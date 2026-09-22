@@ -5,6 +5,7 @@ import {
   anchorPoint,
   approachPoint,
   clipOutside,
+  dragSegmentKeepingRun,
   enforcePerpendicularEnds,
   handlePin,
   landingConnector,
@@ -424,8 +425,8 @@ describe("enforcePerpendicularEnds — a manual route around its target (#844 FP
     expect(pts).toEqual([
       src,
       { x: 240, y: 235 },
-      { x: 321, y: 235 },
-      { x: 321, y: 540 },
+      { x: 341, y: 235 },
+      { x: 341, y: 540 },
       { x: 81, y: 540 },
       { x: 81, y: 498 },
       tgt,
@@ -449,6 +450,123 @@ describe("enforcePerpendicularEnds — a manual route around its target (#844 FP
     expect(pts.some((p) => p.y === 540 && p.x > CHARLIE.x + CHARLIE.width)).toBe(true);
     expect(throughCard(pts)).toBe(false);
     expect(orthogonal(pts)).toBe(true);
+  });
+});
+
+describe("enforcePerpendicularEnds — the sidestep lane (#844 FP iter-5, finding 3)", () => {
+  const CHARLIE = { x: 121, y: 481, width: 160, height: 35 };
+  const right = CHARLIE.x + CHARLIE.width;
+
+  it("detours a leg and a half out, off the lane other edges' legs run on", () => {
+    const pts = enforcePerpendicularEnds(
+      [{ x: 240, y: 195 }, { x: 240, y: 540 }, { x: 81, y: 540 }, { x: 121, y: 498 }],
+      "bottom",
+      "left",
+      LEG,
+      CHARLIE,
+    );
+    const columns = pts.slice(1, -1).map((p) => p.x);
+    // One leg beyond the right border is where an edge landing on Charlie's
+    // right side runs its perpendicular leg (the reported overlap at x=320).
+    expect(columns).not.toContain(right + LEG);
+    expect(columns).toContain(right + LEG * 1.5);
+  });
+});
+
+describe("enforcePerpendicularEnds — an AUTO route around its target (#844 FP iter-5, finding 1)", () => {
+  // simple-bugfix `else`: Visual tester's bottom output to « implementer »,
+  // above-left of it, landing on its default left side. The router planned the
+  // wire as leaving rightwards, which leaves a collinear bend at the source's
+  // bottom border (1160,406) once the source leg is imposed.
+  const IMPLEMENTER = { x: 1109, y: -19, width: 160, height: 35 };
+  const src = { x: 1232, y: 406 };
+  const tgt = { x: 1110, y: -1 };
+  const snapped = [src, { x: 1160, y: 406 }, { x: 1160, y: -1 }, tgt];
+
+  it("re-lays from its last real corner, not from a router bend on its own border", () => {
+    const pts = enforcePerpendicularEnds(snapped, "bottom", "left", LEG, IMPLEMENTER, {
+      manual: false,
+    });
+    expect(pts).toEqual([src, { x: 1232, y: 446 }, { x: 1070, y: 446 }, { x: 1070, y: -1 }, tgt]);
+    // Nothing runs along the source card's bottom border (y=406) any more.
+    expect(pts.slice(1).some((p) => p.y === 406)).toBe(false);
+  });
+
+  it("is a fixed point once stored", () => {
+    const once = enforcePerpendicularEnds(snapped, "bottom", "left", LEG, IMPLEMENTER, {
+      manual: false,
+    });
+    expect(
+      enforcePerpendicularEnds(once, "bottom", "left", LEG, IMPLEMENTER, { manual: false }),
+    ).toEqual(once);
+  });
+
+  it("goes under, not over, on the Verdict = Pass edge to « Ship It »", () => {
+    const SHIP = { x: 748, y: 399, width: 160, height: 35 };
+    const shipTgt = { x: 749, y: 417 };
+    const pts = enforcePerpendicularEnds(
+      [src, { x: 1000, y: 406 }, { x: 1000, y: 417 }, shipTgt],
+      "bottom",
+      "left",
+      LEG,
+      SHIP,
+      { manual: false },
+    );
+    expect(pts).toEqual([
+      src,
+      { x: 1232, y: 446 },
+      { x: 1000, y: 446 },
+      { x: 1000, y: 474 },
+      { x: 709, y: 474 },
+      { x: 709, y: 417 },
+      shipTgt,
+    ]);
+  });
+});
+
+describe("dragSegmentKeepingRun (#844 FP iter-5, finding 2)", () => {
+  // Charlie's top border ON the lattice line y=480, as on the FP canvas.
+  const CHARLIE = { x: 121, y: 480, width: 160, height: 36 };
+  const src = { x: 240, y: 195 };
+  const tgt = { x: 121, y: 498 };
+  const grid = { origin: { x: 0, y: 0 }, step: WIRING_GRID_STEP, free: false };
+  const enforce = (pts: Point[]) => enforcePerpendicularEnds(pts, "bottom", "left", LEG, CHARLIE);
+  // …240,235 → 240,400 → 81,400 → 81,498…: segment 2 is the corridor at y=400.
+  const route = enforce([src, { x: 240, y: 400 }, tgt]);
+
+  /** The y of the dragged corridor in an enforced route: its lowest run left of x=240. */
+  const corridorY = (pts: Point[]) =>
+    Math.max(...pts.slice(2, -2).filter((p) => p.x === 81).map((p) => p.y).filter((y) => y !== 498));
+
+  it("never jumps back above the card while the pointer crosses the card's band", () => {
+    let held = route;
+    const seen: number[] = [];
+    for (let y = 400; y <= 560; y += 4) {
+      const next = dragSegmentKeepingRun(route, 2, y, grid, enforce, CHARLIE);
+      if (next.keepsRun) held = next.enforced;
+      seen.push(corridorY(held));
+    }
+    // Follows the pointer down, and only down.
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThanOrEqual(seen[i - 1]);
+    expect(seen[seen.length - 1]).toBe(560);
+  });
+
+  it("refuses the magnet onto the landing approach, which parks the run across the card", () => {
+    // 498 is the landing approach's y, within half a cell of the pointer.
+    const next = dragSegmentKeepingRun(route, 2, 506, grid, enforce, CHARLIE);
+    expect(next.keepsRun).toBe(true);
+    expect(next.moved[2].y).toBe(520);
+  });
+
+  it("does not count a run laid along the card's border as kept", () => {
+    const next = dragSegmentKeepingRun(route, 2, 484, grid, enforce, CHARLIE);
+    expect(next.keepsRun).toBe(false);
+  });
+
+  it("changes nothing away from the card", () => {
+    const next = dragSegmentKeepingRun(route, 2, 441, grid, enforce, CHARLIE);
+    expect(next.keepsRun).toBe(true);
+    expect(next.enforced).toEqual(enforce([src, { x: 240, y: 440 }, { x: 81, y: 440 }, tgt]));
   });
 });
 

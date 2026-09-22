@@ -152,7 +152,7 @@ export function dragSegmentOnGrid(
   points: Point[],
   segmentIndex: number,
   coord: number,
-  opts: { origin: Point; step: number; free: boolean },
+  opts: { origin: Point; step: number; free: boolean; magnet?: boolean },
 ): Point[] {
   if (segmentIndex < 0 || segmentIndex >= points.length - 1) return points;
   const result = points.map((p) => ({ ...p }));
@@ -171,7 +171,9 @@ export function dragSegmentOnGrid(
   const neighbours = [result[segmentIndex - 1], result[segmentIndex + 2]]
     .filter((p): p is Point => p != null)
     .map((p) => p[axis]);
-  const target = opts.free
+  // `magnet: false` is the grid alone — for when the neighbour's coordinate is
+  // one the route cannot keep (see `dragSegmentKeepingRun`).
+  const target = opts.free || opts.magnet === false
     ? snapped
     : nearestCandidate(coord, [snapped, ...neighbours], opts.step / 2);
 

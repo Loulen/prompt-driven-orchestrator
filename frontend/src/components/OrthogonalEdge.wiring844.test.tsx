@@ -386,3 +386,48 @@ describe("OrthogonalEdge — dragging a corridor past the target (#844 FP iter-4
     }
   });
 });
+
+describe("OrthogonalEdge — dragging a corridor ACROSS the target's band (#844 FP iter-5)", () => {
+  const BELOW = { x: 20, y: 200, width: 200, height: 80 };
+  const stacked: Node[] = [
+    nodes[0],
+    { ...nodes[1], position: { x: BELOW.x, y: BELOW.y } },
+  ];
+  const data = edgeData({
+    mode: "manual",
+    waypoints: [{ x: 100, y: 160 }, { x: -20, y: 160 }],
+    targetSide: "left",
+    sourceAnchor: { side: "bottom", offset: 100 },
+    targetAnchor: { side: "left", offset: 40 },
+  });
+  const stored = () => useEditStore.getState().openTabs[0].pipeline.edges[0].waypoints ?? [];
+
+  it("holds the run above the card instead of jumping back to the source", () => {
+    harness(data, stacked);
+    const handle = document.querySelector('[data-testid="edge-seg-handle-e-0-2"]')!;
+    fireEvent.pointerDown(handle, { button: 0 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 170 });
+    expect(stored()).toEqual([{ x: 100, y: 160 }, { x: -20, y: 160 }]);
+
+    // Inside the card's band, on the landing approach's y (the magnet): no
+    // route keeps the run there. It used to snap up to the source leg (y=120).
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 236 });
+    expect(stored()).toEqual([{ x: 100, y: 160 }, { x: -20, y: 160 }]);
+
+    // Past the card, it goes round it with the run under the pointer.
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 320 });
+    expect(stored().some((w) => w.y === 320)).toBe(true);
+    fireEvent.pointerUp(window);
+    expect(stored().some((w) => w.y === 320)).toBe(true);
+  });
+
+  it("keeps the last held position when released inside the band", () => {
+    harness(data, stacked);
+    const handle = document.querySelector('[data-testid="edge-seg-handle-e-0-2"]')!;
+    fireEvent.pointerDown(handle, { button: 0 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 170 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 250 });
+    fireEvent.pointerUp(window);
+    expect(stored()).toEqual([{ x: 100, y: 160 }, { x: -20, y: 160 }]);
+  });
+});

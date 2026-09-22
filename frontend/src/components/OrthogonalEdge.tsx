@@ -16,12 +16,12 @@ import {
 } from "../lib/edgePath";
 import {
   anchorPoint,
+  dragSegmentKeepingRun,
   enforcePerpendicularEnds,
   landingLeg,
   storableWaypoints,
 } from "../lib/anchorSide";
 import {
-  dragSegmentOnGrid,
   mergeAlignedSegments,
   snapPolyline,
   WIRING_GRID_STEP,
@@ -206,12 +206,15 @@ export default function OrthogonalEdge({
       obstacles,
       targetSide: data?.targetSide,
     });
+    // `manual: false`: the router's bends are not the user's pins, so a wire that
+    // has to go around its target is re-laid from its last real corner.
     return enforcePerpendicularEnds(
       snapPolyline(auto, CANVAS_LATTICE, WIRING_GRID_STEP),
       srcSide,
       tgtSide,
       leg,
       tgtRect ?? undefined,
+      { manual: false },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, leg, tgtRect]);
@@ -253,24 +256,28 @@ export default function OrthogonalEdge({
         // freezing it here keeps the snap stable for the whole drag.
         const origin = useWiringStore.getState().origin;
         let latest = points;
+        let accepted = false;
         const move = (ev: PointerEvent) => {
           shiftRef.current = ev.shiftKey;
           const flow = screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
           const coord = orientation === "horizontal" ? flow.y : flow.x;
           // Only THIS segment moves. `dragSegmentOnGrid` never rewrites the
           // neighbours' coordinates, so the rest of the route is byte-stable.
-          latest = dragSegmentOnGrid(points, segmentIndex, coord, {
-            origin,
-            step: WIRING_GRID_STEP,
-            free: ev.shiftKey,
-          });
-          const enforced = enforcePerpendicularEnds(
-            latest,
-            srcSide,
-            tgtSide,
-            leg,
+          const next = dragSegmentKeepingRun(
+            points,
+            segmentIndex,
+            coord,
+            { origin, step: WIRING_GRID_STEP, free: ev.shiftKey },
+            (pts) => enforcePerpendicularEnds(pts, srcSide, tgtSide, leg, tgtRect ?? undefined),
             tgtRect ?? undefined,
           );
+          // A position the route cannot keep the run at (across the target
+          // card): hold the last one it could, instead of drawing the wire
+          // jumping away from the pointer.
+          if (!next.keepsRun && accepted) return;
+          accepted = true;
+          latest = next.moved;
+          const enforced = next.enforced;
           updateEdge(edgeIndex, {
             mode: "manual",
             waypoints: storableWaypoints(enforced).map((p) => ({

@@ -1,6 +1,6 @@
 import type { EdgeAnchor, NodeType, PortSide } from "../types";
 import type { Point } from "./orthogonalRouter";
-import { snapToGrid } from "./wiringGrid";
+import { dragSegmentOnGrid, snapToGrid } from "./wiringGrid";
 
 /** An axis-aligned rectangle in canvas (flow) coordinates. */
 export interface AnchorRect {
@@ -331,7 +331,9 @@ function crossesRect(points: Point[], rect: AnchorRect): boolean {
  * repeated correction.
  *
  * `targetRect` (the target card) keeps the wire from running THROUGH the card on
- * its way to the landing leg — see {@link aroundTarget}.
+ * its way to the landing leg — see {@link aroundTarget}. `manual` says whether the
+ * interior points are the user's (a manual route) or the router's (an auto one):
+ * only the user's are worth preserving when the wire has to be re-laid.
  */
 export function enforcePerpendicularEnds(
   points: Point[],
@@ -339,6 +341,7 @@ export function enforcePerpendicularEnds(
   targetSide: PortSide,
   leg: number,
   targetRect?: AnchorRect,
+  { manual = true }: { manual?: boolean } = {},
 ): Point[] {
   if (points.length < 2) return points;
   const src = points[0];
@@ -382,7 +385,10 @@ export function enforcePerpendicularEnds(
     ...dedupeCollinear(squared.slice(1, -1)),
     squared[squared.length - 1],
   ];
-  return targetRect ? aroundTarget(squared, enforced, targetSide, leg, targetRect) : enforced;
+  if (!targetRect) return enforced;
+  return manual
+    ? aroundTarget(squared, enforced, targetSide, leg, targetRect)
+    : aroundTarget(enforced, enforced, targetSide, leg, targetRect, { sidestep: false });
 }
 
 /**
@@ -407,6 +413,13 @@ export function enforcePerpendicularEnds(
  *    still count as « clear » and the wire turns after the last of them, not at
  *    the source approach (#844 FP iter-4, finding 1).
  *
+ * Both repairs exist to respect what the USER put there. An auto route has no
+ * such intent — its interior points are the router's, planned as if the wire
+ * left by the right, and a collinear router bend kept as a « pin » made the wire
+ * climb back to its own source card and run along its border (#844 FP iter-5,
+ * finding 1). So an auto route is handed in already merged, with `sidestep` off:
+ * it only ever gets the truncate-and-land repair, from its last real corner.
+ *
  * A fixed point like the rest of enforcement: a body already clear of the card
  * is returned untouched, so re-enforcing the stored waypoints reproduces the
  * route. A card too close to go around returns the square route unchanged.
@@ -417,6 +430,7 @@ function aroundTarget(
   targetSide: PortSide,
   leg: number,
   rect: AnchorRect,
+  { sidestep = true }: { sidestep?: boolean } = {},
 ): Point[] {
   // Everything but the perpendicular leg, which ends ON the border by design.
   if (!crossesRect(enforced.slice(0, -1), rect)) return enforced;
@@ -434,7 +448,7 @@ function aroundTarget(
   // Nearer corridor first. A candidate must still pass through every point of
   // the route: going round by the side the wire lands on can collapse the detour
   // onto the landing and silently drop the very segment the user placed.
-  for (const far of [false, true]) {
+  for (const far of sidestep ? [false, true] : []) {
     const shifted = tidy(sidestepCrossings(path, rect, leg, far));
     if (clear(shifted) && path.every((p) => onPolyline(p, shifted))) return shifted;
   }
@@ -455,11 +469,15 @@ function aroundTarget(
 
 /**
  * Pushes every segment that runs straight THROUGH `rect` — both of its ends
- * outside the card — into the free corridor one leg beyond the nearer parallel
- * border (the farther one when `far`): `a → b` becomes `a → a' → b' → b`. The
- * two legs (first and last segment) are left alone, and so is a segment ending
- * inside the card, which sidestepping cannot fix. Only inserts points, like
- * `squareUp`.
+ * outside the card — into the free corridor beyond the nearer parallel border
+ * (the farther one when `far`): `a → b` becomes `a → a' → b' → b`. The two legs
+ * (first and last segment) are left alone, and so is a segment ending inside the
+ * card, which sidestepping cannot fix. Only inserts points, like `squareUp`.
+ *
+ * The corridor sits a leg and a HALF out, not one leg. One leg beyond a border is
+ * exactly where every other edge landing on or leaving that side runs its
+ * perpendicular leg, so a detour there drew over a neighbour's approach and the
+ * two wires could no longer be told apart (#844 FP iter-5, finding 3).
  */
 function sidestepCrossings(
   points: Point[],
@@ -467,9 +485,10 @@ function sidestepCrossings(
   leg: number,
   far: boolean,
 ): Point[] {
+  const lane = leg * 1.5;
   const corridor = (v: number, low: number, high: number) => {
-    const near = nearerCorridor(v, low, high, leg);
-    return far ? (near < low ? high + leg : low - leg) : near;
+    const near = nearerCorridor(v, low, high, lane);
+    return far ? (near < low ? high + lane : low - lane) : near;
   };
   const strictlyInside = (p: Point) =>
     p.x > rect.x + TOL &&
@@ -493,6 +512,48 @@ function sidestepCrossings(
     out.push(b);
   }
   return out;
+}
+
+/**
+ * A segment drag whose dragged run survives enforcement.
+ *
+ * `dragSegmentOnGrid` knows nothing of the target card, so it can put the run
+ * where no route can keep it — typically the neighbour magnet, which lines the
+ * run up with the landing approach and so parks it straight across the target.
+ * Enforcement then has to re-lay the wire without it, and the run the user is
+ * holding jumps away from the pointer, back above the card (#844 FP iter-5,
+ * finding 2). So the magnet is dropped for that position and the plain grid tried
+ * instead; `keepsRun: false` means neither worked, and the caller should hold the
+ * last position that did rather than draw the jump.
+ *
+ * With `targetRect`, a position that lays the wire ALONG one of the card's
+ * borders does not count either: the run is kept, but drawn over the card's
+ * outline, where it reads as neither inside nor out.
+ */
+export function dragSegmentKeepingRun(
+  points: Point[],
+  segmentIndex: number,
+  coord: number,
+  grid: { origin: Point; step: number; free: boolean },
+  enforce: (points: Point[]) => Point[],
+  targetRect?: AnchorRect,
+): { moved: Point[]; enforced: Point[]; keepsRun: boolean } {
+  // Dragging the first segment inserts a bend beside the pinned source, which
+  // shifts the dragged run one index along.
+  const at = segmentIndex === 0 ? 1 : segmentIndex;
+  let last: { moved: Point[]; enforced: Point[]; keepsRun: boolean } | null = null;
+  for (const magnet of grid.free ? [false] : [true, false]) {
+    const moved = dragSegmentOnGrid(points, segmentIndex, coord, { ...grid, magnet });
+    const enforced = enforce(moved);
+    const [a, b] = [moved[at], moved[at + 1]];
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const keepsRun =
+      [a, mid, b].every((p) => onPolyline(p, enforced)) &&
+      !(targetRect && runsAlongBorder(enforced.slice(0, -1), targetRect));
+    last = { moved, enforced, keepsRun };
+    if (keepsRun) break;
+  }
+  return last!;
 }
 
 /**
@@ -556,6 +617,34 @@ function dedupeCollinear(points: Point[]): Point[] {
     }
   }
   return out;
+}
+
+/** Whether a segment of `points` runs ON one of `rect`'s borders, over a
+ *  stretch of it (a wire crossing a border at a point does not count). */
+function runsAlongBorder(points: Point[], rect: AnchorRect): boolean {
+  const [x0, x1, y0, y1] = [rect.x, rect.x + rect.width, rect.y, rect.y + rect.height];
+  const overlaps = (lo: number, hi: number, e0: number, e1: number) =>
+    Math.min(lo, hi) < e1 - TOL && Math.max(lo, hi) > e0 + TOL;
+  for (let i = 1; i < points.length; i++) {
+    const [a, b] = [points[i - 1], points[i]];
+    const horizontal = Math.abs(a.y - b.y) < TOL;
+    const vertical = Math.abs(a.x - b.x) < TOL;
+    if (
+      horizontal &&
+      (Math.abs(a.y - y0) < TOL || Math.abs(a.y - y1) < TOL) &&
+      overlaps(a.x, b.x, x0, x1)
+    ) {
+      return true;
+    }
+    if (
+      vertical &&
+      (Math.abs(a.x - x0) < TOL || Math.abs(a.x - x1) < TOL) &&
+      overlaps(a.y, b.y, y0, y1)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Whether `p` lies on one of the axis-aligned segments of `points`. */

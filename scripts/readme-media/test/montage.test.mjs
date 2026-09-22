@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
+import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { chromeLayout, planCuts } from "../lib/montage.mjs";
 
 test("keeps the windows around the markers and cuts the wait between them", () => {
@@ -71,4 +74,21 @@ test("the chrome frames a 960 px GIF around content of the crop's aspect", () =>
   assert.ok(layout.content.y >= layout.margin + layout.bar);
   assert.equal(layout.height % 2, 0);
   assert.equal(layout.content.height % 2, 0);
+});
+
+// The encode runs off the event loop: a SIGINT to node alone is handled at once
+// (not after the encode), and the running ffmpeg dies with it.
+test("a SIGINT mid-encode exits at once and kills the running ffmpeg", async () => {
+  const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "encode-forever.mjs");
+  const child = spawn(process.execPath, [fixture], { stdio: ["ignore", "pipe", "inherit"] });
+  await new Promise((resolve) => child.stdout.once("data", resolve));
+  const ffmpegPid = Number(execFileSync("pgrep", ["-P", String(child.pid), "ffmpeg"], { encoding: "utf8" }).trim());
+  assert.ok(ffmpegPid > 0);
+  const sent = Date.now();
+  child.kill("SIGINT");
+  const code = await new Promise((resolve) => child.once("exit", (c) => resolve(c)));
+  assert.equal(code, 130);
+  assert.ok(Date.now() - sent < 2000, `exited after ${Date.now() - sent} ms`);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.throws(() => process.kill(ffmpegPid, 0), /ESRCH/);
 });

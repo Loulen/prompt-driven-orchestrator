@@ -2,8 +2,14 @@
 // maintainer checks a regeneration on without opening each GIF — duration,
 // weight, dimensions, markers. Recording one scene (SCENE=…) or one variant
 // (VARIANT=…) replaces those entries and keeps the others'.
+//
+// A variant is encoded in its work folder, then `landVariant` moves its GIF and
+// poster into the review folder and writes its entry in one synchronous step:
+// a run cut short (Ctrl+C, crash) leaves the previous files and entry together,
+// never a new GIF under a stale entry.
 
 import fs from "node:fs";
+import path from "node:path";
 
 export function readManifest(file) {
   try {
@@ -23,6 +29,17 @@ export function updateManifest(file, sceneName, entry) {
   manifest.scenes = Object.fromEntries(Object.entries(manifest.scenes).sort(([a], [b]) => a.localeCompare(b)));
   fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
+}
+
+/** Move a finished variant's files (`[[from, to], …]`) into the review folder
+ *  and record its entry. Synchronous on purpose: no signal handler can run
+ *  between the move and the manifest write. */
+export function landVariant({ file, sceneName, title, entry, moves }) {
+  for (const [from, to] of moves) {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(from, to);
+  }
+  return updateManifest(file, sceneName, { title, variants: [entry] });
 }
 
 /** One variant's manifest entry. Warnings say what misses the target. */

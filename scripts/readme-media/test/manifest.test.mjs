@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { readManifest, updateManifest, variantEntry } from "../lib/manifest.mjs";
+import { landVariant, readManifest, updateManifest, variantEntry } from "../lib/manifest.mjs";
 import { TARGET_MS } from "../lib/montage.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -53,6 +53,40 @@ test("recording one variant again keeps the scene's other variant and the other 
       ["b", 9.5],
     ],
   );
+});
+
+test("a variant lands its files and its entry together; an unfinished one leaves the previous pair", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "readme-media-land-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "manifest.json");
+  const work = path.join(dir, ".work", "stats", "a");
+  const encode = (content) => {
+    fs.mkdirSync(work, { recursive: true });
+    fs.writeFileSync(path.join(work, "out.gif"), content);
+    fs.writeFileSync(path.join(work, "out.jpg"), content);
+  };
+  const land = (durationS) =>
+    landVariant({
+      file,
+      sceneName: "stats",
+      title: "Run stats by model",
+      entry: entry("a", durationS, []),
+      moves: [
+        [path.join(work, "out.gif"), path.join(dir, "stats", "a.gif")],
+        [path.join(work, "out.jpg"), path.join(dir, "stats", "a.jpg")],
+      ],
+    });
+  encode("run 1");
+  land(13.6);
+  // Run 2 is cut after encoding, before landing: the review folder and the
+  // manifest still agree on run 1.
+  encode("run 2");
+  assert.equal(fs.readFileSync(path.join(dir, "stats", "a.gif"), "utf8"), "run 1");
+  assert.equal(readManifest(file).scenes.stats.variants[0].duration_s, 13.6);
+  land(11.6);
+  assert.equal(fs.readFileSync(path.join(dir, "stats", "a.gif"), "utf8"), "run 2");
+  assert.equal(readManifest(file).scenes.stats.variants[0].duration_s, 11.6);
+  assert.equal(fs.existsSync(path.join(work, "out.gif")), false);
 });
 
 test("the review folder is ignored by git", () => {

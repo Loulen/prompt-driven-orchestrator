@@ -27,7 +27,7 @@ For each scene, in its own throwaway instance:
    plus a `.claude.json` holding only the account block and the fixture repo's trust. Every file is
    recorded in `state.json` **before** it is written.
 3. **Mocked history** (`needs: ["history"]`, `lib/history-plan.mjs` + `lib/history-write.mjs`). About
-   210 runs of `implement-review` over the last 30 days, with synthetic claude/copilot/pi transcripts,
+   About 205 runs of `implement-review` over the last 30 days, with synthetic claude/copilot/pi transcripts,
    a manual price table and 100 fires of the (disabled) `prod-health-check` trigger. The plan is pure
    and deterministic (seeded); its targets are tested (`test/history-plan.test.mjs`) and so is the
    Stats API reading it (`test/demo-instance.test.mjs`).
@@ -36,7 +36,10 @@ For each scene, in its own throwaway instance:
    stretches build the timeline.
 5. **Montage** (`lib/montage.mjs`). It keeps the timeline, cuts the waits, crops, and bakes in the
    window chrome (rounded corners, traffic lights, shadow). Then it encodes the GIF (15 fps, 960 px
-   wide by default) and the poster, which is the last frame, i.e. the end state.
+   wide by default) and the poster, which is the last frame, i.e. the end state. ffmpeg runs
+   asynchronously, so a Ctrl+C mid-encode is handled at once and kills it. Each variant is encoded
+   under `.work/` and lands in the review folder together with its manifest entry: an interrupted
+   run leaves the previous GIF and its entry, never a new GIF under a stale entry.
 6. **Teardown**. The daemon is stopped, the demo tmux server is killed (every agent with it), the
    auth files are wiped and the root is removed. This happens after each scene, and on any exit:
    failure, uncaught error, Ctrl+C, SIGTERM. A run killed with SIGKILL leaves its `state.json`, and
@@ -106,12 +109,15 @@ What `play(ctx)` gets:
 
 Whatever is not in a marker window, a `keep`, a `fast` or a `hold` is cut. Aim for 8 to 15 s; the
 manifest warns outside that range, and a short montage is frozen on its last frame up to 8 s.
-Record the scene, open both GIFs from `.readme-media/`, pick one in `selection.txt`, then
+A row GIF shows a ~480 px cell: crop on the panel that matters so its text reads at about 1:1
+(crop width close to the GIF's content width, ~910 px); a narrower `viewport` lets the page reflow
+into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one in `selection.txt`, then
 `make readme-media-publish`.
 
 ## Tests
 
 `make test` runs `node --test scripts/readme-media/test/*.test.mjs`. That covers the history plan,
-the cut plan, selection and publication, scene discovery, the manifest, and a real demo instance
+the cut plan, selection and publication, scene discovery, the manifest (and a variant's atomic
+landing), a SIGINT mid-encode, and a real demo instance
 (Stats API ratios, teardown after success / Ctrl+C / crash / hard kill; needs `cargo build`). The
 full recording of the Stats scene is opt-in: `READMEMEDIA_E2E=1`.

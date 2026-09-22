@@ -3,9 +3,11 @@
 // that matters, frame it in the baked-in window chrome, and encode the GIF and
 // its poster (the last frame — the end state).
 //
-// `planCuts` is pure (unit-tested); `renderVariant` shells out to ffmpeg.
+// `planCuts` is pure (unit-tested); `renderVariant` shells out to ffmpeg,
+// asynchronously: the event loop stays free, so a Ctrl+C mid-encode is handled
+// at once — the running ffmpeg is killed on exit with the demo instance.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -143,7 +145,7 @@ export async function renderChrome(browser, layout, file) {
 }
 
 /** Cut, crop, frame and encode one variant. Returns the probed GIF facts. */
-export function renderVariant({ video, plan, crop, layout, chromePng, workDir, gifFile, posterFile, fps = GIF_FPS }) {
+export async function renderVariant({ video, plan, crop, layout, chromePng, workDir, gifFile, posterFile, fps = GIF_FPS }) {
   fs.mkdirSync(workDir, { recursive: true });
   const n = plan.segments.length;
   if (n === 0) throw new Error("nothing to keep: the scene set no marker, keep or hold");
@@ -163,8 +165,8 @@ export function renderVariant({ video, plan, crop, layout, chromePng, workDir, g
   parts.push(`[base][1:v]overlay=0:0:shortest=1,format=rgb24[out]`);
 
   const montage = path.join(workDir, "montage.mkv");
-  ffmpeg(["-i", video, "-loop", "1", "-framerate", String(fps), "-i", chromePng, "-filter_complex", parts.join(";"), "-map", "[out]", "-c:v", "ffv1", montage]);
-  ffmpeg([
+  await ffmpeg(["-i", video, "-loop", "1", "-framerate", String(fps), "-i", chromePng, "-filter_complex", parts.join(";"), "-map", "[out]", "-c:v", "ffv1", montage]);
+  await ffmpeg([
     "-i",
     montage,
     "-vf",
@@ -173,12 +175,29 @@ export function renderVariant({ video, plan, crop, layout, chromePng, workDir, g
     "0",
     gifFile,
   ]);
-  ffmpeg(["-sseof", "-0.4", "-i", montage, "-update", "1", "-q:v", "2", posterFile]);
+  await ffmpeg(["-sseof", "-0.4", "-i", montage, "-update", "1", "-q:v", "2", posterFile]);
   return probe(gifFile);
 }
 
-function ffmpeg(args) {
-  execFileSync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args], { stdio: ["ignore", "inherit", "inherit"] });
+const running = new Set();
+process.on("exit", () => {
+  for (const child of running) child.kill("SIGKILL");
+});
+
+export function ffmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args], { stdio: ["ignore", "inherit", "inherit"] });
+    running.add(child);
+    child.on("error", (error) => {
+      running.delete(child);
+      reject(error);
+    });
+    child.on("exit", (code, signal) => {
+      running.delete(child);
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exited with ${signal ?? `code ${code}`}`));
+    });
+  });
 }
 
 /** Duration (s), dimensions and weight of a produced GIF. */

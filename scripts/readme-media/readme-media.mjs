@@ -4,8 +4,8 @@
 //   record   — for each scene: a fresh demo instance (ADR-0074), its mocked
 //              history if the scene needs it, the auth of the harnesses it plays
 //              live; each of its two variants is filmed, cut and framed into
-//              .readme-media/<scene>/<variant>.gif + .jpg; the manifest is
-//              updated. The instance is torn down after each scene, and on any
+//              .readme-media/<scene>/<variant>.gif + .jpg, and its manifest
+//              entry is written as it lands. The instance is torn down after each scene, and on any
 //              exit (failure and Ctrl+C included).
 //   publish  — copy the variant the selection file names, per scene, into
 //              docs/assets/readme/<scene>.gif + .jpg. Records nothing.
@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DemoInstance } from "./lib/demo-instance.mjs";
-import { updateManifest, variantEntry } from "./lib/manifest.mjs";
+import { landVariant, variantEntry } from "./lib/manifest.mjs";
 import { chromeLayout, planCuts, renderChrome, renderVariant, TARGET_MS } from "./lib/montage.mjs";
 import { Recorder } from "./lib/recorder.mjs";
 import { loadScenes, selectScenes } from "./lib/scenes.mjs";
@@ -47,7 +47,6 @@ async function record(filter) {
     for (const scene of scenes) {
       console.log(`\n== scene ${scene.name}`);
       const instance = new DemoInstance({ repoRoot, liveHarnesses: scene.live ?? [], keep: process.env.KEEP_DEMO === "1" });
-      const entries = [];
       try {
         await instance.start();
         if ((scene.needs ?? []).includes("history")) {
@@ -58,7 +57,7 @@ async function record(filter) {
         const variants = process.env.VARIANT ? scene.variants.filter((v) => v.id === process.env.VARIANT) : scene.variants;
         for (const variant of variants) {
           try {
-            entries.push(await recordVariant({ browser, instance, scene, variant }));
+            await recordVariant({ browser, instance, scene, variant, manifestFile });
           } catch (error) {
             failures.push(`${scene.name}/${variant.id}: ${error.message}`);
             console.error(`variant ${scene.name}/${variant.id} failed:\n${error.stack}`);
@@ -71,9 +70,6 @@ async function record(filter) {
         // Stop the scene's agents and daemon now, not at the end of the run.
         instance.teardown();
       }
-      if (entries.length > 0) {
-        updateManifest(manifestFile, scene.name, { title: scene.title ?? scene.name, variants: entries });
-      }
     }
   } finally {
     await browser.close();
@@ -85,7 +81,7 @@ async function record(filter) {
   }
 }
 
-async function recordVariant({ browser, instance, scene, variant }) {
+async function recordVariant({ browser, instance, scene, variant, manifestFile }) {
   const gifWidth = variant.gifWidth ?? DEFAULT_GIF_WIDTH;
   const crop = variant.crop ?? { x: 0, y: 0, ...variant.viewport };
   const workDir = path.join(PATHS.review, ".work", scene.name, variant.id);
@@ -107,19 +103,30 @@ async function recordVariant({ browser, instance, scene, variant }) {
   const layout = chromeLayout({ gifWidth, crop });
   const chromePng = path.join(workDir, "chrome.png");
   await renderChrome(browser, layout, chromePng);
-  const outDir = path.join(PATHS.review, scene.name);
-  fs.mkdirSync(outDir, { recursive: true });
-  const gif = path.join(outDir, `${variant.id}.gif`);
-  const poster = path.join(outDir, `${variant.id}.jpg`);
-  const facts = renderVariant({ video: timeline.video, plan, crop, layout, chromePng, workDir, gifFile: gif, posterFile: poster });
+  // Encoded in the work folder; lands in the review folder only once complete.
+  const encodedGif = path.join(workDir, "out.gif");
+  const encodedPoster = path.join(workDir, "out.jpg");
+  const facts = await renderVariant({ video: timeline.video, plan, crop, layout, chromePng, workDir, gifFile: encodedGif, posterFile: encodedPoster });
+  const gif = path.join(PATHS.review, scene.name, `${variant.id}.gif`);
+  const poster = path.join(PATHS.review, scene.name, `${variant.id}.jpg`);
   const entry = variantEntry({
     variant,
     facts,
     plan,
     gif: path.relative(PATHS.review, gif),
     poster: path.relative(PATHS.review, poster),
-    posterBytes: fs.statSync(poster).size,
+    posterBytes: fs.statSync(encodedPoster).size,
     target: TARGET_MS,
+  });
+  landVariant({
+    file: manifestFile,
+    sceneName: scene.name,
+    title: scene.title ?? scene.name,
+    entry,
+    moves: [
+      [encodedGif, gif],
+      [encodedPoster, poster],
+    ],
   });
   console.log(`   ${entry.duration_s}s · ${entry.width}×${entry.height} · ${(entry.bytes / 1e6).toFixed(1)} MB · markers ${entry.markers.map((m) => `${m.name}@${m.t_s}s`).join(", ")}`);
   for (const warning of entry.warnings) console.warn(`   WARNING: ${warning}`);

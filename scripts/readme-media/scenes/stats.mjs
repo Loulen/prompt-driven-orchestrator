@@ -9,6 +9,9 @@
 import { sleep } from "../lib/demo-instance.mjs";
 
 const VIEWPORT = { width: 1200, height: 760 };
+// Narrower window for variant a: the modal reflows, so the crop keeps the
+// ranked list, the headline, the chart and the effort rows at ~1:1 in the GIF.
+const VIEWPORT_A = { width: 1080, height: 760 };
 
 /** From the runs list to the Stats modal, on `tab`. `film` keeps the two
  *  clicks in the GIF (only when the crop shows the top bar and the rail). */
@@ -16,6 +19,8 @@ async function openStats(ctx, tab, { film: filmed = true } = {}) {
   const { page } = ctx;
   await ctx.goto("/");
   await page.getByTestId("open-stats").waitFor();
+  // The rail fills a beat after the page: never open on « No runs yet ».
+  await page.getByTestId("run-display-label").first().waitFor({ timeout: 30_000 });
   await sleep(400);
   const film = (fn) => (filmed ? ctx.keep(fn) : fn());
   await film(async () => {
@@ -48,11 +53,13 @@ export default {
     {
       id: "a",
       label: "Cost › By model → effort",
-      viewport: VIEWPORT,
+      viewport: VIEWPORT_A,
+      // Focused on the Cost panel: the top bar and the Stats sections are cut.
+      crop: { x: 140, y: 150, width: 940, height: 610 },
       markers: ["cost-by-model", "effort"],
       async play(ctx) {
         const { page } = ctx;
-        await openStats(ctx, "cost");
+        await openStats(ctx, "cost", { film: false });
         const nav = page.getByTestId("stats-drilldown-navigation");
         await ctx.keep(async () => {
           await choose(ctx, page.getByLabel("Cost grouping"), "model");

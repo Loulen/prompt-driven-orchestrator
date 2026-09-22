@@ -790,7 +790,7 @@ impl Importer {
     ) {
         let dup = self.edges.iter().any(|e| {
             e.source.node == src_node
-                && e.source.port == src_port
+                && e.source.port() == src_port
                 && e.target.node == tgt_node
                 && e.target.port == tgt_port
                 && e.when == when
@@ -800,10 +800,7 @@ impl Importer {
             return;
         }
         self.edges.push(EdgeDef {
-            source: EdgeEndpoint {
-                node: src_node.to_string(),
-                port: src_port.to_string(),
-            },
+            source: crate::pipeline::EdgeSource::single(src_node, src_port),
             target: EdgeEndpoint {
                 node: tgt_node.to_string(),
                 port: tgt_port.to_string(),

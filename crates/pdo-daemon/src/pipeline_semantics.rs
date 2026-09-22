@@ -38,8 +38,8 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::pipeline::{
-    EdgeDef, EdgeEndpoint, FrontmatterFieldDecl, LoopKind, LoopRegion, NodeDef, NodeType,
-    PipelineDef, Port, PortSide, PortType, VariableDef, VariableType,
+    EdgeDef, EdgeEndpoint, EdgeSource, FrontmatterFieldDecl, LoopKind, LoopRegion, NodeDef,
+    NodeType, PipelineDef, Port, PortSide, PortType, VariableDef, VariableType,
 };
 
 /// Fields excluded from the projection, per serializer scope, spelled exactly as
@@ -265,7 +265,7 @@ impl<'a> PortProjection<'a> {
 
 #[derive(Serialize)]
 struct EdgeProjection<'a> {
-    source: EndpointProjection<'a>,
+    source: SourceProjection<'a>,
     target: EndpointProjection<'a>,
     /// Not emitted by the frontend serializer, but authored text — semantic here.
     reason: Option<&'a str>,
@@ -292,12 +292,48 @@ impl<'a> EdgeProjection<'a> {
         // LAYOUT_FIELDS["edge"] — routing is presentation (#154 / #168).
         let (_layout_mode, _layout_waypoints, _layout_target_side) = (mode, waypoints, target_side);
         Self {
-            source: EndpointProjection::of(source),
+            source: SourceProjection::of(source),
             target: EndpointProjection::of(target),
             reason: reason.as_deref(),
             when: when.as_ref().map(canon_yaml),
             is_else: *is_else,
             repeated: *repeated,
+        }
+    }
+}
+
+/// The source end (ADR-0073 / #843). A single-port edge projects EXACTLY the
+/// shape `EndpointProjection` used to produce — `{node, port}` — so every
+/// pre-#843 pipeline keeps its content hash and no library star flips on this
+/// change alone. A multi-port edge projects `{node, ports}` with the ports
+/// **sorted**: the carried ports are a SET, so `[a, b]` and `[b, a]` are the same
+/// pipeline (ADR-0073 §2). This is the one place in the projection that reorders
+/// a sequence, and it is deliberate.
+#[derive(Serialize)]
+struct SourceProjection<'a> {
+    node: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ports: Option<Vec<&'a str>>,
+}
+
+impl<'a> SourceProjection<'a> {
+    fn of(source: &'a EdgeSource) -> Self {
+        let EdgeSource { node, ports } = source;
+        if ports.len() <= 1 {
+            return Self {
+                node,
+                port: Some(source.port()),
+                ports: None,
+            };
+        }
+        let mut sorted: Vec<&str> = ports.iter().map(String::as_str).collect();
+        sorted.sort_unstable();
+        Self {
+            node,
+            port: None,
+            ports: Some(sorted),
         }
     }
 }
@@ -467,6 +503,57 @@ mod tests {
             canonical(&make("verdict: {eq: PASS}", "score: {gte: 3}")),
             canonical(&make("score: {gte: 3}", "verdict: {eq: PASS}")),
         );
+    }
+
+    // ── Multi-output edges (ADR-0073 §2 / #843) ─────────────────────────────
+
+    /// start → doer(out, spec) → end, with the doer→end edge's carried ports
+    /// spelled by the caller.
+    fn multi_port_fixture(source: &str) -> String {
+        format!(
+            "name: multi\nversion: '1.0'\nnodes:\n\
+             - id: start\n  name: Start\n  type: start\n  outputs:\n  - name: user_prompt\n\
+             - id: doer\n  name: Doer\n  type: agent\n  isolated_worktree: false\n  outputs:\n  - name: out\n  - name: spec\n\
+             - id: end\n  name: End\n  type: end\n  inputs:\n  - name: result\n\
+             edges:\n\
+             - source: {{node: start, port: user_prompt}}\n  target: {{node: doer, port: in}}\n\
+             - source: {source}\n  target: {{node: end, port: result}}\n"
+        )
+    }
+
+    #[test]
+    fn the_order_of_an_edges_carried_ports_does_not_change_the_projection() {
+        // The carried outputs are a SET: re-ticking the same two in the other
+        // order is the same pipeline, so the library star must not flip.
+        assert_eq!(
+            canonical(&multi_port_fixture("{node: doer, ports: [out, spec]}")),
+            canonical(&multi_port_fixture("{node: doer, ports: [spec, out]}")),
+        );
+    }
+
+    #[test]
+    fn a_different_set_of_carried_ports_changes_the_projection() {
+        assert_ne!(
+            canonical(&multi_port_fixture("{node: doer, ports: [out, spec]}")),
+            canonical(&multi_port_fixture("{node: doer, ports: [out]}")),
+        );
+        assert_ne!(
+            canonical(&multi_port_fixture("{node: doer, ports: [out, spec]}")),
+            canonical(&multi_port_fixture("{node: doer, port: out}")),
+        );
+    }
+
+    #[test]
+    fn a_single_port_edge_projects_the_pre_843_shape() {
+        // The content hash of every existing pipeline must survive #843: a
+        // one-port source still projects `{"node":..,"port":..}`, with no
+        // `ports` key, exactly as `EndpointProjection` used to emit.
+        let projected = canonical(&multi_port_fixture("{node: doer, port: out}"));
+        assert!(
+            projected.contains(r#""source":{"node":"doer","port":"out"}"#),
+            "got: {projected}"
+        );
+        assert!(!projected.contains(r#""ports""#), "got: {projected}");
     }
 
     #[test]

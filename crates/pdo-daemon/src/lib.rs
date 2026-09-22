@@ -9229,7 +9229,7 @@ fn passthrough_switch_artifact(
         ctx.artifacts_dir,
         &in_edge.source.node,
         source_iter,
-        &in_edge.source.port,
+        in_edge.source.port(),
     );
     if !src_path.exists() {
         return;
@@ -9242,6 +9242,21 @@ fn passthrough_switch_artifact(
     let _ = std::fs::copy(&src_path, &dst_path);
 }
 
+/// The evaluation context a completed node's outgoing `when:` clauses read.
+///
+/// Every declared output port contributes its frontmatter TWICE:
+///
+///  - under the bare field name (`verdict`), the merged, last-port-wins view the
+///    predicate grammar has always read — what an unqualified clause means;
+///  - under the port-qualified name (`review.verdict`), so a multi-port edge can
+///    say WHICH carried output a condition reads (ADR-0073 §3 / #843). The
+///    frontend writes the qualified spelling as soon as an edge carries two
+///    ports, and the bare one while it carries one — which is why a single-port
+///    pipeline keeps evaluating exactly as before.
+///
+/// A port whose name already contains a `.` would produce an ambiguous qualified
+/// key; that is harmless here (the bare key is still authoritative) and the panel
+/// never offers such a name.
 fn resolve_source_frontmatter(
     pipeline: &pipeline::PipelineDef,
     completed_node_id: &str,
@@ -9259,6 +9274,7 @@ fn resolve_source_frontmatter(
             blackboard::artifact_path(artifacts_dir, completed_node_id, iter, &port.name);
         if let Ok(port_fields) = frontmatter_parser::parse_frontmatter_from_file(&artifact_path) {
             for (k, v) in port_fields {
+                fields.insert(format!("{}.{k}", port.name), v.clone());
                 fields.insert(k, v);
             }
         }
@@ -23291,7 +23307,7 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
 fn edge_info_from_pipeline(e: &pipeline::EdgeDef) -> event_log::EdgeInfo {
     event_log::EdgeInfo {
         source_node: e.source.node.clone(),
-        source_port: e.source.port.clone(),
+        source_port: e.source.port().to_string(),
         target_node: e.target.node.clone(),
         target_port: e.target.port.clone(),
         halt_message: e.reason.clone(),
@@ -23854,6 +23870,50 @@ mod tests {
         assert_eq!(advertised_url(v4), "http://localhost:5172");
         let v6: SocketAddr = "[::]:5172".parse().unwrap();
         assert_eq!(advertised_url(v6), "http://localhost:5172");
+    }
+
+    /// #843 / ADR-0073 §3 — a `when:` on a multi-port edge names WHICH carried
+    /// output it reads by qualifying the field (`spec.ready`). That only works if
+    /// the producer's frontmatter map carries the qualified spelling beside the
+    /// merged one every pre-#843 clause reads.
+    #[test]
+    fn source_frontmatter_carries_both_the_merged_and_the_port_qualified_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = dir.path();
+
+        let write = |port: &str, body: &str| {
+            let path = blackboard::artifact_path(artifacts, "design", 1, port);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, body).unwrap();
+        };
+        write("out", "---\nready: false\nverdict: PASS\n---\n\nbody\n");
+        write("spec", "---\nready: true\n---\n\nbody\n");
+
+        let yaml = "name: multi\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: design\n    name: design\n    type: agent\n    isolated_worktree: false\n    outputs:\n      - name: out\n      - name: spec\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: {node: start, port: user_prompt}\n    target: {node: design, port: brief}\n  - source: {node: design, ports: [out, spec]}\n    target: {node: end, port: result}\n";
+        let pipeline = pipeline::parse_pipeline(yaml).unwrap().pipeline;
+
+        let fields = resolve_source_frontmatter(&pipeline, "design", 1, artifacts);
+
+        // Port-qualified: each output's own value, whatever the other says.
+        assert_eq!(
+            fields.get("out.ready"),
+            Some(&serde_yaml::Value::Bool(false))
+        );
+        assert_eq!(
+            fields.get("spec.ready"),
+            Some(&serde_yaml::Value::Bool(true))
+        );
+        // Merged: the bare name an unqualified (pre-#843) clause reads, still
+        // present and still last-port-wins.
+        assert_eq!(fields.get("ready"), Some(&serde_yaml::Value::Bool(true)));
+        assert_eq!(
+            fields.get("verdict"),
+            Some(&serde_yaml::Value::String("PASS".into()))
+        );
+        assert_eq!(
+            fields.get("out.verdict"),
+            Some(&serde_yaml::Value::String("PASS".into()))
+        );
     }
 
     #[test]
@@ -32709,10 +32769,7 @@ mod tests {
 
     fn edge(src: &str, tgt: &str) -> pipeline::EdgeDef {
         pipeline::EdgeDef {
-            source: pipeline::EdgeEndpoint {
-                node: src.into(),
-                port: "out".into(),
-            },
+            source: crate::pipeline::EdgeSource::single(src, "out"),
             target: pipeline::EdgeEndpoint {
                 node: tgt.into(),
                 port: "in".into(),
@@ -43522,10 +43579,7 @@ edges: []
             variables: HashMap::new(),
             nodes: vec![],
             edges: vec![pipeline::EdgeDef {
-                source: pipeline::EdgeEndpoint {
-                    node: "reviewer".into(),
-                    port: "review".into(),
-                },
+                source: crate::pipeline::EdgeSource::single("reviewer", "review"),
                 target: pipeline::EdgeEndpoint {
                     node: "sw".into(),
                     port: "in".into(),
@@ -43645,10 +43699,7 @@ edges: []
             variables: HashMap::new(),
             nodes: vec![],
             edges: vec![pipeline::EdgeDef {
-                source: pipeline::EdgeEndpoint {
-                    node: "reviewer".into(),
-                    port: "review".into(),
-                },
+                source: crate::pipeline::EdgeSource::single("reviewer", "review"),
                 target: pipeline::EdgeEndpoint {
                     node: "sw".into(),
                     port: "in".into(),

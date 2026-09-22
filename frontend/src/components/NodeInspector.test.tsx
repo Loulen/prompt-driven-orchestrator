@@ -525,6 +525,93 @@ function seedSelfFeedPipeline() {
   });
 }
 
+// #843 / ADR-0073: ONE edge carrying two outputs feeds TWO inputs on the target.
+function seedMultiPortPipeline() {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "design",
+              name: "design",
+              type: "agent",
+              interactive: false,
+              inputs: [],
+              outputs: [
+                { name: "out", repeated: false, side: "right" },
+                { name: "spec", repeated: false, side: "right" },
+              ],
+              view: { x: 0, y: 0 },
+            },
+            {
+              id: "impl",
+              name: "implementer",
+              type: "agent",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "diff", repeated: false, side: "right" }],
+              view: { x: 200, y: 0 },
+            },
+          ],
+          edges: [
+            {
+              source: { node: "design", ports: ["out", "spec"] },
+              target: { node: "impl", port: "out" },
+            },
+          ],
+        },
+        prompts: { impl: "Implement." },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "impl" },
+  });
+}
+
+describe("NodeInspector — inputs of a multi-output edge (#843)", () => {
+  it("lists one input per carried port, both fed by the same source node", () => {
+    seedMultiPortPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("pooled-input-out")).toHaveTextContent("design");
+    expect(screen.getByTestId("pooled-input-spec")).toHaveTextContent("design");
+  });
+
+  it("dropping one input unticks its output instead of deleting the shared edge", () => {
+    seedMultiPortPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-spec-delete-design"));
+
+    const edges = useEditStore.getState().openTabs[0].pipeline.edges;
+    // The arrow survives, back in the pre-#843 single-port shape, and the other
+    // input is untouched — deleting the edge would have taken it too.
+    expect(edges).toHaveLength(1);
+    expect(edges[0].source).toEqual({ node: "design", port: "out" });
+    expect(screen.getByTestId("pooled-input-out")).toBeInTheDocument();
+    expect(screen.queryByTestId("pooled-input-spec")).toBeNull();
+  });
+
+  it("dropping the last input of a now-single-port edge deletes the edge", () => {
+    seedMultiPortPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-spec-delete-design"));
+    fireEvent.click(screen.getByTestId("pooled-input-out-delete-design"));
+
+    expect(useEditStore.getState().openTabs[0].pipeline.edges).toHaveLength(0);
+  });
+});
+
 describe("NodeInspector — per-source input delete (#339)", () => {
   it("deletes a non-cycle edge immediately and keeps the panel open on the node", () => {
     seedPooledReviewPipeline();

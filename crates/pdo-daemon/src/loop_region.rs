@@ -554,10 +554,7 @@ mod tests {
 
     fn edge(sn: &str, sp: &str, tn: &str, tp: &str) -> crate::pipeline::EdgeDef {
         crate::pipeline::EdgeDef {
-            source: crate::pipeline::EdgeEndpoint {
-                node: sn.into(),
-                port: sp.into(),
-            },
+            source: crate::pipeline::EdgeSource::single(sn, sp),
             target: crate::pipeline::EdgeEndpoint {
                 node: tn.into(),
                 port: tp.into(),

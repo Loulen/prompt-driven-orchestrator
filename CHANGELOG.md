@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## README vitrine, référence dans `docs/reference/` (#855)
+## 1.97.4 — README vitrine, référence dans `docs/reference/` (#855)
 
 Le README devient une vitrine (traduction française : `docs/readme/README.fr.md`). La
 référence qu'il portait déménage sans perte : commandes CLI, installation et mise à jour dans

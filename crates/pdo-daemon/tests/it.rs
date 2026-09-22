@@ -46,6 +46,9 @@ mod update_apply;
 #[path = "update_check.rs"]
 mod update_check;
 
+#[path = "docs_links.rs"]
+mod docs_links;
+
 #[path = "edit_self_write_loop.rs"]
 mod edit_self_write_loop;
 

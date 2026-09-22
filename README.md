@@ -1,263 +1,227 @@
-# Prompt Driven Orchestrator (PDO)
+<h1 align="center">PDO</h1>
 
-PDO is a visual orchestrator for software-development agents.
+<p align="center">
+  <a href="https://github.com/Loulen/prompt-driven-orchestrator/releases/latest"><img src="https://img.shields.io/github/v/release/Loulen/prompt-driven-orchestrator?style=flat&amp;label=release&amp;color=10b981" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-10b981?style=flat" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux-10b981?style=flat-square" alt="Supported platforms: macOS and Linux" />
+</p>
 
-![PDO web UI showing a feature pipeline, a live agent session, and typed output.](docs/pdo-ui.png)
+<p align="center">
+  <sub><strong>English</strong> · <a href="docs/readme/README.fr.md">Français</a></sub>
+</p>
 
-*A bounded implementation loop with a live terminal and typed output.*
+<p align="center">
+  <strong>The visual orchestrator for coding agents.</strong><br/>
+  For 100x devs who still care about the craft.
+</p>
 
-| Capability | Result |
-| --- | --- |
-| Visual pipelines | Build agent workflows on a canvas |
-| Deterministic routing | Route nodes with mechanical rules |
-| Typed outputs | Validate, preserve, and pass structured artifacts |
-| Interactive sessions | Watch, guide, or take over from the web terminal |
-| Triggers | Start runs on a schedule or from a script |
+<h3 align="center"><a href="#install"><ins>Install PDO</ins></a></h3>
 
-## Quick start
+<!-- Media slots: `make readme-media` publishes each scene to docs/assets/readme/<scene>.gif with its
+     poster docs/assets/readme/<scene>.jpg (scenes: hero, pipelines, routing, outputs, review, triggers,
+     stats, orchestration, profiles, skills). Until a scene is published, its slot shows docs/pdo-ui.png.
+     In each <picture>: the reduced-motion <source> takes the poster, the other <source> the GIF
+     (type="image/gif"), the <img> the poster. README.md and docs/readme/README.fr.md share the media. -->
+<p align="center">
+  <a href="docs/features.md"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="A PDO run in progress: Claude Code at work in the implementer node's terminal, then the reviewer's typed outputs" width="960" /></picture></a>
+</p>
 
-### 1. Install PDO
+## Features
 
-Homebrew works on macOS and Linux.
+<table>
+<tr>
+<td width="50%" valign="middle">
+
+### Visual pipelines
+
+Build agent workflows on a canvas: drop an `implementer` node, drag its edge to `end`. Plain YAML underneath.
+
+[Docs →](docs/features.md#visual-pipelines)
+
+</td>
+<td width="50%">
+  <!-- scene: pipelines -->
+  <a href="docs/features.md#visual-pipelines"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Adding an implementer node and dragging its edge to end on the canvas" width="100%" /></picture></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Conditional routing &amp; loops
+
+Drag an edge back from `reviewer` to `implementer` and set `verdict != pass`. Routing reads typed outputs, never an LLM's judgment.
+
+[Docs →](docs/features.md#conditional-routing--loops)
+
+</td>
+<td width="50%">
+  <!-- scene: routing -->
+  <a href="docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Dragging a loop edge from reviewer back to implementer with the condition verdict != pass" width="100%" /></picture></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Typed outputs
+
+Each node declares what it hands over (markdown with frontmatter, image lists, files) and PDO validates it before the next node starts.
+
+[Docs →](docs/features.md#typed-outputs)
+
+</td>
+<td width="50%">
+  <!-- scene: outputs -->
+  <a href="docs/features.md#typed-outputs"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="The reviewer's typed outputs: a verdict with a Mermaid diagram and annotated screenshots" width="100%" /></picture></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Diff review
+
+Comment any line of a run's diff and send it to the run's manager agent. Its answer lands in the thread, and the fix goes back into the pipeline.
+
+[Docs →](docs/features.md#diff-review)
+
+</td>
+<td width="50%">
+  <!-- scene: review -->
+  <a href="docs/features.md#diff-review"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Commenting a diff line, sending it to the manager, and its answer arriving in the thread" width="100%" /></picture></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Triggers
+
+Fire a pipeline on a cron, behind a guard script: `* * * * *` + `./prod-health-check.sh` turns a prod outage into an incident run, with the report as input.
+
+[Docs →](docs/features.md#triggers)
+
+</td>
+<td width="50%">
+  <!-- scene: triggers -->
+  <a href="docs/features.md#triggers"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="A cron trigger with the prod-health-check.sh guard, its dry-run and its fire history" width="100%" /></picture></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Run stats by model
+
+Cost, duration and failure rate per model and per node, from your own runs. See what Opus 5.5, Fable 5.1, GPT-5.6 Sol and GLM-5.3 Flash really cost you.
+
+[Docs →](docs/features.md#run-stats-by-model)
+
+</td>
+<td width="50%">
+  <!-- scene: stats -->
+  <a href="docs/features.md#run-stats-by-model"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="The Stats page broken down by model and effort" width="100%" /></picture></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Recursive orchestration
+
+A node can launch child pipelines from its own session. Children nest under their parent in the run tree, and the Orchestration tab tracks them to the end.
+
+[Docs →](docs/features.md#recursive-orchestration)
+
+</td>
+<td width="50%">
+  <!-- scene: orchestration -->
+  <a href="docs/features.md#recursive-orchestration"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="A node launching child runs, nested under their parent in the run tree" width="100%" /></picture></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Agent profiles
+
+Name a harness · model · effort once. Change the profile and every node that follows it switches, with no node to edit.
+
+[Docs →](docs/features.md#agent-profiles)
+
+</td>
+<td width="50%">
+  <!-- scene: profiles -->
+  <a href="docs/features.md#agent-profiles"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Changing an agent profile and every node that follows it switching model" width="100%" /></picture></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Skill bank
+
+Import skills from a repo or write them by hand, then give them to any node from the skill picker.
+
+[Docs →](docs/features.md#skill-bank)
+
+</td>
+<td width="50%">
+  <!-- scene: skills -->
+  <a href="docs/features.md#skill-bank"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Importing skills into the skill bank and adding one to a node" width="100%" /></picture></a>
+</td>
+</tr>
+</table>
+
+**Also in the box:**
+
+- **[Isolated worktrees](docs/features.md#isolated-worktrees)** — every run gets its own git worktree, and each node picks isolated or shared.
+- **[Live sessions](docs/features.md#live-sessions)** — watch any node's terminal, type into it, or take over.
+- **[Sandbox](docs/features.md#sandbox)** — run nodes in a container profile, with the harness home staged for you.
+- **[Multi-repo runs](docs/features.md#multi-repo-runs)** — one run that works across several repositories.
+- **[Guided tours](docs/features.md#guided-tours)** — the app walks you through your first pipeline, one step at a time.
+- **[Page mounts](docs/features.md#page-mounts)** — agents serve prototypes and reports under `/pages/<name>/` for you to review.
+- **[Service &amp; in-app update](docs/features.md#service--in-app-update)** — `pdo service install` keeps it running; one click in the status bar updates it.
+- **And more** — the [changelog](CHANGELOG.md) is the real feature list.
+
+---
+
+## Natively supported agents
+
+Works with **any harness**: if it runs in a terminal, a descriptor makes it a PDO node.
+
+<p>
+  <a href="https://docs.anthropic.com/en/docs/claude-code/overview"><kbd><img src="https://www.google.com/s2/favicons?domain=claude.ai&amp;sz=64" alt="Claude Code logo" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
+  <a href="https://opencode.ai/docs/cli/"><kbd><img src="https://www.google.com/s2/favicons?domain=opencode.ai&amp;sz=64" alt="OpenCode logo" width="16" valign="middle" /> OpenCode</kbd></a> &nbsp;
+  <a href="https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli"><kbd><img src="https://www.google.com/s2/favicons?domain=github.com&amp;sz=64" alt="GitHub Copilot logo" width="16" valign="middle" /> GitHub Copilot</kbd></a> &nbsp;
+  <a href="https://pi.dev"><kbd><img src="https://www.google.com/s2/favicons?domain=pi.dev&amp;sz=64" alt="Pi logo" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
+  <a href="docs/reference/harnesses.md"><kbd>+ any harness</kbd></a>
+</p>
+
+---
+
+## Install
+
+### Install — macOS, Linux
 
 ```bash
+# Homebrew (macOS, Linux)
 brew install Loulen/tap/pdo
-```
 
-The install script supports Linux and macOS on x86_64 and ARM64.
-
-```bash
+# or the install script (Linux, macOS · x86_64, ARM64)
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh | sh
 ```
 
-Both methods install a checksum-verified `pdo` binary on your `PATH`.
+PDO needs `tmux`, `git` and at least one authenticated agent harness.
 
-| Task | Command |
-| --- | --- |
-| Update from the app | Click the version in the status bar (or Settings › General › Version & update) → **Update**. PDO runs your install method's command in a detached process, reinstalls the service unit, restarts, and the page reloads on the new version |
-| Update with Homebrew | `brew update && brew upgrade Loulen/tap/pdo` (`brew update` first: a stale tap hides the latest formula) |
-| Update with the script | Run the install script again |
-| Install a specific release | Replace `latest` with a tag such as `v1.31.2` |
-
-### 2. Install runtime requirements
-
-| Requirement | Purpose |
-| --- | --- |
-| `tmux` | Runs node and shell sessions |
-| `git` | Creates an isolated worktree for each node |
-| An agent harness | Runs the agent inside each node |
+### Start
 
 ```bash
-brew install tmux git
+pdo daemon            # then open http://localhost:5172
+pdo service install   # start at boot, keep running after logout
 ```
 
-PDO includes descriptors for `claude`, `opencode`, and `copilot`.
+Updating, service options and every CLI command: [docs/reference/cli.md](docs/reference/cli.md).
 
-### 3. Start PDO
+---
 
-Run `pdo daemon`, then open [http://localhost:5172](http://localhost:5172).
+## Developing
 
-### 4. Keep PDO running
-
-Run `pdo service install` to start PDO at boot and keep it running after logout. Check it with `pdo service status` or remove it with `pdo service uninstall`.
-
-## CLI commands
-
-| Command | Description |
-| --- | --- |
-| `pdo daemon [--port <port>] [--bind <ip>]` | Start the daemon. `PDO_PORT` and `PDO_BIND` provide defaults, while command-line flags take precedence. |
-| `pdo service install [--port <port>] [--bind <ip>] [--dry-run]` | Install the systemd user service or launchd agent; `--dry-run` prints the definition without changing the host. Keep `PDO_ALLOWED_WS_ORIGINS` in a `pdo.service.d/override.conf` drop-in, which survives unit rewrites including Update. |
-| `pdo service status` | Show the installed service status. |
-| `pdo service uninstall` | Stop, disable, and remove the installed service. |
-| `pdo complete [--auto]` | Complete the current node; `--auto` is reserved for runtime hooks. |
-| `pdo fail --reason <text>` | Fail the current node with a recorded reason. |
-| `pdo skip --reason <text>` | End the current run as skipped when there is legitimately no work. |
-| `pdo wait-user [--message <text>]` | Declare that the current node waits on its user: the node and run turn awaiting-user with the message on the banner (capped at 100 characters). Accepted on any node with a live session; refused (exit 3) on a script node or without a session; a repeat is a no-op. Lifted by the user's Enter in the PDO terminal or by the completion release. |
-| `pdo migrate [--dir <path>] [--dry-run]` | Migrate legacy pipeline YAML files. |
-| `pdo reap [--count] [--dry-run] [--ttl-hours <hours>] [--terminal-ttl-hours <hours>] [--budget-secs <seconds>]` | Report or archive old terminal runs according to the retention policy. |
-| `pdo docs support-table [--check\|--write] [--file <path>]` | Check or regenerate the README harness support table. |
-| `pdo run create <pipeline> [options]` | Create a run through the daemon, with optional input, repository, harness, sandbox, and provisioning settings. `--input-file <path>` reads the prompt from a file; `--image <path>` / `--file <path>` (repeatable) attach files the entry node sees under `## Input Images` / `## Input Files` (one budget per run, `max_attachments_mb` in Settings). |
-| `pdo run wait [--all] [--timeout <seconds>]` | From a node session, block until a child run of this node becomes terminal (`--all`: every child). Exit 0 with one JSON line per settled child (`run_id`, `name`, `status`, `reason`, `children_active`), or `{"noop":true}` when no child is active; exit 2 when `--timeout` elapses (nothing on stdout); exit 1 when the daemon is unreachable or outside a node session. |
-| `pdo page mount <name> <directory>` | Serve a directory under `/pages/<name>/`. |
-| `pdo page list` | List active page mounts. |
-| `pdo page unmount <name>` | Remove a page mount. |
-| `pdo review list [--state <state>] [--run <id>]` | List review comments for a run. |
-| `pdo review reply <id> --text <markdown> [--resolved] [--run <id>]` | Reply to a review comment and optionally propose or record its resolution. |
-
-## Reverse proxy
-
-The daemon listens on `0.0.0.0:<port>` without authentication or TLS.
-
-Put authentication and TLS in front of PDO before exposing it beyond a trusted network.
-
-Behind a proxy on the same machine, start the daemon with `--bind 127.0.0.1`.
-
-Set every public browser origin as an exact `scheme://host[:port]` value, for example
-`PDO_ALLOWED_WS_ORIGINS="https://pdo.example.tld,https://pdo.internal:8443" pdo daemon`.
-
-| Setting | Behavior |
-| --- | --- |
-| Default WebSocket origins | `localhost` and `127.0.0.1:<port>` |
-| Extra WebSocket origins | Comma-separated `PDO_ALLOWED_WS_ORIGINS` values |
-| WebSocket routes | `/ws` and `/sessions/<id>/pty` |
-| TLS proxy | The UI uses `wss://` automatically |
-
-Add `PDO_ALLOWED_WS_ORIGINS` to the service environment when the daemon runs as a service.
-
-### Attachments through a proxy
-
-A Run's attachments travel in one multipart `POST /runs`. The daemon's own budget is
-`max_attachments_mb` in Settings (50 MB by default), but a reverse proxy checks the body size
-first, and nginx refuses anything over 1 MB unless told otherwise (#839).
-
-| Symptom | Meaning | Fix |
-| --- | --- | --- |
-| `The server in front of PDO … refused the request body (413)` | The proxy's body limit, not PDO's: the refusal carried no PDO error body | Raise `client_max_body_size` (nginx) or the equivalent, at or above `max_attachments_mb` |
-| `attachments exceed the per-run limit of N MB` | PDO's own budget | Raise `max_attachments_mb` in Settings or attach less |
-| `Upload interrupted … the network or a proxy in front of PDO cut the connection` | The connection dropped before the daemon answered | Check the proxy's timeouts (`client_body_timeout`, `proxy_read_timeout`) and the link |
-| `Upload timed out after Ns` | Nothing answered within the upload budget (a minute plus ten seconds per MB) | Same as above; the CLI applies the same wait |
-| `upload interrupted while reading attachment X` (400 from the daemon) | The body was cut mid-stream between the proxy and the daemon | Check the proxy's `proxy_request_buffering` / timeouts |
-
-```nginx
-location / {
-    client_max_body_size 64m;   # ≥ max_attachments_mb
-    proxy_pass http://127.0.0.1:5172;
-}
-```
-
-### Copy and paste in the terminal pane
-
-Selection happens in the browser, so copy and paste work over plain `http://<host>:<port>` too: no https or `localhost` is required (#772).
-
-| Action | How |
-| --- | --- |
-| Select | Drag with the mouse (Shift+drag and Option+drag on macOS also work) |
-| Copy | Ctrl+Shift+C, Ctrl+C while text is selected, or the copy button in the pane toolbar |
-| Paste | Ctrl+Shift+V, Ctrl+V, or right-click |
-| Scroll tmux scrollback | Mouse wheel (forwarded to tmux) |
-
-Ctrl+C without a selection still interrupts the program in the pane. On macOS use Cmd instead of Ctrl.
-
-If the pane shows `disconnected` on a remote origin, the daemon rejected the WebSocket origin: add it to `PDO_ALLOWED_WS_ORIGINS` (see above).
-
-## Harness support
-
-<!-- support-table:begin -->
-<!-- Generated from crates/pdo-daemon/src/harness_probes.rs. Do not edit by hand: run `make support-table`. `make check` fails if this block has drifted. -->
-
-PDO can launch, attach, resume, and complete nodes with every built-in harness.
-
-| Capability | What PDO does with it | `claude` 2.1.246 | `opencode` 1.18.18 | `copilot` 1.0.80 | `pi` 0.85.1 |
-| --- | --- | --- | --- | --- | --- |
-| **Cost** | Show the Run cost | ✅ derived: per-message token usage × the price table | ❌ | ✅ reported: the harness's own billing unit × a published constant | ✅ reported: the harness's own billing unit × a published constant |
-| **Transcript** | Find the session transcript | ✅ the JSONL transcript, keyed by working directory | ❌ | ✅ the event journal, keyed by the session identity PDO imposed | ✅ the session JSONL in the working directory's folder, keyed by the session identity PDO imposed |
-| **Observed model & effort** | Show the model and effort the execution actually ran on (Stats › Cost › By model) | ✅ observed: the model per message; the effort stays requested | ❌ | ✅ observed: the model and the effort, from the source | ✅ observed: the model and the effort, from the source |
-| **End of turn** | Complete a node when its turn ends | ✅ an injected `Stop` hook, plus the transcript tail as the sweep's fallback | ❌ | ✅ the journal's explicit `assistant.turn_end` event | ✅ an injected `agent_settled` extension, plus the session tail as the sweep's fallback |
-| **Usage-limit menu** | Detect the harness usage-limit menu | ✅ the interactive "wait for limit to reset" menu, matched in a pane capture | ❌ | ❌ | ❌ |
-| **Sandbox staging set** | Stage the harness home in a sandbox and disarm its blocking dialogs | ✅ the `.claude` home: credentials and org managed settings copied, trust and permissions bypass fixed up, transcripts harvested back | ❌ | ❌ | ✅ the `.pi/agent` home: auth, settings, model catalogue, extensions, skills, prompts, themes and bin copied, sessions harvested back |
-| **Context usage** | Show peak context-window usage | ✅ derived: per-turn token usage from the transcript, deduplicated and maxed | ❌ | ✅ derived: the journal's cumulative usage counters, converted to a per-turn contribution and maxed | ✅ derived: per-message `usage.totalTokens` from the session, deduplicated and maxed, read against the catalogue's context window |
-| **Steering** | Count the steering messages a human typed per execution (Stats › Performance) | ✅ derived: typed user turns of the transcript, launch prompt and runtime messages excluded | ❌ | ✅ derived: the journal's `user.message` events, launch prompt and runtime messages excluded | ✅ derived: the session's user-role messages, launch prompt and runtime messages excluded |
-
-Each header shows the last validated harness version; PDO does not enforce it. The sandbox image is not provided by PDO: it is the profile's image, and the harness binary must already be in it (ADR-0063).
-
-Custom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, resume, and complete nodes through `pdo complete`.
-
-<!-- support-table:end -->
-
-## Harness prerequisites
-
-| Requirement | Setup |
-| --- | --- |
-| Authentication | Log in with each harness before using it through PDO |
-| An approved working directory | Trust the target repository root once; trust cascades to subdirectories |
-| An installed version | Compare your installed harness with the last validated version in the support table |
-| A model catalogue for `pi` | Keep pi's model catalogue reachable from its home (`~/.pi/agent`): pi prices each message from it, and a message it cannot price makes the node's cost read "—" rather than `$0` |
-| `pi` in the sandbox image | PDO does not provide the sandbox image. For a sandboxed `pi` node your image must contain the `pi` binary: PDO checks it with a `which` at spawn, and a node whose binary is missing goes `Interrupted` with that reason (ADR-0063) |
-
-Outside sandboxed runs, PDO does not stage any harness's home.
-
-Inside a sandbox, the image and profile define the available harness configuration.
-
-## How PDO works
-
-| Principle | Behavior | Reference |
-| --- | --- | --- |
-| Deterministic orchestration | Typed outputs and graph rules choose the next node | [ADR-0002](docs/adr/0002-mechanical-conditionals-only.md), [ADR-0011](docs/adr/0011-conditional-edges-and-loop-regions.md) |
-| Typed artifacts | Each node emits validated frontmatter and a content body | [ADR-0020](docs/adr/0020-archive-preserves-outputs.md) |
-| Expert control | Interactive nodes wait for input and expose a live terminal | [ADR-0005](docs/adr/0005-inline-xterm-over-os-spawn.md) |
-| Deliberate autonomy | Only nodes placed in the pipeline can push, open PRs, or merge | [ADR-0012](docs/adr/0012-triggers-and-trust-earned-autonomy.md) |
-| Local agent setup | Sessions use your harness configuration and skills | [ADR-0045](docs/adr/0045-un-harnais-se-declare-par-un-template-d-argv-les-capacites-remplissent-les-trous.md) |
-
-See [CONTEXT.md](CONTEXT.md) for the domain model.
-
-## Development
-
-### Prerequisites
-
-| Tool | Version |
-| --- | --- |
-| [Rust](https://rustup.rs/) | Stable |
-| [Node.js](https://nodejs.org/) | 22 or newer |
-| [pnpm](https://pnpm.io/) | Use the version declared by the project |
-
-### Frontend
-
-```bash
-cd frontend
-pnpm install
-pnpm run dev
-```
-
-The Vite server runs at [http://localhost:5173](http://localhost:5173) with hot reload.
-
-It proxies API and WebSocket traffic to `127.0.0.1:5172`.
-
-### Daemon
-
-```bash
-cargo run -p pdo-daemon -- daemon
-cargo run -p pdo-daemon -- daemon --port 9999
-```
-
-The daemon serves the embedded frontend at [http://localhost:5172](http://localhost:5172).
-
-### Production build
-
-```bash
-cd frontend && pnpm run build && cd ..
-cargo build --release -p pdo-daemon
-```
-
-The release binary embeds `frontend/dist/`.
-
-### CLI
-
-```bash
-cargo run -p pdo-daemon -- --help
-```
-
-### Build and test commands
-
-| Purpose | Command |
-| --- | --- |
-| Check Rust | `cargo check --workspace --all-targets` |
-| Test Rust | `cargo test --workspace` |
-| Lint Rust | `cargo clippy --workspace --all-targets -- -D warnings` |
-| Check Rust formatting | `cargo fmt --all --check` |
-| Type-check frontend | `cd frontend && pnpm run typecheck` |
-| Test frontend | `cd frontend && pnpm run test` |
-| Lint frontend | `cd frontend && pnpm run lint` |
-| Build frontend | `cd frontend && pnpm run build` |
-
-## Architecture
-
-| Resource | Content |
-| --- | --- |
-| [CONTEXT.md](CONTEXT.md) | Domain glossary and module map |
-| [`docs/adr/`](docs/adr/) | Architecture decisions |
+Want to contribute or run PDO from source? See [CONTRIBUTING.md](CONTRIBUTING.md). Reference docs (CLI, reverse proxy, terminal, harness support) live in [docs/reference/](docs/reference/).
 
 ## License
 
-PDO is released under the [MIT License](LICENSE). Use it, modify it, embed it, host it,
-for any purpose. Contributions are accepted under the same license; see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+PDO is free and open source under the [MIT License](LICENSE): use it, modify it, embed it, host it, for any purpose.

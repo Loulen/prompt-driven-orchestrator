@@ -21,7 +21,11 @@
 use crate::harness_probes::probes_for;
 use crate::harness_registry::{embedded_floor, validated_version};
 
-/// The HTML comment opening the generated block in the README. Everything between
+/// The repository file carrying the generated block (#855: moved out of the README,
+/// which no longer holds any generated content). Relative to the repository root.
+pub const DOCUMENT: &str = "docs/reference/harnesses.md";
+
+/// The HTML comment opening the generated block in [`DOCUMENT`]. Everything between
 /// this line and [`END_MARKER`] is owned by the generator.
 pub const BEGIN_MARKER: &str = "<!-- support-table:begin -->";
 pub const END_MARKER: &str = "<!-- support-table:end -->";
@@ -197,7 +201,7 @@ pub fn check(document: &str) -> Result<(), String> {
     Err(format!(
         "the harness support table has drifted from the code that declares it.\n\n{}\n\n\
          Regenerate it with `make support-table` (the table is generated from \
-         crates/pdo-daemon/src/harness_probes.rs — edit the capabilities, not the README).",
+         crates/pdo-daemon/src/harness_probes.rs — edit the capabilities, not {DOCUMENT}).",
         first_difference(committed, expected)
     ))
 }
@@ -315,6 +319,7 @@ mod tests {
         assert!(err.contains("drifted"), "{err}");
         assert!(err.contains("first difference at line"), "{err}");
         assert!(err.contains("make support-table"), "{err}");
+        assert!(err.contains("docs/reference/harnesses.md"), "{err}");
     }
 
     #[test]

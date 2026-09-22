@@ -56,7 +56,7 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
   that exited). A first `claude` launch in a fresh worktree lands on the "Quick safety check" trust
   dialog — confirm it with `tmux send-keys -t <session> Enter`. `copilot`'s equivalent is **not** a
   step to drive: approve the target repository's root once, outside the journey, and it cascades to
-  every node sub-worktree (README § Prerequisites). A `copilot` pane parked on it means the
+  every node sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means the
   prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
   - Pipelines: `.pdo/pipelines/<name>.yaml` and the sidecar `.pdo/pipelines/<name>.prompts/<node>.md`

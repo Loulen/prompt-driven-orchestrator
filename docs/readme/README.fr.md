@@ -116,7 +116,7 @@ Coût, durée et taux d'échec par modèle et par nœud, tirés de vos propres r
 </td>
 <td width="50%">
   <!-- scene: stats -->
-  <a href="../../docs/features.md#run-stats-by-model"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="La page Stats ventilée par modèle et par effort" width="100%" /></picture></a>
+  <a href="../../docs/features.md#run-stats-by-model"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/stats.jpg"><source srcset="../../docs/assets/readme/stats.gif" type="image/gif"><img src="../../docs/assets/readme/stats.jpg" alt="La page Stats ventilée par modèle et par effort" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

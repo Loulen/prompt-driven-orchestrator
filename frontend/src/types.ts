@@ -1545,6 +1545,27 @@ export interface EdgeEndpoint {
   port: string;
 }
 
+/**
+ * The source end of an edge: one node, and the output port(s) the edge CARRIES
+ * (ADR-0073 / #843). A multi-port edge is still one edge for the runtime — it
+ * fires once, at the source node's completion, and drops one emergent input per
+ * carried port on the target.
+ *
+ * Two shapes, exactly as in the YAML the daemon parses and re-emits:
+ * `{ node, port }` for a single carried port — the pre-#843 form, unchanged, so
+ * an existing pipeline round-trips byte for byte — and `{ node, ports }` for
+ * several. Exactly one of the two keys is set; never read them directly, go
+ * through `lib/edgePorts.ts` (`carriedPorts`, `primaryPort`, `withCarriedPorts`)
+ * so the two shapes stay one concept.
+ */
+export interface EdgeSource {
+  node: string;
+  /** Set iff the edge carries exactly one port. */
+  port?: string;
+  /** Set iff the edge carries two or more ports, in authored order. */
+  ports?: string[];
+}
+
 /** A pinned waypoint on a manually-routed edge — absolute canvas coordinates. */
 export interface EdgeWaypoint {
   x: number;
@@ -1562,7 +1583,7 @@ export interface EdgeWaypoint {
 export type EdgeRouteMode = "auto" | "manual";
 
 export interface EdgeDef {
-  source: EdgeEndpoint;
+  source: EdgeSource;
   target: EdgeEndpoint;
   reason?: string | null;
   /** Optional `when:` clause (ADR-0011): conditional routing on the edge. */

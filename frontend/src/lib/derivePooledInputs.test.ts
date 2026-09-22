@@ -28,7 +28,7 @@ describe("derivePooledInputs", () => {
     const inputs = derivePooledInputs(p, "implementer");
 
     expect(inputs).toEqual([
-      { name: "review", repeated: false, sources: [{ nodeId: "reviewer", label: "reviewer", edgeIndex: 0 }] },
+      { name: "review", repeated: false, sources: [{ nodeId: "reviewer", label: "reviewer", edgeIndex: 0, port: "review", sharedEdge: false }] },
     ]);
   });
 
@@ -48,8 +48,8 @@ describe("derivePooledInputs", () => {
         name: "review",
         repeated: false,
         sources: [
-          { nodeId: "security-reviewer", label: "security-reviewer", edgeIndex: 0 },
-          { nodeId: "perf-reviewer", label: "perf-reviewer", edgeIndex: 1 },
+          { nodeId: "security-reviewer", label: "security-reviewer", edgeIndex: 0, port: "review", sharedEdge: false },
+          { nodeId: "perf-reviewer", label: "perf-reviewer", edgeIndex: 1, port: "review", sharedEdge: false },
         ],
       },
     ]);
@@ -81,7 +81,7 @@ describe("derivePooledInputs", () => {
     const inputs = derivePooledInputs(p, "loop-body");
 
     expect(inputs).toEqual([
-      { name: "lap", repeated: true, sources: [{ nodeId: "worker", label: "worker", edgeIndex: 0 }] },
+      { name: "lap", repeated: true, sources: [{ nodeId: "worker", label: "worker", edgeIndex: 0, port: "lap", sharedEdge: false }] },
     ]);
   });
 
@@ -93,7 +93,7 @@ describe("derivePooledInputs", () => {
 
     const inputs = derivePooledInputs(p, "implementer");
 
-    expect(inputs[0].sources).toEqual([{ nodeId: "rv-7", label: "rv-7", edgeIndex: 0 }]);
+    expect(inputs[0].sources).toEqual([{ nodeId: "rv-7", label: "rv-7", edgeIndex: 0, port: "review", sharedEdge: false }]);
   });
 
   it("returns an empty list for a node with no incoming edges", () => {
@@ -126,7 +126,7 @@ describe("derivePooledInputs", () => {
     const inputs = derivePooledInputs(p, "c");
 
     expect(inputs).toEqual([
-      { name: "in", repeated: false, sources: [{ nodeId: "c", label: "c", edgeIndex: 0 }] },
+      { name: "in", repeated: false, sources: [{ nodeId: "c", label: "c", edgeIndex: 0, port: "in", sharedEdge: false }] },
     ]);
   });
 
@@ -142,5 +142,46 @@ describe("derivePooledInputs", () => {
     const inputs = derivePooledInputs(p, "c");
 
     expect(inputs[0].sources.map((s) => s.edgeIndex)).toEqual([0, 1]);
+  });
+
+  // #843 / ADR-0073: one edge, one firing, one emergent input PER CARRIED PORT.
+  it("derives one input per carried port of a multi-output edge", () => {
+    const p = pipeline(
+      [node("design"), node("orch")],
+      [
+        {
+          source: { node: "design", ports: ["out", "spec"] },
+          target: { node: "orch", port: "out" },
+        },
+      ],
+    );
+
+    const inputs = derivePooledInputs(p, "orch");
+
+    expect(inputs.map((i) => i.name)).toEqual(["out", "spec"]);
+    // Both rows point at the SAME edge, and say so — dropping one must untick
+    // its port rather than delete the arrow and take the other input with it.
+    expect(inputs.flatMap((i) => i.sources)).toEqual([
+      { nodeId: "design", label: "design", edgeIndex: 0, port: "out", sharedEdge: true },
+      { nodeId: "design", label: "design", edgeIndex: 0, port: "spec", sharedEdge: true },
+    ]);
+  });
+
+  it("pools a multi-port input with a same-named single-port edge from elsewhere", () => {
+    const p = pipeline(
+      [node("design"), node("other"), node("orch")],
+      [
+        {
+          source: { node: "design", ports: ["out", "spec"] },
+          target: { node: "orch", port: "out" },
+        },
+        { source: { node: "other", port: "spec" }, target: { node: "orch", port: "spec" } },
+      ],
+    );
+
+    const inputs = derivePooledInputs(p, "orch");
+
+    const spec = inputs.find((i) => i.name === "spec")!;
+    expect(spec.sources.map((s) => s.nodeId)).toEqual(["design", "other"]);
   });
 });

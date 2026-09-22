@@ -341,3 +341,65 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     expect(other.data.loopBadge).toBeUndefined();
   });
 });
+
+// #843 / ADR-0073: an edge can carry several outputs of its source node. It is
+// still ONE arrow on the canvas — drawn from the primary carried port's handle —
+// and its condition pill names the output each predicate reads as soon as there
+// is more than one to choose from.
+describe("deriveEditEdges — multi-output edges (#843)", () => {
+  function node(id: string, outputs: string[]): NodeDef {
+    return {
+      id,
+      name: id,
+      type: "agent",
+      inputs: [],
+      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      interactive: false,
+    };
+  }
+
+  function pipeline(edges: PipelineDef["edges"]): PipelineDef {
+    return {
+      name: "p",
+      variables: {},
+      nodes: [node("design", ["out", "spec"]), node("orch", [])],
+      edges,
+    };
+  }
+
+  it("draws ONE arrow for a multi-port edge, from the primary port's handle", () => {
+    const edges = deriveEditEdges(
+      pipeline([
+        { source: { node: "design", ports: ["out", "spec"] }, target: { node: "orch", port: "out" } },
+      ]),
+    );
+    expect(edges).toHaveLength(1);
+    expect(edges[0].sourceHandle).toBe("out");
+  });
+
+  it("renders the condition pill with the output prefix once two ports are carried", () => {
+    const edges = deriveEditEdges(
+      pipeline([
+        {
+          source: { node: "design", ports: ["out", "spec"] },
+          target: { node: "orch", port: "out" },
+          when: { "out.has_design_work": { eq: true } },
+        },
+      ]),
+    );
+    expect(edges[0].data!.label).toBe("out.has_design_work = true");
+  });
+
+  it("renders the property alone on a single-port edge", () => {
+    const edges = deriveEditEdges(
+      pipeline([
+        {
+          source: { node: "design", port: "out" },
+          target: { node: "orch", port: "out" },
+          when: { has_design_work: { eq: true } },
+        },
+      ]),
+    );
+    expect(edges[0].data!.label).toBe("has_design_work = true");
+  });
+});

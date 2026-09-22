@@ -273,6 +273,117 @@ pub(crate) struct EdgeEndpoint {
     pub port: String,
 }
 
+/// The source end of an edge: one node, and the output port(s) the edge
+/// **carries** (ADR-0073 / #843). A multi-port edge is still ONE edge for the
+/// runtime — it fires once, at the source node's completion, and drops one
+/// emergent input per carried port on the target.
+///
+/// Two YAML shapes, and the single-port one is the one this re-emits whenever a
+/// single port is carried, so an existing file round-trips byte for byte:
+///
+/// ```yaml
+/// source: { node: design, port: out }          # one port — unchanged
+/// source: { node: design, ports: [out, spec] } # several — additive
+/// ```
+///
+/// `ports` is ALWAYS non-empty after a parse: an edge that carries nothing has
+/// no meaning, so [`deserialize`](EdgeSource::deserialize) rejects both an empty
+/// `ports:` list and a source that names neither key.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct EdgeSource {
+    pub node: String,
+    /// Carried output ports, in authored order. Order is presentation only — the
+    /// semantic projection compares the SET (ADR-0073 §2).
+    pub ports: Vec<String>,
+}
+
+impl EdgeSource {
+    /// The single-port source every pre-#843 edge has.
+    pub(crate) fn single(node: impl Into<String>, port: impl Into<String>) -> Self {
+        Self {
+            node: node.into(),
+            ports: vec![port.into()],
+        }
+    }
+
+    /// The edge's *primary* port: the first carried one. This is what the legacy
+    /// single-port reading of an edge means — the artifact a `Switch` routes, the
+    /// port a `body`/`done` structural edge names, the port an `EdgeInfo` shows.
+    /// Returns `""` for a `Default`-constructed source (never a parsed one).
+    pub(crate) fn port(&self) -> &str {
+        self.ports.first().map(String::as_str).unwrap_or("")
+    }
+
+    /// Whether this edge carries `port`.
+    pub(crate) fn carries(&self, port: &str) -> bool {
+        self.ports.iter().any(|p| p == port)
+    }
+
+    /// `design.out`, or `design.out+spec` when several ports are carried — the
+    /// spelling every diagnostic uses for an edge's source end.
+    pub(crate) fn label(&self) -> String {
+        format!("{}.{}", self.node, self.ports.join("+"))
+    }
+}
+
+impl Serialize for EdgeSource {
+    /// Emits `port:` for a single carried port and `ports:` for several. The
+    /// single-port shape is byte-identical to the pre-#843 one — that is the
+    /// backward-compatibility contract, not a convenience.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("node", &self.node)?;
+        if self.ports.len() == 1 {
+            map.serialize_entry("port", &self.ports[0])?;
+        } else {
+            map.serialize_entry("ports", &self.ports)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for EdgeSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            node: String,
+            #[serde(default)]
+            port: Option<String>,
+            #[serde(default)]
+            ports: Option<Vec<String>>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        // Both keys at once is an authoring mistake, not a shape: reading one and
+        // dropping the other would silently lose a carried port on the next save.
+        if raw.port.is_some() && raw.ports.is_some() {
+            return Err(serde::de::Error::custom(format!(
+                "edge source '{}' has both `port:` and `ports:` — use one",
+                raw.node
+            )));
+        }
+        let ports = match (raw.port, raw.ports) {
+            (Some(p), None) => vec![p],
+            (None, Some(list)) if !list.is_empty() => list,
+            (None, Some(_)) => return Err(serde::de::Error::custom(format!(
+                "edge source '{}' has an empty `ports:` list — an edge carries at least one output",
+                raw.node
+            ))),
+            (Some(_), Some(_)) => unreachable!("rejected above"),
+            (None, None) => {
+                return Err(serde::de::Error::custom(format!(
+                    "edge source '{}' names no output — expected `port:` or `ports:`",
+                    raw.node
+                )))
+            }
+        };
+        Ok(Self {
+            node: raw.node,
+            ports,
+        })
+    }
+}
+
 /// Edge routing mode (#154). `Auto` edges store no waypoints — their
 /// right-angle path is recomputed deterministically and re-routes on node move.
 /// `Manual` edges pin the route to persisted `waypoints`. Routing is *layout*,
@@ -294,7 +405,7 @@ pub(crate) struct EdgeWaypoint {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct EdgeDef {
-    pub source: EdgeEndpoint,
+    pub source: EdgeSource,
     pub target: EdgeEndpoint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -326,6 +437,28 @@ pub(crate) struct EdgeDef {
     /// semantic pipeline-diff. Absent ⇒ left (legacy anchoring), never written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_side: Option<PortSide>,
+}
+
+impl EdgeDef {
+    /// The inputs this edge drops on its target: one per carried port (ADR-0073).
+    /// Each pair is `(source port, target input name)`.
+    ///
+    /// A single-port edge keeps `target.port` as the input name — that is what a
+    /// declared handle (a `merge`'s input, End's `result`) and every pre-#843
+    /// file mean, and renaming it on the way through would break them. As soon as
+    /// the edge carries several ports there is no single name left to honour, so
+    /// each input takes its own port's name — which is exactly the emergent rule
+    /// ("connecting `debugger.repro_steps` creates a `repro_steps` input").
+    pub(crate) fn emergent_inputs(&self) -> Vec<(String, String)> {
+        if self.source.ports.len() <= 1 {
+            return vec![(self.source.port().to_string(), self.target.port.clone())];
+        }
+        self.source
+            .ports
+            .iter()
+            .map(|p| (p.clone(), p.clone()))
+            .collect()
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1013,46 +1146,63 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
 pub(crate) fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
     let node_ids: HashSet<&str> = pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
 
+    let edge_label = |edge: &EdgeDef| {
+        format!(
+            "edge '{} -> {}.{}'",
+            edge.source.label(),
+            edge.target.node,
+            edge.target.port
+        )
+    };
+
+    // `ports` names the port(s) the endpoint claims on its node: one for a
+    // target, one PER CARRIED PORT for a multi-port source (ADR-0073) — a typo in
+    // the second port of a `ports:` list is the same dangling reference as a typo
+    // in the first, and silently ignoring it would stall the run mid-flight.
     let check = |edge: &EdgeDef,
-                 endpoint: &EdgeEndpoint,
+                 node_id: &str,
+                 ports: &[String],
                  role: &str,
                  get_ports: fn(&NodeDef) -> &[Port]|
-     -> Option<String> {
-        let edge_label = format!(
-            "edge '{}.{} -> {}.{}'",
-            edge.source.node, edge.source.port, edge.target.node, edge.target.port
-        );
-        if !node_ids.contains(endpoint.node.as_str()) {
-            return Some(format!(
-                "{edge_label}: {role} references non-existent node '{}'",
-                endpoint.node
-            ));
+     -> Vec<String> {
+        if !node_ids.contains(node_id) {
+            return vec![format!(
+                "{}: {role} references non-existent node '{node_id}'",
+                edge_label(edge)
+            )];
         }
-        let node = pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == endpoint.node)
-            .unwrap();
+        let node = pipeline.nodes.iter().find(|n| n.id == node_id).unwrap();
         if role == "target" && node.node_type.has_emergent_inputs() {
-            return None;
+            return Vec::new();
         }
-        if !get_ports(node).iter().any(|p| p.name == endpoint.port) {
-            return Some(format!(
-                "{edge_label}: {role} port '{}' not found on node '{}'",
-                endpoint.port, endpoint.node
-            ));
-        }
-        None
+        ports
+            .iter()
+            .filter(|port| !get_ports(node).iter().any(|p| p.name == **port))
+            .map(|port| {
+                format!(
+                    "{}: {role} port '{port}' not found on node '{node_id}'",
+                    edge_label(edge)
+                )
+            })
+            .collect()
     };
 
     let mut errors = Vec::new();
     for edge in &pipeline.edges {
-        if let Some(e) = check(edge, &edge.source, "source", |n| &n.outputs) {
-            errors.push(e);
-        }
-        if let Some(e) = check(edge, &edge.target, "target", |n| &n.inputs) {
-            errors.push(e);
-        }
+        errors.extend(check(
+            edge,
+            &edge.source.node,
+            &edge.source.ports,
+            "source",
+            |n| &n.outputs,
+        ));
+        errors.extend(check(
+            edge,
+            &edge.target.node,
+            std::slice::from_ref(&edge.target.port),
+            "target",
+            |n| &n.inputs,
+        ));
     }
 
     // A region member naming a missing node is the same class of dangling
@@ -1140,7 +1290,7 @@ pub(crate) fn resolve_switch_upstream_schema(
     let source_port = source_node
         .outputs
         .iter()
-        .find(|p| p.name == edge.source.port)?;
+        .find(|p| p.name == edge.source.port())?;
     source_port.frontmatter.clone()
 }
 
@@ -1942,6 +2092,177 @@ edges:
             !warnings.iter().any(|w| w.contains("target port")),
             "emergent input on a regular node must not warn on target port; got: {warnings:?}"
         );
+    }
+
+    // ── Multi-output edges (ADR-0073 / #843) ────────────────────────────────
+    //
+    // An edge carries one or more output ports of the SAME source node and stays
+    // ONE edge for the runtime. The YAML is additive: the single-port form is
+    // unchanged and is the one re-emitted whenever a single port is carried.
+
+    const TWO_OUTPUT_PIPELINE: &str = r#"
+name: multi-port
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: design
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+      - name: spec
+  - id: ab000002
+    name: orchestrator
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: brief }
+  - source: { node: ab000001, ports: [out, spec] }
+    target: { node: ab000002, port: out }
+  - source: { node: ab000002, port: out }
+    target: { node: end, port: result }
+"#;
+
+    #[test]
+    fn parses_the_single_port_source_form() {
+        let result = parse_pipeline(TWO_OUTPUT_PIPELINE).unwrap();
+        let edge = &result.pipeline.edges[0];
+        assert_eq!(edge.source.ports, vec!["user_prompt".to_string()]);
+        assert_eq!(edge.source.port(), "user_prompt");
+    }
+
+    #[test]
+    fn parses_the_multi_port_source_form() {
+        let result = parse_pipeline(TWO_OUTPUT_PIPELINE).unwrap();
+        let edge = &result.pipeline.edges[1];
+        assert_eq!(
+            edge.source.ports,
+            vec!["out".to_string(), "spec".to_string()]
+        );
+        // The primary port is the first carried one: what every legacy
+        // single-port reading of the edge means.
+        assert_eq!(edge.source.port(), "out");
+        assert!(edge.source.carries("spec"));
+        assert!(!edge.source.carries("notes"));
+    }
+
+    #[test]
+    fn a_single_port_source_re_emits_the_unchanged_form() {
+        // THE backward-compatibility contract: re-serializing an existing edge
+        // must produce `port:`, never `ports: [..]`, or every pipeline in the
+        // wild would be rewritten on its first save.
+        let source = EdgeSource::single("ab000001", "out");
+        let yaml = serde_yaml::to_string(&source).unwrap();
+        assert!(yaml.contains("port: out"), "got: {yaml}");
+        assert!(!yaml.contains("ports:"), "got: {yaml}");
+    }
+
+    #[test]
+    fn a_multi_port_source_emits_the_additive_form() {
+        let source = EdgeSource {
+            node: "ab000001".into(),
+            ports: vec!["out".into(), "spec".into()],
+        };
+        let yaml = serde_yaml::to_string(&source).unwrap();
+        assert!(yaml.contains("ports:"), "got: {yaml}");
+        let round: EdgeSource = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(round, source);
+    }
+
+    #[test]
+    fn an_edge_source_that_names_no_output_is_refused() {
+        // An edge that carries nothing has no meaning: accepting it would let a
+        // pipeline reach the scheduler with an edge that can never resolve.
+        let err = serde_yaml::from_str::<EdgeSource>(
+            "node: ab000001
+",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("names no output"), "got: {err}");
+
+        let err = serde_yaml::from_str::<EdgeSource>(
+            "node: ab000001
+ports: []
+",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("empty"), "got: {err}");
+    }
+
+    #[test]
+    fn an_edge_source_naming_both_forms_is_refused() {
+        // Reading one and dropping the other would silently lose a carried port
+        // on the next save.
+        let err = serde_yaml::from_str::<EdgeSource>(
+            "node: ab000001
+port: out
+ports: [out, spec]
+",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("both"), "got: {err}");
+    }
+
+    #[test]
+    fn warns_on_a_typo_in_any_carried_port_not_just_the_first() {
+        // A typo in the second port of a `ports:` list is the same dangling
+        // reference as one in the first; ignoring it would stall the run.
+        let yaml = TWO_OUTPUT_PIPELINE.replace("ports: [out, spec]", "ports: [out, speec]");
+        let result = parse_pipeline(&yaml).unwrap();
+        let warnings: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("source port 'speec' not found")),
+            "got: {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("'out' not found")),
+            "the carried port that DOES exist must not warn; got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn emergent_inputs_are_one_per_carried_port() {
+        let result = parse_pipeline(TWO_OUTPUT_PIPELINE).unwrap();
+        let multi = &result.pipeline.edges[1];
+        assert_eq!(
+            multi.emergent_inputs(),
+            vec![
+                ("out".to_string(), "out".to_string()),
+                ("spec".to_string(), "spec".to_string()),
+            ]
+        );
+        // A single-port edge keeps the target's declared input name — what a
+        // structural handle (End's `result`) and every pre-#843 file mean.
+        let to_end = &result.pipeline.edges[2];
+        assert_eq!(
+            to_end.emergent_inputs(),
+            vec![("out".to_string(), "result".to_string())]
+        );
+    }
+
+    #[test]
+    fn the_source_label_names_every_carried_port() {
+        let result = parse_pipeline(TWO_OUTPUT_PIPELINE).unwrap();
+        assert_eq!(result.pipeline.edges[1].source.label(), "ab000001.out+spec");
+        assert_eq!(result.pipeline.edges[2].source.label(), "ab000002.out");
     }
 
     #[test]

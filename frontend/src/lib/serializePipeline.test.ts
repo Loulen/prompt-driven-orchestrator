@@ -544,6 +544,52 @@ describe("serializePipeline persists edge when/else (ADR-0011)", () => {
     expect(yaml).not.toContain("when:");
     expect(yaml).not.toContain("else:");
   });
+
+  // #843 / ADR-0073: an edge can carry several outputs of its source node. The
+  // YAML is ADDITIVE — the single-port form is unchanged and stays the one
+  // emitted while a single port is carried, so an existing pipeline opens and
+  // saves identically.
+  describe("carried outputs (#843)", () => {
+    it("emits `port:` for a single carried output, exactly as before", () => {
+      const yaml = serializePipeline(
+        makeEdgePipeline([
+          {
+            source: { node: "reviewer", port: "verdict" },
+            target: { node: "impl", port: "review" },
+          },
+        ]),
+      );
+      expect(yaml).toContain("port: verdict");
+      expect(yaml).not.toContain("ports:");
+    });
+
+    it("emits `ports:` for several carried outputs", () => {
+      const yaml = serializePipeline(
+        makeEdgePipeline([
+          {
+            source: { node: "reviewer", ports: ["verdict", "report"] },
+            target: { node: "impl", port: "review" },
+          },
+        ]),
+      );
+      expect(yaml).toContain("ports:");
+      expect(yaml).toContain("verdict");
+      expect(yaml).toContain("report");
+    });
+
+    it("emits a port-qualified when key verbatim on a multi-port edge", () => {
+      const yaml = serializePipeline(
+        makeEdgePipeline([
+          {
+            source: { node: "reviewer", ports: ["verdict", "report"] },
+            target: { node: "impl", port: "review" },
+            when: { "verdict.is_blocking": { eq: true } },
+          },
+        ]),
+      );
+      expect(yaml).toContain("verdict.is_blocking:");
+    });
+  });
 });
 
 describe("serializePipeline persists port_type", () => {

@@ -157,6 +157,55 @@ describe("pipelinesEquivalent", () => {
     expect(pipelinesEquivalent(a, b)).toBe(false);
   });
 
+  // #843 / ADR-0073 §2: the outputs an edge carries are a SET. Two pipelines
+  // whose only difference is the ORDER of that list are the same pipeline, so
+  // re-ticking the same two outputs in the other order never flips the star.
+  it("ignores the order of an edge's carried outputs", () => {
+    const a = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["out", "spec"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["spec", "out"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
+  it("still flags a different SET of carried outputs", () => {
+    const a = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["out", "spec"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["out", "notes"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(false);
+  });
+
+  it("does not equate a single-port edge with a two-port one", () => {
+    const a = def({
+      nodes: [node("a"), node("b")],
+      edges: [{ source: { node: "a", port: "out" }, target: { node: "b", port: "in" } }],
+    });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["out", "spec"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(false);
+  });
+
   it("preserves structural differences", () => {
     expect(
       pipelinesEquivalent(def({ nodes: [node("a")] }), def({ nodes: [node("b")] })),

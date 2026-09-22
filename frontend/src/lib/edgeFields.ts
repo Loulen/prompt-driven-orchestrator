@@ -1,4 +1,5 @@
 import { OPERATORS, type Operator } from "./whenClause";
+import { primaryPort } from "./edgePorts";
 import type { PipelineDef, EdgeDef, FrontmatterFieldDecl } from "../types";
 
 /**
@@ -17,15 +18,21 @@ export interface EdgeConditionField {
  * Resolves the fields selectable in the `when:` editor for a given edge:
  * the source output port's frontmatter, plus `iter`, plus pipeline variables.
  * Conditions reference only these (ADR-0002): no free expressions, no LLM.
+ *
+ * `port` names WHICH carried output the row reads (#843 / ADR-0073 §3) — an edge
+ * can carry several, and each condition row picks one. Omitted, it falls back to
+ * the edge's primary port, which is the whole story for a single-port edge.
  */
 export function edgeConditionFields(
   pipeline: PipelineDef,
   edge: EdgeDef,
+  port?: string,
 ): EdgeConditionField[] {
   const fields: EdgeConditionField[] = [];
 
+  const readPort = port ?? primaryPort(edge.source);
   const sourceNode = pipeline.nodes.find((n) => n.id === edge.source.node);
-  const sourcePort = sourceNode?.outputs.find((p) => p.name === edge.source.port);
+  const sourcePort = sourceNode?.outputs.find((p) => p.name === readPort);
   if (sourcePort?.frontmatter) {
     for (const [name, decl] of Object.entries(sourcePort.frontmatter)) {
       fields.push({ name, decl });

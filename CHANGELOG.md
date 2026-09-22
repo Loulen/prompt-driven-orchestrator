@@ -16,6 +16,17 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.101.0
+**Tour « First pipeline » : geste depuis le bord, correction du port dans la section Outputs** (#846, #840).
+
+- Les étapes d'edge ne parlent plus de dot ni de handle : elles enseignent le bord de la carte
+  (#844).
+- Les deux edges du tester avancent sur l'output porté. Si l'edge ne porte pas `out`, la carte
+  re-vise l'edge puis la section Outputs du panneau, et avance quand `out` est coché ; l'étape de
+  sélection qui suit est alors déjà satisfaite.
+- Les conditions `when` sont acceptées sur une edge multi-port (`out.verdict`) comme sur une edge
+  à un port (`verdict`) ; une valeur fausse retient l'étape avec un indice précis.
+
 ## 1.100.0
 **Câblage des edges depuis le bord, tracé sur grille, drag de segments snappé** (#844, #840).
 

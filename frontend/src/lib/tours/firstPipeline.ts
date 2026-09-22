@@ -14,9 +14,10 @@
  *   it will wait on your answers along the way.
  */
 
-import type { NodeDef, PipelineDef } from "../../types";
+import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
 import type { TourAppState, TourDef, TourObservation, TourStep } from "../tour";
 import { carriedPorts, carries } from "../edgePorts";
+import { splitFieldKey } from "../whenClause";
 
 /** The name the tour asks the user to paste for the pipeline itself. */
 export const TUTORIAL_PIPELINE_ID = "tutorial-implement-test";
@@ -187,10 +188,61 @@ function selected(app: TourAppState, node: NodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
 }
 
-function whenEquals(when: Record<string, unknown> | null | undefined, field: string, value: string): boolean {
-  const predicate = when?.[field];
-  if (!predicate || typeof predicate !== "object") return false;
-  return (predicate as Record<string, unknown>).eq === value;
+/**
+ * Whether the edge's condition reads `field eq value` on the `out` port. The key
+ * is resolved against the ports the edge carries, the way the daemon and the
+ * When editor read it: bare `verdict` on an edge that carries only `out`,
+ * `out.verdict` once it carries `out` and `image_list` — which is what every
+ * edge fixed in the Outputs section carries (#846, FP iteration 1: the step read
+ * the bare key only, and the correction path dead-ended here).
+ */
+function whenEquals(edge: EdgeDef | undefined, field: string, value: string): boolean {
+  if (!edge?.when) return false;
+  const ports = carriedPorts(edge.source);
+  return Object.entries(edge.when).some(([key, predicate]) => {
+    const at = splitFieldKey(key, ports);
+    return (
+      at.port === OUT_PORT &&
+      at.field === field &&
+      !!predicate &&
+      typeof predicate === "object" &&
+      (predicate as Record<string, unknown>).eq === value
+    );
+  });
+}
+
+/**
+ * A step that writes `verdict eq <value>` on the tester → `to` edge. While the
+ * edge holds some other condition, the body says what the step is waiting for,
+ * so a reader whose clause is off by one field or value is not left staring at
+ * a card that never moves (#846, FP iteration 1).
+ */
+function conditionStep(def: {
+  id: string;
+  title: string;
+  to: (app: TourAppState) => NodeDef | null;
+  value: string;
+  /** Why the condition matters — the second sentence of both bodies. */
+  why: string;
+}): TourStep {
+  const edge = (app: TourAppState): EdgeDef | undefined => {
+    const i = edgeIndex(app.pipeline, agent(app, 1), def.to(app), OUT_PORT);
+    return i < 0 ? undefined : app.pipeline?.edges[i];
+  };
+  return {
+    id: def.id,
+    title: def.title,
+    body: (o) => {
+      const when = edge(o.app)?.when;
+      return !when || Object.keys(when).length === 0
+        ? `Add the condition verdict eq ${def.value}. ${def.why}`
+        : `Not there yet: the condition must read verdict eq ${def.value}, on the out output. ${def.why}`;
+    },
+    target: () => ['[data-testid="when-editor"]'],
+    waitingFor: "the When editor of the selected edge",
+    failureHint: "The edge was deselected before the condition was saved.",
+    done: (o) => whenEquals(edge(o.app), "verdict", def.value),
+  };
 }
 
 // ---- the steps ------------------------------------------------------------
@@ -474,18 +526,13 @@ const STEPS: TourStep[] = [
     waitingFor: "the tester → implementer edge",
     done: (o) => edgeSelected(o.app, agent(o.app, 0)),
   },
-  {
+  conditionStep({
     id: "loop-condition",
     title: "Only loop back on a failure",
-    body: "Add the condition verdict eq fail. The edge now fires only when the tester's frontmatter says the change did not hold up.",
-    target: () => ['[data-testid="when-editor"]'],
-    waitingFor: "the When editor of the selected edge",
-    failureHint: "The edge was deselected before the condition was saved.",
-    done: (o) => {
-      const i = edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0), OUT_PORT);
-      return i >= 0 && whenEquals(o.app.pipeline?.edges[i]?.when, "verdict", "fail");
-    },
-  },
+    to: (app) => agent(app, 0),
+    value: "fail",
+    why: "The edge now fires only when the tester's frontmatter says the change did not hold up.",
+  }),
   carryOutEdgeStep({
     id: "edge-tester-end",
     title: "Connect tester to End",
@@ -507,18 +554,13 @@ const STEPS: TourStep[] = [
     waitingFor: "the tester → End edge",
     done: (o) => edgeSelected(o.app, endNode(o.app)),
   },
-  {
+  conditionStep({
     id: "end-condition",
     title: "Finish only on a pass",
-    body: "Add the condition verdict eq pass. Both routes out of the tester are now explicit: pass ends the Run, fail sends it round again.",
-    target: () => ['[data-testid="when-editor"]'],
-    waitingFor: "the When editor of the selected edge",
-    failureHint: "The edge was deselected before the condition was saved.",
-    done: (o) => {
-      const i = edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app), OUT_PORT);
-      return i >= 0 && whenEquals(o.app.pipeline?.edges[i]?.when, "verdict", "pass");
-    },
-  },
+    to: endNode,
+    value: "pass",
+    why: "Both routes out of the tester are now explicit: pass ends the Run, fail sends it round again.",
+  }),
   {
     id: "save",
     title: "Save the pipeline",

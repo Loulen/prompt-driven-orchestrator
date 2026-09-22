@@ -28,6 +28,8 @@ import {
 } from "../tour";
 import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
 import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
+import { carriedPorts, defaultConditionPort, withCarriedPorts } from "../edgePorts";
+import { requalifyWhen, rowsToWhen } from "../whenClause";
 
 const STEPS = FIRST_PIPELINE_TOUR.steps;
 
@@ -149,17 +151,43 @@ class FakeApp {
     });
   }
 
-  /** What ticking a box in the edge panel's Outputs section does. */
+  /**
+   * What ticking a box in the edge panel's Outputs section does: the carried
+   * ports change, and the edge's clause is re-qualified for them.
+   */
   setEdgePorts(index: number, ports: string[]) {
     this.patch((p) => {
       p.edges = p.edges.map((e, i) =>
         i === index
-          ? { ...e, source: ports.length === 1 ? { node: e.source.node, port: ports[0] } : { node: e.source.node, ports } }
+          ? {
+              ...e,
+              source: withCarriedPorts(e.source, ports),
+              when: requalifyWhen(e.when, carriedPorts(e.source), ports) ?? undefined,
+            }
           : e,
       );
     });
   }
 
+  /**
+   * What the When editor writes for one `field eq value` row: the row reads the
+   * edge's default port, and the key is encoded for the ports the edge carries —
+   * bare on a single-port edge, `out.verdict` on an edge that carries two. Never
+   * a hand-written clause: the FP of #846 found the tour green against a shape
+   * the real editor does not produce.
+   */
+  writeCondition(index: number, field: string, value: string) {
+    this.patch((p) => {
+      p.edges = p.edges.map((e, i) => {
+        if (i !== index) return e;
+        const ports = carriedPorts(e.source);
+        const row = { port: defaultConditionPort(ports), field, op: "eq" as const, value };
+        return { ...e, when: rowsToWhen([row], ports) ?? undefined };
+      });
+    });
+  }
+
+  /** A raw clause, for the cases the editor can produce by other rows. */
   setEdgeWhen(index: number, when: Record<string, unknown>) {
     this.patch((p) => {
       p.edges = p.edges.map((e, i) => (i === index ? { ...e, when } : e));
@@ -305,11 +333,11 @@ function gestures(fake: FakeApp): Record<string, () => void> {
       fake.selectEdge(1);
       fake.show('[data-testid="when-editor"]');
     },
-    "loop-condition": () => fake.setEdgeWhen(1, { verdict: { eq: "fail" } }),
+    "loop-condition": () => fake.writeCondition(1, "verdict", "fail"),
     "edge-tester-end": () =>
       fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "end", port: "result" } }),
     "select-end-edge": () => fake.selectEdge(2),
-    "end-condition": () => fake.setEdgeWhen(2, { verdict: { eq: "pass" } }),
+    "end-condition": () => fake.writeCondition(2, "verdict", "pass"),
     save: () => {
       fake.save();
       fake.show(`[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`);
@@ -598,10 +626,11 @@ describe("an edge that carries the wrong output", () => {
     }
 
     expect(run.phase).toBe("finished");
+    // Both edges carry out AND image_list, so the editor qualified the key.
     expect(fake.app.pipeline?.edges.map((e) => e.when)).toEqual([
       undefined,
-      { verdict: { eq: "fail" } },
-      { verdict: { eq: "pass" } },
+      { "out.verdict": { eq: "fail" } },
+      { "out.verdict": { eq: "pass" } },
     ]);
   });
 });
@@ -762,5 +791,64 @@ describe("the shape of every step", () => {
       expect(bodyOf(step).toLowerCase(), step.id).not.toMatch(/opens? a terminal/);
       expect(bodyOf(step).toLowerCase(), step.id).toContain("complete");
     }
+  });
+});
+
+/**
+ * #846, FP iteration 1 — once `out` is ticked next to `image_list`, the edge
+ * carries two ports and the When editor spells the key `out.verdict`. The
+ * condition steps read the key the way the daemon does, against the carried
+ * ports, and say what they wait for while the clause is not the one asked.
+ */
+describe("a condition on an edge that carries two outputs", () => {
+  function upTo(fake: FakeApp, stepId: string) {
+    const script = gestures(fake);
+    for (const step of STEPS) {
+      if (step.id === stepId) return step;
+      script[step.id]();
+    }
+    throw new Error(`no step ${stepId}`);
+  }
+
+  it.each([
+    ["loop-condition", 1, "fail"],
+    ["end-condition", 2, "pass"],
+  ] as const)("%s advances on the out.verdict key the editor writes", (stepId, index, value) => {
+    const fake = new FakeApp();
+    const step = upTo(fake, stepId);
+    fake.setEdgePorts(index, ["out", "image_list"]);
+
+    expect(step.done!(fake.obs())).toBe(false);
+    expect(stepBody(step, fake.obs())).toMatch(new RegExp(`^Add the condition verdict eq ${value}\\.`));
+
+    fake.writeCondition(index, "verdict", value);
+    expect(fake.app.pipeline?.edges[index].when).toEqual({ "out.verdict": { eq: value } });
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  it("does not count a verdict read on another output", () => {
+    const fake = new FakeApp();
+    const step = upTo(fake, "loop-condition");
+    fake.setEdgePorts(1, ["out", "image_list"]);
+    fake.setEdgeWhen(1, { "image_list.verdict": { eq: "fail" } });
+    expect(step.done!(fake.obs())).toBe(false);
+  });
+
+  it("keeps a condition written before the port was ticked", () => {
+    const fake = new FakeApp();
+    const step = upTo(fake, "loop-condition");
+    fake.writeCondition(1, "verdict", "fail");
+    fake.setEdgePorts(1, ["out", "image_list"]);
+    expect(fake.app.pipeline?.edges[1].when).toEqual({ "out.verdict": { eq: "fail" } });
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  it("says what it waits for while the clause is another one", () => {
+    const fake = new FakeApp();
+    const step = upTo(fake, "loop-condition");
+    fake.writeCondition(1, "verdict", "pass");
+    expect(step.done!(fake.obs())).toBe(false);
+    expect(stepBody(step, fake.obs())).toContain("Not there yet");
+    expect(stepBody(step, fake.obs())).toContain("verdict eq fail");
   });
 });

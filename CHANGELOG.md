@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.97.4 — README vitrine, référence dans `docs/reference/` (#855)
+
+Le README devient une vitrine (traduction française : `docs/readme/README.fr.md`). La
+référence qu'il portait déménage sans perte : commandes CLI, installation et mise à jour dans
+`docs/reference/cli.md`, reverse proxy et pièces jointes dans `docs/reference/reverse-proxy.md`,
+copier-coller dans `docs/reference/terminal.md`, développement dans `CONTRIBUTING.md`.
+
+- **Le tableau de support des harnais vit dans `docs/reference/harnesses.md`**, avec les
+  prérequis. `make check` et `make support-table` visent ce fichier, et c'est désormais le
+  `--file` par défaut de `pdo docs support-table` (avant : `README.md`, qui ne porte plus de
+  bloc généré).
+
 ## Licence — MIT, explicitement
 
 Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les métadonnées Cargo

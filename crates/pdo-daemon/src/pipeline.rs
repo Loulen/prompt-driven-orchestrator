@@ -365,10 +365,12 @@ impl<'de> Deserialize<'de> for EdgeSource {
         let ports = match (raw.port, raw.ports) {
             (Some(p), None) => vec![p],
             (None, Some(list)) if !list.is_empty() => list,
-            (None, Some(_)) => return Err(serde::de::Error::custom(format!(
+            (None, Some(_)) => {
+                return Err(serde::de::Error::custom(format!(
                 "edge source '{}' has an empty `ports:` list — an edge carries at least one output",
                 raw.node
-            ))),
+            )))
+            }
             (Some(_), Some(_)) => unreachable!("rejected above"),
             (None, None) => {
                 return Err(serde::de::Error::custom(format!(
@@ -401,6 +403,18 @@ pub(crate) enum EdgeRouteMode {
 pub(crate) struct EdgeWaypoint {
     pub x: f64,
     pub y: f64,
+}
+
+/// Where on a card's side a wire leaves from or lands on (#844). The side is the
+/// coarse choice `target_side` already carried; `offset` is the distance *along*
+/// that side, in canvas px, from the side's start. Absent ⇒ the side's middle,
+/// which is the pre-#844 geometry — so an untouched pipeline round-trips byte for
+/// byte. Layout, like `mode`/`waypoints`/`target_side`: it persists in the file
+/// and is excluded from the semantic pipeline-diff.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct EdgeAnchor {
+    pub side: PortSide,
+    pub offset: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -437,6 +451,31 @@ pub(crate) struct EdgeDef {
     /// semantic pipeline-diff. Absent ⇒ left (legacy anchoring), never written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_side: Option<PortSide>,
+    /// Where on the SOURCE card's border the wire leaves (#844). Layout, like the
+    /// three above. Absent ⇒ the middle of the departure side, never written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_anchor: Option<EdgeAnchor>,
+    /// Where on the TARGET card's side the arrow lands (#844). Its `side` agrees
+    /// with `target_side`; the offset is the per-pixel position along it. Layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_anchor: Option<EdgeAnchor>,
+    /// Whether the carried outputs are NAMED on the canvas, near the arrow's
+    /// base (#845). Absent ⇒ the frontend's derived default (on iff the source
+    /// node declares two or more outputs), so the file stays silent until the
+    /// author decides. *Layout*, like the four fields around it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_output_labels: Option<bool>,
+    /// Pinned absolute canvas position of an output label, keyed by carried
+    /// port (#845). A port absent from the map sits at its default spot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_label_pos: Option<BTreeMap<String, EdgeWaypoint>>,
+    /// Pinned absolute canvas position of the `when`/`else` pill (#845).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_label_pos: Option<EdgeWaypoint>,
+    /// Draw order (#845): edges draw ABOVE the node cards by default, `true`
+    /// drops this one below. Absent/false ⇒ above, and never written.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub below_nodes: bool,
 }
 
 impl EdgeDef {
@@ -2639,6 +2678,159 @@ edges:
         // Absent ⇒ never serialized (clean file, round-trips by absence).
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         assert!(!serialized.contains("target_side"));
+        // Same for the two #844 anchors: an edge drawn before per-edge anchoring
+        // existed round-trips byte for byte.
+        assert_eq!(result.pipeline.edges[0].source_anchor, None);
+        assert_eq!(result.pipeline.edges[0].target_anchor, None);
+        assert!(!serialized.contains("source_anchor"));
+        assert!(!serialized.contains("target_anchor"));
+    }
+
+    #[test]
+    fn parses_edge_anchors_and_round_trips() {
+        // #844: WHERE on a card's border the wire leaves and lands. Layout, like
+        // `target_side`, but persisted so a shared workflow keeps its wiring.
+        let yaml = with_start_end(
+            r#"
+name: wired-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: agent
+    isolated_worktree: true
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+    target_side: top
+    source_anchor: { side: bottom, offset: 80 }
+    target_anchor: { side: top, offset: 36 }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let edge = &result.pipeline.edges[0];
+        let src = edge.source_anchor.expect("source anchor parsed");
+        assert_eq!(src.side, PortSide::Bottom);
+        assert_eq!(src.offset, 80.0);
+        let tgt = edge.target_anchor.expect("target anchor parsed");
+        assert_eq!(tgt.side, PortSide::Top);
+        assert_eq!(tgt.offset, 36.0);
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.edges[0].source_anchor, Some(src));
+        assert_eq!(reparsed.edges[0].target_anchor, Some(tgt));
+    }
+
+    #[test]
+    fn parses_edge_label_layout_and_round_trips() {
+        // #845: the label toggle, both label positions and the draw order are
+        // layout — parsed, kept and re-written verbatim, so a pipeline decorated
+        // on one machine renders identically on the next.
+        let yaml = with_start_end(
+            r#"
+name: decorated-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: plan
+      - name: notes
+  - id: ab000002
+    name: implementer
+    type: agent
+    isolated_worktree: true
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, ports: [plan, notes] }
+    target: { node: ab000002, port: plan }
+    show_output_labels: false
+    output_label_pos:
+      plan: { x: 12, y: 34 }
+      notes: { x: 56, y: 78 }
+    condition_label_pos: { x: 90, y: 11 }
+    below_nodes: true
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let edge = &result.pipeline.edges[0];
+        assert_eq!(edge.show_output_labels, Some(false));
+        assert_eq!(
+            edge.output_label_pos.as_ref().unwrap()["plan"],
+            EdgeWaypoint { x: 12.0, y: 34.0 }
+        );
+        assert_eq!(
+            edge.condition_label_pos,
+            Some(EdgeWaypoint { x: 90.0, y: 11.0 })
+        );
+        assert!(edge.below_nodes);
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
+        let redge = &reparsed.edges[0];
+        assert_eq!(redge.show_output_labels, Some(false));
+        assert_eq!(redge.output_label_pos.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            redge.condition_label_pos,
+            Some(EdgeWaypoint { x: 90.0, y: 11.0 })
+        );
+        assert!(redge.below_nodes);
+    }
+
+    #[test]
+    fn edge_label_layout_defaults_to_absent() {
+        // An un-decorated edge carries none of the four, and writes none of them:
+        // the derived defaults (labels on iff the source declares >= 2 outputs,
+        // drawn above the cards, labels at their computed spots) round-trip by
+        // ABSENCE, so opening and saving a pipeline nobody re-decorated is a
+        // no-op on the file.
+        let yaml = with_start_end(
+            r#"
+name: plain-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: agent
+    isolated_worktree: true
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let edge = &result.pipeline.edges[0];
+        assert_eq!(edge.show_output_labels, None);
+        assert_eq!(edge.output_label_pos, None);
+        assert_eq!(edge.condition_label_pos, None);
+        assert!(!edge.below_nodes);
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        for key in [
+            "show_output_labels",
+            "output_label_pos",
+            "condition_label_pos",
+            "below_nodes",
+        ] {
+            assert!(!serialized.contains(key), "{key} must not be written");
+        }
     }
 
     #[test]

@@ -2,10 +2,11 @@ import type { Edge, Node } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
 import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
-import { anchorHandleId, isEmergentInputNode } from "../lib/anchorSide";
+import { anchorHandleId, isEmergentInputNode, rimHandleId } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
-import { primaryPort } from "../lib/edgePorts";
+import { carriedPorts, declaredOutputs, primaryPort } from "../lib/edgePorts";
+import { outputLabelSlots, resolveOutputLabels } from "../lib/edgeLabels";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -80,7 +81,6 @@ export function deriveEditNodes(
           nodeId: n.id,
           status,
           inputSide: n.inputs[0]?.side ?? "left",
-          outputSide: n.outputs[0]?.side ?? "right",
         },
       };
     }
@@ -418,6 +418,31 @@ export function formatWhenPill(when: Record<string, unknown>): string {
 export type EditEdgeData = OrthogonalEdgeData;
 
 /**
+ * Per-edge draw order (#845). xyflow stacks its edge layers by `zIndex`, so an
+ * edge above 1000 draws over the node cards (nodes render around 0-1000 in the
+ * same stacking context) and one at 0 draws under them.
+ *
+ * The labels and segment handles follow suit ({@link EDGE_LABELS_ABOVE_NODES}
+ * / {@link EDGE_LABELS_UNDER_NODES}, set per element in `OrthogonalEdge`): an
+ * elevated edge would otherwise sit above its own labels and let its 14px
+ * invisible hit-stroke swallow every pointer event aimed at a label or a
+ * segment handle — silently, with nothing in the console to explain it — and
+ * an edge sent under the cards would keep its labels and handles painted over
+ * them.
+ *
+ * 1001 clears xyflow's `elevateNodesOnSelect` (+1000 on the selected card), and
+ * deliberately only TIES with {@link REGION_CHROME_Z}: the node layer is painted
+ * after the edge layer, so a loop region's header band keeps winning the tie and
+ * stays clickable (#455) instead of being buried under a passing arrow.
+ */
+export const EDGE_ABOVE_NODES = 1001;
+export const EDGE_UNDER_NODES = 0;
+/** Labels and handles of an edge drawn above the cards: one notch over it. */
+export const EDGE_LABELS_ABOVE_NODES = 1002;
+/** Labels and handles of an edge drawn under the cards: level with it. */
+export const EDGE_LABELS_UNDER_NODES = 0;
+
+/**
  * Derives xyflow edges from a pipeline. Conditional edges (ADR-0011) carry an
  * always-visible condition pill at their midpoint: the rendered `when:` clause
  * for guarded edges, the literal "else" for fallback edges. The pill is the
@@ -472,11 +497,64 @@ function resolveTargetHandle(
   return anchorHandleId(targetSide ?? "left");
 }
 
+/**
+ * The side the arrow physically arrives on — what the edge's geometry must use,
+ * as opposed to the persisted `target_side`.
+ *
+ * They differ exactly where the target keeps a DECLARED handle: `target_side` is
+ * an emergent-body notion (#168) and such a node never has one, so the persisted
+ * value reads back as the `left` default while the handle sits wherever the port
+ * declares (the End marker's `result` on its top border, a merge's `branches` on
+ * its own side). Routing to `left` there lays the perpendicular landing leg on a
+ * border the wire does not touch.
+ */
+export function resolveTargetGeometrySide(
+  target: PipelineDef["nodes"][number],
+  targetSide: PortSide,
+): PortSide {
+  if (isEmergentInputNode(target.type)) return targetSide;
+  return target.inputs[0]?.side ?? "left";
+}
+
+/**
+ * The side a wire leaves its source by. A drawn edge (#844) says so itself in
+ * `source_anchor`. An edge drawn before #844 has no anchor: it left from its
+ * output's DECLARED side — where the per-output dot used to sit — so that is the
+ * fallback, `right` only when the port declares none. Falling straight back to
+ * `right` sent every legacy `side: bottom|left|top` output out the wrong border,
+ * back through its own card and into the target from the opposite side (#844 FP
+ * iter-2, blocking).
+ */
+export function resolveSourceSide(
+  source: PipelineDef["nodes"][number] | undefined,
+  edge: PipelineDef["edges"][number],
+): PortSide {
+  if (edge.source_anchor) return edge.source_anchor.side;
+  const port = primaryPort(edge.source);
+  const declared = source?.outputs.find((p) => p.name === port) ?? source?.outputs[0];
+  return declared?.side ?? "right";
+}
+
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 
+  // Output-label slots (#845): fan-out edges drawn from one departure point
+  // number their labels across the group, so their tags do not stack.
+  const labelSlots = outputLabelSlots(
+    pipeline.edges.map((e) => ({
+      departure: `${e.source.node}\u0000${primaryPort(e.source)}`,
+      labelCount: resolveOutputLabels(e.show_output_labels, declaredOutputs(pipeline, e).length)
+        ? carriedPorts(e.source).length
+        : 0,
+    })),
+  );
+
   return pipeline.edges.map((e, i) => {
     const isEndEdge = endNodeId != null && e.target.node === endNodeId;
+    const sourceSide = resolveSourceSide(
+      pipeline.nodes.find((n) => n.id === e.source.node),
+      e,
+    );
     const targetNode = pipeline.nodes.find((n) => n.id === e.target.node);
     // The persisted anchor side (#168). Only meaningful for an emergent body
     // target; declared/structural handles ignore it. Defaults to `left` so an
@@ -485,6 +563,15 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
     const targetHandle = targetNode
       ? resolveTargetHandle(targetNode, e.target.port, targetSide)
       : e.target.port || null;
+    // The side the wire actually ARRIVES on, which is not always the persisted
+    // one: a target that keeps a declared handle (End's `result`, a merge's
+    // `branches`) ignores `target_side` entirely and pins the arrow on its own
+    // side. Handing the edge the persisted `left` there made it lay the landing
+    // leg across a side the handle is not on — a wire entering the card from the
+    // left to reach a pin on its top border (#844, FP finding 2).
+    const geometrySide: PortSide = targetNode
+      ? resolveTargetGeometrySide(targetNode, targetSide)
+      : targetSide;
     const isElse = e.else === true;
     const hasWhen = e.when != null && Object.keys(e.when).length > 0;
     const isConditional = isElse || hasWhen;
@@ -509,25 +596,51 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
     // and renders the condition pill + segment handles itself, so we hand it
     // the routing fields plus the styling it needs.
     const waypoints: EdgeWaypoint[] | null = e.waypoints ?? null;
+    // Labels (#845). The toggle's default is derived from how many outputs the
+    // SOURCE NODE DECLARES — not from how many this edge carries: an edge
+    // carrying one of two outputs still needs to say which one.
+    const ports = carriedPorts(e.source);
+    const showOutputLabels = resolveOutputLabels(
+      e.show_output_labels,
+      declaredOutputs(pipeline, e).length,
+    );
     return {
       id: `e-${i}`,
       source: e.source.node,
       target: e.target.node,
-      // The arrow binds to the PRIMARY carried port's handle; a multi-port
-      // edge (ADR-0073) is still one arrow, drawn from one place.
-      sourceHandle: primaryPort(e.source) || null,
+      // #844: the arrow binds to the RIM strip of the side it leaves by — there
+      // is no per-output handle any more. xyflow needs the binding for
+      // connectivity and for its own geometry only; the drawn departure POINT
+      // comes from `source_anchor` inside the edge component. An edge drawn
+      // before #844 has no anchor and leaves by its output's declared side.
+      sourceHandle: rimHandleId(sourceSide),
       targetHandle,
       type: "orthogonal",
+      // Draw order (#845): edges sit ABOVE the node cards by default, so an
+      // arrow crossing a card stays readable; "Draw under nodes" drops this one
+      // to 0. `elevateEdgesOnSelect` is deliberately NOT enabled on the canvas —
+      // it would lift a selected edge back above the cards and silently undo the
+      // switch for as long as the edge is selected.
+      zIndex: e.below_nodes === true ? EDGE_UNDER_NODES : EDGE_ABOVE_NODES,
       data: {
         edgeIndex: i,
         mode: e.mode ?? null,
         waypoints,
-        targetSide,
+        targetSide: geometrySide,
+        sourceSide,
+        sourceAnchor: e.source_anchor ?? null,
+        targetAnchor: e.target_anchor ?? null,
         isConditional,
         isElse,
         label,
         strokeColor,
         dashed: isDashed,
+        ports,
+        showOutputLabels,
+        outputLabelPos: e.output_label_pos ?? null,
+        conditionLabelPos: e.condition_label_pos ?? null,
+        outputLabelSlot: labelSlots[i],
+        belowNodes: e.below_nodes === true,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import { TooltipProvider } from "./ui/tooltip";
@@ -29,35 +29,7 @@ describe("PortRow", () => {
     expect(screen.getByTestId("port-input-in")).toBeInTheDocument();
   });
 
-  it("renders with data-testid for output port", () => {
-    render(
-      <PortRow portName="body" kind="output" side="right" index={0} total={1} />,
-      { wrapper: Wrapper },
-    );
-    expect(screen.getByTestId("port-output-body")).toBeInTheDocument();
-  });
-
-  it("renders output ports as a plain dot, not a labelled pill (#170)", () => {
-    const { container } = render(
-      <PortRow portName="body" kind="output" side="right" index={0} total={1} />,
-      { wrapper: Wrapper },
-    );
-    expect(container.querySelector(".port-dot")).toBeInTheDocument();
-    expect(container.querySelector(".port-pill")).not.toBeInTheDocument();
-  });
-
-  it("output port shows no permanent label, reveals name on hover (#170)", () => {
-    const { container } = render(
-      <PortRow portName="body" kind="output" side="right" index={0} total={1} />,
-      { wrapper: Wrapper },
-    );
-    expect(screen.queryByText("body")).not.toBeInTheDocument();
-    const dot = container.querySelector(".port-dot") as HTMLElement;
-    fireEvent.pointerEnter(dot, { clientX: 50, clientY: 40 });
-    expect(screen.getByText("body")).toBeInTheDocument();
-  });
-
-  it("input ports keep the labelled pill (#170 only changes outputs)", () => {
+  it("input ports keep the labelled pill", () => {
     const { container } = render(
       <PortRow portName="review" kind="input" side="left" index={0} total={1} />,
       { wrapper: Wrapper },
@@ -90,16 +62,5 @@ describe("PortRow", () => {
     );
     const row = screen.getByTestId("port-input-branches");
     expect(row).toBeInTheDocument();
-  });
-
-  it("output port reveals its name on hover when no nodeType or description", () => {
-    const { container } = render(
-      <PortRow portName="result" kind="output" side="right" index={0} total={1} />,
-      { wrapper: Wrapper },
-    );
-    expect(screen.queryByText("result")).not.toBeInTheDocument();
-    const dot = container.querySelector(".port-dot") as HTMLElement;
-    fireEvent.pointerEnter(dot, { clientX: 30, clientY: 30 });
-    expect(screen.getByText("result")).toBeInTheDocument();
   });
 });

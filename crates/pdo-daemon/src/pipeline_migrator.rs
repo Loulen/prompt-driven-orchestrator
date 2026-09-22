@@ -1225,8 +1225,9 @@ fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
         //
         // The routing clauses ride along: the guard that decided whether the loop
         // was entered at all must now decide whether its entry node is spawned.
-        // Layout (`mode`/`waypoints`/`target_side`) is deliberately NOT copied —
-        // it described a route to a node that no longer exists.
+        // Layout (`mode`/`waypoints`/`target_side`, and the #845 label positions
+        // and draw order) is deliberately NOT copied — it described a route, and
+        // labels along it, for a node that no longer exists.
         if let Some(sources) = loop_in_sources.get(loop_id) {
             for (unode, uport, in_edge) in sources {
                 let mut m = serde_yaml::Mapping::new();

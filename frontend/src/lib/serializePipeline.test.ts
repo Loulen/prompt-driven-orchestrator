@@ -381,6 +381,128 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).not.toContain("target_side:");
   });
 
+  it("serializes both per-edge anchors, rounded, so the wiring survives reload (#844)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "agent",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+          target_side: "top",
+          source_anchor: { side: "bottom", offset: 80 },
+          // Sub-pixel offsets are what turn a straight wire into a
+          // three-segment path with two phantom handles; they round on persist.
+          target_anchor: { side: "top", offset: 36.4 },
+        },
+      ]),
+    );
+    expect(yaml).toContain("side: bottom");
+    expect(yaml).toContain("offset: 80");
+    expect(yaml).toContain("offset: 36");
+    expect(yaml).not.toContain("36.4");
+  });
+
+  it("omits the anchors on an edge that was never wired by hand (#844)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "agent",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+        },
+      ]),
+    );
+    // Absent ⇒ the side's middle, the pre-#844 geometry: a pipeline drawn before
+    // this feature round-trips byte for byte.
+    expect(yaml).not.toContain("source_anchor");
+    expect(yaml).not.toContain("target_anchor");
+  });
+
+  it("serializes an edge's label layout and draw order (#845)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "agent",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+          show_output_labels: false,
+          output_label_pos: { user_prompt: { x: 12, y: 34 } },
+          condition_label_pos: { x: 56, y: 78 },
+          below_nodes: true,
+        },
+      ]),
+    );
+    // Decorating an edge travels with the file, so a shared pipeline renders
+    // the way its author left it.
+    expect(yaml).toContain("show_output_labels: false");
+    expect(yaml).toContain("output_label_pos:");
+    expect(yaml).toContain("user_prompt:");
+    expect(yaml).toContain("condition_label_pos:");
+    expect(yaml).toContain("below_nodes: true");
+  });
+
+  it("omits every #845 label field an edge never set", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "agent",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+          // The shapes a cleared edit leaves behind must not be emitted either:
+          // an empty position map is the same as no map at all, and `false` is
+          // the default draw order.
+          output_label_pos: {},
+          below_nodes: false,
+        },
+      ]),
+    );
+    for (const key of [
+      "show_output_labels",
+      "output_label_pos",
+      "condition_label_pos",
+      "below_nodes",
+    ]) {
+      expect(yaml).not.toContain(key);
+    }
+  });
+
+  it("serializes show_output_labels: true — the toggle has no constant default to fall back on", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "agent",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+          show_output_labels: true,
+        },
+      ]),
+    );
+    // Absence means "derive from the source node's output count", so an explicit
+    // `true` has to be written even though it may LOOK like the default today —
+    // declaring a second output later must not flip the canvas.
+    expect(yaml).toContain("show_output_labels: true");
+  });
+
   it("serializes multi-field frontmatter with all fields at same depth", () => {
     const node: NodeDef = {
       id: "multi", name: "multi", type: "agent",

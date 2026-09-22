@@ -52,8 +52,15 @@ cd "$(git rev-parse --show-toplevel)"
 #   owns it (worktree/branch modules operate on an existing repo, never create one);
 #   folding it into lib.rs would only hide 400 lines of git plumbing there. The
 #   integration PRs landed past the 90 baseline and left main red.
+# frontend/src/components: 200 (#840 story, integration/840-canvas-edges). Re-admits the
+#   three per-ticket component tests #843/#845 landed past 194 (EdgeDetailPanel.outputs843,
+#   EdgeDetailPanel.display845, OrthogonalEdge.labels845) and admits #844's net +3:
+#   NodeRimHandles.tsx replaces OutputPortDot.tsx (the rim IS the connection source now,
+#   ADR-0072), WiringGridOverlay.tsx + its test draw the wiring lattice, and
+#   OrthogonalEdge.wiring844 / EditCanvas.contextMenu are the FP-backing tests. The pure
+#   geometry went into lib/ (anchorSide, wiringGrid), not a watched directory.
 BASELINES='
-frontend/src/components 194
+frontend/src/components 200
 crates/pdo-daemon/src 91
 '
 

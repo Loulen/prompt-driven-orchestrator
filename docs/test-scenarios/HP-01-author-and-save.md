@@ -42,8 +42,17 @@ Features validated while crossing the editing screens (grafted from retired per-
    (Duplicate is offered only on library-only rows, never on starred working rows.)
 3. **Add a node** from the edit toolbar → a new slim card appears (type icon + name + code/doc marker,
    no id text, no `interactive` badge).
-4. **Draw an edge**: drag from a node's green **output dot** and drop on another node's **card body**
-   → an emergent input edge is created, named after the source document (there is no input dot to aim at).
+4. **Draw an edge**: press **anywhere on the source node's border** (there is no output dot any more —
+   the whole rim is the drag-source) and drag. The preview grows **on the wiring grid**, one orthogonal
+   segment per crossed cell; hold **Shift** mid-gesture to leave the grid, release it to re-origin the
+   grid on the current point. Drop on another node's **card body** → an emergent input edge is created,
+   named after the source document (there is no input dot to aim at), carrying the source's **first
+   declared output**, pinned as `mode: manual` with the waypoints just drawn, and landing
+   **perpendicular** to the side it was aimed at.
+   Then **reshape it**: select the edge, drag a middle segment → it snaps to the grid (Shift frees it)
+   and the neighbouring waypoints do not move; drag it until it lines up with a neighbour → the
+   waypoint between them is **merged away** on release. **Right-click on a segment handle does
+   nothing**; right-click on the edge still offers « Delete edge ».
 5. **Author a conditional edge**: click an edge → the **edge detail panel** opens; add a `when`
    condition (pick a field, operator, value) → the always-visible condition pill appears at the edge
    midpoint.
@@ -62,6 +71,9 @@ Features validated while crossing the editing screens (grafted from retired per-
 
 - After step 3–7: the canvas reflects each edit (new node, edge with arrow on the body, condition pill,
   loop region box with `↻` header).
+- During step 4: the wiring grid shows only while the wire is being drawn (amber dots by default —
+  Settings › General › Interface › **Wiring grid**), and the snap indicator is a filled ring on the
+  grid, a hollow dashed one while Shift frees the trace.
 - After step 8: undo reverts exactly one structural step (a typed rename undoes as one step, not per
   keystroke); redo restores it.
 - After step 9: dirty `•` gone, `saved-ago` text visible, Save disabled.
@@ -72,8 +84,10 @@ Features validated while crossing the editing screens (grafted from retired per-
 - The saved `*.yaml` (and `*.prompts/<node>.md` sidecar) on disk reflects the edits; a duplicated
   pipeline's YAML is byte-faithful **except the `name:` line** (unknown keys and comments survive).
 - The conditional edge's boolean value is written canonical (`true`/`false`, not `"true"`).
-- A change that is **layout-only** (node position, edge waypoints) does **not** flip the pipeline to
-  "diverged" against its library twin.
+- The drawn edge writes `mode: manual` with grid-aligned `waypoints`, plus `source_anchor` /
+  `target_anchor` (`{side, offset}`) — the wiring travels with the file.
+- A change that is **layout-only** (node position, edge waypoints, edge anchors) does **not** flip the
+  pipeline to "diverged" against its library twin.
 
 ## Cleanup (best-effort)
 

@@ -1573,6 +1573,21 @@ export interface EdgeWaypoint {
 }
 
 /**
+ * WHERE on a card's side a wire leaves from or lands on (#844). The side is the
+ * coarse choice `target_side` already carried; `offset` is the distance ALONG
+ * that side, in flow px, measured from the side's start (left→right on
+ * `top`/`bottom`, top→bottom on `left`/`right`) and kept at least 10px clear of
+ * the corners. An absent anchor means the side's middle — the pre-#844 geometry.
+ *
+ * Layout, like `mode`/`waypoints`/`target_side`: persisted in the pipeline file,
+ * excluded from the semantic diff (`lib/layoutFields.ts`).
+ */
+export interface EdgeAnchor {
+  side: PortSide;
+  offset: number;
+}
+
+/**
  * Edge routing mode (issue #154). `auto` edges store no waypoints — their
  * right-angle path is recomputed deterministically and re-routes on node move.
  * `manual` edges pin the route to persisted `waypoints`. Both `mode` and
@@ -1609,6 +1624,43 @@ export interface EdgeDef {
    * semantic pipeline-diff. Absent ⇒ left (legacy anchoring).
    */
   target_side?: PortSide | null;
+  /**
+   * Where on the source card's border the wire leaves (#844). Absent ⇒ the middle
+   * of the departure side, the pre-#844 geometry. LAYOUT.
+   */
+  source_anchor?: EdgeAnchor | null;
+  /**
+   * Where on the target card's side the arrow lands (#844). Its `side` agrees
+   * with `target_side`; the offset is the per-pixel position along it. Absent ⇒
+   * the middle of `target_side`. LAYOUT.
+   */
+  target_anchor?: EdgeAnchor | null;
+  /**
+   * Whether the carried outputs are NAMED on the canvas, near the arrow's base
+   * (#845). Absent ⇒ the default, which is on iff the source node declares two
+   * or more outputs: a single-output node would just be repeating itself. Set
+   * explicitly (either way) the toggle wins, and the panel stops showing
+   * "· default".
+   */
+  show_output_labels?: boolean | null;
+  /**
+   * Pinned absolute canvas position of an output label, keyed by carried port
+   * (#845). A port absent from the map sits at its default alternating spot
+   * around the arrow's base; dragging a label pins it here. Positions survive
+   * un-ticking the port, so re-ticking it restores the placement the author
+   * chose rather than snapping back to the default.
+   */
+  output_label_pos?: Record<string, EdgeWaypoint> | null;
+  /** Pinned absolute canvas position of the when/else pill (#845). Absent ⇒ the
+   *  path midpoint, nudged clear of the stroke. */
+  condition_label_pos?: EdgeWaypoint | null;
+  /**
+   * Draw order (#845). Edges draw ABOVE the node cards by default — an arrow
+   * crossing a card stays readable; `true` drops this one below. Layout like
+   * the four fields above: persisted so a shared workflow renders identically,
+   * excluded from the semantic diff.
+   */
+  below_nodes?: boolean | null;
 }
 
 /**

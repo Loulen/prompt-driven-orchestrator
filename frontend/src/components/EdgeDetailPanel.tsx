@@ -1,5 +1,14 @@
 import { useCallback } from "react";
-import { ArrowRight, Plus, X, Activity, RefreshCw, CornerDownRight } from "lucide-react";
+import {
+  ArrowRight,
+  Plus,
+  X,
+  Activity,
+  RefreshCw,
+  CornerDownRight,
+  Layers,
+  Tags,
+} from "lucide-react";
 import { useEditStore } from "../stores/editStore";
 import type { EdgeDef, EdgeTriggerStatus } from "../types";
 import {
@@ -23,6 +32,7 @@ import {
   clampOperator,
   type EdgeConditionField,
 } from "../lib/edgeFields";
+import { resolveOutputLabels } from "../lib/edgeLabels";
 import { SectionHead } from "./InspectorPrimitives";
 
 /**
@@ -311,6 +321,47 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
             }}
           />
 
+          {/* Display (#845) — how this edge is DRAWN: whether its carried
+              outputs are named on the canvas, and whether it passes over or
+              under the node cards. Both are layout, and the footnote says so:
+              they travel in the file but never move the library star. */}
+          <SectionHead title="Display" />
+          <div className="flex flex-col gap-2" data-testid="display-section">
+            <Switch
+              icon={<Tags size={12} className="shrink-0" />}
+              label="Output labels"
+              // "· default" means UNSET — the toggle follows the source node's
+              // declared output count. It disappears as soon as the author
+              // decides, even if they decide on the same value.
+              note={edge.show_output_labels == null ? "· default" : undefined}
+              on={resolveOutputLabels(edge.show_output_labels, declared.length)}
+              onToggle={(next) => {
+                if (edgeIndex == null) return;
+                // Toggling back to the derived default writes the value rather
+                // than clearing it: the author has now decided, and adding a
+                // second output to the source node must not silently flip the
+                // labels back on.
+                updateEdge(edgeIndex, { show_output_labels: next });
+              }}
+              testId="toggle-output-labels"
+              title="Show the name of each carried output near the arrow's base"
+            />
+            <Switch
+              icon={<Layers size={12} className="shrink-0" />}
+              label="Draw under nodes"
+              on={edge.below_nodes === true}
+              onToggle={(next) => {
+                if (edgeIndex == null) return;
+                updateEdge(edgeIndex, { below_nodes: next });
+              }}
+              testId="toggle-under-nodes"
+              title="Edges draw above nodes by default; this one goes below"
+            />
+            <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.5 }} data-testid="display-layout-note">
+              Layout only — saved in the file, ignored by the semantic diff.
+            </div>
+          </div>
+
           {/* Runtime trigger status — panel-only (never on canvas) */}
           <SectionHead title="Runtime" />
           <TriggerStatusView trigger={trigger} />
@@ -402,31 +453,73 @@ function ElseToggle({
   onToggle: (next: boolean) => void;
 }) {
   return (
+    <Switch
+      icon={<CornerDownRight size={12} className="shrink-0" />}
+      label="Default (else)"
+      on={isElse}
+      onToggle={onToggle}
+      testId="else-toggle"
+      title="A default edge fires only when no sibling edge matched"
+    />
+  );
+}
+
+/**
+ * The panel's switch chrome, shared by the When section's `else` toggle and the
+ * Display section's two (#845) — one control, so a layout switch is never read
+ * as a different KIND of thing from the semantic one above it.
+ *
+ * `note` is the faint suffix the Output labels switch uses to say its value is
+ * still derived ("· default").
+ */
+function Switch({
+  icon,
+  label,
+  note,
+  on,
+  onToggle,
+  testId,
+  title,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  note?: string;
+  on: boolean;
+  onToggle: (next: boolean) => void;
+  testId: string;
+  title: string;
+}) {
+  return (
     <button
       type="button"
       role="switch"
-      aria-checked={isElse}
-      onClick={() => onToggle(!isElse)}
+      aria-checked={on}
+      onClick={() => onToggle(!on)}
       className={`flex items-center justify-between gap-2 rounded border px-2 py-1.5 ${
-        isElse
+        on
           ? "border-acc bg-bg-3 text-acc"
           : "border-line-strong bg-bg-3 text-fg-3 hover:border-acc hover:text-acc"
       }`}
-      data-testid="else-toggle"
-      title="A default edge fires only when no sibling edge matched"
+      data-testid={testId}
+      title={title}
     >
       <span className="flex items-center gap-1.5" style={{ fontSize: "11px" }}>
-        <CornerDownRight size={12} className="shrink-0" />
-        Default (else)
+        {icon}
+        {label}
+        {note && (
+          <span className="text-fg-4" style={{ fontSize: "9.5px" }} data-testid={`${testId}-note`}>
+            {note}
+          </span>
+        )}
       </span>
       <span
         className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-          isElse ? "bg-acc" : "bg-fg-5"
+          on ? "bg-acc" : "bg-fg-5"
         }`}
       >
         <span
           className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
-            isElse ? "left-3" : "left-0.5"
+            on ? "left-3" : "left-0.5"
           }`}
         />
       </span>
@@ -602,7 +695,7 @@ function RoutingSection({
           <div className="text-fg-4" style={{ fontSize: "10px" }}>
             {isManual
               ? `Route persisted as ${waypoints.length} waypoint${waypoints.length === 1 ? "" : "s"}; survives node moves.`
-              : "Right-angle route, re-computed on every node move."}
+              : "Right-angle route on the wiring grid, re-computed on every node move."}
           </div>
         </div>
       </div>

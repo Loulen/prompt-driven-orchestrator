@@ -997,3 +997,15 @@ Règle de récupération des prompts : string-literal sans interpolation → ver
 - Idiomes mappés : `agent()` → **Node**, `pipeline()` → boucle **`collection`**, `for`/`while` autour d'un `agent()` → boucle **`bounded`**, `if`/`return` gardé → **edge conditionnelle**, schémas JSON → **frontmatter de port de sortie**.
 - Un idiome hors sous-ensemble → **placeholder annoté**. Un `git merge` scripté → Node `agent` annoté, **pas** le Merge first-class (dont il excède le contrat).
 - Tout rôle importé — placeholder annoté compris — devient un Node `agent` **isolé**, et le brouillon écrit la ligne. L'import ne déduit jamais l'isolation du prompt, du nom du rôle, de ses sorties ni de son appartenance à une région `collection` : un workflow étranger n'a pas d'avis sur les worktrees, et en inventer un est précisément la devinette qu'ADR-0060 supprime. L'auteur arbitre ensuite sur le canvas.
+
+---
+
+## Médias du README
+
+**Instance de démo** :
+Daemon PDO jetable, étanche à l'instance de l'utilisateur (son propre répertoire courant, son propre `HOME`, son propre port), sur laquelle `make readme-media` enregistre les médias du README. Les scènes live y tournent avec de vrais agents ; l'historique (Stats, fires, runs terminés) y est **moqué** (ADR-0072).
+_Éviter_ : « mode démo » (PDO n'a pas de mode démo, ADR-0071), « instance de test ».
+
+**Scène** :
+Un geste du produit enregistré de bout en bout sur l'instance de démo et monté en un GIF + poster : le hero ou une ligne du tableau de features. Une scène a deux **variantes** ; le **fichier de sélection**, versionné, dit laquelle est publiée.
+_Éviter_ : « vidéo », « démo », « capture » pour une scène.

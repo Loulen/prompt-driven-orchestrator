@@ -344,6 +344,23 @@ body {
   transform: translate(-50%, -50%);
 }
 
+/* Edge labels above the elevated edges (#845).
+ *
+ * Edges draw ABOVE the node cards now, which means giving each edge's SVG layer
+ * a zIndex (1001, `EDGE_ABOVE_NODES` in editNodeDerivation.ts). That same layer
+ * then sits above `.react-flow__edgelabel-renderer`, which is where the output
+ * labels, the condition pill and the segment handles live — and the edge's own
+ * invisible 14px hit-stroke swallows every pointer event aimed at them, so
+ * labels cannot be grabbed and handles cannot be dragged, with nothing in the
+ * console to say why.
+ *
+ * Lift the label layer one notch above the elevated edges. It keeps xyflow's
+ * `pointer-events: none` (only its children opt back in), so this changes the
+ * hit ORDER without making the layer itself catch anything. */
+.react-flow__edgelabel-renderer {
+  z-index: 1002;
+}
+
 /* Output port dot (#170) — plain filled green dot straddling the node border.
    No standing label; the port name floats next to the cursor on hover. Reuses
    the .react-flow__handle override so xyflow's default styling is neutralised.

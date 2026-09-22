@@ -55,7 +55,19 @@ pub(crate) const LAYOUT_FIELDS: &[(&str, &[&str])] = &[
     ("node", &["view"]),
     ("inputPort", &[]),
     ("outputPort", &[]),
-    ("edge", &["mode", "waypoints", "target_side"]),
+    (
+        "edge",
+        &[
+            "mode",
+            "waypoints",
+            "target_side",
+            // #845 — label placement and draw order are canvas presentation.
+            "show_output_labels",
+            "output_label_pos",
+            "condition_label_pos",
+            "below_nodes",
+        ],
+    ),
     ("loopRegion", &[]),
     // The whole `notes` block is dropped at pipeline scope (ADR-0018 R1), so the
     // projection never descends into a note — this entry exists for the guard only.
@@ -288,9 +300,30 @@ impl<'a> EdgeProjection<'a> {
             mode,
             waypoints,
             target_side,
+            show_output_labels,
+            output_label_pos,
+            condition_label_pos,
+            below_nodes,
         } = edge;
-        // LAYOUT_FIELDS["edge"] — routing is presentation (#154 / #168).
-        let (_layout_mode, _layout_waypoints, _layout_target_side) = (mode, waypoints, target_side);
+        // LAYOUT_FIELDS["edge"] — routing is presentation (#154 / #168), and so
+        // are the labels and the draw order (#845).
+        let (
+            _layout_mode,
+            _layout_waypoints,
+            _layout_target_side,
+            _layout_show_output_labels,
+            _layout_output_label_pos,
+            _layout_condition_label_pos,
+            _layout_below_nodes,
+        ) = (
+            mode,
+            waypoints,
+            target_side,
+            show_output_labels,
+            output_label_pos,
+            condition_label_pos,
+            below_nodes,
+        );
         Self {
             source: SourceProjection::of(source),
             target: EndpointProjection::of(target),
@@ -472,6 +505,23 @@ mod tests {
             "mode: manual\n  waypoints:\n  - {x: 10, y: 20}\n  target_side: top",
         );
         assert_eq!(canonical(&auto), canonical(&pinned));
+    }
+
+    /// #845: decorating an edge — naming its outputs on the canvas, dragging
+    /// either kind of label, sending it under the cards — is presentation. Two
+    /// pipelines differing only in those four fields must hash identically, or
+    /// moving a label flips the library badge to "out of sync".
+    #[test]
+    fn edge_labels_and_draw_order_do_not_change_the_projection() {
+        let plain = fixture(300.0, "");
+        let decorated = fixture(
+            300.0,
+            "show_output_labels: false\n  \
+             output_label_pos:\n    user_prompt: {x: 12, y: 34}\n  \
+             condition_label_pos: {x: 56, y: 78}\n  \
+             below_nodes: true",
+        );
+        assert_eq!(canonical(&plain), canonical(&decorated));
     }
 
     #[test]

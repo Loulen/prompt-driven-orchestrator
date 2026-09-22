@@ -116,7 +116,7 @@ Cost, duration and failure rate per model and per node, from your own runs. See 
 </td>
 <td width="50%">
   <!-- scene: stats -->
-  <a href="docs/features.md#run-stats-by-model"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="The Stats page broken down by model and effort" width="100%" /></picture></a>
+  <a href="docs/features.md#run-stats-by-model"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/stats.jpg"><source srcset="docs/assets/readme/stats.gif" type="image/gif"><img src="docs/assets/readme/stats.jpg" alt="The Stats page broken down by model and effort" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

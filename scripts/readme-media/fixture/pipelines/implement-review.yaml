@@ -1,0 +1,85 @@
+name: implement-review
+version: '1.0'
+nodes:
+- id: start
+  name: Start
+  type: start
+  outputs:
+  - name: user_prompt
+    side: bottom
+  view:
+    x: 300
+    y: 0
+- id: implementer
+  name: implementer
+  type: agent
+  isolated_worktree: false
+  pin_harness: claude
+  harnesses:
+    claude:
+      model: claude-opus-5-5
+      effort: medium
+  view:
+    x: 300
+    y: 160
+  inputs:
+  - name: task
+    side: top
+  outputs:
+  - name: code
+    side: bottom
+- id: reviewer
+  name: reviewer
+  type: agent
+  isolated_worktree: false
+  pin_harness: claude
+  harnesses:
+    claude:
+      model: claude-opus-5-5
+      effort: medium
+  view:
+    x: 300
+    y: 340
+  inputs:
+  - name: code
+    side: top
+  outputs:
+  - name: review
+    side: bottom
+    frontmatter:
+      verdict:
+        type: enum
+        allowed:
+        - pass
+        - fail
+  - name: screenshots
+    side: right
+    port_type: image_list
+- id: end
+  name: End
+  type: end
+  inputs:
+  - name: result
+    side: top
+  view:
+    x: 300
+    y: 520
+edges:
+- source:
+    node: start
+    port: user_prompt
+  target:
+    node: implementer
+    port: task
+- source:
+    node: implementer
+    port: code
+  target:
+    node: reviewer
+    port: code
+- source:
+    node: reviewer
+    port: review
+  target:
+    node: end
+    port: result

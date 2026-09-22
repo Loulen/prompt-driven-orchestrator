@@ -88,6 +88,7 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 | Test frontend | `cd frontend && pnpm run test` |
 | Lint frontend | `cd frontend && pnpm run lint` |
 | Build frontend | `cd frontend && pnpm run build` |
+| Test the README media tooling | `node --test 'scripts/readme-media/test/*.test.mjs'` |
 
 ### Harness support table
 
@@ -95,6 +96,46 @@ The table in [docs/reference/harnesses.md](docs/reference/harnesses.md) is gener
 `crates/pdo-daemon/src/harness_probes.rs`. Never edit the block by hand: run
 `make support-table` after adding a harness, adding a capability, or moving a "last validated
 version". `make check` fails if the committed block has drifted from the code.
+
+### README media
+
+The GIFs and posters of the README (`docs/assets/readme/`) are produced by a script: nothing is
+captured by hand. `make readme-media` drives the real UI of a **demo instance**, a PDO daemon sealed
+off from yours (its own working directory, `HOME` and port; see
+[ADR-0074](docs/adr/0074-les-medias-du-readme-sont-joues-par-de-vrais-agents-sur-une-instance-de-demo-isolee.md)).
+It records two variants per scene into `.readme-media/` (not versioned), with a `manifest.json`.
+`make readme-media-publish` then copies the variant `scripts/readme-media/selection.txt` names for each
+scene into `docs/assets/readme/`.
+
+```bash
+make readme-media SCENE=stats      # one scene; without SCENE, all of them
+make readme-media-publish          # the selected variants → docs/assets/readme/
+```
+
+Prerequisites:
+
+| Tool | Why |
+| --- | --- |
+| Node.js 22.13 or newer | the script, and `node:sqlite` for the mocked history |
+| `ffmpeg` (with `ffprobe`) | cutting, framing and encoding the GIFs and posters |
+| Playwright's Chromium: `cd frontend && pnpm install && pnpm exec playwright install chromium` | filming the UI |
+| `tmux`, `git` | the demo daemon, like any PDO |
+| An authenticated harness (`claude`) | only for the scenes played live: its auth files are copied into the demo `HOME` for the recording, then wiped |
+
+Cost of a regeneration: the Stats scene uses a mocked history and costs nothing but about a minute.
+Each live scene (hero, diff review, orchestration…) runs a real `claude` session on
+`claude-opus-5-5`, stopped as soon as the scene is recorded. Each regeneration also adds its GIFs to
+the git history, since they are committed without a weight budget.
+
+When to regenerate: only when a scene visibly changes (the UI it films, the copy of its README row),
+and only that scene (`SCENE=…`). Open both variants from `.readme-media/`, pick one in `selection.txt`,
+publish, then commit `docs/assets/readme/` and the selection. Switching to the other variant later
+is a one-line edit and `make readme-media-publish`; nothing is recorded again.
+
+The script never touches your instance: not your daemon, port, `~/.pdo`, event log or tmux sessions.
+Whatever the ending (success, failure, Ctrl+C), it stops the demo agents and daemon and wipes the
+copied auth files. How it works, and how to add a scene (one file under `scripts/readme-media/scenes/`):
+[scripts/readme-media/README.md](scripts/readme-media/README.md).
 
 ## Architecture
 

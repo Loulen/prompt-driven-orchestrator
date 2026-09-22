@@ -22,6 +22,7 @@ fn documents() -> Vec<String> {
         "docs/readme/README.fr.md",
         "docs/features.md",
         "CONTRIBUTING.md",
+        "scripts/readme-media/README.md",
     ]
     .iter()
     .map(|s| s.to_string())

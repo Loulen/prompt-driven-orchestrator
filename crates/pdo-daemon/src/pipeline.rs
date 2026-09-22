@@ -365,10 +365,12 @@ impl<'de> Deserialize<'de> for EdgeSource {
         let ports = match (raw.port, raw.ports) {
             (Some(p), None) => vec![p],
             (None, Some(list)) if !list.is_empty() => list,
-            (None, Some(_)) => return Err(serde::de::Error::custom(format!(
+            (None, Some(_)) => {
+                return Err(serde::de::Error::custom(format!(
                 "edge source '{}' has an empty `ports:` list — an edge carries at least one output",
                 raw.node
-            ))),
+            )))
+            }
             (Some(_), Some(_)) => unreachable!("rejected above"),
             (None, None) => {
                 return Err(serde::de::Error::custom(format!(

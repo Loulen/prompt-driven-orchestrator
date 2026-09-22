@@ -16,7 +16,7 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
-## Non publié
+## 1.97.3
 **Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).
 
 - Un 413 **sans corps JSON** (page HTML d'un reverse proxy, nginx `client_max_body_size` à 1 Mo

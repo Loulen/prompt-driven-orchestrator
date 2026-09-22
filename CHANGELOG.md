@@ -16,6 +16,21 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.100.0
+**Câblage des edges depuis le bord, tracé sur grille, drag de segments snappé** (#844, #840).
+
+- Création : les dots d'output disparaissent. Une edge part de n'importe quel point du bord du
+  node source et se trace par cellules de la grille de câblage (ADR-0072). `Shift` libère le
+  tracé ; le relâcher ré-origine la grille sur le point courant. L'edge créée est en
+  `mode: manual` et porte le premier output déclaré.
+- YAML : deux champs de layout, `source_anchor` et `target_anchor` (`{ side, offset }`), disent où
+  le fil quitte et touche les cartes. Absents, le fil part du milieu du côté comme avant ; ils sont
+  ignorés par le diff sémantique.
+- Drag de segment : snap à la grille, `Shift` libère, les autres waypoints ne bougent pas, deux
+  segments alignés fusionnent. « Re-route automatically » donne un tracé auto aligné sur la grille.
+- Le clic droit sur un handle de segment ne supprime plus de waypoint ; le menu « Delete edge »
+  reste sur l'edge.
+
 ## 1.99.0
 **Labels d'edge déplaçables, toggle des labels d'output, ordre de dessin edges/nodes** (#845, #840).
 

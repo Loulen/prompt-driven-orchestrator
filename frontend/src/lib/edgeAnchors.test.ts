@@ -314,6 +314,66 @@ describe("enforcePerpendicularEnds", () => {
   });
 });
 
+describe("enforcePerpendicularEnds — around the target card (#844 FP iter-3)", () => {
+  // disk-janitor `start→reap`: Start's bottom output right ABOVE « Reclaim disk »,
+  // whose input declares no side, so the arrow lands on the default left.
+  const REAP = { x: 121, y: 40, width: 160, height: 36 };
+  const src = { x: 200, y: -45 };
+  const tgt = { x: 121, y: 58 };
+  // What the router + lattice snap hand over: planned as if leaving rightwards.
+  const auto = [src, { x: 160, y: -45 }, { x: 160, y: 58 }, tgt];
+
+  function throughCard(points: Point[], rect: typeof REAP): boolean {
+    for (let i = 1; i < points.length - 1; i++) {
+      const [a, b] = [points[i - 1], points[i]];
+      const spans = (lo: number, hi: number, e0: number, e1: number) =>
+        Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+      if (spans(a.x, b.x, rect.x, rect.x + rect.width) && spans(a.y, b.y, rect.y, rect.y + rect.height)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  it("without the card, squares the route straight through it (the reported stub)", () => {
+    const pts = enforcePerpendicularEnds(auto, "bottom", "left", LEG);
+    expect(throughCard(pts, REAP)).toBe(true);
+  });
+
+  it("with the card, goes round its corner and runs into the left side head-on", () => {
+    const pts = enforcePerpendicularEnds(auto, "bottom", "left", LEG, REAP);
+    expect(pts).toEqual([
+      src,
+      { x: 200, y: -5 },
+      { x: 81, y: -5 },
+      { x: 81, y: 58 },
+      tgt,
+    ]);
+    expect(throughCard(pts, REAP)).toBe(false);
+    expect(orthogonal(pts)).toBe(true);
+  });
+
+  it("is still a fixed point, so the stored waypoints reload identically", () => {
+    const once = enforcePerpendicularEnds(auto, "bottom", "left", LEG, REAP);
+    expect(enforcePerpendicularEnds(once, "bottom", "left", LEG, REAP)).toEqual(once);
+    const reloaded = enforcePerpendicularEnds(
+      [src, ...storableWaypoints(once), tgt],
+      "bottom",
+      "left",
+      LEG,
+      REAP,
+    );
+    expect(reloaded).toEqual(once);
+  });
+
+  it("leaves a route that already clears the card untouched", () => {
+    const clear = [src, { x: 200, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 58 }, tgt];
+    expect(enforcePerpendicularEnds(clear, "bottom", "left", LEG, REAP)).toEqual(
+      enforcePerpendicularEnds(clear, "bottom", "left", LEG),
+    );
+  });
+});
+
 describe("storableWaypoints", () => {
   it("stores only the points BETWEEN the two legs — the legs are re-derived", () => {
     const enforced = [

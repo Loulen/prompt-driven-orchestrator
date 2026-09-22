@@ -123,7 +123,7 @@ function edgeData(overrides: Partial<OrthogonalEdgeData> = {}): OrthogonalEdgeDa
   };
 }
 
-function harness(data: OrthogonalEdgeData = edgeData()) {
+function harness(data: OrthogonalEdgeData = edgeData(), cards: Node[] = nodes) {
   const edges: Edge<OrthogonalEdgeData>[] = [
     {
       id: "e-0",
@@ -139,7 +139,7 @@ function harness(data: OrthogonalEdgeData = edgeData()) {
     <ReactFlowProvider>
       <div style={{ width: 800, height: 800 }}>
         <ReactFlow
-          nodes={nodes}
+          nodes={cards}
           edges={edges}
           nodeTypes={nodeTypes}
           edgeTypes={{ orthogonal: OrthogonalEdge }}
@@ -295,5 +295,47 @@ describe("OrthogonalEdge — an un-anchored edge leaves by its output's declared
     const pts = drawnPoints();
     expect(pts[1].y).toBe(pts[0].y);
     expect(pts[1].x).toBeGreaterThan(pts[0].x);
+  });
+});
+
+describe("OrthogonalEdge — an auto route never runs through its target card (#844 FP iter-3)", () => {
+  // The source sits right ABOVE the target, whose arrow lands on its left side:
+  // the router plans as if leaving rightwards, and squaring its route to the
+  // bottom departure used to walk down the middle of the target, across it, and
+  // back in from the empty left — an arrowhead from nowhere.
+  const BELOW = { x: 20, y: 200, width: 200, height: 80 };
+  const stacked: Node[] = [
+    nodes[0],
+    { ...nodes[1], position: { x: BELOW.x, y: BELOW.y } },
+  ];
+
+  it("goes round the card's corner and enters its left side head-on", () => {
+    harness(
+      edgeData({
+        mode: "auto",
+        waypoints: null,
+        targetSide: "left",
+        sourceAnchor: { side: "bottom", offset: 100 },
+        targetAnchor: { side: "left", offset: 40 },
+      }),
+      stacked,
+    );
+    const pts = drawnPoints();
+    expect(pts[0]).toEqual({ x: 100, y: 80 });
+    expect(pts[pts.length - 1]).toEqual({ x: 20, y: 240 });
+    // No segment but the landing leg touches the card's inside.
+    for (let i = 1; i < pts.length - 1; i++) {
+      const [a, b] = [pts[i - 1], pts[i]];
+      const spans = (lo: number, hi: number, e0: number, e1: number) =>
+        Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+      const inside =
+        spans(a.x, b.x, BELOW.x, BELOW.x + BELOW.width) &&
+        spans(a.y, b.y, BELOW.y, BELOW.y + BELOW.height);
+      expect(inside).toBe(false);
+    }
+    // Arrives from the left, rightwards, one leg long.
+    const [before, last] = pts.slice(-2);
+    expect(before.y).toBe(last.y);
+    expect(last.x - before.x).toBe(40);
   });
 });

@@ -188,7 +188,13 @@ export default function OrthogonalEdge({
       // `enforcePerpendicularEnds` does the same repair anchor-aware, and it is
       // what keeps the legs square after a move.
       const interior = waypoints.map((w) => ({ x: w.x, y: w.y }));
-      return enforcePerpendicularEnds([sourcePt, ...interior, targetPt], srcSide, tgtSide, leg);
+      return enforcePerpendicularEnds(
+        [sourcePt, ...interior, targetPt],
+        srcSide,
+        tgtSide,
+        leg,
+        tgtRect ?? undefined,
+      );
     }
     // « Re-route automatically » produces a grid-ALIGNED auto path (#844): the
     // router's bends are snapped onto the wiring lattice so an auto edge and a
@@ -205,9 +211,10 @@ export default function OrthogonalEdge({
       srcSide,
       tgtSide,
       leg,
+      tgtRect ?? undefined,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, leg]);
+  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, leg, tgtRect]);
 
   const d = pathToSvg(points);
   // The first and last segments are the perpendicular legs into the two anchors:
@@ -257,7 +264,13 @@ export default function OrthogonalEdge({
             step: WIRING_GRID_STEP,
             free: ev.shiftKey,
           });
-          const enforced = enforcePerpendicularEnds(latest, srcSide, tgtSide, leg);
+          const enforced = enforcePerpendicularEnds(
+            latest,
+            srcSide,
+            tgtSide,
+            leg,
+            tgtRect ?? undefined,
+          );
           updateEdge(edgeIndex, {
             mode: "manual",
             waypoints: storableWaypoints(enforced).map((p) => ({
@@ -283,6 +296,7 @@ export default function OrthogonalEdge({
             srcSide,
             tgtSide,
             leg,
+            tgtRect ?? undefined,
           );
           const interior = storableWaypoints(merged);
           updateEdge(edgeIndex, {
@@ -296,7 +310,7 @@ export default function OrthogonalEdge({
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
       },
-    [edgeIndex, points, screenToFlowPosition, updateEdge, srcSide, tgtSide, leg],
+    [edgeIndex, points, screenToFlowPosition, updateEdge, srcSide, tgtSide, leg, tgtRect],
   );
 
   // Pastel orange when this edge is the selected one, grey otherwise (#177).

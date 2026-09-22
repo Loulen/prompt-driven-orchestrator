@@ -329,12 +329,16 @@ function crossesRect(points: Point[], rect: AnchorRect): boolean {
  * inserting bends, never by moving anything. So nothing already placed can be
  * disturbed, and the two legs are perpendicular by construction instead of by
  * repeated correction.
+ *
+ * `targetRect` (the target card) keeps the wire from running THROUGH the card on
+ * its way to the landing leg — see {@link aroundTarget}.
  */
 export function enforcePerpendicularEnds(
   points: Point[],
   sourceSide: PortSide,
   targetSide: PortSide,
   leg: number,
+  targetRect?: AnchorRect,
 ): Point[] {
   if (points.length < 2) return points;
   const src = points[0];
@@ -373,11 +377,55 @@ export function enforcePerpendicularEnds(
   // an endpoint and its own approach point (that segment is already square), so
   // the two approach points are still at index 1 and len-2. Merging strictly
   // between the endpoints therefore keeps both legs whole.
-  return [
+  const enforced = [
     squared[0],
     ...dedupeCollinear(squared.slice(1, -1)),
     squared[squared.length - 1],
   ];
+  return targetRect ? aroundTarget(enforced, targetSide, leg, targetRect) : enforced;
+}
+
+/**
+ * Re-lays the tail of an enforced path around the target card when it runs
+ * through it.
+ *
+ * The router plans as if every wire left by the right, and enforcement only
+ * INSERTS bends, so a wire leaving a card's bottom towards a target right below
+ * it, arriving on its (default) left side, was squared down the middle of the
+ * target, across it, out of its far border and back in: the leg into the card
+ * then drew an arrowhead from empty space (#844 FP iter-3). The fix keeps the
+ * route up to the last point genuinely clear of the card, then lands with the
+ * same around-the-card connector the drawing gesture uses, so the auto route and
+ * a drawn one arrive the same way.
+ *
+ * A fixed point like the rest of enforcement: a tail already clear of the card is
+ * returned untouched, so re-enforcing the stored waypoints reproduces the route.
+ */
+function aroundTarget(
+  enforced: Point[],
+  targetSide: PortSide,
+  leg: number,
+  rect: AnchorRect,
+): Point[] {
+  const tgt = enforced[enforced.length - 1];
+  // Everything but the perpendicular leg, which ends ON the border by design.
+  const body = enforced.slice(0, -1);
+  if (!crossesRect(body, rect)) return enforced;
+  // Never clip into the source leg: the first two points are pinned.
+  const kept = [...enforced.slice(0, 2), ...clipOutside(enforced.slice(2, -2), rect, leg - TOL)];
+  let from = kept.length;
+  // The kept prefix may still run into the card on its last segment.
+  while (from > 2 && crossesRect(kept.slice(0, from), rect)) from--;
+  const prefix = kept.slice(0, from);
+  const connector = landingConnector(prefix[prefix.length - 1], tgt, targetSide, leg, rect);
+  const rerouted = [
+    prefix[0],
+    ...dedupeCollinear([...prefix.slice(1), ...connector.slice(1, -1)]),
+    tgt,
+  ];
+  // A card too close to the source to go around cleanly: keep the square route
+  // rather than trade one crossing for another.
+  return crossesRect(rerouted.slice(0, -1), rect) ? enforced : rerouted;
 }
 
 /**

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   browseFs,
+  createRun,
   deletePipeline,
   duplicateLibraryPipeline,
   editRunRepos,
@@ -16,6 +17,7 @@ import {
   request,
   savePipeline,
   saveRunPipeline,
+  uploadTimeoutMs,
 } from "./api";
 
 afterEach(() => {
@@ -267,6 +269,135 @@ describe("request core", () => {
 // optional flags. The wire contract IS the AC: with no options the URL must be
 // EXACTLY `/fs/browse`, query-string-free, so the daemon takes the byte-identical
 // pre-#431 default branch.
+// #839 — an upload that fails BETWEEN the browser and the daemon (a reverse
+// proxy's body limit, a cut connection, a stalled link) must name that layer,
+// the host, the payload and the knobs — never the bare `POST /runs failed: 413`
+// or the browser's `TypeError: Failed to fetch`.
+describe("upload failures between the browser and the daemon (#839)", () => {
+  const attachedRun = () => ({
+    pipeline: "p",
+    input: "hello",
+    variables: {},
+    target_repo: "/repo",
+    files: [new File([new Uint8Array(1_500_000)], "copilote.html", { type: "text/html" })],
+  });
+
+  it("a 413 whose body is not JSON is attributed to the proxy, with the size and both limits", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 413,
+        json: async () => {
+          throw new SyntaxError("Unexpected token <");
+        },
+        text: async () => "<html><body>413 Request Entity Too Large</body></html>",
+      })),
+    );
+    const err = (await createRun(attachedRun()).catch((e) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(413);
+    expect(err.message).toContain("server in front of PDO");
+    expect(err.message).toContain("1.4 MB");
+    expect(err.message).toContain("client_max_body_size");
+    expect(err.message).toContain("max_attachments_mb");
+    expect(err.message).not.toMatch(/^POST \/runs failed: 413$/);
+  });
+
+  it("the daemon's own 413 (JSON body) keeps the daemon's sentence", async () => {
+    stubFetchWith(413, {
+      error: "attachments exceed the per-run limit of 50 MB (at `big.bin`); raise `max_attachments_mb` in Settings or attach less",
+    });
+    const err = (await createRun(attachedRun()).catch((e) => e)) as ApiError;
+    expect(err.message).toMatch(/^attachments exceed the per-run limit/);
+    expect(err.message).not.toContain("server in front of PDO");
+  });
+
+  it("a non-JSON error on any status says the reply did not come from the daemon", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 502,
+        json: async () => {
+          throw new SyntaxError("Unexpected token <");
+        },
+        text: async () => "<html>Bad Gateway</html>",
+      })),
+    );
+    const err = (await request("GET", "/runs").catch((e) => e)) as ApiError;
+    expect(err.status).toBe(502);
+    expect(err.message).toContain("GET /runs failed: 502");
+    expect(err.message).toContain("intermediary");
+    expect(err.body).toBeNull();
+  });
+
+  it("a `Failed to fetch` on POST /runs with attachments names the host, the size and the hints", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    const err = (await createRun(attachedRun()).catch((e) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBeUndefined();
+    expect(err.message).toContain("Upload interrupted");
+    expect(err.message).toContain("1.4 MB");
+    expect(err.message).toContain(window.location.host);
+    expect(err.message).toContain("Failed to fetch");
+    expect(err.message).toContain("client_max_body_size");
+  });
+
+  it("a `Failed to fetch` without attachments stays short and names the host", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    const err = (await request("GET", "/runs").catch((e) => e)) as ApiError;
+    expect(err.message).toBe(
+      `GET /runs failed: could not reach ${window.location.host} (Failed to fetch).`,
+    );
+  });
+
+  it("an upload that stops progressing expires with a timeout sentence", async () => {
+    vi.useFakeTimers();
+    try {
+      // A fetch that only settles when its signal aborts — a stalled upload.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (_url: string, init?: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () =>
+                reject(new DOMException("The operation was aborted.", "AbortError")),
+              );
+            }),
+        ),
+      );
+      const pending = createRun(attachedRun()).catch((e) => e);
+      // 1.5 MB → 2 MB rounded up → 60 s + 20 s.
+      expect(uploadTimeoutMs(1_500_000)).toBe(80_000);
+      await vi.advanceTimersByTimeAsync(80_000);
+      const err = (await pending) as ApiError;
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.message).toContain("Upload timed out after 80s");
+      expect(err.message).toContain("1.4 MB");
+      expect(err.message).toContain("max_attachments_mb");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("only uploads get an abort signal — a plain JSON request is untouched", async () => {
+    const fn = captureFetch(200, { ok: true });
+    await request("GET", "/runs");
+    expect(fn.mock.calls[0][1]?.signal).toBeUndefined();
+  });
+});
+
 describe("browseFs wire contract", () => {
   const EMPTY = { path: "/", parent: null, entries: [], truncated: false, error: null };
 

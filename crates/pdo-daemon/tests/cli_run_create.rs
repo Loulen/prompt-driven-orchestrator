@@ -470,3 +470,135 @@ async fn attachment_refusals_surface_readably() {
     assert_ne!(code, Some(0));
     assert!(stderr.contains("failed to read --file"), "{stderr}");
 }
+
+/// #839: a fake intermediary in front of "the daemon". `Reply::Html413` reads
+/// the request head and answers a plain nginx-style 413 page (no JSON);
+/// `Reply::Drop` reads a little then closes the socket — a cut upload.
+enum Reply {
+    Html413,
+    Drop,
+}
+
+async fn fake_proxy(reply: Reply) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = vec![0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            match reply {
+                Reply::Html413 => {
+                    // Like nginx's lingering close: drain the announced body
+                    // so the client reads the answer instead of a broken pipe.
+                    let head = String::from_utf8_lossy(&buf).to_string();
+                    let announced: usize = head
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    let already = head
+                        .split_once("\r\n\r\n")
+                        .map(|(_, b)| b.trim_end_matches('\0').len())
+                        .unwrap_or(0);
+                    let mut remaining = announced.saturating_sub(already);
+                    let mut sink = vec![0u8; 65536];
+                    while remaining > 0 {
+                        let n = match sock.read(&mut sink).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => n,
+                        };
+                        remaining = remaining.saturating_sub(n);
+                    }
+                    let html = "<html><head><title>413 Request Entity Too Large</title></head>\
+                                <body><center><h1>413 Request Entity Too Large</h1></center>\
+                                <hr><center>nginx</center></body></html>";
+                    let head = format!(
+                        "HTTP/1.1 413 Request Entity Too Large\r\nContent-Type: text/html\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        html.len()
+                    );
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(html.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                }
+                Reply::Drop => {
+                    drop(sock);
+                }
+            }
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn a_413_html_page_from_a_proxy_is_named_as_the_proxy_limit_not_the_budget() {
+    let proxy_url = fake_proxy(Reply::Html413).await;
+    let dir = tempfile::tempdir().unwrap();
+    let big = dir.path().join("copilote.html");
+    std::fs::write(&big, vec![b'x'; 1_400_000]).unwrap();
+
+    let (code, _stdout, stderr) = run_pdo_run_create(
+        &proxy_url,
+        &[
+            PIPELINE_NAME,
+            "--input",
+            "hi",
+            "--target-repo",
+            "/tmp/whatever",
+            "--file",
+            big.to_str().unwrap(),
+        ],
+        None,
+    )
+    .await;
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("413"), "{stderr}");
+    assert!(stderr.contains("server in front of PDO"), "{stderr}");
+    assert!(stderr.contains("client_max_body_size"), "{stderr}");
+    assert!(
+        stderr.contains("1.3 MB"),
+        "the size sent is named: {stderr}"
+    );
+    assert!(
+        !stderr.contains("<html>"),
+        "the proxy's HTML page must not be dumped raw: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn a_connection_cut_during_the_upload_names_the_host_and_the_size() {
+    let proxy_url = fake_proxy(Reply::Drop).await;
+    let dir = tempfile::tempdir().unwrap();
+    let big = dir.path().join("copilote.html");
+    std::fs::write(&big, vec![b'x'; 1_400_000]).unwrap();
+
+    let (code, _stdout, stderr) = run_pdo_run_create(
+        &proxy_url,
+        &[
+            PIPELINE_NAME,
+            "--input",
+            "hi",
+            "--target-repo",
+            "/tmp/whatever",
+            "--file",
+            big.to_str().unwrap(),
+        ],
+        None,
+    )
+    .await;
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("upload interrupted"), "{stderr}");
+    assert!(stderr.contains(&proxy_url), "the host is named: {stderr}");
+    assert!(
+        stderr.contains("1.3 MB"),
+        "the size sent is named: {stderr}"
+    );
+    assert!(stderr.contains("max_attachments_mb"), "{stderr}");
+}

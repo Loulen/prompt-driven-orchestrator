@@ -35,6 +35,9 @@ mod declared_wait;
 #[path = "daemon_bind.rs"]
 mod daemon_bind;
 
+#[path = "run_create_upload_errors.rs"]
+mod run_create_upload_errors;
+
 #[path = "stats_cost_by_model.rs"]
 mod stats_cost_by_model;
 

@@ -288,7 +288,12 @@ describe("PasteSkillModal reference files (#671)", () => {
     setup();
     paste("draft");
     fireEvent.drop(screen.getByTestId("paste-skill-modal"), dropEvent([new File([VALID], "SKILL.md", { type: "text/markdown" })]));
-    await waitFor(() => expect((screen.getByTestId("paste-skill-text") as HTMLTextAreaElement).value).toBe(VALID));
+    // The drop reads the File asynchronously; under a full parallel run the
+    // default 1 s wait lapses now and then — a flake, not a regression.
+    await waitFor(
+      () => expect((screen.getByTestId("paste-skill-text") as HTMLTextAreaElement).value).toBe(VALID),
+      { timeout: 5000 },
+    );
     expect(screen.queryByTestId("paste-skill-files")).toBeNull();
     expect(screen.getByTestId("paste-skill-replaced")).toHaveTextContent("Replaced by dropped SKILL.md");
     for (const id of ["frontmatter", "name", "description", "body", "unique"]) expect(checkState(id)).toBe("pass");

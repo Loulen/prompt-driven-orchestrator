@@ -1,5 +1,5 @@
 //! The **skills selected per tier** and their pure resolver into the **skills
-//! effectifs** of a NodeRun (#669, spec #667, ADR-0062, CONTEXT.md §*Banque de
+//! actifs** of a NodeRun (#669, spec #667, ADR-0062, CONTEXT.md §*Banque de
 //! skills*).
 //!
 //! Four additive tiers carry the same key `skills`, a list of [`SkillRef`]
@@ -53,11 +53,11 @@ pub(crate) struct SkillTiers<'a> {
     pub node: Option<&'a [SkillRef]>,
 }
 
-/// One effective skill: the id, its **current** bank name, and every tier that
+/// One active skill: the id, its **current** bank name, and every tier that
 /// selected it (a skill checked at two tiers is delivered once, attributed to
 /// both).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct EffectiveSkill {
+pub(crate) struct ActiveSkill {
     pub id: String,
     pub name: String,
     pub tiers: Vec<SkillTier>,
@@ -76,7 +76,7 @@ pub(crate) struct MissingSkill {
 /// promised but cannot get.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ResolvedSkills {
-    pub skills: Vec<EffectiveSkill>,
+    pub skills: Vec<ActiveSkill>,
     pub missing: Vec<MissingSkill>,
 }
 
@@ -119,7 +119,7 @@ pub(crate) fn resolve(tiers: &SkillTiers<'_>, bank: &BTreeMap<String, String>) -
     for id in order {
         let (label, tiers) = seen.remove(&id).expect("every ordered id was inserted");
         match bank.get(&id) {
-            Some(name) => out.skills.push(EffectiveSkill {
+            Some(name) => out.skills.push(ActiveSkill {
                 id,
                 name: name.clone(),
                 tiers,
@@ -216,17 +216,17 @@ mod tests {
         assert_eq!(
             resolved.skills,
             vec![
-                EffectiveSkill {
+                ActiveSkill {
                     id: "a".into(),
                     name: "tdd".into(),
                     tiers: vec![SkillTier::Instance]
                 },
-                EffectiveSkill {
+                ActiveSkill {
                     id: "b".into(),
                     name: "grilling".into(),
                     tiers: vec![SkillTier::Project]
                 },
-                EffectiveSkill {
+                ActiveSkill {
                     id: "c".into(),
                     name: "code-review".into(),
                     tiers: vec![SkillTier::Node]
@@ -341,7 +341,7 @@ mod tests {
             serde_json::to_string(&SkillTier::Instance).unwrap(),
             "\"instance\""
         );
-        let e: EffectiveSkill =
+        let e: ActiveSkill =
             serde_json::from_str(r#"{"id":"a","name":"tdd","tiers":["project","node"]}"#).unwrap();
         assert_eq!(e.tiers, vec![SkillTier::Project, SkillTier::Node]);
     }

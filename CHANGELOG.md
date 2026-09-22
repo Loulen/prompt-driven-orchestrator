@@ -16,6 +16,21 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.98.0
+**Sélecteur de skills compact, « active skills » partout** (#849, story #847).
+
+- Replié, le sélecteur tient sur une ligne : icône, « Skills », sous-ligne « No skill » /
+  « n active skills ». La liste de noms sous le bouton et le paragraphe d'avertissement rouge
+  disparaissent ; un skill sélectionné qui n'existe plus dans la banque se signale par une icône
+  d'alerte (message en tooltip) et n'est pas compté.
+- Déplié : skills hérités cochés, grisés, tier d'origine à droite ; skills disparus listés barrés
+  en tête, décochables ; le popover reste ouvert après chaque coche et s'ouvre aussi en lecture
+  seule, cases figées.
+- Le tour *First run* (étape « Add the two PDO skills ») lit l'état coché dans le popover.
+- Vocabulaire : « effective » devient « active » côté skills (types du résolveur front, type du
+  skill gelé côté daemon, identifiants de test, scénarios HP, documentation). Format des
+  pipelines stockés inchangé.
+
 ## 1.97.3
 **Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).
 

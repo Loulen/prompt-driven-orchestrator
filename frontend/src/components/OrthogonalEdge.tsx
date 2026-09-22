@@ -54,6 +54,9 @@ export interface OrthogonalEdgeData extends Record<string, unknown> {
    * round-tripping; the route arrives from this side, not always the left.
    */
   targetSide?: PortSide;
+  /** The side the wire leaves its source by (#844): the anchor's side, else the
+   *  carried output's declared side. Absent ⇒ `right`. */
+  sourceSide?: PortSide;
   /** Where on the source card's border the wire leaves (#844). Absent ⇒ the
    *  middle of the departure side. */
   sourceAnchor?: EdgeAnchor | null;
@@ -168,8 +171,9 @@ export default function OrthogonalEdge({
   const waypoints = data?.waypoints;
 
   // The sides the wire leaves and arrives on. An edge drawn before #844 has no
-  // source anchor and leaves rightwards, like the shipped canvas always did.
-  const srcSide: PortSide = sourceAnchor?.side ?? "right";
+  // source anchor and leaves by its output's declared side, like the shipped
+  // canvas always did (the dot sat there).
+  const srcSide: PortSide = sourceAnchor?.side ?? data?.sourceSide ?? "right";
   const tgtSide: PortSide = targetAnchor?.side ?? data?.targetSide ?? "left";
   const leg = landingLeg(WIRING_GRID_STEP);
 

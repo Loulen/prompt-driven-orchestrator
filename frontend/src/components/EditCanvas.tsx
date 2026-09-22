@@ -60,7 +60,8 @@ import {
 import { drawnEdgeLayout } from "../lib/drawnEdge";
 import { WIRING_GRID_STEP } from "../lib/wiringGrid";
 import { WIRE, WIRE_SOFT } from "../lib/wiringColors";
-import { pendingSource, resetWiringSession, wiringTrace } from "../lib/wiringSession";
+import { pendingSource, resetWiringSession, wiringGesture, wiringTrace } from "../lib/wiringSession";
+import { droppedPath } from "../lib/wiringGesture";
 import { useWiringStore } from "../stores/wiringStore";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import { useSkillBank } from "../hooks/useSkillBank";
@@ -712,7 +713,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       const edgeIndex = pendingEdgeIndexRef.current;
       pendingEdgeIndexRef.current = null;
       const sourceAnchor = pendingSource.anchor;
-      const traced = wiringTrace.points;
+      const publishedTrace = wiringTrace.points;
+      const gesture = wiringGesture.current;
       resetWiringSession();
       if (edgeIndex == null) return;
 
@@ -755,7 +757,20 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         (targetDef ? resolveTargetGeometrySide(targetDef, "left") : "left");
 
       // The traced waypoints ARE the route: the edge is born `mode: manual`
-      // (#844). `drawnEdgeLayout` owns which fields a drop writes and which it
+      // (#844). Rebuilt from THIS event's connection state, not taken from the
+      // last pointer move, whose hover state lags one frame behind (see
+      // `droppedPath`).
+      const traced = gesture
+        ? droppedPath(
+            gesture,
+            drop,
+            toNode,
+            connectionState.toHandle ?? null,
+            connectionState.fromNode?.id ?? null,
+            WIRING_GRID_STEP,
+          )
+        : publishedTrace;
+      // `drawnEdgeLayout` owns which fields a drop writes and which it
       // deliberately leaves absent.
       const updates = drawnEdgeLayout({
         traced,
@@ -1142,7 +1157,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   );
 }
 
-function ContextMenu({
+export function ContextMenu({
   x,
   y,
   type,
@@ -1167,9 +1182,28 @@ function ContextMenu({
   onDeleteEdge: () => void;
   onClose: () => void;
 }) {
+  // Escape dismisses the menu. Without it the full-screen backdrop below stayed
+  // mounted after the menu was abandoned by keyboard, and silently swallowed the
+  // next click on the canvas or the edge panel (#844 FP iter-2).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        className="fixed inset-0 z-40"
+        data-testid="context-menu-backdrop"
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+      />
       <div
         className="fixed z-50 rounded-md border border-line bg-bg-3 py-1 shadow-lg"
         style={{ left: x, top: y, fontSize: "11.5px", minWidth: 140 }}

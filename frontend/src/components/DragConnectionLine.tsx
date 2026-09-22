@@ -9,7 +9,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Position,
   useConnection,
   useReactFlow,
   useStoreApi,
@@ -17,72 +16,20 @@ import {
 } from "@xyflow/react";
 import { pathToSvg } from "../lib/edgePath";
 import type { Point } from "../lib/orthogonalRouter";
-import type { NodeType, PortSide } from "../types";
-import {
-  anchorPoint,
-  handlePin,
-  isEmergentInputNode,
-  sideFromRimHandle,
-  type AnchorRect,
-} from "../lib/anchorSide";
+import type { PortSide } from "../types";
+import { sideFromRimHandle } from "../lib/anchorSide";
 import { WIRING_GRID_STEP } from "../lib/wiringGrid";
 import {
   advanceGesture,
   gesturePath,
-  landingAt,
+  hoverLanding,
   startGesture,
   type LandingTarget,
   type WiringGesture,
 } from "../lib/wiringGesture";
 import { WIRE } from "../lib/wiringColors";
-import { pendingSource, wiringTrace } from "../lib/wiringSession";
+import { pendingSource, wiringGesture, wiringTrace } from "../lib/wiringSession";
 import { useWiringStore } from "../stores/wiringStore";
-
-/** The rect of a node xyflow reports as hovered, or null when it is this
- *  gesture's own source, or not measured yet. */
-function targetRect(
-  toNode: { id: string; measured?: { width?: number; height?: number }; internals: { positionAbsolute: Point } } | null,
-  fromNodeId: string | null,
-): AnchorRect | null {
-  if (!toNode || toNode.id === fromNodeId) return null;
-  const width = toNode.measured?.width ?? 0;
-  const height = toNode.measured?.height ?? 0;
-  if (!width || !height) return null;
-  return { x: toNode.internals.positionAbsolute.x, y: toNode.internals.positionAbsolute.y, width, height };
-}
-
-const POSITION_TO_SIDE: Record<Position, PortSide> = {
-  [Position.Top]: "top",
-  [Position.Right]: "right",
-  [Position.Bottom]: "bottom",
-  [Position.Left]: "left",
-};
-
-/**
- * Where the wire will be pinned on a target that does NOT anchor by drop (the End
- * marker's declared `result`, a merge's `branches`): on that handle, on its own
- * side, wherever the cursor happens to be. `null` for an emergent body, which
- * anchors where it is dropped.
- *
- * Read off the live handle rather than assumed, because the handle is the thing
- * the renderer will use: `connection.toHandle` carries the handle's absolute
- * CENTRE plus its size and `position`, which is all `getHandlePosition` needs.
- * Rounded like `OrthogonalEdge` rounds its endpoints, so preview and edge agree
- * to the pixel.
- */
-function pinnedLanding(
-  toNode: { data?: Record<string, unknown> } | null,
-  toHandle: { x: number; y: number; width: number; height: number; position: Position } | null,
-  rect: AnchorRect,
-): { side: PortSide; point: Point } | null {
-  const nodeType = toNode?.data?.nodeType;
-  if (typeof nodeType === "string" && isEmergentInputNode(nodeType as NodeType)) return null;
-  const side = (toHandle ? POSITION_TO_SIDE[toHandle.position] : null) ?? "left";
-  const pin = toHandle
-    ? handlePin({ x: toHandle.x, y: toHandle.y }, toHandle, side)
-    : anchorPoint(rect, null, side);
-  return { side, point: { x: Math.round(pin.x), y: Math.round(pin.y) } };
-}
 
 export default function DragConnectionLine({
   fromX,
@@ -121,10 +68,12 @@ export default function DragConnectionLine({
     (cursor: Point, shift: boolean) => {
       const state = store.getState();
       const live = state.connection.inProgress ? state.connection : null;
-      const rect = targetRect(live?.toNode ?? null, live?.fromNode?.id ?? null);
-      const landing = rect
-        ? landingAt(cursor, rect, pinnedLanding(live?.toNode ?? null, live?.toHandle ?? null, rect))
-        : null;
+      const landing = hoverLanding(
+        cursor,
+        live?.toNode ?? null,
+        live?.toHandle ?? null,
+        live?.fromNode?.id ?? null,
+      );
       const next = advanceGesture(latest.current, {
         cursor,
         shift,
@@ -135,6 +84,7 @@ export default function DragConnectionLine({
       // Published synchronously: `onConnectEnd` fires on the very next event and
       // reads this to persist the drawn route.
       wiringTrace.points = gesturePath(next, landing, step_);
+      wiringGesture.current = next;
       setGesture(next);
     },
     [store, step_],
@@ -172,14 +122,12 @@ export default function DragConnectionLine({
   // persist (nearest side, per-pixel offset) — and not at the node's centre, which
   // is where the handle's own geometry would drag it.
   const live = connection.inProgress ? connection : null;
-  const rect = targetRect(live?.toNode ?? null, live?.fromNode?.id ?? null);
-  const landing: LandingTarget | null = rect
-    ? landingAt(
-        gesture.cursor,
-        rect,
-        pinnedLanding(live?.toNode ?? null, live?.toHandle ?? null, rect),
-      )
-    : null;
+  const landing: LandingTarget | null = hoverLanding(
+    gesture.cursor,
+    live?.toNode ?? null,
+    live?.toHandle ?? null,
+    live?.fromNode?.id ?? null,
+  );
   const points = gesturePath(gesture, landing, step);
   const tip = points[points.length - 1] ?? { x: toX, y: toY };
 

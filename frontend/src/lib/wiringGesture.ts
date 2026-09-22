@@ -11,7 +11,7 @@
 // advanced as a side effect of rendering would walk two cells per pointer move,
 // visibly and only in development.
 
-import type { EdgeAnchor, PortSide } from "../types";
+import type { EdgeAnchor, NodeType, PortSide } from "../types";
 import type { Point } from "./orthogonalRouter";
 import {
   anchorFromPoint,
@@ -21,6 +21,8 @@ import {
   landingConnector,
   landingLeg,
   dropAnchor,
+  handlePin,
+  isEmergentInputNode,
   type AnchorRect,
 } from "./anchorSide";
 import {
@@ -134,19 +136,45 @@ export function gesturePath(
   if (landing) {
     const leg = landingLeg(step);
     const committed = clipOutside(gesture.trace.points, landing.rect, leg);
-    return [
-      ...committed.slice(0, -1),
-      ...landingConnector(
-        committed[committed.length - 1],
-        landing.point,
-        landing.anchor.side,
-        leg,
-        landing.rect,
-      ),
-    ];
+    return foldJunction(
+      [
+        ...committed.slice(0, -1),
+        ...landingConnector(
+          committed[committed.length - 1],
+          landing.point,
+          landing.anchor.side,
+          leg,
+          landing.rect,
+        ),
+      ],
+      committed.length - 1,
+    );
   }
   if (gesture.shift) return freeContinuation(gesture.trace, gesture.cursor);
   return gesture.trace.points;
+}
+
+/**
+ * Drops the point where the committed trace hands over to the landing connector
+ * while it sits mid-run — typically the last grid cell was traced AWAY from the
+ * landing, and the connector ran straight back over it: a 40px spur in the
+ * preview that the persisted route (collinear-merged) never had (#844 FP iter-2).
+ * Only that junction is touched, and never the approach point or the anchor, so
+ * the perpendicular leg is intact.
+ */
+function foldJunction(points: Point[], junction: number): Point[] {
+  const out = points.map((p) => ({ ...p }));
+  let j = junction;
+  while (j >= 1 && j < out.length - 2) {
+    const [a, b, c] = [out[j - 1], out[j], out[j + 1]];
+    const collinear =
+      (Math.abs(a.y - b.y) < 1e-6 && Math.abs(b.y - c.y) < 1e-6) ||
+      (Math.abs(a.x - b.x) < 1e-6 && Math.abs(b.x - c.x) < 1e-6);
+    if (!collinear) break;
+    out.splice(j, 1);
+    j -= 1;
+  }
+  return out;
 }
 
 /**
@@ -176,4 +204,105 @@ export function landingAt(
   }
   const anchor = dropAnchor(cursor, rect);
   return { rect, anchor, point: anchorPoint(rect, anchor, anchor.side) };
+}
+
+/** The slice of an xyflow internal node the landing needs. */
+export interface HoveredNode {
+  id: string;
+  measured?: { width?: number; height?: number };
+  internals: { positionAbsolute: Point };
+  data?: Record<string, unknown>;
+}
+
+/** The slice of an xyflow handle the landing needs: its absolute CENTRE, its
+ *  size, and its `Position` (whose values are the four side names). */
+export interface HoveredHandle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  position: string;
+}
+
+const SIDES: readonly PortSide[] = ["left", "right", "top", "bottom"];
+
+/** The rect of the hovered node, or null when it is the gesture's own source or
+ *  is not measured yet. */
+export function hoveredRect(toNode: HoveredNode | null, fromNodeId: string | null): AnchorRect | null {
+  if (!toNode || toNode.id === fromNodeId) return null;
+  const width = toNode.measured?.width ?? 0;
+  const height = toNode.measured?.height ?? 0;
+  if (!width || !height) return null;
+  return { x: toNode.internals.positionAbsolute.x, y: toNode.internals.positionAbsolute.y, width, height };
+}
+
+/**
+ * Where the wire will be pinned on a target that does NOT anchor by drop (the End
+ * marker's declared `result`, a merge's `branches`): on that handle, on its own
+ * side, wherever the cursor happens to be. `null` for an emergent body, which
+ * anchors where it is dropped.
+ *
+ * Read off the live handle rather than assumed, because the handle is the thing
+ * the renderer will use: xyflow's `toHandle` carries the handle's absolute CENTRE
+ * plus its size and `position`, which is all `getHandlePosition` needs. Rounded
+ * like `OrthogonalEdge` rounds its endpoints, so preview and edge agree to the
+ * pixel.
+ */
+export function pinnedLanding(
+  toNode: HoveredNode | null,
+  toHandle: HoveredHandle | null,
+  rect: AnchorRect,
+): { side: PortSide; point: Point } | null {
+  const nodeType = toNode?.data?.nodeType;
+  if (typeof nodeType === "string" && isEmergentInputNode(nodeType as NodeType)) return null;
+  const side =
+    toHandle && (SIDES as readonly string[]).includes(toHandle.position)
+      ? (toHandle.position as PortSide)
+      : "left";
+  const pin = toHandle
+    ? handlePin({ x: toHandle.x, y: toHandle.y }, toHandle, side)
+    : anchorPoint(rect, null, side);
+  return { side, point: { x: Math.round(pin.x), y: Math.round(pin.y) } };
+}
+
+/**
+ * The landing for a cursor hovering `toNode` — or null when nothing is hovered.
+ * One function for the preview and for the drop, so the two cannot drift.
+ */
+export function hoverLanding(
+  cursor: Point,
+  toNode: HoveredNode | null,
+  toHandle: HoveredHandle | null,
+  fromNodeId: string | null,
+): LandingTarget | null {
+  const rect = hoveredRect(toNode, fromNodeId);
+  return rect ? landingAt(cursor, rect, pinnedLanding(toNode, toHandle, rect)) : null;
+}
+
+/**
+ * The route a drop persists, rebuilt from the FINAL connection state.
+ *
+ * Not the polyline the last pointer move published. xyflow refreshes its hover
+ * state (`toNode`/`toHandle`) on `mousemove`, which the browser dispatches AFTER
+ * the `pointermove` the gesture listens to — so each frame reads the hover of the
+ * previous one. When the pointer enters the target and is released on the very
+ * next event, the last published trace has no landing at all: the saved waypoints
+ * stop short, and the renderer squares the gap straight through the card, while
+ * the (fresher) preview had gone around it (#844, FP iter-2). The drop's own
+ * `toNode`/`toHandle` and release point are current, so the landing is recomputed
+ * from them.
+ */
+export function droppedPath(
+  gesture: WiringGesture,
+  drop: Point,
+  toNode: HoveredNode | null,
+  toHandle: HoveredHandle | null,
+  fromNodeId: string | null,
+  step: number,
+): Point[] {
+  const landing = hoverLanding(drop, toNode, toHandle, fromNodeId);
+  // The gesture may not even know the pointer is over the target yet (see
+  // above); advancing it with `overTarget` only records the release point.
+  const next = advanceGesture(gesture, { cursor: drop, shift: gesture.shift, overTarget: landing != null, step });
+  return gesturePath(next, landing, step);
 }

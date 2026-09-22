@@ -5,6 +5,7 @@ import type { OrthogonalEdgeData } from "./OrthogonalEdge";
 import { anchorHandleId, isEmergentInputNode, rimHandleId } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
+import { primaryPort } from "../lib/edgePorts";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -489,11 +490,34 @@ export function resolveTargetGeometrySide(
   return target.inputs[0]?.side ?? "left";
 }
 
+/**
+ * The side a wire leaves its source by. A drawn edge (#844) says so itself in
+ * `source_anchor`. An edge drawn before #844 has no anchor: it left from its
+ * output's DECLARED side — where the per-output dot used to sit — so that is the
+ * fallback, `right` only when the port declares none. Falling straight back to
+ * `right` sent every legacy `side: bottom|left|top` output out the wrong border,
+ * back through its own card and into the target from the opposite side (#844 FP
+ * iter-2, blocking).
+ */
+export function resolveSourceSide(
+  source: PipelineDef["nodes"][number] | undefined,
+  edge: PipelineDef["edges"][number],
+): PortSide {
+  if (edge.source_anchor) return edge.source_anchor.side;
+  const port = primaryPort(edge.source);
+  const declared = source?.outputs.find((p) => p.name === port) ?? source?.outputs[0];
+  return declared?.side ?? "right";
+}
+
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 
   return pipeline.edges.map((e, i) => {
     const isEndEdge = endNodeId != null && e.target.node === endNodeId;
+    const sourceSide = resolveSourceSide(
+      pipeline.nodes.find((n) => n.id === e.source.node),
+      e,
+    );
     const targetNode = pipeline.nodes.find((n) => n.id === e.target.node);
     // The persisted anchor side (#168). Only meaningful for an emergent body
     // target; declared/structural handles ignore it. Defaults to `left` so an
@@ -543,8 +567,8 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
       // is no per-output handle any more. xyflow needs the binding for
       // connectivity and for its own geometry only; the drawn departure POINT
       // comes from `source_anchor` inside the edge component. An edge drawn
-      // before #844 has no anchor and keeps the legacy rightwards departure.
-      sourceHandle: rimHandleId(e.source_anchor?.side ?? "right"),
+      // before #844 has no anchor and leaves by its output's declared side.
+      sourceHandle: rimHandleId(sourceSide),
       targetHandle,
       type: "orthogonal",
       data: {
@@ -552,6 +576,7 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
         mode: e.mode ?? null,
         waypoints,
         targetSide: geometrySide,
+        sourceSide,
         sourceAnchor: e.source_anchor ?? null,
         targetAnchor: e.target_anchor ?? null,
         isConditional,

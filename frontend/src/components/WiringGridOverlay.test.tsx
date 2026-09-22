@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import WiringGridOverlay from "./WiringGridOverlay";
-import { WIRING_GRID_STEP, snapToGrid } from "../lib/wiringGrid";
+import { WIRING_GRID_STEP, crispOffset, snapToGrid } from "../lib/wiringGrid";
 
 describe("WiringGridOverlay (#844)", () => {
   it("anchors the lattice ON the origin, so a dot is a point the trace snaps to", () => {
@@ -66,6 +66,46 @@ describe("WiringGridOverlay (#844)", () => {
   it("scales the dots the same way, so they survive a zoomed-out canvas too", () => {
     const [radius] = widths("dots", 0.5);
     expect(radius * 0.5).toBeCloseTo(0.8, 5);
+  });
+
+  it("nudges the lines onto whole screen pixels under a fractional translate (zoom 1)", () => {
+    // xyflow's fit view leaves the viewport at x.5: a 1px line starting there is
+    // two half-intensity columns.
+    render(
+      <WiringGridOverlay
+        origin={{ x: 0, y: 0 }}
+        step={WIRING_GRID_STEP}
+        variant="lines"
+        zoom={1}
+        translate={{ x: 120.5, y: 33.25 }}
+      />,
+    );
+    const grid = screen.getByTestId("wiring-grid");
+    const [vx, , , vy] = grid.style.backgroundPosition
+      .split(/[ ,]+/)
+      .map((v) => parseFloat(v));
+    const left = parseFloat(grid.style.left);
+    const top = parseFloat(grid.style.top);
+    // Every vertical line starts on a whole screen pixel…
+    for (const k of [0, 1, 7]) {
+      const screenX = 120.5 + (left + vx + k * WIRING_GRID_STEP);
+      expect(Math.abs(screenX - Math.round(screenX))).toBeLessThan(1e-9);
+      const screenY = 33.25 + (top + vy + k * WIRING_GRID_STEP);
+      expect(Math.abs(screenY - Math.round(screenY))).toBeLessThan(1e-9);
+    }
+    // …by moving it less than half a screen pixel off the lattice.
+    expect(Math.abs(vx)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(vy)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("does not nudge at all when the translate is already whole", () => {
+    expect(crispOffset(-4000, 120, 1)).toBe(0);
+    expect(crispOffset(-4000, 120, 0.5)).toBe(0);
+  });
+
+  it("paints under the edges and the cards", () => {
+    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={WIRING_GRID_STEP} variant="lines" />);
+    expect(screen.getByTestId("wiring-grid").style.zIndex).toBe("-1");
   });
 
   it("never eats a pointer event — it is a reading aid, not a surface", () => {

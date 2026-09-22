@@ -17,9 +17,14 @@
 
 import type { EdgeAnchor } from "../types";
 import type { Point } from "./orthogonalRouter";
+import type { WiringGesture } from "./wiringGesture";
 
 /** The polyline the connection line last drew, in flow coordinates. */
 export const wiringTrace: { points: Point[] } = { points: [] };
+
+/** The gesture state the connection line last reached, so the drop can rebuild
+ *  its landing from xyflow's final connection state (see `droppedPath`). */
+export const wiringGesture: { current: WiringGesture | null } = { current: null };
 
 /** Where on the rim the gesture started: the flow point, and the anchor it
  *  resolves to on the source card. */
@@ -32,6 +37,7 @@ export const pendingSource: { point: Point | null; anchor: EdgeAnchor | null } =
  *  drag never leaks its trace into the next edge. */
 export function resetWiringSession(): void {
   wiringTrace.points = [];
+  wiringGesture.current = null;
   pendingSource.point = null;
   pendingSource.anchor = null;
 }

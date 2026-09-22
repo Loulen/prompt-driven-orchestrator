@@ -251,3 +251,20 @@ export function snapPolyline(points: Point[], origin: Point, step: number): Poin
   else if (axes[last - 1] === "vertical") out[last - 1].x = out[last].x;
   return mergeCollinear(out);
 }
+
+/**
+ * The sub-pixel nudge, in flow px, that puts a grid line's left/top edge on a
+ * whole SCREEN pixel.
+ *
+ * The viewport translate is routinely fractional (xyflow centres the fit view),
+ * and a one-pixel line starting at x.5 is rasterised as two half-intensity
+ * columns: at zoom 1 exactly, where users sit, the `lines` grid came out visibly
+ * fainter than at 0.95 (#844 FP iter-2). Nudging by under half a screen pixel is
+ * invisible against the 1.5px wire and keeps the line crisp. Exact for every line
+ * whenever `zoom × step` is whole (zoom 1, 0.5, 2…); elsewhere the lines fall on
+ * varying fractions anyway and this only aligns the one through the origin.
+ */
+export function crispOffset(latticeFlow: number, translate: number, zoom: number): number {
+  const screen = translate + zoom * latticeFlow;
+  return (Math.round(screen) - screen) / zoom;
+}

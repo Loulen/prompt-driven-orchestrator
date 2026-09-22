@@ -14,6 +14,7 @@
 import { useStore } from "@xyflow/react";
 import type { Point } from "../lib/orthogonalRouter";
 import { WIRE } from "../lib/wiringColors";
+import { crispOffset } from "../lib/wiringGrid";
 
 /** Half-extent of the overlay, in flow px. A multiple of every step so the
  *  lattice stays in phase with the origin at the div's own edges. */
@@ -25,15 +26,17 @@ const LINE_PX = 1;
 const DOT_PX = 0.8;
 
 /**
- * The same overlay, reading the viewport zoom itself.
+ * The same overlay, reading the viewport zoom and translate itself.
  *
- * Subscribed here rather than in `EditCanvas` so a pinch-zoom re-renders the grid
+ * Subscribed here rather than in `EditCanvas` so a pan or zoom re-renders the grid
  * and nothing else; the pure component below stays renderable without a flow
  * provider.
  */
 export function ViewportWiringGridOverlay(props: { origin: Point; step: number; variant: "dots" | "lines" }) {
   const zoom = useStore((s) => s.transform[2]);
-  return <WiringGridOverlay {...props} zoom={zoom} />;
+  const tx = useStore((s) => s.transform[0]);
+  const ty = useStore((s) => s.transform[1]);
+  return <WiringGridOverlay {...props} zoom={zoom} translate={{ x: tx, y: ty }} />;
 }
 
 export default function WiringGridOverlay({
@@ -41,6 +44,7 @@ export default function WiringGridOverlay({
   step,
   variant,
   zoom = 1,
+  translate = { x: 0, y: 0 },
 }: {
   origin: Point;
   step: number;
@@ -48,6 +52,8 @@ export default function WiringGridOverlay({
   /** Viewport zoom. The overlay lives in FLOW space, so the browser rasterises it
    *  scaled by this: a width expressed in flow px is multiplied by it. */
   zoom?: number;
+  /** Viewport translate, in screen px — only used to keep the lines crisp. */
+  translate?: Point;
 }) {
   // Every stroke is drawn a flow-px width that COMES OUT at its screen width.
   // Without this the `lines` variant was invisible at the zoom users actually sit
@@ -62,6 +68,10 @@ export default function WiringGridOverlay({
   const half = step / 2;
   const line = LINE_PX * px;
   const dot = DOT_PX * px;
+  const left = origin.x - HALF;
+  const top = origin.y - HALF;
+  const nudgeX = crispOffset(left, translate.x, zoom);
+  const nudgeY = crispOffset(top, translate.y, zoom);
   const style: React.CSSProperties =
     variant === "dots"
       ? {
@@ -75,7 +85,7 @@ export default function WiringGridOverlay({
             `linear-gradient(to right, ${WIRE} 0 ${line}px, transparent ${line}px),` +
             `linear-gradient(to bottom, ${WIRE} 0 ${line}px, transparent ${line}px)`,
           backgroundSize: `${step}px ${step}px, ${step}px ${step}px`,
-          backgroundPosition: "0 0, 0 0",
+          backgroundPosition: `${nudgeX}px 0, 0 ${nudgeY}px`,
           opacity: 0.35,
         };
 
@@ -85,11 +95,17 @@ export default function WiringGridOverlay({
       style={{
         position: "absolute",
         // Anchored ON the origin, so the lattice passes exactly through it.
-        left: origin.x - HALF,
-        top: origin.y - HALF,
+        left,
+        top,
         width: HALF * 2,
         height: HALF * 2,
         pointerEvents: "none",
+        // UNDER the edges and the cards, as in the validated prototype. The
+        // viewport portal comes last in the viewport, so without this the grid
+        // was painted across every card during a drag (#844 FP iter-2). The
+        // viewport is its own stacking context, so -1 stays above the canvas
+        // background.
+        zIndex: -1,
         ...style,
       }}
     />

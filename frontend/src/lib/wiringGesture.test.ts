@@ -260,3 +260,29 @@ describe("landingAt", () => {
     expect(landingAt({ x: 470, y: 470 }, TGT_RECT, null).anchor.side).toBe("bottom");
   });
 });
+
+describe("gesturePath — no spur where the trace hands over to the landing (#844 FP iter-2)", () => {
+  it("drops the last cell when the connector runs straight back over it", () => {
+    // The last cell was traced RIGHT to x=400, past the left side's approach at
+    // x=360: the connector turns straight back LEFT over it. The preview kept
+    // that 40px spur; the persisted route (collinear-merged) never did.
+    const gesture: WiringGesture = {
+      trace: { points: [{ x: 280, y: 560 }, { x: 400, y: 560 }], heading: "horizontal" },
+      origin: { x: 0, y: 0 },
+      cursor: { x: 405, y: 440 },
+      shift: false,
+      wasShift: false,
+    };
+    const landing = landingAt({ x: 405, y: 440 }, TGT_RECT);
+    const path = gesturePath(gesture, landing, STEP);
+    expect(path).toEqual([
+      { x: 280, y: 560 },
+      { x: 360, y: 560 },
+      { x: 360, y: 440 },
+      { x: 400, y: 440 },
+    ]);
+    // And since the drop persists this very polyline, the saved route has no
+    // spur either.
+    expect(orthogonal(path)).toBe(true);
+  });
+});

@@ -3,7 +3,15 @@ import { drawnEdgeLayout } from "./drawnEdge";
 import { WIRING_GRID_STEP } from "./wiringGrid";
 import { anchorPoint, enforcePerpendicularEnds, landingLeg } from "./anchorSide";
 import type { Point } from "./orthogonalRouter";
-import { advanceGesture, gesturePath, landingAt, startGesture } from "./wiringGesture";
+import {
+  advanceGesture,
+  droppedPath,
+  gesturePath,
+  landingAt,
+  startGesture,
+  type HoveredHandle,
+  type HoveredNode,
+} from "./wiringGesture";
 
 const SRC_RECT = { x: 0, y: 0, width: 200, height: 80 };
 const TGT_RECT = { x: 400, y: 400, width: 200, height: 80 };
@@ -179,6 +187,96 @@ describe("drawnEdgeLayout (#844)", () => {
     }
     // …and what is reloaded is what was drawn.
     expect(reloaded).toEqual(enforcePerpendicularEnds(traced, "bottom", "top", leg));
+  });
+
+  describe("a pinned target approached from its far side, dropped on the next event (#844 FP iter-2)", () => {
+    // End marker at TGT_RECT, its declared `result` handle covering the card and
+    // pinned on the TOP border. The gesture comes from BELOW.
+    const END_NODE: HoveredNode = {
+      id: "end",
+      measured: { width: TGT_RECT.width, height: TGT_RECT.height },
+      internals: { positionAbsolute: { x: TGT_RECT.x, y: TGT_RECT.y } },
+      data: { nodeType: "end" },
+    };
+    const END_HANDLE: HoveredHandle = {
+      x: TGT_RECT.x + TGT_RECT.width / 2,
+      y: TGT_RECT.y + TGT_RECT.height / 2,
+      width: TGT_RECT.width,
+      height: TGT_RECT.height,
+      position: "top",
+    };
+    const PIN = { x: 500, y: 400 };
+    const DROP = { x: 500, y: 470 };
+
+    /** The gesture as the connection line leaves it: xyflow refreshes its hover
+     *  on `mousemove`, AFTER our `pointermove`, so the frame that entered the card
+     *  still believed nothing was hovered. */
+    function staleGesture() {
+      let gesture = startGesture(SRC, "bottom", WIRING_GRID_STEP);
+      for (const cursor of [{ x: 80, y: 560 }, { x: 500, y: 560 }, DROP]) {
+        gesture = advanceGesture(gesture, {
+          cursor,
+          shift: false,
+          overTarget: false,
+          step: WIRING_GRID_STEP,
+        });
+      }
+      return gesture;
+    }
+
+    function reloadedFrom(traced: Point[]): Point[] {
+      const layout = drawnEdgeLayout({
+        traced,
+        sourceAnchor: SOURCE_ANCHOR,
+        targetAnchor: null,
+        targetSide: "top",
+        anchorsByDrop: false,
+      });
+      return enforcePerpendicularEnds(
+        [SRC, ...(layout.waypoints ?? []), PIN],
+        "bottom",
+        "top",
+        landingLeg(WIRING_GRID_STEP),
+      );
+    }
+
+    function crossesCard(route: Point[]): boolean {
+      const spans = (lo: number, hi: number, e0: number, e1: number) =>
+        Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+      for (let i = 1; i < route.length; i++) {
+        const [a, b] = [route[i - 1], route[i]];
+        if (
+          spans(a.x, b.x, TGT_RECT.x, TGT_RECT.x + TGT_RECT.width) &&
+          spans(a.y, b.y, TGT_RECT.y, TGT_RECT.y + TGT_RECT.height)
+        )
+          return true;
+      }
+      return false;
+    }
+
+    it("reproduces the defect with the trace the last pointer move published", () => {
+      // What `onConnectEnd` used to persist: no landing at all, so the renderer
+      // squares the gap straight up through the card.
+      expect(crossesCard(reloadedFrom(gesturePath(staleGesture(), null, WIRING_GRID_STEP)))).toBe(true);
+    });
+
+    it("goes around the card once the landing is rebuilt from the drop's own state", () => {
+      const traced = droppedPath(staleGesture(), DROP, END_NODE, END_HANDLE, "src", WIRING_GRID_STEP);
+      expect(traced[traced.length - 1]).toEqual(PIN);
+      const reloaded = reloadedFrom(traced);
+      expect(crossesCard(reloaded)).toBe(false);
+      // …and what is reloaded is what the preview drew.
+      expect(reloaded).toEqual(
+        enforcePerpendicularEnds(traced, "bottom", "top", landingLeg(WIRING_GRID_STEP)),
+      );
+    });
+
+    it("keeps the published trace when nothing is hovered at the drop", () => {
+      const gesture = staleGesture();
+      expect(droppedPath(gesture, DROP, null, null, "src", WIRING_GRID_STEP)).toEqual(
+        gesturePath(gesture, null, WIRING_GRID_STEP),
+      );
+    });
   });
 
   it("writes nothing at all for a drop that carried no gesture and no anchor", () => {

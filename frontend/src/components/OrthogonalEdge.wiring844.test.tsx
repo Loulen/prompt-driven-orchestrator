@@ -271,3 +271,29 @@ describe("OrthogonalEdge — an edge drawn before #844", () => {
     }
   });
 });
+
+describe("OrthogonalEdge — an un-anchored edge leaves by its output's declared side (#844 FP iter-2)", () => {
+  it("heads down out of a `side: bottom` output instead of rightwards", () => {
+    harness(
+      edgeData({
+        sourceAnchor: null,
+        targetAnchor: null,
+        sourceSide: "bottom",
+        mode: "auto",
+        waypoints: null,
+      }),
+    );
+    const pts = drawnPoints();
+    // First leg: vertical and downwards — out of the bottom border, like the
+    // output dot that used to sit there.
+    expect(pts[1].x).toBe(pts[0].x);
+    expect(pts[1].y).toBeGreaterThan(pts[0].y);
+  });
+
+  it("keeps the rightwards departure when nothing says otherwise", () => {
+    harness(edgeData({ sourceAnchor: null, targetAnchor: null, mode: "auto", waypoints: null }));
+    const pts = drawnPoints();
+    expect(pts[1].y).toBe(pts[0].y);
+    expect(pts[1].x).toBeGreaterThan(pts[0].x);
+  });
+});

@@ -814,6 +814,10 @@ impl Importer {
             target_side: None,
             source_anchor: None,
             target_anchor: None,
+            show_output_labels: None,
+            output_label_pos: None,
+            condition_label_pos: None,
+            below_nodes: false,
         });
     }
 

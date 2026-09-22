@@ -75,7 +75,20 @@ export const LAYOUT_FIELDS: Record<SerializerScope, readonly string[]> = {
   outputPort: [],
   // #844: `source_anchor`/`target_anchor` say WHERE on a card's border a wire
   // leaves and lands — presentation, exactly like `target_side` beside them.
-  edge: ["mode", "waypoints", "target_side", "source_anchor", "target_anchor"] satisfies (keyof EdgeDef)[],
+  // #845: the two label positions, the output-label toggle and the draw order
+  // are canvas presentation like the routing above them — two pipelines that
+  // differ only in these compare equal behind the library star.
+  edge: [
+    "mode",
+    "waypoints",
+    "target_side",
+    "source_anchor",
+    "target_anchor",
+    "show_output_labels",
+    "output_label_pos",
+    "condition_label_pos",
+    "below_nodes",
+  ] satisfies (keyof EdgeDef)[],
   loopRegion: [],
   // GUARD-ONLY: the strip drops the whole `notes` block via LAYOUT_FIELDS.pipeline
   // and never descends into a note (ADR-0018 R1 — notes are whole-block layout).
@@ -111,7 +124,8 @@ export function stripLayout(obj: Record<string, unknown>): Record<string, unknow
   const edges = obj.edges;
   if (Array.isArray(edges)) {
     for (const edge of edges as Record<string, unknown>[]) {
-      // mode, waypoints, target_side, source_anchor, target_anchor
+      // mode, waypoints, target_side, source_anchor, target_anchor, and the
+      // #845 label/draw-order fields
       for (const k of LAYOUT_FIELDS.edge) delete edge[k];
     }
   }

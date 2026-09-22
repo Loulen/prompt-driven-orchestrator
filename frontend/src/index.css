@@ -344,6 +344,25 @@ body {
   transform: translate(-50%, -50%);
 }
 
+/* Edge labels stack WITH their edge (#845).
+ *
+ * Edges draw above the node cards by default (zIndex 1001, `EDGE_ABOVE_NODES`)
+ * or under them (0, "Draw under nodes"). The output labels, the condition pill
+ * and the segment handles all live in `.react-flow__edgelabel-renderer`, one
+ * layer shared by every edge — so a z-index on the LAYER can only put all of
+ * them above the cards or all of them below. Lifted to 1002 as a whole, an edge
+ * sent under the cards kept its pill and handles painted over them.
+ *
+ * So the layer must stay a plain positioned box, not a stacking context: each
+ * label and handle carries its own z-index (`EDGE_LABELS_ABOVE_NODES` = 1002,
+ * one notch over its elevated edge so the edge's invisible 14px hit-stroke
+ * cannot swallow the pointer aimed at it; `EDGE_LABELS_UNDER_NODES` = 0, level
+ * with an edge drawn under) and competes with the node cards directly. Never
+ * give this layer a z-index. */
+.react-flow__edgelabel-renderer {
+  z-index: auto;
+}
+
 
 /* Drop-target highlight — amber, only on input pills of hovered node
    (refs docs/design/project/winners.css §2, .port-pill.is-drop) */

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { deriveEditEdges, deriveEditNodes, deriveLoopRegions, runReachedEnd } from "./editNodeDerivation";
+import {
+  deriveEditEdges,
+  deriveEditNodes,
+  deriveLoopRegions,
+  runReachedEnd,
+  EDGE_ABOVE_NODES,
+  EDGE_UNDER_NODES,
+} from "./editNodeDerivation";
 import type {
   LoopRegion,
   NodeDef,
@@ -501,5 +508,149 @@ describe("deriveEditEdges — multi-output edges (#843)", () => {
       ]),
     );
     expect(edges[0].data!.label).toBe("has_design_work = true");
+  });
+});
+
+// #845: the canvas labels and the draw order are derived from the edge's own
+// layout fields — the toggle's DEFAULT from how many outputs the source node
+// declares, never from how many this edge happens to carry.
+describe("deriveEditEdges — labels and draw order (#845)", () => {
+  function node(id: string, outputs: string[]): NodeDef {
+    return {
+      id,
+      name: id,
+      type: "agent",
+      inputs: [],
+      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      interactive: false,
+    };
+  }
+
+  function pipeline(sourceOutputs: string[], edges: PipelineDef["edges"]): PipelineDef {
+    return {
+      name: "p",
+      variables: {},
+      nodes: [node("design", sourceOutputs), node("orch", [])],
+      edges,
+    };
+  }
+
+  it("names the carried outputs by default when the source declares two or more", () => {
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [{ source: { node: "design", ports: ["out", "spec"] }, target: { node: "orch", port: "out" } }],
+      ),
+    );
+    expect(edges[0].data!.showOutputLabels).toBe(true);
+    expect(edges[0].data!.ports).toEqual(["out", "spec"]);
+  });
+
+  it("stays silent by default on a single-output source", () => {
+    const edges = deriveEditEdges(
+      pipeline(["out"], [{ source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } }]),
+    );
+    expect(edges[0].data!.showOutputLabels).toBe(false);
+  });
+
+  it("defaults off on a source declaring two outputs when the edge carries one — the toggle is the AUTHOR's", () => {
+    // The derivation reads the per-edge value first; only an absent one falls
+    // back to the count. A `false` must survive, or turning the labels off on a
+    // two-output node would silently come back on the next render.
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [
+          {
+            source: { node: "design", port: "out" },
+            target: { node: "orch", port: "out" },
+            show_output_labels: false,
+          },
+        ],
+      ),
+    );
+    expect(edges[0].data!.showOutputLabels).toBe(false);
+  });
+
+  it("draws above the nodes by default and below on demand", () => {
+    const above = deriveEditEdges(
+      pipeline(["out"], [{ source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } }]),
+    );
+    expect(above[0].zIndex).toBe(EDGE_ABOVE_NODES);
+    expect(EDGE_ABOVE_NODES).toBeGreaterThan(1000);
+
+    const below = deriveEditEdges(
+      pipeline(
+        ["out"],
+        [
+          {
+            source: { node: "design", port: "out" },
+            target: { node: "orch", port: "out" },
+            below_nodes: true,
+          },
+        ],
+      ),
+    );
+    expect(below[0].zIndex).toBe(EDGE_UNDER_NODES);
+    expect(EDGE_UNDER_NODES).toBe(0);
+  });
+
+  it("tells the edge whether it draws under the nodes, for its labels and handles", () => {
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out"],
+        [
+          { source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } },
+          {
+            source: { node: "design", port: "out" },
+            target: { node: "orch", port: "out" },
+            below_nodes: true,
+          },
+        ],
+      ),
+    );
+    expect(edges.map((e) => e.data!.belowNodes)).toEqual([false, true]);
+  });
+
+  it("numbers the label slots across fan-out edges leaving from the same port", () => {
+    // FP #845 finding: two edges out of `design.spec` placed their tags at the
+    // same default spot, one hiding the other.
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [
+          { source: { node: "design", ports: ["spec", "out"] }, target: { node: "orch", port: "out" } },
+          { source: { node: "design", port: "spec" }, target: { node: "orch", port: "out" } },
+          // a different departure point starts its own count
+          { source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } },
+          // hidden labels take no slot
+          {
+            source: { node: "design", port: "spec" },
+            target: { node: "orch", port: "out" },
+            show_output_labels: false,
+          },
+          { source: { node: "design", port: "spec" }, target: { node: "orch", port: "out" } },
+        ],
+      ),
+    );
+    expect(edges.map((e) => e.data!.outputLabelSlot)).toEqual([0, 2, 0, 3, 3]);
+  });
+
+  it("hands the pinned label positions through to the edge", () => {
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [
+          {
+            source: { node: "design", ports: ["out", "spec"] },
+            target: { node: "orch", port: "out" },
+            output_label_pos: { spec: { x: 40, y: 50 } },
+            condition_label_pos: { x: 12, y: 13 },
+          },
+        ],
+      ),
+    );
+    expect(edges[0].data!.outputLabelPos).toEqual({ spec: { x: 40, y: 50 } });
+    expect(edges[0].data!.conditionLabelPos).toEqual({ x: 12, y: 13 });
   });
 });

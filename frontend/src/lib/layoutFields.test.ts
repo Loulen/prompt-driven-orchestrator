@@ -98,6 +98,14 @@ const EDGE: Complete<EdgeDef> = {
   // #844: the two per-edge anchors. Layout, like the three above.
   source_anchor: { side: "bottom", offset: 40 },
   target_anchor: { side: "top", offset: 37 },
+  // #845 — same caveat as the node fields above: `Complete<EdgeDef>` forces
+  // them here, but naming them proves nothing about emission. The emission
+  // proof is in `serializePipeline.test.ts` (non-default values land in the
+  // YAML object, defaults round-trip by absence).
+  show_output_labels: false,
+  output_label_pos: { out: WAYPOINT },
+  condition_label_pos: WAYPOINT,
+  below_nodes: true,
 };
 const REGION: Complete<LoopRegion> = {
   id: "r1",
@@ -154,7 +162,7 @@ describe("serializer field-partition exhaustiveness guard (#355)", () => {
   // Sanity: assert the leaf scopes most prone to under-population are actually
   // maximal, so the set-equality above can't pass on an accidentally-thin fixture.
   it("fixture is maximal at edge/output-port scope", () => {
-    expect(sortedKeys(edge)).toHaveLength(9);
+    expect(sortedKeys(edge)).toHaveLength(13);
     expect(sortedKeys(output)).toHaveLength(7);
   });
 });
@@ -171,6 +179,12 @@ describe("stripLayout", () => {
     // #844 — the two per-edge anchors go the same way.
     expect("source_anchor" in edge).toBe(false);
     expect("target_anchor" in edge).toBe(false);
+    // #845 — labels and draw order are presentation too: two pipelines that
+    // differ only in these compare EQUAL behind the library star.
+    expect("show_output_labels" in edge).toBe(false);
+    expect("output_label_pos" in edge).toBe(false);
+    expect("condition_label_pos" in edge).toBe(false);
+    expect("below_nodes" in edge).toBe(false);
     // R1 (#307 / ADR-0018): the notes KEY is absent, not `notes: []` (an empty
     // array would deep-compare != absent and move the star).
     expect("notes" in stripped).toBe(false);

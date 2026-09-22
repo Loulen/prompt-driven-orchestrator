@@ -205,6 +205,23 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
         offset: Math.round(e.target_anchor.offset),
       };
     }
+    // Labels and draw order (#845). Layout again, and again emitted only when
+    // NON-DEFAULT, so a pipeline nobody re-decorated saves back byte-identical:
+    //  - `show_output_labels` has no constant default (it is derived from the
+    //    source node's declared output count), so absence means "follow the
+    //    derivation" and any explicit value — `false` included — is emitted;
+    //  - an empty `output_label_pos` map is the same as no map at all;
+    //  - `below_nodes: false` is the default draw order, above the cards.
+    if (e.show_output_labels != null) edge.show_output_labels = e.show_output_labels;
+    if (e.output_label_pos && Object.keys(e.output_label_pos).length > 0) {
+      edge.output_label_pos = Object.fromEntries(
+        Object.entries(e.output_label_pos).map(([port, p]) => [port, { x: p.x, y: p.y }]),
+      );
+    }
+    if (e.condition_label_pos) {
+      edge.condition_label_pos = { x: e.condition_label_pos.x, y: e.condition_label_pos.y };
+    }
+    if (e.below_nodes === true) edge.below_nodes = true;
     return edge;
   });
 

@@ -16,6 +16,19 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.99.0
+**Labels d'edge déplaçables, toggle des labels d'output, ordre de dessin edges/nodes** (#845, #840).
+
+- Labels d'output : petit tag par port porté, placé en alternance au pied de l'edge, déplaçable
+  (`output_label_pos`). Toggle par edge (`show_output_labels`), actif par défaut si le node source
+  déclare au moins 2 outputs.
+- Label de condition : la pill `when` est déplaçable (`condition_label_pos`) et se place par défaut
+  à côté du trait, plus sur le handle de segment.
+- Ordre de dessin : les edges passent au-dessus des nodes par défaut ; le switch « Draw under
+  nodes » (`below_nodes`) les repasse dessous, handles et pill compris.
+- Ces 4 champs sont du layout : écrits seulement hors valeur par défaut, ignorés par le diff
+  sémantique.
+
 ## 1.98.0
 **Edge multi-port : une seule edge porte plusieurs outputs d'un même node** (#843, #840).
 

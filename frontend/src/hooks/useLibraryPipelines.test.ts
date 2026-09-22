@@ -108,6 +108,31 @@ describe("pipelinesEquivalent", () => {
     expect(pipelinesEquivalent(a, b)).toBe(true);
   });
 
+  // #845: naming the carried outputs on the canvas, dragging either kind of
+  // label and sending an edge under the cards are LAYOUT. Two pipelines that
+  // differ only in those four fields must compare equal, or decorating an edge
+  // flips the library star to "diverged".
+  it("ignores the output-label toggle, both label positions and the draw order", () => {
+    const e = (over: Partial<PipelineDef["edges"][number]> = {}) => ({
+      source: { node: "a", port: "out" },
+      target: { node: "b", port: "in" },
+      ...over,
+    });
+    const a = def({ nodes: [node("a"), node("b")], edges: [e()] });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        e({
+          show_output_labels: false,
+          output_label_pos: { out: { x: 12, y: 34 } },
+          condition_label_pos: { x: 56, y: 78 },
+          below_nodes: true,
+        }),
+      ],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
   // #307: canvas notes are LAYOUT, not semantics (default R1 = full-layout).
   // Two pipelines differing only by their notes — presence, content, OR
   // position — must compare equal so the synced/diverged star never moves.

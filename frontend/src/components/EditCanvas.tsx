@@ -6,6 +6,7 @@ import {
   Position,
   useNodesState,
   useEdgesState,
+  useConnection,
   useReactFlow,
   type Node,
   type Edge,
@@ -13,6 +14,7 @@ import {
   type Connection,
   type FinalConnectionState,
   ReactFlowProvider,
+  ViewportPortal,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { LoopKind, NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
@@ -31,7 +33,8 @@ import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../lib/
 import { registerCanvasReveal } from "../lib/canvasReveal";
 import { collectionFanoutFields, collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import DestroyLoopModal from "./DestroyLoopModal";
-import PortRow from "./PortRow";
+import NodeRimHandles from "./NodeRimHandles";
+import WiringGridOverlay from "./WiringGridOverlay";
 import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
 import { LoopRegionNode } from "./LoopRegionNode";
@@ -45,7 +48,20 @@ import LintBanner, { type LintBannerItem } from "./LintBanner";
 import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
 import { useDismissedNudges } from "../hooks/useDismissedNudges";
-import { anchorHandleId, anchorsByDropOnBody, chooseAnchorSide, isEmergentInputNode } from "../lib/anchorSide";
+import {
+  anchorFromPoint,
+  anchorHandleId,
+  anchorPoint,
+  anchorsByDropOnBody,
+  isEmergentInputNode,
+  dropAnchor,
+  sideFromRimHandle,
+} from "../lib/anchorSide";
+import { drawnEdgeLayout } from "../lib/drawnEdge";
+import { WIRING_GRID_STEP } from "../lib/wiringGrid";
+import { WIRE, WIRE_SOFT } from "../lib/wiringColors";
+import { pendingSource, resetWiringSession, wiringTrace } from "../lib/wiringSession";
+import { useWiringStore } from "../stores/wiringStore";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import { useSkillBank } from "../hooks/useSkillBank";
 import { Bookmark, SlidersHorizontal, TriangleAlert } from "lucide-react";
@@ -102,6 +118,15 @@ interface EditNodeData {
 // Exported for unit tests; co-located with the canvas it renders.
 export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) {
   const selection = useEditStore((s) => s.selection);
+  // #844: hovering the rim arms the gesture — a subtle AMBER ring says « a wire
+  // starts here », the crosshair on the strip itself says how.
+  const [rimHover, setRimHover] = useState<PortSide | null>(null);
+  // #844: the drop-target ring. Read from the LIVE connection rather than from a
+  // hover handler, so the card lights up exactly when releasing here would land
+  // the wire — which is the same answer `onConnectEnd` will give.
+  const isWireTarget = useConnection(
+    (c) => c.inProgress && c.toNode?.id === id && c.fromNode?.id !== id,
+  );
   // OR-in xyflow's own `selected` (#232) so every node in a multi-select group
   // lights the accent ring during a drag, not just the last-clicked one the
   // Zustand single-selection tracks.
@@ -134,7 +159,25 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
   const bodyHandleSide = data.inputs[0]?.side ?? "left";
 
   return (
-    <NodeCard status={cardStatus} selected={isSelected} style={{ minWidth: 160, fontSize: "12px" }}>
+    <NodeCard
+      status={cardStatus}
+      selected={isSelected}
+      style={{
+        minWidth: 160,
+        fontSize: "12px",
+        // Amber is the wiring colour throughout (#844): the same family the
+        // selected edge uses. Green is the app's accent and already means
+        // something else on a card. The soft ring arms the gesture on rim hover;
+        // the solid one says « releasing here lands the wire », and wins when
+        // both apply.
+        ...(rimHover
+          ? { boxShadow: `0 0 0 1px var(--color-bg-1), 0 0 0 2.5px ${WIRE_SOFT}` }
+          : null),
+        ...(isWireTarget
+          ? { boxShadow: `0 0 0 1px var(--color-bg-1), 0 0 0 2.5px ${WIRE}` }
+          : null),
+      }}
+    >
       {/* Emergent inputs (#149): NO input dots. An incoming arrow lands anywhere
           on the node body. A single invisible target handle covers the card and
           carries the drop highlight. The declared `result` input on the End node
@@ -252,17 +295,11 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
           ))}
         </div>
       )}
-      {data.outputs.map((port, i) => (
-        <PortRow
-          key={`out-${port.name}`}
-          portName={port.name}
-          kind="output"
-          side={port.side}
-          index={i}
-          total={data.outputs.length}
-          description={port.description}
-        />
-      ))}
+      {/* #844: the rim is the drag-source — no output dot any more. Rendered LAST
+          and on a higher layer so it wins the pointer over the body target above;
+          inside the rim the card still drags. A node that declares no output
+          (the End marker) starts no wire and grows no rim. */}
+      {data.outputs.length > 0 && <NodeRimHandles onRimHover={setRimHover} />}
     </NodeCard>
   );
 }
@@ -340,6 +377,12 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const reactFlow = useReactFlow();
   const [isDraggingEdge, setIsDraggingEdge] = useState(false);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  // #844: the wiring grid shows only while a wire is being drawn, on the lattice
+  // the gesture is currently originated on, in the feedback the reader chose.
+  const setWiring = useWiringStore((s) => s.setWiring);
+  const wiring = useWiringStore((s) => s.wiring);
+  const gridOrigin = useWiringStore((s) => s.origin);
+  const gridFeedback = useWiringStore((s) => s.gridFeedback);
   const dragHighlightNodeId = isDraggingEdge ? hoveredNodeId : null;
 
   const tab = openTabs.find((t) => t.id === activeTabId);
@@ -511,7 +554,14 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       if (!pipeline) return;
       const sourceNode = pipeline.nodes.find((n) => n.id === connection.source);
       const targetNode = pipeline.nodes.find((n) => n.id === connection.target);
-      const sourcePort = connection.sourceHandle ?? sourceNode?.outputs[0]?.name ?? "out";
+      // #844: the drag starts on a RIM strip, which is a layout handle, not a
+      // port. A new edge carries the FIRST DECLARED output (ADR-0073) and the
+      // choice is revised in the panel's Outputs section. A structural source
+      // handle (a declared port id) still names its own port.
+      const sourcePort =
+        (sideFromRimHandle(connection.sourceHandle) ? null : connection.sourceHandle) ??
+        sourceNode?.outputs[0]?.name ??
+        "out";
       // Inputs are emergent (#149): dropping on a node's body creates an input
       // named after the SOURCE document. Structural nodes (merge) still expose
       // declared target handles, so honour an explicit `targetHandle`; otherwise
@@ -624,27 +674,51 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     [],
   );
 
-  const onConnectStart = useCallback(() => setIsDraggingEdge(true), []);
+  const onConnectStart = useCallback(
+    (event: MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null }) => {
+      setIsDraggingEdge(true);
+      setWiring(true);
+      // #844: the press position on the rim — the one thing xyflow does not pass
+      // on later, and the whole basis of the source anchor. The connection line
+      // and `onConnectEnd` read it back out of the gesture scratchpad.
+      resetWiringSession();
+      const side = sideFromRimHandle(params.handleId);
+      const internal = params.nodeId ? reactFlow.getInternalNode(params.nodeId) : null;
+      if (!side || !internal) return;
+      const press = "touches" in event ? event.touches[0] : event;
+      if (press?.clientX == null) return;
+      const pressFlow = reactFlow.screenToFlowPosition({ x: press.clientX, y: press.clientY });
+      const rect = {
+        x: internal.internals.positionAbsolute.x,
+        y: internal.internals.positionAbsolute.y,
+        width: internal.measured?.width ?? CARD_WIDTH,
+        height: internal.measured?.height ?? CARD_HEIGHT,
+      };
+      const anchor = anchorFromPoint(pressFlow, rect, side, WIRING_GRID_STEP);
+      pendingSource.anchor = anchor;
+      pendingSource.point = anchorPoint(rect, anchor, anchor.side);
+    },
+    [reactFlow, setWiring],
+  );
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
       setIsDraggingEdge(false);
+      setWiring(false);
       setHoveredNodeId(null);
 
-      // Anchor the just-drawn edge on the target side nearest the drop (#168).
-      // Only emergent work-node bodies anchor by drop position; declared and
-      // structural ports keep their fixed side. The edge `onConnect` appended is
-      // at `pendingEdgeIndexRef`.
+      // Anchor the just-drawn edge on the target side nearest the drop (#168), and
+      // pin the route the user actually drew (#844). The edge `onConnect` appended
+      // is at `pendingEdgeIndexRef`.
       const edgeIndex = pendingEdgeIndexRef.current;
       pendingEdgeIndexRef.current = null;
+      const sourceAnchor = pendingSource.anchor;
+      const traced = wiringTrace.points;
+      resetWiringSession();
       if (edgeIndex == null) return;
 
       const toNode = connectionState.toNode;
       if (!toNode) return;
       const targetDef = pipeline?.nodes.find((n) => n.id === toNode.id);
-      // Declared-port nodes (End's `result`) and structural nodes (merge) keep
-      // their declared, fixed-side handle — never re-anchor those. Keyed on node
-      // TYPE: a work node carrying a vestigial declared `in` still anchors (#175).
-      if (!targetDef || !isEmergentInputNode(targetDef.type)) return;
 
       // Where the user actually released, in FLOW coordinates. We read the raw
       // pointer (not `connectionState.to`, which xyflow snaps to a handle centre)
@@ -663,17 +737,36 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         height: toNode.measured.height ?? 0,
       };
       if (rect.width === 0 || rect.height === 0) return;
-      const side = chooseAnchorSide(drop, rect);
-      // Left is the legacy default; only persist when the drop chose another side
-      // so an ordinary left-side drop stays clean in the file.
-      if (side === "left") return;
+
+      // Declared-port nodes (End's `result`) and structural nodes (merge) keep
+      // their declared, fixed-side handle — never re-anchor those. Keyed on node
+      // TYPE: a work node carrying a vestigial declared `in` still anchors (#175).
+      const anchorsByDrop = targetDef != null && isEmergentInputNode(targetDef.type);
+      const targetAnchor = anchorsByDrop ? dropAnchor(drop, rect) : null;
+      // The side the edge will actually RENDER with. A declared-port target keeps
+      // its fixed handle and persists no `target_side`, which reads back as
+      // `left`; enforcing the landing leg against any other side would save a
+      // route that differs from the one drawn.
+      const side = targetAnchor?.side ?? "left";
+
+      // The traced waypoints ARE the route: the edge is born `mode: manual`
+      // (#844). `drawnEdgeLayout` owns which fields a drop writes and which it
+      // deliberately leaves absent.
+      const updates = drawnEdgeLayout({
+        traced,
+        sourceAnchor,
+        targetAnchor,
+        targetSide: side,
+        anchorsByDrop,
+      });
+      if (Object.keys(updates).length === 0) return;
       // Untracked (ADR-0014 / #226): the preceding `addEdge` already pushed the
-      // pre-edge snapshot, and this arrival-side stamp is causally linked to it
-      // via `pendingEdgeIndexRef`. Folding it into that one history entry makes a
-      // single edge-draw gesture undo in one step (edge + side together).
-      updateEdge(edgeIndex, { target_side: side }, { track: false });
+      // pre-edge snapshot, and this layout stamp is causally linked to it via
+      // `pendingEdgeIndexRef`. Folding it into that one history entry makes a
+      // single edge-draw gesture undo in one step (edge + route together).
+      updateEdge(edgeIndex, updates, { track: false });
     },
-    [pipeline, reactFlow, updateEdge],
+    [pipeline, reactFlow, updateEdge, setWiring],
   );
   const onNodeMouseEnter = useCallback((_: ReactMouseEvent, node: Node) => setHoveredNodeId(node.id), []);
   const onNodeMouseLeave = useCallback(() => setHoveredNodeId(null), []);
@@ -931,7 +1024,23 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           nodesDraggable={!readOnly}
           nodesConnectable={!readOnly}
         >
+          {/* Decorative background — 20px, always, whatever the wiring grid does
+              (CONTEXT.md: the two grids are different things). */}
           <Background color="var(--color-line-soft)" gap={20} size={1} />
+          {/* #844: the wiring grid lives in FLOW space. Drawn inside the viewport
+              portal, it shares the path's coordinate system exactly, so a dot is
+              always a point the trace snaps to — at any zoom, and after a Shift
+              re-origin. `Background`'s pattern space is SCREEN space and drifts
+              from the path as soon as the canvas is panned or zoomed. */}
+          {wiring && gridFeedback !== "none" && (
+            <ViewportPortal>
+              <WiringGridOverlay
+                origin={gridOrigin}
+                step={WIRING_GRID_STEP}
+                variant={gridFeedback}
+              />
+            </ViewportPortal>
+          )}
         </ReactFlow>
       </DragHighlightProvider>
 

@@ -57,7 +57,31 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     );
     const edges = deriveEditEdges(p);
     expect(edges[0].targetHandle).toBe("__anchor:left");
-    expect(edges[0].sourceHandle).toBe("plan");
+    // #844: the arrow leaves by a RIM strip, not by a per-output handle — there
+    // is no output dot to bind to any more. Un-anchored ⇒ the legacy rightwards
+    // departure.
+    expect(edges[0].sourceHandle).toBe("rim-right");
+  });
+
+  it("binds the departure to the rim of the side the wire was drawn from (#844)", () => {
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], ["code"])],
+      [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "dst", port: "plan" },
+          source_anchor: { side: "bottom", offset: 80 },
+          target_anchor: { side: "top", offset: 36 },
+          target_side: "top",
+        },
+      ],
+    );
+    const edges = deriveEditEdges(p);
+    expect(edges[0].sourceHandle).toBe("rim-bottom");
+    // The anchors ride on the edge data: the component draws from them, not
+    // from xyflow's handle centres.
+    expect(edges[0].data?.sourceAnchor).toEqual({ side: "bottom", offset: 80 });
+    expect(edges[0].data?.targetAnchor).toEqual({ side: "top", offset: 36 });
   });
 
   it("keeps the declared port for the End node (it retains a `result` input handle)", () => {
@@ -374,7 +398,8 @@ describe("deriveEditEdges — multi-output edges (#843)", () => {
       ]),
     );
     expect(edges).toHaveLength(1);
-    expect(edges[0].sourceHandle).toBe("out");
+    // One arrow, drawn from one place: the rim of the departure side (#844).
+    expect(edges[0].sourceHandle).toBe("rim-right");
   });
 
   it("renders the condition pill with the output prefix once two ports are carried", () => {

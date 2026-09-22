@@ -2,10 +2,9 @@ import type { Edge, Node } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
 import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
-import { anchorHandleId, isEmergentInputNode } from "../lib/anchorSide";
+import { anchorHandleId, isEmergentInputNode, rimHandleId } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
-import { primaryPort } from "../lib/edgePorts";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -80,7 +79,6 @@ export function deriveEditNodes(
           nodeId: n.id,
           status,
           inputSide: n.inputs[0]?.side ?? "left",
-          outputSide: n.outputs[0]?.side ?? "right",
         },
       };
     }
@@ -513,9 +511,12 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
       id: `e-${i}`,
       source: e.source.node,
       target: e.target.node,
-      // The arrow binds to the PRIMARY carried port's handle; a multi-port
-      // edge (ADR-0073) is still one arrow, drawn from one place.
-      sourceHandle: primaryPort(e.source) || null,
+      // #844: the arrow binds to the RIM strip of the side it leaves by — there
+      // is no per-output handle any more. xyflow needs the binding for
+      // connectivity and for its own geometry only; the drawn departure POINT
+      // comes from `source_anchor` inside the edge component. An edge drawn
+      // before #844 has no anchor and keeps the legacy rightwards departure.
+      sourceHandle: rimHandleId(e.source_anchor?.side ?? "right"),
       targetHandle,
       type: "orthogonal",
       data: {
@@ -523,6 +524,8 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
         mode: e.mode ?? null,
         waypoints,
         targetSide,
+        sourceAnchor: e.source_anchor ?? null,
+        targetAnchor: e.target_anchor ?? null,
         isConditional,
         isElse,
         label,

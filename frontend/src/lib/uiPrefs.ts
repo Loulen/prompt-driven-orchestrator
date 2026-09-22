@@ -62,6 +62,39 @@ export function saveChildRunsExpanded(v: boolean): void {
 }
 
 /**
+ * #844 — how the wiring grid shows itself WHILE an edge is being drawn (Settings ›
+ * General › Interface, « Wiring grid »). A reading aid, per browser, saved at the
+ * change.
+ *
+ * Note what is NOT a setting: the grid's STEP is a product constant (ADR-0072,
+ * `lib/wiringGrid.ts`), because waypoints travel inside the shared pipeline file.
+ * Only the feedback — how loudly the lattice announces itself under the cursor —
+ * is the reader's business. Absent / unparseable → `dots`.
+ */
+export type WiringGridFeedback = "none" | "dots" | "lines";
+
+const WIRING_GRID_KEY = "pdo.ui.wiringGridFeedback";
+
+export function loadWiringGridFeedback(): WiringGridFeedback {
+  try {
+    const raw = localStorage.getItem(WIRING_GRID_KEY);
+    if (raw == null) return "dots";
+    const v: unknown = JSON.parse(raw);
+    return v === "none" || v === "dots" || v === "lines" ? v : "dots";
+  } catch {
+    return "dots";
+  }
+}
+
+export function saveWiringGridFeedback(v: WiringGridFeedback): void {
+  try {
+    localStorage.setItem(WIRING_GRID_KEY, JSON.stringify(v));
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+}
+
+/**
  * Stats keeps **no** per-browser preference (#819). The box-plot zoom and the
  * axis mode used to live here under `pdo.stats.*`; they are now ephemeral like
  * every other Stats setting — see `lib/statsFilters.ts`. Stale keys from an

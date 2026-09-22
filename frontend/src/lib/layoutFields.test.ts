@@ -95,6 +95,9 @@ const EDGE: Complete<EdgeDef> = {
   mode: "manual",
   waypoints: [WAYPOINT],
   target_side: "top",
+  // #844: the two per-edge anchors. Layout, like the three above.
+  source_anchor: { side: "bottom", offset: 40 },
+  target_anchor: { side: "top", offset: 37 },
 };
 const REGION: Complete<LoopRegion> = {
   id: "r1",
@@ -151,13 +154,13 @@ describe("serializer field-partition exhaustiveness guard (#355)", () => {
   // Sanity: assert the leaf scopes most prone to under-population are actually
   // maximal, so the set-equality above can't pass on an accidentally-thin fixture.
   it("fixture is maximal at edge/output-port scope", () => {
-    expect(sortedKeys(edge)).toHaveLength(7);
+    expect(sortedKeys(edge)).toHaveLength(9);
     expect(sortedKeys(output)).toHaveLength(7);
   });
 });
 
 describe("stripLayout", () => {
-  it("removes node.view, edge.mode/waypoints/target_side, and the whole notes block", () => {
+  it("removes node.view, every edge layout field, and the whole notes block", () => {
     const stripped = stripLayout(pipelineToYamlObject(PIPELINE));
     const node = (stripped.nodes as Record<string, unknown>[])[0];
     const edge = (stripped.edges as Record<string, unknown>[])[0];
@@ -165,6 +168,9 @@ describe("stripLayout", () => {
     expect("mode" in edge).toBe(false);
     expect("waypoints" in edge).toBe(false);
     expect("target_side" in edge).toBe(false);
+    // #844 — the two per-edge anchors go the same way.
+    expect("source_anchor" in edge).toBe(false);
+    expect("target_anchor" in edge).toBe(false);
     // R1 (#307 / ADR-0018): the notes KEY is absent, not `notes: []` (an empty
     // array would deep-compare != absent and move the star).
     expect("notes" in stripped).toBe(false);

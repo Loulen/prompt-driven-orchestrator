@@ -55,7 +55,16 @@ pub(crate) const LAYOUT_FIELDS: &[(&str, &[&str])] = &[
     ("node", &["view"]),
     ("inputPort", &[]),
     ("outputPort", &[]),
-    ("edge", &["mode", "waypoints", "target_side"]),
+    (
+        "edge",
+        &[
+            "mode",
+            "waypoints",
+            "target_side",
+            "source_anchor",
+            "target_anchor",
+        ],
+    ),
     ("loopRegion", &[]),
     // The whole `notes` block is dropped at pipeline scope (ADR-0018 R1), so the
     // projection never descends into a note — this entry exists for the guard only.
@@ -288,9 +297,18 @@ impl<'a> EdgeProjection<'a> {
             mode,
             waypoints,
             target_side,
+            source_anchor,
+            target_anchor,
         } = edge;
-        // LAYOUT_FIELDS["edge"] — routing is presentation (#154 / #168).
-        let (_layout_mode, _layout_waypoints, _layout_target_side) = (mode, waypoints, target_side);
+        // LAYOUT_FIELDS["edge"] — routing and anchoring are presentation
+        // (#154 / #168 / #844).
+        let (
+            _layout_mode,
+            _layout_waypoints,
+            _layout_target_side,
+            _layout_source_anchor,
+            _layout_target_anchor,
+        ) = (mode, waypoints, target_side, source_anchor, target_anchor);
         Self {
             source: SourceProjection::of(source),
             target: EndpointProjection::of(target),
@@ -472,6 +490,20 @@ mod tests {
             "mode: manual\n  waypoints:\n  - {x: 10, y: 20}\n  target_side: top",
         );
         assert_eq!(canonical(&auto), canonical(&pinned));
+    }
+
+    #[test]
+    fn per_edge_anchors_do_not_change_the_projection() {
+        // #844: where on a card's border a wire leaves and lands is presentation,
+        // exactly like the arrow side beside it. Two pipelines differing only in
+        // their wiring compare EQUAL, so the library star does not move when a
+        // route is redrawn.
+        let plain = fixture(300.0, "");
+        let wired = fixture(
+            300.0,
+            "source_anchor: {side: bottom, offset: 80}\n  target_anchor: {side: top, offset: 36}",
+        );
+        assert_eq!(canonical(&plain), canonical(&wired));
     }
 
     #[test]

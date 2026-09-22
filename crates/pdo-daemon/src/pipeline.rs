@@ -403,6 +403,18 @@ pub(crate) struct EdgeWaypoint {
     pub y: f64,
 }
 
+/// Where on a card's side a wire leaves from or lands on (#844). The side is the
+/// coarse choice `target_side` already carried; `offset` is the distance *along*
+/// that side, in canvas px, from the side's start. Absent ⇒ the side's middle,
+/// which is the pre-#844 geometry — so an untouched pipeline round-trips byte for
+/// byte. Layout, like `mode`/`waypoints`/`target_side`: it persists in the file
+/// and is excluded from the semantic pipeline-diff.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct EdgeAnchor {
+    pub side: PortSide,
+    pub offset: f64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct EdgeDef {
     pub source: EdgeSource,
@@ -437,6 +449,14 @@ pub(crate) struct EdgeDef {
     /// semantic pipeline-diff. Absent ⇒ left (legacy anchoring), never written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_side: Option<PortSide>,
+    /// Where on the SOURCE card's border the wire leaves (#844). Layout, like the
+    /// three above. Absent ⇒ the middle of the departure side, never written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_anchor: Option<EdgeAnchor>,
+    /// Where on the TARGET card's side the arrow lands (#844). Its `side` agrees
+    /// with `target_side`; the offset is the per-pixel position along it. Layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_anchor: Option<EdgeAnchor>,
 }
 
 impl EdgeDef {
@@ -2639,6 +2659,55 @@ edges:
         // Absent ⇒ never serialized (clean file, round-trips by absence).
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         assert!(!serialized.contains("target_side"));
+        // Same for the two #844 anchors: an edge drawn before per-edge anchoring
+        // existed round-trips byte for byte.
+        assert_eq!(result.pipeline.edges[0].source_anchor, None);
+        assert_eq!(result.pipeline.edges[0].target_anchor, None);
+        assert!(!serialized.contains("source_anchor"));
+        assert!(!serialized.contains("target_anchor"));
+    }
+
+    #[test]
+    fn parses_edge_anchors_and_round_trips() {
+        // #844: WHERE on a card's border the wire leaves and lands. Layout, like
+        // `target_side`, but persisted so a shared workflow keeps its wiring.
+        let yaml = with_start_end(
+            r#"
+name: wired-edge
+nodes:
+  - id: ab000001
+    name: planner
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: plan
+  - id: ab000002
+    name: implementer
+    type: agent
+    isolated_worktree: true
+    outputs:
+      - name: code
+edges:
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000002, port: plan }
+    target_side: top
+    source_anchor: { side: bottom, offset: 80 }
+    target_anchor: { side: top, offset: 36 }
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let edge = &result.pipeline.edges[0];
+        let src = edge.source_anchor.expect("source anchor parsed");
+        assert_eq!(src.side, PortSide::Bottom);
+        assert_eq!(src.offset, 80.0);
+        let tgt = edge.target_anchor.expect("target anchor parsed");
+        assert_eq!(tgt.side, PortSide::Top);
+        assert_eq!(tgt.offset, 36.0);
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.edges[0].source_anchor, Some(src));
+        assert_eq!(reparsed.edges[0].target_anchor, Some(tgt));
     }
 
     #[test]

@@ -812,6 +812,8 @@ impl Importer {
             mode: None,
             waypoints: None,
             target_side: None,
+            source_anchor: None,
+            target_anchor: None,
         });
     }
 

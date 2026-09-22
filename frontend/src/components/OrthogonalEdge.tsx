@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useRef } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -12,13 +12,36 @@ import {
   pathToSvg,
   pathMidpoint,
   segmentHandles,
-  dragSegment,
-  reanchorWaypoints,
   segHandleStyle,
-  deleteWaypoint,
 } from "../lib/edgePath";
+import {
+  anchorPoint,
+  enforcePerpendicularEnds,
+  landingLeg,
+  storableWaypoints,
+} from "../lib/anchorSide";
+import {
+  dragSegmentOnGrid,
+  mergeAlignedSegments,
+  snapPolyline,
+  WIRING_GRID_STEP,
+} from "../lib/wiringGrid";
+import { useWiringStore } from "../stores/wiringStore";
 import { useEditStore } from "../stores/editStore";
-import type { EdgeWaypoint, PortSide } from "../types";
+import type { EdgeAnchor, EdgeWaypoint, PortSide } from "../types";
+
+/**
+ * The lattice an AUTO route snaps to: the canvas's own, through the origin —
+ * deliberately NOT the wiring session's current origin.
+ *
+ * A gesture re-origins the lattice on its own tip when Shift is released
+ * (ADR-0072), which is right for the wire being drawn and wrong for every other
+ * edge on the canvas: reading the session origin here made every auto route on
+ * screen jump a few pixels the moment someone started drawing a wire somewhere
+ * else. An auto route belongs to no gesture, so it snaps to the shared lattice
+ * and stays put.
+ */
+const CANVAS_LATTICE: Point = { x: 0, y: 0 };
 
 export interface OrthogonalEdgeData extends Record<string, unknown> {
   edgeIndex: number;
@@ -31,6 +54,12 @@ export interface OrthogonalEdgeData extends Record<string, unknown> {
    * round-tripping; the route arrives from this side, not always the left.
    */
   targetSide?: PortSide;
+  /** Where on the source card's border the wire leaves (#844). Absent ⇒ the
+   *  middle of the departure side. */
+  sourceAnchor?: EdgeAnchor | null;
+  /** Where on the target card's side the arrow lands (#844). Absent ⇒ the middle
+   *  of `targetSide`. */
+  targetAnchor?: EdgeAnchor | null;
   isConditional: boolean;
   isElse: boolean;
   label?: string;
@@ -39,12 +68,13 @@ export interface OrthogonalEdgeData extends Record<string, unknown> {
 }
 
 /**
- * Orthogonal (right-angle) edge with manual-waypoint shaping (#154, design
- * screen 14). Auto edges pathfind around other nodes via `routeOrthogonal` and
- * re-route for free when a node moves (the path is recomputed every render from
- * live node positions). Selecting the edge reveals perpendicular-only segment
- * handles (#178); the first drag pins the route to persisted `manual`
- * waypoints. The reset back to auto lives in the edge detail panel.
+ * Orthogonal (right-angle) edge with manual-waypoint shaping (#154, design screen
+ * 14) on the wiring grid (#844 / ADR-0072). Auto edges pathfind around other nodes
+ * via `routeOrthogonal`, are snapped onto the lattice, and re-route for free when a
+ * node moves. Selecting the edge reveals perpendicular-only segment handles (#178)
+ * that snap to the grid — Shift frees them, neighbours are never re-snapped, and a
+ * drag that aligns two segments merges the waypoint between them on release. The
+ * reset back to auto lives in the edge detail panel.
  */
 export default function OrthogonalEdge({
   id,
@@ -86,92 +116,183 @@ export default function OrthogonalEdge({
     ),
   );
 
-  const sourcePt: Point = { x: sourceX, y: sourceY };
-  const targetPt: Point = { x: targetX, y: targetY };
+  // The source and target card rects, so the persisted anchors can be turned into
+  // absolute points. xyflow hands over `sourceX/Y` and `targetX/Y` — the CENTRES
+  // of the bound handles — and an anchored edge is precisely one that does not
+  // leave from there.
+  const endpointRects = useStore(
+    useCallback(
+      (s): { source: Rect | null; target: Rect | null } => {
+        const read = (nodeId: string): Rect | null => {
+          const n = s.nodeLookup.get(nodeId);
+          if (!n) return null;
+          const width = n.measured?.width ?? n.width ?? 0;
+          const height = n.measured?.height ?? n.height ?? 0;
+          if (width === 0 || height === 0) return null;
+          return {
+            x: n.internals.positionAbsolute.x,
+            y: n.internals.positionAbsolute.y,
+            width,
+            height,
+          };
+        };
+        return { source: read(source), target: read(target) };
+      },
+      [source, target],
+    ),
+    (a, b) =>
+      JSON.stringify(a.source) === JSON.stringify(b.source) &&
+      JSON.stringify(a.target) === JSON.stringify(b.target),
+  );
+
+  const sourceAnchor = data?.sourceAnchor ?? null;
+  const targetAnchor = data?.targetAnchor ?? null;
+  const srcRect = endpointRects.source;
+  const tgtRect = endpointRects.target;
+  const srcAnchored =
+    srcRect && sourceAnchor ? anchorPoint(srcRect, sourceAnchor, sourceAnchor.side) : null;
+  const tgtAnchored =
+    tgtRect && targetAnchor ? anchorPoint(tgtRect, targetAnchor, targetAnchor.side) : null;
+  // Rounded to whole flow pixels: xyflow's handle centres are sub-pixel and differ
+  // by a fraction, enough to turn a dead-straight wire into a three-segment path
+  // with an invisible 0.2px jog in it — and two spurious drag handles.
+  const sourcePt: Point = {
+    x: Math.round(srcAnchored?.x ?? sourceX),
+    y: Math.round(srcAnchored?.y ?? sourceY),
+  };
+  const targetPt: Point = {
+    x: Math.round(tgtAnchored?.x ?? targetX),
+    y: Math.round(tgtAnchored?.y ?? targetY),
+  };
   const mode = data?.mode;
   const waypoints = data?.waypoints;
 
+  // The sides the wire leaves and arrives on. An edge drawn before #844 has no
+  // source anchor and leaves rightwards, like the shipped canvas always did.
+  const srcSide: PortSide = sourceAnchor?.side ?? "right";
+  const tgtSide: PortSide = targetAnchor?.side ?? data?.targetSide ?? "left";
+  const leg = landingLeg(WIRING_GRID_STEP);
+
   const points: Point[] = useMemo(() => {
     if (mode === "manual" && waypoints && waypoints.length > 0) {
-      // Pinned route: endpoints follow their nodes, the interior follows the
-      // persisted absolute waypoints. Re-anchor the endpoint-adjacent waypoints
-      // against the live endpoints so every segment stays axis-aligned when a
-      // connected node moves (#165) — and the pill, keyed off the midpoint,
-      // stays centered on the re-routed path.
-      const anchored = reanchorWaypoints(
-        sourcePt,
-        targetPt,
-        waypoints.map((w) => ({ x: w.x, y: w.y })),
-      );
-      return [sourcePt, ...anchored, targetPt];
+      // NO `reanchorWaypoints` here. That helper keeps a route orthogonal after a
+      // node move by sliding the endpoint-adjacent waypoints onto the ENDPOINTS'
+      // own coordinates — right when an edge is pinned to side centres, wrong for
+      // an anchored one: it drags the first waypoint back onto the source's x and
+      // the last onto the target's x, so the wire detours around the two legs it
+      // no longer needs (a jog at each end, and the arrowhead behind a spur).
+      // `enforcePerpendicularEnds` does the same repair anchor-aware, and it is
+      // what keeps the legs square after a move.
+      const interior = waypoints.map((w) => ({ x: w.x, y: w.y }));
+      return enforcePerpendicularEnds([sourcePt, ...interior, targetPt], srcSide, tgtSide, leg);
     }
-    // Auto route: arrive from the persisted anchor side (#168 / #175) rather
-    // than always horizontally from the left. Manual routes (above) arrive
-    // however the user shaped their waypoints, so this only steers auto edges.
-    return routeOrthogonal({ source: sourcePt, target: targetPt, obstacles, targetSide: data?.targetSide });
+    // « Re-route automatically » produces a grid-ALIGNED auto path (#844): the
+    // router's bends are snapped onto the wiring lattice so an auto edge and a
+    // hand-drawn one line up instead of missing by a few pixels. It lands
+    // perpendicular too, so the reset does not undo the arrowhead's orientation.
+    const auto = routeOrthogonal({
+      source: sourcePt,
+      target: targetPt,
+      obstacles,
+      targetSide: data?.targetSide,
+    });
+    return enforcePerpendicularEnds(
+      snapPolyline(auto, CANVAS_LATTICE, WIRING_GRID_STEP),
+      srcSide,
+      tgtSide,
+      leg,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, waypoints, sourceX, sourceY, targetX, targetY, obstacles, data?.targetSide]);
+  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, leg]);
 
   const d = pathToSvg(points);
-  const handles = useMemo(() => segmentHandles(points), [points]);
+  // The first and last segments are the perpendicular legs into the two anchors:
+  // structural, not user-shapable. They carry no drag handle.
+  //
+  // This is not only tidiness. Dragging the source leg made `dragSegmentOnGrid`
+  // insert a bend beside the pinned endpoint; the leg was then re-imposed on
+  // render, leaving that bend stranded beside it and the wire detouring left and
+  // back right around a leg it no longer needed. Move the leg where it lands
+  // instead — that is what the anchor is for.
+  const handles = useMemo(
+    () =>
+      segmentHandles(points).filter(
+        (h) => h.segmentIndex !== 0 && h.segmentIndex !== points.length - 2,
+      ),
+    [points],
+  );
 
   const edgeIndex = data?.edgeIndex;
+
+  // Shift state during a segment drag, read off the live event (the pointer is
+  // captured, so a keyboard listener would be the only other way in).
+  const shiftRef = useRef(false);
 
   const onHandleDrag = useCallback(
     (segmentIndex: number, orientation: "horizontal" | "vertical") =>
       (e: React.PointerEvent) => {
         e.stopPropagation();
+        // Primary button only. Without this, a right-click on a handle still
+        // starts a drag and silently reshapes the route — the delete-waypoint
+        // gesture is meant to be GONE (#844), not renamed.
+        if (e.button !== 0) return;
         if (edgeIndex == null) return;
+        // The session origin is read ONCE, at grab time: a segment drag belongs
+        // to the gesture in progress (a Shift release inside it re-origins), and
+        // freezing it here keeps the snap stable for the whole drag.
+        const origin = useWiringStore.getState().origin;
+        let latest = points;
         const move = (ev: PointerEvent) => {
+          shiftRef.current = ev.shiftKey;
           const flow = screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
           const coord = orientation === "horizontal" ? flow.y : flow.x;
-          const next = dragSegment(points, segmentIndex, coord);
-          // Pin: the interior points become the persisted waypoints (absolute).
-          const interior = next.slice(1, next.length - 1);
+          // Only THIS segment moves. `dragSegmentOnGrid` never rewrites the
+          // neighbours' coordinates, so the rest of the route is byte-stable.
+          latest = dragSegmentOnGrid(points, segmentIndex, coord, {
+            origin,
+            step: WIRING_GRID_STEP,
+            free: ev.shiftKey,
+          });
+          const enforced = enforcePerpendicularEnds(latest, srcSide, tgtSide, leg);
           updateEdge(edgeIndex, {
             mode: "manual",
-            waypoints: interior.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+            waypoints: storableWaypoints(enforced).map((p) => ({
+              x: Math.round(p.x),
+              y: Math.round(p.y),
+            })),
           });
         };
         const up = () => {
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
+          // Releasing Shift at the end of the drag re-origins the grid on the
+          // point just placed (ADR-0072) — the same semantics as while wiring.
+          if (shiftRef.current) {
+            const tip = latest[Math.min(segmentIndex + 1, latest.length - 1)];
+            if (tip) useWiringStore.getState().setOrigin({ x: tip.x, y: tip.y });
+            shiftRef.current = false;
+          }
+          // Aligning two segments merges the waypoint between them (#844). That is
+          // the ONLY way to delete a waypoint now.
+          const merged = enforcePerpendicularEnds(
+            mergeAlignedSegments(latest),
+            srcSide,
+            tgtSide,
+            leg,
+          );
+          const interior = storableWaypoints(merged);
+          updateEdge(edgeIndex, {
+            mode: interior.length > 0 ? "manual" : "auto",
+            waypoints:
+              interior.length > 0
+                ? interior.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }))
+                : null,
+          });
         };
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
       },
-    [edgeIndex, points, screenToFlowPosition, updateEdge],
-  );
-
-  // Right-click a segment handle to delete the waypoint it sits on (#169). The
-  // interior `points` ARE the persisted waypoints (point index k ⇒ waypoint
-  // index k-1). A handle on segment `i` spans points[i]..points[i+1]; drop the
-  // interior point it touches (prefer the segment start when it is a waypoint,
-  // else the segment end). Removing the last waypoint reverts the edge to auto.
-  const onHandleDelete = useCallback(
-    (segmentIndex: number) => (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (edgeIndex == null || mode !== "manual" || !waypoints || waypoints.length === 0) {
-        return;
-      }
-      const lastIdx = points.length - 1;
-      const startIsWaypoint = segmentIndex >= 1 && segmentIndex <= lastIdx - 1;
-      const wpIndex = startIsWaypoint ? segmentIndex - 1 : segmentIndex;
-      const next = deleteWaypoint(
-        waypoints.map((w) => ({ x: w.x, y: w.y })),
-        wpIndex,
-      );
-      if (next.length === 0) {
-        updateEdge(edgeIndex, { mode: "auto", waypoints: null });
-        return;
-      }
-      updateEdge(edgeIndex, {
-        mode: "manual",
-        waypoints: next.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
-      });
-    },
-    [edgeIndex, mode, waypoints, points.length, updateEdge],
+    [edgeIndex, points, screenToFlowPosition, updateEdge, srcSide, tgtSide, leg],
   );
 
   // Pastel orange when this edge is the selected one, grey otherwise (#177).
@@ -232,7 +353,9 @@ export default function OrthogonalEdge({
         )}
         {/* Perpendicular-only segment handles, visible while the edge is
             selected (#178) — never on mere hover, and gone on deselect even
-            for manual-mode edges. */}
+            for manual-mode edges. No `onContextMenu` action: right-click on a
+            handle does NOTHING now (#844) — a waypoint goes away by being
+            dragged into alignment, not by a hidden menu. */}
         {isSelected &&
           handles.map((h) => (
             <div
@@ -240,7 +363,15 @@ export default function OrthogonalEdge({
               className="nodrag nopan"
               data-testid={`edge-seg-handle-${id}-${h.segmentIndex}`}
               onPointerDown={onHandleDrag(h.segmentIndex, h.orientation)}
-              onContextMenu={onHandleDelete(h.segmentIndex)}
+              // `EdgeLabelRenderer` portals its children out of the edge's SVG,
+              // but a React portal still bubbles React events up the REACT tree —
+              // straight into xyflow's `onEdgeContextMenu`. Swallowing it here is
+              // what makes right-click on a handle do nothing AT ALL, rather than
+              // quietly opening the edge's own menu.
+              onContextMenu={(ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+              }}
               style={segHandleStyle(h.x, h.y, h.orientation, strokeColor)}
             />
           ))}

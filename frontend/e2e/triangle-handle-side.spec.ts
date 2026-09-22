@@ -4,14 +4,19 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runMultipart } from "./helpers";
 
-// Layer 4 — Output port handle renders on the side named by its `side` field (#40).
+// Layer 4 — a declared output `side` places NO canvas handle any more (#40, #844).
 //
-// Post canvas-refonte (#149 / #170): output ports render as plain filled dots
-// (`OutputPortDot`) whose xyflow Handle carries `data-handlepos="<side>"`. The
-// old per-port SVG triangle polygon (points like "5,10 11,10 8,2") is gone, as
-// are input pills — a node's inputs are emergent (no input handle). So this spec
-// asserts the OUTPUT dot lands on the declared `side: top` (its handle has
-// `data-handlepos="top"`), and that no left/right output handle is mislaid.
+// History: the output port used to be an SVG triangle, then a plain filled dot
+// (#149 / #170) whose xyflow Handle carried `data-handlepos="<side>"`, and this
+// spec asserted the dot landed on the declared `side: top`.
+//
+// Since #844 there is no per-output handle at all: a wire starts from any point
+// of the card's BORDER, through four rim source strips, and the side it leaves by
+// is the side the author pressed — recorded per edge as `source_anchor`, not
+// declared per port. `side` survives in the document (it is semantic, and the
+// node library treats it as identity) but places nothing on the canvas. So the
+// spec now asserts exactly that: no `result` handle anywhere, and the four rim
+// strips instead.
 //
 // The daemon refuses to load a pipeline without exactly one start + one end node
 // (crates/pdo-daemon/src/pipeline.rs), so the seed wraps the checker between a
@@ -114,31 +119,18 @@ test("output port with side:top renders its dot handle on the top edge", async (
   // Wait for the node to render
   await page.waitForTimeout(500);
 
-  // The `result` output dot (#170) is the xyflow source Handle for the checker
-  // node. Declared `side: top` → xyflow stamps it `data-handlepos="top"`.
-  const resultHandle = page.locator(
-    '.react-flow__handle[data-handleid="result"]',
-  );
-  await expect(resultHandle.first()).toBeVisible({ timeout: 5_000 });
-
-  // The checker's output dot sits on the top edge.
-  const checkerTopDot = page.locator(
-    '.react-flow__handle.port-dot[data-handleid="result"][data-handlepos="top"]',
-  );
-  await expect(checkerTopDot).toBeVisible({ timeout: 5_000 });
-  // It is rendered as a plain dot (the slim-card output dot), not a labelled
-  // pill — the old per-port SVG triangle polygon was removed in the refonte.
-  await expect(checkerTopDot.locator("polygon")).toHaveCount(0);
-
-  // The checker output is NOT on the left or right edge (it honours side: top).
+  // The checker declares `side: top` on its `result` output. That places nothing:
+  // there is no per-output handle on a card any more (#844).
   await expect(
-    page.locator(
-      '.react-flow__handle.port-dot[data-handleid="result"][data-handlepos="left"]',
-    ),
+    page.locator('.react-flow__handle[data-handleid="result"][data-handlepos="top"]'),
   ).toHaveCount(0);
-  await expect(
-    page.locator(
-      '.react-flow__handle.port-dot[data-handleid="result"][data-handlepos="right"]',
-    ),
-  ).toHaveCount(0);
+  await expect(page.locator(".port-dot")).toHaveCount(0);
+
+  // What the card offers instead is its whole border, on all four sides — the
+  // departure side is the one the author presses, not one the port declares.
+  for (const side of ["top", "bottom", "left", "right"]) {
+    await expect(
+      page.locator(`.react-flow__handle[data-handleid="rim-${side}"]`).first(),
+    ).toBeVisible({ timeout: 5_000 });
+  }
 });

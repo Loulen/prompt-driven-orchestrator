@@ -812,6 +812,10 @@ impl Importer {
             mode: None,
             waypoints: None,
             target_side: None,
+            show_output_labels: None,
+            output_label_pos: None,
+            condition_label_pos: None,
+            below_nodes: false,
         });
     }
 

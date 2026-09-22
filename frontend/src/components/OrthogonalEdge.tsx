@@ -17,8 +17,15 @@ import {
   segHandleStyle,
   deleteWaypoint,
 } from "../lib/edgePath";
+import {
+  conditionLabelOffset,
+  departureHeading,
+  midpointAxis,
+  outputLabelPlacement,
+} from "../lib/edgeLabels";
 import { useEditStore } from "../stores/editStore";
-import type { EdgeWaypoint, PortSide } from "../types";
+import type { EdgeDef, EdgeWaypoint, PortSide } from "../types";
+import { EDGE_LABELS_ABOVE_NODES, EDGE_LABELS_UNDER_NODES } from "./editNodeDerivation";
 
 export interface OrthogonalEdgeData extends Record<string, unknown> {
   edgeIndex: number;
@@ -36,6 +43,21 @@ export interface OrthogonalEdgeData extends Record<string, unknown> {
   label?: string;
   strokeColor: string;
   dashed: boolean;
+  /** The outputs this edge carries (ADR-0073 / #843) — one canvas label each. */
+  ports?: string[];
+  /** Resolved `show_output_labels` (#845): the per-edge toggle, else the
+   *  count-derived default. Absent ⇒ off (an edge with no carried port to name). */
+  showOutputLabels?: boolean;
+  /** Pinned absolute positions of the output labels, keyed by port (#845). */
+  outputLabelPos?: Record<string, EdgeWaypoint> | null;
+  /** Pinned absolute position of the condition pill (#845). */
+  conditionLabelPos?: EdgeWaypoint | null;
+  /** First placement slot of this edge's output labels (#845): non-zero when
+   *  an earlier edge leaves from the same point, so the two sets don't stack. */
+  outputLabelSlot?: number;
+  /** `below_nodes` (#845): the edge — and so its labels and handles — draws
+   *  under the node cards. */
+  belowNodes?: boolean;
 }
 
 /**
@@ -54,6 +76,7 @@ export default function OrthogonalEdge({
   targetY,
   source,
   target,
+  sourcePosition,
   markerEnd,
   data,
 }: EdgeProps<Edge<OrthogonalEdgeData>>) {
@@ -65,6 +88,7 @@ export default function OrthogonalEdge({
   // is orange at a time. It survives edge re-derivation too, unlike xyflow's
   // transient per-element `selected` flag, which is reset when edges are rebuilt.
   const selection = useEditStore((s) => s.selection);
+  const setSelection = useEditStore((s) => s.setSelection);
   const { screenToFlowPosition } = useReactFlow();
 
   // Obstacle rects: every node except this edge's own source and target. Read
@@ -174,6 +198,62 @@ export default function OrthogonalEdge({
     [edgeIndex, mode, waypoints, points.length, updateEdge],
   );
 
+  // Every label write goes through here, so the `edgeIndex` guard is stated
+  // once and the drag handlers below stay about the gesture.
+  const patchEdge = useCallback(
+    (updates: Partial<EdgeDef>) => {
+      if (edgeIndex == null) return;
+      updateEdge(edgeIndex, updates);
+    },
+    [edgeIndex, updateEdge],
+  );
+
+  /**
+   * Free-drag a label to an absolute canvas position (#845).
+   *
+   * A label must not BLOCK the click on its edge (#845 AC), but it also has to
+   * be grabbable — so it cannot simply be `pointer-events: none`. The two
+   * gestures are told apart by travel: past 3 px it is a drag and the position
+   * is written; below that it is a click, and the selection is handed to the
+   * edge underneath exactly as if the stroke itself had been hit.
+   *
+   * Every move writes through `updateEdge` under the same coalesce key, so a
+   * whole drag folds into ONE undo step (ADR-0014), like a node drag.
+   */
+  const onLabelDrag = useCallback(
+    (commit: (p: Point) => void) => (e: React.PointerEvent) => {
+      // Primary button only: without this the right-click that opens the edge's
+      // context menu would also start a drag and silently move the label.
+      if (e.button !== 0 || edgeIndex == null) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const start = { x: e.clientX, y: e.clientY };
+      let moved = false;
+      const move = (ev: PointerEvent) => {
+        if (Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) > 3) moved = true;
+        if (moved) commit(screenToFlowPosition({ x: ev.clientX, y: ev.clientY }));
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        if (!moved) setSelection({ kind: "edge", id: null, edgeIndex });
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    },
+    [edgeIndex, screenToFlowPosition, setSelection],
+  );
+
+  // `EdgeLabelRenderer` portals its children out of the edge's SVG, but a React
+  // portal still bubbles React events up the REACT tree — straight into
+  // xyflow's `onEdgeContextMenu`. Swallowing it here is what keeps a right-click
+  // on a label from opening the edge's "Delete edge" menu from a spot the
+  // pointer never touched the stroke at.
+  const onLabelContextMenu = useCallback((ev: React.MouseEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  }, []);
+
   // Pastel orange when this edge is the selected one, grey otherwise (#177).
   // The override flows through to the condition pill border and segment handles
   // below, which both read `strokeColor`, so the whole edge reads as selected.
@@ -184,8 +264,31 @@ export default function OrthogonalEdge({
 
   // Anchor the condition pill at the path's arc-length midpoint (#176) — the
   // median vertex drifts off-center on unbalanced routes and stacks sibling
-  // pills on shared bends.
-  const labelPoint = pathMidpoint(points) ?? targetPt;
+  // pills on shared bends — nudged clear of the stroke (#845), because a pill
+  // straddling a straight edge sits exactly on the midpoint segment handle and
+  // eats the pointer events that handle needs. A dragged pill overrides both.
+  const mid = pathMidpoint(points) ?? targetPt;
+  const midOffset = conditionLabelOffset(midpointAxis(points, mid));
+  const pinnedCondition = data?.conditionLabelPos ?? null;
+  const labelPoint: Point = pinnedCondition ?? {
+    x: mid.x + midOffset.x,
+    y: mid.y + midOffset.y,
+  };
+
+  // Output labels (#845): one per carried port, near the departure, alternating
+  // around the base of the arrow until the author drags them elsewhere.
+  const ports = data?.ports ?? [];
+  const showOutputLabels = data?.showOutputLabels === true && ports.length > 0;
+  const heading = departureHeading(sourcePosition as PortSide | undefined, points);
+  const outputLabelPos = data?.outputLabelPos ?? null;
+  const labelSlot = data?.outputLabelSlot ?? 0;
+  // Everything this edge portals into the label layer stacks with the edge
+  // (#845). The layer itself is not a stacking context, so this z-index
+  // competes with the node cards directly: over them for an edge drawn above,
+  // level with the edge — and so painted under the later node layer — for one
+  // drawn under. One notch over the edge also keeps its hit-stroke from
+  // swallowing the pointer aimed at a label or handle.
+  const labelZ = data?.belowNodes ? EDGE_LABELS_UNDER_NODES : EDGE_LABELS_ABOVE_NODES;
 
   return (
     <>
@@ -209,10 +312,71 @@ export default function OrthogonalEdge({
         data-testid={`orthogonal-edge-hit-${id}`}
       />
       <EdgeLabelRenderer>
-        {/* Conditional pill (ADR-0011) — always visible, mirrors the prior edge. */}
+        {/* Output labels (#845) — one per carried port, near the departure.
+            Deliberately unlike the condition pill: a small square mono tag on a
+            filled `bg-3`, hairline `line` border, no coloured outline, so the
+            two kinds of label are never read as the same thing. */}
+        {showOutputLabels &&
+          ports.map((port, i) => {
+            const place = outputLabelPlacement(labelSlot + i, heading.axis, heading.dir);
+            const pinned = outputLabelPos?.[port];
+            const x = pinned ? pinned.x : points[0].x + place.x;
+            const y = pinned ? pinned.y : points[0].y + place.y;
+            // A pinned label is centred on its own position — the drag put it
+            // where the cursor was, so that is the point the author aimed at.
+            // An un-pinned one is anchored by its near edge and grows away from
+            // the card, or a long port name vanishes under it.
+            const shiftX = pinned ? "-50%" : place.align === "start" ? "0%" : "-100%";
+            return (
+              <div
+                key={port}
+                className="nodrag nopan"
+                data-testid={`edge-output-label-${id}-${port}`}
+                onPointerDown={onLabelDrag((p) =>
+                  patchEdge({
+                    output_label_pos: {
+                      ...(outputLabelPos ?? {}),
+                      [port]: { x: Math.round(p.x), y: Math.round(p.y) },
+                    },
+                  }),
+                )}
+                onContextMenu={onLabelContextMenu}
+                style={{
+                  position: "absolute",
+                  transform: `translate(${shiftX}, -50%) translate(${x}px, ${y}px)`,
+                  // `EdgeLabelRenderer` is `pointer-events: none` and children
+                  // do NOT inherit an opt-in: without this the label is not
+                  // merely click-through, it is invisible to the mouse — and
+                  // what looks like a drag is the pane panning underneath.
+                  pointerEvents: "all",
+                  zIndex: labelZ,
+                  fontFamily: "var(--font-mono, monospace)",
+                  fontSize: 9.5,
+                  lineHeight: 1.3,
+                  whiteSpace: "nowrap",
+                  cursor: "grab",
+                  color: "var(--color-fg-2)",
+                  background: "var(--color-bg-3)",
+                  border: "1px solid var(--color-line)",
+                  borderRadius: 2,
+                  padding: "1px 4px",
+                }}
+              >
+                {port}
+              </div>
+            );
+          })}
+        {/* Conditional pill (ADR-0011) — always visible, draggable since #845. */}
         {data?.label && (
           <div
             className="nodrag nopan"
+            data-testid={`edge-condition-label-${id}`}
+            onPointerDown={onLabelDrag((p) =>
+              patchEdge({
+                condition_label_pos: { x: Math.round(p.x), y: Math.round(p.y) },
+              }),
+            )}
+            onContextMenu={onLabelContextMenu}
             style={{
               position: "absolute",
               transform: `translate(-50%, -50%) translate(${labelPoint.x}px, ${labelPoint.y}px)`,
@@ -223,7 +387,11 @@ export default function OrthogonalEdge({
               border: `1px solid ${strokeColor}`,
               borderRadius: 6,
               padding: "3px 6px",
-              pointerEvents: "none",
+              // Grabbable, not click-through (#845): a plain click still hands
+              // the selection to the edge, so the pill never blocks it.
+              pointerEvents: "all",
+              zIndex: labelZ,
+              cursor: "grab",
               whiteSpace: "nowrap",
             }}
           >
@@ -241,7 +409,7 @@ export default function OrthogonalEdge({
               data-testid={`edge-seg-handle-${id}-${h.segmentIndex}`}
               onPointerDown={onHandleDrag(h.segmentIndex, h.orientation)}
               onContextMenu={onHandleDelete(h.segmentIndex)}
-              style={segHandleStyle(h.x, h.y, h.orientation, strokeColor)}
+              style={{ ...segHandleStyle(h.x, h.y, h.orientation, strokeColor), zIndex: labelZ }}
             />
           ))}
       </EdgeLabelRenderer>

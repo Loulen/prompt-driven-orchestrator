@@ -202,11 +202,11 @@ Les inputs étant émergents, une flèche entrante atterrit **sur le corps** du 
 ### Labels et ordre de dessin — layout par edge
 
 - **Label d'output** *(terme)* : le nom d'un output porté, affiché **près du départ** de l'edge, discret et visuellement distinct du label de condition. Un label par port ; l'affichage est un **toggle par edge** (tous ou aucun), **actif par défaut si le node source déclare ≥ 2 outputs**. Placement par défaut en alternance autour de la base de la flèche (1er à gauche/au-dessus, 2e à droite/en dessous, puis en s'éloignant), selon que la flèche est verticale ou horizontale ; chaque label est déplaçable librement.
-- **Label de condition** : la clause `when`/`else` rendue sur l'edge ; au milieu par défaut, **déplaçable librement** sur le canvas. Il appartient à l'edge : supprimer l'edge le supprime.
+- **Label de condition** : la clause `when`/`else` rendue sur l'edge ; au milieu par défaut, **décalé de 15 px hors du trait** (à cheval dessus il masquait la poignée de segment du milieu et bloquait son drag), **déplaçable librement** sur le canvas. Il appartient à l'edge : supprimer l'edge le supprime.
 - **Position de label** : **coordonnées absolues** du canvas, par label ; absente = placement par défaut.
 - **Ordre de dessin** : une edge se dessine **au-dessus des nodes** par défaut ; un paramètre par edge la passe dessous.
 
-Toutes ces valeurs (toggle, positions, ordre de dessin) sont du **layout** : persistées dans le fichier, exclues du diff sémantique, sans réglage global.
+Toutes ces valeurs (toggle, positions, ordre de dessin) sont du **layout** : persistées dans le fichier, exclues du diff sémantique, sans réglage global. Elles s'écrivent sur l'edge en `show_output_labels`, `output_label_pos` (par port porté), `condition_label_pos` et `below_nodes`, chacune **émise seulement si non-défaut** — un pipeline que personne n'a redécoré se rouvre et se sauve à l'identique. `show_output_labels` n'a **pas** de défaut constant : son absence veut dire « suis le nombre d'outputs déclarés », donc une valeur explicite s'écrit même quand elle coïncide avec la dérivation du moment.
 
 ---
 

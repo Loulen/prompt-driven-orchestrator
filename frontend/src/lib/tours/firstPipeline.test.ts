@@ -28,6 +28,8 @@ import {
 } from "../tour";
 import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
 import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
+import { carriedPorts, defaultConditionPort, withCarriedPorts } from "../edgePorts";
+import { requalifyWhen, rowsToWhen } from "../whenClause";
 
 const STEPS = FIRST_PIPELINE_TOUR.steps;
 
@@ -73,6 +75,8 @@ class FakeApp {
     if (node) return !!this.app.pipeline?.nodes.some((n) => n.id === node[1]);
     const edge = /^\.react-flow__edge\[data-id="e-(\d+)"\]$/.exec(selector);
     if (edge) return (this.app.pipeline?.edges.length ?? 0) > Number(edge[1]);
+    // The edge panel, and its Outputs section, are up while an edge is selected.
+    if (selector === OUTPUTS_SECTION) return this.app.selection.kind === "edge";
     return false;
   }
 
@@ -147,6 +151,43 @@ class FakeApp {
     });
   }
 
+  /**
+   * What ticking a box in the edge panel's Outputs section does: the carried
+   * ports change, and the edge's clause is re-qualified for them.
+   */
+  setEdgePorts(index: number, ports: string[]) {
+    this.patch((p) => {
+      p.edges = p.edges.map((e, i) =>
+        i === index
+          ? {
+              ...e,
+              source: withCarriedPorts(e.source, ports),
+              when: requalifyWhen(e.when, carriedPorts(e.source), ports) ?? undefined,
+            }
+          : e,
+      );
+    });
+  }
+
+  /**
+   * What the When editor writes for one `field eq value` row: the row reads the
+   * edge's default port, and the key is encoded for the ports the edge carries —
+   * bare on a single-port edge, `out.verdict` on an edge that carries two. Never
+   * a hand-written clause: the FP of #846 found the tour green against a shape
+   * the real editor does not produce.
+   */
+  writeCondition(index: number, field: string, value: string) {
+    this.patch((p) => {
+      p.edges = p.edges.map((e, i) => {
+        if (i !== index) return e;
+        const ports = carriedPorts(e.source);
+        const row = { port: defaultConditionPort(ports), field, op: "eq" as const, value };
+        return { ...e, when: rowsToWhen([row], ports) ?? undefined };
+      });
+    });
+  }
+
+  /** A raw clause, for the cases the editor can produce by other rows. */
   setEdgeWhen(index: number, when: Record<string, unknown>) {
     this.patch((p) => {
       p.edges = p.edges.map((e, i) => (i === index ? { ...e, when } : e));
@@ -183,6 +224,7 @@ const PROMPT_INPUT = '[data-testid="node-prompt-input"]';
 const ADD_MENU = '[data-testid="add-menu-node"]';
 /** The delete confirmation's own box — see the last step's re-aim (#825). */
 const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
+const OUTPUTS_SECTION = '[data-testid="outputs-section"]';
 const LIBRARY_ROW = `[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`;
 
 /**
@@ -291,11 +333,11 @@ function gestures(fake: FakeApp): Record<string, () => void> {
       fake.selectEdge(1);
       fake.show('[data-testid="when-editor"]');
     },
-    "loop-condition": () => fake.setEdgeWhen(1, { verdict: { eq: "fail" } }),
+    "loop-condition": () => fake.writeCondition(1, "verdict", "fail"),
     "edge-tester-end": () =>
       fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "end", port: "result" } }),
     "select-end-edge": () => fake.selectEdge(2),
-    "end-condition": () => fake.setEdgeWhen(2, { verdict: { eq: "pass" } }),
+    "end-condition": () => fake.writeCondition(2, "verdict", "pass"),
     save: () => {
       fake.save();
       fake.show(`[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`);
@@ -491,6 +533,109 @@ describe("the accidents a reader can have", () => {
 });
 
 /**
+ * #846 — an edge drawn from the border carries the source's FIRST declared
+ * output. When the tester's edge ends up carrying something else, redrawing
+ * would carry the same port again: the step observes the carried output and
+ * sends the reader to the edge panel's Outputs section instead.
+ */
+describe("an edge that carries the wrong output", () => {
+  function upTo(fake: FakeApp, stepId: string) {
+    const script = gestures(fake);
+    for (const step of STEPS) {
+      if (step.id === stepId) return step;
+      script[step.id]();
+    }
+    throw new Error(`no step ${stepId}`);
+  }
+
+  it.each([
+    ["edge-tester-implementer", { node: "n1", port: "in" }, 1],
+    ["edge-tester-end", { node: "end", port: "result" }, 2],
+  ] as const)("%s guides to the Outputs section, and advances once out is ticked", (stepId, target, index) => {
+    const fake = new FakeApp();
+    const step = upTo(fake, stepId);
+
+    // Before anything is drawn: the two cards, whose border is the gesture.
+    expect(step.target(fake.obs())).toEqual([
+      '.react-flow__node[data-id="n2"]',
+      `.react-flow__node[data-id="${target.node}"]`,
+    ]);
+
+    fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { ...target } });
+    expect(step.done!(fake.obs())).toBe(false);
+    // Not selected yet: the card points at the edge, and says what to tick where.
+    expect(step.target(fake.obs())).toEqual([`.react-flow__edge[data-id="e-${index}"]`]);
+    expect(stepBody(step, fake.obs())).toContain("image_list, not out");
+    expect(stepBody(step, fake.obs())).toContain("Outputs section");
+    expect(stepNote(step, fake.obs())).toBeNull();
+
+    // Selected: the panel is up, the card re-aims onto its Outputs section.
+    fake.selectEdge(index);
+    expect(step.target(fake.obs())).toEqual([OUTPUTS_SECTION]);
+    expect(stepBody(step, fake.obs())).toContain("Tick out in the Outputs section");
+    expect(fake.obs().present(OUTPUTS_SECTION)).toBe(true);
+
+    // Ticking out makes the edge carry both, in declaration order: done.
+    fake.setEdgePorts(index, ["out", "image_list"]);
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  it("walks the whole tour when both tester edges are fixed in the Outputs section", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    const wrong: Record<string, () => void> = {
+      "edge-tester-implementer": () =>
+        fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "n1", port: "in" } }),
+      "edge-tester-end": () =>
+        fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "end", port: "result" } }),
+    };
+    const fix: Record<string, number> = { "edge-tester-implementer": 1, "edge-tester-end": 2 };
+    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
+    let clock = 0;
+    const tick = () => (run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200)));
+
+    for (let guard = 0; guard < STEPS.length * 3 && run.phase === "running"; guard++) {
+      const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
+      if (step.id in wrong) {
+        wrong[step.id]();
+        tick();
+        expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id, "a wrong edge is not the step done").toBe(step.id);
+        fake.selectEdge(fix[step.id]);
+        tick();
+        expect(run.phase, "the Outputs section is a real target").toBe("running");
+        fake.setEdgePorts(fix[step.id], ["out", "image_list"]);
+        tick();
+        continue;
+      }
+      if (step.id === "select-loop-edge" || step.id === "select-end-edge") {
+        // Entered with the fixed edge still selected: satisfied, says so, and asks for Next.
+        expect(run.satisfiedOnEntry, step.id).toBe(true);
+        expect(stepBody(step, fake.obs()), step.id).toContain("already selected");
+        fake.show('[data-testid="when-editor"]');
+        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+        continue;
+      }
+      script[step.id]();
+      tick();
+      if (run.phase !== "running" || currentStep(FIRST_PIPELINE_TOUR, run)?.id !== step.id) continue;
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
+        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+      } else if (step.skippable) {
+        run = skipStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+      }
+    }
+
+    expect(run.phase).toBe("finished");
+    // Both edges carry out AND image_list, so the editor qualified the key.
+    expect(fake.app.pipeline?.edges.map((e) => e.when)).toEqual([
+      undefined,
+      { "out.verdict": { eq: "fail" } },
+      { "out.verdict": { eq: "pass" } },
+    ]);
+  });
+});
+
+/**
  * The last step of *First pipeline* offers the trash, and the trash opens a
  * confirmation that is drawn **centred** — outside the row the step lights. The
  * projecteur's blockers therefore intercepted both Cancel and Delete: the one
@@ -598,28 +743,44 @@ describe("the shape of every step", () => {
     expect(STEPS.find((s) => s.id === "keep-or-delete")?.skippable).toBe(true);
   });
 
-  it("names the handle to drag from, on a node that has two", () => {
-    // The FP drew the return edge from `image_list` — the card said "drag from
-    // tester" and the tester has two output handles by then. The edge was made
-    // normally, and two steps later the When editor offered `iter` and no
-    // `verdict`, with no way back (#825, FP iteration 2).
+  it("says which output the edge carries, on a node that has two", () => {
+    // The FP drew the return edge from `image_list` (#825, FP iteration 2). A
+    // drawn edge now carries the first declared output (#846, ADR-0073): the
+    // card says which one that is, and what the other one would not give.
     for (const id of ["edge-tester-implementer", "edge-tester-end"]) {
       const step = STEPS.find((s) => s.id === id)!;
       const said = `${bodyOf(step)} ${stepNote(step, SHAPE_OBS) ?? ""}`;
       expect(said, id).toContain("out");
-      expect(said, id).toContain("image_list");
+      expect(said, id).toContain("first output");
     }
   });
 
-  it("sends every edge step to the out handle, never under the card", () => {
-    // The first edge said "the handle under implementer". Under the card there
-    // is only the bottom anchor, an edge *target* and never a source, so the
-    // drag moved the node and made no edge — with no feedback about why
-    // (#825, FP iteration 5). All three edge steps now name `out`.
+  it("sends every edge step to the card's border, never a dot or a handle", () => {
+    // #846 — there is no output dot any more (#844): the whole rim of a card is
+    // the drag-source. Checked in every state the edge steps can show,
+    // including the Outputs-section correction.
+    const states = [SHAPE_OBS];
+    for (const selectIt of [false, true]) {
+      const fake = new FakeApp();
+      const script = gestures(fake);
+      for (const s of STEPS) {
+        if (s.id === "edge-tester-implementer") break;
+        script[s.id]();
+      }
+      fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "n1", port: "in" } });
+      if (selectIt) fake.selectEdge(1);
+      states.push(fake.obs());
+    }
     for (const step of STEPS.filter((s) => s.id.startsWith("edge-"))) {
-      const said = `${bodyOf(step)} ${stepNote(step, SHAPE_OBS) ?? ""}`;
-      expect(said, step.id).toContain("out handle");
-      expect(said.toLowerCase(), step.id).not.toMatch(/\bunder\b/);
+      expect(bodyOf(step), step.id).toContain("border");
+      expect(bodyOf(step).toLowerCase(), step.id).not.toMatch(/\bunder\b/);
+    }
+    for (const step of STEPS) {
+      for (const o of states) {
+        const said = `${step.title} ${stepBody(step, o)} ${stepNote(step, o) ?? ""}`.toLowerCase();
+        expect(said, step.id).not.toMatch(/\bdots?\b/);
+        expect(said, step.id).not.toMatch(/\bhandles?\b/);
+      }
     }
   });
 
@@ -630,5 +791,64 @@ describe("the shape of every step", () => {
       expect(bodyOf(step).toLowerCase(), step.id).not.toMatch(/opens? a terminal/);
       expect(bodyOf(step).toLowerCase(), step.id).toContain("complete");
     }
+  });
+});
+
+/**
+ * #846, FP iteration 1 — once `out` is ticked next to `image_list`, the edge
+ * carries two ports and the When editor spells the key `out.verdict`. The
+ * condition steps read the key the way the daemon does, against the carried
+ * ports, and say what they wait for while the clause is not the one asked.
+ */
+describe("a condition on an edge that carries two outputs", () => {
+  function upTo(fake: FakeApp, stepId: string) {
+    const script = gestures(fake);
+    for (const step of STEPS) {
+      if (step.id === stepId) return step;
+      script[step.id]();
+    }
+    throw new Error(`no step ${stepId}`);
+  }
+
+  it.each([
+    ["loop-condition", 1, "fail"],
+    ["end-condition", 2, "pass"],
+  ] as const)("%s advances on the out.verdict key the editor writes", (stepId, index, value) => {
+    const fake = new FakeApp();
+    const step = upTo(fake, stepId);
+    fake.setEdgePorts(index, ["out", "image_list"]);
+
+    expect(step.done!(fake.obs())).toBe(false);
+    expect(stepBody(step, fake.obs())).toMatch(new RegExp(`^Add the condition verdict eq ${value}\\.`));
+
+    fake.writeCondition(index, "verdict", value);
+    expect(fake.app.pipeline?.edges[index].when).toEqual({ "out.verdict": { eq: value } });
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  it("does not count a verdict read on another output", () => {
+    const fake = new FakeApp();
+    const step = upTo(fake, "loop-condition");
+    fake.setEdgePorts(1, ["out", "image_list"]);
+    fake.setEdgeWhen(1, { "image_list.verdict": { eq: "fail" } });
+    expect(step.done!(fake.obs())).toBe(false);
+  });
+
+  it("keeps a condition written before the port was ticked", () => {
+    const fake = new FakeApp();
+    const step = upTo(fake, "loop-condition");
+    fake.writeCondition(1, "verdict", "fail");
+    fake.setEdgePorts(1, ["out", "image_list"]);
+    expect(fake.app.pipeline?.edges[1].when).toEqual({ "out.verdict": { eq: "fail" } });
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  it("says what it waits for while the clause is another one", () => {
+    const fake = new FakeApp();
+    const step = upTo(fake, "loop-condition");
+    fake.writeCondition(1, "verdict", "pass");
+    expect(step.done!(fake.obs())).toBe(false);
+    expect(stepBody(step, fake.obs())).toContain("Not there yet");
+    expect(stepBody(step, fake.obs())).toContain("verdict eq fail");
   });
 });

@@ -1,12 +1,15 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build test check lint fmt clean support-table install update service-install service-status service-restart service-logs
+.PHONY: help dev build test check lint fmt clean support-table readme-media readme-media-publish install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
 SANDBOX := /tmp/pdo-dev-sandbox
 # The one file carrying the generated harness support table (#855).
 SUPPORT_TABLE := docs/reference/harnesses.md
+# The README media tool (#856, ADR-0074). `node:sqlite` is still flagged
+# experimental: its warning is noise here.
+README_MEDIA := node --disable-warning=ExperimentalWarning scripts/readme-media/readme-media.mjs
 
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git
@@ -24,6 +27,8 @@ help:
 	@echo "  make fmt     cargo fmt"
 	@echo "  make clean   cargo clean + rm frontend/dist"
 	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
+	@echo "  make readme-media [SCENE=stats]   Record the README media (2 variants per scene) into .readme-media/ — see CONTRIBUTING"
+	@echo "  make readme-media-publish [SCENE=…]  Copy the selected variants into docs/assets/readme/"
 	@echo ""
 	@echo "Installed global daemon ($(PDO_PROD_DIR), port $(PDO_PROD_PORT)):"
 	@echo "  make install          Clone if needed + build release + install $(PDO_BIN)"
@@ -55,6 +60,7 @@ test:
 	cargo nextest run --workspace
 	cargo test --workspace --doc
 	cd frontend && pnpm test
+	node --disable-warning=ExperimentalWarning --test 'scripts/readme-media/test/*.test.mjs'
 
 check:
 	cargo check --workspace
@@ -69,6 +75,16 @@ check:
 # after adding a harness, adding a capability, or moving a "last validated version".
 support-table:
 	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/$(SUPPORT_TABLE)
+
+# README media (ADR-0074): a sealed demo instance, real UI, real agents for the
+# live scenes. Costs an agent session per live scene — regenerate only when a
+# scene visibly changed. `SCENE=a,b` limits the run; `VARIANT=a` one variant.
+readme-media:
+	cargo build
+	SCENE=$(SCENE) VARIANT=$(VARIANT) KEEP_DEMO=$(KEEP_DEMO) $(README_MEDIA) record
+
+readme-media-publish:
+	SCENE=$(SCENE) $(README_MEDIA) publish
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

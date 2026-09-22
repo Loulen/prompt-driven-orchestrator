@@ -44,6 +44,10 @@ design-prompts/
 frontend/src/prototype/
 frontend/design/*
 
+# `make readme-media` review folder: every recorded variant, the manifest and
+# the raw takes. Only the selected variants are published (docs/assets/readme/).
+.readme-media/
+
 # Reproduction / debugging screenshots dropped at the repo root
 /*.png
 

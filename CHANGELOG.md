@@ -16,6 +16,16 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.98.0
+**Edge multi-port : une seule edge porte plusieurs outputs d'un même node** (#843, #840).
+
+- YAML : `source: { node, ports: [a, b] }` pour une edge multi-port ; la forme `port:` à un seul
+  port reste inchangée et les pipelines existants ne sont pas réécrits.
+- Runtime : une edge multi-port se déclenche une fois et le node aval reçoit un input par port,
+  nommé d'après le port (`PDO_INPUT_<PORT>`, préambule « Inputs » listé par port).
+- Panneau d'edge : section **Outputs** en tête (le dernier port coché ne peut pas être décoché) ;
+  une condition `when` choisit le port lu et son schéma se résout par ligne.
+- Diff sémantique insensible à l'ordre des ports portés.
 ## 1.97.3
 **Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).
 

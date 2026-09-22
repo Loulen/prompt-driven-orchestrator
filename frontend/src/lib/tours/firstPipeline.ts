@@ -16,6 +16,7 @@
 
 import type { NodeDef, PipelineDef } from "../../types";
 import type { TourAppState, TourDef, TourObservation, TourStep } from "../tour";
+import { carries } from "../edgePorts";
 
 /** The name the tour asks the user to paste for the pipeline itself. */
 export const TUTORIAL_PIPELINE_ID = "tutorial-implement-test";
@@ -75,7 +76,7 @@ function edgeIndex(
     (e) =>
       e.source.node === from.id &&
       e.target.node === to.id &&
-      (fromPort == null || e.source.port === fromPort),
+      (fromPort == null || carries(e.source, fromPort)),
   );
 }
 

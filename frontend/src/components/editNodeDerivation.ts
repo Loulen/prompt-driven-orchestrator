@@ -5,6 +5,7 @@ import type { OrthogonalEdgeData } from "./OrthogonalEdge";
 import { anchorHandleId, isEmergentInputNode } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
+import { primaryPort } from "../lib/edgePorts";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -512,7 +513,9 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
       id: `e-${i}`,
       source: e.source.node,
       target: e.target.node,
-      sourceHandle: e.source.port || null,
+      // The arrow binds to the PRIMARY carried port's handle; a multi-port
+      // edge (ADR-0073) is still one arrow, drawn from one place.
+      sourceHandle: primaryPort(e.source) || null,
       targetHandle,
       type: "orthogonal",
       data: {

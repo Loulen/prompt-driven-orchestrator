@@ -1,4 +1,5 @@
 import type { EdgeDef, LoopRegion, NodeDef, PipelineDef } from "../types";
+import { carriedPorts } from "./edgePorts";
 
 /**
  * Default iteration cap for an auto-materialized bounded region, so a drawn
@@ -283,11 +284,16 @@ export function collectionFanoutFields(
     if (members.has(edge.source.node)) continue; // intra-member edge
     const src = byId.get(edge.source.node);
     if (!src) continue;
-    const port = src.outputs.find((p) => p.name === edge.source.port);
-    for (const [name, decl] of Object.entries(port?.frontmatter ?? {})) {
-      if (decl.type === "list" && !seen.has(name)) {
-        seen.add(name);
-        fields.push(name);
+    // Every port the edge CARRIES is a candidate driver (ADR-0073): a multi-port
+    // edge delivers each of them, so a `list` on the second one is just as
+    // fannable as one on the first.
+    for (const portName of carriedPorts(edge.source)) {
+      const port = src.outputs.find((p) => p.name === portName);
+      for (const [name, decl] of Object.entries(port?.frontmatter ?? {})) {
+        if (decl.type === "list" && !seen.has(name)) {
+          seen.add(name);
+          fields.push(name);
+        }
       }
     }
   }
@@ -320,10 +326,14 @@ export function collectionFanoutNudges(pipeline: PipelineDef): FanoutNudge[] {
   for (const edge of pipeline.edges) {
     const src = byId.get(edge.source.node);
     if (!src) continue;
-    const port = src.outputs.find((p) => p.name === edge.source.port);
     // The output is "list-typed" when any of its declared frontmatter fields is
-    // a `list` (the frontmatter map is keyed by field name, not port name).
-    const isList = Object.values(port?.frontmatter ?? {}).some((f) => f.type === "list");
+    // a `list` (the frontmatter map is keyed by field name, not port name). Any
+    // carried port counts — the edge delivers all of them (ADR-0073).
+    const isList = carriedPorts(edge.source).some((portName) =>
+      Object.values(src.outputs.find((p) => p.name === portName)?.frontmatter ?? {}).some(
+        (f) => f.type === "list",
+      ),
+    );
     if (!isList) continue;
     const target = edge.target.node;
     if (collectionMembers.has(target)) continue; // already fanned out

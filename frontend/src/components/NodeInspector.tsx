@@ -25,6 +25,9 @@ import {
 } from "../lib/nodeIsolation";
 import DestroyLoopModal from "./DestroyLoopModal";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
+import type { PooledInputSource } from "../lib/derivePooledInputs";
+import { carriedPorts, withCarriedPorts } from "../lib/edgePorts";
+import { requalifyWhen } from "../lib/whenClause";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import { Tooltip } from "./ui/tooltip";
 import type { LibraryEntry } from "../api";
@@ -73,6 +76,7 @@ export default function NodeInspector({
   const updateNode = useEditStore((s) => s.updateNode);
   const updatePrompt = useEditStore((s) => s.updatePrompt);
   const deleteEdge = useEditStore((s) => s.deleteEdge);
+  const updateEdge = useEditStore((s) => s.updateEdge);
   const scrollToPort = useEditStore((s) => s.scrollToPort);
   const setScrollToPort = useEditStore((s) => s.setScrollToPort);
 
@@ -196,7 +200,21 @@ export default function NodeInspector({
   // "delete an input" since inputs are emergent (#149/ADR-0011). Last-cycle
   // deletions go through the same destroy-loop confirmation as the canvas;
   // `keepSelection` keeps the inspector open on this node.
-  function handleDeleteSource(edgeIndex: number) {
+  function handleDeleteSource(source: PooledInputSource) {
+    const edgeIndex = source.edgeIndex;
+    const edge = tab!.pipeline.edges[edgeIndex];
+    const ports = edge ? carriedPorts(edge.source) : [];
+    // #843 / ADR-0073: one incoming edge can feed SEVERAL inputs here, one per
+    // carried output. Dropping one of them unticks its port; deleting the edge
+    // would silently take the sibling inputs with it.
+    if (ports.length > 1) {
+      const next = ports.filter((p) => p !== source.port);
+      updateEdge(edgeIndex, {
+        source: withCarriedPorts(edge.source, next),
+        when: requalifyWhen(edge.when, ports, next),
+      });
+      return;
+    }
     const destroyed = regionsDestroyedByEdgeRemoval(tab!.pipeline, edgeIndex);
     if (destroyed.length > 0) {
       setPendingDestroy({ edgeIndex, loopIds: destroyed });

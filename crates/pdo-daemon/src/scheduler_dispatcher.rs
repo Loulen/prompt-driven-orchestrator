@@ -47,7 +47,7 @@ pub(crate) fn waiting_nodes(run_state: &RunState) -> Vec<ReadySpawn> {
 mod tests {
     use super::*;
     use crate::event_log::NodeState;
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
@@ -100,10 +100,7 @@ mod tests {
 
     fn make_edge(src_node: &str, src_port: &str, tgt_node: &str, tgt_port: &str) -> EdgeDef {
         EdgeDef {
-            source: EdgeEndpoint {
-                node: src_node.into(),
-                port: src_port.into(),
-            },
+            source: EdgeSource::single(src_node, src_port),
             target: EdgeEndpoint {
                 node: tgt_node.into(),
                 port: tgt_port.into(),

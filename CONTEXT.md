@@ -28,7 +28,7 @@ Un Node se définit par :
 
 - **Nom** — identifiant lisible affiché dans le canvas.
 - **Prompt système** — le rôle, écrit dans la zone de texte qui s'ouvre à l'édition.
-- **Ports de sortie — déclarés.** Un ou plusieurs documents produits, chacun un port nommé : c'est le **contrat de production** du Node (avec son schéma de frontmatter optionnel, cf. *Blackboard*). Multi-fan-out supporté. Rendu : un dot vert par document, drag-source des edges.
+- **Ports de sortie — déclarés.** Un ou plusieurs documents produits, chacun un port nommé : c'est le **contrat de production** du Node (avec son schéma de frontmatter optionnel, cf. *Blackboard*). Multi-fan-out supporté. Rendu : les ports sont listés sur la carte ; une edge se démarre depuis le bord du node et porte le premier output par défaut (cf. *Edges — structure*).
 - **Ports d'entrée — émergents.** Un Node ne **déclare pas** ses entrées : elles sont *dérivées des edges entrantes*. Connecter `debugger.repro_steps` vers un Node y crée de facto une entrée `repro_steps`. Plusieurs edges de même nom **poolent** dans une seule entrée-liste — pooling **sémantique**, jamais un groupement visuel des flèches. Sur collision de noms *distincts*, on qualifie par source. L'accumulation cross-itérations est un flag `repeated` porté par l'**edge**, pas par l'entrée.
 
 Asymétrie assumée : le Node *connaît* ses sorties, *découvre* ses entrées au câblage. Conséquence sur la bibliothèque : un Node réutilisable porte ses **outputs + rôle + type**, pas ses inputs (purement pipeline-spécifiques).
@@ -178,17 +178,35 @@ Supprimer l'edge qui retire le **dernier cycle** d'une boucle `bounded` déclenc
 
 ## Edges — structure
 
-Une edge câble un output port source vers un input port target, et porte une clause `when:` optionnelle. La terminaison du Run passe toujours par un edge vers le nœud `End` mandatoire (#39).
+Une edge câble **un ou plusieurs output ports d'un même node source** vers un node target, et porte une clause `when:` optionnelle. Elle est **une seule edge pour le runtime** : elle fire une fois, à la complétion du node source, et dépose **un input émergent par port porté** sur la cible (ADR-0073). Un port par edge reste la forme courante ; la forme YAML à un port est inchangée, celle à plusieurs ports est additive. La terminaison du Run passe toujours par un edge vers le nœud `End` mandatoire (#39).
 
-### Routage — `mode` + `waypoints` (#154)
+- **Output porté** *(terme)* : le ou les ports source d'une edge. À la création, l'edge porte le **premier output déclaré** du node ; le choix se révise dans la section **Outputs** du panneau de détail de l'edge (une case par output déclaré, **au moins une cochée** — décocher la dernière est refusé). _Éviter_ : « port de l'edge » (ambigu avec l'input cible), « edge par port ».
+- **Deux formes YAML, additives** : `source: {node, port}` tant qu'un seul port est porté — **inchangée**, et c'est celle **réémise** dès qu'il n'y en a qu'un, donc un pipeline existant se rouvre et se sauve à l'identique ; `source: {node, ports: [a, b]}` au-delà. Le diff sémantique compare l'**ensemble** des ports, pas leur ordre.
+- **Nom de l'input émergent** : une edge à un port dépose son input sous `target.port` (ce que veulent une poignée déclarée — l'input d'un `merge`, le `result` du End — et tous les fichiers antérieurs) ; dès deux ports, chaque input prend le nom **de son propre port**.
+- **`when` et multi-port** : une clause `when` **désigne le port** dont elle lit la frontmatter ; le verdict s'applique à l'edge entière, donc à tous ses ports (ADR-0073). Le port se lit dans le **nom du champ** : `has_design_work` tant qu'un seul port est porté (implicite, forme inchangée), `design.has_design_work` dès qu'il y en a plusieurs. `iter`, `$variables` et `any` ne sont jamais qualifiés — ils n'appartiennent à aucun output. Côté daemon, la frontmatter du producteur est publiée sous les **deux** orthographes (fusionnée et qualifiée par port), ce qui est exactement ce qui rend la forme implicite rétrocompatible.
+- **Bord = drag-source** : une edge se démarre depuis **n'importe quel point du bord** du node source ; il n'y a plus de dot par output. Elle atterrit **sur le corps** du node cible (`target_side`, ci-dessous).
 
-Le tracé d'une edge est **orthogonal**, auto-routé par défaut. `mode: manual` épingle un tracé via des `waypoints` absolus ; « re-route automatically » les efface.
+### Routage — `mode` + `waypoints` (#154) et grille de câblage (ADR-0072)
+
+Le tracé d'une edge est **orthogonal**. La création à la souris est **progressive** : le tracé suit le curseur par incréments sur la **grille de câblage**, chaque cellule franchie ajoutant un segment ; l'edge naît donc en `mode: manual` avec ses `waypoints`. `Shift` enfoncé libère le tracé de la grille (il colle au curseur) ; relâcher `Shift` **ré-origine la grille sur le point courant**. La même sémantique de `Shift` vaut pour le drag d'un segment existant, qui snappe à la grille par défaut ; les autres waypoints ne sont **jamais re-snappés**. « Re-route automatically » efface les waypoints et recalcule un tracé auto-routé, lui aussi aligné sur la grille.
+
+- **Grille de câblage** *(terme)* : pas fixe, **constante du produit, jamais un réglage** (ADR-0072). Distincte de la grille décorative du fond. _Éviter_ : « snap grid utilisateur », « pas de grille du projet ».
+- Supprimer un waypoint = dragger jusqu'à aligner deux segments (fusion). Aucun geste au clic droit sur un segment.
 
 `mode` + `waypoints` (comme `view` sur les nœuds) sont du **layout, pas de la sémantique** : ils persistent **dans le fichier pipeline** (le routage voyage quand un workflow est partagé) mais sont **exclus du diff sémantique** — deux pipelines ne différant que par leur layout comparent **égaux**. Le partitionnement layout/sémantique a un propriétaire unique côté frontend, miroité côté daemon avec des gardes d'exhaustivité (#154, #355, #395).
 
 ### Ancrage de l'edge entrante — `target_side` (#168)
 
 Les inputs étant émergents, une flèche entrante atterrit **sur le corps** du nœud cible. `target_side` mémorise de quel côté (le plus proche du point de dépôt). C'est du **layout** : persiste dans le fichier, exclu du diff sémantique. Les ports **déclarés** gardent leur côté fixe.
+
+### Labels et ordre de dessin — layout par edge
+
+- **Label d'output** *(terme)* : le nom d'un output porté, affiché **près du départ** de l'edge, discret et visuellement distinct du label de condition. Un label par port ; l'affichage est un **toggle par edge** (tous ou aucun), **actif par défaut si le node source déclare ≥ 2 outputs**. Placement par défaut en alternance autour de la base de la flèche (1er à gauche/au-dessus, 2e à droite/en dessous, puis en s'éloignant), selon que la flèche est verticale ou horizontale ; chaque label est déplaçable librement.
+- **Label de condition** : la clause `when`/`else` rendue sur l'edge ; au milieu par défaut, **déplaçable librement** sur le canvas. Il appartient à l'edge : supprimer l'edge le supprime.
+- **Position de label** : **coordonnées absolues** du canvas, par label ; absente = placement par défaut.
+- **Ordre de dessin** : une edge se dessine **au-dessus des nodes** par défaut ; un paramètre par edge la passe dessous.
+
+Toutes ces valeurs (toggle, positions, ordre de dessin) sont du **layout** : persistées dans le fichier, exclues du diff sémantique, sans réglage global.
 
 ---
 

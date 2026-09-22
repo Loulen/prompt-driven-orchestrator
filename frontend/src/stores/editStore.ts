@@ -18,6 +18,8 @@ import {
   renamePipeline as apiRenamePipeline,
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
+import { carriedPorts, withCarriedPorts } from "../lib/edgePorts";
+import { requalifyWhen, renameWhenPorts } from "../lib/whenClause";
 import { isStructuralMarker } from "../lib/structuralMarkers";
 import { serializePipeline } from "../lib/serializePipeline";
 import { loadTabsDisabled, saveTabsDisabled } from "../lib/uiPrefs";
@@ -437,14 +439,33 @@ function propagatePortChangesToEdges(
       kept.push(edge);
       continue;
     }
-    const renamed = renameMap.get(edge[edgeSide].port);
-    if (renamed) {
-      kept.push({ ...edge, [edgeSide]: { ...edge[edgeSide], port: renamed } });
-    } else if (newPortNames.has(edge[edgeSide].port)) {
-      kept.push(edge);
+    if (edgeSide === "target") {
+      const renamed = renameMap.get(edge.target.port);
+      if (renamed) {
+        kept.push({ ...edge, target: { ...edge.target, port: renamed } });
+      } else if (newPortNames.has(edge.target.port)) {
+        kept.push(edge);
+      }
+      // else: the port the edge referenced is gone — drop the edge (no node-side
+      // effect since ForEach `over` clearing was retired with the node type, #151).
+      continue;
     }
-    // else: the port the edge referenced is gone — drop the edge (no node-side
-    // effect since ForEach `over` clearing was retired with the node type, #151).
+    // Source side: the edge may carry SEVERAL outputs (ADR-0073 / #843). Rename
+    // each one, drop the ones that disappeared, and drop the edge only when it
+    // is left carrying nothing — losing one of two ports must not take the
+    // arrow with it. A dropped port's condition rows are re-pointed at a port
+    // still carried, exactly as unticking one in the panel does.
+    const ports = carriedPorts(edge.source);
+    // Rename first (same cardinality, so the clause's qualifiers follow their
+    // port), then drop what disappeared (which re-points the orphaned rows).
+    const renamed = ports.map((p) => renameMap.get(p) ?? p);
+    const next = renamed.filter((p) => newPortNames.has(p));
+    if (next.length === 0) continue;
+    kept.push({
+      ...edge,
+      source: withCarriedPorts(edge.source, next),
+      when: requalifyWhen(renameWhenPorts(edge.when, ports, renameMap), renamed, next),
+    });
   }
   tab.pipeline.edges = kept;
 }

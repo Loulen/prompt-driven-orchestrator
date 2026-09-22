@@ -3,10 +3,10 @@ import type { Skill, SkillBank, SkillFolder } from "../types";
 import {
   addRefs,
   allSelected,
-  effectiveCountLabel,
+  activeCountLabel,
   missingIds,
   removeRef,
-  resolveEffectiveSkills,
+  resolveActiveSkills,
   skillsInFolder,
   toRefs,
 } from "./skillSelection";
@@ -38,9 +38,9 @@ const bank: SkillBank = {
   ],
 };
 
-describe("resolveEffectiveSkills", () => {
+describe("resolveActiveSkills", () => {
   it("unions the tiers coarsest first and attributes each row to its origin", () => {
-    const resolved = resolveEffectiveSkills(
+    const resolved = resolveActiveSkills(
       "node",
       [{ id: "c", name: "code-review" }],
       [
@@ -54,12 +54,12 @@ describe("resolveEffectiveSkills", () => {
       ["b", ["project"], false, true],
       ["c", ["node"], true, false],
     ]);
-    expect(resolved.effectiveCount).toBe(3);
+    expect(resolved.activeCount).toBe(3);
     expect(resolved.missing).toEqual([]);
   });
 
   it("delivers a skill picked at two tiers once, own and inherited at the same time", () => {
-    const resolved = resolveEffectiveSkills(
+    const resolved = resolveActiveSkills(
       "run",
       [{ id: "a", name: "tdd" }, { id: "d", name: "spring" }],
       [{ tier: "instance", skills: [{ id: "a", name: "tdd" }] }],
@@ -68,16 +68,16 @@ describe("resolveEffectiveSkills", () => {
     expect(resolved.rows).toHaveLength(2);
     expect(resolved.rows[0]).toMatchObject({ id: "a", tiers: ["instance", "run"], own: true, inherited: true });
     expect(resolved.rows[1]).toMatchObject({ id: "d", tiers: ["run"], own: true, inherited: false });
-    expect(resolved.effectiveCount).toBe(2);
+    expect(resolved.activeCount).toBe(2);
   });
 
   it("names a row from the bank, not from the stored label", () => {
-    const resolved = resolveEffectiveSkills("node", [{ id: "a", name: "old-label" }], [], bank);
+    const resolved = resolveActiveSkills("node", [{ id: "a", name: "old-label" }], [], bank);
     expect(resolved.rows[0].name).toBe("tdd");
   });
 
-  it("flags an id the bank no longer knows as missing, excluded from the effective count", () => {
-    const resolved = resolveEffectiveSkills(
+  it("flags an id the bank no longer knows as missing, excluded from the active count", () => {
+    const resolved = resolveActiveSkills(
       "node",
       [{ id: "gone", name: "deleted" }],
       [{ tier: "instance", skills: [{ id: "a", name: "tdd" }] }],
@@ -87,15 +87,15 @@ describe("resolveEffectiveSkills", () => {
     expect(resolved.missing).toEqual([
       expect.objectContaining({ id: "gone", name: "deleted", missing: true, tiers: ["node"] }),
     ]);
-    expect(resolved.effectiveCount).toBe(1);
+    expect(resolved.activeCount).toBe(1);
   });
 
   it("ignores blank ids and handles empty tiers", () => {
-    const resolved = resolveEffectiveSkills("node", [{ id: "  ", name: "x" }], [], bank);
+    const resolved = resolveActiveSkills("node", [{ id: "  ", name: "x" }], [], bank);
     expect(resolved.rows).toEqual([]);
-    expect(effectiveCountLabel(resolved.effectiveCount)).toBe("No skill");
-    expect(effectiveCountLabel(1)).toBe("1 effective skill");
-    expect(effectiveCountLabel(3)).toBe("3 effective skills");
+    expect(activeCountLabel(resolved.activeCount)).toBe("No skill");
+    expect(activeCountLabel(1)).toBe("1 active skill");
+    expect(activeCountLabel(3)).toBe("3 active skills");
   });
 });
 

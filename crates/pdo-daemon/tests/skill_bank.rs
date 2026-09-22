@@ -932,7 +932,7 @@ async fn file_endpoints_on_an_unknown_skill_are_404() {
 }
 
 // ---------------------------------------------------------------------------
-// #669 — selection by tier, skills effectifs with origin, referents populated.
+// #669 — selection by tier, skills actifs with origin, referents populated.
 // A real daemon, a seeded pipeline, nodes spawned through the tmux command seam
 // (a harmless `sleep`). Every assertion is an HTTP response or an event payload.
 // ---------------------------------------------------------------------------
@@ -1152,9 +1152,9 @@ async fn skills_of_the_four_tiers_are_unioned_at_spawn_with_their_origin() {
     let run_id = run["run_id"].as_str().unwrap().to_string();
 
     let payload = wait_for_node_started(&daemon, &run_id).await;
-    let effective = &payload["skills"];
+    let active = &payload["skills"];
     assert_eq!(
-        skill_ids(effective),
+        skill_ids(active),
         vec![
             a["id"].as_str().unwrap(),
             b["id"].as_str().unwrap(),
@@ -1164,15 +1164,15 @@ async fn skills_of_the_four_tiers_are_unioned_at_spawn_with_their_origin() {
         "union, coarsest tier first, de-duplicated: {payload}"
     );
     assert_eq!(
-        tiers_of(effective, &a["id"]),
+        tiers_of(active, &a["id"]),
         serde_json::json!(["instance", "project"])
     );
     assert_eq!(
-        tiers_of(effective, &b["id"]),
+        tiers_of(active, &b["id"]),
         serde_json::json!(["project"])
     );
-    assert_eq!(tiers_of(effective, &d["id"]), serde_json::json!(["run"]));
-    assert_eq!(tiers_of(effective, &c["id"]), serde_json::json!(["node"]));
+    assert_eq!(tiers_of(active, &d["id"]), serde_json::json!(["run"]));
+    assert_eq!(tiers_of(active, &c["id"]), serde_json::json!(["node"]));
     assert_eq!(payload["missing_skills"], serde_json::json!([]));
 
     // The Run tier was frozen on `RunStarted`; the projection exposes both.

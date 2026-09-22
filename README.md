@@ -104,6 +104,27 @@ Set every public browser origin as an exact `scheme://host[:port]` value, for ex
 
 Add `PDO_ALLOWED_WS_ORIGINS` to the service environment when the daemon runs as a service.
 
+### Attachments through a proxy
+
+A Run's attachments travel in one multipart `POST /runs`. The daemon's own budget is
+`max_attachments_mb` in Settings (50 MB by default), but a reverse proxy checks the body size
+first, and nginx refuses anything over 1 MB unless told otherwise (#839).
+
+| Symptom | Meaning | Fix |
+| --- | --- | --- |
+| `The server in front of PDO … refused the request body (413)` | The proxy's body limit, not PDO's: the refusal carried no PDO error body | Raise `client_max_body_size` (nginx) or the equivalent, at or above `max_attachments_mb` |
+| `attachments exceed the per-run limit of N MB` | PDO's own budget | Raise `max_attachments_mb` in Settings or attach less |
+| `Upload interrupted … the network or a proxy in front of PDO cut the connection` | The connection dropped before the daemon answered | Check the proxy's timeouts (`client_body_timeout`, `proxy_read_timeout`) and the link |
+| `Upload timed out after Ns` | Nothing answered within the upload budget (a minute plus ten seconds per MB) | Same as above; the CLI applies the same wait |
+| `upload interrupted while reading attachment X` (400 from the daemon) | The body was cut mid-stream between the proxy and the daemon | Check the proxy's `proxy_request_buffering` / timeouts |
+
+```nginx
+location / {
+    client_max_body_size 64m;   # ≥ max_attachments_mb
+    proxy_pass http://127.0.0.1:5172;
+}
+```
+
 ### Copy and paste in the terminal pane
 
 Selection happens in the browser, so copy and paste work over plain `http://<host>:<port>` too: no https or `localhost` is required (#772).

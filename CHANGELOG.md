@@ -16,6 +16,20 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## Non publié
+**Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).
+
+- Un 413 **sans corps JSON** (page HTML d'un reverse proxy, nginx `client_max_body_size` à 1 Mo
+  par défaut) est attribué à l'intermédiaire, avec la taille envoyée et les deux limites à
+  vérifier — plus jamais `POST /runs failed: 413`. Un 413 du daemon garde sa phrase.
+- `Failed to fetch` sur un `POST /runs` avec pièces jointes devient « Upload interrupted after
+  Ns while sending X MB to <hôte> … », et un upload qui ne progresse plus **expire** (UI et CLI :
+  une minute plus dix secondes par Mo) au lieu de rester suspendu.
+- Côté daemon, un multipart coupé en cours de flux répond 400 « upload interrupted … while
+  reading attachment `<nom>` » (ou « after field `<champ>` ») au lieu du trompeur « missing
+  field: input ». Un test couvre désormais le 413 sur `POST /runs`.
+- README : section « Attachments through a proxy ».
+
 ## 1.97.2
 **Tour guidé : scroll hors spotlight, dropdown skills, « Create » à l'étape 3** (#837).
 

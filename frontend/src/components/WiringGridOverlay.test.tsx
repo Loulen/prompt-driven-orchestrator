@@ -1,7 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import WiringGridOverlay from "./WiringGridOverlay";
-import { WIRING_GRID_STEP, crispOffset, snapToGrid } from "../lib/wiringGrid";
+import { GRID_SIZES, crispOffset, gridStep, snapToGrid } from "../lib/wiringGrid";
+
+// Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
+const GRID_STEP = gridStep("L");
 
 describe("WiringGridOverlay (#844)", () => {
   it("anchors the lattice ON the origin, so a dot is a point the trace snaps to", () => {
@@ -9,31 +12,40 @@ describe("WiringGridOverlay (#844)", () => {
     // agree with the path: the overlay lives in FLOW coordinates, so its own
     // left/top follow the origin rather than the screen.
     const origin = { x: 57, y: 123 };
-    render(<WiringGridOverlay origin={origin} step={WIRING_GRID_STEP} variant="dots" />);
+    render(<WiringGridOverlay origin={origin} step={GRID_STEP} variant="dots" />);
     const grid = screen.getByTestId("wiring-grid");
     const left = parseFloat(grid.style.left);
     const top = parseFloat(grid.style.top);
     // The overlay's own edges are a whole number of cells from the origin, so the
     // tiled lattice stays in phase with it.
-    expect((origin.x - left) % WIRING_GRID_STEP).toBe(0);
-    expect((origin.y - top) % WIRING_GRID_STEP).toBe(0);
+    expect((origin.x - left) % GRID_STEP).toBe(0);
+    expect((origin.y - top) % GRID_STEP).toBe(0);
     // And the lattice it draws is the one `snapToGrid` snaps onto.
-    expect(snapToGrid(origin, origin, WIRING_GRID_STEP)).toEqual(origin);
+    expect(snapToGrid(origin, origin, GRID_STEP)).toEqual(origin);
+  });
+
+  it("tiles at the pitch of every grid size (#877)", () => {
+    for (const size of GRID_SIZES) {
+      const step = gridStep(size);
+      const { unmount } = render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={step} variant="dots" />);
+      expect(screen.getByTestId("wiring-grid").style.backgroundSize).toBe(`${step}px ${step}px`);
+      unmount();
+    }
   });
 
   it("puts the dots on the grid lines, not at the tile centres", () => {
-    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={WIRING_GRID_STEP} variant="dots" />);
+    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={GRID_STEP} variant="dots" />);
     const grid = screen.getByTestId("wiring-grid");
     // A `radial-gradient` dot sits at the CENTRE of its tile; shifting the
     // background back half a cell is what moves it onto the line.
     expect(grid.style.backgroundPosition).toBe(
-      `${-WIRING_GRID_STEP / 2}px ${-WIRING_GRID_STEP / 2}px`,
+      `${-GRID_STEP / 2}px ${-GRID_STEP / 2}px`,
     );
-    expect(grid.style.backgroundSize).toBe(`${WIRING_GRID_STEP}px ${WIRING_GRID_STEP}px`);
+    expect(grid.style.backgroundSize).toBe(`${GRID_STEP}px ${GRID_STEP}px`);
   });
 
   it("draws two crossing gradients in the lines variant", () => {
-    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={WIRING_GRID_STEP} variant="lines" />);
+    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={GRID_STEP} variant="lines" />);
     const grid = screen.getByTestId("wiring-grid");
     expect(grid.style.backgroundImage).toContain("to right");
     expect(grid.style.backgroundImage).toContain("to bottom");
@@ -48,7 +60,7 @@ describe("WiringGridOverlay (#844)", () => {
     render(
       <WiringGridOverlay
         origin={{ x: 0, y: 0 }}
-        step={WIRING_GRID_STEP}
+        step={GRID_STEP}
         variant={variant}
         zoom={zoom}
       />,
@@ -74,7 +86,7 @@ describe("WiringGridOverlay (#844)", () => {
     render(
       <WiringGridOverlay
         origin={{ x: 0, y: 0 }}
-        step={WIRING_GRID_STEP}
+        step={GRID_STEP}
         variant="lines"
         zoom={1}
         translate={{ x: 120.5, y: 33.25 }}
@@ -88,9 +100,9 @@ describe("WiringGridOverlay (#844)", () => {
     const top = parseFloat(grid.style.top);
     // Every vertical line starts on a whole screen pixel…
     for (const k of [0, 1, 7]) {
-      const screenX = 120.5 + (left + vx + k * WIRING_GRID_STEP);
+      const screenX = 120.5 + (left + vx + k * GRID_STEP);
       expect(Math.abs(screenX - Math.round(screenX))).toBeLessThan(1e-9);
-      const screenY = 33.25 + (top + vy + k * WIRING_GRID_STEP);
+      const screenY = 33.25 + (top + vy + k * GRID_STEP);
       expect(Math.abs(screenY - Math.round(screenY))).toBeLessThan(1e-9);
     }
     // …by moving it less than half a screen pixel off the lattice.
@@ -104,12 +116,12 @@ describe("WiringGridOverlay (#844)", () => {
   });
 
   it("paints under the edges and the cards", () => {
-    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={WIRING_GRID_STEP} variant="lines" />);
+    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={GRID_STEP} variant="lines" />);
     expect(screen.getByTestId("wiring-grid").style.zIndex).toBe("-1");
   });
 
   it("never eats a pointer event — it is a reading aid, not a surface", () => {
-    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={WIRING_GRID_STEP} variant="dots" />);
+    render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={GRID_STEP} variant="dots" />);
     expect(screen.getByTestId("wiring-grid").style.pointerEvents).toBe("none");
   });
 });

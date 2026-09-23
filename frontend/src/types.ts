@@ -1705,6 +1705,9 @@ export interface NoteDef {
   view?: { x: number; y: number } | null;
 }
 
+/** A wiring-grid size (#877 / ADR-0076) — `lib/wiringGrid.ts` maps it to px. */
+export type GridSize = "S" | "M" | "L";
+
 export interface PipelineDef {
   name: string;
   version?: string | null;
@@ -1722,6 +1725,12 @@ export interface PipelineDef {
    * as additional info.
    */
   prompt_required?: boolean;
+  /**
+   * The pipeline's own wiring-grid size (#877 / ADR-0076): `S`/`M`/`L` =
+   * 20/30/40px. Layout, not semantics. Absent ⇒ the pipeline follows the
+   * reader's global default (Settings › General › Interface).
+   */
+  grid_size?: GridSize | null;
 }
 
 export interface PipelineDetail {

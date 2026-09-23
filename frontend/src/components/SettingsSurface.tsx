@@ -38,6 +38,7 @@ import HarnessSelect from "./HarnessSelect";
 import ThemeSelect from "./ThemeSelect";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../lib/uiPrefs";
 import { useWiringStore } from "../stores/wiringStore";
+import GridSizePicker from "./GridSizePicker";
 import { harnessCatalog, findHarnessOption } from "../lib/harness";
 import AgentControl from "./AgentControl";
 import { announceAgentProfilesChanged, useAgentProfiles } from "../hooks/useAgentProfiles";
@@ -1382,6 +1383,8 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
   // a change reaches an already-mounted canvas; the store persists it per browser.
   const gridFeedback = useWiringStore((s) => s.gridFeedback);
   const setGridFeedback = useWiringStore((s) => s.setGridFeedback);
+  const defaultGridSize = useWiringStore((s) => s.defaultGridSize);
+  const setDefaultGridSize = useWiringStore((s) => s.setDefaultGridSize);
 
   return (
     <Section section={section}>
@@ -1562,9 +1565,32 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
           })}
         </div>
         <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
-          How the wiring grid shows itself while you draw an edge on the canvas. The grid's{" "}
-          <em>step</em> is not a setting: it is a product constant (ADR-0072), because pinned
-          routes travel inside the shared pipeline file.
+          How the wiring grid shows itself while you draw an edge on the canvas.
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Wiring grid size
+          </span>
+          <span
+            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
+            style={{ fontSize: "9.5px" }}
+            data-testid="setting-wiring-grid-size-badge"
+          >
+            Device-local · saved immediately
+          </span>
+        </div>
+        <GridSizePicker
+          value={defaultGridSize}
+          onChange={(v) => v && setDefaultGridSize(v)}
+          ariaLabel="Wiring grid size"
+          testId="setting-wiring-grid-size"
+        />
+        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+          The step edges snap to on the canvas, for every pipeline that has no size of its own. A
+          pipeline can pick its own size in its Pipeline Inspector; that choice is saved in the
+          pipeline file and wins over this one. Existing routes are never re-snapped.
         </div>
       </div>
     </Section>

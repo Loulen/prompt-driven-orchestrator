@@ -129,6 +129,7 @@ const PIPELINE: Complete<PipelineDef> = {
   loops: [REGION],
   notes: [NOTE],
   prompt_required: false, // must be exactly `false` to emit
+  grid_size: "S", // emitted only when the pipeline chose a size (#877)
 };
 
 const sortedKeys = (o: unknown) =>

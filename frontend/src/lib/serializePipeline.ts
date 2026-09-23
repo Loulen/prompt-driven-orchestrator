@@ -80,6 +80,10 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
   // The default (prompt required) is omitted so the common case stays clean and
   // round-trips by absence — same convention as `loops` and `version`.
   if (p.prompt_required === false) obj.prompt_required = false;
+  // #877 / ADR-0076: the pipeline's own wiring-grid size, emitted only when the
+  // pipeline chose one — absent, it follows the reader's global default, and an
+  // untouched pipeline round-trips byte for byte. Layout (`layoutFields.ts`).
+  if (p.grid_size) obj.grid_size = p.grid_size;
   if (Object.keys(p.variables).length > 0) {
     const vars: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(p.variables)) {

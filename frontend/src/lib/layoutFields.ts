@@ -69,7 +69,9 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
 };
 
 export const LAYOUT_FIELDS: Record<SerializerScope, readonly string[]> = {
-  pipeline: ["notes"] satisfies (keyof PipelineDef)[],
+  // #877 / ADR-0076: the wiring-grid size is canvas presentation — two pipelines
+  // that differ only in it compare equal behind the library star.
+  pipeline: ["notes", "grid_size"] satisfies (keyof PipelineDef)[],
   node: ["view"] satisfies (keyof NodeDef)[],
   inputPort: [],
   outputPort: [],
@@ -113,7 +115,7 @@ export const LAYOUT_FIELDS: Record<SerializerScope, readonly string[]> = {
  * descends into node/loop/note internals.
  */
 export function stripLayout(obj: Record<string, unknown>): Record<string, unknown> {
-  for (const k of LAYOUT_FIELDS.pipeline) delete obj[k]; // notes (whole block)
+  for (const k of LAYOUT_FIELDS.pipeline) delete obj[k]; // notes (whole block), grid_size
 
   const nodes = obj.nodes;
   if (Array.isArray(nodes)) {

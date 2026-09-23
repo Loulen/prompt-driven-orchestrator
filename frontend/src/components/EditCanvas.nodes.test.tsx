@@ -7,7 +7,10 @@ import { useEditStore } from "../stores/editStore";
 import { deriveEditEdges } from "./editNodeDerivation";
 import { landsByDrop } from "../lib/anchorSide";
 import { droppedPath, hoverLanding, startGesture, type HoveredHandle, type HoveredNode } from "../lib/wiringGesture";
-import { WIRING_GRID_STEP } from "../lib/wiringGrid";
+import { gridStep } from "../lib/wiringGrid";
+
+// Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
+const GRID_STEP = gridStep("L");
 import type { EdgeAnchor, NodeDef, NodeStatus, NodeType, PipelineDef, PortSide } from "../types";
 
 // EditNode reads selection from the global edit store; reset it between tests so
@@ -485,8 +488,8 @@ describe("End marker accepts an incoming edge on any of its four borders (#840)"
     });
 
     it.each(SIDES)("saves a route ending perpendicular into the %s border", (side) => {
-      const gesture = startGesture({ x: 80, y: 80 }, "bottom", WIRING_GRID_STEP);
-      const traced = droppedPath(gesture, AIM[side], END, BODY, "src", WIRING_GRID_STEP);
+      const gesture = startGesture({ x: 80, y: 80 }, "bottom", GRID_STEP);
+      const traced = droppedPath(gesture, AIM[side], END, BODY, "src", GRID_STEP);
       const [before, last] = traced.slice(-2);
       expect(BORDER[side](last)).toBe(true);
       // The last leg runs along the side's normal: vertical into top/bottom,

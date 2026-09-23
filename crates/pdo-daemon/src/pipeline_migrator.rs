@@ -2578,6 +2578,7 @@ edges:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let diags = lint_missing_merge(&pipeline);
         assert_eq!(diags.len(), 1);
@@ -2606,6 +2607,7 @@ edges:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(
@@ -2626,6 +2628,7 @@ edges:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(diags.is_empty());
@@ -2649,6 +2652,7 @@ edges:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(diags.is_empty());

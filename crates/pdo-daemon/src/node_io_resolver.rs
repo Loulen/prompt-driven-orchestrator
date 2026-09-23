@@ -581,6 +581,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -775,6 +776,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -1034,6 +1036,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         for dir_name in ["a", "b"] {
@@ -1129,6 +1132,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
@@ -1211,6 +1215,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
@@ -1295,6 +1300,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
@@ -1358,6 +1364,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 

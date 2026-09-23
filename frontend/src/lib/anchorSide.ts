@@ -250,9 +250,9 @@ export function outwardDelta(side: PortSide): Point {
 }
 
 /**
- * Minimum length of the perpendicular leg: one grid cell, never under 16px. At a
- * 40px grid the leg is a cell; if the constant is ever lowered, 16px is the floor
- * below which a straight entry stops being legible.
+ * Minimum length of the perpendicular leg: one grid cell of the size in effect
+ * (20/30/40px, #877), never under 16px — the floor below which a straight entry
+ * stops being legible, kept under the smallest size.
  */
 export function landingLeg(step: number): number {
   return Math.max(16, step);

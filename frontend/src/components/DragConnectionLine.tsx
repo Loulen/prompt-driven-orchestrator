@@ -18,7 +18,7 @@ import { pathToSvg } from "../lib/edgePath";
 import type { Point } from "../lib/orthogonalRouter";
 import type { PortSide } from "../types";
 import { sideFromRimHandle } from "../lib/anchorSide";
-import { WIRING_GRID_STEP } from "../lib/wiringGrid";
+import { useWiringGridStep } from "../hooks/useWiringGrid";
 import {
   advanceGesture,
   gesturePath,
@@ -41,7 +41,9 @@ export default function DragConnectionLine({
   const store = useStoreApi();
   const setOrigin = useWiringStore((s) => s.setOrigin);
   const { screenToFlowPosition } = useReactFlow();
-  const step = WIRING_GRID_STEP;
+  // The step in effect when the gesture starts (#877). A size change mid-drag is
+  // not a gesture anyone performs; the lattice of a trace never changes under it.
+  const step = useWiringGridStep();
 
   const pressedSide = sideFromRimHandle(connection.fromHandle?.id);
 

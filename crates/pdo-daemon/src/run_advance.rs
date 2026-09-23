@@ -846,6 +846,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 

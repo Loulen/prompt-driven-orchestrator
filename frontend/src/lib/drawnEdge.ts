@@ -8,7 +8,6 @@
 import type { EdgeAnchor, EdgeDef, PortSide } from "../types";
 import type { Point } from "./orthogonalRouter";
 import { enforcePerpendicularEnds, landingLeg, storableWaypoints } from "./anchorSide";
-import { WIRING_GRID_STEP } from "./wiringGrid";
 
 export interface DrawnEdgeInput {
   /** The polyline the preview drew, in flow coordinates. */
@@ -23,6 +22,8 @@ export interface DrawnEdgeInput {
   targetSide: PortSide;
   /** Whether this target anchors by drop position at all (`landsByDrop`). */
   anchorsByDrop: boolean;
+  /** The wiring-grid step the edge was drawn on (#877) — sets the leg length. */
+  step: number;
 }
 
 /**
@@ -38,7 +39,7 @@ export interface DrawnEdgeInput {
  *     router draws, so pinning it would be noise that later fights node moves.
  */
 export function drawnEdgeLayout(input: DrawnEdgeInput): Partial<EdgeDef> {
-  const { traced, sourceAnchor, targetAnchor, targetSide, anchorsByDrop } = input;
+  const { traced, sourceAnchor, targetAnchor, targetSide, anchorsByDrop, step } = input;
 
   // Enforced BEFORE persisting, not only while previewing: what is saved has to
   // end with the perpendicular leg into `target_anchor` and begin with one out of
@@ -51,7 +52,7 @@ export function drawnEdgeLayout(input: DrawnEdgeInput): Partial<EdgeDef> {
           traced,
           sourceAnchor.side,
           targetSide,
-          landingLeg(WIRING_GRID_STEP),
+          landingLeg(step),
         )
       : traced;
   const interior = storableWaypoints(enforced).map((p) => ({

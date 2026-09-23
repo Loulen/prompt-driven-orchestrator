@@ -17,11 +17,14 @@ import {
   squareUp,
   storableWaypoints,
 } from "./anchorSide";
-import { isAxisAligned, WIRING_GRID_STEP } from "./wiringGrid";
+import { gridStep, isAxisAligned } from "./wiringGrid";
+
+// Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
+const GRID_STEP = gridStep("L");
 
 // A 200x80 card whose top-left is at (100, 100).
 const RECT = { x: 100, y: 100, width: 200, height: 80 };
-const LEG = landingLeg(WIRING_GRID_STEP);
+const LEG = landingLeg(GRID_STEP);
 
 function orthogonal(points: Point[]): boolean {
   for (let i = 1; i < points.length; i++) {
@@ -65,11 +68,11 @@ describe("anchorPoint", () => {
 
 describe("anchorFromPoint", () => {
   it("snaps the departure along the side onto the wiring lattice", () => {
-    const a = anchorFromPoint({ x: 173, y: 400 }, RECT, "bottom", WIRING_GRID_STEP);
+    const a = anchorFromPoint({ x: 173, y: 400 }, RECT, "bottom", GRID_STEP);
     expect(a.side).toBe("bottom");
     // 173 snaps to 160 in absolute flow coordinates; the offset is relative.
     expect(a.offset).toBe(60);
-    expect(anchorPoint(RECT, a, a.side).x % WIRING_GRID_STEP).toBe(0);
+    expect(anchorPoint(RECT, a, a.side).x % GRID_STEP).toBe(0);
   });
 
   it("takes the drop per pixel when the step is 0 — the arrow lands where it was aimed", () => {
@@ -529,7 +532,7 @@ describe("dragSegmentKeepingRun (#844 FP iter-5, finding 2)", () => {
   const CHARLIE = { x: 121, y: 480, width: 160, height: 36 };
   const src = { x: 240, y: 195 };
   const tgt = { x: 121, y: 498 };
-  const grid = { origin: { x: 0, y: 0 }, step: WIRING_GRID_STEP, free: false };
+  const grid = { origin: { x: 0, y: 0 }, step: GRID_STEP, free: false };
   const enforce = (pts: Point[]) => enforcePerpendicularEnds(pts, "bottom", "left", LEG, CHARLIE);
   // …240,235 → 240,400 → 81,400 → 81,498…: segment 2 is the corridor at y=400.
   const route = enforce([src, { x: 240, y: 400 }, tgt]);

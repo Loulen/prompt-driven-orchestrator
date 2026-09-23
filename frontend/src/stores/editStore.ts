@@ -215,7 +215,9 @@ interface EditState {
   moveNote: (noteId: string, x: number, y: number) => void;
   deleteNote: (noteId: string) => void;
 
-  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required">>) => void;
+  /** `grid_size: null` clears the pipeline's own size (it follows the global
+   *  default again) — the key is then dropped from the document, not nulled. */
+  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required" | "grid_size">>) => void;
 
   updatePrompt: (nodeId: string, content: string) => void;
 
@@ -868,6 +870,10 @@ export const useEditStore = create<EditState>((set, get) => ({
       if (updates.version !== undefined) tab.pipeline.version = updates.version;
       if (updates.variables !== undefined) tab.pipeline.variables = updates.variables;
       if (updates.prompt_required !== undefined) tab.pipeline.prompt_required = updates.prompt_required;
+      if (updates.grid_size !== undefined) {
+        if (updates.grid_size) tab.pipeline.grid_size = updates.grid_size;
+        else delete tab.pipeline.grid_size;
+      }
     }, { coalesceKey: `updatePipelineMeta:${Object.keys(updates).sort().join(",")}` }));
   },
 

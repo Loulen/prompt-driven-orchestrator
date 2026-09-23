@@ -46,7 +46,7 @@ nodes:
   outputs:
   - name: review
     side: bottom
-    instructions: Your verdict, then a short Mermaid diagram of the flow you checked.
+    instructions: Your verdict, then a small Mermaid diagram of the flow you checked.
     frontmatter:
       verdict:
         type: enum

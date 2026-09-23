@@ -127,7 +127,10 @@ scenes are canvas gestures; each costs nothing but about a minute. Each live sce
 review, orchestration…) runs real `claude` sessions on `claude-opus-5-5`, stopped as soon as the
 scene is recorded. The hero runs the demo pipeline twice, one run per variant (a few minutes in
 all): variant a stops its run once the terminal is filmed, and variant b waits for the reviewer's
-outputs. The reviewer drives Playwright's Chromium from your cache (`~/.cache/ms-playwright`). Each regeneration also adds its GIFs to
+outputs. Typed outputs and Diff review each play one run to the end (off camera, a few minutes),
+shared by their two variants; Diff review then wakes the run's manager once per variant for its
+answer. Recursive orchestration plays one orchestrating run per variant, and each starts two child
+runs of the whole pipeline (a minute or two each). The reviewer drives Playwright's Chromium from your cache (`~/.cache/ms-playwright`). Each regeneration also adds its GIFs to
 the git history, since they are committed without a weight budget.
 
 When to regenerate: only when a scene visibly changes (the UI it films, the copy of its README row),
@@ -136,8 +139,9 @@ publish, then commit `docs/assets/readme/` and the selection. Switching to the o
 is a one-line edit and `make readme-media-publish`; nothing is recorded again.
 
 The script never touches your instance: not your daemon, port, `~/.pdo`, event log or tmux sessions.
-Whatever the ending (success, failure, Ctrl+C), it stops the demo agents and daemon and wipes the
-copied auth files. How it works, and how to add a scene (one file under `scripts/readme-media/scenes/`):
+Whatever the ending (success, failure, Ctrl+C), it stops the demo agents and daemon, waits for every
+agent process to exit, wipes the copied auth files and removes the demo root: nothing is left in
+`/tmp`, and no `claude` outlives the command. How it works, and how to add a scene (one file under `scripts/readme-media/scenes/`):
 [scripts/readme-media/README.md](scripts/readme-media/README.md).
 
 ## Architecture

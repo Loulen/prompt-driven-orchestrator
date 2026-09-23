@@ -207,6 +207,10 @@ export class DemoInstance {
   }
 }
 
+/** How long an agent gets to exit on its own after the tmux server is gone,
+ *  before it is killed. Claude Code takes a few seconds to wind down. */
+const AGENT_EXIT_GRACE_MS = 10_000;
+
 /** Synchronous teardown of one instance, from its state (live or found on disk). */
 export function teardownState(state, log = console.log) {
   if (state.daemonPid && isAlive(state.daemonPid)) {
@@ -215,6 +219,12 @@ export function teardownState(state, log = console.log) {
     while (isAlive(state.daemonPid) && Date.now() < deadline) sleepSync(100);
     if (isAlive(state.daemonPid)) signalGroup(state.daemonPid, "SIGKILL");
   }
+  // The agents are listed BEFORE the tmux server goes: once it is killed its
+  // panes are gone, but a `claude` that got the hangup keeps running a few
+  // seconds, and on its way out writes under its HOME — which recreated the
+  // throwaway root after it was removed (#859). So the root is removed only
+  // once every process of the demo has really exited.
+  const agents = demoProcesses(state);
   // Every agent the demo launched lives on this socket: killing the server
   // ends them all, and touches no other socket (the user's included).
   try {
@@ -222,6 +232,7 @@ export function teardownState(state, log = console.log) {
   } catch {
     // no server: nothing was launched, or it is already gone
   }
+  stopProcesses(new Set([...agents, ...demoProcesses(state)]), log);
   // A server that exited on its own (its last session stopped) can leave its
   // socket file behind; the server is gone now, so the file is only litter.
   if (typeof process.getuid === "function") {
@@ -237,7 +248,124 @@ export function teardownState(state, log = console.log) {
       // best effort
     }
   } else {
-    fs.rmSync(state.root, { recursive: true, force: true });
+    // A process started in between (the daemon's last spawn) is stopped too,
+    // and the root removed again if it wrote there meanwhile.
+    for (let pass = 0; pass < 3; pass++) {
+      fs.rmSync(state.root, { recursive: true, force: true });
+      const late = demoProcesses(state);
+      if (late.size === 0 && !fs.existsSync(state.root)) break;
+      stopProcesses(late, log);
+    }
+    if (fs.existsSync(state.root)) log(`WARNING: could not remove the demo root ${state.root}`);
+  }
+}
+
+/**
+ * Every live process of the demo instance: the panes of its tmux socket and
+ * their descendants, plus — where /proc exists — any process whose HOME is the
+ * demo HOME or whose cwd is under the root (an agent's child that outlived its
+ * parent and was reparented). Never this process.
+ */
+export function demoProcesses(state) {
+  const pids = new Set();
+  let panes = [];
+  try {
+    panes = execFileSync("tmux", ["-L", `pdo-${state.port}`, "list-panes", "-a", "-F", "#{pane_pid}"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split("\n")
+      .map(Number)
+      .filter(Boolean);
+  } catch {
+    // no server
+  }
+  const children = processTree();
+  const stack = [...panes];
+  while (stack.length > 0) {
+    const pid = stack.pop();
+    if (pids.has(pid)) continue;
+    pids.add(pid);
+    stack.push(...(children.get(pid) ?? []));
+  }
+  if (state.home && state.root) {
+    for (const pid of procPidsUsing(state)) pids.add(pid);
+  }
+  pids.delete(process.pid);
+  for (const pid of pids) if (!isAlive(pid)) pids.delete(pid);
+  return pids;
+}
+
+/** pid → child pids, from `ps` (Linux and macOS). */
+function processTree() {
+  const children = new Map();
+  let out = "";
+  try {
+    out = execFileSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    return children;
+  }
+  for (const line of out.split("\n")) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (!pid) continue;
+    if (!children.has(ppid)) children.set(ppid, []);
+    children.get(ppid).push(pid);
+  }
+  return children;
+}
+
+/** Linux only: processes whose environment names the demo HOME, or whose cwd
+ *  is under the demo root. Other users' processes are unreadable and skipped. */
+function procPidsUsing(state) {
+  const pids = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name));
+  } catch {
+    return pids;
+  }
+  const home = `HOME=${state.home}`;
+  for (const name of entries) {
+    const pid = Number(name);
+    if (pid === process.pid) continue;
+    try {
+      const cwd = fs.readlinkSync(`/proc/${name}/cwd`);
+      if (cwd === state.root || cwd.startsWith(`${state.root}/`)) {
+        pids.push(pid);
+        continue;
+      }
+    } catch {
+      // gone, or not ours
+    }
+    try {
+      if (fs.readFileSync(`/proc/${name}/environ`, "utf8").split("\0").includes(home)) pids.push(pid);
+    } catch {
+      // gone, or not ours
+    }
+  }
+  return pids;
+}
+
+/** SIGTERM, wait for the real exit (up to the grace), then SIGKILL. */
+function stopProcesses(pids, log) {
+  const alive = () => [...pids].filter(isAlive);
+  if (alive().length === 0) return;
+  for (const pid of alive()) signalPid(pid, "SIGTERM");
+  const deadline = Date.now() + AGENT_EXIT_GRACE_MS;
+  while (alive().length > 0 && Date.now() < deadline) sleepSync(100);
+  const stubborn = alive();
+  if (stubborn.length === 0) return;
+  log(`demo teardown: killing ${stubborn.length} process(es) still running after ${AGENT_EXIT_GRACE_MS / 1000}s: ${stubborn.join(", ")}`);
+  for (const pid of stubborn) signalPid(pid, "SIGKILL");
+  const killDeadline = Date.now() + 3_000;
+  while (alive().length > 0 && Date.now() < killDeadline) sleepSync(50);
+}
+
+function signalPid(pid, signal) {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // already gone
   }
 }
 

@@ -69,3 +69,46 @@ test("the canvas scenes (#858): hero, pipelines and routing, two variants each a
   assert.equal(heroB.crop, undefined);
   assert.deepEqual(heroB.localStorage["pdo.layout.run"], { left: 15, center: 42, right: 43 });
 });
+
+test("the artifact scenes (#859): outputs, review and orchestration, two variants each and their markers", async () => {
+  const scenes = await loadScenes(path.join(here, "..", "scenes"));
+  const markers = (name) => scenes.get(name).variants.map((v) => [v.id, v.markers]);
+  assert.deepEqual(markers("outputs"), [
+    ["a", ["ports-declared", "image-opened", "mermaid-rendered"]],
+    ["b", ["ports-declared", "image-opened", "mermaid-rendered"]],
+  ]);
+  assert.deepEqual(markers("review"), [
+    ["a", ["comment-posted", "sent-to-manager", "answer-received"]],
+    ["b", ["comment-posted", "sent-to-manager", "answer-received"]],
+  ]);
+  assert.deepEqual(markers("orchestration"), [
+    ["a", ["child-created", "counters"]],
+    ["b", ["child-created", "counters"]],
+  ]);
+  // All three are played by real agents: the claude auth is staged for them.
+  for (const name of ["outputs", "review", "orchestration"]) assert.deepEqual(scenes.get(name).live, ["claude"], name);
+  // A row GIF stays readable at ~470 px: its crop is never wider than the window.
+  for (const name of ["outputs", "review", "orchestration"]) {
+    for (const v of scenes.get(name).variants) {
+      const crop = v.crop ?? { x: 0, y: 0, ...v.viewport };
+      assert.ok(crop.x + crop.width <= v.viewport.width && crop.y + crop.height <= v.viewport.height, `${name}/${v.id} crop inside the window`);
+    }
+  }
+});
+
+test("orchestration relaunches the ONE demo pipeline: Orchestrator on for implementer, nothing else", async () => {
+  const { orchestratorYaml, ORCHESTRATION_TASK, PARTS } = await import("../scenes/orchestration.mjs");
+  const fixture = fs.readFileSync(path.join(here, "..", "fixture", "pipelines", "implement-review.yaml"), "utf8");
+  const yaml = orchestratorYaml(fixture);
+  const added = yaml.split("\n").filter((line) => !fixture.split("\n").includes(line));
+  assert.deepEqual(added, ["  orchestrator: true"]);
+  assert.match(yaml, /- id: implementer\n  name: implementer\n  type: agent\n  orchestrator: true\n/);
+  assert.equal(yaml.match(/orchestrator: true/g).length, 1, "the reviewer stays a plain node");
+  // Every child is a run of the same pipeline, told not to orchestrate in turn.
+  assert.equal(PARTS.length, 2);
+  for (const part of PARTS) {
+    assert.ok(ORCHESTRATION_TASK.input.includes(`pdo run create implement-review --name "${part.name}"`), part.name);
+    assert.match(part.input, /do not create child runs/);
+  }
+  assert.doesNotMatch(ORCHESTRATION_TASK.input, /pdo run create (?!implement-review)/, "no second pipeline");
+});

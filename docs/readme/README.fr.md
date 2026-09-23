@@ -71,7 +71,7 @@ Chaque nœud déclare ce qu'il transmet (markdown avec frontmatter, listes d'ima
 </td>
 <td width="50%">
   <!-- scene: outputs -->
-  <a href="../../docs/features.md#typed-outputs"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Les outputs typés du reviewer : un verdict avec un diagramme Mermaid et des captures annotées" width="100%" /></picture></a>
+  <a href="../../docs/features.md#typed-outputs"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/outputs.jpg"><source srcset="../../docs/assets/readme/outputs.gif" type="image/gif"><img src="../../docs/assets/readme/outputs.jpg" alt="Les outputs typés du reviewer : un verdict avec un diagramme Mermaid et des captures annotées" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -86,7 +86,7 @@ Commentez n'importe quelle ligne du diff d'un run et envoyez-la à son agent man
 </td>
 <td width="50%">
   <!-- scene: review -->
-  <a href="../../docs/features.md#diff-review"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Un commentaire posé sur une ligne du diff, envoyé au manager, puis sa réponse dans le fil" width="100%" /></picture></a>
+  <a href="../../docs/features.md#diff-review"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/review.jpg"><source srcset="../../docs/assets/readme/review.gif" type="image/gif"><img src="../../docs/assets/readme/review.jpg" alt="Un commentaire posé sur une ligne du diff, envoyé au manager, puis sa réponse dans le fil" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -131,7 +131,7 @@ Un nœud peut lancer des pipelines enfants depuis sa propre session. Les enfants
 </td>
 <td width="50%">
   <!-- scene: orchestration -->
-  <a href="../../docs/features.md#recursive-orchestration"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Un nœud qui lance des runs enfants, rangés sous leur parent dans l'arbre de runs" width="100%" /></picture></a>
+  <a href="../../docs/features.md#recursive-orchestration"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/orchestration.jpg"><source srcset="../../docs/assets/readme/orchestration.gif" type="image/gif"><img src="../../docs/assets/readme/orchestration.jpg" alt="Un nœud qui lance des runs enfants, rangés sous leur parent dans l'arbre de runs" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

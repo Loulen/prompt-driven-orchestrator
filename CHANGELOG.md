@@ -28,6 +28,15 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.101.1
+**La node End accepte une edge sur ses quatre bords** (#840).
+
+- End atterrit là où le fil est lâché, comme un node agent ou script : haut, droite, bas ou
+  gauche, avec aperçu, ancre sauvegardée et tracé perpendiculaire au bord. L'edge porte toujours
+  le port `result`.
+- Une edge vers End sauvegardée sans ancre garde le côté déclaré de `result` : les pipelines
+  existants se rouvrent à l'identique. Le node merge reste fixé sur sa pastille `branches`.
+
 ## 1.101.0
 **Tour « First pipeline » : geste depuis le bord, correction du port dans la section Outputs** (#846, #840).
 
@@ -77,6 +86,7 @@ contribution sont dans `CONTRIBUTING.md`.
 - Panneau d'edge : section **Outputs** en tête (le dernier port coché ne peut pas être décoché) ;
   une condition `when` choisit le port lu et son schéma se résout par ligne.
 - Diff sémantique insensible à l'ordre des ports portés.
+
 ## 1.97.3
 **Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).
 

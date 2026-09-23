@@ -137,21 +137,22 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     expect(edges[0].data?.sourceSide).toBe("right");
   });
 
-  it("keeps the declared port for the End node (it retains a `result` input handle)", () => {
+  it("binds an End edge to a body anchor handle, like a work node (#840)", () => {
+    // End lands by drop: the handle is layout (`__anchor:<side>`), the carried
+    // `result` port stays on the edge itself.
     const p = pipeline(
       [node("src", "agent", [], ["plan"]), node("end", "end", ["result"], [])],
       [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
     );
     const edges = deriveEditEdges(p);
-    expect(edges[0].targetHandle).toBe("result");
+    expect(edges[0].targetHandle).toBe("__anchor:left");
   });
 
-  it("routes to the side the declared handle is actually ON (#844, FP finding 2)", () => {
-    // A declared-port target has no say in `target_side` — nothing ever persists
-    // one for it — so the field reads back as the `left` default while the handle
-    // sits where the port declares it. Handing the edge that `left` laid the
-    // perpendicular landing leg across a border the wire never touches, and the
-    // approach to that phantom border was persisted as waypoints inside the card.
+  it("routes a legacy (un-anchored) End edge to `result`'s declared side (#844, #840)", () => {
+    // An End edge saved before #840 carries no anchor and no `target_side`: it
+    // must reopen on the side it always landed on — the one `result` declares —
+    // not on the `left` that absence reads back as. Routing to `left` laid the
+    // perpendicular landing leg across a border the wire never touched.
     const end = node("end", "end", ["result"], []);
     end.inputs[0].side = "top";
     const p = pipeline(

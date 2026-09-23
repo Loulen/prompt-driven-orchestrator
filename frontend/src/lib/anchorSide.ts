@@ -28,12 +28,31 @@ export const ANCHOR_SIDES: readonly PortSide[] = ["left", "right", "top", "botto
  * legacy (1-input `in`) work nodes anchor by drop.
  *
  * `start` has no inputs; `end` (declared `result`) and structural `merge` keep
- * their declared, fixed-side ports and are never re-anchored by drop position.
+ * their declared ports. Where an incoming wire LANDS is a separate question —
+ * see {@link landsByDrop}: End lands by drop like a work node (#840).
  */
 export function isEmergentInputNode(type: NodeType): boolean {
   // #248: a `script` node consumes whole artifacts by edge like a work node, so
   // its inputs are emergent too — anchor incoming edges to the body by drop.
   return type === "agent" || type === "script";
+}
+
+/**
+ * Whether an incoming edge lands on this node where it was DROPPED (any border,
+ * per-pixel `target_anchor`), rather than being pinned to a declared handle.
+ *
+ * Every emergent work node does, and so does the End marker (#840): its declared
+ * `result` is the pipeline's contract — the edge still carries that port — but
+ * it is not a place on the card. Pinning the arrow to `result`'s declared side
+ * (`left` in every real pipeline) made End the one target that refused a wire on
+ * its top, right or bottom border. Only a `merge` keeps a fixed landing: its
+ * `branches` port pill is a real, visible handle. `start` takes no incoming edge.
+ *
+ * One question, asked by the card's handles, the edge derivation, the landing
+ * preview and the drop — so the four cannot disagree on where a wire lands.
+ */
+export function landsByDrop(type: NodeType): boolean {
+  return isEmergentInputNode(type) || type === "end";
 }
 
 /**
@@ -55,9 +74,9 @@ export function sideFromAnchorHandle(handleId: string | null | undefined): PortS
 
 /**
  * Whether a drop that landed on the handle `handleId` should anchor by drop
- * position (#168). Only an emergent body anchor handle does; a declared input
- * (End's `result`) or a structural port (merge `branches`, loop `in`) keeps its
- * fixed declared side and must be left untouched (AC: declared ports unaffected).
+ * position (#168). Only a body anchor handle does (a work node's, or End's since
+ * #840); a structural port (merge `branches`, loop `in`) keeps its fixed declared
+ * side and must be left untouched (AC: declared ports unaffected).
  */
 export function anchorsByDropOnBody(handleId: string | null | undefined): boolean {
   return sideFromAnchorHandle(handleId) != null;
@@ -726,9 +745,9 @@ export function storableWaypoints(enforced: Point[]): Point[] {
  *
  * This is xyflow's `getHandlePosition` rule, restated — the renderer is handed
  * exactly this point as `targetX/targetY`, so a preview that lands anywhere else
- * draws a wire the edge will not keep. It matters most for the End marker, whose
- * declared `result` handle covers the whole card: its centre is the card's centre
- * and its pin is the middle of its declared side.
+ * draws a wire the edge will not keep. It matters for a merge's `branches` pill,
+ * the one target left that pins the wire to a declared handle (End lands by
+ * drop since #840).
  */
 export function handlePin(
   centre: Point,

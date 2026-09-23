@@ -53,7 +53,7 @@ import {
   anchorHandleId,
   anchorPoint,
   anchorsByDropOnBody,
-  isEmergentInputNode,
+  landsByDrop,
   dropAnchor,
   sideFromRimHandle,
 } from "../lib/anchorSide";
@@ -149,14 +149,14 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
   const inputImages =
     data.nodeType === "start" ? (data.inputImages ?? []) : [];
 
-  // Emergent work nodes (non-isolated/isolated) anchor incoming edges by
-  // drop position; declared-port nodes (End) keep their fixed side. Keyed on
-  // node TYPE so a work node carrying a vestigial declared `in` still anchors by
-  // drop (#175) rather than being mistaken for a fixed-side declared port.
-  const emergent = isEmergentInputNode(data.nodeType);
+  // Work nodes and the End marker (#840) anchor incoming edges by drop
+  // position, on any border. Keyed on node TYPE so a work node carrying a
+  // vestigial declared `in` still anchors by drop (#175) rather than being
+  // mistaken for a fixed-side declared port.
+  const emergent = landsByDrop(data.nodeType);
   // A declared port's body handle arrives from its own declared side (#175 AC3),
-  // not a hardcoded left. Moot for emergent bodies (edges bind to the per-side
-  // anchor handles below), but kept consistent.
+  // not a hardcoded left. Moot for a lands-by-drop body (edges bind to the
+  // per-side anchor handles below), but kept consistent.
   const bodyHandleSide = data.inputs[0]?.side ?? "left";
 
   return (
@@ -181,10 +181,10 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
     >
       {/* Emergent inputs (#149): NO input dots. An incoming arrow lands anywhere
           on the node body. A single invisible target handle covers the card and
-          carries the drop highlight. The declared `result` input on the End node
-          keeps its handle id (and its declared-side `position`) so routing to End
-          still resolves on its own side; emergent nodes render the highlight
-          handle id-less and bind incoming edges to the per-side anchors below. */}
+          carries the drop highlight. A lands-by-drop node (work nodes, End since
+          #840) renders it id-less and binds incoming edges to the per-side
+          anchors below; any other declared input keeps its handle id and its
+          declared-side `position`. */}
       <Handle
         id={emergent ? undefined : data.inputs[0]?.name}
         type="target"
@@ -207,8 +207,8 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
           invisible side-centre target handle PER SIDE. An incoming edge binds to
           the handle for its persisted `target_side`, so xyflow anchors the arrow
           and derives the arrival geometry from that side (no forced left->right).
-          Declared-input nodes (e.g. End's `result`) keep their fixed-side handle
-          and never grow these. */}
+          End grows them too (#840): its `result` is the edge's port, not a place
+          on the card. */}
       {emergent &&
         ANCHOR_HANDLE_SIDES.map(({ side, position, style }) => (
           <Handle
@@ -740,10 +740,11 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       };
       if (rect.width === 0 || rect.height === 0) return;
 
-      // Declared-port nodes (End's `result`) and structural nodes (merge) keep
-      // their declared, fixed-side handle — never re-anchor those. Keyed on node
-      // TYPE: a work node carrying a vestigial declared `in` still anchors (#175).
-      const anchorsByDrop = targetDef != null && isEmergentInputNode(targetDef.type);
+      // Structural nodes (merge) keep their declared, fixed-side handle — never
+      // re-anchor those. Work nodes and End (#840) land where dropped. Keyed on
+      // node TYPE: a work node carrying a vestigial declared `in` still anchors
+      // (#175).
+      const anchorsByDrop = targetDef != null && landsByDrop(targetDef.type);
       const targetAnchor = anchorsByDrop ? dropAnchor(drop, rect) : null;
       // The side the edge will actually RENDER with — the same answer
       // `deriveEditEdges` gives it on the next render. A declared-port target

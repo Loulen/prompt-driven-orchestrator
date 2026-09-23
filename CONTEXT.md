@@ -198,7 +198,7 @@ Le tracé d'une edge est **orthogonal**. La création à la souris est **progres
 
 ### Ancrage de l'edge entrante — `target_side` (#168) et ancres par edge (#844)
 
-Les inputs étant émergents, une flèche entrante atterrit **sur le corps** du nœud cible. `target_side` mémorise de quel côté (le plus proche du point de dépôt). C'est du **layout** : persiste dans le fichier, exclu du diff sémantique. Les ports **déclarés** gardent leur côté fixe.
+Les inputs étant émergents, une flèche entrante atterrit **sur le corps** du nœud cible. `target_side` mémorise de quel côté (le plus proche du point de dépôt). C'est du **layout** : persiste dans le fichier, exclu du diff sémantique. Le nœud `End` atterrit de même sur **n'importe lequel de ses bords** (#840) : son `result` déclaré est le port que l'edge porte, pas un endroit de la carte ; une edge vers `End` sans ancre (fichier antérieur) garde le côté déclaré par `result`. Seuls les ports **structurels** (les `branches` d'un `merge`) gardent leur côté fixe.
 
 - **Ancre d'edge** *(terme, `{side, offset}`)* : **où** sur le bord d'une carte un fil part (`source_anchor`) ou atterrit (`target_anchor`) — le côté, plus la distance **le long** de ce côté, à au moins 10 px des coins. Le départ est snappé sur la grille de câblage (la première cellule est alors déjà alignée), l'arrivée est prise **au pixel** (la flèche atterrit là où on a visé). Absente ⇒ le **milieu** du côté, c'est-à-dire la géométrie d'avant #844 : un pipeline existant se rouvre et se sauve à l'identique. Layout, comme `target_side`. _Éviter_ : « position du port » (l'ancre n'appartient pas à un port, mais à l'edge).
 

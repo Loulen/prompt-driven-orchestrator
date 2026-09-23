@@ -122,7 +122,8 @@ describe("drawnEdgeLayout (#844)", () => {
 
   it("never saves a route that runs through the target card (#844, FP finding 2)", () => {
     // The whole chain, as the canvas runs it: a gesture that dives at the BOTTOM
-    // of an End marker whose `result` handle is declared on its TOP border. The
+    // of a target that pins the wire to a handle declared on its TOP border (a
+    // merge's `branches`; End lands by drop since #840). The
     // preview is pinned to that handle — the drop position has no say — so the
     // route persisted is the one that will be rendered, and it goes round the
     // card rather than through it. Before the fix the preview landed on the
@@ -190,15 +191,16 @@ describe("drawnEdgeLayout (#844)", () => {
   });
 
   describe("a pinned target approached from its far side, dropped on the next event (#844 FP iter-2)", () => {
-    // End marker at TGT_RECT, its declared `result` handle covering the card and
-    // pinned on the TOP border. The gesture comes from BELOW.
-    const END_NODE: HoveredNode = {
-      id: "end",
+    // A merge at TGT_RECT, its declared handle covering the card and pinned on
+    // the TOP border (End was the case here until it began landing by drop,
+    // #840). The gesture comes from BELOW.
+    const PINNED_NODE: HoveredNode = {
+      id: "merge",
       measured: { width: TGT_RECT.width, height: TGT_RECT.height },
       internals: { positionAbsolute: { x: TGT_RECT.x, y: TGT_RECT.y } },
-      data: { nodeType: "end" },
+      data: { nodeType: "merge" },
     };
-    const END_HANDLE: HoveredHandle = {
+    const PINNED_HANDLE: HoveredHandle = {
       x: TGT_RECT.x + TGT_RECT.width / 2,
       y: TGT_RECT.y + TGT_RECT.height / 2,
       width: TGT_RECT.width,
@@ -261,7 +263,7 @@ describe("drawnEdgeLayout (#844)", () => {
     });
 
     it("goes around the card once the landing is rebuilt from the drop's own state", () => {
-      const traced = droppedPath(staleGesture(), DROP, END_NODE, END_HANDLE, "src", WIRING_GRID_STEP);
+      const traced = droppedPath(staleGesture(), DROP, PINNED_NODE, PINNED_HANDLE, "src", WIRING_GRID_STEP);
       expect(traced[traced.length - 1]).toEqual(PIN);
       const reloaded = reloadedFrom(traced);
       expect(crossesCard(reloaded)).toBe(false);

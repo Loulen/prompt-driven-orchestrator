@@ -247,9 +247,9 @@ describe("landingAt", () => {
   });
 
   it("obeys a target that pins the wire to its own declared handle", () => {
-    // End's `result`, a merge's `branches`: the drop position has no say. The
-    // preview must land where the edge will actually be pinned, or it draws — and
-    // persists — the approach to a border the wire never touches.
+    // A merge's `branches` (End lands by drop since #840): the drop position has
+    // no say. The preview must land where the edge will actually be pinned, or it
+    // draws — and persists — the approach to a border the wire never touches.
     const pin = { side: "top" as const, point: { x: 500, y: 400 } };
     const landing = landingAt({ x: 470, y: 470 }, TGT_RECT, pin);
     expect(landing.anchor.side).toBe("top");

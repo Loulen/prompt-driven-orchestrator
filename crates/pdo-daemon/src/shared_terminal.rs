@@ -12,6 +12,11 @@
 //!   with `refresh-client -f` (never a re-attach), and the bridge drops its input
 //!   frames — read-only is held by the bridge, not by tmux's `read-only` flag.
 //!
+//! A spectator **takes control** with a `take_control` frame (#870): its poste
+//! becomes the pilot, the former pilot a spectator, and the same `settle` flips
+//! the `ignore-size` of both postes' clients live. A take-over from the pilot or
+//! from a solo terminal changes nothing.
+//!
 //! Every change is pushed to each connection as a `role` text frame. A frame is
 //! only sent when it differs from the last one that connection received, so a
 //! spectator hears about a pilot resize and nothing else.
@@ -253,6 +258,29 @@ impl SharedTerminalRegistry {
         conn.size = size;
         conn.resized = now;
         presence.settle();
+    }
+
+    /// A spectator takes control (#870): its poste becomes the pilot. Returns
+    /// `false` (and changes nothing) when the connection is not a spectator —
+    /// the pilot's own request, a solo terminal, an unknown connection.
+    pub(crate) fn take_control(&self, session: &str, id: ConnId) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(presence) = inner.sessions.get_mut(session) else {
+            return false;
+        };
+        let Some(conn) = presence.connections.iter().find(|c| c.id == id) else {
+            return false;
+        };
+        let spectator = presence
+            .pilot
+            .as_ref()
+            .is_some_and(|pilot| *pilot != conn.poste);
+        if !spectator {
+            return false;
+        }
+        presence.pilot = Some(conn.poste.clone());
+        presence.settle();
+        true
     }
 
     /// The connection closed. The hand passes on if it was the pilot's last one.
@@ -512,6 +540,104 @@ mod tests {
         let mut y = join(&reg, None);
         assert_eq!(x.last().unwrap()["role"], "pilot");
         assert_eq!(y.last().unwrap()["role"], "spectator");
+    }
+
+    #[test]
+    fn a_spectator_takes_control_and_the_former_pilot_watches() {
+        let reg = SharedTerminalRegistry::default();
+        let mut a = join(&reg, Some("A"));
+        reg.resize("s", a.m.id, size(200, 50));
+        let mut b = join(&reg, Some("B"));
+        reg.resize("s", b.m.id, size(90, 30));
+        a.frames();
+        b.frames();
+
+        assert!(reg.take_control("s", b.m.id));
+        let fb = b.last().unwrap();
+        assert_eq!(fb["role"], "pilot");
+        assert_eq!(fb["spectators"], 1);
+        let fa = a.last().unwrap();
+        assert_eq!(fa["role"], "spectator");
+        assert_eq!(fa["pilot"]["cols"], 90);
+        assert!(!b.spectator() && !b.ignore_size());
+        assert!(a.spectator() && a.ignore_size());
+
+        // The new pilot's resizes are the grid the former one now follows.
+        reg.resize("s", b.m.id, size(100, 35));
+        assert_eq!(a.last().unwrap()["pilot"]["cols"], 100);
+        // And the hand can go back.
+        assert!(reg.take_control("s", a.m.id));
+        assert_eq!(a.last().unwrap()["role"], "pilot");
+        assert_eq!(b.last().unwrap()["role"], "spectator");
+    }
+
+    #[test]
+    fn take_control_from_the_pilot_or_solo_changes_nothing() {
+        let reg = SharedTerminalRegistry::default();
+        let mut a = join(&reg, Some("A"));
+        a.frames();
+        assert!(!reg.take_control("s", a.m.id), "solo");
+        assert!(a.frames().is_empty());
+
+        let mut b = join(&reg, Some("B"));
+        a.frames();
+        b.frames();
+        assert!(!reg.take_control("s", a.m.id), "already the pilot");
+        assert!(a.frames().is_empty() && b.frames().is_empty());
+        assert!(b.spectator());
+        assert!(!reg.take_control("s", 999), "unknown connection");
+        assert!(!reg.take_control("other", b.m.id), "unknown session");
+    }
+
+    #[test]
+    fn taking_control_keeps_the_hand_when_a_third_poste_arrives_and_the_pilot_leaves() {
+        let reg = SharedTerminalRegistry::default();
+        let mut a = join(&reg, Some("A"));
+        reg.resize("s", a.m.id, size(120, 40));
+        let b = join(&reg, Some("B"));
+        reg.resize("s", b.m.id, size(90, 30));
+        assert!(reg.take_control("s", b.m.id));
+        let mut c = join(&reg, Some("C"));
+        assert_eq!(c.last().unwrap()["pilot"]["cols"], 90);
+        // B leaves: the hand goes to the first arrived of the rest, A.
+        reg.leave("s", b.m.id);
+        assert_eq!(a.last().unwrap()["role"], "pilot");
+        let fc = c.last().unwrap();
+        assert_eq!(fc["role"], "spectator");
+        assert_eq!(fc["pilot"]["cols"], 120);
+        assert!(c.spectator() && !a.spectator());
+    }
+
+    #[test]
+    fn every_tab_of_the_poste_that_takes_control_pilots() {
+        let reg = SharedTerminalRegistry::default();
+        let mut a = join(&reg, Some("A"));
+        let mut b1 = join(&reg, Some("B"));
+        let mut b2 = join(&reg, Some("B"));
+        assert!(reg.take_control("s", b2.m.id));
+        assert_eq!(b1.last().unwrap()["role"], "pilot");
+        assert_eq!(b2.last().unwrap()["role"], "pilot");
+        assert_eq!(a.last().unwrap()["role"], "spectator");
+        assert!(!b1.spectator() && !b1.ignore_size());
+    }
+
+    #[test]
+    fn taking_control_of_one_session_leaves_the_other_alone() {
+        let reg = SharedTerminalRegistry::default();
+        let mut a = join(&reg, Some("A"));
+        let b = join(&reg, Some("B"));
+        let (ta, mut rxa) = mpsc::unbounded_channel();
+        let other_a = reg.join("other", Some("A".into()), ta);
+        let (tb, mut rxb) = mpsc::unbounded_channel();
+        let other_b = reg.join("other", Some("B".into()), tb);
+        while rxa.try_recv().is_ok() {}
+        while rxb.try_recv().is_ok() {}
+
+        assert!(reg.take_control("s", b.m.id));
+        assert_eq!(a.last().unwrap()["role"], "spectator");
+        assert!(rxa.try_recv().is_err() && rxb.try_recv().is_err());
+        assert!(!other_a.spectator.load(Ordering::SeqCst));
+        assert!(other_b.spectator.load(Ordering::SeqCst));
     }
 
     #[test]

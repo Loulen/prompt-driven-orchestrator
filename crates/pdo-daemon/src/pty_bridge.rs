@@ -8,6 +8,8 @@
 //! - Binary frames → stdin of the PTY (user keystrokes), dropped while the
 //!   connection is a spectator
 //! - Text frames with JSON `{"type":"resize","cols":N,"rows":N}` → PTY resize
+//! - Text frames with JSON `{"type":"take_control"}` → a spectator takes the hand
+//!   (#870); ignored from the pilot or a solo terminal
 //!
 //! Protocol (daemon → WS):
 //! - Binary frames ← stdout of the PTY (terminal output)
@@ -130,6 +132,12 @@ pub(crate) fn decode_resize(text: &str) -> Option<ResizeMsg> {
     } else {
         None
     }
+}
+
+/// Whether a text WS frame is the take-control message (#870).
+pub(crate) fn is_take_control(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .is_ok_and(|v| v.get("type").and_then(|t| t.as_str()) == Some("take_control"))
 }
 
 /// Query string of the PTY upgrade.
@@ -334,6 +342,11 @@ async fn handle_pty_ws(
                                 rows: resize.rows,
                             },
                         );
+                    } else if is_take_control(&text) {
+                        // #870 / ADR-0075: only a spectator's request does
+                        // anything; the registry flips the roles, the `ignore-size`
+                        // of both postes' clients and the read-only filter.
+                        state.shared_terminals.take_control(&input_session, conn_id);
                     } else {
                         // Unknown / malformed control frames must NEVER be
                         // written to the PTY as user input — that would inject
@@ -613,6 +626,14 @@ mod tests {
     #[test]
     fn decode_resize_rejects_garbage() {
         assert_eq!(decode_resize("not json at all"), None);
+    }
+
+    #[test]
+    fn take_control_frame_is_recognised() {
+        assert!(is_take_control(r#"{"type":"take_control"}"#));
+        assert!(!is_take_control(r#"{"type":"resize","cols":80,"rows":24}"#));
+        assert!(!is_take_control("take_control"));
+        assert!(!is_take_control(r#"{"kind":"take_control"}"#));
     }
 
     #[test]

@@ -303,7 +303,7 @@ function useWaitingLabel(since: string | undefined): string | null {
  * One amber shape, four contents keyed on `awaiting.cause`:
  * - `declared` (A1/A2): « The agent is waiting for your answer », the agent's
  *   message verbatim when there is one, the Enter hint (or the frozen-pane hint
- *   when no live socket, A4);
+ *   when no live socket, A4; « take control to reply » for a spectator, #870);
  * - `completion_not_released` (A3): « The agent is done and waits for your go »,
  *   the daemon's sentence with the two buttons as inline links;
  * - `child_awaiting` (C): « A child run is waiting for you » + « Open <child> → »,
@@ -314,6 +314,7 @@ function useWaitingLabel(since: string | undefined): string | null {
 function AwaitingBanner({
   awaiting,
   terminalLive,
+  terminalSpectating = false,
   canRelease,
   onRelease,
   onMarkComplete,
@@ -322,6 +323,9 @@ function AwaitingBanner({
   awaiting: AwaitingInfo | null | undefined;
   /** A live PTY socket is open below: Enter can reach the agent. */
   terminalLive: boolean;
+  /** #870: this browser only watches the terminal; its Enter reaches nothing
+   *  until it takes control. */
+  terminalSpectating?: boolean;
   canRelease: boolean;
   onRelease: () => void;
   onMarkComplete: () => void;
@@ -352,9 +356,11 @@ function AwaitingBanner({
         to take the artifacts as they are.
       </>
     );
-    hint = terminalLive
-      ? "Not done yet? Reply in the terminal and press Enter — the agent keeps working."
-      : "This pane is a snapshot — reopen the session to keep talking, or use the buttons.";
+    hint = !terminalLive
+      ? "This pane is a snapshot — reopen the session to keep talking, or use the buttons."
+      : terminalSpectating
+        ? "Not done yet? Another browser has control — take control to reply in the terminal."
+        : "Not done yet? Reply in the terminal and press Enter — the agent keeps working.";
   } else if (cause === "child_awaiting") {
     title = "A child run is waiting for you";
     const childId = awaiting?.child_run_id ?? null;
@@ -387,7 +393,9 @@ function AwaitingBanner({
     body = awaiting?.message ?? null;
     hint = !terminalLive
       ? "This pane is a snapshot — reopen the session to reply, or use the buttons below."
-      : awaiting?.message
+      : terminalSpectating
+        ? "Another browser has control of the terminal below — take control to reply, then press Enter to resume."
+        : awaiting?.message
         ? "Reply in the terminal below and press Enter to resume."
         : "Open the terminal below to see what it asked, reply and press Enter to resume.";
   }
@@ -397,6 +405,7 @@ function AwaitingBanner({
       data-testid="awaiting-banner"
       data-cause={cause}
       data-terminal-live={terminalLive}
+      data-terminal-spectating={terminalSpectating}
     >
       <AlertCircle size={14} className="mt-0.5 shrink-0 text-st-await" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -465,6 +474,8 @@ export default function NodeDetailPanel({
   // depends on it). `null` before the terminal reported — read as live, so the
   // frozen hint never flashes while the socket is still connecting.
   const [terminalLive, setTerminalLive] = useState<boolean | null>(null);
+  // #870: whether this browser only watches the inline terminal.
+  const [terminalSpectating, setTerminalSpectating] = useState(false);
   // #723 — an orchestrator NodeRun splits its lower pane into I/O | Orchestration.
   // I/O stays the default; the choice is per mounted node (remount = back to I/O).
   const [detailTab, setDetailTab] = useState<"io" | "orchestration">(initialDetailTab);
@@ -770,6 +781,7 @@ export default function NodeDetailPanel({
         <AwaitingBanner
           awaiting={selectedIter === node.iter ? node.awaiting : null}
           terminalLive={terminalLive ?? true}
+          terminalSpectating={terminalSpectating}
           canRelease={canReleaseCompletion && !isReleasing}
           onRelease={releaseCompletion}
           onMarkComplete={markComplete}
@@ -989,6 +1001,7 @@ export default function NodeDetailPanel({
                 // sitting on an older, long-reaped iteration.
                 paneSource={{ runId, nodeId: node.node_id, iter: selectedIter }}
                 onLiveSocketChange={setTerminalLive}
+                onSpectatingChange={setTerminalSpectating}
               />
             ) : (
               <div className="flex h-full flex-col" data-testid="pending-placeholder">

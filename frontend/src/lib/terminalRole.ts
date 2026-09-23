@@ -47,3 +47,21 @@ export const READ_ONLY_HINT =
 export function watchedLabel(n: number): string {
   return `Watched from ${n} other browser${n === 1 ? "" : "s"}`;
 }
+
+/** #870: the client → daemon frame a spectator sends to take control. The
+ *  daemon ignores it from the pilot or a solo terminal. */
+export const TAKE_CONTROL_FRAME = JSON.stringify({ type: "take_control" });
+
+export const TAKE_CONTROL_LABEL = "Take control";
+
+/** #870: shown briefly to a pilot that has just become a spectator. */
+export const TAKEN_OVER_NOTICE = "Another browser took control";
+
+/** How long the take-over notice stays up. */
+export const TAKEN_OVER_NOTICE_MS = 4000;
+
+/** #870: a pilot → spectator transition is a take-over by another browser (the
+ *  pilot never loses the hand any other way). */
+export function isTakenOver(prev: TerminalRole, next: TerminalRole): boolean {
+  return prev.role === "pilot" && next.role === "spectator";
+}

@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "1.97.7"
+version = "1.97.8"
 dependencies = [
  "anyhow",
  "axum",

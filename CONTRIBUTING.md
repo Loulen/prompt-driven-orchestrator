@@ -122,9 +122,12 @@ Prerequisites:
 | `tmux`, `git` | the demo daemon, like any PDO |
 | An authenticated harness (`claude`) | only for the scenes played live: its auth files are copied into the demo `HOME` for the recording, then wiped |
 
-Cost of a regeneration: the Stats scene uses a mocked history and costs nothing but about a minute.
-Each live scene (hero, diff review, orchestration…) runs a real `claude` session on
-`claude-opus-5-5`, stopped as soon as the scene is recorded. Each regeneration also adds its GIFs to
+Cost of a regeneration: the Stats scene uses a mocked history, and the Visual pipelines and Routing
+scenes are canvas gestures; each costs nothing but about a minute. Each live scene (hero, diff
+review, orchestration…) runs real `claude` sessions on `claude-opus-5-5`, stopped as soon as the
+scene is recorded. The hero runs the demo pipeline twice, one run per variant (a few minutes in
+all): variant a stops its run once the terminal is filmed, and variant b waits for the reviewer's
+outputs. The reviewer drives Playwright's Chromium from your cache (`~/.cache/ms-playwright`). Each regeneration also adds its GIFs to
 the git history, since they are committed without a weight budget.
 
 When to regenerate: only when a scene visibly changes (the UI it films, the copy of its README row),

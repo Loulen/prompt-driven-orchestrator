@@ -23,7 +23,7 @@
      In each <picture>: the reduced-motion <source> takes the poster, the other <source> the GIF
      (type="image/gif"), the <img> the poster. README.md and docs/readme/README.fr.md share the media. -->
 <p align="center">
-  <a href="docs/features.md"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="A PDO run in progress: Claude Code at work in the implementer node's terminal, then the reviewer's typed outputs" width="960" /></picture></a>
+  <a href="docs/features.md"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/hero.jpg"><source srcset="docs/assets/readme/hero.gif" type="image/gif"><img src="docs/assets/readme/hero.jpg" alt="A PDO run in progress: Claude Code at work in the implementer node's terminal, then the reviewer's typed outputs" width="960" /></picture></a>
 </p>
 
 ## Features
@@ -41,7 +41,7 @@ Build agent workflows on a canvas: drop an `implementer` node, drag its edge to 
 </td>
 <td width="50%">
   <!-- scene: pipelines -->
-  <a href="docs/features.md#visual-pipelines"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Adding an implementer node and dragging its edge to end on the canvas" width="100%" /></picture></a>
+  <a href="docs/features.md#visual-pipelines"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/pipelines.jpg"><source srcset="docs/assets/readme/pipelines.gif" type="image/gif"><img src="docs/assets/readme/pipelines.jpg" alt="Adding an implementer node and wiring it from Start to End on the canvas" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -56,7 +56,7 @@ Drag an edge back from `reviewer` to `implementer` and set `verdict != pass`. Ro
 </td>
 <td width="50%">
   <!-- scene: routing -->
-  <a href="docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Dragging a loop edge from reviewer back to implementer with the condition verdict != pass" width="100%" /></picture></a>
+  <a href="docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/routing.jpg"><source srcset="docs/assets/readme/routing.gif" type="image/gif"><img src="docs/assets/readme/routing.jpg" alt="Dragging a loop edge from reviewer back to implementer with the condition verdict != pass" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

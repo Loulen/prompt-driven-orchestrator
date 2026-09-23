@@ -1030,3 +1030,7 @@ _Éviter_ : « mode démo » (PDO n'a pas de mode démo, ADR-0071), « instance 
 **Scène** :
 Un geste du produit enregistré de bout en bout sur l'instance de démo et monté en un GIF + poster : le hero ou une ligne du tableau de features. Une scène a deux **variantes** ; le **fichier de sélection**, versionné, dit laquelle est publiée.
 _Éviter_ : « vidéo », « démo », « capture » pour une scène.
+
+**Pipeline de démo** :
+`implement-review` (`implementer → reviewer`), le **seul** pipeline visible dans les médias du README. Versionné dans `scripts/readme-media/fixture/pipelines/`, il tourne sur le dépôt fixture avec `claude` / `claude-opus-5-5` : `implementer` ajoute une petite feature, `reviewer` rend un verdict (markdown, diagramme Mermaid) et des captures annotées (`image_list`). Les scènes du canvas le construisent (Visual pipelines) ou y ajoutent la boucle `verdict != pass` (Routing) ; les scènes live le lancent.
+_Éviter_ : « pipeline de test », un second pipeline à l'écran.

@@ -82,6 +82,9 @@ export class DemoInstance {
 
     for (const dir of [this.state.home, this.state.cwd, this.state.bin]) fs.mkdirSync(dir, { recursive: true });
     fs.symlinkSync(binary, path.join(this.state.bin, "pdo"));
+    // The demo tmux server reads the demo HOME's conf: with focus events on,
+    // Claude Code never prints its « tmux focus-events off » hint on camera.
+    fs.writeFileSync(path.join(this.state.home, ".tmux.conf"), "set -g focus-events on\n");
     this.installFixtureRepo();
     this.installLibrary();
 
@@ -134,6 +137,9 @@ export class DemoInstance {
       // No egress that could put a banner on screen or move the prices.
       PDO_UPDATE_CHECK: "off",
       PDO_PRICE_SYNC: "off",
+      // A live reviewer drives Playwright: its browsers stay in the user's
+      // cache (read-only use), not a download into the throwaway HOME.
+      PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? path.join(os.homedir(), ".cache", "ms-playwright"),
     });
     delete env.TMUX;
     delete env.TMUX_PANE;
@@ -215,6 +221,11 @@ export function teardownState(state, log = console.log) {
     execFileSync("tmux", ["-L", `pdo-${state.port}`, "kill-server"], { stdio: "ignore" });
   } catch {
     // no server: nothing was launched, or it is already gone
+  }
+  // A server that exited on its own (its last session stopped) can leave its
+  // socket file behind; the server is gone now, so the file is only litter.
+  if (typeof process.getuid === "function") {
+    fs.rmSync(path.join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid()}`, `pdo-${state.port}`), { force: true });
   }
   const left = wipeCredentials(state.authFiles ?? []);
   if (left.length > 0) log(`WARNING: could not wipe demo auth files: ${left.join(", ")}`);

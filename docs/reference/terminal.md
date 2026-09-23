@@ -25,8 +25,10 @@ When two browsers show the same terminal (node, Manager, library assistant or Ru
 | Role | Who | What it sees and can do |
 | --- | --- | --- |
 | Pilot | The first browser to open the terminal | Its window size sets the terminal size, and only its keystrokes reach the session. An eye with a number above the terminal shows how many other browsers are watching. |
-| Spectator | Every other browser | Read-only: keystrokes are not sent, and hovering the terminal says so. It shows the pilot's whole screen at the pilot's columns × rows, with the font reduced to fit (below a readability floor, the area scrolls). It cannot lift a declared wait. |
+| Spectator | Every other browser | Read-only: keystrokes are not sent, and hovering the terminal says so. It shows the pilot's whole screen at the pilot's columns × rows, with the font reduced to fit (below a readability floor, the area scrolls). It cannot lift a declared wait: on a node waiting for an answer, the banner says to take control to reply. |
 | Solo | A browser alone on the terminal, or several tabs of one browser | Nothing changes and nothing is shown. Tabs of one browser share its identity (kept in `localStorage`) and all type and resize as before. |
+
+A spectator **takes control** with the hand icon above the terminal (**Take control**), with no confirmation. It becomes the pilot: the terminal takes its window size, at the normal font, and its keystrokes reach the session. The former pilot becomes a spectator, reads **Another browser took control** for a few seconds, and gets the hand icon in turn. Control is held per terminal: taking one does not change your role on another.
 
 When the pilot closes the terminal, the first browser to have arrived among the others takes over. If only one browser is left, it is solo again, with the normal size and font.
 

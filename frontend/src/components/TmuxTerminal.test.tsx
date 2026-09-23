@@ -981,6 +981,126 @@ describe("TmuxTerminal", () => {
       expect(term.write).toHaveBeenCalledWith("plain text");
     });
 
+    // #870: taking control.
+    it("a spectator sees the hand; a click sends the take-control frame", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "solo" });
+      expect(screen.queryByTestId("term-take-control")).toBeNull();
+
+      roleFrame(ws, { role: "spectator", pilot: { cols: 120, rows: 30 } });
+      const hand = screen.getByTestId("term-take-control");
+      expect(hand.getAttribute("aria-label")).toBe("Take control");
+      expect(hand.parentElement?.dataset.tooltip).toBe("Take control");
+      // Not the one who lost the hand: no take-over notice.
+      expect(screen.queryByTestId("term-taken-over")).toBeNull();
+
+      fireEvent.click(hand);
+      const frames = ws.sent.filter((s): s is string => typeof s === "string").map((s) => JSON.parse(s));
+      expect(frames.at(-1)).toEqual({ type: "take_control" });
+    });
+
+    it("the pilot and a solo terminal have no hand", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      expect(screen.queryByTestId("term-take-control")).toBeNull();
+      roleFrame(ws, { role: "solo" });
+      expect(screen.queryByTestId("term-take-control")).toBeNull();
+    });
+
+    it("the new pilot goes back to its normal fit and types again", async () => {
+      areaOf(1000, 500);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "spectator", pilot: { cols: 200, rows: 50 } });
+      fireEvent.click(screen.getByTestId("term-take-control"));
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+
+      expect(term.options.fontSize).toBe(11);
+      expect(sentResizes(ws).at(-1)).toEqual({
+        type: "resize",
+        cols: Math.floor(1000 / (11 * 0.6)),
+        rows: Math.floor(500 / (11 * 1.2)),
+      });
+      expect(screen.queryByTestId("term-take-control")).toBeNull();
+      expect(screen.getByTestId("term-watchers").textContent).toBe("1");
+      const onData = term.onData.mock.calls[0][0] as (d: string) => void;
+      const before = ws.sent.length;
+      onData("x");
+      expect(ws.sent.length).toBe(before + 1);
+    });
+
+    it("pilot → spectator: « Another browser took control » for a few seconds, then the hand stays", async () => {
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      vi.useFakeTimers();
+      try {
+        roleFrame(ws, { role: "spectator", pilot: { cols: 90, rows: 30 } });
+        expect(screen.getByTestId("term-taken-over").textContent).toBe(
+          "Another browser took control",
+        );
+        expect(screen.getByTestId("term-take-control")).toBeInTheDocument();
+        // Read-only from now on.
+        const onData = term.onData.mock.calls[0][0] as (d: string) => void;
+        const before = ws.sent.length;
+        onData("x");
+        expect(ws.sent.length).toBe(before);
+
+        act(() => {
+          vi.advanceTimersByTime(4100);
+        });
+        expect(screen.queryByTestId("term-taken-over")).toBeNull();
+        expect(screen.getByTestId("term-take-control")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("the take-over notice goes away when the hand comes back", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      roleFrame(ws, { role: "spectator", pilot: { cols: 90, rows: 30 } });
+      expect(screen.getByTestId("term-taken-over")).toBeInTheDocument();
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      expect(screen.queryByTestId("term-taken-over")).toBeNull();
+    });
+
+    it("tells the parent whether this browser spectates", async () => {
+      const onSpectatingChange = vi.fn();
+      render(
+        <TmuxTerminal
+          session="pdo-run1-impl-iter-1"
+          status="running"
+          onSpectatingChange={onSpectatingChange}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      const ws = wsInstances[0];
+      expect(onSpectatingChange).toHaveBeenLastCalledWith(false);
+      roleFrame(ws, { role: "spectator", pilot: { cols: 90, rows: 30 } });
+      expect(onSpectatingChange).toHaveBeenLastCalledWith(true);
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      expect(onSpectatingChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("two terminals hold their roles independently", async () => {
+      render(
+        <>
+          <TmuxTerminal session="term-one" status="running" />
+          <TmuxTerminal session="term-two" status="running" />
+        </>,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      const [one, two] = wsInstances;
+      roleFrame(one, { role: "spectator", pilot: { cols: 90, rows: 30 } });
+      roleFrame(two, { role: "pilot", spectators: 1 });
+      const hands = screen.getAllByTestId("term-take-control");
+      expect(hands).toHaveLength(1);
+      fireEvent.click(hands[0]);
+      const sentTake = (ws: MockWebSocket) =>
+        ws.sent.filter((s) => s === JSON.stringify({ type: "take_control" })).length;
+      expect(sentTake(one)).toBe(1);
+      expect(sentTake(two)).toBe(0);
+    });
+
     it("a frozen pane opens no socket and has no role", async () => {
       fetchPaneMock.mockResolvedValue({
         content: "❯ ",

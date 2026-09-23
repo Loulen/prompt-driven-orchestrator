@@ -408,3 +408,232 @@ async fn a_spectators_enter_does_not_lift_a_declared_wait() {
     let _ = a.close(None).await;
     let _ = b.close(None).await;
 }
+
+// --- #870: taking control ---
+
+async fn take_control(ws: &mut Ws) {
+    ws.send(Message::Text(r#"{"type":"take_control"}"#.into()))
+        .await
+        .unwrap();
+}
+
+/// `client_pid` of every client attached to `session`, sorted.
+fn client_pids(socket: &str, session: &str) -> Vec<String> {
+    let mut pids: Vec<String> = tmux(
+        socket,
+        &["list-clients", "-t", session, "-F", "#{client_pid}"],
+    )
+    .lines()
+    .map(str::to_string)
+    .collect();
+    pids.sort();
+    pids
+}
+
+/// Wait until the pane shows `needle`; return the pane.
+async fn pane_until(socket: &str, session: &str, needle: &str) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut pane = String::new();
+    while tokio::time::Instant::now() < deadline {
+        pane = tmux(socket, &["capture-pane", "-p", "-t", session]);
+        if pane.contains(needle) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    pane
+}
+
+#[tokio::test]
+async fn a_spectator_takes_control_the_window_and_the_keyboard_follow_it() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let session = "pdo-shared-term-take";
+    create_session(&socket, session);
+
+    let mut a = connect(&daemon, session, Some("posteA")).await;
+    role_until(&mut a, is("solo")).await;
+    resize(&mut a, 140, 42).await;
+    wait_window(&socket, session, 140, 42).await;
+
+    let mut b = connect(&daemon, session, Some("posteB")).await;
+    resize(&mut b, 90, 30).await;
+    role_until(&mut b, spectator_of(140, 42)).await;
+    role_until(&mut a, is("pilot")).await;
+    wait_ignoring_clients(&socket, session, 1, 2).await;
+    let pids_before = client_pids(&socket, session);
+    assert_eq!(pids_before.len(), 2);
+
+    // B takes control: B pilots, A watches B's grid; the window takes B's size.
+    take_control(&mut b).await;
+    let pilot = role_until(&mut b, is("pilot")).await;
+    assert_eq!(pilot["spectators"], 1);
+    role_until(&mut a, spectator_of(90, 30)).await;
+    wait_window(&socket, session, 90, 30).await;
+    wait_ignoring_clients(&socket, session, 1, 2).await;
+
+    // No tmux client was re-attached: same count, same processes.
+    assert_eq!(client_pids(&socket, session), pids_before);
+
+    // B's keystrokes land, A's no longer do.
+    a.send(Message::Binary(b"former-pilot-typed\r".to_vec().into()))
+        .await
+        .unwrap();
+    b.send(Message::Binary(b"new-pilot-typed\r".to_vec().into()))
+        .await
+        .unwrap();
+    let pane = pane_until(&socket, session, "new-pilot-typed").await;
+    assert!(
+        pane.contains("new-pilot-typed"),
+        "new pilot input missing: {pane:?}"
+    );
+    assert!(
+        !pane.contains("former-pilot-typed"),
+        "the former pilot's input reached the pane: {pane:?}"
+    );
+
+    // A's resizes no longer weigh on the window; B's do.
+    resize(&mut a, 60, 20).await;
+    resize(&mut b, 100, 32).await;
+    wait_window(&socket, session, 100, 32).await;
+    role_until(&mut a, spectator_of(100, 32)).await;
+
+    let _ = a.close(None).await;
+    let _ = b.close(None).await;
+    let _ = tmux(&socket, &["kill-session", "-t", session]);
+}
+
+#[tokio::test]
+async fn take_control_from_the_pilot_or_a_solo_terminal_is_ignored() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let session = "pdo-shared-term-take-noop";
+    create_session(&socket, session);
+
+    // Solo: nothing changes, and nothing reaches the pane.
+    let mut a = connect(&daemon, session, Some("posteA")).await;
+    role_until(&mut a, is("solo")).await;
+    resize(&mut a, 120, 40).await;
+    wait_window(&socket, session, 120, 40).await;
+    take_control(&mut a).await;
+    assert_no_role_frame(&mut a, Duration::from_millis(300)).await;
+
+    // The pilot asking for the hand it holds: no frame, same roles, same window.
+    let mut b = connect(&daemon, session, Some("posteB")).await;
+    resize(&mut b, 80, 24).await;
+    role_until(&mut b, spectator_of(120, 40)).await;
+    role_until(&mut a, is("pilot")).await;
+    take_control(&mut a).await;
+    assert_no_role_frame(&mut a, Duration::from_millis(300)).await;
+    assert_no_role_frame(&mut b, Duration::from_millis(100)).await;
+    assert!(follows(window_size(&socket, session), 120, 40));
+    wait_ignoring_clients(&socket, session, 1, 2).await;
+
+    let pane = tmux(&socket, &["capture-pane", "-p", "-t", session]);
+    assert!(!pane.contains("take_control"), "{pane:?}");
+
+    let _ = a.close(None).await;
+    let _ = b.close(None).await;
+    let _ = tmux(&socket, &["kill-session", "-t", session]);
+}
+
+#[tokio::test]
+async fn taking_control_of_one_terminal_leaves_the_other_alone() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let one = "pdo-shared-term-one";
+    let two = "pdo-shared-term-two";
+    create_session(&socket, one);
+    create_session(&socket, two);
+
+    let mut a1 = connect(&daemon, one, Some("posteA")).await;
+    role_until(&mut a1, is("solo")).await;
+    let mut b1 = connect(&daemon, one, Some("posteB")).await;
+    role_until(&mut b1, is("spectator")).await;
+    let mut a2 = connect(&daemon, two, Some("posteA")).await;
+    role_until(&mut a2, is("solo")).await;
+    let mut b2 = connect(&daemon, two, Some("posteB")).await;
+    role_until(&mut b2, is("spectator")).await;
+    role_until(&mut a2, is("pilot")).await;
+
+    take_control(&mut b1).await;
+    role_until(&mut b1, is("pilot")).await;
+    role_until(&mut a1, is("spectator")).await;
+    assert_no_role_frame(&mut a2, Duration::from_millis(300)).await;
+    assert_no_role_frame(&mut b2, Duration::from_millis(100)).await;
+
+    // On the second terminal A still types and B still does not.
+    b2.send(Message::Binary(b"b-on-two\r".to_vec().into()))
+        .await
+        .unwrap();
+    a2.send(Message::Binary(b"a-on-two\r".to_vec().into()))
+        .await
+        .unwrap();
+    let pane = pane_until(&socket, two, "a-on-two").await;
+    assert!(pane.contains("a-on-two"), "{pane:?}");
+    assert!(!pane.contains("b-on-two"), "{pane:?}");
+
+    for ws in [&mut a1, &mut b1, &mut a2, &mut b2] {
+        let _ = ws.close(None).await;
+    }
+    let _ = tmux(&socket, &["kill-session", "-t", one]);
+    let _ = tmux(&socket, &["kill-session", "-t", two]);
+}
+
+/// ADR-0069 × ADR-0075 × #870: after a take-over, the new pilot's Enter lifts a
+/// declared wait and the former pilot's does not.
+#[tokio::test]
+async fn after_a_take_over_only_the_new_pilot_lifts_a_declared_wait() {
+    use crate::declared_wait::{create_run, get_json, seed, wait_node_status, wait_user, PARENT};
+
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+    let (status, body) = wait_user(&daemon, &run_id, "worker", Some("Strip or card?")).await;
+    assert_eq!(status, 200, "{body}");
+
+    let session = pdo_daemon::tmux_session_manager::node_session_name(&run_id, "worker", 1);
+    let mut a = connect(&daemon, &session, Some("posteA")).await;
+    role_until(&mut a, is("solo")).await;
+    let mut b = connect(&daemon, &session, Some("posteB")).await;
+    role_until(&mut b, is("spectator")).await;
+    role_until(&mut a, is("pilot")).await;
+
+    take_control(&mut b).await;
+    role_until(&mut b, is("pilot")).await;
+    role_until(&mut a, is("spectator")).await;
+
+    a.send(Message::Binary(b"strip\r".to_vec().into()))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let run = get_json(&daemon, &format!("/runs/{run_id}")).await;
+    assert_eq!(
+        run["nodes"]["worker"]["status"], "awaiting_user",
+        "the former pilot's Enter must not lift the wait: {run}"
+    );
+
+    b.send(Message::Binary(b"card\r".to_vec().into()))
+        .await
+        .unwrap();
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    let _ = a.close(None).await;
+    let _ = b.close(None).await;
+}

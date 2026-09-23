@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build test check lint fmt clean support-table readme-media readme-media-publish install update service-install service-status service-restart service-logs
+.PHONY: help dev build test check lint fmt clean support-table readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -29,6 +29,8 @@ help:
 	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
 	@echo "  make readme-media [SCENE=stats]   Record the README media (2 variants per scene) into .readme-media/ — see CONTRIBUTING"
 	@echo "  make readme-media-publish [SCENE=…]  Copy the selected variants into docs/assets/readme/"
+	@echo "  make readme-media-export   Copy the README target pipelines into your library as readme-* (to redraw them)"
+	@echo "  make readme-media-import   Bring your readme-* pipelines back into scripts/readme-media/fixture/targets/"
 	@echo ""
 	@echo "Installed global daemon ($(PDO_PROD_DIR), port $(PDO_PROD_PORT)):"
 	@echo "  make install          Clone if needed + build release + install $(PDO_BIN)"
@@ -85,6 +87,15 @@ readme-media:
 
 readme-media-publish:
 	SCENE=$(SCENE) $(README_MEDIA) publish
+
+# The target pipelines of the README scenes (ADR-0074 §6), between the fixture
+# and your library (~/.pdo/pipelines): export as readme-*, redraw them in the
+# editor, import. The export never overwrites a readme-* you modified.
+readme-media-export:
+	$(README_MEDIA) export
+
+readme-media-import:
+	$(README_MEDIA) import
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MANUAL_PRICES, PROFILES, planHistory } from "../lib/history-plan.mjs";
+import { DEMO_PIPELINE } from "../lib/demo-pipeline.mjs";
 
 const NOW = new Date("2026-09-22T20:00:00Z");
 const REPO = "/tmp/demo/repos/shop-app";
@@ -63,10 +64,14 @@ const all = executions();
 const key = (e) => `${e.model}/${e.effort}`;
 const group = (list, by) => list.reduce((m, e) => m.set(by(e), [...(m.get(by(e)) ?? []), e]), new Map());
 
-test("one pipeline only: every run is the demo pipeline, on its two nodes", () => {
+test("every run is the demo pipeline, on its two nodes, with the snapshot of its target", () => {
   const started = plan.events.filter((e) => e.kind === "run_started");
   assert.ok(started.length > 150);
-  for (const e of started) assert.equal(e.payload.pipeline_id, "implement-review");
+  for (const e of started) {
+    assert.equal(e.payload.pipeline_id, "implement-review");
+    assert.deepEqual(e.payload.node_defs, DEMO_PIPELINE.nodeDefs);
+    assert.deepEqual(e.payload.edges, DEMO_PIPELINE.edges);
+  }
   const nodes = new Set(plan.events.filter((e) => e.node_id).map((e) => e.node_id));
   assert.deepEqual([...nodes].sort(), ["implementer", "reviewer"]);
 });

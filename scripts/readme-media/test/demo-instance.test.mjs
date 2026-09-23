@@ -14,6 +14,7 @@ import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { DemoInstance, isAlive, sweepStaleInstances } from "../lib/demo-instance.mjs";
 import { seedHistory } from "../lib/seed.mjs";
+import { parseYaml, readTarget, TARGETS } from "../lib/targets.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..", "..");
@@ -83,6 +84,28 @@ describe("demo instance: Stats API over the mocked history", { skip }, () => {
     assert.ok(state.authFiles.includes(staged));
   });
 
+  test("each pipeline of the demo library is its target byte for byte, only name: set, and the daemon serves it as drawn", async () => {
+    for (const t of TARGETS.filter((target) => target.installed)) {
+      const { yaml, prompts } = readTarget(t.id);
+      const installed = fs.readFileSync(path.join(instance.libraryDir, `${t.name}.yaml`), "utf8");
+      const differing = installed.split("\n").filter((line, i) => line !== yaml.split("\n")[i]);
+      assert.ok(differing.every((line) => /^name: /.test(line)), `${t.id}: only name: differs (${JSON.stringify(differing)})`);
+      assert.equal(installed.length - installed.indexOf("\n"), yaml.length - yaml.indexOf("\n"), `${t.id}: same bytes after the name line`);
+      assert.equal(parseYaml(installed).name, t.name);
+      for (const [node, content] of Object.entries(prompts)) {
+        assert.equal(fs.readFileSync(path.join(instance.libraryDir, `${t.name}.prompts`, `${node}.md`), "utf8"), content);
+      }
+      const { pipeline } = await instance.api("GET", `/pipelines/${t.name}`);
+      const drawn = parseYaml(yaml);
+      assert.deepEqual(
+        pipeline.nodes.map((n) => [n.id, n.view?.x, n.view?.y]),
+        drawn.nodes.map((n) => [n.id, n.view.x, n.view.y]),
+        `${t.id}: the positions as drawn`,
+      );
+      assert.equal(pipeline.edges.length, drawn.edges.length);
+    }
+  });
+
   test("/stats/cost: median cost ratios per model × effort, and no run without computable cost", () => {
     assert.equal(cost.total.unknown, 0, "no « Runs without computable cost » banner");
     assert.deepEqual(cost.total.missing_reasons, []);
@@ -101,7 +124,7 @@ describe("demo instance: Stats API over the mocked history", { skip }, () => {
     assert.deepEqual(
       cost.by_pipeline.map((p) => p.id),
       ["implement-review"],
-      "one pipeline only",
+      "the Stats are computed on implement-review",
     );
   });
 

@@ -79,6 +79,7 @@ mod scheduler;
 mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
+mod shared_terminal;
 mod skill_bank;
 mod skill_delivery;
 mod skill_import;
@@ -527,6 +528,9 @@ struct AppState {
     /// by the declaration and by the lift; in-memory only — a daemon restart
     /// forgets it, and the next keystroke re-arms it.
     pty_typed: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// #867 / ADR-0075: who pilots each tmux session shown by several postes
+    /// (browsers). In-memory presence: a restart drops every socket anyway.
+    shared_terminals: shared_terminal::SharedTerminalRegistry,
     /// Sessions killed by the orphan sweep **since this daemon booted** — a
     /// cumulative counter, not a per-pass gauge. Don't reset it each pass: the
     /// killing pass is followed within seconds by an idle one, so the surface
@@ -3440,6 +3444,7 @@ pub async fn serve_with_config(
         reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+        shared_terminals: Default::default(),
         panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
             config.panic_on_stale_sweep,
         )),
@@ -24682,6 +24687,7 @@ mod tests {
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -27995,6 +28001,7 @@ mod tests {
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -34022,6 +34029,7 @@ mod tests {
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -40930,6 +40938,7 @@ edges: []
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -41140,6 +41149,7 @@ edges: []
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),

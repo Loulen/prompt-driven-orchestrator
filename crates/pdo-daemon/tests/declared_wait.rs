@@ -14,7 +14,7 @@
 
 use crate::common::TestDaemon;
 
-const PARENT: &str = "wait-parent";
+pub(crate) const PARENT: &str = "wait-parent";
 const CHILD: &str = "wait-child";
 
 /// `worker` is interactive AND an orchestrator: the story's FP needs both.
@@ -105,7 +105,7 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
+pub(crate) fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
     std::fs::write(pipelines_dir.join(format!("{PARENT}.yaml")), PARENT_YAML)?;
@@ -120,7 +120,11 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon: &TestDaemon, pipeline: &str, session: Option<(&str, &str)>) -> String {
+pub(crate) async fn create_run(
+    daemon: &TestDaemon,
+    pipeline: &str,
+    session: Option<(&str, &str)>,
+) -> String {
     let body = serde_json::json!({
         "pipeline": pipeline,
         "input": "work",
@@ -143,7 +147,7 @@ async fn create_run(daemon: &TestDaemon, pipeline: &str, session: Option<(&str, 
     json["run_id"].as_str().unwrap().to_string()
 }
 
-async fn get_json(daemon: &TestDaemon, path: &str) -> serde_json::Value {
+pub(crate) async fn get_json(daemon: &TestDaemon, path: &str) -> serde_json::Value {
     let resp = reqwest::get(format!("{}{}", daemon.url(), path))
         .await
         .unwrap();
@@ -151,7 +155,7 @@ async fn get_json(daemon: &TestDaemon, path: &str) -> serde_json::Value {
     resp.json().await.unwrap()
 }
 
-async fn wait_node_status(daemon: &TestDaemon, run_id: &str, node_id: &str, want: &str) {
+pub(crate) async fn wait_node_status(daemon: &TestDaemon, run_id: &str, node_id: &str, want: &str) {
     for _ in 0..600 {
         let run = get_json(daemon, &format!("/runs/{run_id}")).await;
         if run["nodes"][node_id]["status"] == want {
@@ -162,7 +166,7 @@ async fn wait_node_status(daemon: &TestDaemon, run_id: &str, node_id: &str, want
     panic!("node {node_id} of run {run_id} never reached `{want}`");
 }
 
-async fn wait_user(
+pub(crate) async fn wait_user(
     daemon: &TestDaemon,
     run_id: &str,
     node_id: &str,

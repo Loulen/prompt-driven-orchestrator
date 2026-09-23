@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 globalThis.ResizeObserver = class {
@@ -96,6 +96,9 @@ interface MockTerminal {
     mouseTrackingMode: "none" | "x10" | "vt200" | "drag" | "any";
   };
   rows: number;
+  cols: number;
+  options: { fontSize: number; theme?: unknown };
+  resize: ReturnType<typeof vi.fn>;
 }
 
 vi.mock("@xterm/xterm", () => ({
@@ -130,6 +133,9 @@ vi.mock("@xterm/xterm", () => ({
         mouseTrackingMode: "none",
       },
       rows: 24,
+      cols: 80,
+      options: { fontSize: (config as { fontSize: number }).fontSize },
+      resize: vi.fn(),
     };
     mockTerminalInstances.push(instance);
     return instance;
@@ -158,8 +164,17 @@ vi.mock("../api", () => ({
   fetchPane: (...args: unknown[]) => fetchPaneMock(...args),
 }));
 
+// Exposes the tooltip text on a wrapper, unless the tooltip is disabled.
 vi.mock("./ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({
+    children,
+    content,
+    disabled,
+  }: {
+    children: React.ReactNode;
+    content: string;
+    disabled?: boolean;
+  }) => <span data-tooltip={disabled ? undefined : content}>{children}</span>,
 }));
 
 import TmuxTerminal from "./TmuxTerminal";
@@ -786,6 +801,207 @@ describe("TmuxTerminal", () => {
       await waitFor(() => expect(btn.dataset.feedback).toBe("copied"));
       expect(execCommand).toHaveBeenCalledWith("copy");
       expect(term.clearSelection).toHaveBeenCalled();
+    });
+  });
+  // #869 / story #867: between two postes, one pilot; the others watch.
+  describe("shared terminal (#869)", () => {
+    function roleFrame(ws: MockWebSocket, frame: Record<string, unknown>) {
+      act(() => {
+        ws.fireEvent("message", { data: JSON.stringify({ type: "role", ...frame }) });
+      });
+    }
+
+    function sentResizes(ws: MockWebSocket) {
+      return ws.sent
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => JSON.parse(s))
+        .filter((m) => m.type === "resize");
+    }
+
+    // A fake area of 1000 × 500 px where a cell is 0.6 × 1.2 font px.
+    function areaOf(width: number, height: number) {
+      proposeDimensionsImpl.current = () => {
+        const font = mockTerminalInstances[0]?.options.fontSize ?? 11;
+        return {
+          cols: Math.floor(width / (font * 0.6)),
+          rows: Math.floor(height / (font * 1.2)),
+        };
+      };
+    }
+
+    async function mountLive() {
+      render(<TmuxTerminal session="pdo-run1-impl-iter-1" status="running" />);
+      await new Promise((r) => setTimeout(r, 10));
+      return { ws: wsInstances[0], term: mockTerminalInstances[0] };
+    }
+
+    beforeEach(() => {
+      localStorage.clear();
+    });
+
+    it("passes the poste in the socket URL, stable across mounts and shared through localStorage", () => {
+      const first = render(<TmuxTerminal session="s1" />);
+      const url1 = new URL(wsInstances[0].url);
+      const poste = url1.searchParams.get("poste");
+      expect(poste).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+      expect(url1.pathname).toBe("/sessions/s1/pty");
+      first.unmount();
+
+      render(<TmuxTerminal session="s2" />);
+      expect(new URL(wsInstances[1].url).searchParams.get("poste")).toBe(poste);
+      // Another tab of this browser reads the same key.
+      expect(localStorage.getItem("pdo.poste")).toBe(poste);
+    });
+
+    it("uses the poste another tab already stored", () => {
+      localStorage.setItem("pdo.poste", "tabSharedPoste42");
+      render(<TmuxTerminal session="s1" />);
+      expect(new URL(wsInstances[0].url).searchParams.get("poste")).toBe("tabSharedPoste42");
+    });
+
+    it("solo shows nothing above the terminal and no read-only hint", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "solo" });
+      expect(screen.queryByTestId("term-watchers")).toBeNull();
+      const container = screen.getByTestId("xterm-container");
+      expect(container.parentElement?.dataset.tooltip).toBeUndefined();
+      expect(container.dataset.role).toBe("solo");
+    });
+
+    it("a pilot with spectators sees an eye and their number", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      const eye = screen.getByTestId("term-watchers");
+      expect(eye.textContent).toBe("1");
+      expect(eye.getAttribute("aria-label")).toBe("Watched from 1 other browser");
+      expect(eye.parentElement?.dataset.tooltip).toBe("Watched from 1 other browser");
+
+      roleFrame(ws, { role: "pilot", spectators: 2 });
+      expect(screen.getByTestId("term-watchers").getAttribute("aria-label")).toBe(
+        "Watched from 2 other browsers",
+      );
+      // A pilot keeps typing.
+      const term = mockTerminalInstances[0];
+      const onData = term.onData.mock.calls[0][0] as (d: string) => void;
+      const before = ws.sent.length;
+      onData("x");
+      expect(ws.sent.length).toBe(before + 1);
+    });
+
+    it("a spectator gets the read-only hint, sends no keystrokes and takes the pilot's grid in a smaller font", async () => {
+      areaOf(1000, 500);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "spectator", pilot: { cols: 200, rows: 50 } });
+
+      const container = screen.getByTestId("xterm-container");
+      expect(container.parentElement?.dataset.tooltip).toBe(
+        "Read-only — another browser has control. Take control with the ✋ icon.",
+      );
+      expect(container.dataset.role).toBe("spectator");
+      expect(screen.queryByTestId("term-watchers")).toBeNull();
+
+      // Grid = the pilot's, on screen and on its own PTY.
+      expect(term.resize).toHaveBeenLastCalledWith(200, 50);
+      expect(sentResizes(ws).at(-1)).toEqual({ type: "resize", cols: 200, rows: 50 });
+
+      // Font reduced until the whole grid fits the area.
+      const font = term.options.fontSize;
+      expect(font).toBeLessThan(11);
+      expect(font).toBeGreaterThanOrEqual(6);
+      expect(Math.floor(1000 / (font * 0.6))).toBeGreaterThanOrEqual(200);
+      expect(Math.floor(500 / (font * 1.2))).toBeGreaterThanOrEqual(50);
+
+      // Keystrokes and binary input never leave the browser.
+      const onData = term.onData.mock.calls[0][0] as (d: string) => void;
+      const onBinary = term.onBinary.mock.calls[0][0] as (d: string) => void;
+      const before = ws.sent.length;
+      onData("hello\r");
+      onBinary("\x1b[<0;1;1M");
+      expect(ws.sent.length).toBe(before);
+    });
+
+    it("a spectator follows the pilot's resize", async () => {
+      areaOf(1000, 500);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "spectator", pilot: { cols: 120, rows: 30 } });
+      roleFrame(ws, { role: "spectator", pilot: { cols: 160, rows: 40 } });
+      expect(term.resize).toHaveBeenLastCalledWith(160, 40);
+      expect(sentResizes(ws).at(-1)).toEqual({ type: "resize", cols: 160, rows: 40 });
+    });
+
+    it("below the font floor, the spectator's area scrolls", async () => {
+      areaOf(300, 150);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "spectator", pilot: { cols: 250, rows: 80 } });
+      expect(term.options.fontSize).toBe(6);
+      expect(screen.getByTestId("xterm-container").className).toContain("overflow-auto");
+      expect(term.resize).toHaveBeenLastCalledWith(250, 80);
+    });
+
+    it("a spectator whose area is large keeps the normal font", async () => {
+      areaOf(3000, 1500);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "spectator", pilot: { cols: 80, rows: 24 } });
+      expect(term.options.fontSize).toBe(11);
+      expect(term.resize).toHaveBeenLastCalledWith(80, 24);
+    });
+
+    it("back to solo: normal font, normal fit, typing again", async () => {
+      areaOf(1000, 500);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "spectator", pilot: { cols: 200, rows: 50 } });
+      expect(term.options.fontSize).toBeLessThan(11);
+
+      roleFrame(ws, { role: "solo" });
+      expect(term.options.fontSize).toBe(11);
+      // The fit's own proposal at the normal font, sent to the PTY.
+      expect(sentResizes(ws).at(-1)).toEqual({
+        type: "resize",
+        cols: Math.floor(1000 / (11 * 0.6)),
+        rows: Math.floor(500 / (11 * 1.2)),
+      });
+      expect(screen.getByTestId("xterm-container").className).not.toContain("overflow-auto");
+      const onData = term.onData.mock.calls[0][0] as (d: string) => void;
+      const before = ws.sent.length;
+      onData("x");
+      expect(ws.sent.length).toBe(before + 1);
+    });
+
+    it("a closed socket drops the role", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      expect(screen.getByTestId("term-watchers")).toBeInTheDocument();
+      act(() => ws.close());
+      expect(screen.queryByTestId("term-watchers")).toBeNull();
+    });
+
+    it("a non-role text frame is still written to the terminal", async () => {
+      const { ws, term } = await mountLive();
+      act(() => ws.fireEvent("message", { data: "plain text" }));
+      expect(term.write).toHaveBeenCalledWith("plain text");
+    });
+
+    it("a frozen pane opens no socket and has no role", async () => {
+      fetchPaneMock.mockResolvedValue({
+        content: "❯ ",
+        session_name: "pdo-run-1-cop-iter-1",
+        resumed: false,
+        stale: false,
+        source: "snapshot",
+      });
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={{ runId: "run-1", nodeId: "cop", iter: 1 }}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      expect(wsInstances).toHaveLength(0);
+      const container = screen.getByTestId("xterm-container");
+      expect(container.dataset.role).toBeUndefined();
+      expect(container.parentElement?.dataset.tooltip).toBeUndefined();
+      expect(screen.queryByTestId("term-watchers")).toBeNull();
     });
   });
 });

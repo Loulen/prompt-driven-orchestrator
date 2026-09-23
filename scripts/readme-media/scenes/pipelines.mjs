@@ -1,6 +1,6 @@
 // Scene « Visual pipelines » (README row 1). No live agent: the demo pipeline
 // `implement-review` is built on the edit canvas. Each variant starts from its
-// skeleton (Start and End only, same name: the one pipeline any GIF shows),
+// skeleton (Start and End only, under the demo name `implement-review`),
 // drops an `implementer` node from the toolbar's + menu, then drags its edges.
 //
 //   a — (the published one) add `implementer`, drag Start → implementer, then

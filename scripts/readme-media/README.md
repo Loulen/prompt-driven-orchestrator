@@ -10,6 +10,8 @@ make readme-media                 # every scene → .readme-media/ (not versione
 make readme-media SCENE=stats     # one scene (comma-separated for several)
 make readme-media SCENE=stats VARIANT=b   # one variant, while tuning a scene
 make readme-media-publish         # selected variants → docs/assets/readme/<scene>.gif + .jpg
+make readme-media-export          # the target pipelines → your library, as readme-* (to redraw them)
+make readme-media-import          # your readme-* pipelines → fixture/targets/
 ```
 
 ## What a run does
@@ -20,8 +22,9 @@ For each scene, in its own throwaway instance:
    throwaway working directory (the event log follows the cwd), with a throwaway `HOME` (pipelines,
    skill bank, profiles, prices, transcripts) and a free port (the tmux socket `pdo-<port>` follows the
    port). Every `PDO_*` variable of the calling shell is dropped. A `pdo` pointing at the checkout's
-   binary comes first on the node sessions' `PATH`. The library gets the demo pipeline
-   `implement-review` (`fixture/pipelines/`), and `fixture/shop-app/` is copied as a fresh git repo.
+   binary comes first on the node sessions' `PATH`. The library gets the **target pipelines** as is
+   (see [Target pipelines](#target-pipelines)): `implement-review` complete and `prod-check`, and
+   `fixture/shop-app/` is copied as a fresh git repo.
    The demo `HOME` gets a `.tmux.conf` (focus events on, so Claude Code prints no tmux hint on
    camera), and the sessions find Playwright's browsers in your cache (`PLAYWRIGHT_BROWSERS_PATH`).
 2. **Auth** (`lib/credentials.mjs`). Only for the harnesses the scene plays live (`live: ["claude"]`):
@@ -31,7 +34,8 @@ For each scene, in its own throwaway instance:
    secret) also sets Claude Code's status line to the model the session runs, so the filmed terminal
    reads `Opus 5.5 · claude-opus-5-5`.
 3. **Mocked history** (`needs: ["history"]`, `lib/history-plan.mjs` + `lib/history-write.mjs`). About
-   205 runs of `implement-review` over the last 30 days, with synthetic claude/copilot/pi transcripts,
+   205 runs of `implement-review` over the last 30 days (their run snapshot is derived from the
+   complete target, `lib/demo-pipeline.mjs`), with synthetic claude/copilot/pi transcripts,
    a manual price table and 100 fires of the (disabled) `prod-health-check` trigger. The plan is pure
    and deterministic (seeded); its targets are tested (`test/history-plan.test.mjs`) and so is the
    Stats API reading it (`test/demo-instance.test.mjs`).
@@ -58,6 +62,54 @@ For each scene, in its own throwaway instance:
 Output: `.readme-media/<scene>/<variant>.gif|.jpg`, `.readme-media/manifest.json` (per variant:
 duration, weight, dimensions, markers, warnings), and the raw takes with their cut plan
 (`timeline.json`) under `.readme-media/.work/`.
+
+## Target pipelines
+
+The pipelines the scenes show are **drawn by the maintainer** in the PDO editor, and the tool
+installs them **as is** ([ADR-0074 §6](../../docs/adr/0074-les-medias-du-readme-sont-joues-par-de-vrais-agents-sur-une-instance-de-demo-isolee.md),
+CONTEXT.md « Pipeline cible »). They live in `fixture/targets/`, with their prompts:
+
+| Target | State | Demo name | Library name | Scenes |
+| --- | --- | --- | --- | --- |
+| `implement-review.pipelines.yaml` | built: `Start → implementer → End` | `implement-review` | `readme-pipelines` | Visual pipelines |
+| `implement-review.yaml` (+ `implement-review.prompts/`) | complete: `implementer → reviewer`, loop ↻ 5 on `review.verdict = fail`, exit on `verdict = pass` | `implement-review` | `readme-implement-review` | Routing & loops, the hero, every live scene |
+| `prod-check.yaml` (+ `prod-check.prompts/`) | the pipeline the `prod-health-check` trigger fires | `prod-check` | `prod-check` | Triggers |
+
+The same `implement-review` is built (Visual pipelines), loops (Routing & loops), then runs (the
+hero). The built state has no prompts of its own: it takes `implement-review`'s, for its nodes.
+
+**Installed as is.** A fresh demo instance gets `implement-review` (complete) and `prod-check`: each
+file byte for byte, only its `name:` line set to the demo name, and its prompts next to it. The tool
+never generates or moves a position, an anchor, a route or a label. The built state shares its name
+with the complete one, so the scene that films it swaps it in. The mocked history's run snapshot is
+**derived** from the complete target (`runSnapshot`): nothing is copied by hand, so a redrawn target
+changes the history with it.
+
+**Redrawing a target.** Never edit a target's layout by hand:
+
+1. `make readme-media-export` copies the three targets into your library (`~/.pdo/pipelines`) as
+   `readme-pipelines`, `readme-implement-review` and `prod-check`, with their prompts. A pipeline
+   already there and identical is left alone. One that differs (you modified it since the last
+   export) is **never overwritten**: the export writes nothing and names it. Import it first, or
+   delete it from your library.
+2. Open them in your PDO editor, move nodes, anchors, routes and labels, edit a prompt, save.
+3. `make readme-media-import` copies them back into `fixture/targets/`, `name:` set back to the demo
+   name, prompts included (those of `readme-implement-review`: a different prompt in
+   `readme-pipelines` is reported, not imported). An export followed by an import without a
+   retouch changes no file.
+4. Review the diff, record the scenes that show the target, commit.
+
+The targets follow the product's edge model (#840): if that model changes, redraw or migrate them.
+
+**The socle, for a scene** (`lib/targets.mjs`, `scenes/_canvas.mjs`):
+
+| | |
+| --- | --- |
+| `installTargetPipeline(instance, id, { yaml })` | install a target in the demo library (prompts included) and wait until the daemon serves it; `yaml` overrides its text, e.g. with a node flag on |
+| `restoreDemoPipeline(instance)` | put the complete `implement-review` back (a variant that saved the canvas changed it) |
+| `withNodeFlags(yaml, node, { orchestrator: true, interactive: true })` | the target with flags on for one node, every other byte kept |
+| `targetPipeline(id)`, `readTarget(id)`, `targetYaml(id)` | a target parsed, its YAML and prompts, its YAML under the demo name |
+| `runSnapshot(pipeline)` | the run snapshot a daemon freezes at run start (`node_defs`, and the edges as drawn) |
 
 ## Choosing and publishing
 
@@ -132,7 +184,7 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 
 | Scene | Live | What it films | Helpers |
 | --- | --- | --- | --- |
-| `hero` | `claude` | a real run of `implement-review`: a → zoom on `implementer` and its live terminal; b (published, design « Variant B ») → live terminal ×8, cut, the `reviewer`'s outputs (verdict + `image_list`) at 1280×760 | `scenes/_live.mjs` |
+| `hero` | `claude` | a real run of the complete `implement-review`, loop included, to a final `pass`: a → zoom on `implementer` and its live terminal ×8, cut, the reviewer's verdict; b (published, design « Variant B ») → live terminal ×8, cut, the `reviewer`'s outputs (verdict + `image_list`) at 1280×760. A lap the reviewer sends back is in the cut; a final verdict other than `pass` fails the variant | `scenes/_live.mjs` |
 | `pipelines` | — | from the pipeline's skeleton (Start, End): + → Node (`implementer`), then its edges | `scenes/_canvas.mjs` |
 | `routing` | — | the loop edge `reviewer → implementer`, `verdict != pass`, the exit as `else`, saved | `scenes/_canvas.mjs` |
 | `stats` | — | the Stats page over the mocked history | |
@@ -143,7 +195,9 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 
 `scenes/_live.mjs` is for the scenes that need real agents: `startDemoRun`
 starts a run of the demo pipeline on the fixture repo (`DEMO_TASK`: add a product search),
-`completeDemoRun` plays one to the end off camera (a scene's `setup`: `outputs` films one finished run
+`completeDemoRun` plays one to the end off camera, through as many loop laps as the reviewer asks
+for, and throws unless it completes on a `pass` (`waitRunPassed`, `finalVerdict`: the verdict of the
+reviewer's last lap) (a scene's `setup`: `outputs` films one finished run
 for both variants, `review` plays one per variant, side by side), `waitNode` / `waitRun` / `waitPane` wait for a node's or a
 run's status or for text in its tmux pane, and `stopDemoRun` stops every agent of the run, in a
 `finally`, as soon as the variant is filmed: its nodes, its manager (`pdo-mgr-<run>`, started on
@@ -151,14 +205,15 @@ demand by a send to the manager), and with `children: true` every child run firs
 also takes them off the runs rail). `scrollUntil` wheel-scrolls a panel until an element sits at a
 given height: point it `over` a visible element of the panel, never the (off-screen) target. `openRun` selects a run on the rail off camera. Opening a run selects
 its live node by itself, so select `Start` first if the filmed click must open the node.
-`scenes/_canvas.mjs` is for the edit canvas: `installPipeline` / `restoreDemoPipeline` put a variant's
-starting pipeline in place (a variant that saves changes the library for the next one), `handle`,
+`scenes/_canvas.mjs` is for the edit canvas: `installTargetPipeline` / `installPipeline` /
+`restoreDemoPipeline` put a variant's starting pipeline in place (a variant that saves changes the
+library for the next one), `handle`,
 `pointOnEdge` (a point on an edge's drawn route: its hit box's centre is not on it) and `zoomCanvas`.
 
 ## Artifact scenes (#859)
 
 - **outputs**: `setup` plays a whole run (`completeDemoRun`); both variants open its `reviewer`.
-  The reviewer's prompt (`fixture/pipelines/implement-review.prompts/reviewer.md`) keeps the review
+  The reviewer's prompt (`fixture/targets/implement-review.prompts/reviewer.md`) keeps the review
   short, with a small left-to-right Mermaid diagram (three or four boxes) right after the verdict:
   it reads in the modal without a scroll (a top-down one scales to the modal's width and overflows). The wait for the Mermaid render is cut; the thumbnails and the lightbox image are loaded
   before they are filmed. The poster checks the run tab has nothing unsaved. On the Run tab the
@@ -173,8 +228,8 @@ starting pipeline in place (a variant that saves changes the library for the nex
   stretch, then a cut. The manager is stopped after each variant. Both variants film the unified
   view with the file list closed, at 1040 px (barely scaled to the GIF's 960, nothing cropped): no code line,
   toolbar button or thread footer is cut or wrapped.
-- **orchestration**: `setup` turns Orchestrator on for `implementer` in the demo HOME's copy of
-  `implement-review` (same name: still the one pipeline). The run's task spells out the two
+- **orchestration**: `setup` installs the target `implement-review` with Orchestrator on for
+  `implementer` (`withNodeFlags`: every other byte as drawn). The run's task spells out the two
   `pdo run create implement-review …` commands, each child's task says not to orchestrate in turn.
   The children are real runs of the whole pipeline (a minute or two each); the variant ends when
   both are finished, then stops and archives the parent and its children. Before variant a's
@@ -193,7 +248,7 @@ socket must hold no session.
   it. The crop leaves out the left panel and its pause banner. The guard is a script of the fixture
   repo (`fixture/shop-app/prod-health-check.sh`, probe in `ops/prod-probe.env`): it exits 0 and prints
   the same incident report the mocked history's fired entries carry.
-- **profiles**: the scene rewrites the demo HOME's copy of `implement-review` so both nodes follow
+- **profiles**: the scene rewrites the demo HOME's copy of the target `implement-review` so both nodes follow
   one profile, « daily driver » (claude · opus · medium). Each variant resets that profile before it
   plays.
 - **skills**: the source is a local git repo, `fixture/qa-skills/` copied to `~/code/qa-skills` in
@@ -202,11 +257,15 @@ socket must hold no session.
 
 ## Tests
 
-`make test` runs `node --test scripts/readme-media/test/*.test.mjs`. That covers the history plan,
+`make test` runs `node --test scripts/readme-media/test/*.test.mjs`. That covers the targets
+(installed byte for byte but `name:`, the run snapshot derived from them, the export / import round
+trip and the refused overwrite, on a throwaway `HOME`), the history plan,
 the cut plan, selection and publication, scene discovery (and the markers of each scene), the
 manifest (and a variant's atomic landing), a SIGINT mid-encode, the video/timeline alignment, and a
 real demo instance
-(Stats API ratios, teardown after success / Ctrl+C / crash / hard kill, and an agent that outlives
+(its library is the targets as is, Stats API ratios, teardown after success / Ctrl+C / crash / hard kill, and an agent that outlives
 the hangup; needs `cargo build`), plus
 the settings scenes' declarations and fixtures (the guard's exit codes and report, the skills repo).
 The full recordings (Stats, and triggers + profiles + skills) are opt-in: `READMEMEDIA_E2E=1`.
+The targets are parsed with `js-yaml`, resolved from `frontend/` like Playwright: run
+`cd frontend && pnpm install` once.

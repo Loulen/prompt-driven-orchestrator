@@ -1,5 +1,5 @@
 // Helpers for the LIVE scenes (a real run of the demo pipeline `implement-review`,
-// real `claude` / `claude-opus-5-5` agents). Not a scene: the `_` prefix keeps
+// complete with its loop, real `claude` / `claude-opus-5-5` agents). Not a scene: the `_` prefix keeps
 // it out of scene discovery. Reused by the hero (#858) and the typed-outputs /
 // diff-review / orchestration scenes (#859).
 //
@@ -13,7 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import { sleep } from "../lib/demo-instance.mjs";
-import { DEMO_PIPELINE } from "../lib/demo-pipeline.mjs";
+import { DEMO_PIPELINE_ID } from "../lib/targets.mjs";
 
 /** The feature the demo `implementer` adds to the fixture shop (small on purpose). */
 export const DEMO_TASK = {
@@ -27,7 +27,7 @@ const TERMINAL = new Set(["completed", "skipped", "failed", "stopped", "stale", 
 /** Start a run of the demo pipeline on the fixture repo. Returns its id. */
 export async function startDemoRun(instance, task = DEMO_TASK) {
   const { run_id: runId } = await instance.api("POST", "/runs", {
-    pipeline: DEMO_PIPELINE.id,
+    pipeline: DEMO_PIPELINE_ID,
     name: task.name,
     input: task.input,
     target_repo: instance.repo,
@@ -36,20 +36,55 @@ export async function startDemoRun(instance, task = DEMO_TASK) {
 }
 
 /** Play a whole run of the demo pipeline, off camera, and return its id once
- *  `reviewer` completed and the run with it. Its node sessions have exited by
- *  then; whatever is left is stopped. Throws when the run did not complete. */
-export async function completeDemoRun(instance, task = DEMO_TASK, { timeout = 20 * 60_000 } = {}) {
+ *  it completed on a `pass` verdict — through as many loop laps as the reviewer
+ *  asks for. Its node sessions have exited by then; whatever is left is
+ *  stopped. Throws when the run did not complete on `pass`. */
+export async function completeDemoRun(instance, task = DEMO_TASK, { timeout = 30 * 60_000 } = {}) {
   const runId = await startDemoRun(instance, task);
   try {
-    const reviewer = await waitNode(instance, runId, "reviewer", { timeout });
-    if (reviewer.status !== "completed") throw new Error(`the demo run ${runId} ended with reviewer ${reviewer.status}`);
-    await waitRun(instance, runId, ["completed"], { timeout: 60_000 });
+    await waitRunPassed(instance, runId, { timeout });
   } catch (error) {
     await stopDemoRun(instance, runId);
     throw error;
   }
   await stopDemoRun(instance, runId);
   return runId;
+}
+
+/** A run that will not move on its own any more. */
+const RUN_ENDED = new Set(["completed", "failed", "skipped", "halted", "archived", "awaiting_user"]);
+
+/** Poll until the run ends (whatever its end), and return it. */
+export async function waitRunEnd(instance, runId, { timeout = 30 * 60_000, every = 500 } = {}) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const run = await instance.api("GET", `/runs/${encodeURIComponent(runId)}`);
+    if (RUN_ENDED.has(run.status)) return run;
+    if (Date.now() > deadline) throw new Error(`run ${runId} still ${run.status} after ${timeout} ms`);
+    await sleep(every);
+  }
+}
+
+/** The `verdict` of the reviewer's LAST lap (the frontmatter of its `review`
+ *  output), with that lap's number. `verdict` is null when there is none. */
+export async function finalVerdict(instance, runId) {
+  const reviewer = await nodeState(instance, runId, "reviewer");
+  if (!reviewer) return { verdict: null, iter: null };
+  const io = await instance.api("GET", `/runs/${encodeURIComponent(runId)}/nodes/reviewer/io?iter=${reviewer.iter}`);
+  const review = io.outputs?.find((o) => o.port === "review");
+  const verdict = review?.files?.find((f) => f.frontmatter?.verdict !== undefined)?.frontmatter.verdict ?? null;
+  return { verdict, iter: reviewer.iter };
+}
+
+/** Wait for the run's end, and throw unless it completed on a `pass` verdict:
+ *  a README medium never shows a failed run. Returns the reviewer's last lap. */
+export async function waitRunPassed(instance, runId, { timeout = 30 * 60_000 } = {}) {
+  const run = await waitRunEnd(instance, runId, { timeout });
+  const { verdict, iter } = await finalVerdict(instance, runId);
+  if (run.status !== "completed" || verdict !== "pass") {
+    throw new Error(`the demo run ${runId} ended ${run.status}, final verdict ${verdict ?? "none"} (reviewer lap ${iter ?? "-"}): a scene only films a run that passes`);
+  }
+  return { run, iter };
 }
 
 export async function nodeState(instance, runId, nodeId) {

@@ -9,11 +9,17 @@
 //              exit (failure and Ctrl+C included).
 //   publish  — copy the variant the selection file names, per scene, into
 //              docs/assets/readme/<scene>.gif + .jpg. Records nothing.
+//   export   — copy the target pipelines (fixture/targets/) into your library
+//              (~/.pdo/pipelines) as readme-*, to redraw them in the editor.
+//              Refuses to overwrite a readme-* pipeline modified since.
+//   import   — the reverse: your readme-* pipelines back into the fixture,
+//              `name:` set back to the demo name.
 //
 // See scripts/readme-media/README.md.
 
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DemoInstance } from "./lib/demo-instance.mjs";
@@ -23,6 +29,7 @@ import { Recorder } from "./lib/recorder.mjs";
 import { loadScenes, selectScenes } from "./lib/scenes.mjs";
 import { seedHistory } from "./lib/seed.mjs";
 import { publish, readSelection } from "./lib/selection.mjs";
+import { exportTargets, importTargets, TARGETS_DIR } from "./lib/targets.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
@@ -139,12 +146,34 @@ async function publishSelected(filter) {
   publish({ selection: readSelection(PATHS.selection), scenes, reviewDir: PATHS.review, assetsDir: PATHS.assets, only });
 }
 
+/** Your library: `~/.pdo/pipelines` of the calling HOME (a test passes its own HOME). */
+function userLibrary() {
+  return path.join(os.homedir(), ".pdo", "pipelines");
+}
+
+function exportToLibrary() {
+  const libraryDir = userLibrary();
+  const { written, unchanged } = exportTargets({ libraryDir });
+  for (const name of written) console.log(`exported ${name} → ${path.join(libraryDir, `${name}.yaml`)}`);
+  for (const name of unchanged) console.log(`${name}: already up to date in ${libraryDir}`);
+  console.log("Redraw them in the PDO editor, then `make readme-media-import`.");
+}
+
+function importFromLibrary() {
+  const { updated, unchanged, warnings } = importTargets({ libraryDir: userLibrary() });
+  for (const id of updated) console.log(`imported ${id} → ${path.relative(repoRoot, TARGETS_DIR)}/`);
+  if (updated.length === 0) console.log(`no change: the fixture already matches your library (${unchanged.join(", ")})`);
+  for (const warning of warnings) console.warn(`WARNING: ${warning}`);
+}
+
 const [command = "record"] = process.argv.slice(2);
 const filter = process.env.SCENE || null;
 try {
   if (command === "record") await record(filter);
   else if (command === "publish") await publishSelected(filter);
-  else throw new Error(`unknown command "${command}" (record | publish)`);
+  else if (command === "export") exportToLibrary();
+  else if (command === "import") importFromLibrary();
+  else throw new Error(`unknown command "${command}" (record | publish | export | import)`);
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

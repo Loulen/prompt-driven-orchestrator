@@ -110,7 +110,18 @@ scene into `docs/assets/readme/`.
 ```bash
 make readme-media SCENE=stats      # one scene; without SCENE, all of them
 make readme-media-publish          # the selected variants → docs/assets/readme/
+make readme-media-export           # the target pipelines → your library, as readme-*
+make readme-media-import           # your readme-* pipelines → the fixture
 ```
+
+The pipelines the scenes show are **target pipelines** drawn by the maintainer in the PDO editor
+(`scripts/readme-media/fixture/targets/`): the built and the complete `implement-review`, and
+`prod-check`, the pipeline the trigger fires. The demo instance gets them as is, byte for byte but
+their `name:`; the tool never generates a layout. To redraw one, `make readme-media-export` copies
+them into your library (`~/.pdo/pipelines`) as `readme-pipelines`, `readme-implement-review` and
+`prod-check`, with their prompts, and never overwrites one you modified since. Edit them in your
+editor, then `make readme-media-import` brings them back into the fixture under their demo name.
+An export followed by an import without a retouch changes no file.
 
 Prerequisites:
 
@@ -125,9 +136,9 @@ Prerequisites:
 Cost of a regeneration: the Stats scene uses a mocked history, and the Visual pipelines and Routing
 scenes are canvas gestures; each costs nothing but about a minute. Each live scene (hero, diff
 review, orchestration…) runs real `claude` sessions on `claude-opus-5-5`, stopped as soon as the
-scene is recorded. The hero runs the demo pipeline twice, one run per variant (a few minutes in
-all): variant a stops its run once the terminal is filmed, and variant b waits for the reviewer's
-outputs. Typed outputs and Diff review each play one run to the end (off camera, a few minutes),
+scene is recorded. The hero runs the complete demo pipeline twice, one run per variant, each to its end
+(a few minutes each, more if the reviewer sends a lap back); a run that does not end on a `pass`
+verdict fails the scene. Typed outputs and Diff review each play one run to the end (off camera, a few minutes),
 shared by their two variants; Diff review then wakes the run's manager once per variant for its
 answer. Recursive orchestration plays one orchestrating run per variant, and each starts two child
 runs of the whole pipeline (a minute or two each). The reviewer drives Playwright's Chromium from your cache (`~/.cache/ms-playwright`). Each regeneration also adds its GIFs to
@@ -138,7 +149,8 @@ and only that scene (`SCENE=…`). Open both variants from `.readme-media/`, pic
 publish, then commit `docs/assets/readme/` and the selection. Switching to the other variant later
 is a one-line edit and `make readme-media-publish`; nothing is recorded again.
 
-The script never touches your instance: not your daemon, port, `~/.pdo`, event log or tmux sessions.
+Recording never touches your instance: not your daemon, port, `~/.pdo`, event log or tmux sessions.
+Only `make readme-media-export` writes to your library, and only its three `readme-*` pipelines.
 Whatever the ending (success, failure, Ctrl+C), it stops the demo agents and daemon, waits for every
 agent process to exit, wipes the copied auth files and removes the demo root: nothing is left in
 `/tmp`, and no `claude` outlives the command. How it works, and how to add a scene (one file under `scripts/readme-media/scenes/`):

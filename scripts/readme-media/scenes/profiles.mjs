@@ -8,8 +8,8 @@
 //   b — the profile's harness: claude → copilot, on gpt-5.6-sol.
 //
 // The demo library's copy of the pipeline pins each node's harness and model
-// (fixture/pipelines/); this scene rewrites that copy, in the demo HOME only,
-// so both nodes follow the profile instead.
+// (its target, fixture/targets/implement-review.yaml); this scene rewrites that
+// copy, in the demo HOME only, so both nodes follow the profile instead.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -33,7 +33,7 @@ const NODES = ["implementer", "reviewer"];
 
 /** Both work nodes follow `profileId` instead of pinning a harness. */
 function followProfile(yaml, profileId) {
-  const pinned = /^( {2})pin_harness: claude\n {2}harnesses:\n {4}claude:\n {6}model: [^\n]+\n {6}effort: [^\n]+\n/gm;
+  const pinned = /^( +)pin_harness: claude\n\1harnesses:\n\1 {2}claude: \{[^\n]*\}\n/gm;
   const out = yaml.replace(pinned, `$1agent_choice:\n$1  mode: profile\n$1  profile_id: ${profileId}\n`);
   const count = (out.match(/profile_id: /g) ?? []).length;
   if (count !== NODES.length) throw new Error(`expected ${NODES.length} pinned nodes in the demo pipeline, rewrote ${count}`);

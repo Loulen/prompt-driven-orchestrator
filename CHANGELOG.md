@@ -16,6 +16,17 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.98.0
+**Terminal partagé : un seul pilote par terminal, les autres postes regardent en lecture seule** (#869).
+
+- Quand deux navigateurs ouvrent le même terminal (nœud ou Manager), le premier est le
+  **pilote** : lui seul pèse sur la taille de la fenêtre tmux. Les suivants sont **spectateurs**
+  (client tmux `ignore-size`) : ils voient l'écran entier du pilote, police réduite (plancher
+  6 px, défilement au-delà), et leurs frappes n'atteignent jamais la session.
+- Le pilote voit un œil et le nombre de spectateurs ; le spectateur lit un tooltip de lecture
+  seule. Quand le pilote part, le spectateur redevient seul : taille, police et saisie normales.
+- Deux onglets du **même** poste restent sans rôle, comme avant. La prise de main arrive avec #870.
+
 ## 1.97.3
 **Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).
 

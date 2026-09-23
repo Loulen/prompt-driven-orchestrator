@@ -16,6 +16,28 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.102.0
+**Terminal partagé : un seul pilote, spectateurs en lecture seule, prise de main** (#867, #869, #870).
+
+- Quand deux navigateurs ouvrent le même terminal (nœud ou Manager), le premier est le
+  **pilote** : lui seul pèse sur la taille de la fenêtre tmux. Les suivants sont **spectateurs**
+  (client tmux `ignore-size`) : ils voient l'écran entier du pilote, police réduite (plancher
+  6 px, défilement au-delà), et leurs frappes n'atteignent jamais la session.
+- Le pilote voit un œil et le nombre de spectateurs ; le spectateur lit un tooltip de lecture
+  seule. Quand le pilote part, le spectateur redevient seul : taille, police et saisie normales.
+- Deux onglets du **même** poste restent sans rôle, comme avant.
+- Un spectateur voit une icône main (« Take control ») dans la barre du terminal. Un clic lui
+  donne la main tout de suite, sans confirmation : sa fenêtre reprend sa taille et sa police
+  normales, ses frappes atteignent la session. La bascule se fait à chaud (`refresh-client -f`),
+  sans rattacher de client tmux.
+- L'ancien pilote devient spectateur, lit brièvement « Another browser took control » et garde
+  l'icône main pour reprendre la main. Quand le pilote part, la main revient au poste arrivé le
+  plus tôt.
+- En attente déclarée, la bannière d'un spectateur dit « take control to reply, then press Enter
+  to resume ».
+- Point connu, antérieur : fermer un socket terminal injecte `\n^D` dans le pane
+  (`portable-pty`), à traiter dans un ticket séparé.
+
 ## 1.101.1
 **La node End accepte une edge sur ses quatre bords** (#840).
 

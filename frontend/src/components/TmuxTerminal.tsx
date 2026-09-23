@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { Maximize2, Minimize2, ExternalLink, Copy, Eye } from "lucide-react";
+import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { attachSession, fetchPane } from "../api";
 import {
@@ -15,9 +15,14 @@ import {
 } from "../lib/terminalClipboard";
 import { resizeAvoidingAltBufferCorruption, type Dimensions } from "../lib/altBufferResize";
 import {
+  isTakenOver,
   parseRoleFrame,
   READ_ONLY_HINT,
   SOLO,
+  TAKE_CONTROL_FRAME,
+  TAKE_CONTROL_LABEL,
+  TAKEN_OVER_NOTICE,
+  TAKEN_OVER_NOTICE_MS,
   watchedLabel,
   type TerminalRole,
 } from "../lib/terminalRole";
@@ -45,6 +50,10 @@ interface Props {
    *  pane is a frozen snapshot / disconnected (`false`), so the awaiting banner
    *  can say « reply below and press Enter » only when Enter can reach anything. */
   onLiveSocketChange?: (live: boolean) => void;
+  /** #870: tells the parent whether this browser is a spectator of the live
+   *  terminal, so the awaiting banner says « take control to reply » instead of
+   *  « reply below ». */
+  onSpectatingChange?: (spectating: boolean) => void;
 }
 
 // A node iteration in one of these states has had its tmux session reaped on the
@@ -92,6 +101,7 @@ export default function TmuxTerminal({
   status,
   paneSource,
   onLiveSocketChange,
+  onSpectatingChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -106,6 +116,10 @@ export default function TmuxTerminal({
   // callbacks read (they outlive renders); the state drives the toolbar.
   const [termRole, setTermRole] = useState<TerminalRole>(SOLO);
   const roleRef = useRef<TerminalRole>(SOLO);
+  // #870: « Another browser took control », up for a few seconds after this
+  // browser lost the hand.
+  const [takenOver, setTakenOver] = useState(false);
+  const takenOverTimer = useRef<number | null>(null);
   // #772: drives the toolbar Copy button; xterm's selection lives outside React.
   const [hasSelection, setHasSelection] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<"copied" | "failed" | null>(null);
@@ -148,6 +162,13 @@ export default function TmuxTerminal({
     setCopyFeedback(ok ? "copied" : "failed");
     if (ok) term.clearSelection();
     window.setTimeout(() => setCopyFeedback(null), 1500);
+  }, []);
+
+  // #870: a spectator takes control. No confirmation, and no optimistic change:
+  // the daemon answers with the new role, which is what flips the toolbar.
+  const handleTakeControl = useCallback(() => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(TAKE_CONTROL_FRAME);
   }, []);
 
   const handleDetach = useCallback(async () => {
@@ -349,7 +370,25 @@ export default function TmuxTerminal({
       resizeAvoidingAltBufferCorruption(term, fitAddon.proposeDimensions(), apply);
     };
 
+    const clearTakenOver = () => {
+      if (takenOverTimer.current !== null) {
+        window.clearTimeout(takenOverTimer.current);
+        takenOverTimer.current = null;
+      }
+      setTakenOver(false);
+    };
+
     const applyRole = (next: TerminalRole) => {
+      if (isTakenOver(roleRef.current, next)) {
+        clearTakenOver();
+        setTakenOver(true);
+        takenOverTimer.current = window.setTimeout(() => {
+          takenOverTimer.current = null;
+          setTakenOver(false);
+        }, TAKEN_OVER_NOTICE_MS);
+      } else if (next.role !== "spectator") {
+        clearTakenOver();
+      }
       roleRef.current = next;
       setTermRole(next);
       layout();
@@ -443,6 +482,7 @@ export default function TmuxTerminal({
       ws?.close();
       roleRef.current = SOLO;
       setTermRole(SOLO);
+      clearTakenOver();
       term.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -489,6 +529,11 @@ export default function TmuxTerminal({
   const watchers =
     mode === "live" && termRole.role === "pilot" ? termRole.spectators : 0;
 
+  // #870: report the spectator state to the parent (banner hint).
+  useEffect(() => {
+    onSpectatingChange?.(spectating);
+  }, [spectating, onSpectatingChange]);
+
   return (
     <div
       className="flex flex-1 flex-col overflow-hidden"
@@ -515,6 +560,31 @@ export default function TmuxTerminal({
           {statusLabel}
         </span>
         <span className="flex-1" />
+        {/* #870: brief, non-blocking — the former pilot learns why its keys
+            stopped reaching the pane. The hand stays next to it. */}
+        {spectating && takenOver && (
+          <span
+            className="font-mono text-st-await"
+            style={{ fontSize: "10px" }}
+            data-testid="term-taken-over"
+            role="status"
+          >
+            {TAKEN_OVER_NOTICE}
+          </span>
+        )}
+        {/* #870: a spectator takes control in one click. */}
+        {spectating && (
+          <Tooltip content={TAKE_CONTROL_LABEL}>
+            <button
+              onClick={handleTakeControl}
+              aria-label={TAKE_CONTROL_LABEL}
+              className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+              data-testid="term-take-control"
+            >
+              <Hand size={12} />
+            </button>
+          </Tooltip>
+        )}
         {/* #867: the pilot knows it is watched. Nothing when solo. */}
         {watchers > 0 && (
           <Tooltip content={watchedLabel(watchers)}>

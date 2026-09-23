@@ -52,12 +52,13 @@ vi.mock("../api", () => ({
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 
-function MockTmuxTerminal({ session, expanded, onExpand, status, paneSource }: {
+function MockTmuxTerminal({ session, expanded, onExpand, status, paneSource, onSpectatingChange }: {
   session: string;
   expanded?: boolean;
   onExpand?: () => void;
   status?: string;
   paneSource?: { runId: string; nodeId: string; iter: number };
+  onSpectatingChange?: (spectating: boolean) => void;
 }) {
   useEffect(() => {
     tmuxMountCount.current += 1;
@@ -74,6 +75,9 @@ function MockTmuxTerminal({ session, expanded, onExpand, status, paneSource }: {
       data-pane-source={paneSource ? JSON.stringify(paneSource) : undefined}
     >
       <button data-testid="term-expand" onClick={onExpand}>expand</button>
+      {/* #870: stand-ins for the daemon's role frames. */}
+      <button data-testid="mock-become-spectator" onClick={() => onSpectatingChange?.(true)}>spectate</button>
+      <button data-testid="mock-become-pilot" onClick={() => onSpectatingChange?.(false)}>pilot</button>
     </div>
   );
 }
@@ -1810,6 +1814,55 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("awaiting-banner-since")).toHaveTextContent(/waiting/);
       // The completion buttons stay the only other interactive marker.
       expect(screen.getByTestId("release-completion-btn")).not.toHaveAttribute("data-primary");
+    });
+
+    // #870: a spectator's Enter reaches nothing until it takes control.
+    it("tells a spectator to take control to reply, and the pilot to reply below", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "declared",
+              message: "Which layout: strip or card?",
+              since: "2026-09-12T10:00:00Z",
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      const hint = () => screen.getByTestId("awaiting-banner-hint");
+      expect(hint()).toHaveTextContent(/Reply in the terminal below/);
+      expect(hint()).not.toHaveTextContent(/take control to reply/);
+
+      fireEvent.click(screen.getByTestId("mock-become-spectator"));
+      expect(hint()).toHaveTextContent(/take control to reply/);
+      expect(hint()).not.toHaveTextContent(/Reply in the terminal below/);
+      expect(screen.getByTestId("awaiting-banner")).toHaveAttribute(
+        "data-terminal-spectating",
+        "true",
+      );
+
+      fireEvent.click(screen.getByTestId("mock-become-pilot"));
+      expect(hint()).toHaveTextContent(/Reply in the terminal below/);
+    });
+
+    it("tells a spectator to take control on a completion that is not released", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "completion_not_released",
+              message: "Completion not released.",
+              since: "2026-09-12T10:00:00Z",
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("mock-become-spectator"));
+      expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(
+        /take control to reply/,
+      );
     });
 
     it("says the agent waits for you when the wait carries no message (A2)", () => {

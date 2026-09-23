@@ -48,7 +48,7 @@ test("the canvas scenes (#858): hero, pipelines and routing, two variants each a
   const scenes = await loadScenes(path.join(here, "..", "scenes"));
   const markers = (name) => scenes.get(name).variants.map((v) => [v.id, v.markers]);
   assert.deepEqual(markers("hero"), [
-    ["a", ["run-started", "zoom", "terminal-active"]],
+    ["a", ["run-started", "zoom", "terminal-active", "verdict"]],
     ["b", ["run-started", "terminal-active", "output-ready"]],
   ]);
   assert.deepEqual(markers("pipelines"), [
@@ -96,13 +96,13 @@ test("the artifact scenes (#859): outputs, review and orchestration, two variant
   }
 });
 
-test("orchestration relaunches the ONE demo pipeline: Orchestrator on for implementer, nothing else", async () => {
+test("orchestration relaunches the demo pipeline: its target, Orchestrator on for implementer, nothing else", async () => {
   const { orchestratorYaml, ORCHESTRATION_TASK, PARTS } = await import("../scenes/orchestration.mjs");
-  const fixture = fs.readFileSync(path.join(here, "..", "fixture", "pipelines", "implement-review.yaml"), "utf8");
-  const yaml = orchestratorYaml(fixture);
-  const added = yaml.split("\n").filter((line) => !fixture.split("\n").includes(line));
-  assert.deepEqual(added, ["  orchestrator: true"]);
-  assert.match(yaml, /- id: implementer\n  name: implementer\n  type: agent\n  orchestrator: true\n/);
+  const target = fs.readFileSync(path.join(here, "..", "fixture", "targets", "implement-review.yaml"), "utf8");
+  const yaml = orchestratorYaml();
+  const added = yaml.split("\n").filter((line) => !target.split("\n").includes(line));
+  assert.deepEqual(added, ["    orchestrator: true"]);
+  assert.match(yaml, /- id: implementer\n {4}name: implementer\n {4}type: agent\n {4}orchestrator: true\n/);
   assert.equal(yaml.match(/orchestrator: true/g).length, 1, "the reviewer stays a plain node");
   // Every child is a run of the same pipeline, told not to orchestrate in turn.
   assert.equal(PARTS.length, 2);
@@ -110,5 +110,22 @@ test("orchestration relaunches the ONE demo pipeline: Orchestrator on for implem
     assert.ok(ORCHESTRATION_TASK.input.includes(`pdo run create implement-review --name "${part.name}"`), part.name);
     assert.match(part.input, /do not create child runs/);
   }
-  assert.doesNotMatch(ORCHESTRATION_TASK.input, /pdo run create (?!implement-review)/, "no second pipeline");
+  assert.doesNotMatch(ORCHESTRATION_TASK.input, /pdo run create (?!implement-review)/, "every child runs implement-review");
+});
+
+test("a live scene only films a run that ends completed on a final `pass` (the reviewer's last lap)", async () => {
+  const { finalVerdict, waitRunPassed } = await import("../scenes/_live.mjs");
+  /** A demo instance's API, reduced to a run and its reviewer's `review` outputs per lap. */
+  const fakeInstance = ({ status, verdicts }) => ({
+    async api(method, route) {
+      if (route === "/runs/r1") return { status, nodes: { reviewer: { status: "completed", iter: verdicts.length } } };
+      const iter = Number(route.match(/iter=(\d+)$/)?.[1]);
+      return { outputs: [{ port: "review", files: [{ path: "output.md", frontmatter: { verdict: verdicts[iter - 1] } }] }] };
+    },
+  });
+  // A lap sent back, then a pass: the verdict read is the last lap's.
+  assert.deepEqual(await finalVerdict(fakeInstance({ status: "completed", verdicts: ["fail", "pass"] }), "r1"), { verdict: "pass", iter: 2 });
+  assert.equal((await waitRunPassed(fakeInstance({ status: "completed", verdicts: ["fail", "pass"] }), "r1")).iter, 2);
+  await assert.rejects(waitRunPassed(fakeInstance({ status: "completed", verdicts: ["pass", "fail"] }), "r1"), /final verdict fail/);
+  await assert.rejects(waitRunPassed(fakeInstance({ status: "failed", verdicts: ["fail", "fail", "fail", "fail", "fail"] }), "r1"), /ended failed/);
 });

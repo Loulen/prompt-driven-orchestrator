@@ -1,7 +1,7 @@
 // Scene « orchestration » (row « Recursive orchestration »): the demo pipeline
 // relaunching ITSELF. Its `implementer` runs with Orchestrator on (`setup`
-// turns the toggle on in the demo HOME's copy of `implement-review`, the one
-// pipeline any GIF shows) and gets a feature in two parts: from its own
+// installs the target `implement-review` with the toggle on, every other byte
+// as drawn) and gets a feature in two parts: from its own
 // session, the REAL agent starts one child run of `implement-review` per part
 // (`pdo run create`), then waits for them (`pdo run wait --all`). The children
 // are REAL runs too — their own implementer and reviewer, on the fixture shop.
@@ -17,14 +17,10 @@
 //
 // Each variant plays its own run, and stops it with its children once filmed.
 
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { sleep } from "../lib/demo-instance.mjs";
-import { DEMO_PIPELINE } from "../lib/demo-pipeline.mjs";
-import { installPipeline } from "./_canvas.mjs";
+import { DEMO_PIPELINE_ID, readTarget, withNodeFlags } from "../lib/targets.mjs";
+import { installTargetPipeline } from "./_canvas.mjs";
 import { openRun, startDemoRun, stopDemoRun, waitNode, waitPane } from "./_live.mjs";
-
-const FIXTURE_PIPELINE = fileURLToPath(new URL(`../fixture/pipelines/${DEMO_PIPELINE.id}.yaml`, import.meta.url));
 
 /** The two parts, each a self-sufficient task for one child run. */
 export const PARTS = [
@@ -46,17 +42,15 @@ export const ORCHESTRATION_TASK = {
     "Add two things to the shop's product list: a search box that filters the products by name as you type, and a select that sorts them by price.",
     "You orchestrate this one: do not write the code yourself. Start one child run of this same pipeline per part, right away, one after the other:",
     "",
-    ...PARTS.map((part) => `pdo run create ${DEMO_PIPELINE.id} --name "${part.name}" --input "${part.input}"`),
+    ...PARTS.map((part) => `pdo run create ${DEMO_PIPELINE_ID} --name "${part.name}" --input "${part.input}"`),
     "",
     "Then wait for both with pdo run wait --all, and complete.",
   ].join("\n"),
 };
 
 /** The demo pipeline with Orchestrator on for `implementer` — nothing else changes. */
-export function orchestratorYaml(yaml) {
-  const node = "- id: implementer\n  name: implementer\n  type: agent\n";
-  if (!yaml.includes(node)) throw new Error("the demo pipeline's implementer node moved: update orchestratorYaml");
-  return yaml.replace(node, `${node}  orchestrator: true\n`);
+export function orchestratorYaml(yaml = readTarget(DEMO_PIPELINE_ID).yaml) {
+  return withNodeFlags(yaml, "implementer", { orchestrator: true });
 }
 
 const TERMINAL = new Set(["completed", "failed", "skipped", "halted", "archived"]);
@@ -115,7 +109,10 @@ async function fastThenCutUntilFirstDone(ctx, runId) {
 async function showSettledImplementer(ctx, runId) {
   const { page, instance } = ctx;
   await waitNode(instance, runId, "implementer", { statuses: ["completed"], timeout: 3 * 60_000 });
-  await ctx.click(page.getByTestId("rf__node-reviewer"), { duration: 150, pause: 40 });
+  // Through `Start`, outside the loop region: a click on the reviewer that has
+  // just started, inside it, may not select it, and then the panel never remounts.
+  await ctx.click(page.getByTestId("rf__node-start"), { duration: 150, pause: 40 });
+  await page.getByText("Run start").first().waitFor({ timeout: 10_000 });
   await sleep(400);
   await ctx.click(page.getByTestId("rf__node-implementer"), { duration: 150, pause: 40 });
   await page.getByTestId("terminal-minimized").waitFor({ timeout: 10_000 });
@@ -134,7 +131,7 @@ export default {
   live: ["claude"],
   async setup(instance) {
     // Same pipeline, same name: only the Orchestrator toggle of `implementer` differs.
-    await installPipeline(instance, orchestratorYaml(fs.readFileSync(FIXTURE_PIPELINE, "utf8")), { nodes: 4, edges: 3 });
+    await installTargetPipeline(instance, DEMO_PIPELINE_ID, { yaml: orchestratorYaml() });
   },
   variants: [
     {

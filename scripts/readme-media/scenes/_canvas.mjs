@@ -4,39 +4,62 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { sleep } from "../lib/demo-instance.mjs";
-import { DEMO_PIPELINE } from "../lib/demo-pipeline.mjs";
+import { DEMO_PIPELINE_ID, installTarget, parseYaml, readTarget, target, withName } from "../lib/targets.mjs";
 
-const FIXTURE_PIPELINE = fileURLToPath(new URL(`../fixture/pipelines/${DEMO_PIPELINE.id}.yaml`, import.meta.url));
-
-/** Replace the demo pipeline in the instance's library with `yaml` (same name:
- *  the one pipeline any GIF shows), and wait until the daemon serves it with
- *  `nodes` nodes and `edges` edges. A variant that saves its canvas changes the
- *  library, so each variant installs its starting pipeline before it plays. */
+/** Replace `implement-review` in the instance's library with `yaml`, and wait
+ *  until the daemon serves it with `nodes` nodes and `edges` edges. A variant
+ *  that saves its canvas changes the library, so each variant installs its
+ *  starting pipeline before it plays. */
 export async function installPipeline(instance, yaml, { nodes, edges }) {
-  const file = path.join(instance.home, ".pdo", "pipelines", `${DEMO_PIPELINE.id}.yaml`);
+  const file = path.join(instance.home, ".pdo", "pipelines", `${DEMO_PIPELINE_ID}.yaml`);
   if (fs.readFileSync(file, "utf8") !== yaml) {
     fs.writeFileSync(file, yaml);
-    // Let the library watcher's change event land before a tab opens on the
-    // pipeline: arriving after, it would mark the tab « changed on disk ».
-    await sleep(2500);
+    await settle();
   }
+  await waitServed(instance, DEMO_PIPELINE_ID, { nodes, edges });
+}
+
+/** Install a target pipeline (lib/targets.mjs) as is — `yaml` overrides its
+ *  text, e.g. with a node flag on — prompts included, and wait until the
+ *  daemon serves it. */
+export async function installTargetPipeline(instance, id, { yaml } = {}) {
+  const file = path.join(instance.libraryDir, `${target(id).name}.yaml`);
+  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+  const installed = installTarget(instance.libraryDir, id, { yaml });
+  if (installed !== before) await settle();
+  const pipeline = parseYaml(installed);
+  await waitServed(instance, target(id).name, { nodes: pipeline.nodes.length, edges: pipeline.edges?.length ?? 0 });
+  return installed;
+}
+
+/** Let the library watcher's change event land before a tab opens on the
+ *  pipeline: arriving after, it would mark the tab « changed on disk ». */
+function settle() {
+  return sleep(2500);
+}
+
+async function waitServed(instance, id, { nodes, edges }) {
   const deadline = Date.now() + 15_000;
   let seen = null;
   while (Date.now() < deadline) {
-    const { pipeline } = await instance.api("GET", `/pipelines/${DEMO_PIPELINE.id}`);
+    const { pipeline } = await instance.api("GET", `/pipelines/${id}`);
     seen = { nodes: pipeline.nodes?.length, edges: pipeline.edges?.length ?? 0 };
     if (seen.nodes === nodes && seen.edges === edges) return;
     await sleep(200);
   }
-  throw new Error(`the daemon never served ${DEMO_PIPELINE.id} with ${nodes} nodes / ${edges} edges (last: ${JSON.stringify(seen)})`);
+  throw new Error(`the daemon never served ${id} with ${nodes} nodes / ${edges} edges (last: ${JSON.stringify(seen)})`);
 }
 
-/** Put the demo pipeline back as versioned (fixture/pipelines/): start →
- *  implementer → reviewer → end. */
+/** Put the demo pipeline back as its target: the complete `implement-review`,
+ *  `implementer → reviewer` with its loop. */
 export async function restoreDemoPipeline(instance) {
-  await installPipeline(instance, fs.readFileSync(FIXTURE_PIPELINE, "utf8"), { nodes: 4, edges: 3 });
+  await installTargetPipeline(instance, DEMO_PIPELINE_ID);
+}
+
+/** The YAML of a target as the demo instance installs it (its demo `name:`). */
+export function targetYaml(id) {
+  return withName(readTarget(id).yaml, target(id).name);
 }
 
 /** Open the demo pipeline on the edit canvas, off camera. */
@@ -45,7 +68,7 @@ export async function openPipeline(ctx) {
   await ctx.goto("/");
   // Through ctx, even off camera: the recorder must know where the cursor is.
   await ctx.click(page.getByTestId("left-tab-library"), { duration: 150, pause: 40 });
-  await ctx.click(page.getByTestId(`library-row-${DEMO_PIPELINE.id}`), { duration: 150, pause: 40 });
+  await ctx.click(page.getByTestId(`library-row-${DEMO_PIPELINE_ID}`), { duration: 150, pause: 40 });
   await page.getByTestId("rf__node-start").waitFor({ timeout: 30_000 });
   await sleep(700);
 }

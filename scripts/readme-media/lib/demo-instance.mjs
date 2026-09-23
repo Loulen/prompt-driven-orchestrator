@@ -21,6 +21,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { stageCredentials, wipeCredentials } from "./credentials.mjs";
+import { installTargets } from "./targets.mjs";
 
 const ROOT_PREFIX = "pdo-readme-media-";
 /** The user's usual ports, never taken even when free. */
@@ -160,9 +161,13 @@ export class DemoInstance {
     git("commit", "-q", "-m", "shop-app: initial static shop");
   }
 
+  /** The demo library: the target pipelines, as is (lib/targets.mjs). */
+  get libraryDir() {
+    return path.join(this.state.home, ".pdo", "pipelines");
+  }
+
   installLibrary() {
-    const source = path.join(this.repoRoot, "scripts", "readme-media", "fixture", "pipelines");
-    fs.cpSync(source, path.join(this.state.home, ".pdo", "pipelines"), { recursive: true });
+    installTargets(this.libraryDir);
   }
 
   async waitReady(timeoutMs = 60_000) {

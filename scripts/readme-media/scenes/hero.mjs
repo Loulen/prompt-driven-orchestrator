@@ -1,11 +1,13 @@
 // Scene « hero » (top of the README): a REAL run of the demo pipeline
-// `implement-review` on the fixture shop — Claude Code (`claude` /
-// `claude-opus-5-5`, named by the terminal's status line) at work in the
-// `implementer` node's terminal, then the `reviewer`'s typed outputs.
+// `implement-review` — the maintainer's target, complete with its loop
+// (`implementer → reviewer`, ↻ 5 on `verdict = fail`, out on `verdict = pass`)
+// — on the fixture shop. Claude Code (`claude` / `claude-opus-5-5`, named by
+// the terminal's status line) at work in the `implementer` node's terminal,
+// then the `reviewer`'s typed outputs on the final `pass`.
 //
 //   a — the run plays, the camera zooms on `implementer`, and Claude Code works
-//       in the terminal next to it. Ends on the live terminal; its run is
-//       stopped at once (it never waits for the reviewer).
+//       in the terminal next to it (×8). Cut to the end of the run: the camera
+//       pulls back on the whole loop, click `reviewer` → its verdict `pass`.
 //   b — (the published one, design « Hero: Variant B ») the run plays, click
 //       `implementer` → live terminal (×8) → cut → click `reviewer` → its typed
 //       outputs: the verdict and the `image_list` of annotated screenshots.
@@ -13,11 +15,16 @@
 //       43 % (`pdo.layout.run`), the final frame on the `image_list`. The
 //       manifest notes the choice (label: « … ends on the reviewer's outputs »).
 //
+// Both variants play their run to its end. A lap the reviewer sends back
+// (`verdict = fail`, the implementer relaunched) is in the cut; a run that does
+// not end `completed` on a final `pass` fails the variant: the hero never
+// shows a failed run.
+//
 // The mocked history (`needs: ["history"]`) fills the runs rail and prices the
 // models, so the rail is never empty and the cost reads in dollars.
 
 import { sleep } from "../lib/demo-instance.mjs";
-import { DEMO_TASK, nodeState, openRun, startDemoRun, stopDemoRun, waitNode, waitPane } from "./_live.mjs";
+import { DEMO_TASK, nodeState, openRun, startDemoRun, stopDemoRun, waitPane, waitRunPassed } from "./_live.mjs";
 
 const VIEWPORT = { width: 1280, height: 760 };
 const LAYOUT = { "pdo.layout.run": { left: 15, center: 42, right: 43 } };
@@ -66,6 +73,34 @@ async function fastUntilDone(ctx, runId, { speed = 8, cap = 90_000 } = {}) {
   );
 }
 
+/** Off camera: wait for the run's end on a final `pass` (a relaunch included),
+ *  then put the inspector back on `Start`, ready for the filmed click. */
+async function cutToPass(ctx, runId) {
+  await waitRunPassed(ctx.instance, runId);
+  await selectStart(ctx);
+  await sleep(600);
+}
+
+/** Filmed: click `reviewer`, its outputs load — the `review` verdict and the
+ *  `image_list` — and (`scroll`) the inspector scrolls down to them. */
+async function openReviewerOutputs(ctx, { scroll = true } = {}) {
+  const { page } = ctx;
+  const pane = page.getByTestId("inspector-pane-run");
+  await ctx.keep(async () => {
+    await ctx.click(page.getByTestId("rf__node-reviewer"), { duration: 800 });
+    await pane.getByTestId("image-thumbnails").waitFor({ timeout: 30_000 });
+    await sleep(700);
+    if (!scroll) return;
+    // Down to the `image_list` (a no-op when it already shows).
+    await ctx.moveTo(pane.getByTestId("details-pane"), { duration: 600 });
+    await ctx.scroll(600, { duration: 700 });
+    await sleep(300);
+  });
+  // Beside the thumbnails, not on one: a hovered thumbnail would stay lit on the poster.
+  const thumbs = await pane.getByTestId("image-thumbnails").boundingBox();
+  await ctx.hover({ x: thumbs.x + thumbs.width + 40, y: thumbs.y + thumbs.height / 2 }, { duration: 700, pause: 300 });
+}
+
 export default {
   name: "hero",
   title: "Hero — a run with Claude Code at work",
@@ -74,14 +109,14 @@ export default {
   variants: [
     {
       id: "a",
-      label: "Run plays, zoom on implementer, Claude Code at work in the terminal",
+      label: "Run plays, zoom on implementer, Claude Code at work in the terminal, cut, the reviewer's verdict pass",
       viewport: VIEWPORT,
       localStorage: LAYOUT,
       // The canvas and the inspector — `implementer` next to its terminal — from
       // the tab bar down to the node's outputs (the runs rail is cut).
       crop: { x: 193, y: 44, width: 1087, height: 646 },
       gifWidth: 1200,
-      markers: ["run-started", "zoom", "terminal-active"],
+      markers: ["run-started", "zoom", "terminal-active", "verdict"],
       async play(ctx) {
         const { page, instance } = ctx;
         let runId;
@@ -100,13 +135,22 @@ export default {
           });
           ctx.mark("zoom", { before: 1300, after: 300 });
           await openImplementerTerminal(ctx, runId);
-          ctx.mark("terminal-active", { before: 0, after: 2400 });
-          await sleep(2400);
-          // The poster is the terminal still at work: never wait for the end.
-          await ctx.fast(() => sleep(3200), { speed: 8 });
-          await ctx.hold(1800);
-          const { status } = await nodeState(instance, runId, "implementer");
-          if (status !== "running") throw new Error(`implementer already ${status}: the poster would show an exited terminal`);
+          ctx.mark("terminal-active", { before: 0, after: 1600 });
+          await sleep(1600);
+          await fastUntilDone(ctx, runId);
+
+          // Cut: the reviewer's work, and any lap it sends back, are not filmed.
+          await cutToPass(ctx, runId);
+          await ctx.keep(async () => {
+            // The camera pulls back on the whole loop, around the same point.
+            await ctx.moveTo(implementer, { duration: 400 });
+            await ctx.scroll(240, { duration: 700 });
+            await sleep(200);
+          });
+          // The crop's inspector is tall enough: the outputs show without a scroll.
+          await openReviewerOutputs(ctx, { scroll: false });
+          ctx.mark("verdict", { before: 1400, after: 400 });
+          await ctx.hold(2000);
         } finally {
           await stopDemoRun(instance, runId, { archive: true });
         }
@@ -133,27 +177,10 @@ export default {
           await sleep(2200);
           await fastUntilDone(ctx, runId);
 
-          // Cut: the reviewer's work (Playwright + Pillow) is not filmed.
-          const reviewer = await waitNode(instance, runId, "reviewer");
-          if (reviewer.status !== "completed") throw new Error(`reviewer ended ${reviewer.status}`);
-          await waitNode(instance, runId, "end", { statuses: ["completed"], timeout: 60_000 }).catch(() => {});
-          await selectStart(ctx);
-          await sleep(600);
-
-          const pane = page.getByTestId("inspector-pane-run");
-          const outputs = pane.getByTestId("details-pane");
-          await ctx.keep(async () => {
-            await ctx.click(page.getByTestId("rf__node-reviewer"), { duration: 800 });
-            await pane.getByTestId("image-thumbnails").waitFor({ timeout: 30_000 });
-            await sleep(700);
-            // Down to the `image_list` (a no-op when it already shows).
-            await ctx.moveTo(outputs, { duration: 600 });
-            await ctx.scroll(600, { duration: 700 });
-            await sleep(300);
-          });
-          // Beside the thumbnails, not on one: a hovered thumbnail would stay lit on the poster.
-          const thumbs = await pane.getByTestId("image-thumbnails").boundingBox();
-          await ctx.hover({ x: thumbs.x + thumbs.width + 40, y: thumbs.y + thumbs.height / 2 }, { duration: 700, pause: 300 });
+          // Cut: the reviewer's work (Playwright + Pillow), and any lap it sends
+          // back, are not filmed.
+          await cutToPass(ctx, runId);
+          await openReviewerOutputs(ctx);
           ctx.mark("output-ready", { before: 1400, after: 400 });
           await ctx.hold(2600);
         } finally {

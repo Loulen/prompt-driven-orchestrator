@@ -9,8 +9,9 @@
 // found by that identity under the (redirected) home — claude derived from
 // tokens × the price table, copilot reported in nano-AIU, pi reported in USD.
 //
-// Everything lives on ONE pipeline, the demo pipeline `implement-review`
-// (design: « one pipeline only »), on its two nodes `implementer` and `reviewer`.
+// The runs are runs of the demo pipeline `implement-review`, on its two nodes
+// `implementer` and `reviewer`; their snapshot is derived from its target
+// (lib/demo-pipeline.mjs), loop included.
 
 import path from "node:path";
 import { createRng, normalQuantiles } from "./rng.mjs";

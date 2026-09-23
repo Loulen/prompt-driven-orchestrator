@@ -70,7 +70,7 @@ test("the canvas scenes (#858): hero, pipelines and routing, two variants each a
   assert.deepEqual(heroB.localStorage["pdo.layout.run"], { left: 15, center: 42, right: 43 });
 });
 
-test("the artifact scenes (#859): outputs, review and orchestration, two variants each and their markers", async () => {
+test("the live row scenes: outputs, review and interactive-orchestrator, two variants each and their markers", async () => {
   const scenes = await loadScenes(path.join(here, "..", "scenes"));
   const markers = (name) => scenes.get(name).variants.map((v) => [v.id, v.markers]);
   assert.deepEqual(markers("outputs"), [
@@ -81,14 +81,16 @@ test("the artifact scenes (#859): outputs, review and orchestration, two variant
     ["a", ["comment-posted", "sent-to-manager", "answer-received"]],
     ["b", ["comment-posted", "sent-to-manager", "answer-received"]],
   ]);
-  assert.deepEqual(markers("orchestration"), [
-    ["a", ["child-created", "counters"]],
-    ["b", ["child-created", "counters"]],
+  // The story in order: the question and its banner, the answer typed, the children.
+  assert.deepEqual(markers("interactive-orchestrator"), [
+    ["a", ["awaiting-you", "answer-typed", "child-created"]],
+    ["b", ["awaiting-you", "answer-typed", "child-created", "counters"]],
   ]);
+  assert.equal(scenes.has("orchestration"), false, "the scene was renamed with its row");
   // All three are played by real agents: the claude auth is staged for them.
-  for (const name of ["outputs", "review", "orchestration"]) assert.deepEqual(scenes.get(name).live, ["claude"], name);
+  for (const name of ["outputs", "review", "interactive-orchestrator"]) assert.deepEqual(scenes.get(name).live, ["claude"], name);
   // A row GIF stays readable at ~470 px: its crop is never wider than the window.
-  for (const name of ["outputs", "review", "orchestration"]) {
+  for (const name of ["outputs", "review", "interactive-orchestrator"]) {
     for (const v of scenes.get(name).variants) {
       const crop = v.crop ?? { x: 0, y: 0, ...v.viewport };
       assert.ok(crop.x + crop.width <= v.viewport.width && crop.y + crop.height <= v.viewport.height, `${name}/${v.id} crop inside the window`);
@@ -96,21 +98,54 @@ test("the artifact scenes (#859): outputs, review and orchestration, two variant
   }
 });
 
-test("orchestration relaunches the demo pipeline: its target, Orchestrator on for implementer, nothing else", async () => {
-  const { orchestratorYaml, ORCHESTRATION_TASK, PARTS } = await import("../scenes/orchestration.mjs");
+test("review is zoomed on the hunk and its thread: a ~700 px crop under the toolbar, scaled up to 960", async () => {
+  const scenes = await loadScenes(path.join(here, "..", "scenes"));
+  for (const v of scenes.get("review").variants) {
+    assert.ok(v.crop, `review/${v.id} has a crop`);
+    assert.ok(v.crop.width >= 680 && v.crop.width <= 760, `review/${v.id}: crop ${v.crop.width} px wide`);
+    assert.ok((v.gifWidth ?? 960) / v.crop.width > 1.25, `review/${v.id}: scaled up in the GIF`);
+    assert.ok(v.crop.y >= 36, `review/${v.id}: the Review toolbar (36 px) is out of frame`);
+    assert.equal(v.localStorage["pdo.review.list"], "closed", `review/${v.id}: the file list is out of frame`);
+    // The send bar is sticky at the bottom: the crop reaches it.
+    assert.equal(v.crop.y + v.crop.height, v.viewport.height, `review/${v.id}: the crop reaches the send bar`);
+  }
+});
+
+test("interactive-orchestrator: its target, implementer interactive and orchestrator with their skills, nothing else", async () => {
+  const { interactiveOrchestratorYaml, INTERACTIVE_TASK, PARTS, QUESTION, ANSWER } = await import("../scenes/interactive-orchestrator.mjs");
   const target = fs.readFileSync(path.join(here, "..", "fixture", "targets", "implement-review.yaml"), "utf8");
-  const yaml = orchestratorYaml();
+  const yaml = interactiveOrchestratorYaml();
   const added = yaml.split("\n").filter((line) => !target.split("\n").includes(line));
-  assert.deepEqual(added, ["    orchestrator: true"]);
-  assert.match(yaml, /- id: implementer\n {4}name: implementer\n {4}type: agent\n {4}orchestrator: true\n/);
-  assert.equal(yaml.match(/orchestrator: true/g).length, 1, "the reviewer stays a plain node");
+  assert.deepEqual(added, [
+    "    interactive: true",
+    "    orchestrator: true",
+    "    skills: [{ id: pdo-interactive, name: pdo-interactive }, { id: pdo-orchestrate, name: pdo-orchestrate }]",
+  ]);
+  assert.match(yaml, /- id: implementer\n {4}name: implementer\n {4}type: agent\n {4}interactive: true\n {4}orchestrator: true\n/);
+  assert.equal(yaml.match(/interactive: true/g).length, 1, "the reviewer stays a plain node");
+  const { parseYaml } = await import("../lib/targets.mjs");
+  const implementer = parseYaml(yaml).nodes.find((n) => n.id === "implementer");
+  assert.deepEqual(implementer.skills.map((s) => s.id), ["pdo-interactive", "pdo-orchestrate"]);
+  // The agent declares its wait with the question (the banner caps it at 100 characters), then starts the children.
+  assert.ok(QUESTION.length < 100);
+  assert.ok(INTERACTIVE_TASK.input.includes(`pdo wait-user --message "${QUESTION}"`));
+  assert.ok(INTERACTIVE_TASK.input.indexOf("pdo wait-user") < INTERACTIVE_TASK.input.indexOf("pdo run create"), "it asks before it orchestrates");
+  assert.ok(ANSWER.length > 0 && !ANSWER.includes("\n"));
   // Every child is a run of the same pipeline, told not to orchestrate in turn.
   assert.equal(PARTS.length, 2);
   for (const part of PARTS) {
-    assert.ok(ORCHESTRATION_TASK.input.includes(`pdo run create implement-review --name "${part.name}"`), part.name);
+    assert.ok(INTERACTIVE_TASK.input.includes(`pdo run create implement-review --name "${part.name}"`), part.name);
     assert.match(part.input, /do not create child runs/);
   }
-  assert.doesNotMatch(ORCHESTRATION_TASK.input, /pdo run create (?!implement-review)/, "every child runs implement-review");
+  assert.doesNotMatch(INTERACTIVE_TASK.input, /pdo run create (?!implement-review)/, "every child runs implement-review");
+  assert.match(INTERACTIVE_TASK.input, /no cd, no absolute path/);
+});
+
+test("interactive-orchestrator fails a variant whose terminal shows the demo root, even wrapped", async () => {
+  const { assertNoDemoPath } = await import("../scenes/interactive-orchestrator.mjs");
+  assert.doesNotThrow(() => assertNoDemoPath("$ pdo run wait --all --timeout 590\n"));
+  assert.throws(() => assertNoDemoPath("Running cd /tmp/pdo-readme-media-83F9aQ/repos/shop-app"), /demo root/);
+  assert.throws(() => assertNoDemoPath("Running cd /tmp/pdo-readme-\nmedia-83F9aQ/repos/shop-app"), /demo root/);
 });
 
 test("a live scene only films a run that ends completed on a final `pass` (the reviewer's last lap)", async () => {

@@ -99,6 +99,8 @@ interface MockTerminal {
   cols: number;
   options: { fontSize: number; theme?: unknown };
   resize: ReturnType<typeof vi.fn>;
+  /** #876: the typography xterm would measure with, captured inside `open()`. */
+  typographyAtOpen: { letterSpacing: string; fontFeatureSettings: string } | null;
 }
 
 vi.mock("@xterm/xterm", () => ({
@@ -107,7 +109,13 @@ vi.mock("@xterm/xterm", () => ({
     const selectionListeners: (() => void)[] = [];
     const instance: MockTerminal = {
       loadAddon: vi.fn(),
-      open: vi.fn(),
+      open: vi.fn((el: HTMLElement) => {
+        const cs = getComputedStyle(el);
+        instance.typographyAtOpen = {
+          letterSpacing: cs.letterSpacing,
+          fontFeatureSettings: cs.fontFeatureSettings,
+        };
+      }),
       write: vi.fn(),
       onData: vi.fn(() => ({ dispose: vi.fn() })),
       onBinary: vi.fn(() => ({ dispose: vi.fn() })),
@@ -136,6 +144,7 @@ vi.mock("@xterm/xterm", () => ({
       cols: 80,
       options: { fontSize: (config as { fontSize: number }).fontSize },
       resize: vi.fn(),
+      typographyAtOpen: null,
     };
     mockTerminalInstances.push(instance);
     return instance;
@@ -197,6 +206,30 @@ describe("TmuxTerminal", () => {
     expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
     expect(screen.getByTestId("term-toolbar")).toBeInTheDocument();
     expect(screen.getByTestId("xterm-container")).toBeInTheDocument();
+  });
+
+  // #876: xterm's DOM renderer derives `.xterm-rows { letter-spacing }` from a
+  // DOM measure of "W" that inherits the page's `letter-spacing` (body sets
+  // -0.005em). That makes every row wider than the grid tmux was sized to, and
+  // the last columns get clipped. jsdom has no layout to see the overflow, so
+  // the guard is the reset itself, which must already hold when xterm opens
+  // and measures.
+  it("neutralises inherited typography on the container before xterm opens (#876)", () => {
+    document.body.style.letterSpacing = "-0.005em";
+    document.body.style.fontFeatureSettings = '"ss01", "cv11"';
+    try {
+      render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
+
+      const term = mockTerminalInstances[0];
+      expect(term.open).toHaveBeenCalledWith(screen.getByTestId("xterm-container"));
+      expect(term.typographyAtOpen).toEqual({
+        letterSpacing: "normal",
+        fontFeatureSettings: "normal",
+      });
+    } finally {
+      document.body.style.letterSpacing = "";
+      document.body.style.fontFeatureSettings = "";
+    }
   });
 
   it("connects WebSocket to /sessions/<id>/pty", () => {

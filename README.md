@@ -101,7 +101,7 @@ Fire a pipeline on a cron, behind a guard script: `* * * * *` + `./prod-health-c
 </td>
 <td width="50%">
   <!-- scene: triggers -->
-  <a href="docs/features.md#triggers"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="A cron trigger with the prod-health-check.sh guard, its dry-run and its fire history" width="100%" /></picture></a>
+  <a href="docs/features.md#triggers"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/triggers.jpg"><source srcset="docs/assets/readme/triggers.gif" type="image/gif"><img src="docs/assets/readme/triggers.jpg" alt="A cron trigger with the prod-health-check.sh guard, its dry-run and its fire history" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -146,7 +146,7 @@ Name a harness · model · effort once. Change the profile and every node that f
 </td>
 <td width="50%">
   <!-- scene: profiles -->
-  <a href="docs/features.md#agent-profiles"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Changing an agent profile and every node that follows it switching model" width="100%" /></picture></a>
+  <a href="docs/features.md#agent-profiles"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/profiles.jpg"><source srcset="docs/assets/readme/profiles.gif" type="image/gif"><img src="docs/assets/readme/profiles.jpg" alt="Changing an agent profile and every node that follows it switching model" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -161,7 +161,7 @@ Import skills from a repo or write them by hand, then give them to any node from
 </td>
 <td width="50%">
   <!-- scene: skills -->
-  <a href="docs/features.md#skill-bank"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Importing skills into the skill bank and adding one to a node" width="100%" /></picture></a>
+  <a href="docs/features.md#skill-bank"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/skills.jpg"><source srcset="docs/assets/readme/skills.gif" type="image/gif"><img src="docs/assets/readme/skills.jpg" alt="Writing a skill by hand, importing skills from a local repo into the skill bank, then adding one to a node" width="100%" /></picture></a>
 </td>
 </tr>
 </table>

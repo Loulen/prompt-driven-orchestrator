@@ -2,7 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
 import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
-import { anchorHandleId, isEmergentInputNode, rimHandleId } from "../lib/anchorSide";
+import { anchorHandleId, landsByDrop, rimHandleId } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
 import { carriedPorts, declaredOutputs, primaryPort } from "../lib/edgePorts";
@@ -469,10 +469,8 @@ export function edgeIndexFromId(edgeId: string): number | null {
  *
  * - Structural nodes (merge) render an id'd target handle per declared input
  *   via `PortPill`, so the edge keeps its declared port name.
- * - Declared-port `edit` nodes (the End node's `result`) keep that declared,
- *   side-fixed handle — those ports are unaffected by anchoring (#168).
- * - Emergent work nodes (`agent`, ADR-0011 / #149) render
- *   one body-covering target handle PER SIDE. The edge binds to the handle for
+ * - Emergent work nodes (`agent`, ADR-0011 / #149) and the End marker (#840)
+ *   render one body-covering target handle PER SIDE. The edge binds to the handle for
  *   its chosen `target_side` (#168) so the arrow anchors and routes from that
  *   side; absent a `target_side`, it binds to the left handle, reproducing the
  *   legacy left-anchored behaviour. This is keyed on node TYPE, not input count:
@@ -488,12 +486,11 @@ function resolveTargetHandle(
   if (target.type === "merge") {
     return declaredPort || null;
   }
-  // Declared-port nodes (End's `result`) keep their declared, fixed-side handle;
-  // they are unaffected by drop-position anchoring.
-  if (!isEmergentInputNode(target.type)) {
+  // A node that pins the wire to a declared handle keeps binding to it.
+  if (!landsByDrop(target.type)) {
     return target.inputs[0]?.name ?? declaredPort ?? null;
   }
-  // Emergent work-node body: anchor on the chosen side (default left = legacy).
+  // A body that lands by drop: anchor on the chosen side.
   return anchorHandleId(targetSide ?? "left");
 }
 
@@ -502,18 +499,37 @@ function resolveTargetHandle(
  * as opposed to the persisted `target_side`.
  *
  * They differ exactly where the target keeps a DECLARED handle: `target_side` is
- * an emergent-body notion (#168) and such a node never has one, so the persisted
+ * a lands-by-drop notion (#168) and such a node never has one, so the persisted
  * value reads back as the `left` default while the handle sits wherever the port
- * declares (the End marker's `result` on its top border, a merge's `branches` on
- * its own side). Routing to `left` there lays the perpendicular landing leg on a
- * border the wire does not touch.
+ * declares (a merge's `branches` on its own side). Routing to `left` there lays
+ * the perpendicular landing leg on a border the wire does not touch.
  */
 export function resolveTargetGeometrySide(
   target: PipelineDef["nodes"][number],
   targetSide: PortSide,
 ): PortSide {
-  if (isEmergentInputNode(target.type)) return targetSide;
+  if (landsByDrop(target.type)) return targetSide;
   return target.inputs[0]?.side ?? "left";
+}
+
+/**
+ * The side an incoming edge lands on, read from what the file persists.
+ *
+ * The anchor comes first: a drop always writes one, while `target_side` is
+ * written only when it is not `left` — so a left drop on an End declared `top`
+ * lives in `target_anchor` alone. Absent both, a work node lands on the legacy
+ * `left`, and the End marker on its `result`'s DECLARED side: that is where every
+ * End edge saved before #840 landed, so an existing pipeline reopens unchanged
+ * (the fallback trap of a rim/anchor rework, cf. `resolveSourceSide`).
+ */
+export function resolveTargetSide(
+  target: PipelineDef["nodes"][number] | undefined,
+  edge: PipelineDef["edges"][number],
+): PortSide {
+  const persisted = edge.target_anchor?.side ?? edge.target_side;
+  if (persisted) return persisted;
+  if (target?.type === "end") return target.inputs[0]?.side ?? "left";
+  return "left";
 }
 
 /**
@@ -556,16 +572,15 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
       e,
     );
     const targetNode = pipeline.nodes.find((n) => n.id === e.target.node);
-    // The persisted anchor side (#168). Only meaningful for an emergent body
-    // target; declared/structural handles ignore it. Defaults to `left` so an
-    // un-anchored edge keeps the legacy left arrival.
-    const targetSide: PortSide = e.target_side ?? "left";
+    // The persisted landing side (#168, #844). Only meaningful for a target that
+    // lands by drop; declared/structural handles ignore it.
+    const targetSide: PortSide = resolveTargetSide(targetNode, e);
     const targetHandle = targetNode
       ? resolveTargetHandle(targetNode, e.target.port, targetSide)
       : e.target.port || null;
     // The side the wire actually ARRIVES on, which is not always the persisted
-    // one: a target that keeps a declared handle (End's `result`, a merge's
-    // `branches`) ignores `target_side` entirely and pins the arrow on its own
+    // one: a target that keeps a declared handle (a merge's `branches`)
+    // ignores `target_side` entirely and pins the arrow on its own
     // side. Handing the edge the persisted `left` there made it lay the landing
     // leg across a side the handle is not on — a wire entering the card from the
     // left to reach a pin on its top border (#844, FP finding 2).

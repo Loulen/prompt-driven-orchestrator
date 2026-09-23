@@ -17,11 +17,11 @@ export interface DrawnEdgeInput {
    *  start on a rim strip (a structural handle, or a synthetic connection). */
   sourceAnchor: EdgeAnchor | null;
   /** Where on the target the arrow landed. Absent for a declared-port target
-   *  (End's `result`, a merge's input), which keeps its fixed side. */
+   *  (a merge's input), which keeps its fixed side. */
   targetAnchor: EdgeAnchor | null;
   /** The side the arrow arrives on. */
   targetSide: PortSide;
-  /** Whether this target anchors by drop position at all (emergent bodies only). */
+  /** Whether this target anchors by drop position at all (`landsByDrop`). */
   anchorsByDrop: boolean;
 }
 

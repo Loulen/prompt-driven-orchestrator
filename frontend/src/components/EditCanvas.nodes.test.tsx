@@ -198,22 +198,21 @@ describe("EditNode emergent anchoring keyed on node type (issue #175)", () => {
     }
   });
 
-  it("keeps a declared-port node (End) on its declared side and grows no anchor handles (AC3)", () => {
-    // End's `result` is a fixed-side declared port: its body handle renders on
-    // the declared side (here `top`), not a hardcoded left, and it never grows
-    // the per-side drop anchors.
+  it("lets the End marker land a wire on any border, whatever `result` declares (#840)", () => {
+    // Until #840 End's `result` was a fixed-side handle and End grew no per-side
+    // anchors: a wire could land on its declared side only. `result` is the
+    // edge's port, not a place on the card — End anchors by drop like a work node.
     const { container } = render(
       <EditNode {...nodeProps("end", [{ name: "result", side: "top" }])} />,
       { wrapper: Wrapper },
     );
-    const handles = Array.from(container.querySelectorAll(".react-flow__handle"));
-    const handleIds = handles.map((h) => h.getAttribute("data-handleid"));
+    const handleIds = Array.from(container.querySelectorAll(".react-flow__handle")).map((h) =>
+      h.getAttribute("data-handleid"),
+    );
     for (const side of ["left", "right", "top", "bottom"]) {
-      expect(handleIds).not.toContain(`__anchor:${side}`);
+      expect(handleIds).toContain(`__anchor:${side}`);
     }
-    const resultHandle = handles.find((h) => h.getAttribute("data-handleid") === "result");
-    expect(resultHandle).toBeTruthy();
-    expect(resultHandle!.getAttribute("data-handlepos")).toBe("top");
+    expect(handleIds).not.toContain("result");
   });
 });
 

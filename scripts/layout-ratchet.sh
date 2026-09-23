@@ -52,9 +52,13 @@ cd "$(git rev-parse --show-toplevel)"
 #   owns it (worktree/branch modules operate on an existing repo, never create one);
 #   folding it into lib.rs would only hide 400 lines of git plumbing there. The
 #   integration PRs landed past the 90 baseline and left main red.
+# crates/pdo-daemon/src: 92 (#869, release 1.98.0) admits shared_terminal.rs — the shared
+#   terminal presence registry (one pilot per tmux session, read-only spectators, role
+#   messages, `ignore-size` switching; ADR-0075). It is ONE new concern that #870 (take
+#   control) extends; pty_bridge.rs only moves bytes and keeps its size, lib.rs only wires it.
 BASELINES='
 frontend/src/components 194
-crates/pdo-daemon/src 91
+crates/pdo-daemon/src 92
 '
 
 fail=0

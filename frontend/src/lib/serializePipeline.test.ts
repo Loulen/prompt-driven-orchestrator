@@ -81,6 +81,15 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toContain("prompt_required: false");
   });
 
+  it("emits the pipeline's own grid_size, and nothing when it follows the global default (#877)", () => {
+    const pipeline = makeFullPipeline([]);
+    expect(serializePipeline(pipeline)).not.toContain("grid_size");
+    pipeline.grid_size = "L";
+    expect(serializePipeline(pipeline)).toContain("grid_size: L");
+    pipeline.grid_size = null;
+    expect(serializePipeline(pipeline)).not.toContain("grid_size");
+  });
+
   it("omits prompt_required when prompt-required (the default, #158)", () => {
     const requiredExplicit = makeFullPipeline([]);
     requiredExplicit.prompt_required = true;

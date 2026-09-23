@@ -1,24 +1,54 @@
 // Wiring grid — pure geometry for the progressive, grid-snapped edge tracing of
-// #844 (ADR-0072). Free of React and of xyflow so the shapes can be reasoned
-// about — and unit-tested — on their own, next to `edgePath.ts`.
+// #844 (ADR-0072; the step is an S/M/L setting since #877 / ADR-0076). Free of
+// React and of xyflow so the shapes can be reasoned about — and unit-tested — on
+// their own, next to `edgePath.ts`.
 //
 // The vocabulary is CONTEXT.md § « Routage — grille de câblage » : the wiring
 // grid is the lattice a trace snaps to, distinct from the decorative background
-// grid (20px, xyflow `Background`) which is pure chrome.
+// grid (xyflow `Background`, drawn at the same pitch) which is pure chrome.
 
 import type { Point } from "./orthogonalRouter";
+import type { GridSize } from "../types";
+
+export type { GridSize };
 
 /**
- * The wiring grid step, in flow px. A **product constant, never a setting**
- * (ADR-0072): `waypoints` travel inside the pipeline file, so two instances on
- * different steps would render the same YAML with routes that no longer line up,
- * and every drag would re-snap onto a lattice foreign to the drawn trace.
+ * The three wiring-grid sizes (#877 / ADR-0076, superseding ADR-0072's single
+ * product constant): `S` = 20px, `M` = 30px, `L` = 40px, in flow px.
  *
- * 40px was chosen on the #840 prototype after trying 20px: a coarse lattice is
- * what makes two wires drawn a moment apart agree. A finer step snapped to
- * *something* on every pixel of travel, which is barely a grid at all.
+ * The step a canvas draws with is resolved by `resolveGridSize`: the pipeline's
+ * own `grid_size` (stored in the file, next to the `waypoints` drawn on it, so a
+ * shared pipeline renders the same everywhere) wins over the reader's global
+ * default (Settings › General › Interface), which falls back to `M`.
+ *
+ * 40px — the #840 prototype's pick and the only step before #877 — turned out too
+ * coarse in use: a node card (35px tall) was shorter than one cell, and the
+ * one-cell perpendicular legs no longer fitted between two close cards.
  */
-export const WIRING_GRID_STEP = 40;
+export const GRID_SIZES: readonly GridSize[] = ["S", "M", "L"];
+
+export const GRID_SIZE_STEPS: Record<GridSize, number> = { S: 20, M: 30, L: 40 };
+
+/** The size a pipeline draws with when neither it nor the reader chose one. */
+export const DEFAULT_GRID_SIZE: GridSize = "M";
+
+export function isGridSize(v: unknown): v is GridSize {
+  return v === "S" || v === "M" || v === "L";
+}
+
+/** The size in effect: the pipeline's own choice, else the global default. An
+ *  unknown value (hand-edited file) reads as absent. */
+export function resolveGridSize(
+  pipelineSize: string | null | undefined,
+  globalSize: GridSize,
+): GridSize {
+  return isGridSize(pipelineSize) ? pipelineSize : globalSize;
+}
+
+/** The step, in flow px, of a grid size. */
+export function gridStep(size: GridSize): number {
+  return GRID_SIZE_STEPS[size];
+}
 
 export type Axis = "horizontal" | "vertical";
 

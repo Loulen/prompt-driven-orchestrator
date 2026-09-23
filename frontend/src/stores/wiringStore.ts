@@ -2,9 +2,12 @@ import { create } from "zustand";
 import type { Point } from "../lib/orthogonalRouter";
 import {
   loadWiringGridFeedback,
+  loadWiringGridSize,
   saveWiringGridFeedback,
+  saveWiringGridSize,
   type WiringGridFeedback,
 } from "../lib/uiPrefs";
+import type { GridSize } from "../lib/wiringGrid";
 
 /**
  * Transient canvas state of the wiring gesture (#844) — deliberately NOT in
@@ -31,19 +34,29 @@ interface WiringState {
   /** How the lattice shows itself while wiring. Mirrors the per-browser
    *  preference; written through so a change applies without a reload. */
   gridFeedback: WiringGridFeedback;
+  /** The reader's default grid size (#877), for pipelines without a
+   *  `grid_size` of their own. Mirrors the per-browser preference, written
+   *  through so a change re-steps the open canvas without a reload. */
+  defaultGridSize: GridSize;
   setWiring: (wiring: boolean) => void;
   setOrigin: (origin: Point) => void;
   setGridFeedback: (gridFeedback: WiringGridFeedback) => void;
+  setDefaultGridSize: (size: GridSize) => void;
 }
 
 export const useWiringStore = create<WiringState>((set) => ({
   wiring: false,
   origin: { x: 0, y: 0 },
   gridFeedback: loadWiringGridFeedback(),
+  defaultGridSize: loadWiringGridSize(),
   setWiring: (wiring) => set({ wiring }),
   setOrigin: (origin) => set({ origin }),
   setGridFeedback: (gridFeedback) => {
     saveWiringGridFeedback(gridFeedback);
     set({ gridFeedback });
+  },
+  setDefaultGridSize: (defaultGridSize) => {
+    saveWiringGridSize(defaultGridSize);
+    set({ defaultGridSize });
   },
 }));

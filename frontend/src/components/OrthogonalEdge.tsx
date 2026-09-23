@@ -27,11 +27,8 @@ import {
   midpointAxis,
   outputLabelPlacement,
 } from "../lib/edgeLabels";
-import {
-  mergeAlignedSegments,
-  snapPolyline,
-  WIRING_GRID_STEP,
-} from "../lib/wiringGrid";
+import { mergeAlignedSegments, snapPolyline } from "../lib/wiringGrid";
+import { useWiringGridStep } from "../hooks/useWiringGrid";
 import { useWiringStore } from "../stores/wiringStore";
 import { useEditStore } from "../stores/editStore";
 import type { EdgeAnchor, EdgeDef, EdgeWaypoint, PortSide } from "../types";
@@ -199,7 +196,10 @@ export default function OrthogonalEdge({
   // canvas always did (the dot sat there).
   const srcSide: PortSide = sourceAnchor?.side ?? data?.sourceSide ?? "right";
   const tgtSide: PortSide = targetAnchor?.side ?? data?.targetSide ?? "left";
-  const leg = landingLeg(WIRING_GRID_STEP);
+  // The active pipeline's grid step (#877): it sets the legs, the auto-route
+  // snap and the segment-drag snap. Stored waypoints are never re-snapped by it.
+  const step = useWiringGridStep();
+  const leg = landingLeg(step);
 
   const points: Point[] = useMemo(() => {
     if (mode === "manual" && waypoints && waypoints.length > 0) {
@@ -233,7 +233,7 @@ export default function OrthogonalEdge({
     // `manual: false`: the router's bends are not the user's pins, so a wire that
     // has to go around its target is re-laid from its last real corner.
     return enforcePerpendicularEnds(
-      snapPolyline(auto, CANVAS_LATTICE, WIRING_GRID_STEP),
+      snapPolyline(auto, CANVAS_LATTICE, step),
       srcSide,
       tgtSide,
       leg,
@@ -241,7 +241,7 @@ export default function OrthogonalEdge({
       { manual: false },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, leg, tgtRect]);
+  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, step, leg, tgtRect]);
 
   const d = pathToSvg(points);
   // The first and last segments are the perpendicular legs into the two anchors:
@@ -291,7 +291,7 @@ export default function OrthogonalEdge({
             points,
             segmentIndex,
             coord,
-            { origin, step: WIRING_GRID_STEP, free: ev.shiftKey },
+            { origin, step, free: ev.shiftKey },
             (pts) => enforcePerpendicularEnds(pts, srcSide, tgtSide, leg, tgtRect ?? undefined),
             tgtRect ?? undefined,
           );
@@ -341,7 +341,7 @@ export default function OrthogonalEdge({
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
       },
-    [edgeIndex, points, screenToFlowPosition, updateEdge, srcSide, tgtSide, leg, tgtRect],
+    [edgeIndex, points, screenToFlowPosition, updateEdge, srcSide, tgtSide, step, leg, tgtRect],
   );
 
   // Every label write goes through here, so the `edgeIndex` guard is stated

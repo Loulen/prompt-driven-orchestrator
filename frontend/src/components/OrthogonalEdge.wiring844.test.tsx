@@ -5,6 +5,7 @@ import OrthogonalEdge, { type OrthogonalEdgeData } from "./OrthogonalEdge";
 import NodeRimHandles from "./NodeRimHandles";
 import { anchorHandleId } from "../lib/anchorSide";
 import { useEditStore } from "../stores/editStore";
+import { useWiringStore } from "../stores/wiringStore";
 import type { PipelineDef, PortSide } from "../types";
 
 // xyflow MEASURES before it draws: a node with no measured size and no handle
@@ -84,9 +85,12 @@ const nodes: Node[] = [
   { id: "tgt", type: "card", position: { x: TGT.x, y: TGT.y }, width: TGT.width, height: TGT.height, data: {} },
 ];
 
+// The fixtures below were drawn on the 40px lattice: the pipeline pins its own
+// size to L (#877), which also proves a pipeline's choice drives the edge.
 function pipeline(edge: Partial<PipelineDef["edges"][number]> = {}): PipelineDef {
   return {
     name: "p",
+    grid_size: "L",
     variables: {},
     nodes: [
       { id: "src", name: "src", type: "agent", inputs: [], outputs: [{ name: "out", repeated: false }], interactive: false },
@@ -337,6 +341,52 @@ describe("OrthogonalEdge — an auto route never runs through its target card (#
     const [before, last] = pts.slice(-2);
     expect(before.y).toBe(last.y);
     expect(last.x - before.x).toBe(40);
+  });
+
+  it("sizes the landing leg by the grid in effect — M (30px) when nobody chose (#877)", () => {
+    const { grid_size: _pinned, ...unset } = pipeline();
+    void _pinned;
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({ ...t, pipeline: unset })),
+    }));
+    harness(
+      edgeData({
+        mode: "auto",
+        waypoints: null,
+        targetSide: "left",
+        sourceAnchor: { side: "bottom", offset: 100 },
+        targetAnchor: { side: "left", offset: 40 },
+      }),
+      stacked,
+    );
+    const [before, last] = drawnPoints().slice(-2);
+    expect(before.y).toBe(last.y);
+    expect(last.x - before.x).toBe(30);
+  });
+
+  it("follows the reader's global default when the pipeline has no size (#877)", () => {
+    const { grid_size: _pinned, ...unset } = pipeline();
+    void _pinned;
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({ ...t, pipeline: unset })),
+    }));
+    useWiringStore.setState({ defaultGridSize: "S" });
+    try {
+      harness(
+        edgeData({
+          mode: "auto",
+          waypoints: null,
+          targetSide: "left",
+          sourceAnchor: { side: "bottom", offset: 100 },
+          targetAnchor: { side: "left", offset: 40 },
+        }),
+        stacked,
+      );
+      const [before, last] = drawnPoints().slice(-2);
+      expect(last.x - before.x).toBe(20);
+    } finally {
+      useWiringStore.setState({ defaultGridSize: "M" });
+    }
   });
 });
 

@@ -599,6 +599,23 @@ pub(crate) struct PipelineDef {
     /// info rather than the sole source of work.
     #[serde(default = "default_prompt_required", skip_serializing_if = "is_true")]
     pub prompt_required: bool,
+    /// The pipeline's own wiring-grid size (#877 / ADR-0076). Absent ⇒ the
+    /// pipeline follows the reader's global default, and it is omitted from YAML
+    /// in that case so an untouched pipeline round-trips byte for byte. Layout,
+    /// not semantics — excluded from the semantic pipeline-diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_size: Option<GridSize>,
+}
+
+/// The three wiring-grid sizes (#877 / ADR-0076): `S` = 20px, `M` = 30px,
+/// `L` = 40px. The daemon never uses the step itself — only the canvas does —
+/// but it must parse the field, or serde drops it and the choice vanishes on
+/// reload (the frontend rehydrates from the daemon-parsed `PipelineDef`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum GridSize {
+    S,
+    M,
+    L,
 }
 
 fn default_prompt_required() -> bool {
@@ -694,6 +711,7 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
     "loops",
     "notes",
     "prompt_required",
+    "grid_size",
 ];
 
 /// The node `type` strings the parser accepts verbatim. Anything else is coerced
@@ -5343,6 +5361,35 @@ nodes: []
     }
 
     #[test]
+    fn grid_size_round_trips_and_absent_is_omitted() {
+        // #877 / ADR-0076: the pipeline's own wiring-grid size persists in the
+        // file, parses without an unknown-field warning, and an unset pipeline
+        // serializes without the key (it follows the reader's global default).
+        let yaml = with_start_end(
+            r#"
+name: gridded
+grid_size: L
+nodes: []
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.pipeline.grid_size, Some(GridSize::L));
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        assert!(serialized.contains("grid_size: L"), "{serialized}");
+        assert_eq!(
+            parse_pipeline(&serialized).unwrap().pipeline.grid_size,
+            Some(GridSize::L)
+        );
+
+        let plain = parse_pipeline(&with_start_end("name: plain\nnodes: []\n")).unwrap();
+        assert_eq!(plain.pipeline.grid_size, None);
+        assert!(!serde_yaml::to_string(&plain.pipeline)
+            .unwrap()
+            .contains("grid_size"));
+    }
+
+    #[test]
     fn deterministic_output_instructions_are_preserved_with_a_non_blocking_diagnostic() {
         let yaml = VALID_MINIMAL.replace(
             "      - name: user_prompt",
@@ -5390,6 +5437,7 @@ version: "1.0"
 variables:
   max_iter_review: 3
 prompt_required: false
+grid_size: S
 nodes:
   - id: start
     name: Start

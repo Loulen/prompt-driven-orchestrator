@@ -2432,9 +2432,12 @@ mod tests {
             "  target: {node: end, port: result}\n",
             "  target: {node: end, port: result}\n  show_output_labels: true\n  output_label_pos: {out: {x: 3, y: 4}}\n  condition_label_pos: {x: 5, y: 6}\n  below_nodes: true\n",
         );
+        // #877 / ADR-0076: the pipeline's wiring-grid size is presentation too.
+        let gridded = laid_out_pipeline("Demo", 300, "grid_size: L\n");
         let baseline = pipelines::content_hash(&plain, &prompts);
         for (label, variant) in [
             ("node moved", moved),
+            ("grid size chosen", gridded),
             ("note added", annotated),
             ("route pinned + arrow re-anchored", pinned),
             ("labels moved + drawn under the nodes", decorated),

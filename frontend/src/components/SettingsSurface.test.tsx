@@ -88,6 +88,7 @@ vi.mock("../api", () => ({
 import SettingsSurface from "./SettingsSurface";
 import { relativiseToHome } from "./StagingProfilesPanel";
 import { useEditStore } from "../stores/editStore";
+import { useWiringStore } from "../stores/wiringStore";
 import type { InstanceSettings, SandboxProfile } from "../types";
 
 function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
@@ -1149,6 +1150,43 @@ describe("SettingsSurface — Interface / child runs default (#783)", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
     expect(await screen.findByTestId("setting-child-runs-collapsed")).toHaveAttribute("aria-checked", "true");
+  });
+});
+
+describe("SettingsSurface — Interface / wiring grid size (#877)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    localStorage.clear();
+    useWiringStore.setState({ defaultGridSize: "M" });
+  });
+
+  it("offers S / M / L, defaults to M, and saves the pick to this browser at once", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+
+    const m = await screen.findByTestId("setting-wiring-grid-size-M");
+    const s = screen.getByTestId("setting-wiring-grid-size-S");
+    const l = screen.getByTestId("setting-wiring-grid-size-L");
+    expect(m).toHaveAttribute("aria-checked", "true");
+    expect(s).toHaveTextContent("20px");
+    expect(m).toHaveTextContent("30px");
+    expect(l).toHaveTextContent("40px");
+    // No « Global » option here: this IS the global default.
+    expect(screen.queryByTestId("setting-wiring-grid-size-global")).not.toBeInTheDocument();
+
+    fireEvent.click(s);
+    expect(localStorage.getItem("pdo.ui.wiringGridSize")).toBe('"S"');
+    expect(useWiringStore.getState().defaultGridSize).toBe("S");
+    expect(s).toHaveAttribute("aria-checked", "true");
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("no longer tells the reader the step is a product constant", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-wiring-grid-size");
+    expect(screen.queryByText(/product constant/)).not.toBeInTheDocument();
   });
 });
 

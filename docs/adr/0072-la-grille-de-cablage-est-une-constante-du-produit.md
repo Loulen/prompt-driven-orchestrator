@@ -1,6 +1,8 @@
 # La grille de câblage est une constante du produit, jamais un réglage
 
-> Statut : accepted (grilling #840). Vocabulaire : CONTEXT.md § « Edges — structure ».
+> Statut : superseded par ADR-0076 pour le pas (#877 : il devient un réglage S/M/L porté par le
+> pipeline). Le geste `Shift` décrit ici tient toujours.
+> Accepted à l'origine (grilling #840). Vocabulaire : CONTEXT.md § « Edges — structure ».
 
 ## Contexte
 

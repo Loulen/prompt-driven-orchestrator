@@ -28,6 +28,17 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.103.0
+**Grille de câblage : 30px par défaut, taille S/M/L réglable** (#877).
+
+- Le pas de la grille de câblage n'est plus figé à 40px : `S` = 20px, `M` = 30px (défaut),
+  `L` = 40px. ADR-0076 supersede ADR-0072 pour le pas.
+- Réglage global dans Settings › General › Interface (par navigateur). Le panneau Inspector
+  d'un pipeline peut le surcharger ; ce choix est enregistré dans le fichier pipeline
+  (`grid_size`) et voyage avec ses `waypoints`.
+- Changer de taille ne réécrit jamais les waypoints déjà enregistrés : les anciens tracés à
+  40px gardent leurs coudes jusqu'à ce qu'on les retouche.
+
 ## 1.102.1
 **Le terminal n'ampute plus ses dernières colonnes** (#876).
 

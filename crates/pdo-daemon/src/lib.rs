@@ -32973,6 +32973,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: false,
+            grid_size: None,
         }
     }
 
@@ -33094,6 +33095,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: false,
+            grid_size: None,
         };
         let mut run_state = event_log::RunState::new("20260613-loop".into(), "cond".into());
         // Entry node `a` completed; nothing else live or schedulable.
@@ -43775,6 +43777,7 @@ edges: []
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let ctx = SpawnContext {
@@ -43895,6 +43898,7 @@ edges: []
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let ctx = SpawnContext {
@@ -44727,6 +44731,7 @@ edges: []
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: false,
+            grid_size: None,
         };
         let pipeline_path = repo_root.join("spawn-unit.yaml");
         (pipeline, node, pipeline_path)

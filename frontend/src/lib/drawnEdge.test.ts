@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { drawnEdgeLayout } from "./drawnEdge";
-import { WIRING_GRID_STEP } from "./wiringGrid";
+import { gridStep } from "./wiringGrid";
+
+// Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
+const GRID_STEP = gridStep("L");
 import { anchorPoint, enforcePerpendicularEnds, landingLeg } from "./anchorSide";
 import type { Point } from "./orthogonalRouter";
 import {
@@ -30,6 +33,7 @@ function drawn(overrides: Partial<Parameters<typeof drawnEdgeLayout>[0]> = {}) {
     targetAnchor: TARGET_ANCHOR,
     targetSide: "top",
     anchorsByDrop: true,
+    step: GRID_STEP,
     ...overrides,
   });
 }
@@ -43,8 +47,8 @@ describe("drawnEdgeLayout (#844)", () => {
 
   it("keeps the waypoints on the wiring lattice", () => {
     for (const w of drawn().waypoints ?? []) {
-      expect(w.x % WIRING_GRID_STEP).toBe(0);
-      expect(w.y % WIRING_GRID_STEP).toBe(0);
+      expect(w.x % GRID_STEP).toBe(0);
+      expect(w.y % GRID_STEP).toBe(0);
     }
   });
 
@@ -59,14 +63,14 @@ describe("drawnEdgeLayout (#844)", () => {
   });
 
   it("stores neither approach point — the legs are re-derived from the anchors", () => {
-    const leg = landingLeg(WIRING_GRID_STEP);
+    const leg = landingLeg(GRID_STEP);
     const stored = drawn().waypoints ?? [];
     expect(stored).not.toContainEqual({ x: SRC.x, y: SRC.y + leg });
     expect(stored).not.toContainEqual({ x: TGT.x, y: TGT.y - leg });
   });
 
   it("round-trips: re-enforcing the stored route reproduces the drawn path", () => {
-    const leg = landingLeg(WIRING_GRID_STEP);
+    const leg = landingLeg(GRID_STEP);
     const drawnPath = enforcePerpendicularEnds(TRACED, "bottom", "top", leg);
     const reloaded = enforcePerpendicularEnds(
       [SRC, ...(drawn().waypoints ?? []), TGT],
@@ -100,7 +104,7 @@ describe("drawnEdgeLayout (#844)", () => {
   });
 
   it("does NOT pin a route that is just its two legs — that is what auto draws", () => {
-    const leg = landingLeg(WIRING_GRID_STEP);
+    const leg = landingLeg(GRID_STEP);
     const straightDown: Point[] = [
       { x: 80, y: 80 },
       { x: 80, y: 80 + leg },
@@ -113,6 +117,7 @@ describe("drawnEdgeLayout (#844)", () => {
       targetAnchor: { side: "top", offset: 80 },
       targetSide: "top",
       anchorsByDrop: true,
+      step: GRID_STEP,
     });
     expect("mode" in layout).toBe(false);
     expect("waypoints" in layout).toBe(false);
@@ -130,7 +135,7 @@ describe("drawnEdgeLayout (#844)", () => {
     // bottom, and its approach to that phantom border was written to the file as
     // waypoints inside the node.
     const pin = { side: "top" as const, point: anchorPoint(TGT_RECT, null, "top") };
-    let gesture = startGesture(SRC, "bottom", WIRING_GRID_STEP);
+    let gesture = startGesture(SRC, "bottom", GRID_STEP);
     for (const cursor of [
       { x: 80, y: 240 },
       { x: 500, y: 245 },
@@ -140,13 +145,13 @@ describe("drawnEdgeLayout (#844)", () => {
         cursor,
         shift: false,
         overTarget: cursor.y > TGT_RECT.y,
-        step: WIRING_GRID_STEP,
+        step: GRID_STEP,
       });
     }
     const traced = gesturePath(
       gesture,
       landingAt({ x: 500, y: 470 }, TGT_RECT, pin),
-      WIRING_GRID_STEP,
+      GRID_STEP,
     );
 
     const layout = drawnEdgeLayout({
@@ -155,6 +160,7 @@ describe("drawnEdgeLayout (#844)", () => {
       targetAnchor: null,
       targetSide: "top",
       anchorsByDrop: false,
+      step: GRID_STEP,
     });
     // No waypoint inside the card…
     for (const w of layout.waypoints ?? []) {
@@ -168,7 +174,7 @@ describe("drawnEdgeLayout (#844)", () => {
     // …and, the stronger property, no SEGMENT of the reloaded route through it
     // either: the spur the FP caught had both its ends outside the card and its
     // body straight across it.
-    const leg = landingLeg(WIRING_GRID_STEP);
+    const leg = landingLeg(GRID_STEP);
     const reloaded = enforcePerpendicularEnds(
       [SRC, ...(layout.waypoints ?? []), pin.point],
       "bottom",
@@ -214,13 +220,13 @@ describe("drawnEdgeLayout (#844)", () => {
      *  on `mousemove`, AFTER our `pointermove`, so the frame that entered the card
      *  still believed nothing was hovered. */
     function staleGesture() {
-      let gesture = startGesture(SRC, "bottom", WIRING_GRID_STEP);
+      let gesture = startGesture(SRC, "bottom", GRID_STEP);
       for (const cursor of [{ x: 80, y: 560 }, { x: 500, y: 560 }, DROP]) {
         gesture = advanceGesture(gesture, {
           cursor,
           shift: false,
           overTarget: false,
-          step: WIRING_GRID_STEP,
+          step: GRID_STEP,
         });
       }
       return gesture;
@@ -233,12 +239,13 @@ describe("drawnEdgeLayout (#844)", () => {
         targetAnchor: null,
         targetSide: "top",
         anchorsByDrop: false,
+        step: GRID_STEP,
       });
       return enforcePerpendicularEnds(
         [SRC, ...(layout.waypoints ?? []), PIN],
         "bottom",
         "top",
-        landingLeg(WIRING_GRID_STEP),
+        landingLeg(GRID_STEP),
       );
     }
 
@@ -259,24 +266,24 @@ describe("drawnEdgeLayout (#844)", () => {
     it("reproduces the defect with the trace the last pointer move published", () => {
       // What `onConnectEnd` used to persist: no landing at all, so the renderer
       // squares the gap straight up through the card.
-      expect(crossesCard(reloadedFrom(gesturePath(staleGesture(), null, WIRING_GRID_STEP)))).toBe(true);
+      expect(crossesCard(reloadedFrom(gesturePath(staleGesture(), null, GRID_STEP)))).toBe(true);
     });
 
     it("goes around the card once the landing is rebuilt from the drop's own state", () => {
-      const traced = droppedPath(staleGesture(), DROP, PINNED_NODE, PINNED_HANDLE, "src", WIRING_GRID_STEP);
+      const traced = droppedPath(staleGesture(), DROP, PINNED_NODE, PINNED_HANDLE, "src", GRID_STEP);
       expect(traced[traced.length - 1]).toEqual(PIN);
       const reloaded = reloadedFrom(traced);
       expect(crossesCard(reloaded)).toBe(false);
       // …and what is reloaded is what the preview drew.
       expect(reloaded).toEqual(
-        enforcePerpendicularEnds(traced, "bottom", "top", landingLeg(WIRING_GRID_STEP)),
+        enforcePerpendicularEnds(traced, "bottom", "top", landingLeg(GRID_STEP)),
       );
     });
 
     it("keeps the published trace when nothing is hovered at the drop", () => {
       const gesture = staleGesture();
-      expect(droppedPath(gesture, DROP, null, null, "src", WIRING_GRID_STEP)).toEqual(
-        gesturePath(gesture, null, WIRING_GRID_STEP),
+      expect(droppedPath(gesture, DROP, null, null, "src", GRID_STEP)).toEqual(
+        gesturePath(gesture, null, GRID_STEP),
       );
     });
   });
@@ -289,6 +296,7 @@ describe("drawnEdgeLayout (#844)", () => {
         targetAnchor: null,
         targetSide: "left",
         anchorsByDrop: true,
+        step: GRID_STEP,
       }),
     ).toEqual({});
   });

@@ -3182,6 +3182,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "reviewer");
@@ -3239,6 +3240,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "a");

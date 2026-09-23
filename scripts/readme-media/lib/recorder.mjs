@@ -19,6 +19,7 @@ export class Recorder {
     this.markers = [];
     this.keeps = [];
     this.fasts = [];
+    this.warnings = [];
     this.mouse = { x: variant.viewport.width * 0.6, y: variant.viewport.height * 0.55 };
   }
 
@@ -91,6 +92,13 @@ export class Recorder {
     const start = this.now();
     await sleep(ms);
     this.keeps.push({ start, end: this.now() });
+  }
+
+  /** Something the maintainer should know about this take, without failing it
+   *  (e.g. the gestures drifted from the target): lands in the manifest's
+   *  `warnings` for the variant. */
+  warn(message) {
+    this.warnings.push(message);
   }
 
   // ---- gestures --------------------------------------------------------------
@@ -167,6 +175,6 @@ export class Recorder {
     const video = this.page.video();
     const duration = this.now();
     await this.context.close();
-    return { video: await video.path(), markers: this.markers, keeps: this.keeps, fasts: this.fasts, duration };
+    return { video: await video.path(), markers: this.markers, keeps: this.keeps, fasts: this.fasts, warnings: this.warnings, duration };
   }
 }

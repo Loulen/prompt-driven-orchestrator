@@ -124,6 +124,7 @@ async function recordVariant({ browser, instance, scene, variant, manifestFile }
     poster: path.relative(PATHS.review, poster),
     posterBytes: fs.statSync(encodedPoster).size,
     target: TARGET_MS,
+    sceneWarnings: timeline.warnings,
   });
   landVariant({
     file: manifestFile,

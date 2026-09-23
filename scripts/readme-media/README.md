@@ -109,15 +109,37 @@ What `play(ctx)` gets:
 
 Whatever is not in a marker window, a `keep`, a `fast` or a `hold` is cut. Aim for 8 to 15 s; the
 manifest warns outside that range, and a short montage is frozen on its last frame up to 8 s.
+Nothing on screen may change after the final `hold`: the video runs a beat past it, and that beat
+can become the poster.
 A row GIF shows a ~480 px cell: crop on the panel that matters so its text reads at about 1:1
 (crop width close to the GIF's content width, ~910 px); a narrower `viewport` lets the page reflow
 into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one in `selection.txt`, then
 `make readme-media-publish`.
+
+## Settings scenes (no live agent)
+
+`triggers`, `profiles` and `skills` (#857) film settings, not agents: `live: []`, so no auth is
+staged. `scenes/_no-agent.mjs` makes that hold. In the page, every request that could start an agent
+session (a new run, a trigger's Run now, a retry) is aborted, and after each variant the demo tmux
+socket must hold no session.
+
+- **triggers**: the demo trigger (`* * * * *`, guard `./prod-health-check.sh`) is shown **armed**.
+  The global Trigger pause goes on first, then the trigger is enabled, so the scheduler never fires
+  it. The crop leaves out the left panel and its pause banner. The guard is a script of the fixture
+  repo (`fixture/shop-app/prod-health-check.sh`, probe in `ops/prod-probe.env`): it exits 0 and prints
+  the same incident report the mocked history's fired entries carry.
+- **profiles**: the scene rewrites the demo HOME's copy of `implement-review` so both nodes follow
+  one profile, « daily driver » (claude · opus · medium). Each variant resets that profile before it
+  plays.
+- **skills**: the source is a local git repo, `fixture/qa-skills/` copied to `~/code/qa-skills` in
+  the demo HOME, so nothing goes over the network. Each variant resets the bank to what the fresh
+  instance seeded. The pick on `reviewer` is never saved.
 
 ## Tests
 
 `make test` runs `node --test scripts/readme-media/test/*.test.mjs`. That covers the history plan,
 the cut plan, selection and publication, scene discovery, the manifest (and a variant's atomic
 landing), a SIGINT mid-encode, and a real demo instance
-(Stats API ratios, teardown after success / Ctrl+C / crash / hard kill; needs `cargo build`). The
-full recording of the Stats scene is opt-in: `READMEMEDIA_E2E=1`.
+(Stats API ratios, teardown after success / Ctrl+C / crash / hard kill; needs `cargo build`), plus
+the settings scenes' declarations and fixtures (the guard's exit codes and report, the skills repo).
+The full recordings (Stats, and triggers + profiles + skills) are opt-in: `READMEMEDIA_E2E=1`.

@@ -71,7 +71,7 @@ Each node declares what it hands over (markdown with frontmatter, image lists, f
 </td>
 <td width="50%">
   <!-- scene: outputs -->
-  <a href="docs/features.md#typed-outputs"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="The reviewer's typed outputs: a verdict with a Mermaid diagram and annotated screenshots" width="100%" /></picture></a>
+  <a href="docs/features.md#typed-outputs"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/outputs.jpg"><source srcset="docs/assets/readme/outputs.gif" type="image/gif"><img src="docs/assets/readme/outputs.jpg" alt="The reviewer's typed outputs: a verdict with a Mermaid diagram and annotated screenshots" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -86,7 +86,7 @@ Comment any line of a run's diff and send it to the run's manager agent. Its ans
 </td>
 <td width="50%">
   <!-- scene: review -->
-  <a href="docs/features.md#diff-review"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="Commenting a diff line, sending it to the manager, and its answer arriving in the thread" width="100%" /></picture></a>
+  <a href="docs/features.md#diff-review"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/review.jpg"><source srcset="docs/assets/readme/review.gif" type="image/gif"><img src="docs/assets/readme/review.jpg" alt="Commenting a diff line, sending it to the manager, and its answer arriving in the thread" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -131,7 +131,7 @@ A node can launch child pipelines from its own session. Children nest under thei
 </td>
 <td width="50%">
   <!-- scene: orchestration -->
-  <a href="docs/features.md#recursive-orchestration"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/pdo-ui.png"><source srcset="docs/pdo-ui.png"><img src="docs/pdo-ui.png" alt="A node launching child runs, nested under their parent in the run tree" width="100%" /></picture></a>
+  <a href="docs/features.md#recursive-orchestration"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/orchestration.jpg"><source srcset="docs/assets/readme/orchestration.gif" type="image/gif"><img src="docs/assets/readme/orchestration.jpg" alt="A node launching child runs, nested under their parent in the run tree" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

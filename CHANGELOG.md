@@ -16,6 +16,21 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.99.0
+**Terminal partagé : prise de main par l'icône main, passage de relais et bannière d'attente** (#870).
+
+- Un spectateur voit une icône main (« Take control ») dans la barre du terminal. Un clic lui
+  donne la main tout de suite, sans confirmation : sa fenêtre reprend sa taille et sa police
+  normales, ses frappes atteignent la session. La bascule se fait à chaud (`refresh-client -f`),
+  sans rattacher de client tmux.
+- L'ancien pilote devient spectateur, lit brièvement « Another browser took control » et garde
+  l'icône main pour reprendre la main. Quand le pilote part, la main revient au poste arrivé le
+  plus tôt.
+- En attente déclarée, la bannière d'un spectateur dit « take control to reply, then press Enter
+  to resume ».
+- Point connu, antérieur : fermer un socket terminal injecte `\n^D` dans le pane
+  (`portable-pty`), à traiter dans un ticket séparé.
+
 ## 1.98.0
 **Terminal partagé : un seul pilote par terminal, les autres postes regardent en lecture seule** (#869).
 

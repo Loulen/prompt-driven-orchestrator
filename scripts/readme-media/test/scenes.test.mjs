@@ -106,9 +106,17 @@ test("review is zoomed on the hunk and its thread: a ~700 px crop under the tool
     assert.ok((v.gifWidth ?? 960) / v.crop.width > 1.25, `review/${v.id}: scaled up in the GIF`);
     assert.ok(v.crop.y >= 36, `review/${v.id}: the Review toolbar (36 px) is out of frame`);
     assert.equal(v.localStorage["pdo.review.list"], "closed", `review/${v.id}: the file list is out of frame`);
-    // The send bar is sticky at the bottom: the crop reaches it.
-    assert.equal(v.crop.y + v.crop.height, v.viewport.height, `review/${v.id}: the crop reaches the send bar`);
+    // The send bar is sticky 8 px above the bottom: the crop ends with it, the rows scrolling under it stay out.
+    assert.equal(v.crop.y + v.crop.height, v.viewport.height - 8, `review/${v.id}: the crop ends at the send bar's bottom`);
   }
+});
+
+test("review: the manager answers in one line (the demo HOME's CLAUDE.md)", async () => {
+  const { MANAGER_RULE } = await import("../scenes/review.mjs");
+  assert.match(MANAGER_RULE, /pdo review reply/);
+  assert.match(MANAGER_RULE, /ONE short sentence of at most 80 characters/);
+  const example = MANAGER_RULE.match(/--text "([^"]+)"/)[1];
+  assert.ok(example.length <= 80, `the example answer is ${example.length} characters`);
 });
 
 test("interactive-orchestrator: its target, implementer interactive and orchestrator with their skills, nothing else", async () => {
@@ -139,6 +147,13 @@ test("interactive-orchestrator: its target, implementer interactive and orchestr
   }
   assert.doesNotMatch(INTERACTIVE_TASK.input, /pdo run create (?!implement-review)/, "every child runs implement-review");
   assert.match(INTERACTIVE_TASK.input, /no cd, no absolute path/);
+  // One bare wait after the children, not the skill's busy loop, on camera.
+  const { WAIT_COMMAND, ANSWER_HOLD_MS } = await import("../scenes/interactive-orchestrator.mjs");
+  assert.match(WAIT_COMMAND, /^pdo run wait --all --timeout \d+$/);
+  assert.ok(INTERACTIVE_TASK.input.indexOf(WAIT_COMMAND) > INTERACTIVE_TASK.input.lastIndexOf("pdo run create"), "it waits once both are started");
+  assert.match(INTERACTIVE_TASK.input, /no loop/);
+  // The typed answer stays readable before the Enter.
+  assert.ok(ANSWER_HOLD_MS >= 800);
 });
 
 test("interactive-orchestrator fails a variant whose terminal shows the demo root, even wrapped", async () => {

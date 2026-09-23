@@ -189,8 +189,8 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 | `routing` | — | the loop edge `reviewer → implementer`, `verdict != pass`, the exit as `else`, saved | `scenes/_canvas.mjs` |
 | `stats` | — | the Stats page over the mocked history | |
 | `outputs` | `claude` | a finished run's `reviewer`: its two ports in Edit, then in Run an annotated screenshot (lightbox) and the `review` markdown with its Mermaid diagram rendered | `scenes/_live.mjs` |
-| `review` | `claude` | a finished run's Review page, zoomed on the commented hunk: a comment on a line, sent to the manager, cut ×8, the manager's own answer in the thread | `scenes/_live.mjs` |
-| `interactive-orchestrator` | `claude` | `implementer`, interactive and orchestrator, asks a question (the « awaiting you » banner), the cursor types the answer in its terminal, then it starts two child runs of `implement-review`, nested under it in the run tree | `scenes/_live.mjs`, `scenes/_canvas.mjs` |
+| `review` | `claude` | a finished run's Review page, zoomed on the commented hunk: a comment on a line, sent to the manager, cut ×8, the manager's own answer in the thread, on one line (the demo HOME's `~/.claude/CLAUDE.md` asks for it; a wrapped answer fails the variant) | `scenes/_live.mjs` |
+| `interactive-orchestrator` | `claude` | `implementer`, interactive and orchestrator, asks a question (the « awaiting you » banner), the cursor types the answer in its terminal, then it starts two child runs of `implement-review`, nested under it in the run tree, and waits for them with one bare `pdo run wait --all` | `scenes/_live.mjs`, `scenes/_canvas.mjs` |
 | `triggers`, `profiles`, `skills` | — | settings, no agent (see below) | `scenes/_no-agent.mjs` |
 
 `scenes/_live.mjs` is for the scenes that need real agents: `startDemoRun`

@@ -49,6 +49,11 @@ export const PARTS = [
 export const QUESTION = "Search and price sort: one child run each, in parallel?";
 export const ANSWER = "Yes, both in parallel.";
 
+/** The one wait the parent runs once its children are started: a bare command
+ *  on camera, not the `while ! pdo run wait …` loop of the orchestrate skill.
+ *  Its timeout outlasts the filmed variant. */
+export const WAIT_COMMAND = "pdo run wait --all --timeout 590";
+
 /** The parent's task: ask first, then orchestrate, never implement. The
  *  commands are spelled out so the agent asks once and starts both children at
  *  once, without a planning detour. */
@@ -66,7 +71,9 @@ export const INTERACTIVE_TASK = {
     "",
     ...PARTS.map((part) => `pdo run create ${DEMO_PIPELINE_ID} --name "${part.name}" --input "${part.input}"`),
     "",
-    "Then wait for both with pdo run wait --all.",
+    "Then wait for both with this one command, no loop around it:",
+    "",
+    WAIT_COMMAND,
     "",
     "Run every command exactly as written, from your current directory: no cd, no absolute path.",
   ].join("\n"),
@@ -173,23 +180,31 @@ async function untilQuestion(ctx, runId) {
   await sleep(300);
 }
 
+/** How long the typed answer stays on screen before the Enter. */
+export const ANSWER_HOLD_MS = 1000;
+
 /** Filmed: a click in the terminal, the answer typed a word at a time (a key
- *  per character round-trips through the PTY bridge and drags over seconds),
- *  Enter once the pane shows it. */
+ *  per character round-trips through the PTY bridge and drags over seconds).
+ *  Each word waits for the pane to echo it, so the words land one by one
+ *  instead of all at once after a lag; the whole answer stays up
+ *  `ANSWER_HOLD_MS` before the Enter. */
 async function typeAnswer(ctx, runId) {
   const { page, instance } = ctx;
   await ctx.click(page.getByTestId("xterm-container"), { duration: 700 });
   await sleep(150);
+  let typed = "";
   for (const word of ANSWER.match(/\S+\s*/g)) {
     await page.keyboard.insertText(word);
-    await sleep(110);
+    typed += word;
+    const echoed = typed.trimEnd();
+    const deadline = Date.now() + 5_000;
+    while (!paneText(instance, runId, "implementer").includes(echoed)) {
+      if (Date.now() > deadline) throw new Error(`« ${echoed} » never reached the implementer's terminal`);
+      await sleep(50);
+    }
+    await sleep(180);
   }
-  const deadline = Date.now() + 5_000;
-  while (!paneText(instance, runId, "implementer").includes(ANSWER)) {
-    if (Date.now() > deadline) throw new Error(`the answer never reached the implementer's terminal`);
-    await sleep(100);
-  }
-  await sleep(250);
+  await sleep(ANSWER_HOLD_MS);
   await page.keyboard.press("Enter");
 }
 

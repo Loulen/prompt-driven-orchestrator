@@ -45,8 +45,13 @@ For each scene, in its own throwaway instance:
    asynchronously, so a Ctrl+C mid-encode is handled at once and kills it. Each variant is encoded
    under `.work/` and lands in the review folder together with its manifest entry: an interrupted
    run leaves the previous GIF and its entry, never a new GIF under a stale entry.
-6. **Teardown**. The daemon is stopped, the demo tmux server is killed (every agent with it), the
-   auth files are wiped and the root is removed. This happens after each scene, and on any exit:
+6. **Teardown**. The daemon is stopped, the demo tmux server is killed (every agent with it), and
+   the script **waits for every process of the demo to really exit** before it goes on: the panes
+   and their descendants, plus (Linux) any process whose HOME is the demo HOME or whose cwd is under
+   the root. A `claude` that got the hangup takes a few seconds to wind down and writes under its
+   HOME on the way out, so removing the root before it exits would let it recreate an orphan
+   `/tmp/pdo-readme-media-*`. A process still alive after 10 s is killed. Then the auth files are
+   wiped and the root is removed. This happens after each scene, and on any exit:
    failure, uncaught error, Ctrl+C, SIGTERM. A run killed with SIGKILL leaves its `state.json`, and
    the next start finishes the teardown. `KEEP_DEMO=1` keeps the root for inspection (auth still wiped).
 
@@ -131,17 +136,50 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 | `pipelines` | — | from the pipeline's skeleton (Start, End): + → Node (`implementer`), then its edges | `scenes/_canvas.mjs` |
 | `routing` | — | the loop edge `reviewer → implementer`, `verdict != pass`, the exit as `else`, saved | `scenes/_canvas.mjs` |
 | `stats` | — | the Stats page over the mocked history | |
+| `outputs` | `claude` | a finished run's `reviewer`: its two ports in Edit, then in Run an annotated screenshot (lightbox) and the `review` markdown with its Mermaid diagram rendered | `scenes/_live.mjs` |
+| `review` | `claude` | a finished run's Review page: a comment on a line, sent to the manager, cut ×8, the manager's own answer in the thread | `scenes/_live.mjs` |
+| `orchestration` | `claude` | `implementer` with Orchestrator on relaunches `implement-review` once per part: the children nest under their parent in the run tree, the counters follow them to the end | `scenes/_live.mjs`, `scenes/_canvas.mjs` |
 | `triggers`, `profiles`, `skills` | — | settings, no agent (see below) | `scenes/_no-agent.mjs` |
 
-`scenes/_live.mjs` is for the scenes that need real agents (#859 reuses it): `startDemoRun`
+`scenes/_live.mjs` is for the scenes that need real agents: `startDemoRun`
 starts a run of the demo pipeline on the fixture repo (`DEMO_TASK`: add a product search),
-`waitNode` / `waitPane` wait for a node's status or for text in its tmux pane, and `stopDemoRun`
-stops every agent of the run, in a `finally`, as soon as the variant is filmed (`archive: true` also
-takes it off the runs rail). `openRun` selects a run on the rail off camera. Opening a run selects
+`completeDemoRun` plays one to the end off camera (a scene's `setup`: `outputs` films one finished run
+for both variants, `review` plays one per variant, side by side), `waitNode` / `waitRun` / `waitPane` wait for a node's or a
+run's status or for text in its tmux pane, and `stopDemoRun` stops every agent of the run, in a
+`finally`, as soon as the variant is filmed: its nodes, its manager (`pdo-mgr-<run>`, started on
+demand by a send to the manager), and with `children: true` every child run first (`archive: true`
+also takes them off the runs rail). `scrollUntil` wheel-scrolls a panel until an element sits at a
+given height: point it `over` a visible element of the panel, never the (off-screen) target. `openRun` selects a run on the rail off camera. Opening a run selects
 its live node by itself, so select `Start` first if the filmed click must open the node.
 `scenes/_canvas.mjs` is for the edit canvas: `installPipeline` / `restoreDemoPipeline` put a variant's
 starting pipeline in place (a variant that saves changes the library for the next one), `handle`,
 `pointOnEdge` (a point on an edge's drawn route: its hit box's centre is not on it) and `zoomCanvas`.
+
+## Artifact scenes (#859)
+
+- **outputs**: `setup` plays a whole run (`completeDemoRun`); both variants open its `reviewer`.
+  The reviewer's prompt (`fixture/pipelines/implement-review.prompts/reviewer.md`) keeps the review
+  short, with a small left-to-right Mermaid diagram (three or four boxes) right after the verdict:
+  it reads in the modal without a scroll (a top-down one scales to the modal's width and overflows). The wait for the Mermaid render is cut; the thumbnails and the lightbox image are loaded
+  before they are filmed. The poster checks the run tab has nothing unsaved. On the Run tab the
+  finished node's terminal is folded to a bar (#346) and the panel lists its I/O: the one input
+  (`code`) above the two outputs. That is how the app shows a finished node, and the scene films it
+  as is.
+- **review**: `setup` plays **one whole run per variant**, both at once: a variant never films the
+  other's comment or reply ("1 sent", a thread already answered). Each variant comments a line the
+  demo task always adds (`app.js`'s input listener, `index.html`'s search input; the file's first
+  added line otherwise), sends it, and waits for the reply the manager posts with
+  `pdo review reply` **in that comment's thread**: nothing is injected. The wait is a short ×8
+  stretch, then a cut. The manager is stopped after each variant. Both variants film the unified
+  view with the file list closed, at 1040 px (barely scaled to the GIF's 960, nothing cropped): no code line,
+  toolbar button or thread footer is cut or wrapped.
+- **orchestration**: `setup` turns Orchestrator on for `implementer` in the demo HOME's copy of
+  `implement-review` (same name: still the one pipeline). The run's task spells out the two
+  `pdo run create implement-review …` commands, each child's task says not to orchestrate in turn.
+  The children are real runs of the whole pipeline (a minute or two each); the variant ends when
+  both are finished, then stops and archives the parent and its children. Before variant a's
+  poster, `implementer` is re-selected off camera once its session ended, so its terminal folds to a
+  bar instead of an empty « [exited] » block.
 
 ## Settings scenes (no live agent)
 
@@ -168,6 +206,7 @@ socket must hold no session.
 the cut plan, selection and publication, scene discovery (and the markers of each scene), the
 manifest (and a variant's atomic landing), a SIGINT mid-encode, the video/timeline alignment, and a
 real demo instance
-(Stats API ratios, teardown after success / Ctrl+C / crash / hard kill; needs `cargo build`), plus
+(Stats API ratios, teardown after success / Ctrl+C / crash / hard kill, and an agent that outlives
+the hangup; needs `cargo build`), plus
 the settings scenes' declarations and fixtures (the guard's exit codes and report, the skills repo).
 The full recordings (Stats, and triggers + profiles + skills) are opt-in: `READMEMEDIA_E2E=1`.

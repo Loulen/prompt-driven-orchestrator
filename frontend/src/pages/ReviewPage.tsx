@@ -872,16 +872,18 @@ export default function ReviewPage({ runId }: Props) {
   return (
     <div className="pdo-review grid h-screen grid-rows-[36px_1fr] bg-bg-1 text-fg" data-testid="review-page">
       {/* ===== Top bar ===== */}
-      <div className="relative z-20 flex items-center gap-2 border-b border-line bg-bg-2 px-2.5" style={{ fontSize: "11px" }}>
+      {/* One line whatever the width: the buttons and pills never wrap, the
+          pipeline · run label truncates first. */}
+      <div className="relative z-20 flex min-w-0 items-center gap-2 whitespace-nowrap border-b border-line bg-bg-2 px-2.5" style={{ fontSize: "11px" }}>
         <button
           type="button"
           onClick={goBack}
           data-testid="review-back"
           title="Back to the Run (canvas stays where you left it)"
-          className="flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-[3px] text-fg-2 hover:bg-bg-3 hover:text-fg"
+          className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-[3px] text-fg-2 hover:bg-bg-3 hover:text-fg"
         >
-          <ArrowLeft size={12} />
-          <span className="text-fg-4">
+          <ArrowLeft size={12} className="shrink-0" />
+          <span className="truncate text-fg-4">
             <span className="font-medium text-fg-2">{run?.pipeline_name ?? "…"}</span> · {runId}
           </span>
         </button>
@@ -933,7 +935,7 @@ export default function ReviewPage({ runId }: Props) {
           )}
         </div>
         {remapNote && (
-          <span className="text-fg-3" style={{ fontSize: "10.5px" }} data-testid="review-remap-note" role="status">
+          <span className="min-w-0 truncate text-fg-3" style={{ fontSize: "10.5px" }} title={remapNote} data-testid="review-remap-note" role="status">
             {remapNote}
           </span>
         )}
@@ -966,7 +968,7 @@ export default function ReviewPage({ runId }: Props) {
         )}
         <span className="h-4 w-px bg-line-strong" />
         <div
-          className="inline-flex overflow-hidden rounded border border-line-strong"
+          className="inline-flex shrink-0 overflow-hidden rounded border border-line-strong"
           title={narrow ? "Unified on narrow windows; your preference is kept" : "Remembered on this browser"}
           role="group"
           data-testid="review-view-toggle"

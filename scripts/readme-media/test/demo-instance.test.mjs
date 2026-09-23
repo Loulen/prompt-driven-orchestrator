@@ -175,6 +175,27 @@ describe("demo instance: cleaned up whatever the ending", { skip }, () => {
     assertGone(state);
   });
 
+  test("Ctrl+C waits for an agent that outlives the hangup, then removes the root for good", async () => {
+    const { child, ready, exited } = holdInstance("stubborn");
+    const state = await ready;
+    try {
+      assert.ok(isAlive(state.agentPid), "the stand-in agent runs");
+      child.kill("SIGINT");
+      assert.equal((await exited).code, 130);
+      // The script handed back only once the agent had really exited…
+      assert.ok(!isAlive(state.agentPid), "the agent exited before the script did");
+      assertGone(state);
+      // …so nothing is left to write under the demo HOME and recreate the root.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      assert.ok(!fs.existsSync(state.root), "the root stays removed");
+    } finally {
+      // A failing run must not leave the stand-in behind: it would write under
+      // the test's tmp root after the suite removed it.
+      if (isAlive(state.agentPid)) process.kill(state.agentPid, "SIGKILL");
+      fs.rmSync(state.root, { recursive: true, force: true });
+    }
+  });
+
   test("an uncaught error in a scene", async () => {
     const { ready, exited } = holdInstance("crash");
     const state = await ready;

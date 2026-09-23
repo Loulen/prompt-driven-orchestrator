@@ -6,6 +6,7 @@ import type { OpenPipeline } from "../stores/editStore";
 import { pipelineToYamlObject } from "../lib/serializePipeline";
 import { deepEqual } from "../lib/deepEqual";
 import { stripLayout } from "../lib/layoutFields";
+import { canonicalizeCarriedPorts } from "../lib/edgePorts";
 
 export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 
@@ -28,8 +29,14 @@ export function pipelinesEquivalent(a: PipelineDef, b: PipelineDef): boolean {
   return deepEqual(comparablePipelineObject(a), comparablePipelineObject(b));
 }
 
+// Layout is stripped, then the one SEMANTIC field whose order carries no
+// meaning is canonicalised: the outputs an edge carries are a SET (ADR-0073 §2 /
+// #843), so `[a, b]` and `[b, a]` are the same pipeline. The daemon's
+// `pipeline_semantics::SourceProjection` sorts the same list for the library
+// content hash; the two must agree or the star and the diff contradict each
+// other on the same edit.
 function comparablePipelineObject(p: PipelineDef): Record<string, unknown> {
-  return stripLayout(pipelineToYamlObject(p));
+  return canonicalizeCarriedPorts(stripLayout(pipelineToYamlObject(p)));
 }
 
 // Prompts live in `<id>.prompts/<node_id>.md` on disk, separate from the

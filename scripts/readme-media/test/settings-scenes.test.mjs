@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { planHistory } from "../lib/history-plan.mjs";
+import { INCIDENT_REPORT, planHistory } from "../lib/history-plan.mjs";
 import { readManifest } from "../lib/manifest.mjs";
 import { loadScenes } from "../lib/scenes.mjs";
 
@@ -20,7 +20,7 @@ const fixture = path.join(here, "..", "fixture");
 const MARKERS = {
   triggers: [
     ["guard-tested", "history-shown"],
-    ["guard-tested", "history-shown"],
+    ["runs-filtered", "incident-shown"],
   ],
   profiles: [
     ["profile-changed", "nodes-switched"],
@@ -49,14 +49,15 @@ test("triggers, profiles and skills: two variants each, their markers, no live a
   }
 });
 
-test("the guard exits 0 on a degraded prod, its report is the incident runs' input", () => {
+test("the guard exits 0 on a degraded prod, its report is what the mocked fires hand prod-check", () => {
   const run = spawnSync(path.join(fixture, "shop-app", "prod-health-check.sh"), { encoding: "utf8", cwd: os.tmpdir() });
   assert.equal(run.status, 0, run.stderr);
-  // The same report the mocked history's fired entries carry as guard stdout.
-  const plan = planHistory({ now: new Date("2026-09-22T12:00:00Z"), targetRepo: "/tmp/shop-app", triggerId: "trg-demo" });
-  const fired = plan.fires.filter((f) => f.outcome === "fired");
-  assert.ok(fired.length > 0);
-  for (const fire of fired) assert.equal(run.stdout.trim(), fire.guard_stdout);
+  assert.equal(run.stdout.trim(), INCIDENT_REPORT);
+  // Every mocked fire carries a report in the guard's own shape (its probe of the day).
+  const plan = planHistory({ now: new Date("2026-09-22T12:00:00Z"), targetRepo: "/home/me/code/shop-app", triggerId: "trg-demo" });
+  const shape = (report) => report.split("\n").map((line) => line.replace(/last deploy: .*/, "last deploy: …").replace(/[\d.:]+/g, "#"));
+  assert.ok(plan.fires.length > 0);
+  for (const fire of plan.fires) assert.deepEqual(shape(fire.guard_stdout), shape(INCIDENT_REPORT));
 });
 
 test("the guard exits 1 on a healthy prod: the minute is skipped", (t) => {

@@ -70,9 +70,13 @@ export class DemoInstance {
       ownerPid: process.pid,
       root,
       home: path.join(root, "home"),
-      cwd: path.join(root, "daemon"),
+      // Where an installed PDO runs (`make install`: ~/.pdo/app): what the UI
+      // shows under the daemon's cwd (the skill bank) reads `~/.pdo/app/…` (#883).
+      cwd: path.join(root, "home", ".pdo", "app"),
       bin: path.join(root, "bin"),
-      repo: path.join(root, "repos", "shop-app"),
+      // Under the demo HOME, where a real machine keeps it: the UI (and Claude
+      // Code) read it `~/code/shop-app`, never the throwaway root (#883).
+      repo: path.join(root, "home", "code", "shop-app"),
       port,
       daemonPid: null,
       authFiles: [],

@@ -109,7 +109,7 @@ const WITH_SOURCE: SkillBank = {
 };
 const POPULATED: SkillBank = {
   root_path: "/home/user/.pdo/skills",
-  folders: [folder("f-m", "méthode"), folder("f-i", "ippon"), folder("f-j", "java", "f-i")],
+  folders: [folder("f-m", "méthode"), folder("f-i", "acme"), folder("f-j", "java", "f-i")],
   skills: [
     skill("s-tdd", "tdd", "f-m", "Test-driven development."),
     skill("s-gr", "grilling", null, "Grill relentlessly."),
@@ -244,6 +244,23 @@ describe("SkillBankPanel (#668)", () => {
     fireEvent.click(within(provenance).getByRole("button"));
     await waitFor(() => expect(screen.getByTestId("folder-detail")).toBeInTheDocument());
     expect(screen.getByTestId("folder-source-badge")).toBeInTheDocument();
+  });
+
+  it("a local source under the home reads ~/…, in the folder and in its skills' provenance", () => {
+    const local = "/home/user/code/qa-skills";
+    const localFolder: SkillFolder = { ...folder("f-qa", "qa-skills"), source: { ...sourceFolder.source!, url: local, path: "" } };
+    setup({
+      root_path: "/home/user/.pdo/skills",
+      folders: [localFolder],
+      skills: [{ ...skill("s-a11y", "a11y-audit", "f-qa", "Audit a page."), source: { url: local, ref: "main", commit: "3f9c2e1deadbeef", path: "skills/a11y-audit" } }],
+    });
+    fireEvent.click(screen.getByTestId("tree-folder-f-qa"));
+    const folderProvenance = screen.getByTestId("folder-provenance");
+    expect(folderProvenance).toHaveTextContent("~/code/qa-skills");
+    expect(folderProvenance).not.toHaveTextContent("/home/user/code/qa-skills");
+    fireEvent.click(screen.getByLabelText("Expand qa-skills"));
+    fireEvent.click(screen.getByTestId("tree-skill-s-a11y"));
+    expect(screen.getByTestId("skill-detail-provenance")).toHaveTextContent("~/code/qa-skills@3f9c2e1 · skills/a11y-audit");
   });
 
   it("FP step 4: Update from source re-scans, shows the diff in the right panel, then updates", async () => {
@@ -443,7 +460,7 @@ describe("SkillBankPanel (#668)", () => {
     fireEvent.click(screen.getByTestId("tree-skill-s-gr"));
     fireEvent.click(screen.getByTestId("skill-detail-move"));
     const picker = screen.getByTestId("move-picker");
-    fireEvent.click(within(picker).getByRole("menuitem", { name: /ippon \/ java/ }));
+    fireEvent.click(within(picker).getByRole("menuitem", { name: /acme \/ java/ }));
     await waitFor(() => expect(updateSkillMock).toHaveBeenCalledWith("s-gr", { folder_id: "f-j" }));
   });
 

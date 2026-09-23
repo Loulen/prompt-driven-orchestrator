@@ -19,6 +19,7 @@ import { timeAgo } from "../lib/skillMd";
 import { displaySourceUrl, parseSkillSource, shortCommit } from "../lib/skillSource";
 import { folderPathLabel } from "../lib/skillTree";
 import FsExplorerModal from "./FsExplorerModal";
+import { tildify } from "../lib/homePath";
 
 interface Props {
   folders: SkillFolder[];
@@ -62,11 +63,6 @@ function newScanId(): string {
   const c = globalThis.crypto as Crypto | undefined;
   if (c && typeof c.randomUUID === "function") return c.randomUUID();
   return `scan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function relativise(path: string, home: string | null | undefined): string {
-  if (home && path.startsWith(home + "/")) return "~" + path.slice(home.length);
-  return path;
 }
 
 /** Rebuild the text a recent source was typed as, for the field. */
@@ -595,7 +591,7 @@ export default function ImportSkillsModal({
                 <div className="text-fg-2" style={{ fontSize: "12px" }}>
                   {parsed?.kind === "local" ? (
                     <>
-                      Scanning <span className="font-mono">{relativise(parsed.url, home)}</span>…
+                      Scanning <span className="font-mono">{tildify(parsed.url, home)}</span>…
                     </>
                   ) : (
                     <>
@@ -646,7 +642,7 @@ export default function ImportSkillsModal({
                           <Folder size={12} className="shrink-0 text-st-await" />
                         )}
                         <span className="font-mono text-fg">
-                          {/^https?:\/\//.test(item.url) ? displaySourceUrl(item.url) : relativise(item.url, home)}
+                          {/^https?:\/\//.test(item.url) ? displaySourceUrl(item.url) : tildify(item.url, home)}
                           {item.path ? `/${item.path}` : ""}
                         </span>
                         <span className="text-fg-4">

@@ -11,11 +11,16 @@
 //
 // The runs are runs of the demo pipeline `implement-review`, on its two nodes
 // `implementer` and `reviewer`; their snapshot is derived from its target
-// (lib/demo-pipeline.mjs), loop included.
+// (lib/demo-pipeline.mjs), loop included. Apart from them, the demo trigger's
+// fires each started a run of `prod-check` (its own target): about one in ten
+// found a real incident, the others were false alarms. Those runs stay out of
+// the Stats by model (their sessions bill no turn and name no model), which are
+// computed on `implement-review` alone (grilling Q42).
 
 import path from "node:path";
 import { createRng, normalQuantiles } from "./rng.mjs";
 import { DEMO_PIPELINE } from "./demo-pipeline.mjs";
+import { runSnapshot, targetPipeline } from "./targets.mjs";
 
 /**
  * The four models of the README, and what each costs, lasts and fails.
@@ -81,12 +86,40 @@ const TASKS = [
   "Round totals to the cent everywhere",
 ];
 
-const INCIDENT_REPORT = [
-  "# Incident — checkout API degraded",
-  "- /api/checkout p95 = 4.2 s (budget 800 ms)",
-  "- 5xx rate 12 % since 21:04",
-  "- last deploy: a1f3c9e \"cart: batch price lookups\"",
-].join("\n");
+/** The guard's report (fixture/shop-app/prod-health-check.sh, exit 0), for
+ *  one probe: what a fire hands `prod-check` as its input. */
+function guardReport({ p95Ms, errorRatePct, since, lastDeploy }) {
+  return [
+    "# Incident — checkout API degraded",
+    `- /api/checkout p95 = ${Math.floor(p95Ms / 1000)}.${Math.floor((p95Ms % 1000) / 100)} s (budget 800 ms)`,
+    `- 5xx rate ${errorRatePct} % since ${since}`,
+    `- last deploy: ${lastDeploy}`,
+  ].join("\n");
+}
+
+/** The fixture's probe (ops/prod-probe.env): the real incident the guard
+ *  reports today, and the one the Triggers scene dry-runs. */
+export const INCIDENT_REPORT = guardReport({ p95Ms: 4200, errorRatePct: 12, since: "21:04", lastDeploy: 'a1f3c9e "cart: batch price lookups"' });
+
+/** The demo trigger's pipeline (fixture/targets/prod-check.yaml), and its nodes. */
+export const PROD_CHECK = runSnapshot(targetPipeline("prod-check"), { id: "prod-check" });
+const DEBUGGER = PROD_CHECK.nodeDefs.find((n) => n.name === "Incident-debugger").id;
+const FIXER = PROD_CHECK.nodeDefs.find((n) => n.name === "Orchestrate Fix").id;
+const NOTIFIER = PROD_CHECK.nodeDefs.find((n) => n.name === "Notify Slack").id;
+/** The path of a run, from its debugger's `Incident_found` (the target's two
+ *  conditional edges): a real incident is fixed then notified, a false alarm
+ *  goes straight to End. */
+export const PROD_CHECK_ROUTES = { true: [DEBUGGER, FIXER, NOTIFIER], false: [DEBUGGER] };
+/** Minutes per node of a prod-check run. */
+const PROD_CHECK_MINUTES = { [DEBUGGER]: [2, 5], [FIXER]: [14, 26], [NOTIFIER]: [0.5, 1.2] };
+const FIRE_COUNT = 100;
+const INCIDENT_COUNT = 10;
+const DEPLOYS = [
+  'a1f3c9e "cart: batch price lookups"',
+  '7c2e0b4 "checkout: retry the payment call"',
+  'e91d5a2 "search: debounce the product filter"',
+  '3b8f61c "cart: persist in localStorage"',
+];
 
 const STEERING_MESSAGES = [
   "Keep prices in cents end to end, please.",
@@ -98,7 +131,9 @@ const STEERING_MESSAGES = [
 /**
  * Build the whole history. `now` is a Date (the last run ends before it),
  * `targetRepo` the demo repository path (transcripts are keyed by the worktree
- * under it), `triggerId` the demo trigger the incident runs were fired by.
+ * under it), `triggerId` the demo trigger whose fires started the `prod-check`
+ * runs (none without it). `prodChecks` lists those runs with their debugger's
+ * `Incident_found`.
  */
 export function planHistory({ now, targetRepo, triggerId = null, seed = 852, days = 30 }) {
   const rng = createRng(seed);
@@ -179,7 +214,6 @@ export function planHistory({ now, targetRepo, triggerId = null, seed = 852, day
 
   const events = [];
   const files = [];
-  const firedRuns = [];
   const nodeDefs = DEMO_PIPELINE.nodeDefs;
   let messageCounter = 0;
   const nextMessageId = () => `msg_demo_${String(++messageCounter).padStart(6, "0")}`;
@@ -188,8 +222,7 @@ export function planHistory({ now, targetRepo, triggerId = null, seed = 852, day
     const runStart = Math.min(starts[index], end - 60 * 60 * 1000);
     const runId = runIdAt(new Date(runStart), rng);
     const worktree = path.join(targetRepo, ".pdo", "runs", runId, "worktree");
-    const triggered = triggerId && index % 17 === 5;
-    const task = triggered ? "Incident: checkout API degraded" : TASKS[index % TASKS.length];
+    const task = TASKS[index % TASKS.length];
     let t = runStart;
     const at = () => new Date(t).toISOString();
 
@@ -197,27 +230,20 @@ export function planHistory({ now, targetRepo, triggerId = null, seed = 852, day
       pipeline_id: DEMO_PIPELINE.id,
       pipeline_name: DEMO_PIPELINE.name,
       name: task,
-      input: triggered ? INCIDENT_REPORT : `${task}.`,
+      input: `${task}.`,
       target_repo: targetRepo,
       harness: "claude",
       sandbox: "off",
       node_defs: nodeDefs,
       edges: DEMO_PIPELINE.edges,
     };
-    if (triggered) {
-      runPayload.triggered_by = triggerId;
-      firedRuns.push({ runId, ts: at() });
-    }
     events.push({ run_id: runId, ts: at(), kind: "run_started", node_id: null, iter: null, payload: runPayload });
     t += 4_000;
 
     // The run's manager session: an infrastructure transcript with no billed
     // turn, so the infrastructure slice is readable ($0) and no Run shows up
     // as « without computable cost ».
-    files.push({
-      path: path.join(".claude", "projects", encodeClaudeDir(worktree), `${rng.uuid()}.jsonl`),
-      content: `${JSON.stringify({ type: "user", message: { role: "user", content: "[pdo-runtime] You are the pipeline manager." }, timestamp: at() })}\n`,
-    });
+    files.push(unbilledTranscript(worktree, rng.uuid(), "[pdo-runtime] You are the pipeline manager.", at()));
 
     let failed = false;
     run.laps.forEach((lap, lapIndex) => {
@@ -300,7 +326,117 @@ export function planHistory({ now, targetRepo, triggerId = null, seed = 852, day
     });
   });
 
-  return { events, files, fires: planFires({ now, days, firedRuns, rng }), prices: MANUAL_PRICES };
+  // The prod-check runs draw from their own stream: the implement-review
+  // history above (and so the Stats) is the same with or without them.
+  const prod = triggerId ? planProdChecks({ now, days, targetRepo, triggerId, rng: createRng(seed + 1) }) : { events: [], files: [], fires: [], prodChecks: [] };
+  return {
+    events: [...events, ...prod.events],
+    files: [...files, ...prod.files],
+    fires: prod.fires,
+    prodChecks: prod.prodChecks,
+    prices: MANUAL_PRICES,
+  };
+}
+
+/** A claude transcript with no billed turn (only the prompt): the session is
+ *  readable at $0, and names no model. */
+function unbilledTranscript(worktree, sessionId, prompt, timestamp) {
+  return {
+    path: path.join(".claude", "projects", encodeClaudeDir(worktree), `${sessionId}.jsonl`),
+    content: `${JSON.stringify({ type: "user", sessionId, message: { role: "user", content: prompt }, timestamp })}\n`,
+  };
+}
+
+/**
+ * About a hundred fires of the demo trigger over the period, each the start of
+ * a `prod-check` run: the guard saw a degraded checkout and fired, then the
+ * Incident-debugger decided. INCIDENT_COUNT of them found a real incident
+ * (`Incident_found = true`: Orchestrate Fix, then Notify Slack); the rest were
+ * false alarms (a short spike, `Incident_found = false`: straight to End).
+ *
+ * Their node sessions bill no turn and name no model: a prod-check run costs
+ * $0 and never lands in a Stats-by-model bucket.
+ */
+function planProdChecks({ now, days, targetRepo, triggerId, rng }) {
+  const incidents = new Set(rng.shuffle([...Array(FIRE_COUNT).keys()]).slice(0, INCIDENT_COUNT));
+  const end = now.getTime() - 30 * 60 * 1000;
+  const starts = Array.from({ length: FIRE_COUNT }, () => end - Math.floor(rng.next() * days * 86_400_000)).sort((a, b) => a - b);
+  const events = [];
+  const files = [];
+  const fires = [];
+  const prodChecks = [];
+  starts.forEach((start, index) => {
+    const incidentFound = incidents.has(index);
+    const fireTs = new Date(start).toISOString();
+    const hhmm = fireTs.slice(11, 16);
+    const input = incidentFound
+      ? guardReport({ p95Ms: rng.int(2800, 5200), errorRatePct: rng.int(6, 18), since: hhmm, lastDeploy: rng.pick(DEPLOYS) })
+      : guardReport({ p95Ms: rng.int(900, 1600), errorRatePct: rng.int(0, 2), since: hhmm, lastDeploy: rng.pick(DEPLOYS) });
+    const runId = runIdAt(new Date(start + 2_000), rng);
+    const worktree = path.join(targetRepo, ".pdo", "runs", runId, "worktree");
+    let t = start + 2_000;
+    const at = () => new Date(t).toISOString();
+    fires.push({
+      ts: fireTs,
+      outcome: "fired",
+      reason: null,
+      run_id: runId,
+      guard_stdout: input,
+      guard_stderr: "",
+      guard_exit_code: 0,
+      source: "schedule",
+    });
+    prodChecks.push({ runId, incidentFound });
+    events.push({
+      run_id: runId,
+      ts: at(),
+      kind: "run_started",
+      node_id: null,
+      iter: null,
+      payload: {
+        pipeline_id: PROD_CHECK.id,
+        pipeline_name: PROD_CHECK.name,
+        name: incidentFound ? "Incident: checkout API degraded" : "Alert: checkout p95 spike",
+        input,
+        target_repo: targetRepo,
+        harness: "claude",
+        sandbox: "off",
+        node_defs: PROD_CHECK.nodeDefs,
+        edges: PROD_CHECK.edges,
+        triggered_by: triggerId,
+      },
+    });
+    files.push(unbilledTranscript(worktree, rng.uuid(), "[pdo-runtime] You are the pipeline manager.", at()));
+    t += 4_000;
+    for (const nodeId of PROD_CHECK_ROUTES[incidentFound]) {
+      const sessionId = rng.uuid();
+      events.push({
+        run_id: runId,
+        ts: at(),
+        kind: "node_started",
+        node_id: nodeId,
+        iter: 1,
+        payload: {
+          node_type: "agent",
+          interactive: false,
+          orchestrator: nodeId === FIXER,
+          isolated_worktree: false,
+          harness: "claude",
+          session_id: sessionId,
+          skills: [],
+          missing_skills: [],
+          skipped_skills: [],
+        },
+      });
+      files.push(unbilledTranscript(worktree, sessionId, input, at()));
+      const [min, max] = PROD_CHECK_MINUTES[nodeId];
+      t += Math.round((min + rng.next() * (max - min)) * 60_000);
+      events.push({ run_id: runId, ts: at(), kind: "node_completed", node_id: nodeId, iter: 1, payload: null });
+      t += 3_000;
+    }
+    events.push({ run_id: runId, ts: at(), kind: "run_completed", node_id: null, iter: null, payload: null });
+  });
+  return { events, files, fires, prodChecks };
 }
 
 /** Cost, duration and context of one attempt, from its node's baseline. */
@@ -314,37 +450,6 @@ export function executionFigures(nodeId, attempt) {
     durationMs: Math.round(base.minutes * profile.speed * Math.exp(0.35 * z) * share * 60_000),
     context: Math.round(base.context * profile.ctxMult * Math.exp(0.2 * z)),
   };
-}
-
-/** About a hundred fires of the demo trigger over the period: mostly skipped by
- *  the guard (prod healthy), a few fired (the incident runs). */
-function planFires({ now, days, firedRuns, rng }) {
-  const fires = firedRuns.map(({ runId, ts }) => ({
-    ts,
-    outcome: "fired",
-    reason: null,
-    run_id: runId,
-    guard_stdout: INCIDENT_REPORT,
-    guard_stderr: "",
-    guard_exit_code: 0,
-    source: "schedule",
-  }));
-  const end = now.getTime() - 5 * 60 * 1000;
-  const skipped = 100 - fires.length;
-  for (let k = 0; k < skipped; k++) {
-    const ts = end - Math.floor(rng.next() * days * 86_400_000);
-    fires.push({
-      ts: new Date(ts).toISOString(),
-      outcome: "guard-exit-nonzero",
-      reason: "guard exited non-zero",
-      run_id: null,
-      guard_stdout: `OK — checkout p95 ${rng.int(180, 420)} ms, 5xx 0.${rng.int(0, 3)} %`,
-      guard_stderr: "",
-      guard_exit_code: 1,
-      source: "schedule",
-    });
-  }
-  return fires.sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
 /** A run id in the daemon's shape: `YYYYMMDD-HHMMSS-<7 hex>`. */

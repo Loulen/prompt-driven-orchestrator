@@ -57,6 +57,7 @@ import SkillFilesTab from "./SkillFilesTab";
 import { useSkillFiles } from "../hooks/useSkillFiles";
 import { useFileDropTarget } from "../hooks/useFileDropTarget";
 import { DropOverlay } from "./SkillFileDropZone";
+import { tildify } from "../lib/homePath";
 
 const REMARK_PLUGINS = [remarkGfm];
 const UNDO_MS = 6000;
@@ -80,11 +81,6 @@ type Pending =
 interface Toast {
   message: string;
   undo?: () => Promise<void>;
-}
-
-function relativise(path: string, home: string | null): string {
-  if (home && path.startsWith(home + "/")) return "~" + path.slice(home.length);
-  return path;
 }
 
 /** The seeded skill (#722): locked against rename, move, edit and delete. */
@@ -413,7 +409,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
         message:
           report.failed.length > 0
             ? `Updated ${n} skill${n === 1 ? "" : "s"} · ${report.failed.length} failed: ${report.failed[0].error}`
-            : `Updated ${n} skill${n === 1 ? "" : "s"} from ${displaySourceUrl(folder.source?.url ?? "the source")}`,
+            : `Updated ${n} skill${n === 1 ? "" : "s"} from ${tildify(displaySourceUrl(folder.source?.url ?? "the source"), home)}`,
       });
     } catch (cause) {
       failWith(cause, "Update from source failed");
@@ -428,7 +424,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
 
   // ---- rendering ----------------------------------------------------------
 
-  const rootLabel = bank.root_path ? `${relativise(bank.root_path, home)}/<id>/` : "";
+  const rootLabel = bank.root_path ? `${tildify(bank.root_path, home)}/<id>/` : "";
 
   const renderActions = (row: TreeRow) => {
     const ref = row.ref;
@@ -672,7 +668,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
           <DeleteSkillConfirm
             skill={pending.skill}
             referents={pending.referents}
-            path={relativise(`${bank.root_path}/${pending.skill.id}`, home)}
+            path={tildify(`${bank.root_path}/${pending.skill.id}`, home)}
             onCancel={() => setPending(null)}
             onConfirm={() => void confirmDelete()}
           />
@@ -705,7 +701,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             onSkillChanged={onChanged}
             showToast={(message) => showToast({ message })}
             onError={setError}
-            pathLabel={bank.root_path ? `${relativise(bank.root_path, home)}/${shortId(selectedSkill.id)}/` : null}
+            pathLabel={bank.root_path ? `${tildify(bank.root_path, home)}/${shortId(selectedSkill.id)}/` : null}
             leaveRequest={leaveRequest}
             onLeaveSettled={() => setLeaveRequest(null)}
             onDirtyChange={setFilesDirty}
@@ -727,6 +723,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
                 selectedSkill.source.path.startsWith(folder.source.path),
             ) ?? null}
             onOpenSourceFolder={openSourceFolder}
+            home={home}
           />
         ) : selectedFolder ? (
           <FolderDetailView
@@ -739,6 +736,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             onDelete={() => void askDelete({ kind: "folder", id: selectedFolder.id })}
             onMoveTo={(parentId) => void moveFolder(selectedFolder.id, parentId)}
             onUpdateFromSource={() => void startUpdateFromSource(selectedFolder)}
+            home={home}
           />
         ) : emptyBank ? (
           <EmptyBank onPaste={() => setPasteOpen(true)} onImport={() => setImportOpen(true)} />
@@ -1020,6 +1018,7 @@ function SkillDetailView({
   onMoveTo,
   sourceFolder,
   onOpenSourceFolder,
+  home,
 }: {
   skill: Skill;
   detail: SkillDetail | null;
@@ -1045,6 +1044,8 @@ function SkillDetailView({
   /** The Source folder this skill was imported into, if it still exists. */
   sourceFolder: SkillFolder | null;
   onOpenSourceFolder: (folderId: string) => void;
+  /** The daemon's home: a local source reads `~/…`. */
+  home: string | null;
 }) {
   const current = detail && detail.id === skill.id ? detail : null;
   const fileCount = current?.files.length ?? 0;
@@ -1145,12 +1146,12 @@ function SkillDetailView({
                 className="font-mono text-fg-3 hover:text-acc hover:underline"
                 title={`Open the Source folder “${sourceFolder.name}”`}
               >
-                {displaySourceUrl(skill.source.url)}
+                {tildify(displaySourceUrl(skill.source.url), home)}
                 {skill.source.commit ? `@${shortCommit(skill.source.commit)}` : ""} · {skill.source.path || "."}
               </button>
             ) : (
               <span className="font-mono text-fg-3" title={skill.source.url}>
-                {displaySourceUrl(skill.source.url)}
+                {tildify(displaySourceUrl(skill.source.url), home)}
                 {skill.source.commit ? `@${shortCommit(skill.source.commit)}` : ""} · {skill.source.path || "."}
               </span>
             )}
@@ -1273,6 +1274,7 @@ function FolderDetailView({
   onDelete,
   onMoveTo,
   onUpdateFromSource,
+  home,
 }: {
   folder: SkillFolder;
   folders: SkillFolder[];
@@ -1283,6 +1285,8 @@ function FolderDetailView({
   onDelete: () => void;
   onMoveTo: (parentId: string | null) => void;
   onUpdateFromSource: () => void;
+  /** The daemon's home: a local source reads `~/…`. */
+  home: string | null;
 }) {
   const [picker, setPicker] = useState(false);
   const exclude = useMemo(() => descendantFolderIds(folder.id, folders), [folder.id, folders]);
@@ -1354,7 +1358,9 @@ function FolderDetailView({
             <table className="w-full" style={{ fontSize: "11.5px" }}>
               <tbody>
                 <ProvenanceRow label="source">
-                  <span className="font-mono text-fg">{source.url}</span>
+                  <span className="font-mono text-fg" title={source.url}>
+                    {tildify(source.url, home)}
+                  </span>
                 </ProvenanceRow>
                 <ProvenanceRow label="ref">
                   <span className="font-mono text-fg">{source.ref ?? "default branch"}</span>

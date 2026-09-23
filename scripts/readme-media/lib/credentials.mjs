@@ -9,6 +9,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
+/** Claude Code's `statusLine`: it gets the session as JSON on stdin and prints
+ *  `model.display_name · model.id`. */
+export const MODEL_STATUS_LINE = {
+  type: "command",
+  command:
+    "node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const m=JSON.parse(s).model||{};process.stdout.write((m.display_name||'')+' · '+(m.id||''))})\"",
+};
+
 export const HARNESS_AUTH = {
   claude: {
     copy: [".claude/.credentials.json"],
@@ -29,10 +37,12 @@ export const HARNESS_AUTH = {
       record(target);
       writePrivate(target, `${JSON.stringify(config, null, 2)}\n`);
       // Not a secret: the settings PDO's own sandbox staging poses so an
-      // unwatched `--dangerously-skip-permissions` session never blocks.
+      // unwatched `--dangerously-skip-permissions` session never blocks, and
+      // Claude Code's status line naming the model the session really runs
+      // (« Opus 5.5 · claude-opus-5-5 »), so the filmed terminal shows it.
       const settings = path.join(demoHome, ".claude", "settings.json");
       fs.mkdirSync(path.dirname(settings), { recursive: true });
-      fs.writeFileSync(settings, `${JSON.stringify({ skipDangerousModePermissionPrompt: true }, null, 2)}\n`);
+      fs.writeFileSync(settings, `${JSON.stringify({ skipDangerousModePermissionPrompt: true, statusLine: MODEL_STATUS_LINE }, null, 2)}\n`);
     },
   },
 };

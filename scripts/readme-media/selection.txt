@@ -3,7 +3,7 @@
 # the published GIF changes without recording anything (ADR-0074 §5).
 #
 # A scene listed here with no scenes/<scene>.mjs yet is skipped by the publication.
-hero           a
+hero           b
 pipelines      a
 routing        a
 outputs        a

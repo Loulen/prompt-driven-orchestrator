@@ -46,6 +46,7 @@ nodes:
   outputs:
   - name: review
     side: bottom
+    instructions: Your verdict, then a short Mermaid diagram of the flow you checked.
     frontmatter:
       verdict:
         type: enum
@@ -55,6 +56,7 @@ nodes:
   - name: screenshots
     side: right
     port_type: image_list
+    instructions: Screenshots of the app, annotated with Pillow.
 - id: end
   name: End
   type: end

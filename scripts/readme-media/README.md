@@ -22,18 +22,23 @@ For each scene, in its own throwaway instance:
    port). Every `PDO_*` variable of the calling shell is dropped. A `pdo` pointing at the checkout's
    binary comes first on the node sessions' `PATH`. The library gets the demo pipeline
    `implement-review` (`fixture/pipelines/`), and `fixture/shop-app/` is copied as a fresh git repo.
+   The demo `HOME` gets a `.tmux.conf` (focus events on, so Claude Code prints no tmux hint on
+   camera), and the sessions find Playwright's browsers in your cache (`PLAYWRIGHT_BROWSERS_PATH`).
 2. **Auth** (`lib/credentials.mjs`). Only for the harnesses the scene plays live (`live: ["claude"]`):
    the auth files are copied into the demo `HOME`. For claude that is `~/.claude/.credentials.json`,
    plus a `.claude.json` holding only the account block and the fixture repo's trust. Every file is
-   recorded in `state.json` **before** it is written.
+   recorded in `state.json` **before** it is written. The demo `~/.claude/settings.json` (not a
+   secret) also sets Claude Code's status line to the model the session runs, so the filmed terminal
+   reads `Opus 5.5 · claude-opus-5-5`.
 3. **Mocked history** (`needs: ["history"]`, `lib/history-plan.mjs` + `lib/history-write.mjs`). About
-   About 205 runs of `implement-review` over the last 30 days, with synthetic claude/copilot/pi transcripts,
+   205 runs of `implement-review` over the last 30 days, with synthetic claude/copilot/pi transcripts,
    a manual price table and 100 fires of the (disabled) `prod-health-check` trigger. The plan is pure
    and deterministic (seeded); its targets are tested (`test/history-plan.test.mjs`) and so is the
    Stats API reading it (`test/demo-instance.test.mjs`).
 4. **Recording** (`lib/recorder.mjs`). Playwright films each variant. The synthetic cursor
    (`lib/cursor.mjs`) is injected before the app on every document. Markers, kept windows and ×8
-   stretches build the timeline.
+   stretches build the timeline. The page opens on a dark, ticking page, so the video starts at the
+   timeline's 0 even when a scene waits before its first `goto`.
 5. **Montage** (`lib/montage.mjs`). It keeps the timeline, cuts the waits, crops, and bakes in the
    window chrome (rounded corners, traffic lights, shadow). Then it encodes the GIF (15 fps, 960 px
    wide by default) and the poster, which is the last frame, i.e. the end state. ffmpeg runs
@@ -107,17 +112,39 @@ What `play(ctx)` gets:
 | `await ctx.fast(fn, { speed: 8 })` | film `fn` fast-forwarded (an agent working) |
 | `await ctx.hold(ms)` | stand still and keep it. End every variant on one: the last frame is the poster |
 
-Whatever is not in a marker window, a `keep`, a `fast` or a `hold` is cut. Aim for 8 to 15 s; the
+Whatever is not in a marker window, a `keep`, a `fast` or a `hold` is cut. A gesture made with
+`ctx.page` directly (a `locator.click()`, `page.mouse`) is fine off camera, but the cursor overlay
+follows it: end it where the next filmed gesture starts. Aim for 8 to 15 s; the
 manifest warns outside that range, and a short montage is frozen on its last frame up to 8 s.
 A row GIF shows a ~480 px cell: crop on the panel that matters so its text reads at about 1:1
 (crop width close to the GIF's content width, ~910 px); a narrower `viewport` lets the page reflow
 into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one in `selection.txt`, then
 `make readme-media-publish`.
 
+## The scenes so far
+
+| Scene | Live | What it films | Helpers |
+| --- | --- | --- | --- |
+| `hero` | `claude` | a real run of `implement-review`: a → zoom on `implementer` and its live terminal; b (published, design « Variant B ») → live terminal ×8, cut, the `reviewer`'s outputs (verdict + `image_list`) at 1280×760 | `scenes/_live.mjs` |
+| `pipelines` | — | from the pipeline's skeleton (Start, End): + → Node (`implementer`), then its edges | `scenes/_canvas.mjs` |
+| `routing` | — | the loop edge `reviewer → implementer`, `verdict != pass`, the exit as `else`, saved | `scenes/_canvas.mjs` |
+| `stats` | — | the Stats page over the mocked history | |
+
+`scenes/_live.mjs` is for the scenes that need real agents (#859 reuses it): `startDemoRun`
+starts a run of the demo pipeline on the fixture repo (`DEMO_TASK`: add a product search),
+`waitNode` / `waitPane` wait for a node's status or for text in its tmux pane, and `stopDemoRun`
+stops every agent of the run, in a `finally`, as soon as the variant is filmed (`archive: true` also
+takes it off the runs rail). `openRun` selects a run on the rail off camera. Opening a run selects
+its live node by itself, so select `Start` first if the filmed click must open the node.
+`scenes/_canvas.mjs` is for the edit canvas: `installPipeline` / `restoreDemoPipeline` put a variant's
+starting pipeline in place (a variant that saves changes the library for the next one), `handle`,
+`pointOnEdge` (a point on an edge's drawn route: its hit box's centre is not on it) and `zoomCanvas`.
+
 ## Tests
 
 `make test` runs `node --test scripts/readme-media/test/*.test.mjs`. That covers the history plan,
-the cut plan, selection and publication, scene discovery, the manifest (and a variant's atomic
-landing), a SIGINT mid-encode, and a real demo instance
+the cut plan, selection and publication, scene discovery (and the markers of each scene), the
+manifest (and a variant's atomic landing), a SIGINT mid-encode, the video/timeline alignment, and a
+real demo instance
 (Stats API ratios, teardown after success / Ctrl+C / crash / hard kill; needs `cargo build`). The
 full recording of the Stats scene is opt-in: `READMEMEDIA_E2E=1`.

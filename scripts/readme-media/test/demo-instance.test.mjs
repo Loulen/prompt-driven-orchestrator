@@ -121,10 +121,18 @@ describe("demo instance: Stats API over the mocked history", { skip }, () => {
     assert.ok(ratio("gpt-5.6-sol", "medium") > 0.4 && ratio("gpt-5.6-sol", "medium") < 0.6, `gpt ${ratio("gpt-5.6-sol", "medium")}`);
     const glm = 1 / ratio("z-ai/glm-5.3-flash", "medium");
     assert.ok(glm > 60 && glm < 90, `glm ${glm}`);
+    // The trigger's prod-check runs bill nothing and name no model: every
+    // model × effort is computed on implement-review alone (#883).
+    for (const model of cost.by_model) {
+      for (const e of model.efforts) assert.deepEqual(e.pipelines.map((p) => p.id), ["implement-review"], `${model.id}/${e.id}`);
+    }
+    const prodCheck = cost.by_pipeline.find((p) => p.id === "prod-check");
+    assert.equal(prodCheck.usd, 0, "the prod-check runs cost nothing");
+    assert.equal(prodCheck.unknown, 0);
     assert.deepEqual(
-      cost.by_pipeline.map((p) => p.id),
-      ["implement-review"],
-      "the Stats are computed on implement-review",
+      performance.by_model.map((m) => m.id).sort(),
+      ["claude-fable-5-1", "claude-opus-5-5", "gpt-5.6-sol", "z-ai/glm-5.3-flash"],
+      "no model bucket for the prod-check runs in Performance either",
     );
   });
 
@@ -157,8 +165,7 @@ describe("demo instance: Stats API over the mocked history", { skip }, () => {
     assert.ok(overview.runs.reduce((s, b) => s + b.count, 0) > 150);
     assert.ok(overview.errors.reduce((s, b) => s + b.count, 0) > 0);
     assert.deepEqual(overview.session_harnesses.sort(), ["claude", "copilot", "pi"]);
-    assert.equal(overview.fires_by_pipeline[0].pipeline_id, "implement-review");
-    assert.equal(overview.fires_by_pipeline[0].count, 100);
+    assert.deepEqual(overview.fires_by_pipeline, [{ pipeline_id: "prod-check", count: 100 }]);
   });
 
   test("teardown leaves no auth file, tmux server or daemon", () => {

@@ -4,10 +4,13 @@
 
 import { CURSOR_STYLE, cursorInitScript } from "./cursor.mjs";
 import { sleep } from "./demo-instance.mjs";
+import { forbiddenOnScreen } from "./screen-guard.mjs";
 
 /** Default kept window around a marker, in ms of recording. */
 const MARKER_BEFORE = 1200;
 const MARKER_AFTER = 1800;
+/** How often the screen guard samples the filmed DOM (lib/screen-guard.mjs). */
+const SCREEN_SAMPLE_MS = 250;
 
 export class Recorder {
   constructor({ browser, instance, variant, videoDir, gifWidth }) {
@@ -19,6 +22,7 @@ export class Recorder {
     this.markers = [];
     this.keeps = [];
     this.fasts = [];
+    this.screen = [];
     this.mouse = { x: variant.viewport.width * 0.6, y: variant.viewport.height * 0.55 };
   }
 
@@ -53,7 +57,24 @@ export class Recorder {
         "<style>@keyframes t{from{background:#0d1117}to{background:#0e1219}}</style></body>",
     );
     this.t0 = Date.now();
+    this.sampling = this.sampleScreen();
     return this.page;
+  }
+
+  /** The screen guard's loop: what the crop shows, every SCREEN_SAMPLE_MS,
+   *  until close. A sample taken mid-navigation is simply skipped. */
+  async sampleScreen() {
+    const crop = this.variant.crop ?? { x: 0, y: 0, ...this.variant.viewport };
+    while (!this.closing) {
+      const t = this.now();
+      try {
+        const hits = await forbiddenOnScreen(this.page, { crop });
+        if (hits.length > 0) this.screen.push({ t, hits });
+      } catch {
+        // the page is navigating (or closing): the next sample reads it
+      }
+      await sleep(SCREEN_SAMPLE_MS);
+    }
   }
 
   /** ms since the video's first frame. */
@@ -166,7 +187,9 @@ export class Recorder {
   async close() {
     const video = this.page.video();
     const duration = this.now();
+    this.closing = true;
+    await this.sampling;
     await this.context.close();
-    return { video: await video.path(), markers: this.markers, keeps: this.keeps, fasts: this.fasts, duration };
+    return { video: await video.path(), markers: this.markers, keeps: this.keeps, fasts: this.fasts, screen: this.screen, duration };
   }
 }

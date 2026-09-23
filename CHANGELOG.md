@@ -16,6 +16,16 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.102.1
+**Le terminal n'ampute plus ses dernières colonnes** (#876).
+
+- Sur un pane large, les 1 à 2 dernières colonnes disparaissaient derrière une bande noire à
+  droite. L'espacement de lettres de la page, hérité par xterm, faussait la largeur des
+  glyphes. Le conteneur du terminal le remet à zéro : la dernière colonne de tmux est entière,
+  quelle que soit la largeur du pane.
+- La barre de statut tmux reste tronquée par tmux lui-même (`status-right-length 40`,
+  `status-left-length 10`) : ce n'est pas un rognage du pane.
+
 ## 1.102.0
 **Terminal partagé : un seul pilote, spectateurs en lecture seule, prise de main** (#867, #869, #870).
 

@@ -1611,34 +1611,55 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
     }
 
     let session = session_env_claim();
-    let client = reqwest::blocking::Client::new().post(format!("{url}/runs"));
     // #779: any `--image` / `--file` switches the body to multipart — the same
     // text fields as the JSON shape (non-scalars as JSON strings, like the UI),
     // plus one `images` / `files` part per attachment. Files are read here so a
     // missing path is named locally, before any request.
-    let mut req = if image.is_empty() && file.is_empty() {
-        client.json(&body)
+    let (form, attachment_bytes) = if image.is_empty() && file.is_empty() {
+        (None, 0)
     } else {
-        client.multipart(run_create_multipart(&body, &image, &file)?)
+        let (form, bytes) = run_create_multipart(&body, &image, &file)?;
+        (Some(form), bytes)
+    };
+    // #839: a bounded wait. Without it a stalled upload hangs the command
+    // forever; with it a slow link still gets a budget that grows with the
+    // payload, and the failure names what was being sent and to whom.
+    let timeout = upload_timeout(attachment_bytes);
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(timeout)
+        .build()
+        .context("failed to build the HTTP client")?
+        .post(format!("{url}/runs"));
+    let mut req = match form {
+        Some(form) => client.multipart(form),
+        None => client.json(&body),
     };
     if let Some((run_id, node_id)) = &session {
         req = req
             .header(SESSION_RUN_HEADER, run_id)
             .header(SESSION_NODE_HEADER, node_id);
     }
-    let resp = req.send().context("failed to reach daemon")?;
+    let resp = req
+        .send()
+        .map_err(|e| upload_transport_error(&url, attachment_bytes, timeout, &e))?;
 
     let status = resp.status();
     let raw = resp.text().unwrap_or_default();
     if !status.is_success() {
         // Readable: surface the daemon's own `error` sentence when there is one
-        // (unknown pipeline, refused session claim, …), the raw body otherwise.
-        let parsed: serde_json::Value =
-            serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
-        let detail = parsed
-            .get("error")
+        // (unknown pipeline, refused session claim, …). A body that is not the
+        // daemon's JSON came from something in front of it (#839): say so, and
+        // for a 413 name the proxy body limit rather than PDO's own budget.
+        let parsed: Option<serde_json::Value> = serde_json::from_str(&raw).ok();
+        let detail = match parsed
+            .as_ref()
+            .and_then(|p| p.get("error"))
             .and_then(|v| v.as_str())
-            .unwrap_or(raw.as_str());
+        {
+            Some(err) => err.to_string(),
+            None => intermediary_refusal_detail(&url, status.as_u16(), attachment_bytes, &raw),
+        };
         anyhow::bail!("daemon refused run creation ({status}): {detail}");
     }
     let parsed: serde_json::Value = serde_json::from_str(&raw)
@@ -1663,11 +1684,75 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
 /// (`variables`, `skills`, `auto_name`, …) serialised the way the daemon's
 /// multipart parser reads them back — JSON text for objects/lists, `true`/
 /// `false` for bools.
+/// The bounded wait of a `POST /runs` from the CLI (#839): a minute, plus ten
+/// seconds per MB of attachments — generous for a slow link, finite for a
+/// stalled one.
+fn upload_timeout(attachment_bytes: u64) -> Duration {
+    let mb = attachment_bytes.div_ceil(1024 * 1024);
+    Duration::from_secs(60 + 10 * mb)
+}
+
+/// The sentence for a `POST /runs` that never got an answer (#839): names the
+/// host, what was being sent, whether the wait expired, and the two knobs a
+/// remote instance usually trips on.
+fn upload_transport_error(
+    url: &str,
+    attachment_bytes: u64,
+    timeout: Duration,
+    err: &reqwest::Error,
+) -> anyhow::Error {
+    if attachment_bytes == 0 {
+        return anyhow::anyhow!("failed to reach daemon at {url}: {err}");
+    }
+    let sent = format_attachment_bytes(attachment_bytes);
+    let what = if err.is_timeout() {
+        format!(
+            "upload timed out after {}s: the daemon at {url} did not answer while {sent} of \
+             attachments were being sent",
+            timeout.as_secs()
+        )
+    } else {
+        format!(
+            "upload interrupted: the daemon at {url} did not answer or the connection was cut \
+             while sending {sent} of attachments ({err})"
+        )
+    };
+    anyhow::anyhow!(
+        "{what}. On a remote instance, check the reverse proxy body limit (nginx \
+         `client_max_body_size`) and `max_attachments_mb` in Settings"
+    )
+}
+
+/// The detail of a non-2xx answer whose body is NOT the daemon's JSON (#839):
+/// it came from a reverse proxy or another intermediary, and a 413 there is
+/// that layer's body limit, not `max_attachments_mb`.
+fn intermediary_refusal_detail(url: &str, status: u16, attachment_bytes: u64, raw: &str) -> String {
+    let sent = format_attachment_bytes(attachment_bytes);
+    if status == 413 {
+        return format!(
+            "the server in front of PDO at {url} refused the request body ({sent} of attachments) \
+             before it reached the daemon — no PDO error body, so this is the reverse proxy's \
+             limit (nginx `client_max_body_size`), not `max_attachments_mb`. Raise it or attach less"
+        );
+    }
+    let excerpt: String = raw.trim().chars().take(200).collect();
+    let excerpt = if excerpt.is_empty() {
+        "empty body".to_string()
+    } else {
+        excerpt
+    };
+    format!(
+        "no PDO error body, the reply came from a proxy or another intermediary in front of the \
+         daemon at {url}: {excerpt}"
+    )
+}
+
 fn run_create_multipart(
     body: &serde_json::Map<String, serde_json::Value>,
     images: &[std::path::PathBuf],
     files: &[std::path::PathBuf],
-) -> Result<reqwest::blocking::multipart::Form> {
+) -> Result<(reqwest::blocking::multipart::Form, u64)> {
+    let mut attachment_bytes: u64 = 0;
     let mut form = reqwest::blocking::multipart::Form::new();
     for (key, value) in body {
         let text = match value {
@@ -1696,11 +1781,12 @@ fn run_create_multipart(
                     )
                 })?
                 .to_string();
+            attachment_bytes += data.len() as u64;
             let part = reqwest::blocking::multipart::Part::bytes(data).file_name(filename);
             form = form.part(field, part);
         }
     }
-    Ok(form)
+    Ok((form, attachment_bytes))
 }
 
 /// One-shot `pdo review list` / `pdo review reply` (#751): the thin CLI client of
@@ -9420,6 +9506,71 @@ fn sanitize_image_filename(raw: &str) -> Option<String> {
     }
 }
 
+/// The 400 sentence for a multipart body that ended before its closing
+/// boundary (#839). Names the layer (transport, not the form), the attachment
+/// being read when it happened, and how much had arrived, so a remote user
+/// can tell a proxy body limit or a dropped connection from a client bug.
+fn multipart_cut_message(
+    last_field: Option<&str>,
+    filename: Option<&str>,
+    received_bytes: u64,
+    cause: &str,
+) -> String {
+    let received = format_attachment_bytes(received_bytes);
+    let where_ = match (filename, last_field) {
+        (Some(name), _) if !name.is_empty() => format!("while reading attachment `{name}`"),
+        (_, Some(field)) if !field.is_empty() => format!("after field `{field}`"),
+        _ => "before any field".to_string(),
+    };
+    format!(
+        "upload interrupted {where_} ({received} of attachments received): the connection was \
+         cut or a proxy in front of PDO truncated the multipart body ({cause}). Check the \
+         network, the reverse proxy body limit (nginx `client_max_body_size`) and \
+         `max_attachments_mb` in Settings"
+    )
+}
+
+/// The 400 sentence for a field that could not be read (#839). axum's
+/// `MultipartError` displays a flat "Error parsing `multipart/form-data`
+/// request"; the multer source underneath says whether the stream simply
+/// ended (a cut upload — named as such, with the field or attachment in
+/// progress) or the field itself was malformed (a plain `bad field`).
+fn multipart_field_error(
+    field: &str,
+    filename: Option<&str>,
+    received_bytes: u64,
+    err: &axum::extract::multipart::MultipartError,
+) -> String {
+    let cause = std::error::Error::source(err)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| err.to_string());
+    let lower = cause.to_lowercase();
+    let cut = lower.contains("incomplete")
+        || lower.contains("failed to read stream")
+        || lower.contains("failed to read field complete headers");
+    if cut {
+        multipart_cut_message(Some(field), filename, received_bytes, &cause)
+    } else {
+        match filename {
+            Some(name) if !name.is_empty() => {
+                format!("failed to read attachment `{name}`: {cause}")
+            }
+            _ => format!("bad field {field}: {cause}"),
+        }
+    }
+}
+
+/// `18 KB`, `1.4 MB` — the size wording of upload errors (#839).
+fn format_attachment_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 async fn parse_multipart_create_run(
     mut multipart: Multipart,
     max_attachment_bytes: u64,
@@ -9477,30 +9628,52 @@ async fn parse_multipart_create_run(
         Ok(())
     };
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    // #839: bytes of attachment parts fully received so far and the last field
+    // seen — what a truncation error names, so a cut upload reads as a cut
+    // upload and never as "missing field: input".
+    let mut received_bytes: u64 = 0;
+    let mut last_field: Option<String> = None;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            // A transport error mid-stream (connection reset, proxy dropped the
+            // body) used to end the loop silently and fall through to a
+            // misleading 400 "missing field". Named for what it is.
+            Err(e) => {
+                let cause = std::error::Error::source(&e)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| e.to_string());
+                return Err(MultipartRefusal::from(multipart_cut_message(
+                    last_field.as_deref(),
+                    None,
+                    received_bytes,
+                    &cause,
+                )));
+            }
+        };
         let field_name = field.name().unwrap_or("").to_string();
+        last_field = Some(field_name.clone());
         match field_name.as_str() {
             "pipeline" => {
-                pipeline = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| format!("bad field pipeline: {e}"))?,
-                );
+                pipeline =
+                    Some(field.text().await.map_err(|e| {
+                        multipart_field_error("pipeline", None, received_bytes, &e)
+                    })?);
             }
             "input" => {
                 input = Some(
                     field
                         .text()
                         .await
-                        .map_err(|e| format!("bad field input: {e}"))?,
+                        .map_err(|e| multipart_field_error("input", None, received_bytes, &e))?,
                 );
             }
             "variables" => {
                 let text = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field variables: {e}"))?;
+                    .map_err(|e| multipart_field_error("variables", None, received_bytes, &e))?;
                 if !text.is_empty() {
                     variables = serde_json::from_str(&text)
                         .map_err(|e| format!("invalid variables JSON: {e}"))?;
@@ -9510,7 +9683,7 @@ async fn parse_multipart_create_run(
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field pipeline_id: {e}"))?;
+                    .map_err(|e| multipart_field_error("pipeline_id", None, received_bytes, &e))?;
                 if !v.is_empty() {
                     pipeline_id = Some(v);
                 }
@@ -9519,7 +9692,7 @@ async fn parse_multipart_create_run(
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field target_repo: {e}"))?;
+                    .map_err(|e| multipart_field_error("target_repo", None, received_bytes, &e))?;
                 if !v.is_empty() {
                     target_repo = Some(v);
                 }
@@ -9530,17 +9703,16 @@ async fn parse_multipart_create_run(
                 let text = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field target_repos: {e}"))?;
+                    .map_err(|e| multipart_field_error("target_repos", None, received_bytes, &e))?;
                 if !text.is_empty() {
                     target_repos = serde_json::from_str(&text)
                         .map_err(|e| format!("invalid target_repos JSON: {e}"))?;
                 }
             }
             "source_branch" => {
-                let v = field
-                    .text()
-                    .await
-                    .map_err(|e| format!("bad field source_branch: {e}"))?;
+                let v = field.text().await.map_err(|e| {
+                    multipart_field_error("source_branch", None, received_bytes, &e)
+                })?;
                 if !v.is_empty() {
                     source_branch = Some(v);
                 }
@@ -9549,7 +9721,7 @@ async fn parse_multipart_create_run(
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field name: {e}"))?;
+                    .map_err(|e| multipart_field_error("name", None, received_bytes, &e))?;
                 if !v.is_empty() {
                     name = Some(v);
                 }
@@ -9561,7 +9733,7 @@ async fn parse_multipart_create_run(
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field sandbox: {e}"))?;
+                    .map_err(|e| multipart_field_error("sandbox", None, received_bytes, &e))?;
                 if !v.is_empty() {
                     sandbox = event_log::SandboxMode::parse(&v);
                 }
@@ -9571,7 +9743,7 @@ async fn parse_multipart_create_run(
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field harness: {e}"))?;
+                    .map_err(|e| multipart_field_error("harness", None, received_bytes, &e))?;
                 if !v.trim().is_empty() {
                     harness = Some(v);
                 }
@@ -9580,7 +9752,7 @@ async fn parse_multipart_create_run(
                 let value = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field agent_choice: {e}"))?;
+                    .map_err(|e| multipart_field_error("agent_choice", None, received_bytes, &e))?;
                 if !value.trim().is_empty() {
                     agent_choice = Some(
                         serde_json::from_str(&value)
@@ -9594,7 +9766,7 @@ async fn parse_multipart_create_run(
                 let value = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field skills: {e}"))?;
+                    .map_err(|e| multipart_field_error("skills", None, received_bytes, &e))?;
                 if !value.trim().is_empty() {
                     skills = serde_json::from_str(&value)
                         .map_err(|e| format!("invalid skills JSON: {e}"))?;
@@ -9606,7 +9778,7 @@ async fn parse_multipart_create_run(
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field auto_name: {e}"))?;
+                    .map_err(|e| multipart_field_error("auto_name", None, received_bytes, &e))?;
                 if !v.is_empty() {
                     auto_name = stale_detector::parse_bool_setting(&v);
                 }
@@ -9615,7 +9787,7 @@ async fn parse_multipart_create_run(
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field auto_fail: {e}"))?;
+                    .map_err(|e| multipart_field_error("auto_fail", None, received_bytes, &e))?;
                 if !v.is_empty() {
                     auto_fail = stale_detector::parse_bool_setting(&v);
                 }
@@ -9624,16 +9796,16 @@ async fn parse_multipart_create_run(
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| format!("bad field provisioning: {e}"))?;
+                    .map_err(|e| multipart_field_error("provisioning", None, received_bytes, &e))?;
                 provisioning =
                     serde_json::from_str(&v).map_err(|e| format!("bad field provisioning: {e}"))?;
             }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
-                let data = field
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("failed to read image: {e}"))?;
+                let data = field.bytes().await.map_err(|e| {
+                    multipart_field_error("images", Some(&raw_filename), received_bytes, &e)
+                })?;
+                received_bytes += data.len() as u64;
                 if data.is_empty() {
                     continue;
                 }
@@ -9644,10 +9816,10 @@ async fn parse_multipart_create_run(
             "files" => {
                 // #779: any file. Extension-free, budget-guarded, name-checked.
                 let raw_filename = field.file_name().unwrap_or("").to_string();
-                let data = field
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("failed to read file: {e}"))?;
+                let data = field.bytes().await.map_err(|e| {
+                    multipart_field_error("files", Some(&raw_filename), received_bytes, &e)
+                })?;
+                received_bytes += data.len() as u64;
                 if data.is_empty() {
                     continue;
                 }

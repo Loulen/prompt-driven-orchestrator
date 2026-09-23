@@ -59,9 +59,13 @@ cd "$(git rev-parse --show-toplevel)"
 #   ADR-0072), WiringGridOverlay.tsx + its test draw the wiring lattice, and
 #   OrthogonalEdge.wiring844 / EditCanvas.contextMenu are the FP-backing tests. The pure
 #   geometry went into lib/ (anchorSide, wiringGrid), not a watched directory.
+# crates/pdo-daemon/src: 92 (#869, release 1.98.0) admits shared_terminal.rs — the shared
+#   terminal presence registry (one pilot per tmux session, read-only spectators, role
+#   messages, `ignore-size` switching; ADR-0075). It is ONE new concern that #870 (take
+#   control) extends; pty_bridge.rs only moves bytes and keeps its size, lib.rs only wires it.
 BASELINES='
 frontend/src/components 200
-crates/pdo-daemon/src 91
+crates/pdo-daemon/src 92
 '
 
 fail=0

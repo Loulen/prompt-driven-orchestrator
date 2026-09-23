@@ -21,10 +21,12 @@ For each scene, in its own throwaway instance:
 1. **Demo instance** (`lib/demo-instance.mjs`). It runs the checkout's `target/debug/pdo daemon` from a
    throwaway working directory (the event log follows the cwd), with a throwaway `HOME` (pipelines,
    skill bank, profiles, prices, transcripts) and a free port (the tmux socket `pdo-<port>` follows the
-   port). Every `PDO_*` variable of the calling shell is dropped. A `pdo` pointing at the checkout's
+   port). The cwd sits where an installed PDO runs (`~/.pdo/app` of the demo `HOME`). Every `PDO_*` variable of the calling shell is dropped. A `pdo` pointing at the checkout's
    binary comes first on the node sessions' `PATH`. The library gets the **target pipelines** as is
    (see [Target pipelines](#target-pipelines)): `implement-review` complete and `prod-check`, and
-   `fixture/shop-app/` is copied as a fresh git repo.
+   `fixture/shop-app/` is copied as a fresh git repo to `~/code/shop-app` of the demo `HOME`: the UI
+   reads it `~/code/shop-app`, like on a real machine. The first `GET /settings` (host probes, slow
+   on a busy machine) is paid off camera before the scene.
    The demo `HOME` gets a `.tmux.conf` (focus events on, so Claude Code prints no tmux hint on
    camera), and the sessions find Playwright's browsers in your cache (`PLAYWRIGHT_BROWSERS_PATH`).
 2. **Auth** (`lib/credentials.mjs`). Only for the harnesses the scene plays live (`live: ["claude"]`):
@@ -35,14 +37,23 @@ For each scene, in its own throwaway instance:
    reads `Opus 5.5 · claude-opus-5-5`.
 3. **Mocked history** (`needs: ["history"]`, `lib/history-plan.mjs` + `lib/history-write.mjs`). About
    205 runs of `implement-review` over the last 30 days (their run snapshot is derived from the
-   complete target, `lib/demo-pipeline.mjs`), with synthetic claude/copilot/pi transcripts,
-   a manual price table and 100 fires of the (disabled) `prod-health-check` trigger. The plan is pure
-   and deterministic (seeded); its targets are tested (`test/history-plan.test.mjs`) and so is the
-   Stats API reading it (`test/demo-instance.test.mjs`).
+   complete target, `lib/demo-pipeline.mjs`), with synthetic claude/copilot/pi transcripts and
+   a manual price table. Apart from them, 100 fires of the (disabled) `prod-health-check` trigger, each
+   the start of a `prod-check` run (its own target's snapshot): 10 found a real incident
+   (`Incident_found = true`: Orchestrate Fix, then Notify Slack), the others were false alarms
+   (`Incident_found = false`: straight to End). Their sessions bill no turn and name no model, so they
+   stay out of the Stats by model, which are computed on `implement-review` alone; they draw from
+   their own seeded stream, so the `implement-review` history is the same with or without them. The
+   plan is pure and deterministic (seeded); its targets are tested (`test/history-plan.test.mjs`) and
+   so is the Stats API reading it (`test/demo-instance.test.mjs`).
 4. **Recording** (`lib/recorder.mjs`). Playwright films each variant. The synthetic cursor
    (`lib/cursor.mjs`) is injected before the app on every document. Markers, kept windows and ×8
    stretches build the timeline. The page opens on a dark, ticking page, so the video starts at the
-   timeline's 0 even when a scene waits before its first `goto`.
+   timeline's 0 even when a scene waits before its first `goto`. The **screen guard**
+   (`lib/screen-guard.mjs`) samples the filmed DOM every 250 ms: a `/tmp/pdo-readme-media` path drawn
+   inside the crop (a text node, an input's value) during a stretch the GIF keeps fails the variant,
+   before its montage. A path outside the crop, hidden, in an attribute or in a cut stretch passes.
+   Every scene gets it; there is nothing to declare.
 5. **Montage** (`lib/montage.mjs`). It keeps the timeline, cuts the waits, crops, and bakes in the
    window chrome (rounded corners, traffic lights, shadow). Then it encodes the GIF (15 fps, 960 px
    wide by default) and the poster, which is the last frame, i.e. the end state. ffmpeg runs
@@ -191,7 +202,7 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 | `outputs` | `claude` | a finished run's `reviewer`: its two ports in Edit, then in Run an annotated screenshot (lightbox) and the `review` markdown with its Mermaid diagram rendered | `scenes/_live.mjs` |
 | `review` | `claude` | a finished run's Review page: a comment on a line, sent to the manager, cut ×8, the manager's own answer in the thread | `scenes/_live.mjs` |
 | `orchestration` | `claude` | `implementer` with Orchestrator on relaunches `implement-review` once per part: the children nest under their parent in the run tree, the counters follow them to the end | `scenes/_live.mjs`, `scenes/_canvas.mjs` |
-| `triggers`, `profiles`, `skills` | — | settings, no agent (see below) | `scenes/_no-agent.mjs` |
+| `triggers`, `profiles`, `skills` | — | settings, no agent (see below): the trigger on `prod-check`, profiles and skills on `implement-review` | `scenes/_no-agent.mjs` |
 
 `scenes/_live.mjs` is for the scenes that need real agents: `startDemoRun`
 starts a run of the demo pipeline on the fixture repo (`DEMO_TASK`: add a product search),
@@ -243,24 +254,31 @@ staged. `scenes/_no-agent.mjs` makes that hold. In the page, every request that 
 session (a new run, a trigger's Run now, a retry) is aborted, and after each variant the demo tmux
 socket must hold no session.
 
-- **triggers**: the demo trigger (`* * * * *`, guard `./prod-health-check.sh`) is shown **armed**.
-  The global Trigger pause goes on first, then the trigger is enabled, so the scheduler never fires
-  it. The crop leaves out the left panel and its pause banner. The guard is a script of the fixture
-  repo (`fixture/shop-app/prod-health-check.sh`, probe in `ops/prod-probe.env`): it exits 0 and prints
-  the same incident report the mocked history's fired entries carry.
+- **triggers**: the demo trigger (`* * * * *`, guard `./prod-health-check.sh`) fires `prod-check`,
+  shown on the canvas as drawn (panned off camera so the `Incident_found = false` label is not cut),
+  and is shown **armed**. The global Trigger pause goes on first, then the trigger is enabled, so the
+  scheduler never fires it: `prod-check` never runs live. The pause banner lives in the Triggers tab
+  of the left panel: a crops the left panel out, b films the Runs tab. a: Test guard, then the fire
+  history. b: the runs rail filtered on the trigger, false alarms (« Alert: checkout p95 spike ») and
+  a real incident among them. The guard is a script of the fixture repo
+  (`fixture/shop-app/prod-health-check.sh`, probe in `ops/prod-probe.env`): it exits 0 and prints the
+  incident report; every mocked fire carries a report of the same shape (its own probe).
 - **profiles**: the scene rewrites the demo HOME's copy of the target `implement-review` so both nodes follow
   one profile, « daily driver » (claude · opus · medium). Each variant resets that profile before it
   plays.
 - **skills**: the source is a local git repo, `fixture/qa-skills/` copied to `~/code/qa-skills` in
-  the demo HOME, so nothing goes over the network. Each variant resets the bank to what the fresh
-  instance seeded. The pick on `reviewer` is never saved.
+  the demo HOME, so nothing goes over the network; the bank reads it `~/code/qa-skills`. Each variant
+  resets the bank to what the fresh instance seeded and puts the target `implement-review` back. The
+  pick on `reviewer` is saved: the poster never shows an unsaved pipeline.
 
 ## Tests
 
 `make test` runs `node --test scripts/readme-media/test/*.test.mjs`. That covers the targets
 (installed byte for byte but `name:`, the run snapshot derived from them, the export / import round
 trip and the refused overwrite, on a throwaway `HOME`), the history plan,
-the cut plan, selection and publication, scene discovery (and the markers of each scene), the
+the prod-check fires (about 10 % real incidents, each run on the branch of its `Incident_found`, the
+Stats unchanged), the screen guard (filmed for real: a demo path on screen fails the variant), the
+cut plan, selection and publication, scene discovery (and the markers of each scene), the
 manifest (and a variant's atomic landing), a SIGINT mid-encode, the video/timeline alignment, and a
 real demo instance
 (its library is the targets as is, Stats API ratios, teardown after success / Ctrl+C / crash / hard kill, and an agent that outlives

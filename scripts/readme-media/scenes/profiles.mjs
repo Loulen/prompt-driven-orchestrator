@@ -184,7 +184,7 @@ export default {
         const { page } = ctx;
         await openCanvas(ctx);
         await ctx.hover(page.getByTestId("node-agent-control"), { duration: 600, pause: 200 });
-        await ctx.hold(800);
+        await ctx.hold(600);
         const panel = await openProfile(ctx);
         await ctx.keep(async () => {
           await ctx.click(page.getByTestId("agent-profile-model-trigger"), { duration: 450 });
@@ -205,15 +205,15 @@ export default {
       async play(ctx) {
         const { page } = ctx;
         await openCanvas(ctx);
-        await ctx.hover(page.getByTestId("node-agent-control"), { duration: 600, pause: 200 });
-        await ctx.hold(800);
+        await ctx.hover(page.getByTestId("node-agent-control"), { duration: 500, pause: 150 });
+        await ctx.hold(300);
         const panel = await openProfile(ctx);
         await ctx.keep(async () => {
-          await ctx.click(page.getByTestId("agent-profile-harness"), { duration: 380 });
-          await ctx.click(page.getByTestId("agent-profile-harness-menu").getByText("copilot", { exact: true }), { duration: 380 });
-          await ctx.click(page.getByTestId("agent-profile-model-trigger"), { duration: 400 });
-          await ctx.click(page.getByTestId("agent-profile-model-option-gpt-5.6-sol"), { duration: 400 });
-          await sleep(250);
+          await ctx.click(page.getByTestId("agent-profile-harness"), { duration: 330 });
+          await ctx.click(page.getByTestId("agent-profile-harness-menu").getByText("copilot", { exact: true }), { duration: 330 });
+          await ctx.click(page.getByTestId("agent-profile-model-trigger"), { duration: 350 });
+          await ctx.click(page.getByTestId("agent-profile-model-option-gpt-5.6-sol"), { duration: 350 });
+          await sleep(200);
         });
         await saveProfile(ctx, panel, "copilot · gpt-5.6-sol · —");
         await showSwitchedNodes(ctx, "gpt-5.6-sol");

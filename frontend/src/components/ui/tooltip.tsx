@@ -1,4 +1,4 @@
-import { Children, cloneElement, isValidElement } from "react";
+import { Children, cloneElement, isValidElement, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 
@@ -67,14 +67,22 @@ export function Tooltip({
   children,
   delay,
   side = "bottom",
+  disabled,
 }: {
   content: string;
   children: ReactNode;
   delay?: number;
   side?: "top" | "bottom" | "left" | "right";
+  /** Keep the trigger mounted but never open. For a hint that only applies in
+   *  some states (#867's read-only hint): unwrapping the child instead would
+   *  remount it. Passing the prop at all makes the tooltip controlled. */
+  disabled?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const control =
+    disabled === undefined ? {} : { open: !disabled && open, onOpenChange: setOpen };
   return (
-    <TooltipPrimitive.Root delayDuration={delay}>
+    <TooltipPrimitive.Root delayDuration={delay} {...control}>
       <TooltipPrimitive.Trigger asChild>
         {withAccessibleName(children, content)}
       </TooltipPrimitive.Trigger>

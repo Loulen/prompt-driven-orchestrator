@@ -1,18 +1,24 @@
 //! PTY bridge: spawns `tmux attach -t <session>` inside a pseudo-terminal and
 //! bridges byte I/O between the PTY and a WebSocket connection.
 //!
+//! Upgrade: `WS /sessions/{id}/pty?poste=<id>`. The optional `poste` names the
+//! browser (#867, ADR-0075); a socket without one counts as a poste of its own.
+//!
 //! Protocol (WS → daemon):
-//! - Binary frames → stdin of the PTY (user keystrokes)
+//! - Binary frames → stdin of the PTY (user keystrokes), dropped while the
+//!   connection is a spectator
 //! - Text frames with JSON `{"type":"resize","cols":N,"rows":N}` → PTY resize
 //!
 //! Protocol (daemon → WS):
 //! - Binary frames ← stdout of the PTY (terminal output)
+//! - Text frames with JSON `{"type":"role","role":"solo"|"pilot"|"spectator",…}`
+//!   on every role change (see [`super::shared_terminal::RoleMsg`])
 
 use std::io::{Read, Write};
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{ws::WebSocketUpgrade, Path as AxumPath, State};
+use axum::extract::{ws::WebSocketUpgrade, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
@@ -20,6 +26,8 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+
+use super::shared_terminal::{self, TermSize};
 
 /// Env var that EXTENDS the WebSocket Origin allowlist with operator-supplied
 /// origins (#564). Comma-separated exact origins (`scheme://host[:port]`), read
@@ -124,9 +132,17 @@ pub(crate) fn decode_resize(text: &str) -> Option<ResizeMsg> {
     }
 }
 
+/// Query string of the PTY upgrade.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct PtyQuery {
+    /// The browser's poste id (#867). Absent or malformed ⇒ a poste of its own.
+    poste: Option<String>,
+}
+
 /// Axum handler for `WS /sessions/{session_id}/pty`.
 pub(crate) async fn session_pty_handler(
     AxumPath(session_id): AxumPath<String>,
+    Query(query): Query<PtyQuery>,
     State(state): State<Arc<super::AppState>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
@@ -144,21 +160,23 @@ pub(crate) async fn session_pty_handler(
     }
 
     let tmux_socket = state.tmux_socket();
-    ws.on_upgrade(move |socket| handle_pty_ws(socket, tmux_socket, session_id, state))
+    let poste = shared_terminal::sanitize_poste(query.poste.as_deref());
+    ws.on_upgrade(move |socket| handle_pty_ws(socket, tmux_socket, session_id, poste, state))
 }
 
 async fn handle_pty_ws(
     socket: WebSocket,
     tmux_socket: String,
     session_id: String,
+    poste: Option<String>,
     state: Arc<super::AppState>,
 ) {
     info!("PTY WebSocket opened for session {session_id}");
 
     let pty_system = native_pty_system();
     let initial_size = PtySize {
-        rows: 24,
-        cols: 80,
+        rows: shared_terminal::INITIAL_SIZE.rows,
+        cols: shared_terminal::INITIAL_SIZE.cols,
         pixel_width: 0,
         pixel_height: 0,
     };
@@ -171,10 +189,21 @@ async fn handle_pty_ws(
         }
     };
 
+    // #867 / ADR-0075: join the terminal's presence before attaching, so a
+    // spectator's client is born with `ignore-size` and never weighs on the
+    // window, not even for the instant before a `refresh-client` would land.
+    let (role_tx, mut role_rx) = mpsc::unbounded_channel::<String>();
+    let mut membership = state.shared_terminals.join(&session_id, poste, role_tx);
+    let conn_id = membership.id;
+    let attach_ignoring_size = *membership.ignore_size.borrow_and_update();
+
     let mut cmd = CommandBuilder::new("tmux");
     // Pin the attach to the daemon's private socket so we don't accidentally
     // reach into another pdo daemon's tmux state on the same host.
     cmd.args(["-L", tmux_socket.as_str(), "attach", "-t", &session_id]);
+    if attach_ignoring_size {
+        cmd.args(["-f", "ignore-size"]);
+    }
     // The consumer at the other end of this PTY is xterm.js in the browser, so
     // declare that terminal type explicitly instead of inheriting the daemon's
     // ambient TERM. A daemon started headless (systemd, container, CI, nohup)
@@ -191,6 +220,7 @@ async fn handle_pty_ws(
         Ok(r) => r,
         Err(e) => {
             error!("Failed to clone PTY reader: {e}");
+            state.shared_terminals.leave(&session_id, conn_id);
             return;
         }
     };
@@ -198,6 +228,7 @@ async fn handle_pty_ws(
         Ok(w) => w,
         Err(e) => {
             error!("Failed to take PTY writer: {e}");
+            state.shared_terminals.leave(&session_id, conn_id);
             return;
         }
     };
@@ -206,9 +237,21 @@ async fn handle_pty_ws(
         Ok(c) => c,
         Err(e) => {
             error!("Failed to spawn tmux attach for {session_id}: {e}");
+            state.shared_terminals.leave(&session_id, conn_id);
             return;
         }
     };
+
+    // Role changes after the attach flip the client's `ignore-size` live. The
+    // task ends on its own when the connection leaves the registry.
+    let flags_handle = child.process_id().map(|pid| {
+        tokio::spawn(shared_terminal::follow_ignore_size(
+            tmux_socket.clone(),
+            pid,
+            membership.ignore_size.clone(),
+        ))
+    });
+    let spectator = membership.spectator.clone();
 
     drop(pair.slave);
 
@@ -234,10 +277,17 @@ async fn handle_pty_ws(
         }
     });
 
-    // Task 2: forward PTY output from channel to WebSocket
+    // Task 2: forward PTY output and role frames to the WebSocket
     let ws_send_handle = tokio::spawn(async move {
-        while let Some(data) = pty_rx.recv().await {
-            if ws_sink.send(Message::Binary(data.into())).await.is_err() {
+        loop {
+            let msg = tokio::select! {
+                data = pty_rx.recv() => match data {
+                    Some(data) => Message::Binary(data.into()),
+                    None => break,
+                },
+                Some(frame) = role_rx.recv() => Message::Text(frame.into()),
+            };
+            if ws_sink.send(msg).await.is_err() {
                 break;
             }
         }
@@ -246,9 +296,15 @@ async fn handle_pty_ws(
 
     // Task 3: read from WebSocket, write to PTY stdin (+ handle resize)
     let input_session = session_id.clone();
+    let input_state = state.clone();
     let ws_recv_handle = tokio::spawn(async move {
+        let state = input_state;
         while let Some(Ok(msg)) = ws_stream.next().await {
             match msg {
+                // ADR-0075 §3: a spectator is read-only. Its keystrokes (and the
+                // mouse reports that travel the same way) never reach the pane,
+                // and so never lift a declared wait either.
+                Message::Binary(_) if spectator.load(std::sync::atomic::Ordering::SeqCst) => {}
                 Message::Binary(data) if pty_writer.write_all(&data).is_err() => {
                     break;
                 }
@@ -270,6 +326,14 @@ async fn handle_pty_ws(
                         if let Err(e) = master.resize(new_size) {
                             warn!("PTY resize failed: {e}");
                         }
+                        state.shared_terminals.resize(
+                            &input_session,
+                            conn_id,
+                            TermSize {
+                                cols: resize.cols,
+                                rows: resize.rows,
+                            },
+                        );
                     } else {
                         // Unknown / malformed control frames must NEVER be
                         // written to the PTY as user input — that would inject
@@ -295,6 +359,13 @@ async fn handle_pty_ws(
         _ = read_handle => {}
         _ = ws_send_handle => {}
         _ = ws_recv_handle => {}
+    }
+
+    // Leave before the reap: the hand passes on (and the remaining clients'
+    // `ignore-size` flips) while this client is still being torn down.
+    state.shared_terminals.leave(&session_id, conn_id);
+    if let Some(handle) = flags_handle {
+        handle.abort();
     }
 
     // Reap the `tmux attach` child (#495). portable_pty's Child, like std's,

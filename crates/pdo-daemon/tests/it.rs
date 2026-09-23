@@ -139,6 +139,9 @@ mod project_harness_resolution;
 #[path = "pty_bridge.rs"]
 mod pty_bridge;
 
+#[path = "shared_terminal.rs"]
+mod shared_terminal;
+
 #[path = "recent_repos.rs"]
 mod recent_repos;
 

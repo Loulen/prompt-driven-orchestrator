@@ -23,7 +23,7 @@
      In each <picture>: the reduced-motion <source> takes the poster, the other <source> the GIF
      (type="image/gif"), the <img> the poster. README.md and docs/readme/README.fr.md share the media. -->
 <p align="center">
-  <a href="../../docs/features.md"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Un run de PDO qui tourne : Claude Code travaille dans le terminal du nœud implementer, puis les outputs typés du reviewer" width="960" /></picture></a>
+  <a href="../../docs/features.md"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/hero.jpg"><source srcset="../../docs/assets/readme/hero.gif" type="image/gif"><img src="../../docs/assets/readme/hero.jpg" alt="Un run de PDO qui tourne : Claude Code travaille dans le terminal du nœud implementer, puis les outputs typés du reviewer" width="960" /></picture></a>
 </p>
 
 ## Fonctionnalités
@@ -41,7 +41,7 @@ Construisez vos workflows d'agents sur un canvas : posez un nœud `implementer`,
 </td>
 <td width="50%">
   <!-- scene: pipelines -->
-  <a href="../../docs/features.md#visual-pipelines"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Ajout d'un nœud implementer et de son arête vers end sur le canvas" width="100%" /></picture></a>
+  <a href="../../docs/features.md#visual-pipelines"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/pipelines.jpg"><source srcset="../../docs/assets/readme/pipelines.gif" type="image/gif"><img src="../../docs/assets/readme/pipelines.jpg" alt="Ajout d'un nœud implementer, relié de Start à End sur le canvas" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -56,7 +56,7 @@ Tirez une arête de `reviewer` vers `implementer` et posez `verdict != pass`. Le
 </td>
 <td width="50%">
   <!-- scene: routing -->
-  <a href="../../docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Une arête de boucle tirée de reviewer vers implementer, avec la condition verdict != pass" width="100%" /></picture></a>
+  <a href="../../docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/routing.jpg"><source srcset="../../docs/assets/readme/routing.gif" type="image/gif"><img src="../../docs/assets/readme/routing.jpg" alt="Une arête de boucle tirée de reviewer vers implementer, avec la condition verdict != pass" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

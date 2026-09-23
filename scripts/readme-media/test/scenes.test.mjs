@@ -43,3 +43,29 @@ test("a malformed scene is refused with the reason", () => {
   assert.throws(() => validateScene({ name: "x", variants: [variant, { ...variant, id: "b", markers: [] }] }, "x.mjs"), /markers/);
   assert.throws(() => validateScene({ name: "x", variants: [variant, { ...variant, id: "b" }] }, "y.mjs"), /file name must be x\.mjs/);
 });
+
+test("the canvas scenes (#858): hero, pipelines and routing, two variants each and their markers", async () => {
+  const scenes = await loadScenes(path.join(here, "..", "scenes"));
+  const markers = (name) => scenes.get(name).variants.map((v) => [v.id, v.markers]);
+  assert.deepEqual(markers("hero"), [
+    ["a", ["run-started", "zoom", "terminal-active"]],
+    ["b", ["run-started", "terminal-active", "output-ready"]],
+  ]);
+  assert.deepEqual(markers("pipelines"), [
+    ["a", ["node-added", "edge-dropped"]],
+    ["b", ["node-added", "edge-dropped"]],
+  ]);
+  assert.deepEqual(markers("routing"), [
+    ["a", ["edge-dropped", "condition-saved"]],
+    ["b", ["edge-dropped", "condition-saved"]],
+  ]);
+  // Only the hero plays agents live (and needs their auth); the canvas rows do not.
+  assert.deepEqual(scenes.get("hero").live, ["claude"]);
+  assert.deepEqual(scenes.get("pipelines").live, []);
+  assert.deepEqual(scenes.get("routing").live, []);
+  // The published hero is design variant B: full window 1280×760, inspector at 43 %, no crop.
+  const heroB = scenes.get("hero").variants.find((v) => v.id === "b");
+  assert.deepEqual(heroB.viewport, { width: 1280, height: 760 });
+  assert.equal(heroB.crop, undefined);
+  assert.deepEqual(heroB.localStorage["pdo.layout.run"], { left: 15, center: 42, right: 43 });
+});

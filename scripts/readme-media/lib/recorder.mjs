@@ -44,6 +44,14 @@ export class Recorder {
     }, storage);
     await this.context.addInitScript(cursorInitScript, { size: this.cursorSize(), ...CURSOR_STYLE });
     this.page = await this.context.newPage();
+    // The video starts on the first screencast frame, and a frame only comes
+    // when the page repaints: a scene that waits before its first goto would
+    // shift every cut. A dark page with a 2 px tick keeps frames coming from
+    // now on, so the timeline's 0 is the video's.
+    await this.page.setContent(
+      '<body style="margin:0;background:#0d1117"><i style="position:fixed;left:0;top:0;width:2px;height:2px;animation:t .2s steps(2) infinite"></i>' +
+        "<style>@keyframes t{from{background:#0d1117}to{background:#0e1219}}</style></body>",
+    );
     this.t0 = Date.now();
     return this.page;
   }

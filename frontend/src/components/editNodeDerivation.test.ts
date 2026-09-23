@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { deriveEditEdges, deriveEditNodes, deriveLoopRegions, runReachedEnd } from "./editNodeDerivation";
+import {
+  deriveEditEdges,
+  deriveEditNodes,
+  deriveLoopRegions,
+  runReachedEnd,
+  EDGE_ABOVE_NODES,
+  EDGE_UNDER_NODES,
+} from "./editNodeDerivation";
 import type {
   LoopRegion,
   NodeDef,
@@ -57,16 +64,116 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     );
     const edges = deriveEditEdges(p);
     expect(edges[0].targetHandle).toBe("__anchor:left");
-    expect(edges[0].sourceHandle).toBe("plan");
+    // #844: the arrow leaves by a RIM strip, not by a per-output handle — there
+    // is no output dot to bind to any more. Un-anchored ⇒ the output's declared
+    // side (right here).
+    expect(edges[0].sourceHandle).toBe("rim-right");
   });
 
-  it("keeps the declared port for the End node (it retains a `result` input handle)", () => {
+  it("binds the departure to the rim of the side the wire was drawn from (#844)", () => {
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], ["code"])],
+      [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "dst", port: "plan" },
+          source_anchor: { side: "bottom", offset: 80 },
+          target_anchor: { side: "top", offset: 36 },
+          target_side: "top",
+        },
+      ],
+    );
+    const edges = deriveEditEdges(p);
+    expect(edges[0].sourceHandle).toBe("rim-bottom");
+    // The anchors ride on the edge data: the component draws from them, not
+    // from xyflow's handle centres.
+    expect(edges[0].data?.sourceAnchor).toEqual({ side: "bottom", offset: 80 });
+    expect(edges[0].data?.targetAnchor).toEqual({ side: "top", offset: 36 });
+  });
+
+  it.each<[PortSide]>([["bottom"], ["left"], ["top"]])(
+    "leaves an un-anchored edge by its output's declared %s side, not rightwards (#844 FP iter-2)",
+    (side) => {
+      // A pipeline saved before #844 has no `source_anchor`. Its wires left from
+      // the output dot, which sat on the port's declared side. Defaulting them
+      // to the right rim sent every one out the wrong border, back across its
+      // own card and into the target from the opposite side.
+      const src: NodeDef = {
+        ...node("src", "agent", [], []),
+        outputs: [
+          { name: "other", repeated: false, side: "right" },
+          { name: "plan", repeated: false, side },
+        ],
+      };
+      const p = pipeline(
+        [src, node("dst", "agent", [], ["code"])],
+        [{ source: { node: "src", port: "plan" }, target: { node: "dst", port: "plan" } }],
+      );
+      const edges = deriveEditEdges(p);
+      expect(edges[0].sourceHandle).toBe(`rim-${side}`);
+      expect(edges[0].data?.sourceSide).toBe(side);
+      expect(edges[0].data?.sourceAnchor).toBeNull();
+    },
+  );
+
+  it("lets a drawn anchor win over the output's declared side", () => {
+    const src: NodeDef = {
+      ...node("src", "agent", [], []),
+      outputs: [{ name: "plan", repeated: false, side: "bottom" }],
+    };
+    const edges = deriveEditEdges(
+      pipeline(
+        [src, node("dst", "agent", [], ["code"])],
+        [
+          {
+            source: { node: "src", port: "plan" },
+            target: { node: "dst", port: "plan" },
+            source_anchor: { side: "right", offset: 12 },
+          },
+        ],
+      ),
+    );
+    expect(edges[0].sourceHandle).toBe("rim-right");
+    expect(edges[0].data?.sourceSide).toBe("right");
+  });
+
+  it("binds an End edge to a body anchor handle, like a work node (#840)", () => {
+    // End lands by drop: the handle is layout (`__anchor:<side>`), the carried
+    // `result` port stays on the edge itself.
     const p = pipeline(
       [node("src", "agent", [], ["plan"]), node("end", "end", ["result"], [])],
       [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
     );
     const edges = deriveEditEdges(p);
-    expect(edges[0].targetHandle).toBe("result");
+    expect(edges[0].targetHandle).toBe("__anchor:left");
+  });
+
+  it("routes a legacy (un-anchored) End edge to `result`'s declared side (#844, #840)", () => {
+    // An End edge saved before #840 carries no anchor and no `target_side`: it
+    // must reopen on the side it always landed on — the one `result` declares —
+    // not on the `left` that absence reads back as. Routing to `left` laid the
+    // perpendicular landing leg across a border the wire never touched.
+    const end = node("end", "end", ["result"], []);
+    end.inputs[0].side = "top";
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), end],
+      [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
+    );
+    expect(deriveEditEdges(p)[0].data?.targetSide).toBe("top");
+  });
+
+  it("still routes an emergent target to its persisted side", () => {
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], [])],
+      [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "dst", port: "plan" },
+          target_side: "bottom",
+        },
+      ],
+    );
+    expect(deriveEditEdges(p)[0].data?.targetSide).toBe("bottom");
   });
 
   it("keeps the declared port for structural nodes (merge)", () => {
@@ -339,5 +446,212 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     const cards = deriveEditNodes(p, null);
     const other = cards.find((c) => c.id === "other")!;
     expect(other.data.loopBadge).toBeUndefined();
+  });
+});
+
+// #843 / ADR-0073: an edge can carry several outputs of its source node. It is
+// still ONE arrow on the canvas — drawn from the primary carried port's handle —
+// and its condition pill names the output each predicate reads as soon as there
+// is more than one to choose from.
+describe("deriveEditEdges — multi-output edges (#843)", () => {
+  function node(id: string, outputs: string[]): NodeDef {
+    return {
+      id,
+      name: id,
+      type: "agent",
+      inputs: [],
+      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      interactive: false,
+    };
+  }
+
+  function pipeline(edges: PipelineDef["edges"]): PipelineDef {
+    return {
+      name: "p",
+      variables: {},
+      nodes: [node("design", ["out", "spec"]), node("orch", [])],
+      edges,
+    };
+  }
+
+  it("draws ONE arrow for a multi-port edge, from the primary port's handle", () => {
+    const edges = deriveEditEdges(
+      pipeline([
+        { source: { node: "design", ports: ["out", "spec"] }, target: { node: "orch", port: "out" } },
+      ]),
+    );
+    expect(edges).toHaveLength(1);
+    // One arrow, drawn from one place: the rim of the departure side (#844).
+    expect(edges[0].sourceHandle).toBe("rim-right");
+  });
+
+  it("renders the condition pill with the output prefix once two ports are carried", () => {
+    const edges = deriveEditEdges(
+      pipeline([
+        {
+          source: { node: "design", ports: ["out", "spec"] },
+          target: { node: "orch", port: "out" },
+          when: { "out.has_design_work": { eq: true } },
+        },
+      ]),
+    );
+    expect(edges[0].data!.label).toBe("out.has_design_work = true");
+  });
+
+  it("renders the property alone on a single-port edge", () => {
+    const edges = deriveEditEdges(
+      pipeline([
+        {
+          source: { node: "design", port: "out" },
+          target: { node: "orch", port: "out" },
+          when: { has_design_work: { eq: true } },
+        },
+      ]),
+    );
+    expect(edges[0].data!.label).toBe("has_design_work = true");
+  });
+});
+
+// #845: the canvas labels and the draw order are derived from the edge's own
+// layout fields — the toggle's DEFAULT from how many outputs the source node
+// declares, never from how many this edge happens to carry.
+describe("deriveEditEdges — labels and draw order (#845)", () => {
+  function node(id: string, outputs: string[]): NodeDef {
+    return {
+      id,
+      name: id,
+      type: "agent",
+      inputs: [],
+      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      interactive: false,
+    };
+  }
+
+  function pipeline(sourceOutputs: string[], edges: PipelineDef["edges"]): PipelineDef {
+    return {
+      name: "p",
+      variables: {},
+      nodes: [node("design", sourceOutputs), node("orch", [])],
+      edges,
+    };
+  }
+
+  it("names the carried outputs by default when the source declares two or more", () => {
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [{ source: { node: "design", ports: ["out", "spec"] }, target: { node: "orch", port: "out" } }],
+      ),
+    );
+    expect(edges[0].data!.showOutputLabels).toBe(true);
+    expect(edges[0].data!.ports).toEqual(["out", "spec"]);
+  });
+
+  it("stays silent by default on a single-output source", () => {
+    const edges = deriveEditEdges(
+      pipeline(["out"], [{ source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } }]),
+    );
+    expect(edges[0].data!.showOutputLabels).toBe(false);
+  });
+
+  it("defaults off on a source declaring two outputs when the edge carries one — the toggle is the AUTHOR's", () => {
+    // The derivation reads the per-edge value first; only an absent one falls
+    // back to the count. A `false` must survive, or turning the labels off on a
+    // two-output node would silently come back on the next render.
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [
+          {
+            source: { node: "design", port: "out" },
+            target: { node: "orch", port: "out" },
+            show_output_labels: false,
+          },
+        ],
+      ),
+    );
+    expect(edges[0].data!.showOutputLabels).toBe(false);
+  });
+
+  it("draws above the nodes by default and below on demand", () => {
+    const above = deriveEditEdges(
+      pipeline(["out"], [{ source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } }]),
+    );
+    expect(above[0].zIndex).toBe(EDGE_ABOVE_NODES);
+    expect(EDGE_ABOVE_NODES).toBeGreaterThan(1000);
+
+    const below = deriveEditEdges(
+      pipeline(
+        ["out"],
+        [
+          {
+            source: { node: "design", port: "out" },
+            target: { node: "orch", port: "out" },
+            below_nodes: true,
+          },
+        ],
+      ),
+    );
+    expect(below[0].zIndex).toBe(EDGE_UNDER_NODES);
+    expect(EDGE_UNDER_NODES).toBe(0);
+  });
+
+  it("tells the edge whether it draws under the nodes, for its labels and handles", () => {
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out"],
+        [
+          { source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } },
+          {
+            source: { node: "design", port: "out" },
+            target: { node: "orch", port: "out" },
+            below_nodes: true,
+          },
+        ],
+      ),
+    );
+    expect(edges.map((e) => e.data!.belowNodes)).toEqual([false, true]);
+  });
+
+  it("numbers the label slots across fan-out edges leaving from the same port", () => {
+    // FP #845 finding: two edges out of `design.spec` placed their tags at the
+    // same default spot, one hiding the other.
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [
+          { source: { node: "design", ports: ["spec", "out"] }, target: { node: "orch", port: "out" } },
+          { source: { node: "design", port: "spec" }, target: { node: "orch", port: "out" } },
+          // a different departure point starts its own count
+          { source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } },
+          // hidden labels take no slot
+          {
+            source: { node: "design", port: "spec" },
+            target: { node: "orch", port: "out" },
+            show_output_labels: false,
+          },
+          { source: { node: "design", port: "spec" }, target: { node: "orch", port: "out" } },
+        ],
+      ),
+    );
+    expect(edges.map((e) => e.data!.outputLabelSlot)).toEqual([0, 2, 0, 3, 3]);
+  });
+
+  it("hands the pinned label positions through to the edge", () => {
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [
+          {
+            source: { node: "design", ports: ["out", "spec"] },
+            target: { node: "orch", port: "out" },
+            output_label_pos: { spec: { x: 40, y: 50 } },
+            condition_label_pos: { x: 12, y: 13 },
+          },
+        ],
+      ),
+    );
+    expect(edges[0].data!.outputLabelPos).toEqual({ spec: { x: 40, y: 50 } });
+    expect(edges[0].data!.conditionLabelPos).toEqual({ x: 12, y: 13 });
   });
 });

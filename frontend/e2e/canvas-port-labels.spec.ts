@@ -4,22 +4,23 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Layer 3b — Port labels, hover label, and drag edge label (refs #66).
+// Layer 3b — Card ports and the rim drag-source (refs #66, #844).
 //
-// Post canvas-refonte / slim card (#149, #170): a node's INPUTS are emergent
-// (an incoming arrow lands anywhere on the body, no input pill) — the only
-// exception is the `merge` node's repeated `branches` input, which keeps a
-// labelled pill. OUTPUT ports render as plain filled dots that surface their
-// name as a cursor-relative floating label (`.port-dot-lbl`) on hover, rather
-// than an always-visible pill. Dragging an edge out of an output dot shows a
-// dynamic `out/<port>` label on the connection line.
+// Post canvas-refonte / slim card (#149) and border wiring (#844): a node's
+// INPUTS are emergent (an incoming arrow lands anywhere on the body, no input
+// pill) — the only exception is the `merge` node's repeated `branches` input,
+// which keeps a labelled pill. OUTPUTS are named on the EDGES that carry them,
+// never on the card: there is no output dot and no output pill any more. A wire
+// starts from any point of the card's border, through the four rim source strips
+// (`rim-<side>`), and its preview grows on the wiring grid with no label chasing
+// the cursor.
 //
 // This spec seeds one node of each kind that still parses (legacy `switch`/
 // `loop` types migrate to generic agent nodes; `type: for-each` is hard-refused
 // since ADR-0011 — its slot here is a plain non-isolated node with the same body/
-// done port shape) and asserts: every output port renders
-// a dot, the merge input pill is present, hovering an output dot reveals its
-// label, and dragging from an output dot shows the dynamic edge label.
+// done port shape) and asserts: no output dot exists, the merge input pill is
+// present, the four rim strips cover the border, and a drag from the rim draws
+// the grid-snapped preview.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -142,7 +143,7 @@ test.afterAll(async () => {
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("every output port renders a dot and the merge input keeps its pill", async ({
+test("no output dot is rendered; the merge input keeps its pill (#844)", async ({
   page,
 }) => {
   await page.goto("/");
@@ -153,23 +154,14 @@ test("every output port renders a dot and the merge input keeps its pill", async
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Output ports render as dots (`port-output-<name>`). The seed declares 10
-  // output ports across the node types: user_prompt, plan, pass, default,
-  // body, done (loop), body, done (per-item non-isolated), merged, out.
-  const outputDots = page.locator('[data-testid^="port-output-"]');
-  await expect(outputDots).toHaveCount(10, { timeout: 5_000 });
-
-  // A few representative output dots are present in the DOM (the visible
-  // element is the absolutely-positioned xyflow handle, not the wrapper div).
-  await expect(page.getByTestId("port-output-plan")).toHaveCount(1);
-  await expect(page.getByTestId("port-output-merged")).toHaveCount(1);
-  // Their handle dots are rendered on the canvas.
+  // The seed declares 10 output ports across the node types. NONE of them draws
+  // anything on a card: an output is named on the edge that carries it (#845),
+  // and the card's whole border is the drag-source instead (#844).
+  await expect(page.locator('[data-testid^="port-output-"]')).toHaveCount(0);
+  await expect(page.locator(".port-dot")).toHaveCount(0);
   await expect(
-    page.locator('.react-flow__handle[data-handleid="plan"][data-handlepos="right"]').first(),
-  ).toBeVisible({ timeout: 3_000 });
-  await expect(
-    page.locator('.react-flow__handle[data-handleid="merged"][data-handlepos="right"]').first(),
-  ).toBeVisible({ timeout: 3_000 });
+    page.locator('.react-flow__handle[data-handleid="plan"]'),
+  ).toHaveCount(0);
 
   // Inputs are emergent (no input pill) — except the merge node's repeated
   // `branches` input, which keeps a labelled pill.
@@ -179,7 +171,31 @@ test("every output port renders a dot and the merge input keeps its pill", async
   await expect(page.getByTestId("port-input-in")).toHaveCount(0);
 });
 
-test("hovering an output port dot reveals its name as a floating label", async ({
+test("the whole card border is the drag-source (#844)", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  await openPipelineForEdit(page, PIPELINE_NAME);
+  await page.waitForTimeout(500);
+
+  // Four source strips per card that declares an output, one per side, each
+  // stretched along its whole border — not a 6px square in a corner.
+  const bottomRim = page.getByTestId("rim-source-bottom").first();
+  await expect(bottomRim).toBeVisible({ timeout: 5_000 });
+  const rimBox = await bottomRim.boundingBox();
+  const card = page.locator(".react-flow__node").first();
+  const cardBox = await card.boundingBox();
+  if (!rimBox || !cardBox) throw new Error("card or rim not visible");
+  expect(rimBox.width).toBeGreaterThan(cardBox.width * 0.9);
+
+  for (const side of ["top", "bottom", "left", "right"]) {
+    await expect(page.getByTestId(`rim-source-${side}`).first()).toHaveCount(1);
+  }
+});
+
+test("dragging from the rim draws the grid-snapped preview, with no label (#844)", async ({
   page,
 }) => {
   await page.goto("/");
@@ -190,53 +206,31 @@ test("hovering an output port dot reveals its name as a floating label", async (
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // The planner's `plan` output dot is the xyflow source handle.
-  const planHandle = page
-    .locator('.react-flow__handle[data-handleid="plan"][data-handlepos="right"]')
-    .first();
-  await expect(planHandle).toBeVisible({ timeout: 5_000 });
+  const rim = page.getByTestId("rim-source-bottom").first();
+  await expect(rim).toBeVisible({ timeout: 5_000 });
+  const box = await rim.boundingBox();
+  if (!box) throw new Error("rim not visible");
 
-  const box = await planHandle.boundingBox();
-  if (!box) throw new Error("plan handle not visible");
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-
-  // The cursor-relative floating label appears with the port name.
-  const dotLabel = page.locator(".port-dot-lbl");
-  await expect(dotLabel).toBeVisible({ timeout: 3_000 });
-  await expect(dotLabel).toHaveText("plan");
-});
-
-test("dragging from an output port shows dynamic edge label", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
-    timeout: 10_000,
-  });
-
-  await openPipelineForEdit(page, PIPELINE_NAME);
-  await page.waitForTimeout(500);
-
-  // Find an output handle and drag from it
-  // The planner's "plan" port handle has data-handleid="plan" and data-handlepos="right"
-  const planHandle = page.locator(
-    '.react-flow__handle[data-handleid="plan"][data-handlepos="right"]',
-  );
-  await expect(planHandle).toBeVisible({ timeout: 5_000 });
-
-  const box = await planHandle.boundingBox();
-  if (!box) throw new Error("plan handle not visible");
-
-  // Start drag from the handle
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + 100, box.y + 50, { steps: 5 });
+  await page.mouse.move(box.x + box.width / 2, box.y + 140, { steps: 5 });
 
-  // The drag connection line should be visible with the label
-  const dragLine = page.getByTestId("drag-connection-line");
-  await expect(dragLine).toBeVisible({ timeout: 3_000 });
-
-  const dragLabel = page.getByTestId("drag-label-text");
-  await expect(dragLabel).toBeVisible({ timeout: 3_000 });
-  await expect(dragLabel).toHaveText(/out\/plan/);
+  await expect(page.getByTestId("drag-connection-line")).toBeVisible({
+    timeout: 3_000,
+  });
+  // The snap indicator is the whole Shift feedback — filled on the grid, hollow
+  // and dashed off it. Nothing textual follows the cursor any more.
+  await expect(page.getByTestId("wiring-snap-indicator")).toHaveAttribute(
+    "data-snapped",
+    "true",
+  );
+  await page.keyboard.down("Shift");
+  await page.mouse.move(box.x + box.width / 2 + 37, box.y + 173, { steps: 3 });
+  await expect(page.getByTestId("wiring-snap-indicator")).toHaveAttribute(
+    "data-snapped",
+    "false",
+  );
+  await page.keyboard.up("Shift");
 
   await page.mouse.up();
 });

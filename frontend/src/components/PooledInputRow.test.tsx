@@ -8,8 +8,8 @@ const pooledReview: PooledInput = {
   name: "review",
   repeated: false,
   sources: [
-    { nodeId: "sec", label: "security-reviewer", edgeIndex: 0 },
-    { nodeId: "perf", label: "perf-reviewer", edgeIndex: 3 },
+    { nodeId: "sec", label: "security-reviewer", edgeIndex: 0, port: "review", sharedEdge: false },
+    { nodeId: "perf", label: "perf-reviewer", edgeIndex: 3, port: "review", sharedEdge: false },
   ],
 };
 
@@ -31,14 +31,14 @@ describe("PooledInputRow — per-source delete (#339)", () => {
     expect(screen.queryByTestId("pooled-input-review-delete-perf")).toBeNull();
   });
 
-  it("renders one × per source and reports each source's own edgeIndex", () => {
+  it("renders one × per source and reports each source's own edge and port", () => {
     const onDeleteSource = vi.fn();
     renderRow({ input: pooledReview, onDeleteSource });
 
     fireEvent.click(screen.getByTestId("pooled-input-review-delete-sec"));
-    expect(onDeleteSource).toHaveBeenCalledWith(0);
+    expect(onDeleteSource).toHaveBeenCalledWith(pooledReview.sources[0]);
 
     fireEvent.click(screen.getByTestId("pooled-input-review-delete-perf"));
-    expect(onDeleteSource).toHaveBeenCalledWith(3);
+    expect(onDeleteSource).toHaveBeenCalledWith(pooledReview.sources[1]);
   });
 });

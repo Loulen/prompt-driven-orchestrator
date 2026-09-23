@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import { TooltipProvider } from "./ui/tooltip";
@@ -198,22 +198,21 @@ describe("EditNode emergent anchoring keyed on node type (issue #175)", () => {
     }
   });
 
-  it("keeps a declared-port node (End) on its declared side and grows no anchor handles (AC3)", () => {
-    // End's `result` is a fixed-side declared port: its body handle renders on
-    // the declared side (here `top`), not a hardcoded left, and it never grows
-    // the per-side drop anchors.
+  it("lets the End marker land a wire on any border, whatever `result` declares (#840)", () => {
+    // Until #840 End's `result` was a fixed-side handle and End grew no per-side
+    // anchors: a wire could land on its declared side only. `result` is the
+    // edge's port, not a place on the card — End anchors by drop like a work node.
     const { container } = render(
       <EditNode {...nodeProps("end", [{ name: "result", side: "top" }])} />,
       { wrapper: Wrapper },
     );
-    const handles = Array.from(container.querySelectorAll(".react-flow__handle"));
-    const handleIds = handles.map((h) => h.getAttribute("data-handleid"));
+    const handleIds = Array.from(container.querySelectorAll(".react-flow__handle")).map((h) =>
+      h.getAttribute("data-handleid"),
+    );
     for (const side of ["left", "right", "top", "bottom"]) {
-      expect(handleIds).not.toContain(`__anchor:${side}`);
+      expect(handleIds).toContain(`__anchor:${side}`);
     }
-    const resultHandle = handles.find((h) => h.getAttribute("data-handleid") === "result");
-    expect(resultHandle).toBeTruthy();
-    expect(resultHandle!.getAttribute("data-handlepos")).toBe("top");
+    expect(handleIds).not.toContain("result");
   });
 });
 
@@ -278,5 +277,74 @@ describe("EditNode Start marker — input images on the canvas (issue #145)", ()
       { wrapper: Wrapper },
     );
     expect(screen.queryByTestId("start-node-images")).toBeNull();
+  });
+});
+
+describe("EditNode rim drag-source (#844)", () => {
+  function workProps(outputs: { name: string; side: "left" | "right" | "top" | "bottom" }[]) {
+    return {
+      ...markerProps({ nodeType: "agent" }),
+      id: "nd_4f2a",
+      data: {
+        label: "rewrite_section",
+        nodeId: "nd_4f2a",
+        nodeType: "agent" as NodeType,
+        status: "pending" as NodeStatus,
+        reached: false,
+        inputs: [],
+        outputs,
+        interactive: false,
+        isolated: false,
+      },
+    } as unknown as Parameters<typeof EditNode>[0];
+  }
+
+  it("renders NO output dot — the card names no port any more", () => {
+    const { container } = render(
+      <EditNode {...workProps([{ name: "out", side: "right" }, { name: "spec", side: "right" }])} />,
+      { wrapper: Wrapper },
+    );
+    expect(container.querySelectorAll(".port-dot")).toHaveLength(0);
+    expect(container.querySelectorAll(".port-pill.kind-output")).toHaveLength(0);
+    expect(screen.queryByText("out")).toBeNull();
+    expect(screen.queryByText("spec")).toBeNull();
+  });
+
+  it("makes the whole border a connection source: one source strip per side", () => {
+    const { container } = render(<EditNode {...workProps([{ name: "out", side: "right" }])} />, {
+      wrapper: Wrapper,
+    });
+    for (const side of ["top", "bottom", "left", "right"]) {
+      const strip = screen.getByTestId(`rim-source-${side}`);
+      expect(strip.getAttribute("data-handleid")).toBe(`rim-${side}`);
+    }
+    expect(container.querySelectorAll('[data-testid^="rim-source-"]')).toHaveLength(4);
+    // xyflow's own `.react-flow__handle` rule sets width/height: 6px, which beats
+    // plain opposing insets — so each strip must say `auto` on its long axis or it
+    // collapses to a 6px square in a corner, and every wire then leaves the card a
+    // dozen pixels off the side's middle.
+    const top = screen.getByTestId("rim-source-top") as HTMLElement;
+    expect(top.style.width).toBe("auto");
+    const left = screen.getByTestId("rim-source-left") as HTMLElement;
+    expect(left.style.height).toBe("auto");
+    // Above the `inset: 0` body target handle, so the rim wins the pointer.
+    expect(Number(top.style.zIndex)).toBeGreaterThan(1);
+  });
+
+  it("grows no rim on a node that declares no output — it starts no wire", () => {
+    render(<EditNode {...workProps([])} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId("rim-source-top")).toBeNull();
+  });
+
+  it("arms the gesture with an amber ring while the rim is hovered", () => {
+    const { container } = render(<EditNode {...workProps([{ name: "out", side: "right" }])} />, {
+      wrapper: Wrapper,
+    });
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.style.boxShadow).toBe("");
+    fireEvent.pointerEnter(screen.getByTestId("rim-source-bottom"));
+    expect(card.style.boxShadow).toContain("--color-st-await");
+    fireEvent.pointerLeave(screen.getByTestId("rim-source-bottom"));
+    expect(card.style.boxShadow).toBe("");
   });
 });

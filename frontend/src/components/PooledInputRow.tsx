@@ -1,4 +1,4 @@
-import type { PooledInput } from "../lib/derivePooledInputs";
+import type { PooledInput, PooledInputSource } from "../lib/derivePooledInputs";
 import { Tooltip } from "./ui/tooltip";
 
 /**
@@ -16,9 +16,11 @@ export default function PooledInputRow({
   input: PooledInput;
   highlighted?: boolean;
   isLast?: boolean;
-  /** Per-source delete (#339): deletes the contributing edge — the canonical
-   * "delete an input" since inputs are emergent. Absent → read-only render. */
-  onDeleteSource?: (edgeIndex: number) => void;
+  /** Per-source delete (#339): removes the contributing edge — or, when that
+   * edge carries other outputs that each feed their own input here (ADR-0073 /
+   * #843), unticks just this output. The canonical "delete an input" since
+   * inputs are emergent. Absent → read-only render. */
+  onDeleteSource?: (source: PooledInputSource) => void;
 }) {
   const pooled = input.sources.length > 1;
   return (
@@ -60,10 +62,16 @@ export default function PooledInputRow({
               <span key={s.edgeIndex} className="flex min-w-0 items-baseline break-words">
                 {s.label}
                 {onDeleteSource && (
-                  <Tooltip content="Delete this input source (removes the incoming edge).">
+                  <Tooltip
+                    content={
+                      s.sharedEdge
+                        ? `Drop this input (unticks the '${s.port}' output on the incoming edge, which carries others).`
+                        : "Delete this input source (removes the incoming edge)."
+                    }
+                  >
                     <button
                       data-testid={`pooled-input-${input.name}-delete-${s.nodeId}`}
-                      onClick={() => onDeleteSource(s.edgeIndex)}
+                      onClick={() => onDeleteSource(s)}
                       className="ml-0.5 cursor-pointer rounded px-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
                       aria-label={`Delete input source ${s.label}`}
                     >

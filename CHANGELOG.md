@@ -16,6 +16,65 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.101.1
+**La node End accepte une edge sur ses quatre bords** (#840).
+
+- End atterrit là où le fil est lâché, comme un node agent ou script : haut, droite, bas ou
+  gauche, avec aperçu, ancre sauvegardée et tracé perpendiculaire au bord. L'edge porte toujours
+  le port `result`.
+- Une edge vers End sauvegardée sans ancre garde le côté déclaré de `result` : les pipelines
+  existants se rouvrent à l'identique. Le node merge reste fixé sur sa pastille `branches`.
+
+## 1.101.0
+**Tour « First pipeline » : geste depuis le bord, correction du port dans la section Outputs** (#846, #840).
+
+- Les étapes d'edge ne parlent plus de dot ni de handle : elles enseignent le bord de la carte
+  (#844).
+- Les deux edges du tester avancent sur l'output porté. Si l'edge ne porte pas `out`, la carte
+  re-vise l'edge puis la section Outputs du panneau, et avance quand `out` est coché ; l'étape de
+  sélection qui suit est alors déjà satisfaite.
+- Les conditions `when` sont acceptées sur une edge multi-port (`out.verdict`) comme sur une edge
+  à un port (`verdict`) ; une valeur fausse retient l'étape avec un indice précis.
+
+## 1.100.0
+**Câblage des edges depuis le bord, tracé sur grille, drag de segments snappé** (#844, #840).
+
+- Création : les dots d'output disparaissent. Une edge part de n'importe quel point du bord du
+  node source et se trace par cellules de la grille de câblage (ADR-0072). `Shift` libère le
+  tracé ; le relâcher ré-origine la grille sur le point courant. L'edge créée est en
+  `mode: manual` et porte le premier output déclaré.
+- YAML : deux champs de layout, `source_anchor` et `target_anchor` (`{ side, offset }`), disent où
+  le fil quitte et touche les cartes. Absents, le fil part du milieu du côté comme avant ; ils sont
+  ignorés par le diff sémantique.
+- Drag de segment : snap à la grille, `Shift` libère, les autres waypoints ne bougent pas, deux
+  segments alignés fusionnent. « Re-route automatically » donne un tracé auto aligné sur la grille.
+- Le clic droit sur un handle de segment ne supprime plus de waypoint ; le menu « Delete edge »
+  reste sur l'edge.
+
+## 1.99.0
+**Labels d'edge déplaçables, toggle des labels d'output, ordre de dessin edges/nodes** (#845, #840).
+
+- Labels d'output : petit tag par port porté, placé en alternance au pied de l'edge, déplaçable
+  (`output_label_pos`). Toggle par edge (`show_output_labels`), actif par défaut si le node source
+  déclare au moins 2 outputs.
+- Label de condition : la pill `when` est déplaçable (`condition_label_pos`) et se place par défaut
+  à côté du trait, plus sur le handle de segment.
+- Ordre de dessin : les edges passent au-dessus des nodes par défaut ; le switch « Draw under
+  nodes » (`below_nodes`) les repasse dessous, handles et pill compris.
+- Ces 4 champs sont du layout : écrits seulement hors valeur par défaut, ignorés par le diff
+  sémantique.
+
+## 1.98.0
+**Edge multi-port : une seule edge porte plusieurs outputs d'un même node** (#843, #840).
+
+- YAML : `source: { node, ports: [a, b] }` pour une edge multi-port ; la forme `port:` à un seul
+  port reste inchangée et les pipelines existants ne sont pas réécrits.
+- Runtime : une edge multi-port se déclenche une fois et le node aval reçoit un input par port,
+  nommé d'après le port (`PDO_INPUT_<PORT>`, préambule « Inputs » listé par port).
+- Panneau d'edge : section **Outputs** en tête (le dernier port coché ne peut pas être décoché) ;
+  une condition `when` choisit le port lu et son schéma se résout par ligne.
+- Diff sémantique insensible à l'ordre des ports portés.
+
 ## 1.97.3
 **Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).
 

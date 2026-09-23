@@ -464,17 +464,18 @@ function SentCard({
               })}
             </div>
           )}
-          <div className="flex items-center gap-2 border-t border-line px-2.5 py-[5px] text-fg-4" style={{ fontSize: "10px" }}>
-            <span className="font-mono" data-testid="review-comment-id">
+          {/* One line whatever the width: the pair label truncates, the id and the status never wrap. */}
+          <div className="flex items-center gap-2 whitespace-nowrap border-t border-line px-2.5 py-[5px] text-fg-4" style={{ fontSize: "10px" }}>
+            <span className="shrink-0 font-mono" data-testid="review-comment-id">
               {c.id}
             </span>
-            <span>· {pairLabel}</span>
+            <span className="min-w-0 truncate" title={pairLabel}>· {pairLabel}</span>
             {outdated && (
               <span className="inline-flex items-center gap-1 text-st-stale" title="The line this comment points at changed on the displayed destination">
                 <History size={10} /> line changed
               </span>
             )}
-            <span className="ml-auto inline-flex items-center gap-1.5" data-testid="review-comment-status" data-kind={footer.kind}>
+            <span className="ml-auto inline-flex shrink-0 items-center gap-1.5" data-testid="review-comment-status" data-kind={footer.kind}>
               <FooterStatusView status={footer} />
               {state === "proposed" ? (
                 <>

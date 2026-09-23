@@ -143,8 +143,8 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 
 `scenes/_live.mjs` is for the scenes that need real agents: `startDemoRun`
 starts a run of the demo pipeline on the fixture repo (`DEMO_TASK`: add a product search),
-`completeDemoRun` plays one to the end off camera (a scene's `setup`: `outputs` and `review` film a
-finished run, one for both variants), `waitNode` / `waitRun` / `waitPane` wait for a node's or a
+`completeDemoRun` plays one to the end off camera (a scene's `setup`: `outputs` films one finished run
+for both variants, `review` plays one per variant, side by side), `waitNode` / `waitRun` / `waitPane` wait for a node's or a
 run's status or for text in its tmux pane, and `stopDemoRun` stops every agent of the run, in a
 `finally`, as soon as the variant is filmed: its nodes, its manager (`pdo-mgr-<run>`, started on
 demand by a send to the manager), and with `children: true` every child run first (`archive: true`
@@ -161,16 +161,25 @@ starting pipeline in place (a variant that saves changes the library for the nex
   The reviewer's prompt (`fixture/pipelines/implement-review.prompts/reviewer.md`) keeps the review
   short, with a small left-to-right Mermaid diagram (three or four boxes) right after the verdict:
   it reads in the modal without a scroll (a top-down one scales to the modal's width and overflows). The wait for the Mermaid render is cut; the thumbnails and the lightbox image are loaded
-  before they are filmed. The poster checks the run tab has nothing unsaved.
-- **review**: `setup` plays a whole run. Each variant comments a line the demo task always adds
-  (`app.js`'s input listener, `index.html`'s search input; the file's first added line otherwise),
-  sends it, and waits for the reply the manager posts with `pdo review reply`: nothing is injected.
-  The wait is a short ×8 stretch, then a cut. The manager is stopped after each variant.
+  before they are filmed. The poster checks the run tab has nothing unsaved. On the Run tab the
+  finished node's terminal is folded to a bar (#346) and the panel lists its I/O: the one input
+  (`code`) above the two outputs. That is how the app shows a finished node, and the scene films it
+  as is.
+- **review**: `setup` plays **one whole run per variant**, both at once: a variant never films the
+  other's comment or reply ("1 sent", a thread already answered). Each variant comments a line the
+  demo task always adds (`app.js`'s input listener, `index.html`'s search input; the file's first
+  added line otherwise), sends it, and waits for the reply the manager posts with
+  `pdo review reply` **in that comment's thread**: nothing is injected. The wait is a short ×8
+  stretch, then a cut. The manager is stopped after each variant. Both variants film the unified
+  view with the file list closed, at 1040 px (barely scaled to the GIF's 960, nothing cropped): no code line,
+  toolbar button or thread footer is cut or wrapped.
 - **orchestration**: `setup` turns Orchestrator on for `implementer` in the demo HOME's copy of
   `implement-review` (same name: still the one pipeline). The run's task spells out the two
   `pdo run create implement-review …` commands, each child's task says not to orchestrate in turn.
   The children are real runs of the whole pipeline (a minute or two each); the variant ends when
-  both are finished, then stops and archives the parent and its children.
+  both are finished, then stops and archives the parent and its children. Before variant a's
+  poster, `implementer` is re-selected off camera once its session ended, so its terminal folds to a
+  bar instead of an empty « [exited] » block.
 
 ## Settings scenes (no live agent)
 

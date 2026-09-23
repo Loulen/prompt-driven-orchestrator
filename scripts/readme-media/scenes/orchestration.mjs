@@ -10,7 +10,8 @@
 //   counters      — the child counters move as the children finish
 //
 //   a — the whole window: the run tree on the left, `implementer`'s
-//       Orchestration tab on the right (child rows, counters, cost).
+//       Orchestration tab on the right (child rows, counters, cost). Its
+//       terminal folds to a bar on the poster, once its session ended.
 //   b — the run tree and the canvas: the parent row folded on its chevron, its
 //       counters and the canvas node's counting the children to the end.
 //
@@ -21,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { sleep } from "../lib/demo-instance.mjs";
 import { DEMO_PIPELINE } from "../lib/demo-pipeline.mjs";
 import { installPipeline } from "./_canvas.mjs";
-import { openRun, startDemoRun, stopDemoRun, waitPane } from "./_live.mjs";
+import { openRun, startDemoRun, stopDemoRun, waitNode, waitPane } from "./_live.mjs";
 
 const FIXTURE_PIPELINE = fileURLToPath(new URL(`../fixture/pipelines/${DEMO_PIPELINE.id}.yaml`, import.meta.url));
 
@@ -107,6 +108,25 @@ async function fastThenCutUntilFirstDone(ctx, runId) {
   await sleep(1500);
 }
 
+/** Off camera, once `implementer` is done: re-select it, so its ended session
+ *  folds to the Terminal bar (#346, seeded when the panel mounts) instead of
+ *  an empty « [exited] » block, and bring its Orchestration tab back. The
+ *  cursor then rests on the canvas (a hovered row stays lit on the poster). */
+async function showSettledImplementer(ctx, runId) {
+  const { page, instance } = ctx;
+  await waitNode(instance, runId, "implementer", { statuses: ["completed"], timeout: 3 * 60_000 });
+  await ctx.click(page.getByTestId("rf__node-reviewer"), { duration: 150, pause: 40 });
+  await sleep(400);
+  await ctx.click(page.getByTestId("rf__node-implementer"), { duration: 150, pause: 40 });
+  await page.getByTestId("terminal-minimized").waitFor({ timeout: 10_000 });
+  const tab = page.getByTestId("detail-tab-orchestration");
+  if ((await tab.getAttribute("data-active")) !== "true") await ctx.click(tab, { duration: 150, pause: 40 });
+  await page.getByTestId("orchestration-child").nth(PARTS.length - 1).waitFor({ timeout: 15_000 });
+  await sleep(600);
+  const canvas = await page.getByTestId("rf__wrapper").boundingBox();
+  await ctx.keep(() => ctx.hover({ x: canvas.x + canvas.width * 0.75, y: canvas.y + canvas.height * 0.3 }, { duration: 600, pause: 100 }));
+}
+
 export default {
   name: "orchestration",
   title: "Recursive orchestration — the demo pipeline relaunching itself, one child per part",
@@ -147,7 +167,7 @@ export default {
           // Cut until the second child is done too: every counter ends « finished ».
           await waitChildren(instance, runId, finished(PARTS.length));
           await page.getByTestId("tab-child-pills-running").waitFor({ state: "detached", timeout: 15_000 });
-          await sleep(600);
+          await showSettledImplementer(ctx, runId);
           await ctx.hold(2400);
         } finally {
           await stopDemoRun(instance, runId, { children: true, archive: true });

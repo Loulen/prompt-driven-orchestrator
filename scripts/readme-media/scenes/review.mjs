@@ -1,30 +1,35 @@
 // Scene « review » (row « Diff review »): the Review page of a run of the demo
-// pipeline that REAL agents played to the end (`setup`, off camera). A line of
-// its diff is commented, the comment is sent to the run's manager — a real
+// pipeline that REAL agents played to the end (`setup`, off camera, one run per
+// variant: each films a review with no earlier comment). A line of its diff is
+// commented, the comment is sent to the run's manager — a real
 // `claude` session PDO starts on demand — and the manager's own answer
 // (`pdo review reply`) lands in the thread. Nothing is injected: the scene
 // waits for the reply the agent writes.
 //
 //   comment-posted → sent-to-manager → cut, ×8 while the manager reads → answer-received
 //
-//   a — split view, `app.js`: the draft, then « Send all to manager » from the send bar.
-//   b — unified view, `index.html`: the draft, then its own « Send ».
+//   a — `app.js`: the draft, then « Send all to manager » from the send bar.
+//   b — `index.html`: the draft, then its own « Send ».
 //
-// The manager is stopped as soon as each variant is filmed (`stopDemoRun`);
-// variant b's send starts a fresh one.
+// Both in the unified view, the file list closed: the diff gets the whole
+// window, so no code line, toolbar or thread footer is cut or wrapped at the
+// GIF's width. The manager is stopped as soon as each variant is filmed
+// (`stopDemoRun`).
 
 import { sleep } from "../lib/demo-instance.mjs";
 import { completeDemoRun, stopDemoRun } from "./_live.mjs";
 
-const VIEWPORT = { width: 1180, height: 680 };
-/** The diff column, header included: the file list on the left (and the run
- *  id at the top left) is cut. */
-const CROP = { x: 272, y: 0, width: 908, height: 680 };
+/** Barely scaled down to the GIF's 960 px, nothing cropped: at this width the
+ *  top bar holds its buttons on one line and the run label still reads. */
+const VIEWPORT = { width: 1040, height: 660 };
+/** Unified view, file list closed (both remembered by the browser). */
+const LAYOUT = { "pdo.review.view": "unified", "pdo.review.list": "closed" };
 /** Where the commented line sits on screen: the editor, the comment and the
- *  answer unfold below it, inside the crop. */
+ *  answer unfold below it. */
 const LINE_TOP = 150;
 
-let runId = null;
+/** The finished run each variant comments, by variant id. */
+const runs = {};
 
 /** The comment of each variant, on a line the demo task always adds (with a
  *  generic fallback on the file's first added line). */
@@ -45,17 +50,14 @@ const TARGETS = {
 
 /** Off camera: the run's Review page, the target line of `file` scrolled to
  *  `LINE_TOP`. Returns the row and the comment text that fits it. */
-async function openReview(ctx, { file, line, text, fallback }, { unified = false } = {}) {
+async function openReview(ctx, runId, { file, line, text, fallback }) {
   const { page } = ctx;
   await ctx.goto(`/runs/${encodeURIComponent(runId)}/review`);
   const card = page.getByTestId("review-file").filter({ has: page.getByTestId("review-file-header").filter({ hasText: file }) }).first();
   await card.waitFor({ timeout: 30_000 });
-  if (unified) {
-    await ctx.click(page.getByTestId("review-view-unified"), { duration: 150, pause: 40 });
-    await sleep(600);
-  }
-  // Split: the destination (new) side. Unified: one table, added lines only.
-  const rows = unified ? card.locator("tr").filter({ has: page.locator('[data-operator="+"]') }) : card.locator('table[data-mode="new"] tr').filter({ has: page.locator('[data-operator="+"]') });
+  if ((await page.getByTestId("review-view-toggle").getAttribute("data-view")) !== "unified") throw new Error("the review is not in the unified view");
+  // One table, added lines only.
+  const rows = card.locator("tr").filter({ has: page.locator('[data-operator="+"]') });
   await rows.first().waitFor({ timeout: 30_000 });
   let row = rows.filter({ hasText: line }).first();
   let comment = text;
@@ -93,30 +95,34 @@ async function sent(page) {
   await sleep(300);
 }
 
+/** The sent comment whose text is `comment` — the one this variant posted. */
+function commentCard(page, comment) {
+  return page.getByTestId("review-comment").filter({ has: page.getByTestId("review-comment-body").filter({ hasText: comment.slice(0, 40) }) }).first();
+}
+
 /** Film the wait for the manager: a short ×8 stretch, then cut until its
- *  answer (the reply its agent posted) is in the thread. */
-async function waitForAnswer(ctx) {
+ *  answer (the reply its agent posted) is in THIS comment's thread. */
+async function waitForAnswer(ctx, comment) {
   const { page } = ctx;
-  const reply = page.getByTestId("review-reply").first();
-  const answered = reply.waitFor({ timeout: 10 * 60_000 });
-  await ctx.fast(() => Promise.race([answered, sleep(12_000)]), { speed: 8 });
+  const card = commentCard(page, comment);
+  const answered = card.getByTestId("review-reply-body").first().waitFor({ timeout: 10 * 60_000 });
+  await ctx.fast(() => Promise.race([answered, sleep(8_000)]), { speed: 8 });
   await answered;
-  await page.getByTestId("review-reply-body").first().waitFor();
   await sleep(500);
-  // The whole thread in view (the answer can push past the crop).
-  const box = await page.getByTestId("review-comment-thread").first().boundingBox();
-  if (box && box.y + box.height > CROP.height - 16) {
+  // The whole thread in view (the answer can push past the window).
+  const box = await card.boundingBox();
+  if (box && box.y + box.height > VIEWPORT.height - 16) {
     await page.evaluate((dy) => {
       document.querySelector('[data-testid="review-main"]').scrollTop += dy;
-    }, box.y + box.height - (CROP.height - 16));
+    }, box.y + box.height - (VIEWPORT.height - 16));
     await sleep(400);
   }
 }
 
 /** The cursor rests on the comment's text, off every button and line number
  *  (a hovered one would stay lit on the poster). */
-async function rest(ctx) {
-  const body = await ctx.page.getByTestId("review-comment-body").first().boundingBox();
+async function rest(ctx, comment) {
+  const body = await commentCard(ctx.page, comment).getByTestId("review-comment-body").boundingBox();
   await ctx.hover({ x: body.x + body.width * 0.8, y: body.y + body.height / 2 }, { duration: 500, pause: 100 });
 }
 
@@ -125,34 +131,41 @@ export default {
   title: "Diff review — a comment sent to the manager, and its answer",
   live: ["claude"],
   async setup(instance) {
-    // One real run, off camera: its diff is what both variants comment.
-    runId = await completeDemoRun(instance);
-    console.log(`   demo run ${runId} completed`);
+    // One real run per variant, off camera and side by side: each variant
+    // comments a diff no earlier comment (or reply) sits on.
+    const settled = await Promise.allSettled(["a", "b"].map(() => completeDemoRun(instance)));
+    const failed = settled.find((s) => s.status === "rejected");
+    if (failed) throw failed.reason;
+    ["a", "b"].forEach((id, i) => {
+      runs[id] = settled[i].value;
+      console.log(`   demo run ${runs[id]} completed (variant ${id})`);
+    });
   },
   variants: [
     {
       id: "a",
-      label: "Split view: comment a line of app.js, « Send all to manager », the manager's answer",
+      label: "Comment a line of app.js, « Send all to manager », the manager's answer",
       viewport: VIEWPORT,
-      crop: CROP,
+      localStorage: LAYOUT,
       markers: ["comment-posted", "sent-to-manager", "answer-received"],
       async play(ctx) {
         const { page, instance } = ctx;
+        const runId = runs.a;
         if (!runId) throw new Error("no finished demo run (setup failed)");
         try {
-          const { row, comment } = await openReview(ctx, TARGETS.a);
+          const { row, comment } = await openReview(ctx, runId, TARGETS.a);
           await ctx.keep(() => writeDraft(ctx, row, comment));
           ctx.mark("comment-posted", { before: 0, after: 700 });
           await sleep(700);
           await ctx.keep(async () => {
             await ctx.click(page.getByTestId("review-send-all"), { duration: 700 });
             await sent(page);
-            await rest(ctx);
+            await rest(ctx, comment);
           });
           ctx.mark("sent-to-manager", { before: 0, after: 1000 });
           await sleep(1000);
-          await waitForAnswer(ctx);
-          await ctx.keep(() => rest(ctx));
+          await waitForAnswer(ctx, comment);
+          await ctx.keep(() => rest(ctx, comment));
           ctx.mark("answer-received", { before: 0, after: 0 });
           await ctx.hold(2300);
         } finally {
@@ -162,27 +175,28 @@ export default {
     },
     {
       id: "b",
-      label: "Unified view: comment a line of index.html, send the draft, the manager's answer",
+      label: "Comment a line of index.html, send the draft on its own, the manager's answer",
       viewport: VIEWPORT,
-      crop: CROP,
+      localStorage: LAYOUT,
       markers: ["comment-posted", "sent-to-manager", "answer-received"],
       async play(ctx) {
         const { page, instance } = ctx;
+        const runId = runs.b;
         if (!runId) throw new Error("no finished demo run (setup failed)");
         try {
-          const { row, comment } = await openReview(ctx, TARGETS.b, { unified: true });
+          const { row, comment } = await openReview(ctx, runId, TARGETS.b);
           await ctx.keep(() => writeDraft(ctx, row, comment));
           ctx.mark("comment-posted", { before: 0, after: 700 });
           await sleep(700);
           await ctx.keep(async () => {
             await ctx.click(page.getByTestId("review-comment-send").first(), { duration: 700 });
             await sent(page);
-            await rest(ctx);
+            await rest(ctx, comment);
           });
           ctx.mark("sent-to-manager", { before: 0, after: 1000 });
           await sleep(1000);
-          await waitForAnswer(ctx);
-          await ctx.keep(() => rest(ctx));
+          await waitForAnswer(ctx, comment);
+          await ctx.keep(() => rest(ctx, comment));
           ctx.mark("answer-received", { before: 0, after: 0 });
           await ctx.hold(2300);
         } finally {

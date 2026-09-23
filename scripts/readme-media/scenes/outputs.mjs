@@ -5,8 +5,9 @@
 //   Edit — its two declared ports: `review` (Markdown, with its `verdict` enum)
 //          and `screenshots` (Image List), expected content « Screenshots of
 //          the app, annotated with Pillow. »          → ports-declared
-//   Run  — the node is done, so only its outputs show: an annotated screenshot
-//          opens in the lightbox                        → image-opened
+//   Run  — the node is done: its terminal folds to a one-line bar (#346) and
+//          the panel is its I/O — the one input `code`, then the two outputs.
+//          An annotated screenshot opens in the lightbox → image-opened
 //          then the `review` markdown, its Mermaid diagram rendered → mermaid-rendered
 //
 //   a — the Edit tab scrolled to the Outputs, one screenshot, the diagram.

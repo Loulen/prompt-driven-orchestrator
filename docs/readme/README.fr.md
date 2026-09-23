@@ -101,7 +101,7 @@ Lancez un pipeline sur un cron, derrière un script de garde : `* * * * *` + `./
 </td>
 <td width="50%">
   <!-- scene: triggers -->
-  <a href="../../docs/features.md#triggers"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Un trigger cron avec le guard prod-health-check.sh, son test à blanc et son historique de fires" width="100%" /></picture></a>
+  <a href="../../docs/features.md#triggers"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/triggers.jpg"><source srcset="../../docs/assets/readme/triggers.gif" type="image/gif"><img src="../../docs/assets/readme/triggers.jpg" alt="Un trigger cron avec le guard prod-health-check.sh, son test à blanc et son historique de fires" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -146,7 +146,7 @@ Nommez une fois un couple harnais · modèle · effort. Changez le profil, et to
 </td>
 <td width="50%">
   <!-- scene: profiles -->
-  <a href="../../docs/features.md#agent-profiles"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Un profil agentique modifié, et tous les nœuds qui le suivent qui changent de modèle" width="100%" /></picture></a>
+  <a href="../../docs/features.md#agent-profiles"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/profiles.jpg"><source srcset="../../docs/assets/readme/profiles.gif" type="image/gif"><img src="../../docs/assets/readme/profiles.jpg" alt="Un profil agentique modifié, et tous les nœuds qui le suivent qui changent de modèle" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>
@@ -161,7 +161,7 @@ Importez des skills depuis un dépôt ou écrivez-les à la main, puis donnez-le
 </td>
 <td width="50%">
   <!-- scene: skills -->
-  <a href="../../docs/features.md#skill-bank"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/pdo-ui.png"><source srcset="../../docs/pdo-ui.png"><img src="../../docs/pdo-ui.png" alt="Des skills importés dans la banque, puis l'un d'eux ajouté à un nœud" width="100%" /></picture></a>
+  <a href="../../docs/features.md#skill-bank"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/skills.jpg"><source srcset="../../docs/assets/readme/skills.gif" type="image/gif"><img src="../../docs/assets/readme/skills.jpg" alt="Un skill écrit à la main, des skills importés d'un dépôt local dans la banque, puis l'un d'eux ajouté à un nœud" width="100%" /></picture></a>
 </td>
 </tr>
 </table>

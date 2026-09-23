@@ -71,7 +71,10 @@ export default function AgentProfilesPanel({
       } else if (selected) {
         await updateAgentProfile(selected.id, draft);
       }
+      // Fold the editor back (list-first): clearing the draft alone left the
+      // selected row's editor open on an empty form after a save.
       setCreating(false);
+      setSelectedId(null);
       setDraft({ name: "", harness: "", model: null, effort: null });
       await onChanged();
     } catch (cause) {

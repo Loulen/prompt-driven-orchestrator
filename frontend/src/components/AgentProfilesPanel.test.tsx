@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AgentProfilesPanel from "./AgentProfilesPanel";
-import { createAgentProfile } from "../api";
+import { createAgentProfile, updateAgentProfile } from "../api";
 import type { AgentProfile } from "../types";
 
 // #798: the panel derives the effort offer from the SERVED catalogue via
@@ -182,4 +182,35 @@ describe("AgentProfilesPanel — per-model effort support (#798)", () => {
     expect(extra).not.toHaveAttribute("data-unsupported");
     expect(screen.queryByTestId("agent-profile-effort-unsupported")).toBeNull();
   }
+});
+
+describe("AgentProfilesPanel — saving an edit", () => {
+  it("folds the editor back once the profile is saved", async () => {
+    const profile: AgentProfile = {
+      id: "p1",
+      name: "daily driver",
+      harness: "claude",
+      model: "opus",
+      effort: "medium",
+      created_at: "",
+      updated_at: "",
+    };
+    const user = userEvent.setup();
+    render(<AgentProfilesPanel profiles={[profile]} onChanged={onChanged} />);
+    await user.click(screen.getByText("daily driver"));
+    expect(screen.getByLabelText("Name")).toHaveValue("daily driver");
+
+    await user.click(screen.getByText("Save profile"));
+
+    expect(vi.mocked(updateAgentProfile)).toHaveBeenCalledWith("p1", {
+      name: "daily driver",
+      harness: "claude",
+      model: "opus",
+      effort: "medium",
+    });
+    expect(onChanged).toHaveBeenCalled();
+    // No editor left open on an empty form: the list reads alone again.
+    expect(screen.queryByLabelText("Name")).toBeNull();
+    expect(screen.queryByText("Save profile")).toBeNull();
+  });
 });

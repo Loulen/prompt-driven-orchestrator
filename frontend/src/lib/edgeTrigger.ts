@@ -1,5 +1,6 @@
 import type { EdgeDef, EdgeInfo, EdgeTriggerStatus, RunState } from "../types";
 import { formatWhenPill } from "../components/editNodeDerivation";
+import { primaryPort } from "./edgePorts";
 
 /**
  * Projects an edge's runtime trigger status (ADR-0011, #147) from the run state.
@@ -48,7 +49,7 @@ function findRunEdge(edges: EdgeInfo[], edge: EdgeDef): EdgeInfo | undefined {
   return edges.find(
     (e) =>
       e.source_node === edge.source.node &&
-      e.source_port === edge.source.port &&
+      e.source_port === primaryPort(edge.source) &&
       e.target_node === edge.target.node &&
       e.target_port === edge.target.port,
   );

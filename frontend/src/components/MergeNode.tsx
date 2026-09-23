@@ -4,6 +4,7 @@ import { useEditStore } from "../stores/editStore";
 import { STATUS_DOT } from "../nodeStyles";
 import { NodeCard } from "./NodeCard";
 import PortRow from "./PortRow";
+import NodeRimHandles from "./NodeRimHandles";
 import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
 import { useIsDropTarget } from "./DragHighlightContext";
 
@@ -11,7 +12,6 @@ interface MergeEditData {
   label: string;
   nodeId: string;
   inputSide: PortSide;
-  outputSide: PortSide;
   status?: NodeStatus;
   [key: string]: unknown;
 }
@@ -46,14 +46,9 @@ export function MergeEditNode({ data, id, selected }: NodeProps<Node<MergeEditDa
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}
       </div>
-      <PortRow
-        portName="merged"
-        kind="output"
-        side={data.outputSide}
-        index={0}
-        total={1}
-        nodeType="merge"
-      />
+      {/* #844: no output dot. The whole rim is the drag-source, here as on a work
+          card, and the `merged` port is named on the edges that carry it. */}
+      <NodeRimHandles />
     </NodeCard>
   );
 }
@@ -64,7 +59,6 @@ interface MergeRunData {
   status: NodeStatus;
   iter: number;
   inputSide: PortSide;
-  outputSide: PortSide;
   [key: string]: unknown;
 }
 
@@ -107,14 +101,6 @@ export function MergeRunNode({ data, selected }: NodeProps<Node<MergeRunData>>) 
           {data.nodeId}
         </span>
       </div>
-      <PortRow
-        portName="merged"
-        kind="output"
-        side={data.outputSide}
-        index={0}
-        total={1}
-        nodeType="merge"
-      />
     </NodeCard>
   );
 }

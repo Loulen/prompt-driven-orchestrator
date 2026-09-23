@@ -562,6 +562,46 @@ describe("deleteEdge selection handling (#339)", () => {
   });
 });
 
+describe("deleteEdge takes the edge's labels with it (#845)", () => {
+  function edge(s: string, t: string, over: Partial<EdgeDef> = {}): EdgeDef {
+    return { source: { node: s, port: "out" }, target: { node: t, port: "in" }, ...over };
+  }
+
+  it("leaves no label position behind, and does not hand them to the next edge", () => {
+    // The label positions live ON the edge, so deleting it deletes them. What
+    // this guards is the index-keyed alternative: edges are addressed by their
+    // position in the array, and a side-table of positions would survive the
+    // deletion and re-attach to whatever edge slid into the slot.
+    const a = makeNode({ id: "aaaa1111" });
+    const b = makeNode({ id: "bbbb2222" });
+    const c = makeNode({ id: "cccc3333" });
+    seedTabWithPipeline(
+      makePipeline(
+        [a, b, c],
+        [
+          edge("aaaa1111", "bbbb2222", {
+            show_output_labels: true,
+            output_label_pos: { out: { x: 10, y: 20 } },
+            condition_label_pos: { x: 30, y: 40 },
+            below_nodes: true,
+          }),
+          edge("bbbb2222", "cccc3333"),
+        ],
+      ),
+    );
+
+    useEditStore.getState().deleteEdge(0);
+
+    const edges = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(edges).toHaveLength(1);
+    expect(edges[0].source.node).toBe("bbbb2222");
+    expect(edges[0].output_label_pos).toBeUndefined();
+    expect(edges[0].condition_label_pos).toBeUndefined();
+    expect(edges[0].show_output_labels).toBeUndefined();
+    expect(edges[0].below_nodes).toBeUndefined();
+  });
+});
+
 describe("deleteNode reconciles loop regions (ADR-0011 / #173)", () => {
   function edge(s: string, t: string): EdgeDef {
     return { source: { node: s, port: "out" }, target: { node: t, port: "in" } };
@@ -1449,6 +1489,66 @@ describe("updateNode propagates port changes to edges", () => {
     expect(tab.pipeline.edges).toHaveLength(1);
     expect(tab.pipeline.edges[0].source.port).toBe("screen");
     expect(tab.pipeline.edges[0].target).toEqual({ node: "bbbbbbbb", port: "in" });
+  });
+
+  // #843 / ADR-0073: an edge can carry SEVERAL outputs. A port rename must reach
+  // every carried port, and losing one of two must not take the arrow with it.
+  it("renames a carried port inside a multi-port edge", () => {
+    const nodeA = makeNode({
+      id: "aaaaaaaa",
+      outputs: [
+        { name: "out", repeated: false },
+        { name: "screenshots", repeated: false },
+      ],
+    });
+    const nodeB = makeNode({ id: "bbbbbbbb" });
+    const edge: EdgeDef = {
+      source: { node: "aaaaaaaa", ports: ["out", "screenshots"] },
+      target: { node: "bbbbbbbb", port: "in" },
+      when: { "screenshots.ready": { eq: true } },
+    };
+    seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [
+        { name: "out", repeated: false },
+        { name: "screens", repeated: false },
+      ],
+    });
+
+    const kept = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(kept).toHaveLength(1);
+    expect(kept[0].source).toEqual({ node: "aaaaaaaa", ports: ["out", "screens"] });
+    // The clause follows the rename rather than pointing at a port that is gone.
+    expect(kept[0].when).toEqual({ "screens.ready": { eq: true } });
+  });
+
+  it("keeps a multi-port edge when only one of its carried ports is deleted", () => {
+    const nodeA = makeNode({
+      id: "aaaaaaaa",
+      outputs: [
+        { name: "out", repeated: false },
+        { name: "screenshots", repeated: false },
+      ],
+    });
+    const nodeB = makeNode({ id: "bbbbbbbb" });
+    const edge: EdgeDef = {
+      source: { node: "aaaaaaaa", ports: ["out", "screenshots"] },
+      target: { node: "bbbbbbbb", port: "in" },
+      when: { "screenshots.ready": { eq: true } },
+    };
+    seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [{ name: "out", repeated: false }],
+    });
+
+    const kept = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(kept).toHaveLength(1);
+    // Back to one carried port: the pre-#843 shape, and the clause loses the
+    // qualifier along with the port it named.
+    expect(kept[0].source).toEqual({ node: "aaaaaaaa", port: "out" });
+    expect(kept[0].when).toEqual({ ready: { eq: true } });
   });
 
   it("renames edge target port when an input port is renamed", () => {

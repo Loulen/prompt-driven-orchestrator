@@ -108,6 +108,31 @@ describe("pipelinesEquivalent", () => {
     expect(pipelinesEquivalent(a, b)).toBe(true);
   });
 
+  // #845: naming the carried outputs on the canvas, dragging either kind of
+  // label and sending an edge under the cards are LAYOUT. Two pipelines that
+  // differ only in those four fields must compare equal, or decorating an edge
+  // flips the library star to "diverged".
+  it("ignores the output-label toggle, both label positions and the draw order", () => {
+    const e = (over: Partial<PipelineDef["edges"][number]> = {}) => ({
+      source: { node: "a", port: "out" },
+      target: { node: "b", port: "in" },
+      ...over,
+    });
+    const a = def({ nodes: [node("a"), node("b")], edges: [e()] });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        e({
+          show_output_labels: false,
+          output_label_pos: { out: { x: 12, y: 34 } },
+          condition_label_pos: { x: 56, y: 78 },
+          below_nodes: true,
+        }),
+      ],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
   // #307: canvas notes are LAYOUT, not semantics (default R1 = full-layout).
   // Two pipelines differing only by their notes — presence, content, OR
   // position — must compare equal so the synced/diverged star never moves.
@@ -153,6 +178,55 @@ describe("pipelinesEquivalent", () => {
     const b = def({
       nodes: [node("a"), node("b")],
       edges: [{ ...base, target: { node: "a", port: "in" }, mode: "auto" as const }],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(false);
+  });
+
+  // #843 / ADR-0073 §2: the outputs an edge carries are a SET. Two pipelines
+  // whose only difference is the ORDER of that list are the same pipeline, so
+  // re-ticking the same two outputs in the other order never flips the star.
+  it("ignores the order of an edge's carried outputs", () => {
+    const a = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["out", "spec"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["spec", "out"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(true);
+  });
+
+  it("still flags a different SET of carried outputs", () => {
+    const a = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["out", "spec"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["out", "notes"] }, target: { node: "b", port: "in" } },
+      ],
+    });
+    expect(pipelinesEquivalent(a, b)).toBe(false);
+  });
+
+  it("does not equate a single-port edge with a two-port one", () => {
+    const a = def({
+      nodes: [node("a"), node("b")],
+      edges: [{ source: { node: "a", port: "out" }, target: { node: "b", port: "in" } }],
+    });
+    const b = def({
+      nodes: [node("a"), node("b")],
+      edges: [
+        { source: { node: "a", ports: ["out", "spec"] }, target: { node: "b", port: "in" } },
+      ],
     });
     expect(pipelinesEquivalent(a, b)).toBe(false);
   });

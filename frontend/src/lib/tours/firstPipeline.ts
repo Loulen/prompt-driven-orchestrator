@@ -14,8 +14,10 @@
  *   it will wait on your answers along the way.
  */
 
-import type { NodeDef, PipelineDef } from "../../types";
+import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
 import type { TourAppState, TourDef, TourObservation, TourStep } from "../tour";
+import { carriedPorts, carries } from "../edgePorts";
+import { splitFieldKey } from "../whenClause";
 
 /** The name the tour asks the user to paste for the pipeline itself. */
 export const TUTORIAL_PIPELINE_ID = "tutorial-implement-test";
@@ -59,10 +61,10 @@ function nodeSel(node: NodeDef | null): string[] {
  *
  * `fromPort` matters once the source has more than one: the tester carries `out`
  * AND `image_list`, and only `out` holds the `verdict` the next step conditions
- * on. An edge drawn from the wrong handle is a dead end two steps later — the
- * When editor offers the fields of the port it came from, and there is no
+ * on. An edge that carries only another port is a dead end two steps later —
+ * the When editor offers the fields of the ports it carries, and there is no
  * `verdict` in a screenshot (#825, FP iteration 2). So the step does not count it
- * as done, and goes on asking for the one it named.
+ * as done, and sends the reader to the edge's Outputs section (#846).
  */
 function edgeIndex(
   pipeline: PipelineDef | null,
@@ -75,7 +77,7 @@ function edgeIndex(
     (e) =>
       e.source.node === from.id &&
       e.target.node === to.id &&
-      (fromPort == null || e.source.port === fromPort),
+      (fromPort == null || carries(e.source, fromPort)),
   );
 }
 
@@ -90,6 +92,69 @@ function edgeSel(
 ): string[] {
   const i = edgeIndex(app.pipeline, from, to, fromPort);
   return i < 0 ? [] : [`.react-flow__edge[data-id="e-${i}"]`];
+}
+
+/**
+ * The tester → `to` edge the user drew without `out` on it, or -1 (#846). A
+ * drawn edge carries the first declared output (ADR-0073), so this is the edge
+ * whose outputs were changed in the panel, or a tester whose outputs were
+ * reordered. The panel's Outputs section is where it is fixed — a redraw would
+ * carry the same port again. Only counted while no tester → `to` edge carries
+ * `out`: once one does, a stray one next to it is not the step's business.
+ */
+function strayEdge(app: TourAppState, to: NodeDef | null): number {
+  const from = agent(app, 1);
+  if (edgeIndex(app.pipeline, from, to, OUT_PORT) >= 0) return -1;
+  return edgeIndex(app.pipeline, from, to);
+}
+
+/** The tester → `to` edge carrying `out` is the selected one. */
+function edgeSelected(app: TourAppState, to: NodeDef | null): boolean {
+  const i = edgeIndex(app.pipeline, agent(app, 1), to, OUT_PORT);
+  return i >= 0 && app.selection.kind === "edge" && app.selection.edgeIndex === i;
+}
+
+/** The edge panel's Outputs section — one checkbox per output of the source. */
+const OUTPUTS_SECTION = '[data-testid="outputs-section"]';
+
+/**
+ * A step that draws an edge out of the tester and must end with `out` on it
+ * (#846). It advances on the output the edge *carries*, not on how it was
+ * drawn. When the edge carries another port, the same card re-aims: onto the
+ * edge until it is selected, then onto the Outputs section, where ticking `out`
+ * satisfies the step.
+ */
+function carryOutEdgeStep(def: {
+  id: string;
+  title: string;
+  to: (app: TourAppState) => NodeDef | null;
+  body: string;
+  note: string;
+  waitingFor: string;
+}): TourStep {
+  const stray = (o: TourObservation) => strayEdge(o.app, def.to(o.app));
+  const straySelected = (o: TourObservation, i: number) =>
+    o.app.selection.kind === "edge" && o.app.selection.edgeIndex === i;
+  return {
+    id: def.id,
+    title: def.title,
+    body: (o) => {
+      const i = stray(o);
+      if (i < 0) return def.body;
+      const ports = carriedPorts(o.app.pipeline!.edges[i].source).join(" and ");
+      return straySelected(o, i)
+        ? `Tick out in the Outputs section on the right. This edge carries ${ports}, and only out holds the verdict the condition reads.`
+        : `This edge carries ${ports}, not out. Click it, then tick out in the Outputs section of its inspector.`;
+    },
+    note: (o) => (stray(o) < 0 ? def.note : null),
+    target: (o) => {
+      const i = stray(o);
+      if (i < 0) return [...nodeSel(agent(o.app, 1)), ...nodeSel(def.to(o.app))];
+      return straySelected(o, i) ? [OUTPUTS_SECTION] : [`.react-flow__edge[data-id="e-${i}"]`];
+    },
+    waitingFor: def.waitingFor,
+    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 1), def.to(o.app), OUT_PORT) >= 0,
+  };
 }
 
 /** Attribute selectors here only ever carry ids the daemon already sanitised, but a
@@ -123,10 +188,61 @@ function selected(app: TourAppState, node: NodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
 }
 
-function whenEquals(when: Record<string, unknown> | null | undefined, field: string, value: string): boolean {
-  const predicate = when?.[field];
-  if (!predicate || typeof predicate !== "object") return false;
-  return (predicate as Record<string, unknown>).eq === value;
+/**
+ * Whether the edge's condition reads `field eq value` on the `out` port. The key
+ * is resolved against the ports the edge carries, the way the daemon and the
+ * When editor read it: bare `verdict` on an edge that carries only `out`,
+ * `out.verdict` once it carries `out` and `image_list` — which is what every
+ * edge fixed in the Outputs section carries (#846, FP iteration 1: the step read
+ * the bare key only, and the correction path dead-ended here).
+ */
+function whenEquals(edge: EdgeDef | undefined, field: string, value: string): boolean {
+  if (!edge?.when) return false;
+  const ports = carriedPorts(edge.source);
+  return Object.entries(edge.when).some(([key, predicate]) => {
+    const at = splitFieldKey(key, ports);
+    return (
+      at.port === OUT_PORT &&
+      at.field === field &&
+      !!predicate &&
+      typeof predicate === "object" &&
+      (predicate as Record<string, unknown>).eq === value
+    );
+  });
+}
+
+/**
+ * A step that writes `verdict eq <value>` on the tester → `to` edge. While the
+ * edge holds some other condition, the body says what the step is waiting for,
+ * so a reader whose clause is off by one field or value is not left staring at
+ * a card that never moves (#846, FP iteration 1).
+ */
+function conditionStep(def: {
+  id: string;
+  title: string;
+  to: (app: TourAppState) => NodeDef | null;
+  value: string;
+  /** Why the condition matters — the second sentence of both bodies. */
+  why: string;
+}): TourStep {
+  const edge = (app: TourAppState): EdgeDef | undefined => {
+    const i = edgeIndex(app.pipeline, agent(app, 1), def.to(app), OUT_PORT);
+    return i < 0 ? undefined : app.pipeline?.edges[i];
+  };
+  return {
+    id: def.id,
+    title: def.title,
+    body: (o) => {
+      const when = edge(o.app)?.when;
+      return !when || Object.keys(when).length === 0
+        ? `Add the condition verdict eq ${def.value}. ${def.why}`
+        : `Not there yet: the condition must read verdict eq ${def.value}, on the out output. ${def.why}`;
+    },
+    target: () => ['[data-testid="when-editor"]'],
+    waitingFor: "the When editor of the selected edge",
+    failureHint: "The edge was deselected before the condition was saved.",
+    done: (o) => whenEquals(edge(o.app), "verdict", def.value),
+  };
 }
 
 // ---- the steps ------------------------------------------------------------
@@ -380,86 +496,71 @@ const STEPS: TourStep[] = [
   {
     id: "edge-implementer-tester",
     title: "Connect implementer to tester",
-    // "the handle under implementer" sent the FP's reader to the card's bottom
-    // anchor, which is an edge *target* (`__anchor:bottom`, `anchorSide.ts`) and
-    // never a source: the drag slid the node instead of drawing an edge. The
-    // `out` handle is a dot on the right edge — say so, the way the two edge
-    // steps after this one do (#825).
-    body: "Drag from the implementer's out handle, the dot on the right edge of its card, onto tester. The edge is the hand-off: when the first finishes, the second starts.",
+    // #846 — there is no output dot any more (#844, ADR-0071): the whole border
+    // of a card is the drag-source. The card is the target, rim included, so
+    // the hole lights the very strip the press has to land on.
+    body: "Press anywhere on the border of the implementer's card — it glows amber — and drag onto tester. The edge is the hand-off: when the first finishes, the second starts.",
     target: (o) => [...nodeSel(agent(o.app, 0)), ...nodeSel(agent(o.app, 1))],
     waitingFor: "the two agent cards",
     done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 0), agent(o.app, 1)) >= 0,
   },
-  {
+  carryOutEdgeStep({
     id: "edge-tester-implementer",
     title: "Draw the way back",
-    body: "Now drag from the tester's out handle onto implementer. That second edge is what makes this a loop rather than a line.",
-    // The tester grew a second output two steps ago, and the two handles look
-    // alike. An edge out of `image_list` carries a screenshot, not a verdict, so
-    // the condition the next step writes would have no field to read (#825).
-    note: "The lower handle is image_list — an edge from it carries the screenshot, and no verdict to route on.",
-    target: (o) => [...nodeSel(agent(o.app, 1)), ...nodeSel(agent(o.app, 0))],
+    to: (app) => agent(app, 0),
+    body: "Now press on the border of the tester's card and drag onto implementer. That second edge is what makes this a loop rather than a line.",
+    // The tester grew a second output a few steps ago. A new edge carries the
+    // FIRST declared one (ADR-0073), which is `out`; an edge carrying only
+    // `image_list` would leave the next condition no verdict to read (#825).
+    note: "A new edge carries the tester's first output, out — not image_list, the screenshot, which has no verdict to route on.",
     waitingFor: "the two agent cards",
-    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0), OUT_PORT) >= 0,
-  },
+  }),
   {
     id: "select-loop-edge",
     title: "Select the edge back to implementer",
-    body: "Click the edge you just drew. Its inspector opens on the right, where a condition is authored.",
+    body: (o) =>
+      edgeSelected(o.app, agent(o.app, 0))
+        ? "The edge is already selected, since you just fixed its outputs. Its inspector on the right is where a condition is authored."
+        : "Click the edge you just drew. Its inspector opens on the right, where a condition is authored.",
     target: (o) => edgeSel(o.app, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
     waitingFor: "the tester → implementer edge",
-    done: (o) =>
-      o.app.selection.kind === "edge" &&
-      o.app.selection.edgeIndex ===
-        edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
+    done: (o) => edgeSelected(o.app, agent(o.app, 0)),
   },
-  {
+  conditionStep({
     id: "loop-condition",
     title: "Only loop back on a failure",
-    body: "Add the condition verdict eq fail. The edge now fires only when the tester's frontmatter says the change did not hold up.",
-    target: () => ['[data-testid="when-editor"]'],
-    waitingFor: "the When editor of the selected edge",
-    failureHint: "The edge was deselected before the condition was saved.",
-    done: (o) => {
-      const i = edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0), OUT_PORT);
-      return i >= 0 && whenEquals(o.app.pipeline?.edges[i]?.when, "verdict", "fail");
-    },
-  },
-  {
+    to: (app) => agent(app, 0),
+    value: "fail",
+    why: "The edge now fires only when the tester's frontmatter says the change did not hold up.",
+  }),
+  carryOutEdgeStep({
     id: "edge-tester-end",
     title: "Connect tester to End",
-    body: "Drag from the tester's out handle onto the End marker. End is where a Run stops, and it needs a route in.",
-    // Same pair of look-alike handles as the loop edge, same consequence: the
-    // `verdict eq pass` of the next step can only be written on an edge that
-    // carries the verdict (#825).
-    note: "Again out, not image_list: the condition below it reads the verdict in out's frontmatter.",
-    target: (o) => [...nodeSel(agent(o.app, 1)), ...nodeSel(endNode(o.app))],
+    to: endNode,
+    body: "Press on the border of the tester's card again and drag onto the End marker. End is where a Run stops, and it needs a route in.",
+    // Same two outputs, same consequence: the `verdict eq pass` of the next
+    // step can only be written on an edge that carries the verdict (#825).
+    note: "Again the edge carries out, the first output: the condition below it reads the verdict in out's frontmatter.",
     waitingFor: "the tester card and the End marker",
-    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app), OUT_PORT) >= 0,
-  },
+  }),
   {
     id: "select-end-edge",
     title: "Select the edge to End",
-    body: "Click that last edge. Same inspector, one more condition to write.",
+    body: (o) =>
+      edgeSelected(o.app, endNode(o.app))
+        ? "The edge is already selected, since you just fixed its outputs. Same inspector, one more condition to write."
+        : "Click that last edge. Same inspector, one more condition to write.",
     target: (o) => edgeSel(o.app, agent(o.app, 1), endNode(o.app), OUT_PORT),
     waitingFor: "the tester → End edge",
-    done: (o) =>
-      o.app.selection.kind === "edge" &&
-      o.app.selection.edgeIndex ===
-        edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app), OUT_PORT),
+    done: (o) => edgeSelected(o.app, endNode(o.app)),
   },
-  {
+  conditionStep({
     id: "end-condition",
     title: "Finish only on a pass",
-    body: "Add the condition verdict eq pass. Both routes out of the tester are now explicit: pass ends the Run, fail sends it round again.",
-    target: () => ['[data-testid="when-editor"]'],
-    waitingFor: "the When editor of the selected edge",
-    failureHint: "The edge was deselected before the condition was saved.",
-    done: (o) => {
-      const i = edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app), OUT_PORT);
-      return i >= 0 && whenEquals(o.app.pipeline?.edges[i]?.when, "verdict", "pass");
-    },
-  },
+    to: endNode,
+    value: "pass",
+    why: "Both routes out of the tester are now explicit: pass ends the Run, fail sends it round again.",
+  }),
   {
     id: "save",
     title: "Save the pipeline",

@@ -65,6 +65,19 @@ interface Props {
 // `interrupted` is absent from both, its session may still be alive.
 const REAPED_STATUSES = new Set(["completed", "failed", "stopped", "stale"]);
 
+// #876: `body` sets `letter-spacing: -0.005em` and `font-feature-settings`, and
+// both inherit into xterm. The DOM renderer measures "W" with a DOM span (which
+// inherits the spacing) while the cell width comes from canvas `measureText`
+// (which ignores it), then sets `.xterm-rows { letter-spacing: cell − span }`.
+// The inherited -0.065px turns into +0.058px per glyph, so a full row overflows
+// its `overflow: hidden` div and the last 1–2 columns are clipped at the right
+// edge. Resetting both on the container, which exists before `term.open()`,
+// makes the two measures agree. Neither the grid size nor FitAddon is at fault.
+const TERMINAL_TYPOGRAPHY_RESET = {
+  letterSpacing: "normal",
+  fontFeatureSettings: "normal",
+} as const;
+
 // xterm writes raw bytes: a snapshot captured with `tmux capture-pane -pe` is
 // newline-separated, and a bare \n moves down without returning, so every line
 // would start where the previous one ended. Normalise to CRLF without doubling
@@ -668,6 +681,7 @@ export default function TmuxTerminal({
         <div
           ref={containerRef}
           className={`min-h-0 flex-1 bg-bg-0${spectating ? " overflow-auto" : ""}`}
+          style={TERMINAL_TYPOGRAPHY_RESET}
           data-testid="xterm-container"
           data-role={mode === "live" ? termRole.role : undefined}
         />

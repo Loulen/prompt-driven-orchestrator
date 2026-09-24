@@ -865,6 +865,7 @@ impl Importer {
             loops: self.loops.clone(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 }

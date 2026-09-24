@@ -1127,6 +1127,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1178,6 +1179,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let run_state = empty_run_state();
@@ -1222,6 +1224,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1278,6 +1281,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1336,6 +1340,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1391,6 +1396,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1456,6 +1462,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let run_state = empty_run_state();
@@ -1524,6 +1531,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1580,6 +1588,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
@@ -1607,6 +1616,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
@@ -1632,6 +1642,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let run_state = empty_run_state();
@@ -1695,6 +1706,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1798,6 +1810,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1874,6 +1887,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1939,6 +1953,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -2201,6 +2216,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();

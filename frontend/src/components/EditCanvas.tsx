@@ -58,7 +58,7 @@ import {
   sideFromRimHandle,
 } from "../lib/anchorSide";
 import { drawnEdgeLayout } from "../lib/drawnEdge";
-import { WIRING_GRID_STEP } from "../lib/wiringGrid";
+import { useWiringGridStep } from "../hooks/useWiringGrid";
 import { WIRE, WIRE_SOFT } from "../lib/wiringColors";
 import { pendingSource, resetWiringSession, wiringGesture, wiringTrace } from "../lib/wiringSession";
 import { droppedPath } from "../lib/wiringGesture";
@@ -384,6 +384,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const wiring = useWiringStore((s) => s.wiring);
   const gridOrigin = useWiringStore((s) => s.origin);
   const gridFeedback = useWiringStore((s) => s.gridFeedback);
+  // #877 / ADR-0076: the step of the active pipeline — its own `grid_size`, else
+  // the reader's global default.
+  const gridStep = useWiringGridStep();
   const dragHighlightNodeId = isDraggingEdge ? hoveredNodeId : null;
 
   const tab = openTabs.find((t) => t.id === activeTabId);
@@ -695,11 +698,11 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         width: internal.measured?.width ?? CARD_WIDTH,
         height: internal.measured?.height ?? CARD_HEIGHT,
       };
-      const anchor = anchorFromPoint(pressFlow, rect, side, WIRING_GRID_STEP);
+      const anchor = anchorFromPoint(pressFlow, rect, side, gridStep);
       pendingSource.anchor = anchor;
       pendingSource.point = anchorPoint(rect, anchor, anchor.side);
     },
-    [reactFlow, setWiring],
+    [reactFlow, setWiring, gridStep],
   );
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
@@ -768,7 +771,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
             toNode,
             connectionState.toHandle ?? null,
             connectionState.fromNode?.id ?? null,
-            WIRING_GRID_STEP,
+            gridStep,
           )
         : publishedTrace;
       // `drawnEdgeLayout` owns which fields a drop writes and which it
@@ -779,6 +782,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         targetAnchor,
         targetSide: side,
         anchorsByDrop,
+        step: gridStep,
       });
       if (Object.keys(updates).length === 0) return;
       // Untracked (ADR-0014 / #226): the preceding `addEdge` already pushed the
@@ -787,7 +791,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       // single edge-draw gesture undo in one step (edge + route together).
       updateEdge(edgeIndex, updates, { track: false });
     },
-    [pipeline, reactFlow, updateEdge, setWiring],
+    [pipeline, reactFlow, updateEdge, setWiring, gridStep],
   );
   const onNodeMouseEnter = useCallback((_: ReactMouseEvent, node: Node) => setHoveredNodeId(node.id), []);
   const onNodeMouseLeave = useCallback(() => setHoveredNodeId(null), []);
@@ -1045,9 +1049,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           nodesDraggable={!readOnly}
           nodesConnectable={!readOnly}
         >
-          {/* Decorative background — 20px, always, whatever the wiring grid does
-              (CONTEXT.md: the two grids are different things). */}
-          <Background color="var(--color-line-soft)" gap={20} size={1} />
+          {/* Decorative background — pure chrome, but drawn at the wiring grid's
+              pitch (#877) so a 30px step does not fall out of phase with it. */}
+          <Background color="var(--color-line-soft)" gap={gridStep} size={1} />
           {/* #844: the wiring grid lives in FLOW space. Drawn inside the viewport
               portal, it shares the path's coordinate system exactly, so a dot is
               always a point the trace snaps to — at any zoom, and after a Shift
@@ -1057,7 +1061,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
             <ViewportPortal>
               <ViewportWiringGridOverlay
                 origin={gridOrigin}
-                step={WIRING_GRID_STEP}
+                step={gridStep}
                 variant={gridFeedback}
               />
             </ViewportPortal>

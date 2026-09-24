@@ -59,12 +59,19 @@ cd "$(git rev-parse --show-toplevel)"
 #   ADR-0072), WiringGridOverlay.tsx + its test draw the wiring lattice, and
 #   OrthogonalEdge.wiring844 / EditCanvas.contextMenu are the FP-backing tests. The pure
 #   geometry went into lib/ (anchorSide, wiringGrid), not a watched directory.
+# frontend/src/components: 201 (#877, release 1.103.0) admits GridSizePicker.tsx — the S/M/L
+#   wiring grid size radio group, rendered by BOTH SettingsSurface (global default) and
+#   PipelineInspector (per-pipeline override, ADR-0076). One shared control rather than two
+#   copies; the step arithmetic lives in lib/wiringGrid and the resolution in hooks/useWiringGrid.
 # crates/pdo-daemon/src: 92 (#869, release 1.98.0) admits shared_terminal.rs — the shared
 #   terminal presence registry (one pilot per tmux session, read-only spectators, role
 #   messages, `ignore-size` switching; ADR-0075). It is ONE new concern that #870 (take
 #   control) extends; pty_bridge.rs only moves bytes and keeps its size, lib.rs only wires it.
+# frontend/src/components: 202 (#899, release 1.103.2) admits AgentProfileModal.tsx — the
+#   agent profile editor moved out of AgentProfilesPanel's inline form into ONE modal shared
+#   by the row's Edit button and New profile (like ProjectEditModal). The panel keeps the list.
 BASELINES='
-frontend/src/components 200
+frontend/src/components 202
 crates/pdo-daemon/src 92
 '
 

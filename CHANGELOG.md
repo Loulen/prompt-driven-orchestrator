@@ -28,6 +28,47 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.103.2
+**Profils agents : seul le bouton Edit ouvre l'éditeur, dans une modale partagée avec New
+profile** (#899).
+
+- Le crayon de chaque ligne de Settings › Agents › Agent profiles est un vrai bouton
+  `Edit <nom>`. Cliquer sur le reste de la ligne n'ouvre plus rien.
+- L'éditeur (Name, Harness, Model, Effort) quitte le formulaire sous la liste pour une modale.
+  **New profile** ouvre la même modale, vide, avec `Create`. Les règles et appels REST ne
+  changent pas ; Cancel, Échap ou un clic sur le fond ferment sans rien enregistrer.
+
+## 1.103.1
+**Enregistrer un pipeline sans changer son nom ne le renomme plus** (#886).
+
+- Un save ne compte comme renommage que si `name:` change vraiment. Avant, un fichier dont le
+  nom contient une majuscule (`Mixed-Case.yaml`) était déplacé à chaque save, ou refusé en 409
+  pendant qu'un run l'utilisait.
+- Un nouveau pipeline prend pour nom de fichier le slug de son nom (`Bugfix-auto-clean` →
+  `bugfix-auto-clean.yaml`), comme duplicate, import et rename. Son nom visible ne change pas.
+  Un nom vide est refusé (400), un nom déjà pris aussi (409).
+
+## 1.103.0
+**Grille de câblage : 30px par défaut, taille S/M/L réglable** (#877).
+
+- Le pas de la grille de câblage n'est plus figé à 40px : `S` = 20px, `M` = 30px (défaut),
+  `L` = 40px. ADR-0076 supersede ADR-0072 pour le pas.
+- Réglage global dans Settings › General › Interface (par navigateur). Le panneau Inspector
+  d'un pipeline peut le surcharger ; ce choix est enregistré dans le fichier pipeline
+  (`grid_size`) et voyage avec ses `waypoints`.
+- Changer de taille ne réécrit jamais les waypoints déjà enregistrés : les anciens tracés à
+  40px gardent leurs coudes jusqu'à ce qu'on les retouche.
+
+## 1.102.1
+**Le terminal n'ampute plus ses dernières colonnes** (#876).
+
+- Sur un pane large, les 1 à 2 dernières colonnes disparaissaient derrière une bande noire à
+  droite. L'espacement de lettres de la page, hérité par xterm, faussait la largeur des
+  glyphes. Le conteneur du terminal le remet à zéro : la dernière colonne de tmux est entière,
+  quelle que soit la largeur du pane.
+- La barre de statut tmux reste tronquée par tmux lui-même (`status-right-length 40`,
+  `status-left-length 10`) : ce n'est pas un rognage du pane.
+
 ## 1.102.0
 **Terminal partagé : un seul pilote, spectateurs en lecture seule, prise de main** (#867, #869, #870).
 

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import PipelineInspector from "./PipelineInspector";
 import { useEditStore } from "../stores/editStore";
+import { useWiringStore } from "../stores/wiringStore";
+import { serializePipeline } from "../lib/serializePipeline";
 import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("../api", () => ({
@@ -159,5 +161,62 @@ describe("PipelineInspector", () => {
     renderInspector();
     expect(screen.getByText("Pipeline Inspector")).toBeInTheDocument(); // inspector did mount
     expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument(); // but no banner
+  });
+});
+
+describe("PipelineInspector — wiring grid size (#877)", () => {
+  beforeEach(() => useWiringStore.setState({ defaultGridSize: "M" }));
+
+  const pipelineNow = () => useEditStore.getState().openTabs[0].pipeline;
+
+  it("follows the global default until the pipeline picks a size", () => {
+    seedTab();
+    renderInspector();
+    expect(screen.getByTestId("pipeline-grid-size-global")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("pipeline-grid-size-global")).toHaveTextContent("Global (M)");
+    expect(screen.getByTestId("pipeline-grid-size-hint")).toHaveTextContent("M · 30px");
+    expect(serializePipeline(pipelineNow())).not.toContain("grid_size");
+  });
+
+  it("stores a picked size in the pipeline file, and it wins over the global default", () => {
+    seedTab();
+    useWiringStore.setState({ defaultGridSize: "L" });
+    renderInspector();
+
+    fireEvent.click(screen.getByTestId("pipeline-grid-size-S"));
+    expect(pipelineNow().grid_size).toBe("S");
+    expect(serializePipeline(pipelineNow())).toContain("grid_size: S");
+    expect(screen.getByTestId("pipeline-grid-size-S")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("pipeline-grid-size-hint")).toHaveTextContent("S · 20px");
+  });
+
+  it("« Global » drops the pipeline's own size from the document", () => {
+    seedTab();
+    renderInspector();
+    fireEvent.click(screen.getByTestId("pipeline-grid-size-L"));
+    expect(pipelineNow().grid_size).toBe("L");
+
+    fireEvent.click(screen.getByTestId("pipeline-grid-size-global"));
+    expect("grid_size" in pipelineNow()).toBe(false);
+    expect(serializePipeline(pipelineNow())).not.toContain("grid_size");
+  });
+
+  it("changing the size never touches a stored waypoint", () => {
+    seedTab();
+    const waypoints = [{ x: 80, y: 240 }, { x: 480, y: 240 }];
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({
+        ...t,
+        pipeline: {
+          ...t.pipeline,
+          edges: t.pipeline.edges.map((e) => ({ ...e, mode: "manual" as const, waypoints })),
+        },
+      })),
+    }));
+    renderInspector();
+    for (const id of ["S", "M", "L", "global"]) {
+      fireEvent.click(screen.getByTestId(`pipeline-grid-size-${id}`));
+      expect(pipelineNow().edges[0].waypoints).toEqual(waypoints);
+    }
   });
 });

@@ -1315,6 +1315,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -2305,6 +2306,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let node = &pipeline.nodes[2]; // implementer
@@ -2391,6 +2393,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let node = &pipeline.nodes[0];
@@ -2723,6 +2726,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -2781,6 +2785,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -2834,6 +2839,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();

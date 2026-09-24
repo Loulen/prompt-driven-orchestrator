@@ -51,7 +51,8 @@ use crate::pipeline::{
 /// `layout_fields_match_frontend_owner` can compare the two partitions.
 #[allow(dead_code)]
 pub(crate) const LAYOUT_FIELDS: &[(&str, &[&str])] = &[
-    ("pipeline", &["notes"]),
+    // #877 / ADR-0076: `grid_size` is canvas presentation, like `notes`.
+    ("pipeline", &["notes", "grid_size"]),
     ("node", &["view"]),
     ("inputPort", &[]),
     ("outputPort", &[]),
@@ -107,8 +108,9 @@ impl<'a> PipelineProjection<'a> {
             loops,
             notes,
             prompt_required,
+            grid_size,
         } = pipeline;
-        let _layout = notes; // LAYOUT_FIELDS["pipeline"] — whole block dropped
+        let _layout = (notes, grid_size); // LAYOUT_FIELDS["pipeline"] — dropped
         Self {
             name,
             version: version.as_deref(),
@@ -544,6 +546,13 @@ mod tests {
             "source_anchor: {side: bottom, offset: 80}\n  target_anchor: {side: top, offset: 36}",
         );
         assert_eq!(canonical(&plain), canonical(&wired));
+    }
+
+    #[test]
+    fn grid_size_does_not_change_the_projection() {
+        // #877 / ADR-0076: the wiring-grid size is canvas presentation.
+        let gridded = format!("{}grid_size: S\n", fixture(300.0, ""));
+        assert_eq!(canonical(&fixture(300.0, "")), canonical(&gridded));
     }
 
     #[test]

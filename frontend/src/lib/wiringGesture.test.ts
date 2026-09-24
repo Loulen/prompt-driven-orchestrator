@@ -7,10 +7,13 @@ import {
   startGesture,
   type WiringGesture,
 } from "./wiringGesture";
-import { isAxisAligned, WIRING_GRID_STEP } from "./wiringGrid";
+import { gridStep, isAxisAligned } from "./wiringGrid";
+
+// Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
+const GRID_STEP = gridStep("L");
 import { enforcePerpendicularEnds, landingConnector, landingLeg } from "./anchorSide";
 
-const STEP = WIRING_GRID_STEP;
+const STEP = GRID_STEP;
 const LEG = landingLeg(STEP);
 // The wire leaves the bottom of a card whose bottom border is at y = 80.
 const FROM: Point = { x: 80, y: 80 };

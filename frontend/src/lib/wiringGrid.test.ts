@@ -13,11 +13,16 @@ import {
   snapPolyline,
   snapToGrid,
   startTrace,
-  WIRING_GRID_STEP,
+  DEFAULT_GRID_SIZE,
+  GRID_SIZES,
+  gridStep,
+  isGridSize,
+  resolveGridSize,
 } from "./wiringGrid";
 
 const ORIGIN: Point = { x: 0, y: 0 };
-const STEP = WIRING_GRID_STEP;
+// The geometry fixtures below are laid out on the 40px (L) lattice.
+const STEP = gridStep("L");
 
 /** Every consecutive pair shares an axis. */
 function orthogonal(points: Point[]): boolean {
@@ -27,13 +32,36 @@ function orthogonal(points: Point[]): boolean {
   return true;
 }
 
-describe("the wiring grid step", () => {
-  it("is a single frontend constant, with no setter beside it", () => {
-    expect(WIRING_GRID_STEP).toBe(40);
-    // ADR-0072: the step is a product constant. If a knob for it ever appears,
-    // this module is where it would have to live — and this assertion is the
-    // tripwire.
-    expect(Object.keys({ WIRING_GRID_STEP })).toEqual(["WIRING_GRID_STEP"]);
+describe("the wiring grid sizes (#877 / ADR-0076)", () => {
+  it("offers S, M and L at 20, 30 and 40px", () => {
+    expect(GRID_SIZES).toEqual(["S", "M", "L"]);
+    expect(GRID_SIZES.map(gridStep)).toEqual([20, 30, 40]);
+  });
+
+  it("defaults to M — a pipeline nobody configured draws on 30px", () => {
+    expect(DEFAULT_GRID_SIZE).toBe("M");
+    expect(gridStep(resolveGridSize(undefined, DEFAULT_GRID_SIZE))).toBe(30);
+  });
+
+  it("lets the pipeline's own size win over the global default", () => {
+    expect(resolveGridSize("S", "L")).toBe("S");
+    expect(resolveGridSize(null, "L")).toBe("L");
+    expect(resolveGridSize(undefined, "S")).toBe("S");
+  });
+
+  it("reads an unknown size (hand-edited file) as no choice", () => {
+    expect(isGridSize("XL")).toBe(false);
+    expect(resolveGridSize("XL", "M")).toBe("M");
+  });
+
+  it("snaps a trace on the resolved step, for every size", () => {
+    for (const size of GRID_SIZES) {
+      const step = gridStep(size);
+      const p = snapToGrid({ x: 97, y: 61 }, ORIGIN, step);
+      expect(p.x % step).toBe(0);
+      expect(p.y % step).toBe(0);
+    }
+    expect(snapToGrid({ x: 97, y: 61 }, ORIGIN, gridStep("M"))).toEqual({ x: 90, y: 60 });
   });
 });
 

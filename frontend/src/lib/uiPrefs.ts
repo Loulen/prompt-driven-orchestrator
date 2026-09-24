@@ -10,6 +10,8 @@
  * mode / a disabled or full store degrades to an in-memory default for the
  * session instead of throwing.
  */
+import { DEFAULT_GRID_SIZE, isGridSize, type GridSize } from "./wiringGrid";
+
 const KEY = "pdo.ui.tabsDisabled";
 
 /** Whether single-tab mode is enabled. Absent / unparseable → `false` (the
@@ -66,10 +68,8 @@ export function saveChildRunsExpanded(v: boolean): void {
  * General › Interface, « Wiring grid »). A reading aid, per browser, saved at the
  * change.
  *
- * Note what is NOT a setting: the grid's STEP is a product constant (ADR-0072,
- * `lib/wiringGrid.ts`), because waypoints travel inside the shared pipeline file.
- * Only the feedback — how loudly the lattice announces itself under the cursor —
- * is the reader's business. Absent / unparseable → `dots`.
+ * The grid's STEP is a separate setting (`loadWiringGridSize` below, #877).
+ * Absent / unparseable → `dots`.
  */
 export type WiringGridFeedback = "none" | "dots" | "lines";
 
@@ -89,6 +89,35 @@ export function loadWiringGridFeedback(): WiringGridFeedback {
 export function saveWiringGridFeedback(v: WiringGridFeedback): void {
   try {
     localStorage.setItem(WIRING_GRID_KEY, JSON.stringify(v));
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+}
+
+/**
+ * #877 / ADR-0076 — the wiring-grid SIZE a pipeline draws with when it has no
+ * `grid_size` of its own (Settings › General › Interface, « Wiring grid size »).
+ * Per browser, saved at the change, like the feedback above. A pipeline that
+ * chose a size in its detail pane carries it in its file and ignores this one —
+ * that is what keeps a shared pipeline's routes identical on every instance.
+ * Absent / unparseable → `M` (30px).
+ */
+const WIRING_GRID_SIZE_KEY = "pdo.ui.wiringGridSize";
+
+export function loadWiringGridSize(): GridSize {
+  try {
+    const raw = localStorage.getItem(WIRING_GRID_SIZE_KEY);
+    if (raw == null) return DEFAULT_GRID_SIZE;
+    const v: unknown = JSON.parse(raw);
+    return isGridSize(v) ? v : DEFAULT_GRID_SIZE;
+  } catch {
+    return DEFAULT_GRID_SIZE;
+  }
+}
+
+export function saveWiringGridSize(v: GridSize): void {
+  try {
+    localStorage.setItem(WIRING_GRID_SIZE_KEY, JSON.stringify(v));
   } catch {
     // quota / disabled / private mode → in-memory only for this session
   }

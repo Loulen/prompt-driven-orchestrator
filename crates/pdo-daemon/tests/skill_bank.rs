@@ -368,11 +368,11 @@ async fn folder_crud_nests_renames_and_deleting_moves_content_to_the_parent() {
             resp.json::<serde_json::Value>().await.unwrap()
         }
     };
-    let ippon = mk("ippon", None).await;
-    let ippon_id = ippon["id"].as_str().unwrap();
-    let java = mk("java", Some(ippon_id)).await;
+    let acme = mk("acme", None).await;
+    let acme_id = acme["id"].as_str().unwrap();
+    let java = mk("java", Some(acme_id)).await;
     let java_id = java["id"].as_str().unwrap();
-    assert_eq!(java["parent_id"], ippon_id);
+    assert_eq!(java["parent_id"], acme_id);
 
     // A skill inside `java`.
     let resp = post_skill(
@@ -398,7 +398,7 @@ async fn folder_crud_nests_renames_and_deleting_moves_content_to_the_parent() {
     // A cycle is refused; a blank name too; an unknown parent too.
     let resp = put_json(
         &daemon,
-        &format!("/settings/skill-folders/{ippon_id}"),
+        &format!("/settings/skill-folders/{acme_id}"),
         serde_json::json!({ "parent_id": java_id }),
     )
     .await;
@@ -422,7 +422,7 @@ async fn folder_crud_nests_renames_and_deleting_moves_content_to_the_parent() {
     let listed = get_json(&daemon, "/settings/skill-folders").await;
     assert_eq!(listed["folders"].as_array().unwrap().len(), 3);
 
-    // Delete `java`: its skill moves up to `ippon`; the skill itself survives.
+    // Delete `java`: its skill moves up to `acme`; the skill itself survives.
     let resp = client
         .delete(format!("{}/settings/skill-folders/{java_id}", daemon.url()))
         .send()
@@ -435,16 +435,16 @@ async fn folder_crud_nests_renames_and_deleting_moves_content_to_the_parent() {
         .into_iter()
         .find(|s| s["id"] == skill["id"])
         .unwrap();
-    assert_eq!(row["folder_id"], ippon_id);
+    assert_eq!(row["folder_id"], acme_id);
     assert!(skills_root(&daemon)
         .join(skill["id"].as_str().unwrap())
         .join("SKILL.md")
         .exists());
 
-    // Deleting `ippon` sends the skill to the root.
+    // Deleting `acme` sends the skill to the root.
     let resp = client
         .delete(format!(
-            "{}/settings/skill-folders/{ippon_id}",
+            "{}/settings/skill-folders/{acme_id}",
             daemon.url()
         ))
         .send()
@@ -459,7 +459,7 @@ async fn folder_crud_nests_renames_and_deleting_moves_content_to_the_parent() {
     assert!(row["folder_id"].is_null());
     let resp = client
         .delete(format!(
-            "{}/settings/skill-folders/{ippon_id}",
+            "{}/settings/skill-folders/{acme_id}",
             daemon.url()
         ))
         .send()
@@ -932,7 +932,7 @@ async fn file_endpoints_on_an_unknown_skill_are_404() {
 }
 
 // ---------------------------------------------------------------------------
-// #669 — selection by tier, skills effectifs with origin, referents populated.
+// #669 — selection by tier, skills actifs with origin, referents populated.
 // A real daemon, a seeded pipeline, nodes spawned through the tmux command seam
 // (a harmless `sleep`). Every assertion is an HTTP response or an event payload.
 // ---------------------------------------------------------------------------
@@ -1152,9 +1152,9 @@ async fn skills_of_the_four_tiers_are_unioned_at_spawn_with_their_origin() {
     let run_id = run["run_id"].as_str().unwrap().to_string();
 
     let payload = wait_for_node_started(&daemon, &run_id).await;
-    let effective = &payload["skills"];
+    let active = &payload["skills"];
     assert_eq!(
-        skill_ids(effective),
+        skill_ids(active),
         vec![
             a["id"].as_str().unwrap(),
             b["id"].as_str().unwrap(),
@@ -1164,15 +1164,15 @@ async fn skills_of_the_four_tiers_are_unioned_at_spawn_with_their_origin() {
         "union, coarsest tier first, de-duplicated: {payload}"
     );
     assert_eq!(
-        tiers_of(effective, &a["id"]),
+        tiers_of(active, &a["id"]),
         serde_json::json!(["instance", "project"])
     );
     assert_eq!(
-        tiers_of(effective, &b["id"]),
+        tiers_of(active, &b["id"]),
         serde_json::json!(["project"])
     );
-    assert_eq!(tiers_of(effective, &d["id"]), serde_json::json!(["run"]));
-    assert_eq!(tiers_of(effective, &c["id"]), serde_json::json!(["node"]));
+    assert_eq!(tiers_of(active, &d["id"]), serde_json::json!(["run"]));
+    assert_eq!(tiers_of(active, &c["id"]), serde_json::json!(["node"]));
     assert_eq!(payload["missing_skills"], serde_json::json!([]));
 
     // The Run tier was frozen on `RunStarted`; the projection exposes both.

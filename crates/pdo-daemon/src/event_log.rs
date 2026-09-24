@@ -593,12 +593,12 @@ pub struct NodeState {
     /// snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolated_worktree: Option<bool>,
-    /// #669/ADR-0062: the **skills effectifs** this NodeRun was frozen with at
+    /// #669/ADR-0062: the **skills actifs** this NodeRun was frozen with at
     /// spawn (union of the four tiers, each with its origin), read from the
     /// `NodeStarted` payload. `None` for a node that never started, a `script`
     /// node (no agent) or a pre-#669 event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) skills: Option<Vec<crate::skill_selection::EffectiveSkill>>,
+    pub(crate) skills: Option<Vec<crate::skill_selection::ActiveSkill>>,
     /// #669: selected ids the bank no longer knew at spawn — the node ran
     /// without them (a warning, never a failure). Absent when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2302,7 +2302,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                 {
                     node.isolated_worktree = Some(isolated);
                 }
-                // #669/ADR-0062: freeze the skills effectifs this session received,
+                // #669/ADR-0062: freeze the skills actifs this session received,
                 // and the ids it was promised but the bank no longer had. A re-spawn
                 // re-freezes; a `script` node / pre-#669 event leaves `None`.
                 if let Some(skills) = event

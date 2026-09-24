@@ -56,8 +56,9 @@ Features validated while crossing the tour:
    does nothing at all.
 4. Walk the form, doing exactly what each card asks: name the Run, pick the training repository
    through the **magnifier** (the explorer opens on the folder the tour created), choose the tutorial
-   pipeline in the **pipeline menu**, pick the `Default` agent profile, tick **both** PDO skills
-   (the card's checklist ticks as you go), paste the prompt → each step advances **on the gesture**,
+   pipeline in the **pipeline menu**, pick the `Default` agent profile, tick **both** PDO skills in
+   the skills picker — which stays open across the two ticks, the card's checklist ticking as you go,
+   and folds back to « 2 active skills » — paste the prompt → each step advances **on the gesture**,
    with no extra confirmation but the ones the card asks for.
 5. **Launch** → the Run appears in the list on the left and the tour points at its row. Launch also
    opens the Run's tab by itself, so the card says so and waits for a `Next` — the step is shown,

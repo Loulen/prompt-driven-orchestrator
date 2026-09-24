@@ -1,6 +1,6 @@
 # Les skills sont livrés dans le worktree, jamais commités
 
-PDO héberge une Banque de skills et livre les skills effectifs d'un NodeRun en les copiant dans `.agents/skills/<name>/` de chaque worktree qu'il crée, avec un lien symbolique par skill dans `.claude/skills/`. Un seul mécanisme pour tous les harnais : c'est le seul emplacement que `claude`, `copilot` et `opencode` lisent sans configuration. Le prix, un fichier posé dans le dépôt cible, est payé par une exclusion Git au grain du skill.
+PDO héberge une Banque de skills et livre les skills actifs d'un NodeRun en les copiant dans `.agents/skills/<name>/` de chaque worktree qu'il crée, avec un lien symbolique par skill dans `.claude/skills/`. Un seul mécanisme pour tous les harnais : c'est le seul emplacement que `claude`, `copilot` et `opencode` lisent sans configuration. Le prix, un fichier posé dans le dépôt cible, est payé par une exclusion Git au grain du skill.
 
 ## Options écartées (mesurées le 2026-09-03)
 

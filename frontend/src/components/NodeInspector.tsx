@@ -535,7 +535,10 @@ export default function NodeInspector({
             {/* #669/ADR-0062: the Node tier of the skills selection. Own skills are
                 live; inherited ones (instance, Projet, Run) are greyed with their
                 origin; the total is the strict additive union. An id the bank lost
-                warns here and on the pipeline banner — the node still runs. */}
+                warns here and on the pipeline banner — the node still runs.
+                A NodeRun that already spawned froze its skills (the line below says
+                with which): the selector goes read-only rather than taking edits
+                that would change nothing (#849), and still opens for reading. */}
             <SkillSelector
               tier="node"
               own={node.skills ?? []}
@@ -544,6 +547,7 @@ export default function NodeInspector({
               bank={skillBank}
               label="Skills"
               testId="node-skill-selector"
+              readOnly={readOnly || runNode?.skills != null}
             />
             {runNode?.skills && (
               <p className="text-fg-4" style={{ fontSize: 9.5 }} data-testid="node-skills-frozen">

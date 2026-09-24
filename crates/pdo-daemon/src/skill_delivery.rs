@@ -1,4 +1,4 @@
-//! **Delivery** of a NodeRun's skills effectifs into the worktree it works in
+//! **Delivery** of a NodeRun's skills actifs into the worktree it works in
 //! (#672, spec #667, ADR-0062, CONTEXT.md §*Banque de skills* — *Livraison*).
 //!
 //! One mechanism for every harness: the skills are **copied** into
@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::skill_selection::EffectiveSkill;
+use crate::skill_selection::ActiveSkill;
 
 /// Marker written on its own line before each excluded path. The run id follows
 /// so the cleanup of one Run never touches another Run's lines.
@@ -81,7 +81,7 @@ pub(crate) fn snapshot_skills(
     bank_root: &Path,
     run_repo_root: &Path,
     run_id: &str,
-    skills: &[EffectiveSkill],
+    skills: &[ActiveSkill],
 ) -> Result<Vec<SkippedSkill>> {
     let root = snapshot_root(run_repo_root, run_id);
     let mut skipped = Vec::new();
@@ -118,7 +118,7 @@ pub(crate) fn deliver(
     worktree: &Path,
     snapshot_root: &Path,
     run_id: &str,
-    skills: &[EffectiveSkill],
+    skills: &[ActiveSkill],
 ) -> Result<DeliveryReport> {
     let mut report = DeliveryReport::default();
     if skills.is_empty() {
@@ -243,7 +243,7 @@ pub(crate) fn frozen_run_skills(events: &[crate::event_log::Event]) -> Option<Fr
         .iter()
         .find(|e| e.kind == crate::event_log::EventKind::RunStarted)
         .and_then(|e| e.payload.as_ref())?;
-    let skills: Option<Vec<EffectiveSkill>> = payload
+    let skills: Option<Vec<ActiveSkill>> = payload
         .get(RUN_STARTED_FROZEN_KEY)
         .and_then(|v| serde_json::from_value(v.clone()).ok());
     let missing: Option<Vec<crate::skill_selection::MissingSkill>> = payload
@@ -261,7 +261,7 @@ pub(crate) fn frozen_run_skills(events: &[crate::event_log::Event]) -> Option<Fr
 /// See [`frozen_run_skills`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FrozenRunSkills {
-    pub skills: Vec<EffectiveSkill>,
+    pub skills: Vec<ActiveSkill>,
     pub missing: Vec<crate::skill_selection::MissingSkill>,
 }
 
@@ -507,8 +507,8 @@ mod tests {
         bank_root
     }
 
-    fn eff(id: &str, name: &str) -> EffectiveSkill {
-        EffectiveSkill {
+    fn eff(id: &str, name: &str) -> ActiveSkill {
+        ActiveSkill {
             id: id.into(),
             name: name.into(),
             tiers: vec![SkillTier::Instance],

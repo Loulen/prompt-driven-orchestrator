@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Folder, FolderOpen, Sparkles, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, FolderOpen, Sparkles, TriangleAlert } from "lucide-react";
 import type { SkillBank, SkillRef, SkillTier } from "../types";
 import { buildRows } from "../lib/skillTree";
 import {
+  activeCountLabel,
   addRefs,
   allSelected,
-  effectiveCountLabel,
   removeRef,
-  resolveEffectiveSkills,
+  resolveActiveSkills,
   skillsInFolder,
   SKILL_TIER_LABEL,
   toRefs,
+  type ActiveRow,
   type InheritedTier,
 } from "../lib/skillSelection";
 
@@ -19,12 +20,19 @@ const EMPTY_BANK: SkillBank = { skills: [], folders: [], root_path: "" };
 /**
  * The ONE skills selector (#669, ADR-0062), shared by the Configuration
  * d'instance, the Projet editor, the Run / Trigger creation and the node
- * inspector. Each tier shows its **own** skills (live checkboxes), the
- * **inherited** ones greyed with their origin tier, and the **effective total**
- * (strict additive union — no tier removes an inherited skill). Checking a
- * folder of the bank checks its skills *at this instant* (a gesture, never a
- * stored reference). An id the bank no longer knows is a warning row: the tier
- * keeps the id, the NodeRun runs without it.
+ * inspector. Since #849 it is **compact**: folded, one row — the icon, the
+ * label, and a discreet sub-line with the **count alone** (« n active skills »),
+ * never the names. The permanent list of names under the button is gone: it only
+ * doubled what the popover already says, four screens paid its height for it, and
+ * a selection of any size overflowed it.
+ *
+ * Unfolded, the bank's tree IS the reading: a checked box is a selected skill, an
+ * inherited one is checked, greyed and locked with its origin tier beside it
+ * (strict additive union — no tier removes an inherited skill). Checking a folder
+ * checks its skills *at this instant* (a gesture, never a stored reference). An id
+ * the bank no longer knows is struck through at the head of the popover, still
+ * checked and still removable there; folded, it becomes the alert icon on the
+ * right of the button, its sentence in the tooltip.
  */
 export default function SkillSelector({
   tier,
@@ -79,7 +87,7 @@ export default function SkillSelector({
   }, [bank, collapsedOverride]);
 
   const resolved = useMemo(
-    () => resolveEffectiveSkills(tier, own, inherited, bank),
+    () => resolveActiveSkills(tier, own, inherited, bank),
     [tier, own, inherited, bank],
   );
   const rows = useMemo(
@@ -96,21 +104,17 @@ export default function SkillSelector({
   }, [resolved, tier]);
   const ownIds = useMemo(() => new Set(own.map((skill) => skill.id)), [own]);
   const hasMissing = resolved.missing.length > 0;
-  const summary = resolved.rows
-    .filter((row) => !row.missing)
-    .map((row) => row.name)
-    .join(", ");
+  const missingMessage = missingSentence(resolved.missing);
 
-  // A pick closes the picker (#837). The popover is an overlay that hides the
-  // fields under it, and it had no way out but a click elsewhere or Escape; a
-  // reader who ticked what they came for was left with a panel in the way. The
-  // effective list under the button shows what was picked, with a remove button
-  // per own skill, so a second skill is one reopen away and an undo needs no
-  // reopen at all.
+  // A pick leaves the picker OPEN (#849). It closed on every tick since #837,
+  // when the list under the button still said what had been picked; that list is
+  // gone, so the popover is now the only place the selection can be read — and
+  // ticking two skills in a row is the ordinary gesture (the *First run* tour
+  // asks for exactly that). Escape, an outside click and the button itself all
+  // still fold it away.
   const toggleSkill = (id: string, name: string) => {
     if (readOnly) return;
     onChange(ownIds.has(id) ? removeRef(own, id) : addRefs(own, [{ id, name }]));
-    setOpen(false);
   };
   const toggleFolder = (folderId: string) => {
     if (readOnly) return;
@@ -122,7 +126,6 @@ export default function SkillSelector({
     } else {
       onChange(addRefs(own, toRefs(skills)));
     }
-    setOpen(false);
   };
   const toggleExpanded = (folderId: string) => {
     setCollapsedOverride((prev) => {
@@ -135,88 +138,99 @@ export default function SkillSelector({
 
   return (
     <div ref={rootRef} className="relative" data-testid={`${testId}-root`}>
-      <span className="mb-1 block uppercase tracking-wider text-fg-4" style={{ fontSize: 9 }}>{label}</span>
+      {/* One row, label included: the caption above the button was a third line
+          for a control that says two things (#849). */}
       <button
         type="button"
         data-testid={testId}
         aria-expanded={open}
-        disabled={readOnly}
         onClick={() => setOpen((value) => !value)}
         className={`flex w-full items-center gap-2 rounded border bg-bg-3 px-2 py-1.5 text-left ${
-          hasMissing ? "border-st-blocked text-st-blocked" : "border-line-strong text-fg-2"
-        } ${readOnly ? "cursor-default opacity-80" : ""}`}
+          hasMissing ? "border-st-blocked" : "border-line-strong"
+        } text-fg-2 ${readOnly ? "opacity-80" : ""}`}
       >
-        {hasMissing ? <TriangleAlert size={11} className="shrink-0" /> : <Sparkles size={11} className="shrink-0" />}
+        <Sparkles size={11} className="shrink-0" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium" style={{ fontSize: 10.5 }} data-testid={`${testId}-count`}>
-            {effectiveCountLabel(resolved.effectiveCount)}
-          </span>
-          <span className="block truncate font-mono text-fg-4" style={{ fontSize: 9.5 }}>
-            {summary || "Pick skills from the bank"}
+          <span className="block truncate font-medium" style={{ fontSize: 10.5 }}>{label}</span>
+          <span className="block truncate text-fg-4" style={{ fontSize: 9.5 }} data-testid={`${testId}-count`}>
+            {activeCountLabel(resolved.activeCount)}
           </span>
         </span>
-        {!readOnly && <ChevronDown size={11} className="shrink-0 text-fg-4" />}
+        {hasMissing && (
+          // The sentence is one hover away instead of a red paragraph under the
+          // button — the same words, none of the height (#849).
+          <span
+            data-testid={`${testId}-alert`}
+            title={missingMessage}
+            // `role="img"` so the sentence is a NAME, not an inert attribute on a
+            // bare span: a reader who never hovers still gets the warning.
+            role="img"
+            aria-label={missingMessage}
+            className="shrink-0 text-st-blocked"
+          >
+            <TriangleAlert size={11} />
+          </span>
+        )}
+        <ChevronDown size={11} className="shrink-0 text-fg-4" />
       </button>
 
-      {resolved.rows.length > 0 && (
-        <ul className="mt-1 flex flex-col gap-0.5" data-testid={`${testId}-effective`}>
-          {resolved.rows.map((row) => (
-            <li
-              key={row.id}
-              data-testid={`${testId}-row-${row.id}`}
-              data-own={row.own}
-              data-inherited={row.inherited}
-              data-missing={row.missing}
-              data-tiers={row.tiers.join(" ")}
-              className={`flex items-center gap-1.5 rounded px-1.5 py-0.5 ${
-                row.missing ? "text-st-blocked" : row.own ? "text-fg-2" : "text-fg-4"
-              }`}
-              style={{ fontSize: 10 }}
-            >
-              {row.missing && <TriangleAlert size={10} className="shrink-0" />}
-              <span className={`min-w-0 flex-1 truncate font-mono ${row.missing ? "line-through" : ""}`}>{row.name}</span>
-              {row.tiers.map((t) => (
-                <span
-                  key={t}
-                  data-tier={t}
-                  className={`rounded border px-1 uppercase tracking-wider ${
-                    t === tier ? "border-acc/60 text-acc" : "border-line text-fg-4"
-                  }`}
-                  style={{ fontSize: 8 }}
-                  title={t === tier ? "Selected here" : `Inherited from the ${SKILL_TIER_LABEL[t].toLowerCase()} tier`}
-                >
-                  {SKILL_TIER_LABEL[t]}
-                </span>
-              ))}
-              {row.own && !readOnly && (
-                <button
-                  type="button"
-                  aria-label={`Remove ${row.name}`}
-                  data-testid={`${testId}-remove-${row.id}`}
-                  onClick={() => onChange(removeRef(own, row.id))}
-                  className="shrink-0 rounded p-0.5 text-fg-4 hover:text-fg-2"
-                >
-                  <X size={10} />
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {hasMissing && (
-        <p className="mt-1 text-st-blocked" style={{ fontSize: 9.5 }} data-testid={`${testId}-missing`}>
-          {resolved.missing.length === 1
-            ? `Skill ${resolved.missing[0].name} no longer exists in the bank. It is skipped; runs still start.`
-            : `${resolved.missing.length} selected skills no longer exist in the bank. They are skipped; runs still start.`}
-        </p>
-      )}
-
-      {open && !readOnly && (
+      {/* Read-only (a node whose spawn froze its skills, a Trigger's detail) opens
+          the popover all the same: the reading is the point, and refusing to open
+          left a count nobody could expand (#849). Only the gestures are frozen. */}
+      {open && (
         <div
           role="dialog"
           data-testid={`${testId}-popover`}
           className="absolute left-0 z-40 mt-1 w-full min-w-[280px] rounded border border-line-strong bg-bg-4 p-1.5 shadow-xl"
         >
+          {hasMissing && (
+            <ul className="mb-1 flex flex-col gap-0.5 border-b border-line pb-1" data-testid={`${testId}-missing`}>
+              {resolved.missing.map((row) => {
+                // `own` = this tier is one of the tiers that selected it, so the
+                // uncheck below has something of ours to remove.
+                const isOwn = row.own;
+                return (
+                  <li
+                    key={`m-${row.id}`}
+                    data-testid={`${testId}-missing-${row.id}`}
+                    data-own={isOwn}
+                    className="flex items-center gap-1.5 rounded px-1 py-0.5 text-st-blocked"
+                    style={{ fontSize: 10.5 }}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={row.name}
+                      data-testid={`${testId}-check-${row.id}`}
+                      checked
+                      // Only this tier's own reference can be dropped here; one a
+                      // coarser tier still selects is a fact, not a choice.
+                      disabled={readOnly || !isOwn}
+                      onChange={() => {
+                        if (readOnly) return;
+                        onChange(removeRef(own, row.id));
+                      }}
+                      className="accent-acc"
+                    />
+                    <TriangleAlert size={10} className="shrink-0" />
+                    <span className={`min-w-0 flex-1 truncate font-mono line-through ${isOwn ? "" : "text-fg-4"}`}>
+                      {row.name}
+                    </span>
+                    {!isOwn &&
+                      row.tiers.map((t) => (
+                        <span
+                          key={t}
+                          data-tier={t}
+                          className="rounded border border-line px-1 uppercase tracking-wider text-fg-4"
+                          style={{ fontSize: 8 }}
+                        >
+                          {SKILL_TIER_LABEL[t]}
+                        </span>
+                      ))}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           <input
             type="search"
             value={filter}
@@ -252,10 +266,12 @@ export default function SkillSelector({
                         ref={(el) => {
                           if (el) el.indeterminate = some;
                         }}
-                        disabled={skills.length === 0}
+                        disabled={readOnly || skills.length === 0}
                         onChange={() => toggleFolder(row.folder!.id)}
                         className="accent-acc"
                       />
+                      {/* The chevron stays live in read-only: folding a folder
+                          reads the tree, it changes no selection. */}
                       <button
                         type="button"
                         onClick={() => toggleExpanded(row.folder!.id)}
@@ -274,6 +290,7 @@ export default function SkillSelector({
                   const skill = row.skill;
                   const isOwn = ownIds.has(skill.id);
                   const from = inheritedById.get(skill.id);
+                  const locked = readOnly || (!isOwn && !!from);
                   return (
                     <li
                       key={`s-${skill.id}`}
@@ -286,7 +303,7 @@ export default function SkillSelector({
                         aria-label={skill.name}
                         data-testid={`${testId}-check-${skill.id}`}
                         checked={isOwn || !!from}
-                        disabled={!isOwn && !!from}
+                        disabled={locked}
                         onChange={() => toggleSkill(skill.id, skill.name)}
                         className="accent-acc"
                         title={from && !isOwn ? `Inherited from the ${from.map((t) => SKILL_TIER_LABEL[t].toLowerCase()).join(", ")} tier` : undefined}
@@ -297,7 +314,7 @@ export default function SkillSelector({
                       <button
                         type="button"
                         tabIndex={-1}
-                        disabled={!isOwn && !!from}
+                        disabled={locked}
                         onClick={() => toggleSkill(skill.id, skill.name)}
                         data-testid={`${testId}-label-${skill.id}`}
                         className={`min-w-0 flex-1 truncate text-left font-mono disabled:cursor-default ${from && !isOwn ? "text-fg-4" : "text-fg"}`}
@@ -317,10 +334,20 @@ export default function SkillSelector({
             </ul>
           )}
           <p className="mt-1 border-t border-line px-1 pt-1 text-fg-4" style={{ fontSize: 9 }}>
-            Inherited skills are greyed and cannot be removed here (additive union). Checking a folder checks its skills now.
+            {readOnly
+              ? "Frozen: this selection is read-only here."
+              : "Inherited skills are greyed and cannot be removed here (additive union). Checking a folder checks its skills now."}
           </p>
         </div>
       )}
     </div>
   );
+}
+
+/** The sentence the alert icon carries — unchanged words, now a tooltip (#849). */
+function missingSentence(missing: ActiveRow[]): string {
+  if (missing.length === 1) {
+    return `Skill ${missing[0].name} no longer exists in the bank. It is skipped; runs still start.`;
+  }
+  return `${missing.length} selected skills no longer exist in the bank. They are skipped; runs still start.`;
 }

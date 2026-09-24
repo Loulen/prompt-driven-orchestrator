@@ -10,6 +10,6 @@ outputs        a
 review         a
 triggers       a
 stats          a
-orchestration  a
+interactive-orchestrator  a
 profiles       a
 skills         a

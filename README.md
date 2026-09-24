@@ -19,7 +19,7 @@
 
 <!-- Media slots: `make readme-media` publishes each scene to docs/assets/readme/<scene>.gif with its
      poster docs/assets/readme/<scene>.jpg (scenes: hero, pipelines, routing, outputs, review, triggers,
-     stats, orchestration, profiles, skills). Until a scene is published, its slot shows docs/pdo-ui.png.
+     stats, interactive-orchestrator, profiles, skills). Until a scene is published, its slot shows docs/pdo-ui.png.
      In each <picture>: the reduced-motion <source> takes the poster, the other <source> the GIF
      (type="image/gif"), the <img> the poster. README.md and docs/readme/README.fr.md share the media. -->
 <p align="center">
@@ -122,16 +122,16 @@ Cost, duration and failure rate per model and per node, from your own runs. See 
 <tr>
 <td width="50%" valign="middle">
 
-### Recursive orchestration
+### Interactive & orchestrator nodes
 
-A node can launch child pipelines from its own session. Children nest under their parent in the run tree, and the Orchestration tab tracks them to the end.
+An interactive node waits for your answer before it goes on: its agent asks, you reply in its terminal. An orchestrator node launches child runs of pipelines from its own session, so pipelines run pipelines. Children nest under their parent in the run tree.
 
-[Docs →](docs/features.md#recursive-orchestration)
+[Docs →](docs/features.md#interactive-and-orchestrator-nodes)
 
 </td>
 <td width="50%">
-  <!-- scene: orchestration -->
-  <a href="docs/features.md#recursive-orchestration"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/orchestration.jpg"><source srcset="docs/assets/readme/orchestration.gif" type="image/gif"><img src="docs/assets/readme/orchestration.jpg" alt="A node launching child runs, nested under their parent in the run tree" width="100%" /></picture></a>
+  <!-- scene: interactive-orchestrator -->
+  <a href="docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/interactive-orchestrator.jpg"><source srcset="docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="docs/assets/readme/interactive-orchestrator.jpg" alt="A node asks a question and waits for you, gets the answer typed in its terminal, then launches two child runs nested under it in the run tree" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

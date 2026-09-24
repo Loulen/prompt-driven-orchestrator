@@ -21,7 +21,7 @@ test("parses one `<scene> <variant>` per line, comments and blanks ignored", () 
 
 test("the versioned selection names every README scene, and a variant each built scene declares", async () => {
   const selection = readSelection(path.join(here, "..", "selection.txt"));
-  assert.deepEqual([...selection.keys()].sort(), ["hero", "orchestration", "outputs", "pipelines", "profiles", "review", "routing", "skills", "stats", "triggers"]);
+  assert.deepEqual([...selection.keys()].sort(), ["hero", "interactive-orchestrator", "outputs", "pipelines", "profiles", "review", "routing", "skills", "stats", "triggers"]);
   const scenes = await loadScenes(path.join(here, "..", "scenes"));
   for (const [name, scene] of scenes) {
     assert.ok(selection.has(name), `${name} has a selection line`);

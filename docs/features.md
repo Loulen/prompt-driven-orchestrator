@@ -12,7 +12,7 @@ vocabulary lives in [CONTEXT.md](../CONTEXT.md).
 - [Diff review](#diff-review)
 - [Triggers](#triggers)
 - [Run stats by model](#run-stats-by-model)
-- [Recursive orchestration](#recursive-orchestration)
+- [Interactive and orchestrator nodes](#interactive-and-orchestrator-nodes)
 - [Agent profiles](#agent-profiles)
 - [Skill bank](#skill-bank)
 - [Also in the box](#also-in-the-box)
@@ -128,17 +128,28 @@ Decisions: [ADR-0022](adr/0022-estimated-cost-from-local-transcripts.md),
 [ADR-0065](adr/0065-modele-et-effort-observes-source-d-abord-intention-en-repli.md).
 Which harness reports what: [harnesses.md](reference/harnesses.md).
 
-## Recursive orchestration
+## Interactive and orchestrator nodes
 
-Turn **Orchestrator** on for a node and its session learns to launch runs itself: `pdo run create`
-starts a child pipeline (the same one, or another) and `pdo run wait` blocks until a child is done.
-The daemon records who launched what, so the run list becomes a **run tree**: children fold under
-their parent, with counters for finished, failed, stale and running descendants. The node's
-**Orchestration** tab follows its children to the end.
+Two flags of an agent node, independent of its type (`agent`, `script`, `merge`): together they
+make its **node kind**, and a node can be both.
+
+Turn **Interactive** on and a human talks to the node. When its agent needs you (a question, a
+choice, a review), it declares the wait with `pdo wait-user --message "<question>"`: the node and its
+run turn **awaiting you**, with the question on the banner. You reply in the node's terminal, and
+your Enter lifts the wait. PDO never infers a wait from a silence. The node's completion is guarded
+until you release it (« Mark ready for completion ») or force it (« Mark complete »).
+
+Turn **Orchestrator** on and its session learns to launch runs itself: `pdo run create` starts a
+child pipeline (the same one, or another), so pipelines run pipelines, and `pdo run wait` blocks
+until a child is done. The daemon records who launched what, so the run list becomes a **run
+tree**: children fold under their parent, with counters for finished, failed, stale and running
+descendants. The node's **Orchestration** tab follows its children to the end, and a child that
+waits for you shows on its parent too.
 
 Decisions: [ADR-0064](adr/0064-la-provenance-parent-enfant-est-mecanique-et-la-liaison-orchestrateur-est-forte.md),
+[ADR-0068](adr/0068-la-liberation-de-la-completion-est-une-garde-du-daemon-pas-un-message-dans-le-pane.md),
 [ADR-0069](adr/0069-l-attente-utilisateur-est-declaree-par-l-agent-et-le-suivi-des-enfants-est-un-pull-bloquant.md).
-Commands: [`pdo run create`, `pdo run wait`](reference/cli.md#cli-commands).
+Commands: [`pdo wait-user`, `pdo run create`, `pdo run wait`](reference/cli.md#cli-commands).
 
 ## Agent profiles
 

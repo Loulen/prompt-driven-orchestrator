@@ -504,8 +504,9 @@ describe("the fast-forward", () => {
     ffSetup(done());
     openSync();
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
-    const popover = await screen.findByTestId("branch-sync-popover");
-    expect(popover).toHaveTextContent("main fast-forwarded to origin/main");
+    // The popover is already open: wait for the fast-forward's report, not for the popover.
+    const popover = screen.getByTestId("branch-sync-popover");
+    await waitFor(() => expect(popover).toHaveTextContent("main fast-forwarded to origin/main"));
     expect(popover).toHaveTextContent("3 commits");
     expect(popover).toHaveTextContent("now sits on the new tip");
     expect(screen.getByTestId("branch-sync-ff-moved")).toHaveTextContent(
@@ -517,8 +518,8 @@ describe("the fast-forward", () => {
     ffSetup(done({ moved_checkout: null }));
     openSync();
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
-    expect(await screen.findByTestId("branch-sync-popover")).toHaveTextContent(
-      "No file changed",
+    await waitFor(() =>
+      expect(screen.getByTestId("branch-sync-popover")).toHaveTextContent("No file changed"),
     );
   });
 
@@ -543,8 +544,9 @@ describe("the fast-forward", () => {
     openSync();
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
 
-    const popover = await screen.findByTestId("branch-sync-popover");
-    expect(popover).toHaveTextContent("working tree not clean");
+    const popover = screen.getByTestId("branch-sync-popover");
+    // Already open: wait for the settled call's text, not for the popover.
+    await waitFor(() => expect(popover).toHaveTextContent("working tree not clean"));
     // The daemon's own reason code: what a person searches for, and what a bug
     // report should carry.
     expect(screen.getByTestId("branch-sync-ff-reason")).toHaveTextContent("dirty_tree");
@@ -601,8 +603,9 @@ describe("the fast-forward", () => {
     openSync();
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
 
-    const popover = await screen.findByTestId("branch-sync-popover");
-    expect(popover).toHaveTextContent("the branch has diverged");
+    const popover = screen.getByTestId("branch-sync-popover");
+    // Already open: wait for the settled call's text, not for the popover.
+    await waitFor(() => expect(popover).toHaveTextContent("the branch has diverged"));
     expect(popover).not.toHaveTextContent("another worktree");
     expect(popover).not.toHaveTextContent("another checkout");
     expect(screen.getByTestId("branch-sync-ff-reason")).toHaveTextContent("diverged");
@@ -628,8 +631,9 @@ describe("the fast-forward", () => {
     openSync();
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
 
-    const popover = await screen.findByTestId("branch-sync-popover");
-    expect(popover).toHaveTextContent("the daemon refused");
+    const popover = screen.getByTestId("branch-sync-popover");
+    // Already open: wait for the settled call's text, not for the popover.
+    await waitFor(() => expect(popover).toHaveTextContent("the daemon refused"));
     expect(popover).not.toHaveTextContent("worktree");
     expect(screen.getByTestId("branch-sync-ff-message")).toHaveTextContent("index.lock exists");
   });
@@ -663,8 +667,9 @@ describe("the fast-forward", () => {
     openSync();
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
 
-    const popover = await screen.findByTestId("branch-sync-popover");
-    expect(popover).toHaveTextContent("Nothing moved");
+    const popover = screen.getByTestId("branch-sync-popover");
+    // Already open: wait for the settled call's text, not for the popover.
+    await waitFor(() => expect(popover).toHaveTextContent("Nothing moved"));
     expect(screen.getByTestId("branch-sync-ff-error")).toHaveTextContent("daemon unreachable");
     // A failed fast-forward never blocks a launch (same contract as a failed fetch).
     expect(screen.getByTestId("branch-sync-switch")).toBeInTheDocument();

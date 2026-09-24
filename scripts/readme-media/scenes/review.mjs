@@ -11,22 +11,53 @@
 //   a — `app.js`: the draft, then « Send all to manager » from the send bar.
 //   b — `index.html`: the draft, then its own « Send ».
 //
-// Both in the unified view, the file list closed: the diff gets the whole
-// window, so no code line, toolbar or thread footer is cut or wrapped at the
-// GIF's width. The manager is stopped as soon as each variant is filmed
+// Both zoomed on the commented hunk and its thread (the comment, the send, the
+// manager's answer): the unified view, the file list closed, a narrow window
+// cropped under the Review toolbar to ~720 px, scaled up to the GIF's 960. The
+// toolbar and the file list are out of frame; the send bar (sticky at the
+// bottom) is in, and the crop ends with it. The other files are collapsed off
+// camera (`focusFile`): under the commented file, only their headers show,
+// whole, never a hunk of theirs. Every toast is waited out off camera. The manager answers in one line
+// (`MANAGER_RULE`, the demo HOME's `~/.claude/CLAUDE.md`, written once the demo
+// runs are done). It is stopped as soon as each variant is filmed
 // (`stopDemoRun`).
 
+import fs from "node:fs";
+import path from "node:path";
 import { sleep } from "../lib/demo-instance.mjs";
 import { completeDemoRun, stopDemoRun } from "./_live.mjs";
 
-/** Barely scaled down to the GIF's 960 px, nothing cropped: at this width the
- *  top bar holds its buttons on one line and the run label still reads. */
-const VIEWPORT = { width: 1040, height: 660 };
+/** A narrow window: the diff's file cards and the thread (720 px at most) fill
+ *  its width, and the send bar ends inside the crop. Its height stops the
+ *  frame after the commented hunk: the next file stays out of the poster. */
+const VIEWPORT = { width: 760, height: 430 };
+/** The Review toolbar's height (`grid-rows-[36px_1fr]`): the crop starts under it. */
+const TOOLBAR = 36;
+/** The send bar is sticky 8 px above the page's bottom (`bottom-2`): under it,
+ *  the next file's rows scroll by, half cut. */
+const SEND_BAR_GAP = 8;
+/** The hunk and its thread, under the toolbar, from the file card's left edge
+ *  to the send bar's right end, down to the send bar's bottom: ~720 px scaled
+ *  up to 960. */
+const CROP = { x: 24, y: TOOLBAR + 8, width: 720, height: VIEWPORT.height - SEND_BAR_GAP - TOOLBAR - 8 };
 /** Unified view, file list closed (both remembered by the browser). */
 const LAYOUT = { "pdo.review.view": "unified", "pdo.review.list": "closed" };
-/** Where the commented line sits on screen: the editor, the comment and the
- *  answer unfold below it. */
-const LINE_TOP = 150;
+/** Where the commented line sits on screen: a few lines of its hunk above it,
+ *  the editor, the comment and the answer unfolding below it. */
+const LINE_TOP = CROP.y + 74;
+
+/** What the manager reads, in the demo HOME's `~/.claude/CLAUDE.md`: its
+ *  answer fits on one line of the thread (~100 characters at the crop's width).
+ *  A format, not a sample answer: a ready-made sentence (a SHA, a fix) gets
+ *  echoed word for word, or taken for an instruction the manager then refuses. */
+export const MANAGER_RULE = [
+  "# Review answers",
+  "",
+  "This file only sets the format of your answers; it is not a task. Wait for a review comment to reach you.",
+  "When you answer a review comment with `pdo review reply`, answer in ONE short sentence of at most 80 characters,",
+  "in your own words: the short SHA of the commit you made for it, then what you changed.",
+  "",
+].join("\n");
 
 /** The finished run each variant comments, by variant id. */
 const runs = {};
@@ -43,7 +74,7 @@ const TARGETS = {
   b: {
     file: "index.html",
     line: /<input[^>]*(type="search"|id="search")/,
-    text: 'Should this input get autocomplete="off", so the browser\'s suggestions don\'t cover the results?',
+    text: 'Could this input get aria-controls="products", for screen readers?',
     fallback: "Could you add a one-line comment saying why this is needed?",
   },
 };
@@ -55,7 +86,10 @@ async function openReview(ctx, runId, { file, line, text, fallback }) {
   await ctx.goto(`/runs/${encodeURIComponent(runId)}/review`);
   const card = page.getByTestId("review-file").filter({ has: page.getByTestId("review-file-header").filter({ hasText: file }) }).first();
   await card.waitFor({ timeout: 30_000 });
+  const main = await page.getByTestId("review-main").boundingBox();
+  if (main.y > CROP.y) throw new Error(`the diff starts at ${main.y} px, under the crop's top (${CROP.y} px): the toolbar would show`);
   if ((await page.getByTestId("review-view-toggle").getAttribute("data-view")) !== "unified") throw new Error("the review is not in the unified view");
+  await focusFile(page, file);
   // One table, added lines only.
   const rows = card.locator("tr").filter({ has: page.locator('[data-operator="+"]') });
   await rows.first().waitFor({ timeout: 30_000 });
@@ -70,29 +104,114 @@ async function openReview(ctx, runId, { file, line, text, fallback }) {
     main.scrollTop += el.getBoundingClientRect().top - top;
   }, LINE_TOP);
   await sleep(700);
+  await frameBottom(page);
   return { row, comment };
 }
 
-/** Filmed: hover the line number, press its « + », type the comment, save the draft. */
-async function writeDraft(ctx, row, comment) {
-  const { page } = ctx;
-  const number = row.locator("td").first();
-  await ctx.hover(number, { duration: 800, pause: 250 });
-  await ctx.click(row.locator("button.diff-add-widget").first(), { duration: 250 });
-  const editor = page.getByTestId("review-editor-text");
-  await editor.waitFor({ timeout: 5_000 });
-  await sleep(250);
-  await page.keyboard.type(comment, { delay: 22 });
-  await sleep(300);
-  await ctx.click(page.getByTestId("review-editor-save"), { duration: 600 });
-  await page.getByTestId("review-send-bar").waitFor({ timeout: 5_000 });
-  await sleep(300);
+/** Off camera: collapse every file but `file`, from its header (the page's own
+ *  toggle). Under the commented file, the next ones show as a header row each,
+ *  not as hunks filling the bottom of the frame. */
+async function focusFile(page, file) {
+  const others = page.getByTestId("review-file").filter({ hasNot: page.getByTestId("review-file-header").filter({ hasText: file }) });
+  for (let i = 0; i < (await others.count()); i++) {
+    const card = others.nth(i);
+    if ((await card.getAttribute("data-collapsed")) === "true") continue;
+    await card.getByTestId("review-file-header").click();
+    await page.waitForFunction((el) => el.dataset.collapsed === "true", await card.elementHandle(), { timeout: 5_000 });
+  }
 }
 
-/** The send landed: no draft is left, so the send bar is gone. */
+/** The bottom of the frame cuts no row: a diff row or a file header across the
+ *  crop's bottom edge is scrolled below it (the content moves down by less than
+ *  a row, the thread stays whole). No toast shows either. */
+async function frameBottom(page) {
+  await noToast(page);
+  const bottom = CROP.y + CROP.height;
+  const cut = await page.evaluate((edge) => {
+    const main = document.querySelector('[data-testid="review-main"]');
+    const rows = main.querySelectorAll('[data-testid="review-file"] tr, [data-testid="review-file-header"]');
+    for (const el of rows) {
+      const r = el.getBoundingClientRect();
+      // The thread's own row is framed by `waitForAnswer`, never pushed out.
+      if (el.querySelector('[data-testid="review-comment"], [data-testid="review-editor-text"]')) continue;
+      if (r.height > 0 && r.top < edge - 1 && r.bottom > edge + 1) return edge - r.top;
+    }
+    return 0;
+  }, bottom);
+  if (cut > 0) {
+    await page.evaluate((dy) => {
+      document.querySelector('[data-testid="review-main"]').scrollTop -= dy;
+    }, cut);
+    await sleep(300);
+  }
+}
+
+/** No toast on screen: it would sit over the bottom of the frame. */
+async function noToast(page) {
+  await page.getByTestId("review-toast").waitFor({ state: "detached", timeout: 10_000 });
+}
+
+/** Type `text` a word at a time: a key per character re-renders the editor on
+ *  each stroke and drags the typing over seconds of GIF. */
+async function typeWords(page, text) {
+  for (const word of text.match(/\S+\s*/g)) {
+    await page.keyboard.insertText(word);
+    await sleep(70);
+  }
+}
+
+/** Filmed: hover the line number, press its « + », type the comment, save the
+ *  draft. Then, off camera, the « Draft saved » toast goes (it would sit over
+ *  the send bar): the next kept frame shows the draft and the send bar alone. */
+async function writeDraft(ctx, row, comment) {
+  const { page } = ctx;
+  await ctx.keep(async () => {
+    const number = row.locator("td").first();
+    await ctx.hover(number, { duration: 800, pause: 250 });
+    await ctx.click(row.locator("button.diff-add-widget").first(), { duration: 250 });
+    const editor = page.getByTestId("review-editor-text");
+    await editor.waitFor({ timeout: 5_000 });
+    await sleep(250);
+    await typeWords(page, comment);
+    await sleep(300);
+    await ctx.click(page.getByTestId("review-editor-save"), { duration: 600 });
+  });
+  await page.getByTestId("review-send-bar").waitFor({ timeout: 5_000 });
+  await noToast(page);
+  await pinSendBar(page);
+  await assertSendBarEndsCrop(page);
+  await sleep(200);
+}
+
+/** With the other files collapsed, the page can end above the window's bottom:
+ *  the send bar then sits in the flow, higher than the crop's bottom. Scroll
+ *  up until it reaches its sticky spot. */
+async function pinSendBar(page) {
+  const bar = await page.getByTestId("review-send-bar").boundingBox();
+  const gap = CROP.y + CROP.height - (bar.y + bar.height);
+  if (gap > 2) {
+    await page.evaluate((dy) => {
+      document.querySelector('[data-testid="review-main"]').scrollTop -= dy;
+    }, gap);
+    await sleep(300);
+  }
+}
+
+/** The crop ends with the send bar: nothing of the next file shows under it. */
+async function assertSendBarEndsCrop(page) {
+  const bar = await page.getByTestId("review-send-bar").boundingBox();
+  const bottom = CROP.y + CROP.height;
+  if (!bar || Math.abs(bar.y + bar.height - bottom) > 2) {
+    throw new Error(`the send bar ends at ${bar && bar.y + bar.height} px, not at the crop's bottom (${bottom} px)`);
+  }
+}
+
+/** Off camera: the send landed (no draft is left, so the send bar is gone),
+ *  its toast went, and the bottom of the frame cuts no row. */
 async function sent(page) {
   await page.getByTestId("review-send-bar").waitFor({ state: "detached", timeout: 30_000 });
-  await sleep(300);
+  await frameBottom(page);
+  await sleep(200);
 }
 
 /** The sent comment whose text is `comment` — the one this variant posted. */
@@ -106,17 +225,33 @@ async function waitForAnswer(ctx, comment) {
   const { page } = ctx;
   const card = commentCard(page, comment);
   const answered = card.getByTestId("review-reply-body").first().waitFor({ timeout: 10 * 60_000 });
-  await ctx.fast(() => Promise.race([answered, sleep(8_000)]), { speed: 8 });
+  await ctx.fast(() => Promise.race([answered, sleep(6_000)]), { speed: 8 });
   await answered;
   await sleep(500);
-  // The whole thread in view (the answer can push past the window).
+  // The whole thread in the crop (the answer can push past its bottom).
   const box = await card.boundingBox();
-  if (box && box.y + box.height > VIEWPORT.height - 16) {
+  const bottom = CROP.y + CROP.height - 16;
+  if (box && box.y + box.height > bottom) {
     await page.evaluate((dy) => {
       document.querySelector('[data-testid="review-main"]').scrollTop += dy;
-    }, box.y + box.height - (VIEWPORT.height - 16));
+    }, box.y + box.height - bottom);
     await sleep(400);
   }
+  await frameBottom(page);
+  await assertOneLineAnswer(card);
+}
+
+/** The manager's answer holds on one line of the thread: no wrap. */
+async function assertOneLineAnswer(card) {
+  // One client rect per line box of the text (margins do not count).
+  const lines = await card.getByTestId("review-reply-body").first().evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    // A code span's box sits a few px off its line's: rects within 6 px share a line.
+    const bottoms = [...range.getClientRects()].filter((r) => r.width > 0).map((r) => r.bottom).sort((x, y) => x - y);
+    return bottoms.filter((b, i) => i === 0 || b - bottoms[i - 1] > 6).length;
+  });
+  if (lines > 1) throw new Error(`the manager's answer wraps over ${lines} lines of the thread`);
 }
 
 /** The cursor rests on the comment's text, off every button and line number
@@ -140,6 +275,10 @@ export default {
       runs[id] = settled[i].value;
       console.log(`   demo run ${runs[id]} completed (variant ${id})`);
     });
+    // Only the manager, started on the first send, reads it: the runs are done.
+    const memory = path.join(instance.home, ".claude", "CLAUDE.md");
+    fs.mkdirSync(path.dirname(memory), { recursive: true });
+    fs.writeFileSync(memory, MANAGER_RULE);
   },
   variants: [
     {
@@ -147,6 +286,7 @@ export default {
       label: "Comment a line of app.js, « Send all to manager », the manager's answer",
       viewport: VIEWPORT,
       localStorage: LAYOUT,
+      crop: CROP,
       markers: ["comment-posted", "sent-to-manager", "answer-received"],
       async play(ctx) {
         const { page, instance } = ctx;
@@ -154,20 +294,18 @@ export default {
         if (!runId) throw new Error("no finished demo run (setup failed)");
         try {
           const { row, comment } = await openReview(ctx, runId, TARGETS.a);
-          await ctx.keep(() => writeDraft(ctx, row, comment));
-          ctx.mark("comment-posted", { before: 0, after: 700 });
-          await sleep(700);
-          await ctx.keep(async () => {
-            await ctx.click(page.getByTestId("review-send-all"), { duration: 700 });
-            await sent(page);
-            await rest(ctx, comment);
-          });
-          ctx.mark("sent-to-manager", { before: 0, after: 1000 });
-          await sleep(1000);
+          await writeDraft(ctx, row, comment);
+          ctx.mark("comment-posted", { before: 0, after: 500 });
+          await sleep(500);
+          await ctx.keep(() => ctx.click(page.getByTestId("review-send-all"), { duration: 700 }));
+          await sent(page);
+          await ctx.keep(() => rest(ctx, comment));
+          ctx.mark("sent-to-manager", { before: 0, after: 800 });
+          await sleep(800);
           await waitForAnswer(ctx, comment);
           await ctx.keep(() => rest(ctx, comment));
           ctx.mark("answer-received", { before: 0, after: 0 });
-          await ctx.hold(2300);
+          await ctx.hold(2000);
         } finally {
           await stopDemoRun(instance, runId);
         }
@@ -178,6 +316,7 @@ export default {
       label: "Comment a line of index.html, send the draft on its own, the manager's answer",
       viewport: VIEWPORT,
       localStorage: LAYOUT,
+      crop: CROP,
       markers: ["comment-posted", "sent-to-manager", "answer-received"],
       async play(ctx) {
         const { page, instance } = ctx;
@@ -185,20 +324,18 @@ export default {
         if (!runId) throw new Error("no finished demo run (setup failed)");
         try {
           const { row, comment } = await openReview(ctx, runId, TARGETS.b);
-          await ctx.keep(() => writeDraft(ctx, row, comment));
-          ctx.mark("comment-posted", { before: 0, after: 700 });
-          await sleep(700);
-          await ctx.keep(async () => {
-            await ctx.click(page.getByTestId("review-comment-send").first(), { duration: 700 });
-            await sent(page);
-            await rest(ctx, comment);
-          });
-          ctx.mark("sent-to-manager", { before: 0, after: 1000 });
-          await sleep(1000);
+          await writeDraft(ctx, row, comment);
+          ctx.mark("comment-posted", { before: 0, after: 500 });
+          await sleep(500);
+          await ctx.keep(() => ctx.click(page.getByTestId("review-comment-send").first(), { duration: 700 }));
+          await sent(page);
+          await ctx.keep(() => rest(ctx, comment));
+          ctx.mark("sent-to-manager", { before: 0, after: 800 });
+          await sleep(800);
           await waitForAnswer(ctx, comment);
           await ctx.keep(() => rest(ctx, comment));
           ctx.mark("answer-received", { before: 0, after: 0 });
-          await ctx.hold(2300);
+          await ctx.hold(2000);
         } finally {
           await stopDemoRun(instance, runId);
         }

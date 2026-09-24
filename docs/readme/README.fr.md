@@ -19,7 +19,7 @@
 
 <!-- Media slots: `make readme-media` publishes each scene to docs/assets/readme/<scene>.gif with its
      poster docs/assets/readme/<scene>.jpg (scenes: hero, pipelines, routing, outputs, review, triggers,
-     stats, orchestration, profiles, skills). Until a scene is published, its slot shows docs/pdo-ui.png.
+     stats, interactive-orchestrator, profiles, skills). Until a scene is published, its slot shows docs/pdo-ui.png.
      In each <picture>: the reduced-motion <source> takes the poster, the other <source> the GIF
      (type="image/gif"), the <img> the poster. README.md and docs/readme/README.fr.md share the media. -->
 <p align="center">
@@ -122,16 +122,16 @@ Coût, durée et taux d'échec par modèle et par nœud, tirés de vos propres r
 <tr>
 <td width="50%" valign="middle">
 
-### Orchestration récursive
+### Nœuds interactive et orchestrator
 
-Un nœud peut lancer des pipelines enfants depuis sa propre session. Les enfants se rangent sous leur parent dans l'arbre de runs, et l'onglet Orchestration les suit jusqu'au bout.
+Un nœud interactive attend votre réponse avant de continuer : son agent pose la question, vous répondez dans son terminal. Un nœud orchestrator lance des runs enfants de pipelines depuis sa propre session : des pipelines de pipelines. Les enfants se rangent sous leur parent dans l'arbre de runs.
 
-[Docs →](../../docs/features.md#recursive-orchestration)
+[Docs →](../../docs/features.md#interactive-and-orchestrator-nodes)
 
 </td>
 <td width="50%">
-  <!-- scene: orchestration -->
-  <a href="../../docs/features.md#recursive-orchestration"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/orchestration.jpg"><source srcset="../../docs/assets/readme/orchestration.gif" type="image/gif"><img src="../../docs/assets/readme/orchestration.jpg" alt="Un nœud qui lance des runs enfants, rangés sous leur parent dans l'arbre de runs" width="100%" /></picture></a>
+  <!-- scene: interactive-orchestrator -->
+  <a href="../../docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/interactive-orchestrator.jpg"><source srcset="../../docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="../../docs/assets/readme/interactive-orchestrator.jpg" alt="Un nœud pose une question et vous attend, reçoit la réponse tapée dans son terminal, puis lance deux runs enfants rangés sous lui dans l'arbre de runs" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

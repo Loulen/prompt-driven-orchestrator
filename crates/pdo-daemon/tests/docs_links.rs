@@ -223,7 +223,7 @@ fn every_feature_row_of_both_readmes_points_to_its_features_section() {
         "diff-review",
         "triggers",
         "run-stats-by-model",
-        "recursive-orchestration",
+        "interactive-and-orchestrator-nodes",
         "agent-profiles",
         "skill-bank",
     ];

@@ -4,6 +4,8 @@
 > **Amende ADR-0029** (la survie « par pipeline » au renommage repose désormais sur l'absorption
 > automatique) et **ADR-0065** (pas de normalisation automatique des ids de modèle, mais une
 > absorption explicite peut en réunir deux).
+> **Amendé par ADR-0078** : absorptions d'efforts et de couples, portée figée à la pose, et
+> propagation des absorptions de Modèles aux couples des Nodes.
 
 ## Contexte
 

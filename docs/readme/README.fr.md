@@ -49,14 +49,14 @@ Construisez vos workflows d'agents sur un canvas : posez un nœud `implementer`,
 
 ### Routage conditionnel et boucles
 
-Tirez une arête de `reviewer` vers `implementer` et posez `verdict != pass`. Le routage lit des outputs typés, jamais le jugement d'un LLM.
+Tirez une arête de `reviewer` vers `implementer` et posez `verdict = fail` ; `verdict = pass` mène à la sortie. Le routage lit des outputs typés, jamais le jugement d'un LLM.
 
 [Docs →](../../docs/features.md#conditional-routing--loops)
 
 </td>
 <td width="50%">
   <!-- scene: routing -->
-  <a href="../../docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/routing.jpg"><source srcset="../../docs/assets/readme/routing.gif" type="image/gif"><img src="../../docs/assets/readme/routing.jpg" alt="Une arête de boucle tirée de reviewer vers implementer, avec la condition verdict != pass" width="100%" /></picture></a>
+  <a href="../../docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/routing.jpg"><source srcset="../../docs/assets/readme/routing.gif" type="image/gif"><img src="../../docs/assets/readme/routing.jpg" alt="Une arête de boucle tirée de reviewer vers implementer, avec la condition verdict = fail, puis verdict = pass vers la sortie" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

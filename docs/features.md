@@ -49,7 +49,7 @@ artifact leaving its source port, a pipeline variable, or the loop counter `iter
 mechanical: `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`. An `else` edge fires only when no
 sibling edge matched. There is no LLM router: an LLM never decides which node runs next.
 
-Drag an edge back from `reviewer` to `implementer`, set `verdict != pass`, and PDO turns the cycle
+Drag an edge back from `reviewer` to `implementer`, set `verdict = fail`, and PDO turns the cycle
 into a named, **bounded loop** (`↻ 1/8` on the canvas) with a `max_iter`, so a cycle can never run
 forever. A **collection loop** fans a node out over a list field of its input, with laps running in
 parallel.

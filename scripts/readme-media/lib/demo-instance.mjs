@@ -90,6 +90,14 @@ export class DemoInstance {
     // The demo tmux server reads the demo HOME's conf: with focus events on,
     // Claude Code never prints its « tmux focus-events off » hint on camera.
     fs.writeFileSync(path.join(this.state.home, ".tmux.conf"), "set -g focus-events on\n");
+    // The PDO preamble names the worktree by its absolute path, and a live agent
+    // likes to `cd` into it: its terminal then shows the throwaway root, which
+    // the screen guard refuses. Its shell already starts there (#852).
+    fs.mkdirSync(path.join(this.state.home, ".claude"), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(this.state.home, ".claude", "CLAUDE.md"),
+      "Your shell already starts in your working directory. Never `cd` to an absolute path, and never type an absolute path in a command: use paths relative to the current directory.\n",
+    );
     this.installFixtureRepo();
     this.installLibrary();
 

@@ -16,6 +16,18 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.105.0
+**Stats : absorption au renommage, liste des absorptions, interrupteur Uncombined** (#891,
+story #888, ADR-0077).
+
+- Renommer un Pipeline dans la bibliothèque (id changé) crée l'absorption ancien → nouveau,
+  d'origine `rename`. Une chaîne A → B → C donne C absorbant de A et de B ; un renommage
+  d'affichage qui garde l'id ne crée rien.
+- Settings › General › *Stats absorptions* (`saves as you go`) liste toutes les absorptions,
+  leur absorbant, leurs absorbés et leur origine ; la croix retire un absorbé aussitôt.
+- Un interrupteur *Uncombined* sur Sessions, Cost, Performance et Triggers montre les
+  chiffres bruts (`uncombined=true`) ; il revient à son défaut à chaque ouverture de Stats.
+
 ## 1.104.0
 **Stats : absorber des Pipelines** (#890, story #888, ADR-0077).
 

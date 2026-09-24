@@ -47,6 +47,12 @@ export function useStats(
    * screen stays until the new answer lands, so a Combine never blanks a tab.
    */
   absorptionsVersion: number = 0,
+  /**
+   * « Uncombined » (#891, ADR-0077 §2): read every tab without the absorptions.
+   * Unlike the cohorts it is one reading for the four tabs that show Pipelines,
+   * so it travels to all three endpoints and sits in each request key.
+   */
+  uncombined: boolean = false,
 ) {
   const {
     overview: overviewCompletedOnly = false,
@@ -63,16 +69,16 @@ export function useStats(
   const [overviewReloadKey, setOverviewReloadKey] = useState(0);
   const [costReloadKey, setCostReloadKey] = useState(0);
   const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
-  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${costCompletedOnly}\u0000${absorptionsVersion}`;
+  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${costCompletedOnly}\u0000${absorptionsVersion}\u0000${uncombined}`;
   const requestedCostKey = useRef<string | null>(null);
-  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}\u0000${performanceCompletedOnly}\u0000${absorptionsVersion}`;
+  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}\u0000${performanceCompletedOnly}\u0000${absorptionsVersion}\u0000${uncombined}`;
   const requestedPerformanceKey = useRef<string | null>(null);
 
   // Overview: eager on open + on every period change.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetchStatsOverview(from, to, bucket, overviewCompletedOnly)
+    fetchStatsOverview(from, to, bucket, overviewCompletedOnly, uncombined)
       .then((data) => {
         if (!cancelled) {
           setOverview(data);
@@ -90,14 +96,14 @@ export function useStats(
     return () => {
       cancelled = true;
     };
-  }, [open, from, to, bucket, reloadKey, overviewCompletedOnly, absorptionsVersion]);
+  }, [open, from, to, bucket, reloadKey, overviewCompletedOnly, absorptionsVersion, uncombined]);
 
   // Cost: lazy — only once the cost tab is active, then on period change too.
   useEffect(() => {
     if (!open || !costActive) return;
     if (requestedCostKey.current === costRequestKey) return;
     requestedCostKey.current = costRequestKey;
-    fetchStatsCost(from, to, bucket, costCompletedOnly)
+    fetchStatsCost(from, to, bucket, costCompletedOnly, uncombined)
       .then((data) => {
         if (requestedCostKey.current === costRequestKey) {
           setCost(data);
@@ -120,6 +126,7 @@ export function useStats(
     bucket,
     reloadKey,
     costCompletedOnly,
+    uncombined,
     costRequestKey,
   ]);
 
@@ -127,7 +134,7 @@ export function useStats(
     if (!open || !performanceActive) return;
     if (requestedPerformanceKey.current === performanceRequestKey) return;
     requestedPerformanceKey.current = performanceRequestKey;
-    fetchStatsPerformance(from, to, reloadKey > 0, performanceCompletedOnly)
+    fetchStatsPerformance(from, to, reloadKey > 0, performanceCompletedOnly, uncombined)
       .then((data) => {
         if (requestedPerformanceKey.current === performanceRequestKey) {
           setPerformance(data);
@@ -149,6 +156,7 @@ export function useStats(
     to,
     reloadKey,
     performanceCompletedOnly,
+    uncombined,
     performanceRequestKey,
   ]);
 

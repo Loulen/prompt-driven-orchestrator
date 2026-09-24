@@ -64,7 +64,7 @@ describe("useStats (#377)", () => {
   it("fetches overview eagerly on open, but not cost", async () => {
     const { result } = renderHook(() => useStats(true, "F", "T", "day", false, false));
     await waitFor(() => expect(result.current.overview).toEqual(OVERVIEW));
-    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day", false);
+    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day", false, false);
     expect(api.fetchStatsCost).not.toHaveBeenCalled();
     expect(api.fetchStatsPerformance).not.toHaveBeenCalled();
   });
@@ -87,7 +87,7 @@ describe("useStats (#377)", () => {
 
     rerender({ costActive: true });
     await waitFor(() => expect(result.current.cost).toEqual(COST));
-    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day", false);
+    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day", false, false);
   });
 
   it("fetches performance lazily and does not refetch when returning to the tab", async () => {
@@ -104,6 +104,7 @@ describe("useStats (#377)", () => {
     expect(api.fetchStatsPerformance).toHaveBeenCalledWith(
       "F",
       "T",
+      false,
       false,
       false,
     );
@@ -125,6 +126,7 @@ describe("useStats (#377)", () => {
         "T",
         false,
         false,
+        false,
       ),
     );
 
@@ -134,6 +136,7 @@ describe("useStats (#377)", () => {
         "F",
         "T",
         true,
+        false,
         false,
       ),
     );
@@ -167,6 +170,7 @@ describe("useStats (#377)", () => {
       "F",
       "T",
       "week",
+      false,
       false,
     );
   });
@@ -206,9 +210,9 @@ describe("useStats — « Runs terminés seulement », per tab (#819)", () => {
       expect(result.current.performance).toEqual(PERFORMANCE),
     );
     // Performance opens narrowed; Overview and Cost open on every Run.
-    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day", false);
-    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day", false);
-    expect(api.fetchStatsPerformance).toHaveBeenCalledWith("F", "T", false, true);
+    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day", false, false);
+    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day", false, false);
+    expect(api.fetchStatsPerformance).toHaveBeenCalledWith("F", "T", false, true, false);
   });
 
   it("refetches the tab whose cohort flipped, and only that one", async () => {
@@ -234,6 +238,7 @@ describe("useStats — « Runs terminés seulement », per tab (#819)", () => {
       expect(api.fetchStatsPerformance).toHaveBeenLastCalledWith(
         "F",
         "T",
+        false,
         false,
         false,
       ),
@@ -264,9 +269,30 @@ describe("useStats — « Runs terminés seulement », per tab (#819)", () => {
         "T",
         "day",
         true,
+        false,
       ),
     );
     expect(api.fetchStatsCost).toHaveBeenCalledTimes(costCalls);
     expect(api.fetchStatsPerformance).toHaveBeenCalledTimes(performanceCalls);
+  });
+});
+
+describe("useStats — « Uncombined » (#891)", () => {
+  it("sends uncombined to all three endpoints, and refetches each on a flip", async () => {
+    const { rerender } = renderHook(
+      ({ uncombined }) =>
+        useStats(true, "F", "T", "day", true, true, 0, {}, 0, uncombined),
+      { initialProps: { uncombined: false } },
+    );
+    await waitFor(() => expect(api.fetchStatsPerformance).toHaveBeenCalledTimes(1));
+    expect(api.fetchStatsOverview).toHaveBeenLastCalledWith("F", "T", "day", false, false);
+    expect(api.fetchStatsCost).toHaveBeenLastCalledWith("F", "T", "day", false, false);
+
+    rerender({ uncombined: true });
+    await waitFor(() =>
+      expect(api.fetchStatsPerformance).toHaveBeenLastCalledWith("F", "T", false, false, true),
+    );
+    expect(api.fetchStatsOverview).toHaveBeenLastCalledWith("F", "T", "day", false, true);
+    expect(api.fetchStatsCost).toHaveBeenLastCalledWith("F", "T", "day", false, true);
   });
 });

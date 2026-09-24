@@ -1755,6 +1755,8 @@ export interface StatsBucketCount {
 export interface StatsPipelineFireCount {
   /** Trigger's `pipeline_id`, or `"(deleted trigger)"` for an orphan fire. */
   pipeline_id: string;
+  /** The name the chart shows — never the key (#891). Absent from older daemons. */
+  name?: string;
   count: number;
 }
 

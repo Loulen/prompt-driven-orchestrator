@@ -135,13 +135,14 @@ Prerequisites:
 
 Cost of a regeneration: the Stats scene uses a mocked history, and the Visual pipelines and Routing
 scenes are canvas gestures; each costs nothing but about a minute. Each live scene (hero, diff
-review, orchestration…) runs real `claude` sessions on `claude-opus-5-5`, stopped as soon as the
+review, interactive & orchestrator nodes…) runs real `claude` sessions on `claude-opus-5-5`, stopped as soon as the
 scene is recorded. The hero runs the complete demo pipeline twice, one run per variant, each to its end
 (a few minutes each, more if the reviewer sends a lap back); a run that does not end on a `pass`
 verdict fails the scene. Typed outputs and Diff review each play one run to the end (off camera, a few minutes),
 shared by their two variants; Diff review then wakes the run's manager once per variant for its
-answer. Recursive orchestration plays one orchestrating run per variant, and each starts two child
-runs of the whole pipeline (a minute or two each). The reviewer drives Playwright's Chromium from your cache (`~/.cache/ms-playwright`). Each regeneration also adds its GIFs to
+answer. Interactive & orchestrator nodes plays one run per variant: its `implementer` asks a question,
+gets the answer typed in its terminal, then starts two child runs of the whole pipeline (a minute or
+two each). The reviewer drives Playwright's Chromium from your cache (`~/.cache/ms-playwright`). Each regeneration also adds its GIFs to
 the git history, since they are committed without a weight budget.
 
 When to regenerate: only when a scene visibly changes (the UI it films, the copy of its README row),

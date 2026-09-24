@@ -118,7 +118,7 @@ The targets follow the product's edge model (#840): if that model changes, redra
 | --- | --- |
 | `installTargetPipeline(instance, id, { yaml })` | install a target in the demo library (prompts included) and wait until the daemon serves it; `yaml` overrides its text, e.g. with a node flag on |
 | `restoreDemoPipeline(instance)` | put the complete `implement-review` back (a variant that saved the canvas changed it) |
-| `withNodeFlags(yaml, node, { orchestrator: true, interactive: true })` | the target with flags on for one node, every other byte kept |
+| `withNodeFlags(yaml, node, { orchestrator: true, interactive: true })` | the target with flags (any `key: value` line) on for one node, every other byte kept |
 | `targetPipeline(id)`, `readTarget(id)`, `targetYaml(id)` | a target parsed, its YAML and prompts, its YAML under the demo name |
 | `runSnapshot(pipeline)` | the run snapshot a daemon freezes at run start (`node_defs`, and the edges as drawn) |
 
@@ -200,8 +200,8 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 | `routing` | — | the loop edge `reviewer → implementer`, `verdict != pass`, the exit as `else`, saved | `scenes/_canvas.mjs` |
 | `stats` | — | the Stats page over the mocked history | |
 | `outputs` | `claude` | a finished run's `reviewer`: its two ports in Edit, then in Run an annotated screenshot (lightbox) and the `review` markdown with its Mermaid diagram rendered | `scenes/_live.mjs` |
-| `review` | `claude` | a finished run's Review page: a comment on a line, sent to the manager, cut ×8, the manager's own answer in the thread | `scenes/_live.mjs` |
-| `orchestration` | `claude` | `implementer` with Orchestrator on relaunches `implement-review` once per part: the children nest under their parent in the run tree, the counters follow them to the end | `scenes/_live.mjs`, `scenes/_canvas.mjs` |
+| `review` | `claude` | a finished run's Review page, zoomed on the commented hunk: a comment on a line, sent to the manager, cut ×8, the manager's own answer in the thread, on one line (the demo HOME's `~/.claude/CLAUDE.md` asks for it; a wrapped answer fails the variant) | `scenes/_live.mjs` |
+| `interactive-orchestrator` | `claude` | `implementer`, interactive and orchestrator, asks a question (the « awaiting you » banner), the cursor types the answer in its terminal, then it starts two child runs of `implement-review`, nested under it in the run tree, and waits for them with one bare `pdo run wait --all` | `scenes/_live.mjs`, `scenes/_canvas.mjs` |
 | `triggers`, `profiles`, `skills` | — | settings, no agent (see below): the trigger on `prod-check`, profiles and skills on `implement-review` | `scenes/_no-agent.mjs` |
 
 `scenes/_live.mjs` is for the scenes that need real agents: `startDemoRun`
@@ -236,16 +236,22 @@ library for the next one), `handle`,
   demo task always adds (`app.js`'s input listener, `index.html`'s search input; the file's first
   added line otherwise), sends it, and waits for the reply the manager posts with
   `pdo review reply` **in that comment's thread**: nothing is injected. The wait is a short ×8
-  stretch, then a cut. The manager is stopped after each variant. Both variants film the unified
-  view with the file list closed, at 1040 px (barely scaled to the GIF's 960, nothing cropped): no code line,
-  toolbar button or thread footer is cut or wrapped.
-- **orchestration**: `setup` installs the target `implement-review` with Orchestrator on for
-  `implementer` (`withNodeFlags`: every other byte as drawn). The run's task spells out the two
-  `pdo run create implement-review …` commands, each child's task says not to orchestrate in turn.
-  The children are real runs of the whole pipeline (a minute or two each); the variant ends when
-  both are finished, then stops and archives the parent and its children. Before variant a's
-  poster, `implementer` is re-selected off camera once its session ended, so its terminal folds to a
-  bar instead of an empty « [exited] » block.
+  stretch, then a cut. The manager is stopped after each variant. Both variants are **zoomed on
+  the commented hunk and its thread**: the unified view with the file list closed, in a 760 px
+  window cropped under the Review toolbar to 720 px (the file card's left edge to the send bar's
+  right end), scaled up to the GIF's 960. The toolbar and the file list are out of frame; the
+  comment and the manager's answer fill it. The comments fit on one line of the thread.
+- **interactive-orchestrator** (row « Interactive & orchestrator nodes »): each variant installs the
+  target `implement-review` with `implementer` interactive and orchestrator (`withNodeFlags`: both
+  flags and the two skills the editor's toggles add, every other byte as drawn), starts its run, and
+  puts the plain target back in the library as soon as Claude Code is up in `implementer` (the run
+  froze its own snapshot at start). So the children are plain runs of the hero's pipeline: they
+  neither ask nor orchestrate. The run's task spells out the question (`pdo wait-user --message`)
+  and the two `pdo run create implement-review …` commands. The agent's reading is ×8 then cut until
+  the node is awaiting and its turn has ended; the answer is typed in the terminal, and its Enter
+  lifts the wait (the banner goes); the children's creation is ×8. Variant a ends on the two
+  children running, variant b cuts until the first one is done. Both stop and archive the parent and
+  its children (and any manager) once filmed.
 
 ## Settings scenes (no live agent)
 

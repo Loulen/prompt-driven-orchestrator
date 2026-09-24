@@ -946,18 +946,9 @@ fn dissolve_switches(doc: &mut serde_yaml::Value) -> Result<(), String> {
         None => Vec::new(),
     };
 
-    let endpoint = |edge: &serde_yaml::Value, key: &str| -> Option<(String, String)> {
-        let ep = edge.get(key)?.as_mapping()?;
-        let node = ep
-            .get(serde_yaml::Value::String("node".into()))?
-            .as_str()?
-            .to_string();
-        let port = ep
-            .get(serde_yaml::Value::String("port".into()))?
-            .as_str()?
-            .to_string();
-        Some((node, port))
-    };
+    // The shared reader, which also understands a multi-port `ports:` source
+    // (#843) — an inline copy here would quietly stop seeing those edges.
+    let endpoint = edge_endpoint;
 
     // Map each switch id to its inbound source `(node, port)` (the edge feeding
     // its `in` port). A switch with no inbound edge is dropped with its outbound
@@ -1061,16 +1052,27 @@ fn dissolve_switches(doc: &mut serde_yaml::Value) -> Result<(), String> {
 
 /// Extracts an edge endpoint's `(node, port)` for the given side key
 /// (`"source"` / `"target"`). Returns `None` if the endpoint is malformed.
+///
+/// A source may carry several ports (`ports: [a, b]`, ADR-0073 / #843); the
+/// migrations here — ForEach, Loop and Switch dissolution — rewire by *node* and
+/// only ever need one port name, so they read the FIRST carried port. Reading
+/// none would make a migration silently skip a multi-port edge, which is how a
+/// legacy pipeline would come out of the migrator half-rewired.
 fn edge_endpoint(edge: &serde_yaml::Value, key: &str) -> Option<(String, String)> {
     let ep = edge.get(key)?.as_mapping()?;
     let node = ep
         .get(serde_yaml::Value::String("node".into()))?
         .as_str()?
         .to_string();
-    let port = ep
-        .get(serde_yaml::Value::String("port".into()))?
-        .as_str()?
-        .to_string();
+    let port = match ep.get(serde_yaml::Value::String("port".into())) {
+        Some(v) => v.as_str()?.to_string(),
+        None => ep
+            .get(serde_yaml::Value::String("ports".into()))?
+            .as_sequence()?
+            .first()?
+            .as_str()?
+            .to_string(),
+    };
     Some((node, port))
 }
 
@@ -1223,8 +1225,9 @@ fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
         //
         // The routing clauses ride along: the guard that decided whether the loop
         // was entered at all must now decide whether its entry node is spawned.
-        // Layout (`mode`/`waypoints`/`target_side`) is deliberately NOT copied —
-        // it described a route to a node that no longer exists.
+        // Layout (`mode`/`waypoints`/`target_side`, and the #845 label positions
+        // and draw order) is deliberately NOT copied — it described a route, and
+        // labels along it, for a node that no longer exists.
         if let Some(sources) = loop_in_sources.get(loop_id) {
             for (unode, uport, in_edge) in sources {
                 let mut m = serde_yaml::Mapping::new();
@@ -2337,7 +2340,7 @@ edges:
             .edges
             .iter()
             .find(|e| {
-                e.source.node == "aBcD1234" && e.source.port == "review" && e.target.node == "end"
+                e.source.node == "aBcD1234" && e.source.port() == "review" && e.target.node == "end"
             })
             .expect("guarded pass edge from reviewer to end");
         assert!(pass_edge.when.is_some(), "pass edge keeps its when: clause");
@@ -2349,7 +2352,7 @@ edges:
             .iter()
             .find(|e| {
                 e.source.node == "aBcD1234"
-                    && e.source.port == "review"
+                    && e.source.port() == "review"
                     && e.target.node == "eFgH5678"
             })
             .expect("else edge from reviewer to implementer");
@@ -2417,7 +2420,7 @@ edges:
         );
     }
 
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, Port, PortSide, PortType};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, Port, PortSide, PortType};
 
     fn make_isolated_node(id: &str) -> NodeDef {
         NodeDef {
@@ -2544,10 +2547,7 @@ edges:
 
     fn make_edge(src: &str, src_port: &str, tgt: &str, tgt_port: &str) -> EdgeDef {
         EdgeDef {
-            source: EdgeEndpoint {
-                node: src.into(),
-                port: src_port.into(),
-            },
+            source: EdgeSource::single(src, src_port),
             target: EdgeEndpoint {
                 node: tgt.into(),
                 port: tgt_port.into(),
@@ -2578,6 +2578,7 @@ edges:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let diags = lint_missing_merge(&pipeline);
         assert_eq!(diags.len(), 1);
@@ -2606,6 +2607,7 @@ edges:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(
@@ -2626,6 +2628,7 @@ edges:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(diags.is_empty());
@@ -2649,6 +2652,7 @@ edges:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let diags = lint_missing_merge(&pipeline);
         assert!(diags.is_empty());

@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { Maximize2, Minimize2, ExternalLink, Copy } from "lucide-react";
+import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { attachSession, fetchPane } from "../api";
 import {
@@ -13,7 +13,21 @@ import {
   swallowsMotionReport,
   writeClipboardText,
 } from "../lib/terminalClipboard";
-import { resizeAvoidingAltBufferCorruption } from "../lib/altBufferResize";
+import { resizeAvoidingAltBufferCorruption, type Dimensions } from "../lib/altBufferResize";
+import {
+  isTakenOver,
+  parseRoleFrame,
+  READ_ONLY_HINT,
+  SOLO,
+  TAKE_CONTROL_FRAME,
+  TAKE_CONTROL_LABEL,
+  TAKEN_OVER_NOTICE,
+  TAKEN_OVER_NOTICE_MS,
+  watchedLabel,
+  type TerminalRole,
+} from "../lib/terminalRole";
+import { posteId } from "../lib/poste";
+import { BASE_FONT_SIZE, spectatorFontSize } from "../lib/spectatorFit";
 import { terminalTheme } from "../lib/terminalTheme";
 import { useTheme } from "../hooks/useTheme";
 
@@ -36,6 +50,10 @@ interface Props {
    *  pane is a frozen snapshot / disconnected (`false`), so the awaiting banner
    *  can say « reply below and press Enter » only when Enter can reach anything. */
   onLiveSocketChange?: (live: boolean) => void;
+  /** #870: tells the parent whether this browser is a spectator of the live
+   *  terminal, so the awaiting banner says « take control to reply » instead of
+   *  « reply below ». */
+  onSpectatingChange?: (spectating: boolean) => void;
 }
 
 // A node iteration in one of these states has had its tmux session reaped on the
@@ -46,6 +64,19 @@ interface Props {
 // string. The set mirrors the daemon's own `iter_is_terminal` in `node_pane`:
 // `interrupted` is absent from both, its session may still be alive.
 const REAPED_STATUSES = new Set(["completed", "failed", "stopped", "stale"]);
+
+// #876: `body` sets `letter-spacing: -0.005em` and `font-feature-settings`, and
+// both inherit into xterm. The DOM renderer measures "W" with a DOM span (which
+// inherits the spacing) while the cell width comes from canvas `measureText`
+// (which ignores it), then sets `.xterm-rows { letter-spacing: cell − span }`.
+// The inherited -0.065px turns into +0.058px per glyph, so a full row overflows
+// its `overflow: hidden` div and the last 1–2 columns are clipped at the right
+// edge. Resetting both on the container, which exists before `term.open()`,
+// makes the two measures agree. Neither the grid size nor FitAddon is at fault.
+const TERMINAL_TYPOGRAPHY_RESET = {
+  letterSpacing: "normal",
+  fontFeatureSettings: "normal",
+} as const;
 
 // xterm writes raw bytes: a snapshot captured with `tmux capture-pane -pe` is
 // newline-separated, and a bare \n moves down without returning, so every line
@@ -61,9 +92,8 @@ function toTerminalNewlines(content: string): string {
 // daemon's resize decoder rejects zero values, and historically would treat
 // the rejected JSON as user input — injecting stray characters into whatever
 // has focus in tmux. Guarding here closes that hole at the source.
-function sendResize(ws: WebSocket, fitAddon: FitAddon): void {
+function sendResize(ws: WebSocket, dims: Dimensions | undefined): void {
   if (ws.readyState !== WebSocket.OPEN) return;
-  const dims = fitAddon.proposeDimensions();
   if (!dims) return;
   if (!Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
   if (dims.cols <= 0 || dims.rows <= 0) return;
@@ -71,6 +101,7 @@ function sendResize(ws: WebSocket, fitAddon: FitAddon): void {
     JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
   );
 }
+
 
 // What this terminal is showing. `probing` is the beat before the daemon has said
 // whether the reaped iteration left a snapshot behind; `live` is the PTY attach.
@@ -83,6 +114,7 @@ export default function TmuxTerminal({
   status,
   paneSource,
   onLiveSocketChange,
+  onSpectatingChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -93,6 +125,14 @@ export default function TmuxTerminal({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  // #867: the role the daemon gave this socket. The ref is what the xterm
+  // callbacks read (they outlive renders); the state drives the toolbar.
+  const [termRole, setTermRole] = useState<TerminalRole>(SOLO);
+  const roleRef = useRef<TerminalRole>(SOLO);
+  // #870: « Another browser took control », up for a few seconds after this
+  // browser lost the hand.
+  const [takenOver, setTakenOver] = useState(false);
+  const takenOverTimer = useRef<number | null>(null);
   // #772: drives the toolbar Copy button; xterm's selection lives outside React.
   const [hasSelection, setHasSelection] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<"copied" | "failed" | null>(null);
@@ -135,6 +175,13 @@ export default function TmuxTerminal({
     setCopyFeedback(ok ? "copied" : "failed");
     if (ok) term.clearSelection();
     window.setTimeout(() => setCopyFeedback(null), 1500);
+  }, []);
+
+  // #870: a spectator takes control. No confirmation, and no optimistic change:
+  // the daemon answers with the new role, which is what flips the toolbar.
+  const handleTakeControl = useCallback(() => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(TAKE_CONTROL_FRAME);
   }, []);
 
   const handleDetach = useCallback(async () => {
@@ -197,7 +244,7 @@ export default function TmuxTerminal({
       cursorBlink: !isFrozen,
       // Nothing to type into: the socket is not opened at all below.
       disableStdin: isFrozen,
-      fontSize: 11,
+      fontSize: BASE_FONT_SIZE,
       fontFamily: "'Geist Mono Variable', monospace",
       theme: terminalTheme(resolved),
       allowTransparency: false,
@@ -286,7 +333,7 @@ export default function TmuxTerminal({
     // surface of every finished node; the snapshot is written straight into the same
     // xterm instead, so scrollback, colours and selection all keep working.
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/sessions/${encodeURIComponent(session)}/pty`;
+    const wsUrl = `${protocol}//${window.location.host}/sessions/${encodeURIComponent(session)}/pty?poste=${encodeURIComponent(posteId())}`;
     const ws = isFrozen ? null : new WebSocket(wsUrl);
     if (ws) {
       ws.binaryType = "arraybuffer";
@@ -297,36 +344,107 @@ export default function TmuxTerminal({
       term.write(toTerminalNewlines(frozen?.content ?? ""));
     }
 
+    // #867: size the grid for the current role. Pilot and solo fit their own
+    // area at the normal font, as always. A spectator takes the pilot's exact
+    // grid — and tells its own PTY so, which is what removes tmux's cropping and
+    // dots — with the font shrunk to fit, down to the floor; below it the area
+    // scrolls.
+    //
+    // #771: a live pane in the alternate screen may be in the state xterm's
+    // resize corrupts (see `altBufferResize.ts`); the helper resets it first and
+    // runs the resize once xterm has processed the reset. A frozen pane has no
+    // alternate screen to reset, and nothing to redraw it — plain fit.
+    const layout = () => {
+      const current = roleRef.current;
+      if (current.role === "spectator") {
+        const pilot = current.pilot;
+        const size = spectatorFontSize(pilot, (fontSize) => {
+          term.options.fontSize = fontSize;
+          return fitAddon.proposeDimensions();
+        });
+        term.options.fontSize = size;
+        resizeAvoidingAltBufferCorruption(term, pilot, () => {
+          term.resize(pilot.cols, pilot.rows);
+          if (ws) sendResize(ws, pilot);
+        });
+        return;
+      }
+      if (term.options && term.options.fontSize !== BASE_FONT_SIZE) {
+        term.options.fontSize = BASE_FONT_SIZE;
+      }
+      const apply = () => {
+        fitAddon.fit();
+        if (ws) sendResize(ws, fitAddon.proposeDimensions());
+      };
+      if (!ws) {
+        apply();
+        return;
+      }
+      resizeAvoidingAltBufferCorruption(term, fitAddon.proposeDimensions(), apply);
+    };
+
+    const clearTakenOver = () => {
+      if (takenOverTimer.current !== null) {
+        window.clearTimeout(takenOverTimer.current);
+        takenOverTimer.current = null;
+      }
+      setTakenOver(false);
+    };
+
+    const applyRole = (next: TerminalRole) => {
+      if (isTakenOver(roleRef.current, next)) {
+        clearTakenOver();
+        setTakenOver(true);
+        takenOverTimer.current = window.setTimeout(() => {
+          takenOverTimer.current = null;
+          setTakenOver(false);
+        }, TAKEN_OVER_NOTICE_MS);
+      } else if (next.role !== "spectator") {
+        clearTakenOver();
+      }
+      roleRef.current = next;
+      setTermRole(next);
+      layout();
+    };
+
     ws?.addEventListener("open", () => {
       setConnected(true);
-      sendResize(ws, fitAddon);
+      sendResize(ws, fitAddon.proposeDimensions());
     });
 
     ws?.addEventListener("message", (event) => {
       if (event.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(event.data));
       } else if (typeof event.data === "string") {
-        term.write(event.data);
+        // Text frames carry the daemon's control messages (the role); anything
+        // else is written as before.
+        const role = parseRoleFrame(event.data);
+        if (role) applyRole(role);
+        else term.write(event.data);
       }
     });
 
-    ws?.addEventListener("close", () => {
+    // A closed socket has no role left: back to the plain fit.
+    const dropRole = () => {
       setConnected(false);
-    });
+      if (roleRef.current.role !== "solo") applyRole(SOLO);
+    };
+    ws?.addEventListener("close", dropRole);
+    ws?.addEventListener("error", dropRole);
 
-    ws?.addEventListener("error", () => {
-      setConnected(false);
-    });
+    // ADR-0075 §3: a spectator is read-only. The daemon drops its input anyway;
+    // not sending it keeps the pane's own echo from lying about what happened.
+    const canType = () => roleRef.current.role !== "spectator";
 
     const inputDisposable = term.onData((data) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN && canType()) {
         const encoder = new TextEncoder();
         ws.send(encoder.encode(data));
       }
     });
 
     const binaryDisposable = term.onBinary((data) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN && canType()) {
         const buffer = new Uint8Array(data.length);
         for (let i = 0; i < data.length; i++) {
           buffer[i] = data.charCodeAt(i);
@@ -362,21 +480,7 @@ export default function TmuxTerminal({
       capture: true,
     });
 
-    // #771: a live pane in the alternate screen may be in the state xterm's
-    // resize corrupts (see `altBufferResize.ts`); the helper resets it first and
-    // runs the fit once xterm has processed the reset. A frozen pane has no
-    // alternate screen to reset, and nothing to redraw it — plain fit.
-    const resizeObserver = new ResizeObserver(() => {
-      const apply = () => {
-        fitAddon.fit();
-        if (ws) sendResize(ws, fitAddon);
-      };
-      if (!ws) {
-        apply();
-        return;
-      }
-      resizeAvoidingAltBufferCorruption(term, fitAddon.proposeDimensions(), apply);
-    });
+    const resizeObserver = new ResizeObserver(layout);
     resizeObserver.observe(container);
 
     return () => {
@@ -389,6 +493,9 @@ export default function TmuxTerminal({
       inputDisposable.dispose();
       binaryDisposable.dispose();
       ws?.close();
+      roleRef.current = SOLO;
+      setTermRole(SOLO);
+      clearTakenOver();
       term.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -431,6 +538,15 @@ export default function TmuxTerminal({
     statusLabel = "connected";
   }
 
+  const spectating = mode === "live" && termRole.role === "spectator";
+  const watchers =
+    mode === "live" && termRole.role === "pilot" ? termRole.spectators : 0;
+
+  // #870: report the spectator state to the parent (banner hint).
+  useEffect(() => {
+    onSpectatingChange?.(spectating);
+  }, [spectating, onSpectatingChange]);
+
   return (
     <div
       className="flex flex-1 flex-col overflow-hidden"
@@ -457,6 +573,46 @@ export default function TmuxTerminal({
           {statusLabel}
         </span>
         <span className="flex-1" />
+        {/* #870: brief, non-blocking — the former pilot learns why its keys
+            stopped reaching the pane. The hand stays next to it. */}
+        {spectating && takenOver && (
+          <span
+            className="font-mono text-st-await"
+            style={{ fontSize: "10px" }}
+            data-testid="term-taken-over"
+            role="status"
+          >
+            {TAKEN_OVER_NOTICE}
+          </span>
+        )}
+        {/* #870: a spectator takes control in one click. */}
+        {spectating && (
+          <Tooltip content={TAKE_CONTROL_LABEL}>
+            <button
+              onClick={handleTakeControl}
+              aria-label={TAKE_CONTROL_LABEL}
+              className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+              data-testid="term-take-control"
+            >
+              <Hand size={12} />
+            </button>
+          </Tooltip>
+        )}
+        {/* #867: the pilot knows it is watched. Nothing when solo. */}
+        {watchers > 0 && (
+          <Tooltip content={watchedLabel(watchers)}>
+            <span
+              className="flex h-5 items-center gap-0.5 px-1 font-mono text-fg-4"
+              style={{ fontSize: "10px" }}
+              data-testid="term-watchers"
+              aria-label={watchedLabel(watchers)}
+              role="status"
+            >
+              <Eye size={12} />
+              {watchers}
+            </span>
+          </Tooltip>
+        )}
         {/* #772: copy the browser-side selection; the tooltip doubles as the
             discoverable hint for the keyboard shortcuts. */}
         <Tooltip
@@ -517,12 +673,19 @@ export default function TmuxTerminal({
         )}
       </div>
 
-      {/* Terminal container */}
-      <div
-        ref={containerRef}
-        className="min-h-0 flex-1 bg-bg-0"
-        data-testid="xterm-container"
-      />
+      {/* Terminal container. #867: the read-only hint is always mounted and
+          only enabled for a spectator — unwrapping the container instead would
+          remount it and lose the xterm inside. A spectator's grid may be larger
+          than the area at the font floor: then the area scrolls. */}
+      <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
+        <div
+          ref={containerRef}
+          className={`min-h-0 flex-1 bg-bg-0${spectating ? " overflow-auto" : ""}`}
+          style={TERMINAL_TYPOGRAPHY_RESET}
+          data-testid="xterm-container"
+          data-role={mode === "live" ? termRole.role : undefined}
+        />
+      </Tooltip>
     </div>
   );
 }

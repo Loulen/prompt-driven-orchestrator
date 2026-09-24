@@ -152,7 +152,7 @@ pub(crate) fn seed_pending_loops(
             max_iter: resolve_max_iter(loop_node, resolved_vars),
         });
         for edge in &pipeline.edges {
-            if edge.source.node == loop_node.id && edge.source.port == "body" {
+            if edge.source.node == loop_node.id && edge.source.carries("body") {
                 actions.push(SchedulerAction::Spawn {
                     node_id: edge.target.node.clone(),
                     iter: 1,
@@ -297,7 +297,7 @@ pub(crate) fn evaluate_outgoing_edges_full(
         }
 
         if let Some(ref port) = matched_port {
-            if edge.source.port != *port {
+            if !edge.source.carries(port) {
                 continue;
             }
         }
@@ -844,7 +844,7 @@ fn handle_loop_input(
             });
 
             for edge in &pipeline.edges {
-                if edge.source.node == loop_node_id && edge.source.port == "body" {
+                if edge.source.node == loop_node_id && edge.source.carries("body") {
                     actions.push(SchedulerAction::Spawn {
                         node_id: edge.target.node.clone(),
                         iter,
@@ -928,7 +928,7 @@ pub(crate) fn evaluate_loop_body_completion(
         });
 
         for edge in &pipeline.edges {
-            if edge.source.node == loop_node_id && edge.source.port == "body" {
+            if edge.source.node == loop_node_id && edge.source.carries("body") {
                 actions.push(SchedulerAction::Spawn {
                     node_id: edge.target.node.clone(),
                     iter: next_iter,
@@ -942,7 +942,7 @@ pub(crate) fn evaluate_loop_body_completion(
 
 fn fire_done_port(pipeline: &PipelineDef, loop_node_id: &str, actions: &mut Vec<SchedulerAction>) {
     for edge in &pipeline.edges {
-        if edge.source.node == loop_node_id && edge.source.port == "done" {
+        if edge.source.node == loop_node_id && edge.source.carries("done") {
             let target_id = &edge.target.node;
             let end_node_id = pipeline
                 .nodes
@@ -1230,9 +1230,8 @@ fn describe_candidate_edges(
             format!(" (read {})", reads.join(", "))
         };
         lines.push(format!(
-            "  - {}.{} -> {}  {}  => {}{}",
-            edge.source.node,
-            edge.source.port,
+            "  - {} -> {}  {}  => {}{}",
+            edge.source.label(),
             edge.target.node,
             guard,
             if fired { "FIRED" } else { "not fired" },
@@ -1300,9 +1299,8 @@ fn describe_region_exit_edges(
             format!(" (read {})", reads.join(", "))
         };
         lines.push(format!(
-            "  - {}.{} -> {}  {}  => {}{}",
-            edge.source.node,
-            edge.source.port,
+            "  - {} -> {}  {}  => {}{}",
+            edge.source.label(),
             edge.target.node,
             guard,
             if fired { "FIRED" } else { "not fired" },
@@ -1554,7 +1552,7 @@ mod tests {
     use super::*;
     use crate::event_log::{NodeState, NodeStatus};
     use crate::graph_resolver::ready_nodes;
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
@@ -1638,10 +1636,7 @@ mod tests {
 
     fn make_edge(src_node: &str, src_port: &str, tgt_node: &str, tgt_port: &str) -> EdgeDef {
         EdgeDef {
-            source: EdgeEndpoint {
-                node: src_node.into(),
-                port: src_port.into(),
-            },
+            source: EdgeSource::single(src_node, src_port),
             target: EdgeEndpoint {
                 node: tgt_node.into(),
                 port: tgt_port.into(),
@@ -1663,10 +1658,7 @@ mod tests {
         is_else: bool,
     ) -> EdgeDef {
         EdgeDef {
-            source: EdgeEndpoint {
-                node: src_node.into(),
-                port: src_port.into(),
-            },
+            source: EdgeSource::single(src_node, src_port),
             target: EdgeEndpoint {
                 node: tgt_node.into(),
                 port: tgt_port.into(),
@@ -1681,10 +1673,7 @@ mod tests {
 
     fn make_end_edge(src_node: &str, src_port: &str, reason: &str) -> EdgeDef {
         EdgeDef {
-            source: EdgeEndpoint {
-                node: src_node.into(),
-                port: src_port.into(),
-            },
+            source: EdgeSource::single(src_node, src_port),
             target: EdgeEndpoint {
                 node: "end".into(),
                 port: "result".into(),
@@ -1793,6 +1782,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let state = empty_run_state();
@@ -1818,6 +1808,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -1842,6 +1833,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -1870,6 +1862,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -1899,6 +1892,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -1937,6 +1931,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -1961,6 +1956,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -1985,6 +1981,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -2018,6 +2015,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -2045,10 +2043,7 @@ mod tests {
                 make_end_node(),
             ],
             edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "implementer".into(),
-                    port: "summary".into(),
-                },
+                source: EdgeSource::single("implementer", "summary"),
                 target: EdgeEndpoint {
                     node: "end".into(),
                     port: "result".into(),
@@ -2062,6 +2057,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -2094,6 +2090,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         // Fast branch `a` completes while `b` is still running.
@@ -2158,6 +2155,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         // classifier + hotfix completed; `dead` never spawned (its guard failed).
@@ -2212,6 +2210,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -2250,6 +2249,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -2287,6 +2287,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -2341,6 +2342,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -2405,6 +2407,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -2489,6 +2492,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -2597,6 +2601,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -2668,6 +2673,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -2751,6 +2757,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -2840,6 +2847,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -2937,6 +2945,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3036,6 +3045,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3084,6 +3094,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3130,6 +3141,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3186,6 +3198,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3260,6 +3273,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3320,6 +3334,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3374,6 +3389,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3440,6 +3456,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3499,6 +3516,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3559,6 +3577,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3604,6 +3623,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3739,6 +3759,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let state = empty_run_state();
@@ -3764,6 +3785,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3803,6 +3825,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3837,6 +3860,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3894,6 +3918,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3944,6 +3969,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -3998,6 +4024,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -4069,6 +4096,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -4119,6 +4147,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -4166,6 +4195,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -4254,6 +4284,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let state = empty_run_state();
 
@@ -4290,6 +4321,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let state = empty_run_state();
 
@@ -4321,6 +4353,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let mut state = empty_run_state();
         state.loop_states.insert(
@@ -4350,6 +4383,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let state = empty_run_state();
 
@@ -4376,6 +4410,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let mut state = empty_run_state();
         state
@@ -4407,6 +4442,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let state = empty_run_state();
 
@@ -4452,6 +4488,7 @@ mod tests {
             loops: vec![collection_region("fan", &["worker"], "items")],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -5064,6 +5101,7 @@ loops:
             }],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -5429,6 +5467,7 @@ loops:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -5611,6 +5650,7 @@ loops:
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut state = empty_run_state();
@@ -5700,6 +5740,7 @@ loops:
             }],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -5943,6 +5984,7 @@ loops:
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let mut rs = empty_run_state();
         rs.nodes.insert("rev".into(), completed_node("rev"));
@@ -5991,6 +6033,7 @@ loops:
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let mut rs = empty_run_state();
         rs.nodes.insert("rev".into(), completed_node("rev"));
@@ -6033,6 +6076,7 @@ loops:
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -6088,6 +6132,7 @@ loops:
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let mut rs = empty_run_state();
         rs.nodes.insert("rev".into(), completed_node("rev"));
@@ -6163,6 +6208,7 @@ loops:
             loops: vec![region("review_loop", &["implementer", "tester"], max_iter)],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 

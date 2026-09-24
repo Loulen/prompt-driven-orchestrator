@@ -433,7 +433,7 @@ fn list_image_files(artifacts_dir: &Path, port_dir: &Path) -> Vec<FileInfo> {
 mod tests {
     use super::*;
     use crate::event_log::{IterationInfo, NodeState, NodeStatus};
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::fs;
 
@@ -567,10 +567,7 @@ mod tests {
                 },
             ],
             edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "planner".into(),
-                    port: "plan".into(),
-                },
+                source: EdgeSource::single("planner", "plan"),
                 target: EdgeEndpoint {
                     node: "implementer".into(),
                     port: "plan".into(),
@@ -584,6 +581,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -763,10 +761,7 @@ mod tests {
                 },
             ],
             edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "reviewer".into(),
-                    port: "review".into(),
-                },
+                source: EdgeSource::single("reviewer", "review"),
                 target: EdgeEndpoint {
                     node: "implementer".into(),
                     port: "reviews".into(),
@@ -781,6 +776,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -1013,10 +1009,7 @@ mod tests {
             ],
             edges: vec![
                 EdgeDef {
-                    source: EdgeEndpoint {
-                        node: "a".into(),
-                        port: "out".into(),
-                    },
+                    source: EdgeSource::single("a", "out"),
                     target: EdgeEndpoint {
                         node: "merger".into(),
                         port: "docs".into(),
@@ -1028,10 +1021,7 @@ mod tests {
                     ..Default::default()
                 },
                 EdgeDef {
-                    source: EdgeEndpoint {
-                        node: "b".into(),
-                        port: "out".into(),
-                    },
+                    source: EdgeSource::single("b", "out"),
                     target: EdgeEndpoint {
                         node: "merger".into(),
                         port: "docs".into(),
@@ -1046,6 +1036,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         for dir_name in ["a", "b"] {
@@ -1127,10 +1118,7 @@ mod tests {
                 },
             ],
             edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "planner".into(),
-                    port: "plan".into(),
-                },
+                source: EdgeSource::single("planner", "plan"),
                 target: EdgeEndpoint {
                     node: "implementer".into(),
                     port: "plan".into(),
@@ -1144,6 +1132,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
@@ -1201,10 +1190,7 @@ mod tests {
             orchestrator: false,
         };
         let mk_edge = |src: &str| EdgeDef {
-            source: EdgeEndpoint {
-                node: src.into(),
-                port: "plan".into(),
-            },
+            source: EdgeSource::single(src, "plan"),
             target: EdgeEndpoint {
                 node: "sink".into(),
                 port: "plan".into(),
@@ -1229,6 +1215,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
@@ -1288,10 +1275,7 @@ mod tests {
             orchestrator: false,
         };
         let mk_edge = |src: &str, port: &str| EdgeDef {
-            source: EdgeEndpoint {
-                node: src.into(),
-                port: port.into(),
-            },
+            source: EdgeSource::single(src, port),
             target: EdgeEndpoint {
                 node: "sink".into(),
                 port: port.into(),
@@ -1316,6 +1300,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
@@ -1379,6 +1364,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 

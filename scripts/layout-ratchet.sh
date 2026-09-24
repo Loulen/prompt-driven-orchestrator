@@ -52,9 +52,27 @@ cd "$(git rev-parse --show-toplevel)"
 #   owns it (worktree/branch modules operate on an existing repo, never create one);
 #   folding it into lib.rs would only hide 400 lines of git plumbing there. The
 #   integration PRs landed past the 90 baseline and left main red.
+# frontend/src/components: 200 (#840 story, integration/840-canvas-edges). Re-admits the
+#   three per-ticket component tests #843/#845 landed past 194 (EdgeDetailPanel.outputs843,
+#   EdgeDetailPanel.display845, OrthogonalEdge.labels845) and admits #844's net +3:
+#   NodeRimHandles.tsx replaces OutputPortDot.tsx (the rim IS the connection source now,
+#   ADR-0072), WiringGridOverlay.tsx + its test draw the wiring lattice, and
+#   OrthogonalEdge.wiring844 / EditCanvas.contextMenu are the FP-backing tests. The pure
+#   geometry went into lib/ (anchorSide, wiringGrid), not a watched directory.
+# frontend/src/components: 201 (#877, release 1.103.0) admits GridSizePicker.tsx — the S/M/L
+#   wiring grid size radio group, rendered by BOTH SettingsSurface (global default) and
+#   PipelineInspector (per-pipeline override, ADR-0076). One shared control rather than two
+#   copies; the step arithmetic lives in lib/wiringGrid and the resolution in hooks/useWiringGrid.
+# crates/pdo-daemon/src: 92 (#869, release 1.98.0) admits shared_terminal.rs — the shared
+#   terminal presence registry (one pilot per tmux session, read-only spectators, role
+#   messages, `ignore-size` switching; ADR-0075). It is ONE new concern that #870 (take
+#   control) extends; pty_bridge.rs only moves bytes and keeps its size, lib.rs only wires it.
+# frontend/src/components: 202 (#899, release 1.103.2) admits AgentProfileModal.tsx — the
+#   agent profile editor moved out of AgentProfilesPanel's inline form into ONE modal shared
+#   by the row's Edit button and New profile (like ProjectEditModal). The panel keeps the list.
 BASELINES='
-frontend/src/components 194
-crates/pdo-daemon/src 91
+frontend/src/components 202
+crates/pdo-daemon/src 92
 '
 
 fail=0

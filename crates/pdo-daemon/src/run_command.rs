@@ -3168,10 +3168,7 @@ mod tests {
                 orchestrator: false,
             }],
             edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "reviewer".into(),
-                    port: "review".into(),
-                },
+                source: EdgeSource::single("reviewer", "review"),
                 target: EdgeEndpoint {
                     node: "sw1".into(),
                     port: "in".into(),
@@ -3185,6 +3182,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "reviewer");
@@ -3228,10 +3226,7 @@ mod tests {
                 orchestrator: false,
             }],
             edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "a".into(),
-                    port: "out".into(),
-                },
+                source: EdgeSource::single("a", "out"),
                 target: EdgeEndpoint {
                     node: "b".into(),
                     port: "in".into(),
@@ -3245,6 +3240,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "a");

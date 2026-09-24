@@ -116,9 +116,12 @@ pub(crate) struct ResolvedInput {
 
 /// THE single edge-walk turning a consumer's incoming edges into concrete input
 /// paths, with the iteration decision delegated to [`source_iter`] /
-/// completed-iters (#194 / #210 / #353). One [`ResolvedInput`] per incoming
-/// edge, in edge-declaration order; pooling of same-named edges is a projection
-/// concern left to each consumer.
+/// completed-iters (#194 / #210 / #353). One [`ResolvedInput`] per CARRIED PORT
+/// of each incoming edge — one per edge for the single-port form every pre-#843
+/// pipeline uses, one per port for a multi-port edge (ADR-0073: one edge, one
+/// firing, one emergent input per carried port) — in edge-declaration then
+/// port-declaration order; pooling of same-named inputs is a projection concern
+/// left to each consumer.
 ///
 /// Pure: it consumes the pre-resolved iteration maps — `source_iters` from
 /// [`resolved_source_iters`] (covers every incoming edge) and `repeated_iters`
@@ -138,7 +141,7 @@ pub(crate) fn resolve_consumer_inputs(
         .edges
         .iter()
         .filter(|e| e.target.node == node_id)
-        .map(|edge| {
+        .flat_map(|edge| {
             let source_node = &edge.source.node;
             // A Start-sourced edge reads the run's user prompt (`_input`), never
             // a per-iteration artifact — the canonical rule `prompt_augmenter`
@@ -149,48 +152,53 @@ pub(crate) fn resolve_consumer_inputs(
                 .any(|n| n.id == *source_node && n.node_type == crate::pipeline::NodeType::Start);
 
             let repeated = edge.repeated;
-            let paths = if from_start {
-                vec![crate::blackboard::input_path(artifacts_dir)]
-            } else if repeated {
-                // #353: one concrete path per COMPLETED source iteration.
-                repeated_iters
-                    .get(source_node.as_str())
-                    .map(|iters| {
-                        iters
-                            .iter()
-                            .map(|&n| {
-                                crate::blackboard::artifact_path(
-                                    artifacts_dir,
-                                    source_node,
-                                    n,
-                                    &edge.source.port,
-                                )
+            edge.emergent_inputs()
+                .into_iter()
+                .map(|(source_port, input_name)| {
+                    let paths = if from_start {
+                        vec![crate::blackboard::input_path(artifacts_dir)]
+                    } else if repeated {
+                        // #353: one concrete path per COMPLETED source iteration.
+                        repeated_iters
+                            .get(source_node.as_str())
+                            .map(|iters| {
+                                iters
+                                    .iter()
+                                    .map(|&n| {
+                                        crate::blackboard::artifact_path(
+                                            artifacts_dir,
+                                            source_node,
+                                            n,
+                                            &source_port,
+                                        )
+                                    })
+                                    .collect()
                             })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                // #194 / #370: the source's latest COMPLETED iteration, never
-                // the consumer's positional `iter` (which a cross-iteration or
-                // external feeder never produced).
-                let it = source_iters
-                    .get(source_node.as_str())
-                    .copied()
-                    .unwrap_or(consumer_iter);
-                vec![crate::blackboard::artifact_path(
-                    artifacts_dir,
-                    source_node,
-                    it,
-                    &edge.source.port,
-                )]
-            };
+                            .unwrap_or_default()
+                    } else {
+                        // #194 / #370: the source's latest COMPLETED iteration, never
+                        // the consumer's positional `iter` (which a cross-iteration or
+                        // external feeder never produced).
+                        let it = source_iters
+                            .get(source_node.as_str())
+                            .copied()
+                            .unwrap_or(consumer_iter);
+                        vec![crate::blackboard::artifact_path(
+                            artifacts_dir,
+                            source_node,
+                            it,
+                            &source_port,
+                        )]
+                    };
 
-            ResolvedInput {
-                port: edge.target.port.clone(),
-                from_start,
-                repeated,
-                paths,
-            }
+                    ResolvedInput {
+                        port: input_name,
+                        from_start,
+                        repeated,
+                        paths,
+                    }
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
 }
@@ -296,7 +304,7 @@ mod tests {
         // Loop-entry join (#194): griller completed iter 2 (after a failed
         // iter 1), implementer completed iter 1. The join consumer resolves
         // each source independently — no positional iter alignment, no stall.
-        use crate::pipeline::{EdgeDef, EdgeEndpoint, PipelineDef};
+        use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, PipelineDef};
         let pipeline = PipelineDef {
             name: "join".into(),
             version: None,
@@ -304,10 +312,7 @@ mod tests {
             nodes: vec![],
             edges: vec![
                 EdgeDef {
-                    source: EdgeEndpoint {
-                        node: "griller".into(),
-                        port: "agentic_test".into(),
-                    },
+                    source: EdgeSource::single("griller", "agentic_test"),
                     target: EdgeEndpoint {
                         node: "tester".into(),
                         port: "test".into(),
@@ -315,10 +320,7 @@ mod tests {
                     ..Default::default()
                 },
                 EdgeDef {
-                    source: EdgeEndpoint {
-                        node: "impl".into(),
-                        port: "out".into(),
-                    },
+                    source: EdgeSource::single("impl", "out"),
                     target: EdgeEndpoint {
                         node: "tester".into(),
                         port: "code".into(),
@@ -329,6 +331,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let state = state_with(vec![
             node_with_iterations(
@@ -347,7 +350,7 @@ mod tests {
         // #353: a `repeated` edge reviewer→impl. The reviewer failed iter 2, so
         // the pool is {1, 3} — the failed iter is quarantined, never globbed in.
         // A second, non-repeated edge is ignored (it resolves via source_iter).
-        use crate::pipeline::{EdgeDef, EdgeEndpoint, PipelineDef};
+        use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, PipelineDef};
         let pipeline = PipelineDef {
             name: "cycle".into(),
             version: None,
@@ -355,10 +358,7 @@ mod tests {
             nodes: vec![],
             edges: vec![
                 EdgeDef {
-                    source: EdgeEndpoint {
-                        node: "reviewer".into(),
-                        port: "review".into(),
-                    },
+                    source: EdgeSource::single("reviewer", "review"),
                     target: EdgeEndpoint {
                         node: "impl".into(),
                         port: "reviews".into(),
@@ -367,10 +367,7 @@ mod tests {
                     ..Default::default()
                 },
                 EdgeDef {
-                    source: EdgeEndpoint {
-                        node: "planner".into(),
-                        port: "plan".into(),
-                    },
+                    source: EdgeSource::single("planner", "plan"),
                     target: EdgeEndpoint {
                         node: "impl".into(),
                         port: "plan".into(),
@@ -382,6 +379,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let state = state_with(vec![
             node_with_iterations(
@@ -407,17 +405,14 @@ mod tests {
     fn resolved_repeated_iters_empty_pool_when_source_has_no_completed_iter() {
         // #353 D6: a repeated source that has not completed any iteration yet
         // maps to an empty Vec — the pool is empty, not a raw glob.
-        use crate::pipeline::{EdgeDef, EdgeEndpoint, PipelineDef};
+        use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, PipelineDef};
         let pipeline = PipelineDef {
             name: "cycle".into(),
             version: None,
             variables: HashMap::new(),
             nodes: vec![],
             edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "reviewer".into(),
-                    port: "review".into(),
-                },
+                source: EdgeSource::single("reviewer", "review"),
                 target: EdgeEndpoint {
                     node: "impl".into(),
                     port: "reviews".into(),
@@ -428,6 +423,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let state = state_with(vec![node_with_iterations(
             "reviewer",
@@ -464,7 +460,7 @@ mod tests {
     }
 
     fn wire_pipeline(repeated: bool, source_type: crate::pipeline::NodeType) -> PipelineDef {
-        use crate::pipeline::{EdgeDef, EdgeEndpoint};
+        use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource};
         PipelineDef {
             name: "wire".into(),
             version: None,
@@ -474,10 +470,7 @@ mod tests {
                 node_def("implementer", crate::pipeline::NodeType::Agent),
             ],
             edges: vec![EdgeDef {
-                source: EdgeEndpoint {
-                    node: "planner".into(),
-                    port: "plan".into(),
-                },
+                source: EdgeSource::single("planner", "plan"),
                 target: EdgeEndpoint {
                     node: "implementer".into(),
                     port: "plan".into(),
@@ -488,6 +481,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -603,6 +597,108 @@ mod tests {
         assert_eq!(
             resolved[0].paths,
             vec![PathBuf::from("/artifacts/planner/iter-2/plan/output.md")]
+        );
+    }
+
+    // ── Multi-output edges (ADR-0073 / #843) ────────────────────────────────
+
+    fn multi_port_wire_pipeline() -> PipelineDef {
+        use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource};
+        PipelineDef {
+            name: "wire-multi".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                node_def("planner", crate::pipeline::NodeType::Agent),
+                node_def("implementer", crate::pipeline::NodeType::Agent),
+            ],
+            edges: vec![EdgeDef {
+                source: EdgeSource {
+                    node: "planner".into(),
+                    ports: vec!["plan".into(), "spec".into()],
+                },
+                target: EdgeEndpoint {
+                    node: "implementer".into(),
+                    port: "plan".into(),
+                },
+                ..Default::default()
+            }],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+        }
+    }
+
+    #[test]
+    fn a_multi_port_edge_resolves_one_input_per_carried_port() {
+        // ADR-0073: one edge, one firing, one emergent input per carried port —
+        // each named after its own output and reading its own artifact.
+        let pipeline = multi_port_wire_pipeline();
+        let state = state_with(vec![node_with_iterations(
+            "planner",
+            &[(1, NodeStatus::Completed)],
+        )]);
+        let resolved =
+            resolve_over_seam(&pipeline, &state, Path::new("/artifacts"), "implementer", 1);
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].port, "plan");
+        assert_eq!(
+            resolved[0].paths,
+            vec![PathBuf::from("/artifacts/planner/iter-1/plan/output.md")]
+        );
+        assert_eq!(resolved[1].port, "spec");
+        assert_eq!(
+            resolved[1].paths,
+            vec![PathBuf::from("/artifacts/planner/iter-1/spec/output.md")]
+        );
+    }
+
+    #[test]
+    fn a_single_port_edge_still_resolves_exactly_one_input() {
+        // Backward compatibility: the pre-#843 shape keeps the target's declared
+        // input name, whatever the source port is called.
+        let pipeline = wire_pipeline(false, crate::pipeline::NodeType::Agent);
+        let state = state_with(vec![node_with_iterations(
+            "planner",
+            &[(1, NodeStatus::Completed)],
+        )]);
+        let resolved =
+            resolve_over_seam(&pipeline, &state, Path::new("/artifacts"), "implementer", 1);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].port, "plan");
+    }
+
+    #[test]
+    fn a_repeated_multi_port_edge_pools_each_port_separately() {
+        let mut pipeline = multi_port_wire_pipeline();
+        pipeline.edges[0].repeated = true;
+        let state = state_with(vec![node_with_iterations(
+            "planner",
+            &[
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Failed),
+                (3, NodeStatus::Completed),
+            ],
+        )]);
+        let resolved =
+            resolve_over_seam(&pipeline, &state, Path::new("/artifacts"), "implementer", 4);
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(
+            resolved[0].paths,
+            vec![
+                PathBuf::from("/artifacts/planner/iter-1/plan/output.md"),
+                PathBuf::from("/artifacts/planner/iter-3/plan/output.md"),
+            ]
+        );
+        assert_eq!(
+            resolved[1].paths,
+            vec![
+                PathBuf::from("/artifacts/planner/iter-1/spec/output.md"),
+                PathBuf::from("/artifacts/planner/iter-3/spec/output.md"),
+            ]
         );
     }
 }

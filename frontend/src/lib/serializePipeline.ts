@@ -80,6 +80,10 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
   // The default (prompt required) is omitted so the common case stays clean and
   // round-trips by absence — same convention as `loops` and `version`.
   if (p.prompt_required === false) obj.prompt_required = false;
+  // #877 / ADR-0076: the pipeline's own wiring-grid size, emitted only when the
+  // pipeline chose one — absent, it follows the reader's global default, and an
+  // untouched pipeline round-trips byte for byte. Layout (`layoutFields.ts`).
+  if (p.grid_size) obj.grid_size = p.grid_size;
   if (Object.keys(p.variables).length > 0) {
     const vars: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(p.variables)) {
@@ -187,6 +191,41 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     if (e.target_side && e.target_side !== "left") {
       edge.target_side = e.target_side;
     }
+    // Per-edge anchors (#844). Layout, like the three above: they say WHERE on a
+    // card's border the wire leaves and lands, so a shared workflow keeps the
+    // wiring it was drawn with. Absent ⇒ the side's middle (the pre-#844
+    // geometry), so an untouched edge round-trips byte for byte. The offset is
+    // rounded on persist — sub-pixel handle centres are what turn a straight wire
+    // into a three-segment path with two phantom handles.
+    if (e.source_anchor) {
+      edge.source_anchor = {
+        side: e.source_anchor.side,
+        offset: Math.round(e.source_anchor.offset),
+      };
+    }
+    if (e.target_anchor) {
+      edge.target_anchor = {
+        side: e.target_anchor.side,
+        offset: Math.round(e.target_anchor.offset),
+      };
+    }
+    // Labels and draw order (#845). Layout again, and again emitted only when
+    // NON-DEFAULT, so a pipeline nobody re-decorated saves back byte-identical:
+    //  - `show_output_labels` has no constant default (it is derived from the
+    //    source node's declared output count), so absence means "follow the
+    //    derivation" and any explicit value — `false` included — is emitted;
+    //  - an empty `output_label_pos` map is the same as no map at all;
+    //  - `below_nodes: false` is the default draw order, above the cards.
+    if (e.show_output_labels != null) edge.show_output_labels = e.show_output_labels;
+    if (e.output_label_pos && Object.keys(e.output_label_pos).length > 0) {
+      edge.output_label_pos = Object.fromEntries(
+        Object.entries(e.output_label_pos).map(([port, p]) => [port, { x: p.x, y: p.y }]),
+      );
+    }
+    if (e.condition_label_pos) {
+      edge.condition_label_pos = { x: e.condition_label_pos.x, y: e.condition_label_pos.y };
+    }
+    if (e.below_nodes === true) edge.below_nodes = true;
     return edge;
   });
 

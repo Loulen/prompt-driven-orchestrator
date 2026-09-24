@@ -554,10 +554,7 @@ mod tests {
 
     fn edge(sn: &str, sp: &str, tn: &str, tp: &str) -> crate::pipeline::EdgeDef {
         crate::pipeline::EdgeDef {
-            source: crate::pipeline::EdgeEndpoint {
-                node: sn.into(),
-                port: sp.into(),
-            },
+            source: crate::pipeline::EdgeSource::single(sn, sp),
             target: crate::pipeline::EdgeEndpoint {
                 node: tn.into(),
                 port: tp.into(),
@@ -585,6 +582,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -718,6 +716,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -787,6 +786,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let region = LoopRegion {
             id: "spin".into(),
@@ -850,6 +850,7 @@ mod tests {
             }],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         // Deleting back-edge A (index 2) still leaves the impl->rev->mid->impl
         // cycle, so the region is kept.
@@ -921,6 +922,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -1061,6 +1063,7 @@ mod tests {
             loops: vec![],
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let region = LoopRegion {
             id: "per-issue".into(),

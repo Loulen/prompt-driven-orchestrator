@@ -1,0 +1,15 @@
+# Which variant of each scene `make readme-media-publish` copies into docs/assets/readme/.
+# One line per scene of the README: `<scene> <variant>`. Change a variant, publish again:
+# the published GIF changes without recording anything (ADR-0074 §5).
+#
+# A scene listed here with no scenes/<scene>.mjs yet is skipped by the publication.
+hero           b
+pipelines      a
+routing        a
+outputs        a
+review         a
+triggers       a
+stats          a
+interactive-orchestrator  a
+profiles       a
+skills         a

@@ -37,6 +37,8 @@ import SessionCounter from "./SessionCounter";
 import HarnessSelect from "./HarnessSelect";
 import ThemeSelect from "./ThemeSelect";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../lib/uiPrefs";
+import { useWiringStore } from "../stores/wiringStore";
+import GridSizePicker from "./GridSizePicker";
 import { harnessCatalog, findHarnessOption } from "../lib/harness";
 import AgentControl from "./AgentControl";
 import { announceAgentProfilesChanged, useAgentProfiles } from "../hooks/useAgentProfiles";
@@ -1377,6 +1379,12 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
     saveChildRunsExpanded(v);
     setChildRunsExpanded(v);
   };
+  // #844 — « Wiring grid ». Held in the wiring store rather than in local state so
+  // a change reaches an already-mounted canvas; the store persists it per browser.
+  const gridFeedback = useWiringStore((s) => s.gridFeedback);
+  const setGridFeedback = useWiringStore((s) => s.setGridFeedback);
+  const defaultGridSize = useWiringStore((s) => s.defaultGridSize);
+  const setDefaultGridSize = useWiringStore((s) => s.setDefaultGridSize);
 
   return (
     <Section section={section}>
@@ -1496,6 +1504,93 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
         <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
           Applied when the run list loads. Toggling a row or the expand/collapse-all button only
           affects the current session.
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Wiring grid
+          </span>
+          <span
+            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
+            style={{ fontSize: "9.5px" }}
+            data-testid="setting-wiring-grid-badge"
+          >
+            Device-local · saved immediately
+          </span>
+        </div>
+        <div
+          role="radiogroup"
+          aria-label="Wiring grid"
+          className="flex gap-1"
+          data-testid="setting-wiring-grid"
+        >
+          {(
+            [
+              { v: "none", label: "Hidden" },
+              { v: "dots", label: "Dots" },
+              { v: "lines", label: "Lines" },
+            ] as const
+          ).map(({ v, label }, i, all) => {
+            const selected = gridFeedback === v;
+            return (
+              <button
+                key={v}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                tabIndex={selected ? 0 : -1}
+                data-testid={`setting-wiring-grid-${v}`}
+                onClick={() => setGridFeedback(v)}
+                onKeyDown={(e) => {
+                  if (["ArrowLeft", "ArrowUp"].includes(e.key)) {
+                    e.preventDefault();
+                    setGridFeedback(all[(i + all.length - 1) % all.length].v);
+                  }
+                  if (["ArrowRight", "ArrowDown"].includes(e.key)) {
+                    e.preventDefault();
+                    setGridFeedback(all[(i + 1) % all.length].v);
+                  }
+                }}
+                className={`flex flex-1 cursor-pointer items-center justify-center rounded border px-2 py-1.5 font-medium transition-colors ${
+                  selected
+                    ? "border-acc bg-acc-bg text-acc"
+                    : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
+                }`}
+                style={{ fontSize: "10px" }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+          How the wiring grid shows itself while you draw an edge on the canvas.
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Wiring grid size
+          </span>
+          <span
+            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
+            style={{ fontSize: "9.5px" }}
+            data-testid="setting-wiring-grid-size-badge"
+          >
+            Device-local · saved immediately
+          </span>
+        </div>
+        <GridSizePicker
+          value={defaultGridSize}
+          onChange={(v) => v && setDefaultGridSize(v)}
+          ariaLabel="Wiring grid size"
+          testId="setting-wiring-grid-size"
+        />
+        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+          The step edges snap to on the canvas, for every pipeline that has no size of its own. A
+          pipeline can pick its own size in its Pipeline Inspector; that choice is saved in the
+          pipeline file and wins over this one. Existing routes are never re-snapped.
         </div>
       </div>
     </Section>

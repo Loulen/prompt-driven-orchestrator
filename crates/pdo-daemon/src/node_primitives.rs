@@ -877,9 +877,14 @@ pub(crate) fn write_skip_outputs(
             }
         }
     }
+    // Every port an outgoing edge CARRIES needs a skip artifact, not just the
+    // primary one: a multi-port edge (ADR-0073) resolves one input per port
+    // downstream, so skipping the node must leave one file per port behind.
     for e in pipeline.edges.iter().filter(|e| e.source.node == node_id) {
-        if !ports.contains(&e.source.port) {
-            ports.push(e.source.port.clone());
+        for port in &e.source.ports {
+            if !ports.contains(port) {
+                ports.push(port.clone());
+            }
         }
     }
     if ports.is_empty() {
@@ -911,7 +916,7 @@ pub(crate) fn write_skip_outputs(
 mod tests {
     use super::*;
     use crate::event_log::{IterationInfo, NodeState, RunState};
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
@@ -1008,10 +1013,7 @@ mod tests {
 
     fn make_edge(src_node: &str, src_port: &str, tgt_node: &str, tgt_port: &str) -> EdgeDef {
         EdgeDef {
-            source: EdgeEndpoint {
-                node: src_node.into(),
-                port: src_port.into(),
-            },
+            source: EdgeSource::single(src_node, src_port),
             target: EdgeEndpoint {
                 node: tgt_node.into(),
                 port: tgt_port.into(),
@@ -1125,6 +1127,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1176,6 +1179,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let run_state = empty_run_state();
@@ -1220,6 +1224,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1276,6 +1281,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1334,6 +1340,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1389,6 +1396,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1454,6 +1462,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let run_state = empty_run_state();
@@ -1522,6 +1531,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1578,6 +1588,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
@@ -1605,6 +1616,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
@@ -1630,6 +1642,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let run_state = empty_run_state();
@@ -1693,6 +1706,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1796,6 +1810,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1872,6 +1887,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1937,6 +1953,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();
@@ -2199,6 +2216,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let mut run_state = empty_run_state();

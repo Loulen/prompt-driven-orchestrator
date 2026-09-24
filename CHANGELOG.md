@@ -10,13 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## Licence — MIT, explicitement
-
-Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les métadonnées Cargo
-déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
-contribution sont dans `CONTRIBUTING.md`.
-
-## 1.98.0
+## 1.108.0
 **Sélecteur de skills compact, « active skills » partout** (#849, story #847).
 
 - Replié, le sélecteur tient sur une ligne : icône, « Skills », sous-ligne « No skill » /
@@ -30,6 +24,162 @@ contribution sont dans `CONTRIBUTING.md`.
 - Vocabulaire : « effective » devient « active » côté skills (types du résolveur front, type du
   skill gelé côté daemon, identifiants de test, scénarios HP, documentation). Format des
   pipelines stockés inchangé.
+
+## 1.107.1 — README vitrine : les médias publiés sont ceux des pipelines cibles (#852)
+
+Le README montre enfin les scènes rejouées sur les pipelines cibles dessinés par le mainteneur
+(ADR-0074 §6). Les 1.104.0 à 1.107.0 les avaient enregistrées sans les publier : les GIF hero,
+Visual pipelines, Routing & loops, Triggers, Agent profiles, Skill bank et Stats dataient
+encore de la v1.
+
+- **`docs/assets/readme/` republié** : le hero tourne `implement-review` avec sa boucle, le
+  trigger lance `prod-check`, les chemins affichés sont `~/code/...`. La ligne Routing & loops
+  décrit `verdict = fail` / `verdict = pass`, comme la cible.
+- **Le hero passe le screen guard** : le `~/.claude/CLAUDE.md` de l'instance de démo interdit à
+  l'agent live de taper un chemin absolu, qui montrait la racine jetable
+  `/tmp/pdo-readme-media-*` dans son terminal.
+- **Scène Agent profiles** : elle ouvre le profil par son crayon `Edit`, dans la modale de la
+  1.103.2 (#899).
+
+## 1.97.4 — README vitrine, référence dans `docs/reference/` (#855)
+
+Le README devient une vitrine (traduction française : `docs/readme/README.fr.md`). La
+référence qu'il portait déménage sans perte : commandes CLI, installation et mise à jour dans
+`docs/reference/cli.md`, reverse proxy et pièces jointes dans `docs/reference/reverse-proxy.md`,
+copier-coller dans `docs/reference/terminal.md`, développement dans `CONTRIBUTING.md`.
+
+- **Le tableau de support des harnais vit dans `docs/reference/harnesses.md`**, avec les
+  prérequis. `make check` et `make support-table` visent ce fichier, et c'est désormais le
+  `--file` par défaut de `pdo docs support-table` (avant : `README.md`, qui ne porte plus de
+  bloc généré).
+
+## Licence — MIT, explicitement
+
+Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les métadonnées Cargo
+déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
+contribution sont dans `CONTRIBUTING.md`.
+
+## 1.103.2
+**Profils agents : seul le bouton Edit ouvre l'éditeur, dans une modale partagée avec New
+profile** (#899).
+
+- Le crayon de chaque ligne de Settings › Agents › Agent profiles est un vrai bouton
+  `Edit <nom>`. Cliquer sur le reste de la ligne n'ouvre plus rien.
+- L'éditeur (Name, Harness, Model, Effort) quitte le formulaire sous la liste pour une modale.
+  **New profile** ouvre la même modale, vide, avec `Create`. Les règles et appels REST ne
+  changent pas ; Cancel, Échap ou un clic sur le fond ferment sans rien enregistrer.
+
+## 1.103.1
+**Enregistrer un pipeline sans changer son nom ne le renomme plus** (#886).
+
+- Un save ne compte comme renommage que si `name:` change vraiment. Avant, un fichier dont le
+  nom contient une majuscule (`Mixed-Case.yaml`) était déplacé à chaque save, ou refusé en 409
+  pendant qu'un run l'utilisait.
+- Un nouveau pipeline prend pour nom de fichier le slug de son nom (`Bugfix-auto-clean` →
+  `bugfix-auto-clean.yaml`), comme duplicate, import et rename. Son nom visible ne change pas.
+  Un nom vide est refusé (400), un nom déjà pris aussi (409).
+
+## 1.103.0
+**Grille de câblage : 30px par défaut, taille S/M/L réglable** (#877).
+
+- Le pas de la grille de câblage n'est plus figé à 40px : `S` = 20px, `M` = 30px (défaut),
+  `L` = 40px. ADR-0076 supersede ADR-0072 pour le pas.
+- Réglage global dans Settings › General › Interface (par navigateur). Le panneau Inspector
+  d'un pipeline peut le surcharger ; ce choix est enregistré dans le fichier pipeline
+  (`grid_size`) et voyage avec ses `waypoints`.
+- Changer de taille ne réécrit jamais les waypoints déjà enregistrés : les anciens tracés à
+  40px gardent leurs coudes jusqu'à ce qu'on les retouche.
+
+## 1.102.1
+**Le terminal n'ampute plus ses dernières colonnes** (#876).
+
+- Sur un pane large, les 1 à 2 dernières colonnes disparaissaient derrière une bande noire à
+  droite. L'espacement de lettres de la page, hérité par xterm, faussait la largeur des
+  glyphes. Le conteneur du terminal le remet à zéro : la dernière colonne de tmux est entière,
+  quelle que soit la largeur du pane.
+- La barre de statut tmux reste tronquée par tmux lui-même (`status-right-length 40`,
+  `status-left-length 10`) : ce n'est pas un rognage du pane.
+
+## 1.102.0
+**Terminal partagé : un seul pilote, spectateurs en lecture seule, prise de main** (#867, #869, #870).
+
+- Quand deux navigateurs ouvrent le même terminal (nœud ou Manager), le premier est le
+  **pilote** : lui seul pèse sur la taille de la fenêtre tmux. Les suivants sont **spectateurs**
+  (client tmux `ignore-size`) : ils voient l'écran entier du pilote, police réduite (plancher
+  6 px, défilement au-delà), et leurs frappes n'atteignent jamais la session.
+- Le pilote voit un œil et le nombre de spectateurs ; le spectateur lit un tooltip de lecture
+  seule. Quand le pilote part, le spectateur redevient seul : taille, police et saisie normales.
+- Deux onglets du **même** poste restent sans rôle, comme avant.
+- Un spectateur voit une icône main (« Take control ») dans la barre du terminal. Un clic lui
+  donne la main tout de suite, sans confirmation : sa fenêtre reprend sa taille et sa police
+  normales, ses frappes atteignent la session. La bascule se fait à chaud (`refresh-client -f`),
+  sans rattacher de client tmux.
+- L'ancien pilote devient spectateur, lit brièvement « Another browser took control » et garde
+  l'icône main pour reprendre la main. Quand le pilote part, la main revient au poste arrivé le
+  plus tôt.
+- En attente déclarée, la bannière d'un spectateur dit « take control to reply, then press Enter
+  to resume ».
+- Point connu, antérieur : fermer un socket terminal injecte `\n^D` dans le pane
+  (`portable-pty`), à traiter dans un ticket séparé.
+
+## 1.101.1
+**La node End accepte une edge sur ses quatre bords** (#840).
+
+- End atterrit là où le fil est lâché, comme un node agent ou script : haut, droite, bas ou
+  gauche, avec aperçu, ancre sauvegardée et tracé perpendiculaire au bord. L'edge porte toujours
+  le port `result`.
+- Une edge vers End sauvegardée sans ancre garde le côté déclaré de `result` : les pipelines
+  existants se rouvrent à l'identique. Le node merge reste fixé sur sa pastille `branches`.
+
+## 1.101.0
+**Tour « First pipeline » : geste depuis le bord, correction du port dans la section Outputs** (#846, #840).
+
+- Les étapes d'edge ne parlent plus de dot ni de handle : elles enseignent le bord de la carte
+  (#844).
+- Les deux edges du tester avancent sur l'output porté. Si l'edge ne porte pas `out`, la carte
+  re-vise l'edge puis la section Outputs du panneau, et avance quand `out` est coché ; l'étape de
+  sélection qui suit est alors déjà satisfaite.
+- Les conditions `when` sont acceptées sur une edge multi-port (`out.verdict`) comme sur une edge
+  à un port (`verdict`) ; une valeur fausse retient l'étape avec un indice précis.
+
+## 1.100.0
+**Câblage des edges depuis le bord, tracé sur grille, drag de segments snappé** (#844, #840).
+
+- Création : les dots d'output disparaissent. Une edge part de n'importe quel point du bord du
+  node source et se trace par cellules de la grille de câblage (ADR-0072). `Shift` libère le
+  tracé ; le relâcher ré-origine la grille sur le point courant. L'edge créée est en
+  `mode: manual` et porte le premier output déclaré.
+- YAML : deux champs de layout, `source_anchor` et `target_anchor` (`{ side, offset }`), disent où
+  le fil quitte et touche les cartes. Absents, le fil part du milieu du côté comme avant ; ils sont
+  ignorés par le diff sémantique.
+- Drag de segment : snap à la grille, `Shift` libère, les autres waypoints ne bougent pas, deux
+  segments alignés fusionnent. « Re-route automatically » donne un tracé auto aligné sur la grille.
+- Le clic droit sur un handle de segment ne supprime plus de waypoint ; le menu « Delete edge »
+  reste sur l'edge.
+
+## 1.99.0
+**Labels d'edge déplaçables, toggle des labels d'output, ordre de dessin edges/nodes** (#845, #840).
+
+- Labels d'output : petit tag par port porté, placé en alternance au pied de l'edge, déplaçable
+  (`output_label_pos`). Toggle par edge (`show_output_labels`), actif par défaut si le node source
+  déclare au moins 2 outputs.
+- Label de condition : la pill `when` est déplaçable (`condition_label_pos`) et se place par défaut
+  à côté du trait, plus sur le handle de segment.
+- Ordre de dessin : les edges passent au-dessus des nodes par défaut ; le switch « Draw under
+  nodes » (`below_nodes`) les repasse dessous, handles et pill compris.
+- Ces 4 champs sont du layout : écrits seulement hors valeur par défaut, ignorés par le diff
+  sémantique.
+
+## 1.98.0
+**Edge multi-port : une seule edge porte plusieurs outputs d'un même node** (#843, #840).
+
+- YAML : `source: { node, ports: [a, b] }` pour une edge multi-port ; la forme `port:` à un seul
+  port reste inchangée et les pipelines existants ne sont pas réécrits.
+- Runtime : une edge multi-port se déclenche une fois et le node aval reçoit un input par port,
+  nommé d'après le port (`PDO_INPUT_<PORT>`, préambule « Inputs » listé par port).
+- Panneau d'edge : section **Outputs** en tête (le dernier port coché ne peut pas être décoché) ;
+  une condition `when` choisit le port lu et son schéma se résout par ligne.
+- Diff sémantique insensible à l'ordre des ports portés.
 
 ## 1.97.3
 **Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).

@@ -258,6 +258,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -393,10 +394,7 @@ mod tests {
             simple_node("b", pipeline::NodeType::Agent),
         ]);
         new.edges.push(pipeline::EdgeDef {
-            source: pipeline::EdgeEndpoint {
-                node: "a".into(),
-                port: "out".into(),
-            },
+            source: crate::pipeline::EdgeSource::single("a", "out"),
             target: pipeline::EdgeEndpoint {
                 node: "b".into(),
                 port: "in".into(),

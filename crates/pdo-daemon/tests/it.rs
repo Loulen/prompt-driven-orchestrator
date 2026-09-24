@@ -46,6 +46,9 @@ mod update_apply;
 #[path = "update_check.rs"]
 mod update_check;
 
+#[path = "docs_links.rs"]
+mod docs_links;
+
 #[path = "edit_self_write_loop.rs"]
 mod edit_self_write_loop;
 
@@ -138,6 +141,9 @@ mod project_harness_resolution;
 
 #[path = "pty_bridge.rs"]
 mod pty_bridge;
+
+#[path = "shared_terminal.rs"]
+mod shared_terminal;
 
 #[path = "recent_repos.rs"]
 mod recent_repos;

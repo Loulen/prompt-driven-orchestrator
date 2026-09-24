@@ -104,11 +104,26 @@ edges:
     target: { node: review, port: in }
     target_side: top              # optional; which side the arrow lands on
 
+  # One edge may CARRY SEVERAL outputs of the same source node (ADR-0073). It is
+  # still one edge: it fires once and drops one input per carried port on the
+  # target, each named after its port. Use `port:` for one, `ports:` for several
+  # — never both. Prefer `port:` whenever a single output is carried.
+  - source: { node: design, ports: [spec, mockup] }
+    target: { node: implement, port: in }
+
   # Conditional edge — taken only when the upstream frontmatter matches (ADR-0011):
   - source: { node: review, port: out }
     target: { node: ship, port: in }
     when:
       Verdict: { eq: Pass }       # eq | ne | gte | lte | ...
+
+  # On a multi-port edge, a condition names WHICH carried output it reads by
+  # qualifying the field — `<port>.<field>`. The verdict applies to the whole
+  # edge. `iter`, `$variables` and `any` are never qualified.
+  - source: { node: design, ports: [spec, mockup] }
+    target: { node: implement, port: in }
+    when:
+      spec.has_design_work: { eq: true }
 
   # The fallback edge for unmatched conditions:
   - source: { node: review, port: out }

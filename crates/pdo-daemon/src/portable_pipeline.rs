@@ -249,6 +249,7 @@ mod tests {
             loops: vec![],
             notes: vec![],
             prompt_required: true,
+            grid_size: None,
         }
     }
 

@@ -121,7 +121,7 @@ pub(crate) fn compute_body_subgraph(
     let body_targets: Vec<&str> = pipeline
         .edges
         .iter()
-        .filter(|e| e.source.node == loop_node_id && e.source.port == "body")
+        .filter(|e| e.source.node == loop_node_id && e.source.carries("body"))
         .map(|e| e.target.node.as_str())
         .collect();
 
@@ -383,7 +383,7 @@ pub(crate) fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> u
 mod tests {
     use super::*;
     use crate::event_log::{NodeState, NodeStatus};
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
@@ -505,10 +505,7 @@ mod tests {
 
     fn make_edge(src_node: &str, src_port: &str, tgt_node: &str, tgt_port: &str) -> EdgeDef {
         EdgeDef {
-            source: EdgeEndpoint {
-                node: src_node.into(),
-                port: src_port.into(),
-            },
+            source: EdgeSource::single(src_node, src_port),
             target: EdgeEndpoint {
                 node: tgt_node.into(),
                 port: tgt_port.into(),
@@ -530,10 +527,7 @@ mod tests {
         is_else: bool,
     ) -> EdgeDef {
         EdgeDef {
-            source: EdgeEndpoint {
-                node: src_node.into(),
-                port: src_port.into(),
-            },
+            source: EdgeSource::single(src_node, src_port),
             target: EdgeEndpoint {
                 node: tgt_node.into(),
                 port: tgt_port.into(),
@@ -556,6 +550,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 

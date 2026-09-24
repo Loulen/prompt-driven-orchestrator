@@ -1,6 +1,9 @@
 import { useEditStore } from "../stores/editStore";
+import { useWiringStore } from "../stores/wiringStore";
+import { gridStep, resolveGridSize, isGridSize } from "../lib/wiringGrid";
 import type { VariableDef } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
+import GridSizePicker from "./GridSizePicker";
 
 const VAR_TYPES = ["int", "float", "string", "bool", "list"] as const;
 
@@ -9,12 +12,14 @@ export default function PipelineInspector() {
   const activeTabId = useEditStore((s) => s.activeTabId);
   const selection = useEditStore((s) => s.selection);
   const updateMeta = useEditStore((s) => s.updatePipelineMeta);
+  const globalGridSize = useWiringStore((s) => s.defaultGridSize);
 
   const tab = openTabs.find((t) => t.id === activeTabId);
   if (!tab || selection.kind !== "none") return null;
 
   const pipeline = tab.pipeline;
   const variables = Object.entries(pipeline.variables);
+  const effectiveGridSize = resolveGridSize(pipeline.grid_size, globalGridSize);
 
   function handleAddVariable() {
     let name = "new_var";
@@ -98,6 +103,24 @@ export default function PipelineInspector() {
             onDelete={() => handleDeleteVariable(name)}
           />
         ))}
+
+        {/* Canvas (#877 / ADR-0076): the pipeline's own wiring-grid size. Saved
+            in the file — a shared pipeline then draws on the same grid for
+            everyone; « Global » stores nothing and follows the reader's default. */}
+        <SectionHead title="Canvas" />
+        <Field label="Wiring grid">
+          <GridSizePicker
+            value={isGridSize(pipeline.grid_size) ? pipeline.grid_size : null}
+            globalSize={globalGridSize}
+            onChange={(v) => updateMeta({ grid_size: v })}
+            ariaLabel="Wiring grid size"
+            testId="pipeline-grid-size"
+          />
+        </Field>
+        <div className="text-fg-4" style={{ fontSize: "10px" }} data-testid="pipeline-grid-size-hint">
+          Draws on {effectiveGridSize} · {gridStep(effectiveGridSize)}px. Existing routes keep
+          their points.
+        </div>
 
         {/* Stats */}
         <SectionHead title="Stats" />

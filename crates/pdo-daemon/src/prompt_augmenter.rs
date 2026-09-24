@@ -1266,7 +1266,7 @@ pub(crate) fn build_library_assistant_prompt(daemon_url: &str, role_prompt: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeType, Port, PortType};
+    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, NodeType, Port, PortType};
 
     fn sample_pipeline() -> PipelineDef {
         PipelineDef {
@@ -1315,6 +1315,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         }
     }
 
@@ -1685,10 +1686,7 @@ mod tests {
             orchestrator: false,
         });
         pipeline.edges.push(EdgeDef {
-            source: EdgeEndpoint {
-                node: "planner".into(),
-                port: "plan".into(),
-            },
+            source: EdgeSource::single("planner", "plan"),
             target: EdgeEndpoint {
                 node: "collector".into(),
                 port: "laps".into(),
@@ -1836,10 +1834,7 @@ mod tests {
             orchestrator: false,
         });
         pipeline.edges.push(EdgeDef {
-            source: EdgeEndpoint {
-                node: "planner".into(),
-                port: "plan".into(),
-            },
+            source: EdgeSource::single("planner", "plan"),
             target: EdgeEndpoint {
                 node: "implementer".into(),
                 port: "plan".into(),
@@ -1872,10 +1867,7 @@ mod tests {
         // COMPLETED iteration, not the consumer's positional iter.
         let mut pipeline = sample_pipeline();
         pipeline.edges.push(EdgeDef {
-            source: EdgeEndpoint {
-                node: "planner".into(),
-                port: "plan".into(),
-            },
+            source: EdgeSource::single("planner", "plan"),
             target: EdgeEndpoint {
                 node: "implementer".into(),
                 port: "plan".into(),
@@ -1938,10 +1930,7 @@ mod tests {
             orchestrator: false,
         });
         pipeline.edges.push(EdgeDef {
-            source: EdgeEndpoint {
-                node: "planner".into(),
-                port: "plan".into(),
-            },
+            source: EdgeSource::single("planner", "plan"),
             target: EdgeEndpoint {
                 node: "implementer".into(),
                 port: "plan".into(),
@@ -1989,10 +1978,7 @@ mod tests {
             orchestrator: false,
         });
         pipeline.edges.push(EdgeDef {
-            source: EdgeEndpoint {
-                node: "planner".into(),
-                port: "plan".into(),
-            },
+            source: EdgeSource::single("planner", "plan"),
             target: EdgeEndpoint {
                 node: "implementer".into(),
                 port: "plans".into(),
@@ -2293,10 +2279,7 @@ mod tests {
             ],
             edges: vec![
                 EdgeDef {
-                    source: EdgeEndpoint {
-                        node: "planner".into(),
-                        port: "plan".into(),
-                    },
+                    source: EdgeSource::single("planner", "plan"),
                     target: EdgeEndpoint {
                         node: "implementer".into(),
                         port: "plan".into(),
@@ -2308,10 +2291,7 @@ mod tests {
                     ..Default::default()
                 },
                 EdgeDef {
-                    source: EdgeEndpoint {
-                        node: "researcher".into(),
-                        port: "context".into(),
-                    },
+                    source: EdgeSource::single("researcher", "context"),
                     target: EdgeEndpoint {
                         node: "implementer".into(),
                         port: "context".into(),
@@ -2326,6 +2306,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let node = &pipeline.nodes[2]; // implementer
@@ -2412,6 +2393,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
 
         let node = &pipeline.nodes[0];
@@ -2744,6 +2726,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -2802,6 +2785,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -2855,6 +2839,7 @@ mod tests {
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
+            grid_size: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();

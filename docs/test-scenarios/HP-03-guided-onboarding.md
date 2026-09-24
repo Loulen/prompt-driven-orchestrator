@@ -76,8 +76,10 @@ Features validated while crossing the tour:
     and offers *Finish here* or *Continue · First pipeline*.
 12. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
     Carry it to its end card and `Finish`. Every card the tour has you create must be **on screen**
-    when it asks you to click it, and the two edges out of the tester are drawn from the handle the
-    card names (`out`, not `image_list`).
+    when it asks you to click it. Every edge is drawn from the **border** of the source card (there is
+    no output dot), and the two edges out of the tester carry **`out`**, its first output — if one
+    carries another port, the card sends you to the edge's **Outputs** section to tick `out`, and
+    only then advances.
 13. Open **Settings › Tutorials** → both tours are ticked.
 
 ## Checks
@@ -104,8 +106,10 @@ Features validated while crossing the tour:
 - **Every lit target is reachable with the mouse, at an ordinary window size** — no step asks for a
   click outside the visible canvas, and no step needs a wider window, a zoom-out or a pan to be
   satisfied. The tour overlay owns the wheel and the drag, so a target off screen is a dead end.
-- A step that asks for a drag from a node with **two output handles** names the one to use, and an
-  edge drawn from the other one does **not** count as the step done.
+- No card mentions a dot or a handle to drag from: every edge step names the card's **border**.
+  On a node with **two outputs**, the card names the one the edge must carry (`out`); an edge that
+  carries only the other one does **not** count as the step done — the card re-aims on that edge,
+  then on the panel's **Outputs** section, and advances once `out` is ticked.
 - A `Create` the daemon refuses **says so in the dialog** (replay the tour keeping the pipeline it
   builds: the name is then taken), and the tour stops on its refusal card rather than waiting on a
   button that does nothing.

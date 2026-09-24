@@ -1809,7 +1809,8 @@ export interface StatsSessionEntity extends StatsPipelineRowMeta {
 /**
  * What a Pipeline row carries beside its numbers (#890): the Runs it counts,
  * the most recent one's start (ISO), and — on an **absorbent** — its absorbed
- * members (ADR-0077). Omitted by the daemon on every other level.
+ * members (ADR-0077). Node rows and « By model » model rows carry the same
+ * (#892); the daemon omits it on every other level.
  */
 export interface StatsPipelineRowMeta {
   runs?: number;
@@ -1818,13 +1819,16 @@ export interface StatsPipelineRowMeta {
 }
 
 /** One absorbed member as its absorbent's row lists it. `executions` rides on
- *  Sessions rows only; `last_run` is absent when it did not run in the period. */
+ *  Sessions rows only; `last_run` is absent when it did not run in the period;
+ *  `provenance` rides on model rows only — where the member's id was read from
+ *  (ADR-0065 §1). */
 export interface StatsAbsorbedMember {
   key: string;
   name: string;
   runs: number;
   executions?: number;
   last_run?: string | null;
+  provenance?: StatsProvenance;
 }
 
 /** `GET /stats/absorptions` — every absorption of the instance. */
@@ -1834,7 +1838,10 @@ export interface StatsAbsorptionList {
 
 export interface StatsAbsorption {
   dimension: "pipeline" | "node" | "model";
+  /** The key of the Pipeline row a Node absorption lives under; "" otherwise. */
   scope: string;
+  /** That Pipeline's name — what Settings shows (#892). */
+  scope_name?: string;
   absorbent: { key: string; name: string };
   members: { key: string; name: string; origin: "manual" | "rename"; created_at: string }[];
 }

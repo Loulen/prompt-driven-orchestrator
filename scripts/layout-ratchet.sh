@@ -70,7 +70,7 @@ cd "$(git rev-parse --show-toplevel)"
 # frontend/src/components: 203 (#890, story #888) admits StatsAbsorption.tsx and its test —
 #   the multi-select bar, the Combine modal, the `[⧉ N]` pill and the members modal of a
 #   Stats Absorption (ADR-0077). StatsModal/StatsCharts render it; the grouping rule lives in
-#   lib/statsAbsorption and the persistence in hooks/usePipelineAbsorption.
+#   lib/statsAbsorption and the persistence in hooks/useStatsAbsorption.
 # crates/pdo-daemon/src: 93 (#890, story #888) admits stats_absorption.rs — storing
 #   absorptions and folding absorbed Pipelines into their absorber across every Stats tab. It
 #   is ONE concern that stats.rs and stats_performance.rs consume, as stats_performance.rs

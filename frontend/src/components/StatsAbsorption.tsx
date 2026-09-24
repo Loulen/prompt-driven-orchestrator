@@ -4,14 +4,17 @@ import type { StatsAbsorbedMember } from "../types";
 import {
   activity,
   defaultAbsorbent,
+  NOUN,
   plural,
+  provenanceNote,
   type AbsorbableRow,
   type AbsorptionCount,
+  type AbsorptionDimension,
 } from "../lib/statsAbsorption";
 
 /**
  * **Absorption** in Stats (#890, ADR-0077) — the visual pattern #891 and #892
- * reuse: a multi-select on the master list's Pipeline rows (hover ring, Ctrl/
+ * reuse: a multi-select on Pipeline, Node and Model rows (hover ring, Ctrl/
  * Cmd-click, Shift-click range, Space), the « N selected · Combine (N)… » bar
  * from two rows, the modal that picks the **absorbent** (the row that keeps its
  * name), the `[⧉ N]` icon on an absorbent, and the members list whose ✕ takes
@@ -21,8 +24,16 @@ import {
 // --- The combined icon ----------------------------------------------------------
 
 /** `[⧉ N]` on an absorbent row: icon and count only. Opens the members list. */
-export function CombinedIcon({ count, onOpen }: { count: number; onOpen: () => void }) {
-  const label = `Combined with ${count} other pipeline${count === 1 ? "" : "s"}`;
+export function CombinedIcon({
+  count,
+  dimension = "pipeline",
+  onOpen,
+}: {
+  count: number;
+  dimension?: AbsorptionDimension;
+  onOpen: () => void;
+}) {
+  const label = `Combined with ${count} other ${NOUN[dimension]}${count === 1 ? "" : "s"}`;
   return (
     <span
       role="button"
@@ -102,11 +113,22 @@ function ModalFrame({
 
 /**
  * Pick the absorbent among the selected rows. ↑/↓ change the choice, Enter
- * combines, Escape cancels (the host routes Escape — see `usePipelineAbsorption`).
+ * combines, Escape cancels (the host routes Escape — see `useStatsAbsorption`).
  */
+/** What Stats will do with the combined rows, said per dimension. */
+function combineSubtitle(dimension: AbsorptionDimension, scopeName: string | undefined): string {
+  if (dimension === "node")
+    return `Stats will read them as one node${scopeName ? ` of ${scopeName}` : ""}, in every tab. Keep the name of:`;
+  if (dimension === "model")
+    return "Stats will read them as one model on the « By model » axis of Cost and Performance. Keep the name of:";
+  return "Stats will read them as one pipeline, in every tab. Keep the name of:";
+}
+
 export function CombineModal<T extends AbsorbableRow>({
   rows,
   count,
+  dimension = "pipeline",
+  scopeName,
   busy,
   error,
   onCancel,
@@ -114,6 +136,9 @@ export function CombineModal<T extends AbsorbableRow>({
 }: {
   rows: T[];
   count: AbsorptionCount<T>;
+  dimension?: AbsorptionDimension;
+  /** The Pipeline a Node absorption lives under, by name. */
+  scopeName?: string;
   busy: boolean;
   error: string | null;
   onCancel: () => void;
@@ -163,10 +188,10 @@ export function CombineModal<T extends AbsorbableRow>({
     <ModalFrame testid="stats-combine-modal" onDismiss={onCancel}>
       <h3 className="flex items-center gap-2 font-medium text-fg" style={{ fontSize: "13px" }}>
         <Combine size={14} className="shrink-0 text-acc" aria-hidden="true" />
-        Combine {rows.length} pipelines
+        Combine {rows.length} {NOUN[dimension]}s
       </h3>
       <p className="mt-1.5 text-fg-3" style={{ fontSize: "11.5px" }}>
-        Stats will read them as one pipeline, in every tab. Keep the name of:
+        {combineSubtitle(dimension, scopeName)}
       </p>
       <div role="radiogroup" aria-label="Keep the name of" className="mt-3 flex flex-col gap-1.5">
         {rows.map((row) => {
@@ -194,7 +219,10 @@ export function CombineModal<T extends AbsorbableRow>({
                 <span className="h-4 w-4 shrink-0 rounded-full border-2 border-fg-4" aria-hidden="true" />
               )}
               <span className="min-w-0">
-                <span className="block truncate text-fg" style={{ fontSize: "12px" }}>
+                <span
+                  className={`block truncate text-fg ${dimension === "model" ? "font-mono" : ""}`}
+                  style={{ fontSize: "12px" }}
+                >
                   {row.name}
                 </span>
                 <span className="block text-fg-4" style={{ fontSize: "10.5px" }}>
@@ -209,7 +237,7 @@ export function CombineModal<T extends AbsorbableRow>({
         {otherLabel} will be counted under <span className="text-fg">{chosen.name}</span> (
         {plural(count.of(chosen), count.word)})
         {alreadyCombined > 0
-          ? `, together with the ${plural(alreadyCombined, "pipeline")} already combined into it`
+          ? `, together with the ${plural(alreadyCombined, NOUN[dimension])} already combined into it`
           : ""}
         . Nothing is rewritten: undo it any time from the combined icon on its row.
       </p>
@@ -248,13 +276,15 @@ export function CombineModal<T extends AbsorbableRow>({
 
 /**
  * The members of one absorbent: the absorbent first (« keeps its name », no ✕),
- * then each absorbed Pipeline with its ✕. Removing the last one closes the list:
- * the absorption is gone and the original rows are back.
+ * then each absorbed row with its ✕ — a model says where its id was read from
+ * (ADR-0065 §1). Removing the last one closes the list: the absorption is gone
+ * and the original rows are back.
  */
 export function MembersModal<T extends AbsorbableRow>({
   absorbent,
   members,
   count,
+  dimension = "pipeline",
   busyKey,
   error,
   onUncombine,
@@ -263,6 +293,7 @@ export function MembersModal<T extends AbsorbableRow>({
   absorbent: T;
   members: StatsAbsorbedMember[];
   count: AbsorptionCount<T>;
+  dimension?: AbsorptionDimension;
   busyKey: string | null;
   error: string | null;
   onUncombine: (member: StatsAbsorbedMember) => void;
@@ -275,11 +306,13 @@ export function MembersModal<T extends AbsorbableRow>({
         {absorbent.name}
       </h3>
       <p className="mt-1.5 text-fg-3" style={{ fontSize: "11.5px" }}>
-        Counts the runs of {plural(members.length, "other pipeline")} too.
+        Counts the runs of {plural(members.length, `other ${NOUN[dimension]}`)} too.
       </p>
       <ul className="mt-3 rounded-md border border-line" data-testid="stats-members-list">
         <li className="flex items-center justify-between gap-3 px-3 py-2">
-          <span className="truncate text-fg">{absorbent.name}</span>
+          <span className={`truncate text-fg ${dimension === "model" ? "font-mono" : ""}`}>
+            {absorbent.name}
+          </span>
           <span className="shrink-0 text-fg-4" style={{ fontSize: "10.5px" }}>
             keeps its name
           </span>
@@ -291,9 +324,16 @@ export function MembersModal<T extends AbsorbableRow>({
             data-testid="stats-member-row"
           >
             <span className="min-w-0">
-              <span className="block truncate text-fg">{member.name}</span>
+              <span className={`block truncate text-fg ${dimension === "model" ? "font-mono" : ""}`}>
+                {member.name}
+              </span>
               <span className="block text-fg-4" style={{ fontSize: "10.5px" }}>
-                {activity(count.ofMember(member), count.word, member.last_run)}
+                {[
+                  activity(count.ofMember(member), count.word, member.last_run),
+                  provenanceNote(member.provenance),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               </span>
             </span>
             <UncombineButton

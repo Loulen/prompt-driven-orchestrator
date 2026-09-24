@@ -40,10 +40,7 @@ import { useTheme } from "../hooks/useTheme";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
 import SelectControl from "./SelectControl";
 import { CombinedIcon } from "./StatsAbsorption";
-import {
-  usePipelineAbsorption,
-  type MasterSelection,
-} from "../hooks/usePipelineAbsorption";
+import { useStatsAbsorption, type MasterSelection } from "../hooks/useStatsAbsorption";
 import type { AbsorbableRow } from "../lib/statsAbsorption";
 import {
   ALL_NODE_KINDS,
@@ -309,9 +306,10 @@ function MasterList<T extends AbsorbableRow>({
   ariaLabel?: string;
   /** Model ids are ids — render them mono (ADR-0065 §2). */
   monoName?: boolean;
-  /** The Pipeline multi-select of the absorption (#890). A plain click still
-   *  opens the detail; the ring, Ctrl/Cmd-click, Shift-click and Space select.
-   *  Absent on axes whose rows are not Pipelines. */
+  /** The multi-select of the absorption (#890): Pipelines, or Models on the
+   *  « By model » axis (#892). A plain click still opens the detail; the ring,
+   *  Ctrl/Cmd-click, Shift-click and Space select. Absent where the rows do not
+   *  combine (« By project »). */
   selection?: MasterSelection;
 }) {
   const options = [{ id: "__total__", name: "Total" } as T, ...rows];
@@ -395,6 +393,7 @@ function MasterList<T extends AbsorbableRow>({
               {selection && absorbed > 0 && (
                 <CombinedIcon
                   count={absorbed}
+                  dimension={selection.dimension}
                   onOpen={() => selection.onOpenMembers(row.id)}
                 />
               )}
@@ -416,12 +415,82 @@ const SESSIONS_COUNT = {
   word: "execution" as const,
 };
 
-/** Cost and Performance count a Pipeline in Runs. */
+/** Cost and Performance count a Pipeline, a Node or a Model in Runs. */
 const RUNS_COUNT = {
   of: (row: AbsorbableRow) => row.runs ?? 0,
   ofMember: (member: StatsAbsorbedMember) => member.runs,
   word: "run" as const,
 };
+
+/** A Cost Node level lists the Infrastructure and Unassigned buckets beside the
+ *  Nodes: those are no Node, so they never combine (#892). */
+const isCostNodeRow = (row: StatsCostEntity) =>
+  !row.id.endsWith(":infrastructure") && !row.id.endsWith(":unassigned");
+
+/**
+ * The Node rows of a detail table carry the same selection as the master list
+ * (#892): the ring before the name, Ctrl/Cmd-click and Shift-click on the row,
+ * Space on the focused row, the selected background, the `[⧉ N]` icon. A plain
+ * click is left to the row.
+ */
+function tableSelection(
+  selection: MasterSelection | undefined,
+  { id, name }: { id: string; name: string },
+  order: string[],
+) {
+  const selectable = selection?.isSelectable(id) ?? false;
+  const checked = selectable && (selection?.selected.has(id) ?? false);
+  return {
+    className: `${checked ? "bg-acc-bg" : ""} ${selection?.flashId === id ? "ring-1 ring-acc" : ""}`,
+    rowProps: selectable
+      ? {
+          "data-checked": checked,
+          onClick: (event: React.MouseEvent) => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey) {
+              event.preventDefault();
+              selection!.toggle(id, event.shiftKey, order);
+            }
+          },
+          onKeyDown: (event: React.KeyboardEvent) => {
+            if (event.key === " " && event.target === event.currentTarget) {
+              event.preventDefault();
+              selection!.toggle(id, false, order);
+            }
+          },
+        }
+      : {},
+    control: !selection ? null : selectable ? (
+      <SelectControl
+        selected={checked}
+        dotClass={null}
+        label={`Select ${name}`}
+        testId="stats-row-select"
+        onSelect={(event) => selection.toggle(id, event.shiftKey, order)}
+      />
+    ) : (
+      <span className="w-4 shrink-0" aria-hidden="true" />
+    ),
+  };
+}
+
+/** The `[⧉ N]` icon of an absorbent row of a detail table. */
+function TableCombinedIcon({
+  selection,
+  row,
+}: {
+  selection: MasterSelection | undefined;
+  row: AbsorbableRow;
+}) {
+  const absorbed = row.absorbed?.length ?? 0;
+  if (!selection || absorbed === 0) return null;
+  return (
+    <CombinedIcon
+      count={absorbed}
+      dimension={selection.dimension}
+      onOpen={() => selection.onOpenMembers(row.id)}
+    />
+  );
+}
 
 function SessionsTab({
   overview,
@@ -441,12 +510,20 @@ function SessionsTab({
   const selected = rows.find((row) => row.id === selectedId) ?? null;
   const periods = selected ? selected.by_period : overview.sessions_by_period;
   const detailRows = selected?.nodes ?? rows;
-  const absorption = usePipelineAbsorption({
-    rows,
+  const absorption = useStatsAbsorption({
     enabled: !uncombined,
-    count: SESSIONS_COUNT,
     onChanged: onAbsorptionsChanged,
   });
+  const pipelines = absorption.selectionFor({ dimension: "pipeline", rows, count: SESSIONS_COUNT });
+  // #892: the Nodes of the Pipeline on screen, scoped to its row.
+  const nodes = selected
+    ? absorption.selectionFor({
+        dimension: "node",
+        scope: { key: selected.id, name: selected.name },
+        rows: selected.nodes,
+        count: SESSIONS_COUNT,
+      })
+    : undefined;
 
   return (
     <div className="flex flex-col gap-4" data-testid="stats-chart-sessions">
@@ -459,7 +536,7 @@ function SessionsTab({
             selected={selectedId}
             valueLabel={(row) => String(row.executions)}
             onSelect={setSelectedId}
-            selection={absorption.selection}
+            selection={pipelines}
           />
         </div>
         <div className="min-w-0 flex-1">
@@ -469,7 +546,8 @@ function SessionsTab({
           <SessionTable
             rows={detailRows}
             harnesses={overview.session_harnesses}
-            onOpenMembers={selected ? undefined : absorption.openMembers}
+            onOpenMembers={selected ? undefined : pipelines?.onOpenMembers}
+            selection={nodes}
           />
         </div>
       </div>
@@ -500,12 +578,16 @@ function SessionTable({
   rows,
   harnesses,
   onOpenMembers,
+  selection,
 }: {
   rows: StatsSessionEntity[];
   harnesses: string[];
   /** Pipeline rows at Total level: the combined icon opens the members. */
   onOpenMembers?: (id: string) => void;
+  /** Node rows under one Pipeline (#892): select and combine them. */
+  selection?: MasterSelection;
 }) {
+  const order = rows.map((row) => row.id);
   return (
     <table className="w-full table-fixed text-left" style={{ fontSize: "11px" }}>
       <thead className="text-fg-4">
@@ -526,10 +608,22 @@ function SessionTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr key={row.id} className="border-t border-line text-fg-2" tabIndex={0}>
+        {rows.map((row) => {
+          const pick = tableSelection(selection, row, order);
+          return (
+          <tr
+            key={row.id}
+            className={`group border-t border-line text-fg-2 ${pick.className}`}
+            tabIndex={0}
+            data-testid="stats-session-row"
+            {...pick.rowProps}
+          >
             <td className="py-2 pr-2">
-              <PipelineName row={row} onOpenMembers={onOpenMembers} />
+              <span className="inline-flex items-center gap-1.5">
+                {pick.control}
+                <PipelineName row={row} onOpenMembers={onOpenMembers} />
+                <TableCombinedIcon selection={selection} row={row} />
+              </span>
             </td>
             <td className="py-2 text-right font-mono">{row.executions}</td>
             {harnesses.map((harness) => (
@@ -542,7 +636,8 @@ function SessionTable({
               </td>
             ))}
           </tr>
-        ))}
+          );
+        })}
       </tbody>
     </table>
   );
@@ -860,10 +955,13 @@ function CostTable({
   onOpen,
   renderName,
   expandablePairs = false,
+  selection,
 }: {
   rows: StatsCostEntity[];
   harnesses: string[];
   unit: "Run" | "execution";
+  /** Node rows under one Pipeline (#892): select and combine them. */
+  selection?: MasterSelection;
   onOpen?: (row: StatsCostEntity) => void;
   /** Replaces the default (button-or-plain) name cell — the model axis marks
    *  provenance and renders "not set" in its own voice. */
@@ -873,6 +971,7 @@ function CostTable({
   expandablePairs?: boolean;
 }) {
   const sorted = [...rows].sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1));
+  const order = sorted.map((row) => row.id);
   // Expansion state lives HERE and dies with the table: the parent keys the
   // table on the drill path, so a stale expanded set never leaks across Nodes.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -899,15 +998,18 @@ function CostTable({
         <tbody>
           {sorted.map((row) => {
             const pairs = expandablePairs ? (row.models ?? []) : [];
+            const pick = tableSelection(selection, row, order);
             return (
               <Fragment key={row.id}>
                 <tr
-                  className="border-t border-line text-fg-2"
+                  className={`group border-t border-line text-fg-2 ${pick.className}`}
                   tabIndex={0}
                   data-testid="stats-detail-row"
+                  {...pick.rowProps}
                 >
                   <td className="py-2 pr-2">
                     <span className="inline-flex items-center gap-1">
+                      {pick.control}
                       {pairs.length > 0 ? (
                         <button
                           type="button"
@@ -945,6 +1047,7 @@ function CostTable({
                           <span>{content}</span>
                         );
                       })()}
+                      <TableCombinedIcon selection={selection} row={row} />
                     </span>
                   </td>
                   <td className="py-2 text-right">
@@ -1044,12 +1147,11 @@ function CostTab({
   onAbsorptionsChanged: () => void;
 }) {
   const [axis, setAxis] = useState<CostAxis>("pipeline");
-  // #890: only the « By pipeline » rows are Pipelines to combine; switching the
-  // grouping drops the selection with them.
-  const absorption = usePipelineAbsorption({
-    rows: cost?.by_pipeline ?? [],
-    enabled: axis === "pipeline" && !uncombined,
-    count: RUNS_COUNT,
+  // #890 / #892: Pipelines on « By pipeline », Models on « By model », the Nodes
+  // of the Pipeline on screen on every axis — never the Projects. Switching the
+  // grouping drops the selection with its rows.
+  const absorption = useStatsAbsorption({
+    enabled: !uncombined,
     onChanged: onAbsorptionsChanged,
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1127,6 +1229,25 @@ function CostTab({
     axis === "model" ? true : axis === "pipeline" ? selected !== null : drilledPipeline !== null;
   const detailUnit: "Run" | "execution" = atNodeLevel ? "execution" : "Run";
 
+  const masterSelection =
+    axis === "pipeline"
+      ? absorption.selectionFor({ dimension: "pipeline", rows: cost.by_pipeline, count: RUNS_COUNT })
+      : axis === "model"
+        ? absorption.selectionFor({ dimension: "model", rows: cost.by_model, count: RUNS_COUNT })
+        : undefined;
+  // The Pipeline whose Nodes the table shows, on whichever axis it was reached.
+  const nodePipeline =
+    axis === "model" ? modelPipeline : axis === "project" ? drilledPipeline : selected;
+  const nodeSelection = nodePipeline
+    ? absorption.selectionFor({
+        dimension: "node",
+        scope: { key: nodePipeline.id, name: nodePipeline.name },
+        rows: nodePipeline.nodes,
+        count: RUNS_COUNT,
+        selectable: isCostNodeRow,
+      })
+    : undefined;
+
   let detailRows: StatsCostEntity[];
   let detailRenderName: ((row: StatsCostEntity) => React.ReactNode) | undefined;
   let onOpen: ((row: StatsCostEntity) => void) | undefined;
@@ -1143,13 +1264,16 @@ function CostTab({
     } else {
       detailRows = cost.by_model;
       detailRenderName = (row) => (
-        <ProvenanceName
-          name={row.name}
-          mono
-          provenance={cost.by_model.find((m) => m.id === row.id)?.provenance}
-          harnesses={row.harnesses}
-          target="model"
-        />
+        <span className="inline-flex items-center gap-1.5">
+          <ProvenanceName
+            name={row.name}
+            mono
+            provenance={cost.by_model.find((m) => m.id === row.id)?.provenance}
+            harnesses={row.harnesses}
+            target="model"
+          />
+          <TableCombinedIcon selection={masterSelection} row={row} />
+        </span>
       );
       onOpen = (row) => setSelectedModelId(row.id);
     }
@@ -1159,7 +1283,7 @@ function CostTab({
     detailRows = rows;
     if (axis === "pipeline") {
       detailRenderName = (row) => (
-        <PipelineName row={row} onOpenMembers={absorption.openMembers} />
+        <PipelineName row={row} onOpenMembers={masterSelection?.onOpenMembers} />
       );
     }
   } else if (axis === "project") {
@@ -1222,6 +1346,7 @@ function CostTab({
             onChange={(event) => {
               setAxis(event.target.value as CostAxis);
               toTotal();
+              absorption.clear();
             }}
             className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
           >
@@ -1235,7 +1360,7 @@ function CostTab({
           selected={axis === "model" ? selectedModelId : selectedId}
           monoName={axis === "model"}
           valueLabel={(row) => formatCostAmount(row.usd, row.partial, row.estimated)}
-          selection={absorption.selection}
+          selection={masterSelection}
           onSelect={(id) => {
             if (axis === "model") {
               setSelectedModelId(id);
@@ -1296,6 +1421,7 @@ function CostTab({
             onOpen={onOpen}
             renderName={detailRenderName}
             expandablePairs={axis !== "model"}
+            selection={detailRows === nodePipeline?.nodes ? nodeSelection : undefined}
           />
         </div>
       </div>
@@ -2069,6 +2195,7 @@ function PerformanceTable({
   onOpen,
   expandablePairs = false,
   filteredRowIds,
+  selection,
 }: {
   rows: StatsPerformanceEntity[];
   harnesses: string[];
@@ -2091,6 +2218,8 @@ function PerformanceTable({
    *  their cells read « filtered » rather than a total that no longer describes
    *  what is on screen. */
   filteredRowIds?: Set<string>;
+  /** Node rows under one Pipeline (#892): select and combine them. */
+  selection?: MasterSelection;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // The couples' own expansion, dying with the table like `expanded` — the
@@ -2246,11 +2375,20 @@ function PerformanceTable({
         <tbody>
           {visible.map(({ row, child, scales }) => {
             const couples = !child && expandablePairs ? (row.models ?? []) : [];
+            // A subagent group is no Node: it never combines.
+            const rowSelection = child ? undefined : selection;
+            const pick = tableSelection(rowSelection, row, ordered.map((item) => item.id));
             return (
               <Fragment key={`${child ? "subagent" : "entity"}-${row.id}`}>
-                <tr className="border-t border-line" data-testid="stats-detail-row">
+                <tr
+                  className={`group border-t border-line ${pick.className}`}
+                  data-testid="stats-detail-row"
+                  tabIndex={rowSelection ? 0 : undefined}
+                  {...pick.rowProps}
+                >
                   <td className={`py-2 pr-2 text-fg-2 ${child ? "pl-7" : ""}`}>
                     <span className="inline-flex items-center gap-1">
+                      {pick.control}
                       {couples.length > 0 ? (
                         <button
                           type="button"
@@ -2309,6 +2447,7 @@ function PerformanceTable({
                           <span>{content}</span>
                         );
                       })()}
+                      <TableCombinedIcon selection={rowSelection} row={row} />
                       {!child && <KindBadges row={row} />}
                     </span>
                   </td>
@@ -2703,12 +2842,11 @@ function PerformanceTab({
     onBandChange({ ...band, durationMode: next });
   const onNodeKindsChange = (kinds: NodeKind[]) =>
     onBandChange({ ...band, nodeKinds: kinds });
-  // #890: the « By pipeline » Pipeline rows are the ones to combine — never the
-  // Infrastructure row beside them, never the « By model » axis.
-  const absorption = usePipelineAbsorption({
-    rows: performance?.by_pipeline ?? [],
-    enabled: axis === "pipeline" && !uncombined,
-    count: RUNS_COUNT,
+  // #890 / #892: the « By pipeline » Pipeline rows — never the Infrastructure
+  // row beside them —, the « By model » Model rows, and the Nodes of the
+  // Pipeline on screen.
+  const absorption = useStatsAbsorption({
+    enabled: !uncombined,
     onChanged: onAbsorptionsChanged,
   });
 
@@ -2869,6 +3007,30 @@ function PerformanceTab({
           ? false
           : hasHiddenNode(selected, nodeKinds);
 
+  const masterSelection =
+    axis === "model"
+      ? absorption.selectionFor({ dimension: "model", rows: performance.by_model, count: RUNS_COUNT })
+      : absorption.selectionFor({
+          dimension: "pipeline",
+          rows: performance.by_pipeline,
+          count: RUNS_COUNT,
+        });
+  // The Pipeline whose Nodes the table shows (never Infrastructure's roles).
+  const nodePipeline =
+    axis === "model"
+      ? modelPipeline
+      : selected && selected.id !== "__infrastructure__"
+        ? selected
+        : null;
+  const nodeSelection = nodePipeline
+    ? absorption.selectionFor({
+        dimension: "node",
+        scope: { key: nodePipeline.id, name: nodePipeline.name },
+        rows: nodePipeline.nodes,
+        count: RUNS_COUNT,
+      })
+    : undefined;
+
   let detailRows: StatsPerformanceEntity[];
   // The Node population the level would show without the kind filter — set only
   // on a Node level, so an empty table can tell « nothing here » from « the
@@ -2896,14 +3058,17 @@ function PerformanceTab({
       detailRenderName = (row) => {
         const provenance = performance.by_model.find((m) => m.id === row.id)?.provenance;
         return (
-          <ProvenanceName
-            name={row.name}
-            mono
-            provenance={provenance}
-            harnesses={[]}
-            target="model"
-            content={performanceProvenanceCopy(provenance)}
-          />
+          <span className="inline-flex items-center gap-1.5">
+            <ProvenanceName
+              name={row.name}
+              mono
+              provenance={provenance}
+              harnesses={[]}
+              target="model"
+              content={performanceProvenanceCopy(provenance)}
+            />
+            <TableCombinedIcon selection={masterSelection} row={row} />
+          </span>
         );
       };
       onOpen = (row) => setSelectedModelId(row.id);
@@ -2918,7 +3083,7 @@ function PerformanceTab({
   } else {
     detailRows = masterRows;
     detailRenderName = (row) => (
-      <PipelineName row={row} onOpenMembers={absorption.openMembers} />
+      <PipelineName row={row} onOpenMembers={masterSelection?.onOpenMembers} />
     );
   }
 
@@ -3005,6 +3170,7 @@ function PerformanceTab({
                   onChange={(event) => {
                     setAxis(event.target.value as PerformanceAxis);
                     toTotal();
+                    absorption.clear();
                   }}
                   className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
                 >
@@ -3029,7 +3195,7 @@ function PerformanceTab({
             </div>
             <MasterList
               rows={masterRows}
-              selection={absorption.selection}
+              selection={masterSelection}
               selected={axis === "model" ? selectedModelId : selectedId}
               monoName={axis === "model"}
               ariaLabel="Performance groups"
@@ -3122,11 +3288,13 @@ function PerformanceTab({
                   onOpen={onOpen}
                   expandablePairs={axis === "pipeline"}
                   filteredRowIds={filteredRowIds}
+                  selection={nodePipeline ? nodeSelection : undefined}
                 />
               )}
             </div>
           </div>
         </div>
+        {absorption.overlay}
       </div>
     </TooltipProvider>
   );

@@ -29,6 +29,22 @@ déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règ
 contribution sont dans `CONTRIBUTING.md`.
 
 ## Non publié
+**Stats : absorber des Nodes et des Modèles** (#892, story #888, ADR-0077).
+
+- Sous un même Pipeline, sélectionner deux lignes Node (Ctrl/Maj-clic dans le détail) puis
+  « Combine » : un Node renommé d'une version à l'autre (`review` → `code-review`) se lit sur
+  une seule ligne dans Sessions, Cost (arbres Pipeline, Projet et Modèle) et Performance.
+  La sélection refuse, visiblement, de mélanger Pipelines et Nodes, ou des Nodes de deux
+  Pipelines ; l'API refuse aussi ce dernier cas.
+- Retirer un Pipeline absorbé fait sortir ses Nodes de l'absorption de Nodes de son ancien
+  absorbant : ils retrouvent leur ligne sous leur Pipeline.
+- Sur l'axe « By model » de Cost et de Performance, deux lignes Modèle (un alias épinglé et
+  son id observé) se combinent ; l'absorbant garde son id verbatim, leurs efforts se
+  réunissent par effort, et la liste des membres dit si chaque id a été observé ou demandé.
+  L'axe Pipeline n'est pas touché.
+- Settings › Stats absorptions liste les Nodes (avec leur Pipeline) et les Modèles.
+- Correctif : la barre « Combine » et ses modales manquaient dans l'onglet Performance.
+
 **Stats : absorption au renommage, liste des absorptions, interrupteur Uncombined** (#891,
 story #888, ADR-0077).
 

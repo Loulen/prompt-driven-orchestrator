@@ -8,8 +8,7 @@ import { UncombineButton } from "./StatsAbsorption";
 type Dimension = StatsAbsorption["dimension"];
 type Member = StatsAbsorption["members"][number];
 
-/** The list's groups, in the order Stats reads them. Nodes and Models come with
- *  their own Combine (#892); the list already knows where to put them. */
+/** The list's groups, in the order Stats reads them (#892 adds Nodes and Models). */
 const DIMENSIONS: { id: Dimension; label: string }[] = [
   { id: "pipeline", label: "Pipelines" },
   { id: "node", label: "Nodes" },
@@ -117,9 +116,22 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                 <li className="flex items-center justify-between gap-3 px-3 py-2">
                   <span className="flex min-w-0 items-center gap-2">
                     <Combine size={12} className="shrink-0 text-acc" aria-hidden="true" />
-                    <span className="truncate text-fg" data-testid="stats-absorption-absorbent">
+                    <span
+                      className={`truncate text-fg ${id === "model" ? "font-mono" : ""}`}
+                      data-testid="stats-absorption-absorbent"
+                    >
                       {absorption.absorbent.name}
                     </span>
+                    {id === "node" && absorption.scope_name && (
+                      // A Node absorption lives under one Pipeline: say which.
+                      <span
+                        className="truncate text-fg-4"
+                        style={{ fontSize: "10.5px" }}
+                        data-testid="stats-absorption-scope"
+                      >
+                        in {absorption.scope_name}
+                      </span>
+                    )}
                   </span>
                   <span className="shrink-0 text-fg-4" style={{ fontSize: "10.5px" }}>
                     keeps its name
@@ -132,7 +144,9 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                     data-testid="stats-absorption-member"
                   >
                     <span className="min-w-0">
-                      <span className="block truncate text-fg">{member.name}</span>
+                      <span className={`block truncate text-fg ${id === "model" ? "font-mono" : ""}`}>
+                        {member.name}
+                      </span>
                       <span
                         className="block text-fg-4"
                         style={{ fontSize: "10.5px" }}

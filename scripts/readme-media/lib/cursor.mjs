@@ -39,11 +39,17 @@ export function cursorInitScript({ size, ring, dragLine, pressedScale }) {
 
     const cursor = document.createElement("div");
     cursor.id = "__demo-cursor";
-    cursor.style.cssText = `position:absolute;left:0;top:0;width:${size}px;height:${size}px;transform-origin:0 0;` + "transition:transform 90ms ease-out;display:none;will-change:transform;";
+    // The arrow follows the pointer with no transition: the moves are already
+    // eased, and a transition retargeted on every mousemove (every ~8 ms) kept
+    // restarting from where it started while xyflow's connection drag held the
+    // main thread — the arrow froze on the press point, then jumped (#882 FP).
+    // Only the pressed scale, on an inner element, is animated.
+    cursor.style.cssText = `position:absolute;left:0;top:0;width:${size}px;height:${size}px;display:none;will-change:transform;`;
     cursor.innerHTML =
-      `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="overflow:visible;filter:drop-shadow(0 1px 2px rgba(0,0,0,.55))">` +
+      `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="overflow:visible;transform-origin:0 0;transition:transform 90ms ease-out;filter:drop-shadow(0 1px 2px rgba(0,0,0,.55))">` +
       '<path d="M3 2 L3 19.5 L7.6 15.4 L10.6 22 L13.8 20.6 L10.9 14.1 L17 14.1 Z" fill="#ffffff" stroke="#11151a" stroke-width="1.6" stroke-linejoin="round"/>' +
       "</svg>";
+    const arrow = cursor.firstElementChild;
     layer.append(line, cursor);
     document.documentElement.append(layer);
 
@@ -52,7 +58,8 @@ export function cursorInitScript({ size, ring, dragLine, pressedScale }) {
     let pressed = false;
     let dragFrom = null;
     const place = () => {
-      cursor.style.transform = `translate(${x}px, ${y}px) scale(${pressed ? pressedScale : 1})`;
+      cursor.style.transform = `translate(${x}px, ${y}px)`;
+      arrow.style.transform = `scale(${pressed ? pressedScale : 1})`;
     };
     const ringAt = (cx, cy) => {
       const halo = document.createElement("div");

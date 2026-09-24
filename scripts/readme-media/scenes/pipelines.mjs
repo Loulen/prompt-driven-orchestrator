@@ -85,7 +85,9 @@ async function play(ctx, { markNode, markEdges }) {
   await drawEdge(ctx, withNodeId(edgeOf(target, "start", "implementer"), id));
   await drawEdge(ctx, withNodeId(edgeOf(target, "implementer", "end"), id));
   ctx.mark("edge-dropped", markEdges);
-  await ctx.moveTo(await emptyCanvasSpot(page), { duration: 400 });
+  // Filmed: the cursor leaves the frame, rather than vanish at the cut to the final shot.
+  const rest = await emptyCanvasSpot(page);
+  await ctx.keep(() => ctx.moveTo(rest, { duration: 400 }));
   await saveCanvas(ctx);
   await landOnTarget(ctx, TARGET);
   await ctx.hold(1800);

@@ -252,15 +252,35 @@ export async function dragNodeTo(ctx, nodeId, view, { duration = 900, film = tru
 }
 
 /**
- * The card lags the pointer by a variable few px (xyflow's drag threshold):
- * short nudges, off camera, until it sits on `view`.
+ * The card lags the pointer by a variable few px (xyflow's drag threshold): put
+ * it on `view` exactly, off camera. xyflow moves a card by how far the pointer
+ * went since the move that crossed the threshold, so the press jumps past it in
+ * one move (that move is the baseline and moves nothing), then goes the missing
+ * px exactly. An eased nudge crosses it at a sample that varies, and a 1 px
+ * correction never landed.
  */
-export async function nudgeNodeTo(ctx, nodeId, view, { tolerance = 1 } = {}) {
-  for (let i = 0; i < 6; i++) {
-    const rect = await nodeRect(ctx.page, nodeId);
-    if (Math.abs(rect.x - view.x) <= tolerance && Math.abs(rect.y - view.y) <= tolerance) return;
-    await dragCard(ctx, nodeId, view, { duration: 200, film: false });
+export async function nudgeNodeTo(ctx, nodeId, view, { tolerance = 0.5 } = {}) {
+  const { page } = ctx;
+  let rect;
+  for (let i = 0; i < 4; i++) {
+    rect = await nodeRect(page, nodeId);
+    const d = { x: view.x - rect.x, y: view.y - rect.y };
+    if (Math.abs(d.x) <= tolerance && Math.abs(d.y) <= tolerance) return;
+    const { zoom } = await canvasViewport(page);
+    const grab = await toScreen(page, { x: rect.x + rect.width * 0.35, y: rect.y + rect.height / 2 });
+    const from = { x: Math.round(grab.x), y: Math.round(grab.y) };
+    const past = { x: from.x, y: from.y + 12 };
+    const to = { x: past.x + d.x * zoom, y: past.y + d.y * zoom };
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(past.x, past.y);
+    await page.mouse.move(to.x, to.y);
+    await page.mouse.up();
+    ctx.mouse = to;
+    await sleep(250);
   }
+  // Still off: the reinstall puts it back, and the cut to the final shot shows that shift.
+  console.warn(`   ${nodeId} rests at (${rect.x.toFixed(1)}, ${rect.y.toFixed(1)}), target (${view.x}, ${view.y})`);
 }
 
 /** Drag a label (a locator: a condition pill, an output tag) so its centre

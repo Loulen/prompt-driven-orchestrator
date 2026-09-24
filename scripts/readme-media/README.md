@@ -164,7 +164,7 @@ What `play(ctx)` gets:
 | --- | --- |
 | `ctx.page`, `ctx.instance` | the Playwright page, and the demo instance (`url`, `repo`, `home`, `api(method, route, body)`) |
 | `ctx.goto(route)` | open a route of the demo UI; the cursor stays where it was |
-| `ctx.moveTo(target)`, `ctx.click(target)`, `ctx.hover(target)`, `ctx.drag(from, to)`, `ctx.scroll(dy)` | eased, real mouse gestures. `target` is a locator or `{x, y}`. The cursor shows a green ring on click, is pressed (×0.88) during a drag, and draws a dashed orange line |
+| `ctx.moveTo(target)`, `ctx.click(target)`, `ctx.hover(target)`, `ctx.drag(from, to)`, `ctx.scroll(dy)` | eased, real mouse gestures. `target` is a locator or `{x, y}`. The cursor shows a green ring on click, is pressed (×0.88) during a drag, and draws a dashed orange line. It follows the real pointer with no transition: a transition retargeted on every move froze it during a canvas connection drag |
 | `ctx.mark(name, { before, after })` | a key moment. The GIF keeps `before`/`after` ms around it (default 1.2 s / 1.8 s) |
 | `await ctx.keep(fn)` | keep what `fn` films at normal speed (a gesture between markers) |
 | `await ctx.fast(fn, { speed: 8 })` | film `fn` fast-forwarded (an agent working) |
@@ -239,7 +239,9 @@ contract, `lib/build-scene.mjs`, is two pure functions any new building scene re
    the complete target without its loop edge, its region and the exit's condition).
 3. **The gestures aim at the target's own coordinates**, in flow px, whatever the zoom:
    `dragNodeTo` moves a card to its `view` (`nudgeNodeTo` then corrects, off camera, the few px
-   xyflow's drag threshold eats), `drawEdge` presses the source card's rim at its `source_anchor`,
+   xyflow's drag threshold eats: it presses, jumps past the threshold in one move, the baseline
+   xyflow measures from, then goes the missing px exactly, so the card lands on `view` to the px and
+   the cut to the final shot shows no shift), `drawEdge` presses the source card's rim at its `source_anchor`,
    drags along the wire the canvas draws for the edge and drops on the target card at its
    `target_anchor` (#840: no port dot, the drop point anchors the arrow). The wire is
    `drawnRoute` (the editor's rule: a 40 px leg straight out of the source side, the waypoints
@@ -259,6 +261,8 @@ contract, `lib/build-scene.mjs`, is two pure functions any new building scene re
    is reinstalled; the helper waits out the daemon's 2 s self-write window (its own save would
    swallow the change), until the tab has reloaded every node at its `view`, and until the tab's
    « changed » dot has faded. The final `hold` films the target: no jump, no « changed on disk ».
+   The one trace of the reinstall is the toolbar's Undo/Redo turning grey at the cut: the reload
+   resets the editor's history.
 
 What the canvas does not draw is not a drift: prompts, harnesses, a port name without a tag, the
 id the editor gives a new node (nodes match by name) or a loop region. A new agent node is

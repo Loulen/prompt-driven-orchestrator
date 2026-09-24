@@ -49,14 +49,14 @@ Build agent workflows on a canvas: drop an `implementer` node, drag its edge to 
 
 ### Conditional routing &amp; loops
 
-Drag an edge back from `reviewer` to `implementer` and set `verdict != pass`. Routing reads typed outputs, never an LLM's judgment.
+Drag an edge back from `reviewer` to `implementer` and set `verdict = fail`; `verdict = pass` leads out. Routing reads typed outputs, never an LLM's judgment.
 
 [Docs →](docs/features.md#conditional-routing--loops)
 
 </td>
 <td width="50%">
   <!-- scene: routing -->
-  <a href="docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/routing.jpg"><source srcset="docs/assets/readme/routing.gif" type="image/gif"><img src="docs/assets/readme/routing.jpg" alt="Dragging a loop edge from reviewer back to implementer with the condition verdict != pass" width="100%" /></picture></a>
+  <a href="docs/features.md#conditional-routing--loops"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/routing.jpg"><source srcset="docs/assets/readme/routing.gif" type="image/gif"><img src="docs/assets/readme/routing.jpg" alt="Dragging a loop edge from reviewer back to implementer with the condition verdict = fail, then verdict = pass on the way out" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

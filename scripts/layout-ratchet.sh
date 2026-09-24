@@ -75,8 +75,12 @@ cd "$(git rev-parse --show-toplevel)"
 #   absorptions and folding absorbed Pipelines into their absorber across every Stats tab. It
 #   is ONE concern that stats.rs and stats_performance.rs consume, as stats_performance.rs
 #   already sits beside stats.rs; lib.rs only wires the routes.
+# frontend/src/components: 204 (#891, story #888) admits StatsAbsorptionsPanel.tsx — the
+#   Settings › General › Stats absorptions list (every absorption, its origin, uncombine as
+#   you go). SettingsSurface renders it; it reuses StatsAbsorption's UncombineButton and
+#   lib/statsAbsorption, so only the Settings layout is new.
 BASELINES='
-frontend/src/components 203
+frontend/src/components 204
 crates/pdo-daemon/src 93
 '
 

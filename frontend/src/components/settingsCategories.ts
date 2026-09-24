@@ -13,6 +13,7 @@ export type SettingsSectionId =
   | "runs"
   | "version-update"
   | "tutorials"
+  | "stats-absorptions"
   | "harness-models"
   | "agent-profiles"
   | "pipeline-manager"
@@ -87,6 +88,15 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         description:
           "Guided tours in the real UI: the tour points, you click. Completion is remembered in this browser only.",
         deviceLocal: true,
+      },
+      {
+        id: "stats-absorptions",
+        // #891 (ADR-0077): every combined row of Stats, the rename-born ones
+        // included. Its own REST resource — each ✕ is written at once.
+        label: "Stats absorptions",
+        description:
+          "Rows Stats reads as one: the first keeps its name and counts the others. Made from Stats with Combine, or by renaming a pipeline.",
+        ownPersistence: true,
       },
     ],
   },

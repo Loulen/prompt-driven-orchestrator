@@ -7429,6 +7429,12 @@ async fn save_pipeline(
             )
                 .into_response();
         }
+        // The visible name before the save — what Stats shows for the old id.
+        let old_name = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
+            .map(|parsed| parsed.pipeline.name.trim().to_string())
+            .unwrap_or_else(|| pipeline_id.clone());
         mark_self_write(&state.recent_writes, &path);
         let new_path = match move_pipeline_entry(&dir, &path, &desired_id, &req.yaml) {
             Ok(p) => p,
@@ -7441,6 +7447,19 @@ async fn save_pipeline(
             }
         };
         mark_self_write(&state.recent_writes, &new_path);
+        // #891 / ADR-0077 §4: the new id carries the old id's Stats series.
+        stats_absorption::record_rename_best_effort(
+            &state.db,
+            stats_absorption::Named {
+                key: pipeline_id.clone(),
+                name: old_name,
+            },
+            stats_absorption::Named {
+                key: desired_id.clone(),
+                name: new_name.clone(),
+            },
+        )
+        .await;
         for (node_id, content) in &req.prompts {
             let prompt_path = pipeline::canonical_prompt_path(&new_path, node_id);
             if let Some(parent) = prompt_path.parent() {
@@ -7646,6 +7665,19 @@ async fn rename_pipeline(
         }
     };
     mark_self_write(&state.recent_writes, &new_path);
+    // #891 / ADR-0077 §4: the new id carries the old id's Stats series.
+    stats_absorption::record_rename_best_effort(
+        &state.db,
+        stats_absorption::Named {
+            key: pipeline_id.clone(),
+            name: parsed.pipeline.name.trim().to_string(),
+        },
+        stats_absorption::Named {
+            key: new_id.clone(),
+            name: new_name.clone(),
+        },
+    )
+    .await;
 
     // Announce the move ourselves: self-writes are suppressed by the watcher,
     // and clients must refresh the list under the NEW id at once.
@@ -24184,10 +24216,19 @@ mod tests {
     /// `start_node_command_force_spawns_pending_node`). Isolating the socket per
     /// test removes the cross-test race. This is a socket-name seed only, never a
     /// bound port: oneshot tests never start an HTTP listener.
+    ///
+    /// The counter is per PROCESS, and `make test` runs nextest — one process per
+    /// test — so a counter starting at a constant gave every test the same first
+    /// port, hence the same socket, and brought the race back (the flaky
+    /// `adr25_case_d_spawned_lists_what_actually_launched`: « tmux new-session
+    /// failed: server exited unexpectedly »). The start is therefore spread by
+    /// process id: 4 000 slots of 10 sockets across 20 000..60 000. `cargo test`
+    /// (one process) still counts up from a single start, so it never collides.
     fn next_test_daemon_port() -> u16 {
         use std::sync::atomic::{AtomicU16, Ordering};
-        static NEXT: AtomicU16 = AtomicU16::new(20000);
-        NEXT.fetch_add(1, Ordering::Relaxed)
+        static NEXT: std::sync::OnceLock<AtomicU16> = std::sync::OnceLock::new();
+        NEXT.get_or_init(|| AtomicU16::new(20000 + (std::process::id() % 4000) as u16 * 10))
+            .fetch_add(1, Ordering::Relaxed)
     }
 
     #[test]
@@ -25598,7 +25639,7 @@ mod tests {
         // Triggers: the fires follow the absorption.
         assert_eq!(
             overview["fires_by_pipeline"],
-            serde_json::json!([{"pipeline_id": "alpha-new", "count": 3}])
+            serde_json::json!([{"pipeline_id": "alpha-new", "name": "Alpha", "count": 3}])
         );
 
         // Cost: one row per tree, the costs added up, the honesty marks kept.
@@ -25812,6 +25853,244 @@ mod tests {
         )
         .unwrap();
         assert_eq!(body["absorptions"][0]["members"][0]["key"], "doomed");
+    }
+
+    /// #891 / ADR-0077 §4 — the HTTP contract of the rename-born absorption: a
+    /// rename that changes the id records old → new (origin `rename`), a chain
+    /// of two renames leaves one absorbent carrying both old ids, and a
+    /// display-only rename (same id) records nothing. Stats then reads one row
+    /// for the old and the new Pipeline in every tab; `uncombined=true` reads two.
+    #[tokio::test]
+    async fn stats_absorption_is_recorded_by_a_pipeline_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "alpha");
+        let mut state = test_state_with_dir(tmp.path()).await;
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home);
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn send(
+            state: &Arc<AppState>,
+            method: &str,
+            uri: &str,
+            body: Option<serde_json::Value>,
+        ) -> (StatusCode, serde_json::Value) {
+            let mut request = Request::builder().method(method).uri(uri);
+            if body.is_some() {
+                request = request.header("content-type", "application/json");
+            }
+            let response = build_router(state.clone())
+                .oneshot(
+                    request
+                        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+            )
+        }
+        async fn completed_run(
+            db: &sqlx::SqlitePool,
+            repo: &str,
+            run: &str,
+            pipeline_id: &str,
+            name: &str,
+            day: &str,
+        ) {
+            let events = [
+                (
+                    "09:00",
+                    "run_started",
+                    None,
+                    serde_json::json!({
+                        "pipeline_id": pipeline_id,
+                        "pipeline_name": name,
+                        "target_repo": repo,
+                        "harness": "claude",
+                        "node_defs": [{"id":"worker","name":"Worker","node_type":"agent"}]
+                    }),
+                ),
+                (
+                    "09:01",
+                    "node_started",
+                    Some("worker"),
+                    serde_json::json!({"node_type":"agent","harness":"claude","session_id":format!("{run}-s")}),
+                ),
+                (
+                    "09:11",
+                    "node_completed",
+                    Some("worker"),
+                    serde_json::json!({}),
+                ),
+                ("09:12", "run_completed", None, serde_json::json!({})),
+            ];
+            for (time, kind, node, payload) in events {
+                sqlx::query(
+                    "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(run)
+                .bind(format!("{day}T{time}:00Z"))
+                .bind(kind)
+                .bind(node)
+                .bind(node.map(|_| 1_i64))
+                .bind(payload.to_string())
+                .execute(db)
+                .await
+                .unwrap();
+            }
+        }
+        let ids = |rows: &serde_json::Value| -> Vec<String> {
+            let mut ids: Vec<String> = rows
+                .as_array()
+                .unwrap_or_else(|| panic!("not rows: {rows}"))
+                .iter()
+                .map(|row| row["id"].as_str().unwrap().to_string())
+                .collect();
+            ids.sort();
+            ids
+        };
+
+        // A Run of `alpha`, then the rename that changes its id.
+        completed_run(&state.db, &repo, "ren-1", "alpha", "alpha", "2033-04-10").await;
+        let (status, body) = send(
+            &state,
+            "PUT",
+            "/pipelines/alpha/rename",
+            Some(serde_json::json!({"name": "Beta"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["id"], "beta");
+        let (_, list) = send(&state, "GET", "/stats/absorptions", None).await;
+        assert_eq!(
+            list["absorptions"],
+            serde_json::json!([{
+                "dimension": "pipeline",
+                "scope": "",
+                "absorbent": {"key": "beta", "name": "Beta"},
+                "members": [{
+                    "key": "alpha",
+                    "name": "alpha",
+                    "origin": "rename",
+                    "created_at": list["absorptions"][0]["members"][0]["created_at"],
+                }],
+            }])
+        );
+
+        // A Run of the renamed Pipeline: Stats reads one row, uncombined two.
+        completed_run(&state.db, &repo, "ren-2", "beta", "Beta", "2033-04-11").await;
+        let window = "from=2033-04-10T00:00:00Z&to=2033-04-12T00:00:00Z";
+        for (endpoint, rows) in [
+            ("overview", "sessions_by_pipeline"),
+            ("cost", "by_pipeline"),
+            ("performance", "by_pipeline"),
+        ] {
+            let uri = format!("/stats/{endpoint}?{window}&bucket=day");
+            let (status, combined) = send(&state, "GET", &uri, None).await;
+            assert_eq!(status, StatusCode::OK, "{endpoint}: {combined}");
+            assert_eq!(ids(&combined[rows]), vec!["beta"], "{endpoint}");
+            let row = &combined[rows][0];
+            assert_eq!(row["name"], "Beta", "{endpoint}");
+            assert_eq!(row["absorbed"][0]["key"], "alpha", "{endpoint}");
+            let (_, raw) = send(&state, "GET", &format!("{uri}&uncombined=true"), None).await;
+            assert_eq!(ids(&raw[rows]), vec!["alpha", "beta"], "{endpoint}");
+        }
+        let (_, overview) = send(
+            &state,
+            "GET",
+            &format!("/stats/overview?{window}&bucket=day"),
+            None,
+        )
+        .await;
+        assert_eq!(overview["sessions_by_pipeline"][0]["executions"], 2);
+
+        // A second rename: one absorbent, both old ids under it.
+        let (status, _) = send(
+            &state,
+            "PUT",
+            "/pipelines/beta/rename",
+            Some(serde_json::json!({"name": "Gamma"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, list) = send(&state, "GET", "/stats/absorptions", None).await;
+        let absorptions = list["absorptions"].as_array().unwrap();
+        assert_eq!(absorptions.len(), 1, "{list}");
+        assert_eq!(absorptions[0]["absorbent"]["key"], "gamma");
+        assert_eq!(absorptions[0]["absorbent"]["name"], "Gamma");
+        let mut members: Vec<(String, String)> = absorptions[0]["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                (
+                    m["key"].as_str().unwrap().to_string(),
+                    m["origin"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        members.sort();
+        assert_eq!(
+            members,
+            vec![
+                ("alpha".to_string(), "rename".to_string()),
+                ("beta".to_string(), "rename".to_string()),
+            ]
+        );
+
+        // A display-only rename keeps the id: nothing is recorded.
+        let (status, body) = send(
+            &state,
+            "PUT",
+            "/pipelines/gamma/rename",
+            Some(serde_json::json!({"name": "gamma"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["id"], "gamma");
+        let (_, after) = send(&state, "GET", "/stats/absorptions", None).await;
+        assert_eq!(after, list, "a same-id rename records nothing");
+    }
+
+    /// #891 — a save whose `name:` change moves the file is a rename too.
+    #[tokio::test]
+    async fn stats_absorption_is_recorded_by_a_save_that_changes_the_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "saved-old");
+        let state = test_state_with_dir(tmp.path()).await;
+        let yaml = std::fs::read_to_string(tmp.path().join(".pdo/pipelines/saved-old.yaml"))
+            .unwrap()
+            .replace("name: saved-old", "name: Saved New");
+        let response = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/saved-old")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"yaml": yaml, "prompts": {}}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let rows = stats_absorption::list(&state.db).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].member, "saved-old");
+        assert_eq!(rows[0].member_name, "saved-old");
+        assert_eq!(rows[0].absorbent, "saved-new");
+        assert_eq!(rows[0].absorbent_name, "Saved New");
+        assert_eq!(rows[0].origin, "rename");
     }
 
     /// `GET /stats/performance` — the whole shape in one cohort: success-only

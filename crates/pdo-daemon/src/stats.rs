@@ -92,6 +92,9 @@ pub(crate) struct PipelineFireCount {
     /// (the trigger row was deleted; there is no cascade, so the fire survives
     /// and must be surfaced, never dropped — hence the `LEFT JOIN`).
     pub pipeline_id: String,
+    /// What the chart shows (#891 — never the key): the name of the Pipeline's
+    /// Sessions row, else the stored name of an absorbent, else the key itself.
+    pub name: String,
     pub count: i64,
 }
 
@@ -338,7 +341,14 @@ async fn fires_by_pipeline(
     }
     let mut fires: Vec<PipelineFireCount> = merged
         .into_iter()
-        .map(|(pipeline_id, count)| PipelineFireCount { pipeline_id, count })
+        .map(|(pipeline_id, count)| PipelineFireCount {
+            name: resolver
+                .stored_name(&pipeline_id)
+                .unwrap_or(&pipeline_id)
+                .to_string(),
+            pipeline_id,
+            count,
+        })
         .collect();
     fires.sort_by(|a, b| {
         b.count
@@ -573,6 +583,16 @@ pub(crate) async fn stats_overview(
             overview.session_harnesses = sessions.harnesses;
             overview.sessions_by_period = sessions.periods;
             overview.sessions_by_pipeline = sessions.pipelines;
+            // A fired Pipeline that ran in the period reads under its row's name.
+            for fire in &mut overview.fires_by_pipeline {
+                if let Some(row) = overview
+                    .sessions_by_pipeline
+                    .iter()
+                    .find(|row| row.id == fire.pipeline_id)
+                {
+                    fire.name = row.name.clone();
+                }
+            }
             Json(overview).into_response()
         }
         (Err(e), _) | (_, Err(e)) => (

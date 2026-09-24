@@ -43,6 +43,32 @@ export function CombinedIcon({ count, onOpen }: { count: number; onOpen: () => v
   );
 }
 
+/** The ✕ that takes one member out of its absorption — in the members list and
+ *  in Settings › General › Stats absorptions (#891), the same gesture. */
+export function UncombineButton({
+  name,
+  disabled,
+  onClick,
+}: {
+  name: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`Uncombine ${name}`}
+      title={`Uncombine ${name}`}
+      disabled={disabled}
+      onClick={onClick}
+      data-testid="stats-uncombine"
+      className="shrink-0 cursor-pointer rounded p-1 text-fg-4 transition-colors hover:text-st-failed disabled:opacity-50"
+    >
+      <X size={12} />
+    </button>
+  );
+}
+
 // --- Modals ---------------------------------------------------------------------
 
 function ModalFrame({
@@ -270,17 +296,11 @@ export function MembersModal<T extends AbsorbableRow>({
                 {activity(count.ofMember(member), count.word, member.last_run)}
               </span>
             </span>
-            <button
-              type="button"
-              aria-label={`Uncombine ${member.name}`}
-              title={`Uncombine ${member.name}`}
+            <UncombineButton
+              name={member.name}
               disabled={busyKey !== null}
               onClick={() => onUncombine(member)}
-              data-testid="stats-uncombine"
-              className="shrink-0 cursor-pointer rounded p-1 text-fg-4 transition-colors hover:text-st-failed disabled:opacity-50"
-            >
-              <X size={12} />
-            </button>
+            />
           </li>
         ))}
       </ul>

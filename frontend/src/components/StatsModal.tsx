@@ -1,7 +1,7 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { RotateCw } from "lucide-react";
 import FullWindowShell from "./FullWindowShell";
-import { syncCostPrices } from "../api";
+import { fetchStatsAbsorptions, syncCostPrices } from "../api";
 import { useStats } from "../hooks/useStats";
 import type { PriceRow, StatsCost, SyncCostPricesReport } from "../types";
 import type { StatsTab } from "./StatsCharts";
@@ -225,6 +225,24 @@ function StatsSurface({
   const [reloadKey, setReloadKey] = useState(0);
   // Bumped by every Combine / Uncombine (#890): all tabs read the new absorptions.
   const [absorptionsVersion, setAbsorptionsVersion] = useState(0);
+  // « Uncombined » (#891): off at each open like every Stats setting, one
+  // reading for Sessions, Triggers, Cost and Performance. Its chip only shows
+  // once the instance has an absorption to set aside.
+  const [uncombined, setUncombined] = useState(false);
+  const [hasAbsorptions, setHasAbsorptions] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetchStatsAbsorptions()
+      .then((list) => {
+        if (!cancelled) setHasAbsorptions(list.absorptions.length > 0);
+      })
+      .catch(() => {
+        // No list, no chip: the tabs still read with the absorptions applied.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [absorptionsVersion]);
   const [syncReport, setSyncReport] = useState<SyncCostPricesReport | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -257,6 +275,7 @@ function StatsSurface({
       performance: performanceCompletedOnly,
     },
     absorptionsVersion,
+    uncombined,
   );
 
   const refreshing =
@@ -446,6 +465,10 @@ function StatsSurface({
           onBandChange={setBand}
           onResetFilters={onResetFilters}
           onAbsorptionsChanged={() => setAbsorptionsVersion((value) => value + 1)}
+          uncombined={uncombined}
+          onUncombinedChange={setUncombined}
+          // Kept while on, so the reading can always be turned back off.
+          showUncombined={hasAbsorptions || uncombined}
         />
       </Suspense>
     </FullWindowShell>

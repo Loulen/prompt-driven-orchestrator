@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Info } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Combine, Info } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -425,9 +425,12 @@ const RUNS_COUNT = {
 
 function SessionsTab({
   overview,
+  uncombined,
   onAbsorptionsChanged,
 }: {
   overview: StatsOverview;
+  /** « Uncombined » (#891): the raw rows are a comparison, not a place to combine. */
+  uncombined: boolean;
   onAbsorptionsChanged: () => void;
 }) {
   const rows = useMemo(
@@ -440,7 +443,7 @@ function SessionsTab({
   const detailRows = selected?.nodes ?? rows;
   const absorption = usePipelineAbsorption({
     rows,
-    enabled: true,
+    enabled: !uncombined,
     count: SESSIONS_COUNT,
     onChanged: onAbsorptionsChanged,
   });
@@ -562,9 +565,14 @@ function TriggersTab({ overview }: { overview: StatsOverview }) {
         <EmptyNote>No trigger fires in this period.</EmptyNote>
       ) : (
         <ChartFrame>
-          <BarChart data={overview.fires_by_pipeline}>
+          <BarChart
+            data={overview.fires_by_pipeline.map((fire) => ({
+              ...fire,
+              label: fire.name ?? fire.pipeline_id,
+            }))}
+          >
             <CartesianGrid stroke={CHART.grid} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="pipeline_id" {...AXIS_PROPS} />
+            <XAxis dataKey="label" {...AXIS_PROPS} />
             <YAxis allowDecimals={false} {...AXIS_PROPS} />
             <RTooltip
               contentStyle={{
@@ -1027,10 +1035,12 @@ type CostAxis = "pipeline" | "project" | "model";
 function CostTab({
   cost,
   error,
+  uncombined,
   onAbsorptionsChanged,
 }: {
   cost: StatsCost | null;
   error: string | null;
+  uncombined: boolean;
   onAbsorptionsChanged: () => void;
 }) {
   const [axis, setAxis] = useState<CostAxis>("pipeline");
@@ -1038,7 +1048,7 @@ function CostTab({
   // grouping drops the selection with them.
   const absorption = usePipelineAbsorption({
     rows: cost?.by_pipeline ?? [],
-    enabled: axis === "pipeline",
+    enabled: axis === "pipeline" && !uncombined,
     count: RUNS_COUNT,
     onChanged: onAbsorptionsChanged,
   });
@@ -2443,6 +2453,41 @@ function CohortChip({
   );
 }
 
+/** « Uncombined » (#891, ADR-0077): read the tab without the absorptions, to
+ *  compare before and after without undoing anything. One reading for every
+ *  tab that shows Pipelines, off at each open (« Réglages de Stats éphémères »),
+ *  and shown only once the instance has an absorption to set aside. */
+function UncombinedChip({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      data-testid="stats-uncombined"
+      title="Show the original rows, as if nothing were combined"
+      onClick={() => onChange(!checked)}
+      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+        checked
+          ? "border-st-done bg-st-done/15 text-fg"
+          : "border-line-strong bg-bg-3 text-fg-2"
+      }`}
+    >
+      {checked ? (
+        <Check size={10} strokeWidth={3} aria-hidden="true" />
+      ) : (
+        <Combine size={10} aria-hidden="true" />
+      )}
+      uncombined
+    </button>
+  );
+}
+
 const DURATION_MODE_LABEL: Record<DurationMode, string> = {
   total: "Total",
   active: "Active",
@@ -2591,15 +2636,21 @@ function CohortOnlyBand({
   label,
   completedOnly,
   onCompletedOnlyChange,
+  uncombined,
 }: {
   label: string;
   completedOnly: boolean;
   onCompletedOnlyChange: (value: boolean) => void;
+  /** The « Uncombined » chip, on the tabs that show Pipelines (not Overview). */
+  uncombined?: { checked: boolean; onChange: (value: boolean) => void };
 }) {
   return (
     <StatsFilterBand label={label} testid="stats-filter-band">
       <CohortChip checked={completedOnly} onChange={onCompletedOnlyChange} />
       <span className="text-fg-4">default: all runs</span>
+      {uncombined && (
+        <UncombinedChip checked={uncombined.checked} onChange={uncombined.onChange} />
+      )}
     </StatsFilterBand>
   );
 }
@@ -2612,12 +2663,18 @@ function PerformanceTab({
   band,
   onBandChange,
   onResetFilters,
+  uncombined,
+  onUncombinedChange,
+  showUncombined,
   onAbsorptionsChanged,
 }: {
   performance: StatsPerformance | null;
   error: string | null;
   completedOnly: boolean;
   onCompletedOnlyChange: (value: boolean) => void;
+  uncombined: boolean;
+  onUncombinedChange: (value: boolean) => void;
+  showUncombined: boolean;
   /** The band's controls, owned by the shell so a tab switch keeps them (#819). */
   band: PerformanceBand;
   onBandChange: (band: PerformanceBand) => void;
@@ -2650,7 +2707,7 @@ function PerformanceTab({
   // Infrastructure row beside them, never the « By model » axis.
   const absorption = usePipelineAbsorption({
     rows: performance?.by_pipeline ?? [],
-    enabled: axis === "pipeline",
+    enabled: axis === "pipeline" && !uncombined,
     count: RUNS_COUNT,
     onChanged: onAbsorptionsChanged,
   });
@@ -2691,6 +2748,9 @@ function PerformanceTab({
       }
     >
       <CohortChip checked={completedOnly} onChange={onCompletedOnlyChange} />
+      {showUncombined && (
+        <UncombinedChip checked={uncombined} onChange={onUncombinedChange} />
+      )}
       <BandDivider />
       <span className="text-fg-4">Duration</span>
       <DurationModeSegments value={mode} onChange={onDurationModeChange} />
@@ -3091,6 +3151,12 @@ export interface StatsChartsProps {
   onResetFilters?: () => void;
   /** A Combine or an Uncombine landed (#890): the host refetches every tab. */
   onAbsorptionsChanged?: () => void;
+  /** « Uncombined » (#891): the rows as the event log wrote them. Owned by the
+   *  shell (one reading for Sessions, Triggers, Cost and Performance, back to
+   *  off at each open); the chip only shows when `showUncombined`. */
+  uncombined?: boolean;
+  onUncombinedChange?: (value: boolean) => void;
+  showUncombined?: boolean;
 }
 
 /** The legend each tab's band carries — it names the tab, not the endpoint. */
@@ -3114,6 +3180,9 @@ export default function StatsCharts({
   onBandChange = () => {},
   onResetFilters = () => {},
   onAbsorptionsChanged = () => {},
+  uncombined = false,
+  onUncombinedChange = () => {},
+  showUncombined = false,
 }: StatsChartsProps) {
   // #759: subscribing here re-renders the whole chart subtree on a theme switch,
   // so every `CHART.*` / `harnessColor()` read below resolves against the new
@@ -3132,6 +3201,9 @@ export default function StatsCharts({
         band={band}
         onBandChange={onBandChange}
         onResetFilters={onResetFilters}
+        uncombined={uncombined}
+        onUncombinedChange={onUncombinedChange}
+        showUncombined={showUncombined}
         onAbsorptionsChanged={onAbsorptionsChanged}
       />
     );
@@ -3139,13 +3211,24 @@ export default function StatsCharts({
   const body = () => {
     if (tab === "cost")
       return (
-        <CostTab cost={cost} error={costError} onAbsorptionsChanged={onAbsorptionsChanged} />
+        <CostTab
+          cost={cost}
+          error={costError}
+          uncombined={uncombined}
+          onAbsorptionsChanged={onAbsorptionsChanged}
+        />
       );
     if (!overview) return <EmptyNote>Loading…</EmptyNote>;
     if (tab === "runs")
       return <RunsTab overview={overview} completedOnly={completedOnly} />;
     if (tab === "sessions")
-      return <SessionsTab overview={overview} onAbsorptionsChanged={onAbsorptionsChanged} />;
+      return (
+        <SessionsTab
+          overview={overview}
+          uncombined={uncombined}
+          onAbsorptionsChanged={onAbsorptionsChanged}
+        />
+      );
     return <TriggersTab overview={overview} />;
   };
   return (
@@ -3155,6 +3238,12 @@ export default function StatsCharts({
           label={TAB_BAND_LABEL[tab]}
           completedOnly={completedOnly}
           onCompletedOnlyChange={onCompletedOnlyChange}
+          uncombined={
+            // Overview (the Runs tab) has no Pipeline rows: nothing to uncombine.
+            tab !== "runs" && showUncombined
+              ? { checked: uncombined, onChange: onUncombinedChange }
+              : undefined
+          }
         />
         <CohortLine
           completedOnly={completedOnly}

@@ -34,6 +34,9 @@ const fetchUpdateStatusMock = vi.fn().mockResolvedValue({
 const checkForUpdateNowMock = vi.fn();
 const fetchUpdateAttemptLogMock = vi.fn();
 const createAgentProfileMock = vi.fn();
+// #891: Settings › General › Stats absorptions reads its own resource.
+const fetchStatsAbsorptionsMock = vi.fn().mockResolvedValue({ absorptions: [] });
+const uncombineStatsMemberMock = vi.fn();
 
 // #431: `browseFs` MUST be in this factory now that the Dockerfile picker renders
 // `FsExplorerModal`. Vitest 4 wraps the factory's return in a Proxy whose `get` trap
@@ -79,6 +82,8 @@ vi.mock("../api", () => ({
   createSkillFolder: vi.fn(),
   updateSkillFolder: vi.fn(),
   deleteSkillFolder: vi.fn(),
+  fetchStatsAbsorptions: (...args: unknown[]) => fetchStatsAbsorptionsMock(...args),
+  uncombineStatsMember: (...args: unknown[]) => uncombineStatsMemberMock(...args),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;
@@ -1795,13 +1800,14 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       within(screen.getByTestId("settings-page-general").querySelector("nav") as HTMLElement)
         .getAllByRole("button")
         .map((button) => button.textContent);
-    // #823 added Tutorials as General's fifth section.
+    // #823 added Tutorials as General's fifth section, #891 Stats absorptions.
     expect(entries()).toEqual([
       "Interface",
       "Runtime limits",
       "Runs",
       "Version & update",
       "Tutorials",
+      "Stats absorptions",
     ]);
     expect(screen.getByTestId("settings-section-interface")).toHaveAttribute("aria-current", "true");
 
@@ -2437,5 +2443,81 @@ describe("SettingsSurface — Tutorials (#823)", () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onStartFullTour).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SettingsSurface — Stats absorptions (#891)", () => {
+  const list = (members: { key: string; name: string; origin: "manual" | "rename" }[]) => ({
+    absorptions: [
+      {
+        dimension: "pipeline" as const,
+        scope: "",
+        absorbent: { key: "digest-v3", name: "Digest v3" },
+        members: members.map((member) => ({ ...member, created_at: "2026-09-20T10:00:00Z" })),
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    fetchSettingsMock.mockReset().mockResolvedValue(sample());
+    updateSettingsMock.mockReset();
+    fetchStatsAbsorptionsMock.mockReset().mockResolvedValue(
+      list([
+        { key: "digest", name: "Digest", origin: "rename" },
+        { key: "nightly", name: "Nightly", origin: "manual" },
+      ]),
+    );
+    uncombineStatsMemberMock.mockReset();
+  });
+
+  it("lists every absorption under General, with its origin and no technical key", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    const body = await screen.findByTestId("settings-section-body-stats-absorptions");
+    expect(within(body).getByText("saves as you go")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-stats-absorptions")).toHaveTextContent(
+      "Stats absorptions",
+    );
+
+    expect(await within(body).findByText("Digest v3")).toBeInTheDocument();
+    const members = within(body).getAllByTestId("stats-absorption-member");
+    expect(members).toHaveLength(2);
+    expect(members[0]).toHaveTextContent("Digest");
+    expect(members[0]).toHaveTextContent("renamed on 2026-09-20");
+    expect(members[1]).toHaveTextContent("Nightly");
+    expect(members[1]).toHaveTextContent("combined in Stats on 2026-09-20");
+    // Names only: the keys never reach the screen.
+    expect(body).not.toHaveTextContent("digest-v3");
+    expect(body).not.toHaveTextContent(/#\d|ADR/);
+  });
+
+  it("takes a member out at once, without the form's Save", async () => {
+    uncombineStatsMemberMock.mockResolvedValue(
+      list([{ key: "nightly", name: "Nightly", origin: "manual" }]),
+    );
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={() => {}} />);
+    const body = await screen.findByTestId("settings-section-body-stats-absorptions");
+    await user.click(await within(body).findByRole("button", { name: "Uncombine Digest" }));
+
+    expect(uncombineStatsMemberMock).toHaveBeenCalledWith("pipeline", "", "digest");
+    await waitFor(() =>
+      expect(within(body).getAllByTestId("stats-absorption-member")).toHaveLength(1),
+    );
+    expect(within(body).queryByText("Digest")).not.toBeInTheDocument();
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("settings-save")).toBeDisabled();
+  });
+
+  it("says so when nothing is combined, and re-reads the list at each open", async () => {
+    fetchStatsAbsorptionsMock.mockResolvedValue({ absorptions: [] });
+    const { rerender } = render(<SettingsSurface open onClose={() => {}} />);
+    expect(await screen.findByTestId("stats-absorptions-empty")).toBeInTheDocument();
+
+    fetchStatsAbsorptionsMock.mockResolvedValue(
+      list([{ key: "digest", name: "Digest", origin: "rename" }]),
+    );
+    rerender(<SettingsSurface open={false} onClose={() => {}} />);
+    rerender(<SettingsSurface open onClose={() => {}} />);
+    expect(await screen.findByText("Digest v3")).toBeInTheDocument();
   });
 });

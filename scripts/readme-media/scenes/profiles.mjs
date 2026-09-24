@@ -117,9 +117,10 @@ async function openProfile(ctx) {
     const box = await row.boundingBox();
     if (box && box.y > 60 && box.y + box.height < height - 70) break;
   }
-  // #899: only the row's Edit pencil opens the editor, in a modal.
+  // The editor is a modal (#899), opened from the row's Edit pencil.
   await ctx.keep(() => ctx.click(panel.getByRole("button", { name: `Edit ${PROFILE.name}` }), { duration: 500 }));
-  await page.getByTestId("agent-profile-model-trigger").waitFor({ timeout: 10_000 });
+  const modal = page.getByTestId("agent-profile-modal");
+  await modal.getByTestId("agent-profile-model-trigger").waitFor({ timeout: 10_000 });
   await sleep(200);
   return panel;
 }
@@ -127,7 +128,8 @@ async function openProfile(ctx) {
 /** Save the profile (kept), wait for its row to read the new combination
  *  (cut), and mark it. */
 async function saveProfile(ctx, panel, combination) {
-  await ctx.keep(() => ctx.click(ctx.page.getByTestId("agent-profile-modal").getByRole("button", { name: "Save profile" }), { duration: 500 }));
+  await ctx.keep(() => ctx.click(ctx.page.getByTestId("agent-profile-save"), { duration: 500 }));
+  await ctx.page.getByTestId("agent-profile-modal").waitFor({ state: "detached", timeout: 15_000 });
   await panel.getByText(combination, { exact: true }).waitFor({ timeout: 15_000 });
   await sleep(200);
   ctx.mark("profile-changed", { before: 100, after: 900 });
@@ -208,7 +210,10 @@ export default {
           await ctx.click(page.getByTestId("agent-profile-harness"), { duration: 330 });
           await ctx.click(page.getByTestId("agent-profile-harness-menu").getByText("copilot", { exact: true }), { duration: 330 });
           await ctx.click(page.getByTestId("agent-profile-model-trigger"), { duration: 350 });
-          await ctx.click(page.getByTestId("agent-profile-model-option-gpt-5.6-sol"), { duration: 350 });
+          // copilot's list scrolls inside the modal: bring the option in first.
+          const option = page.getByTestId("agent-profile-model-option-gpt-5.6-sol");
+          await option.scrollIntoViewIfNeeded();
+          await ctx.click(option, { duration: 350 });
           await sleep(200);
         });
         await saveProfile(ctx, panel, "copilot · gpt-5.6-sol · —");

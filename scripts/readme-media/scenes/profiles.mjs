@@ -95,7 +95,7 @@ async function settled(locator) {
   }
 }
 
-/** Settings › Agents › Agent profiles, then the profile's editor. The page
+/** Settings › Agents › Agent profiles, then the profile's editor modal. The page
  *  loads and the rail click (outside the crop) are cut. */
 async function openProfile(ctx) {
   const { page } = ctx;
@@ -117,21 +117,19 @@ async function openProfile(ctx) {
     const box = await row.boundingBox();
     if (box && box.y > 60 && box.y + box.height < height - 70) break;
   }
-  await ctx.keep(() => ctx.click(row, { duration: 500 }));
-  await page.getByTestId("agent-profile-model-trigger").waitFor({ timeout: 10_000 });
+  // The editor is a modal (#899), opened from the row's Edit pencil.
+  await ctx.keep(() => ctx.click(panel.getByRole("button", { name: `Edit ${PROFILE.name}` }), { duration: 500 }));
+  const modal = page.getByTestId("agent-profile-modal");
+  await modal.getByTestId("agent-profile-model-trigger").waitFor({ timeout: 10_000 });
   await sleep(200);
-  // The editor opens under the list: wheel it into view, Save included.
-  const save = await panel.getByRole("button", { name: "Save profile" }).boundingBox();
-  const bottom = height * 0.86;
-  if (save.y + save.height > bottom) await ctx.keep(() => ctx.scroll(save.y + save.height - bottom, { duration: 500 }));
-  await sleep(150);
   return panel;
 }
 
 /** Save the profile (kept), wait for its row to read the new combination
  *  (cut), and mark it. */
 async function saveProfile(ctx, panel, combination) {
-  await ctx.keep(() => ctx.click(panel.getByRole("button", { name: "Save profile" }), { duration: 500 }));
+  await ctx.keep(() => ctx.click(ctx.page.getByTestId("agent-profile-save"), { duration: 500 }));
+  await ctx.page.getByTestId("agent-profile-modal").waitFor({ state: "detached", timeout: 15_000 });
   await panel.getByText(combination, { exact: true }).waitFor({ timeout: 15_000 });
   await sleep(200);
   ctx.mark("profile-changed", { before: 100, after: 900 });
@@ -212,7 +210,10 @@ export default {
           await ctx.click(page.getByTestId("agent-profile-harness"), { duration: 330 });
           await ctx.click(page.getByTestId("agent-profile-harness-menu").getByText("copilot", { exact: true }), { duration: 330 });
           await ctx.click(page.getByTestId("agent-profile-model-trigger"), { duration: 350 });
-          await ctx.click(page.getByTestId("agent-profile-model-option-gpt-5.6-sol"), { duration: 350 });
+          // copilot's list scrolls inside the modal: bring the option in first.
+          const option = page.getByTestId("agent-profile-model-option-gpt-5.6-sol");
+          await option.scrollIntoViewIfNeeded();
+          await ctx.click(option, { duration: 350 });
           await sleep(200);
         });
         await saveProfile(ctx, panel, "copilot · gpt-5.6-sol · —");

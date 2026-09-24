@@ -157,6 +157,7 @@ use serde_json::Value;
 
 use crate::distribution::r7_distribution;
 use crate::event_log::EventKind;
+use crate::stats_absorption::{AbsorbedMember, AbsorptionResolver, PipelineTallies, RunIdentity};
 use crate::AppState;
 
 /// Query string: an ISO-8601 `[from, to)` window — the same cohort rule as
@@ -176,6 +177,10 @@ pub(crate) struct PerformanceQuery {
     /// same Runs.
     #[serde(default)]
     pub completed_only: bool,
+    /// « Uncombined » (#888, ADR-0077): no absorption applied. Shared verbatim
+    /// with `/stats/overview` and `/stats/cost`.
+    #[serde(default)]
+    pub uncombined: bool,
 }
 
 /// One metric's coverage for one row × one harness. **Never null on the wire**:
@@ -261,6 +266,14 @@ pub(crate) struct PerformanceEntity {
     /// already the drill).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<PerformanceModelEffortPair>,
+    /// Pipeline rows only (#890): the Runs counted, the most recent one's start,
+    /// and — on an absorbent — its absorbed members. Omitted on the other levels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub absorbed: Vec<AbsorbedMember>,
 }
 
 /// One model × effort couple of a Node leaf (ADR-0065): the performance
@@ -368,7 +381,16 @@ pub(crate) async fn stats_performance(
     State(state): State<Arc<AppState>>,
     Query(q): Query<PerformanceQuery>,
 ) -> Response {
-    match compute_performance(&state, &q.from, &q.to, q.refresh, q.completed_only).await {
+    match compute_performance(
+        &state,
+        &q.from,
+        &q.to,
+        q.refresh,
+        q.completed_only,
+        q.uncombined,
+    )
+    .await
+    {
         Ok(payload) => Json(payload).into_response(),
         Err(error) => error.into_response(),
     }
@@ -571,6 +593,7 @@ fn finish_subagents(subagents: BTreeMap<String, SubagentAcc>) -> Vec<Performance
             interactive: None,
             orchestrator: None,
             models: Vec::new(),
+            ..Default::default()
         })
         .collect()
 }
@@ -585,6 +608,7 @@ fn finish_node(id: String, acc: NodeAcc) -> PerformanceEntity {
         interactive: Some(acc.kind.interactive),
         orchestrator: Some(acc.kind.orchestrator),
         models: wire_model_pairs(acc.pairs),
+        ..Default::default()
     }
 }
 
@@ -604,6 +628,7 @@ fn finish_infra_role(id: &str, name: &str, acc: NodeAcc) -> PerformanceEntity {
         // Infrastructure carries no model identity (module doc): an empty
         // `models` is omitted on the wire, never an empty array.
         models: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -612,10 +637,19 @@ struct PipelineAcc {
     name: String,
     by_harness: BTreeMap<String, HarnessAcc>,
     nodes: BTreeMap<String, NodeAcc>,
+    tallies: PipelineTallies,
 }
 
-fn finish_pipeline(id: String, acc: PipelineAcc) -> PerformanceEntity {
+fn finish_pipeline(
+    id: String,
+    acc: PipelineAcc,
+    resolver: &AbsorptionResolver,
+) -> PerformanceEntity {
+    let absorbed = resolver.absorbed(&id, &acc.tallies);
     PerformanceEntity {
+        runs: Some(acc.tallies.runs()),
+        last_run: acc.tallies.last_run(),
+        absorbed,
         id,
         name: acc.name,
         harnesses: finish_by_harness(acc.by_harness),
@@ -734,8 +768,7 @@ struct ModelAxisModelAcc {
 fn record_model_observation(
     model_axis: &mut BTreeMap<String, ModelAxisModelAcc>,
     node_pairs: &mut BTreeMap<ModelEffortKey, ModelPairAcc>,
-    pipeline_id: &str,
-    pipeline_name: &str,
+    pipeline: &RunIdentity,
     node_id: &str,
     node_name: &str,
     node_kind: NodeKind,
@@ -758,9 +791,9 @@ fn record_model_observation(
         .or_default();
     let pipeline_acc = effort_acc
         .pipelines
-        .entry(pipeline_id.to_string())
+        .entry(pipeline.pipeline_key.clone())
         .or_default();
-    pipeline_acc.name = pipeline_name.to_string();
+    pipeline.adopt_name(&mut pipeline_acc.name);
     let node_acc = pipeline_acc.nodes.entry(node_id.to_string()).or_default();
     node_acc.name = node_name.to_string();
     node_acc.kind = node_kind;
@@ -860,6 +893,7 @@ fn wire_model_axis(
                                     interactive: Some(node_acc.kind.interactive),
                                     orchestrator: Some(node_acc.kind.orchestrator),
                                     models: Vec::new(),
+                                    ..Default::default()
                                 })
                                 .collect();
                             PerformanceEntity {
@@ -871,6 +905,7 @@ fn wire_model_axis(
                                 interactive: None,
                                 orchestrator: None,
                                 models: Vec::new(),
+                                ..Default::default()
                             }
                         })
                         .collect();
@@ -884,6 +919,7 @@ fn wire_model_axis(
                             interactive: None,
                             orchestrator: None,
                             models: Vec::new(),
+                            ..Default::default()
                         },
                         effort,
                         provenance: effort_provenance,
@@ -901,6 +937,7 @@ fn wire_model_axis(
                     interactive: None,
                     orchestrator: None,
                     models: Vec::new(),
+                    ..Default::default()
                 },
                 provenance: crate::stats::provenance(model_observed, model_requested),
                 efforts,
@@ -1335,8 +1372,7 @@ fn fold_subagents(
     subagents: &mut BTreeMap<String, SubagentAcc>,
     mut node_pairs: Option<&mut BTreeMap<ModelEffortKey, ModelPairAcc>>,
     mut model_axis: Option<&mut BTreeMap<String, ModelAxisModelAcc>>,
-    pipeline_id: &str,
-    pipeline_name: &str,
+    pipeline: Option<&RunIdentity>,
     node_id: &str,
     node_name: &str,
     node_kind: NodeKind,
@@ -1370,9 +1406,11 @@ fn fold_subagents(
         // a subagent on another model lands in its own bucket. A subagent has no
         // startup event, so ONLY the observed identities count: a mute file
         // invents nothing (never a "default of X" bucket).
-        if let (Some(node_pairs), Some(model_axis)) =
-            (node_pairs.as_deref_mut(), model_axis.as_deref_mut())
-        {
+        if let (Some(node_pairs), Some(model_axis), Some(pipeline)) = (
+            node_pairs.as_deref_mut(),
+            model_axis.as_deref_mut(),
+            pipeline,
+        ) {
             let source = crate::harness_probes::observed_identity_source(harness);
             if source.is_some() {
                 for identity in crate::harness_probes::observed_identities(harness, &text) {
@@ -1396,8 +1434,7 @@ fn fold_subagents(
                     record_model_observation(
                         model_axis,
                         node_pairs,
-                        pipeline_id,
-                        pipeline_name,
+                        pipeline,
                         node_id,
                         node_name,
                         node_kind,
@@ -1428,8 +1465,7 @@ fn record_node_success(
     pipeline_by_harness: &mut BTreeMap<String, HarnessAcc>,
     total_by_harness: &mut BTreeMap<String, HarnessAcc>,
     model_axis: &mut BTreeMap<String, ModelAxisModelAcc>,
-    pipeline_id: &str,
-    pipeline_name: &str,
+    pipeline: &RunIdentity,
     node_id: &str,
     node_name: &str,
     claude_root: &Path,
@@ -1491,8 +1527,7 @@ fn record_node_success(
         record_model_observation(
             model_axis,
             &mut node_acc.pairs,
-            pipeline_id,
-            pipeline_name,
+            pipeline,
             node_id,
             node_name,
             pending.kind,
@@ -1509,8 +1544,7 @@ fn record_node_success(
         &mut node_acc.subagents,
         Some(&mut node_acc.pairs),
         Some(model_axis),
-        pipeline_id,
-        pipeline_name,
+        Some(pipeline),
         node_id,
         node_name,
         pending.kind,
@@ -1716,8 +1750,7 @@ fn record_infra_success(
             &mut acc.subagents,
             None,
             None,
-            "",
-            "",
+            None,
             "",
             "",
             NodeKind::default(),
@@ -1789,6 +1822,7 @@ pub(crate) fn recompute_count_for_test(from: &str, to: &str) -> u32 {
 /// calls needed to know whether anything changed, never a transcript read.
 struct RunContext {
     run_id: String,
+    started_at: String,
     payload: Value,
     events: Vec<crate::event_log::Event>,
     claude_root: PathBuf,
@@ -1805,9 +1839,13 @@ async fn compute_performance(
     to: &str,
     refresh: bool,
     completed_only: bool,
+    uncombined: bool,
 ) -> Result<StatsPerformance, PerformanceError> {
-    let rows = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT run_id, payload FROM events \
+    let resolver = AbsorptionResolver::load(&state.db, uncombined)
+        .await
+        .map_err(|e| PerformanceError::Db(e.to_string()))?;
+    let rows = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT run_id, ts, payload FROM events \
          WHERE kind = 'run_started' AND ts >= ? AND ts < ? ORDER BY ts",
     )
     .bind(from)
@@ -1830,7 +1868,11 @@ async fn compute_performance(
     // without this, toggling « completed runs only » could serve the other
     // cohort's answer.
     completed_only.hash(&mut key_hasher);
-    for (run_id, payload) in rows {
+    // #890 / ADR-0077 §2: this memo keeps already-aggregated trees, so the
+    // absorptions they were folded under are part of its identity — a Combine or
+    // an Uncombine recomputes.
+    resolver.fingerprint().hash(&mut key_hasher);
+    for (run_id, started_at, payload) in rows {
         let payload: Value = payload
             .as_deref()
             .and_then(|p| serde_json::from_str(p).ok())
@@ -1879,6 +1921,7 @@ async fn compute_performance(
 
         contexts.push(RunContext {
             run_id,
+            started_at,
             payload,
             events,
             claude_root,
@@ -1900,7 +1943,7 @@ async fn compute_performance(
     #[cfg(test)]
     record_recompute_for_test(&key);
 
-    let value = fold_performance(contexts)?;
+    let value = fold_performance(contexts, &resolver)?;
 
     let mut guard = performance_memo()
         .lock()
@@ -1915,7 +1958,10 @@ async fn compute_performance(
 /// The heavy fold — every transcript read and subagent directory scan, gated
 /// behind the memo. Synchronous: events are already loaded into [`RunContext`],
 /// so nothing here touches `state.db` again.
-fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, PerformanceError> {
+fn fold_performance(
+    contexts: Vec<RunContext>,
+    resolver: &AbsorptionResolver,
+) -> Result<StatsPerformance, PerformanceError> {
     let mut seen_roots: HashSet<PathBuf> = HashSet::new();
     let mut pipelines: BTreeMap<String, PipelineAcc> = BTreeMap::new();
     let mut model_axis: BTreeMap<String, ModelAxisModelAcc> = BTreeMap::new();
@@ -1933,6 +1979,7 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
 
     for RunContext {
         run_id,
+        started_at,
         payload,
         events,
         claude_root,
@@ -1940,17 +1987,8 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
         stores,
     } in contexts
     {
-        let pipeline_id = payload
-            .get("pipeline_id")
-            .and_then(|v| v.as_str())
-            .or_else(|| payload.get("pipeline_name").and_then(|v| v.as_str()))
-            .unwrap_or("(unknown)")
-            .to_string();
-        let pipeline_name = payload
-            .get("pipeline_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&pipeline_id)
-            .to_string();
+        // The Run's identity, absorptions applied (#890, ADR-0077).
+        let identity = resolver.run_identity(&payload);
         let node_defs = node_defs_from_payload(&payload);
         let run_harness = payload
             .get("harness")
@@ -1959,8 +1997,11 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
             .unwrap_or(crate::harness_registry::CLAUDE)
             .to_string();
 
-        let pipeline_acc = pipelines.entry(pipeline_id.clone()).or_default();
-        pipeline_acc.name = pipeline_name.clone();
+        let pipeline_acc = pipelines.entry(identity.pipeline_key.clone()).or_default();
+        identity.adopt_name(&mut pipeline_acc.name);
+        pipeline_acc
+            .tallies
+            .record_run(&identity, &run_id, &started_at);
 
         // #810: the declared wait of every execution of this Run, resolved in
         // one pass BEFORE the fold — a wait closed by the very `NodeCompleted`
@@ -2099,8 +2140,7 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             &mut pipeline_acc.by_harness,
                             &mut total_by_harness,
                             &mut model_axis,
-                            &pipeline_id,
-                            &pipeline_name,
+                            &identity,
                             &node_id,
                             &node_name,
                             &claude_root,
@@ -2223,7 +2263,7 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
 
     let mut pipeline_rows: Vec<PerformanceEntity> = pipelines
         .into_iter()
-        .map(|(id, acc)| finish_pipeline(id, acc))
+        .map(|(id, acc)| finish_pipeline(id, acc, resolver))
         .collect();
     pipeline_rows.sort_by(|a, b| a.id.cmp(&b.id));
 

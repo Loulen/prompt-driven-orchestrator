@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -542,6 +542,32 @@ export function fetchStatsPerformance(
       ...(refresh ? { refresh: true } : {}),
       ...(completedOnly ? { completed_only: true } : {}),
     },
+  });
+}
+
+/** Every Stats absorption of the instance (#890, ADR-0077). */
+export function fetchStatsAbsorptions(): Promise<StatsAbsorptionList> {
+  return request<StatsAbsorptionList>("GET", "/stats/absorptions");
+}
+
+/**
+ * Combine Pipelines (#890): `absorbent` keeps its name and counts `members`'
+ * runs in every tab. Flattened by the daemon — a member that was itself an
+ * absorbent hands its members over. Resolves to the list as it stands after.
+ */
+export function combineStatsPipelines(
+  absorbent: { key: string; name: string },
+  members: { key: string; name: string }[],
+): Promise<StatsAbsorptionList> {
+  return request<StatsAbsorptionList>("POST", "/stats/absorptions", {
+    body: { dimension: "pipeline", absorbent, members },
+  });
+}
+
+/** Take one Pipeline out of its absorption — the ✕ of the members list. */
+export function uncombineStatsPipeline(member: string): Promise<StatsAbsorptionList> {
+  return request<StatsAbsorptionList>("DELETE", "/stats/absorptions/member", {
+    query: { dimension: "pipeline", member },
   });
 }
 

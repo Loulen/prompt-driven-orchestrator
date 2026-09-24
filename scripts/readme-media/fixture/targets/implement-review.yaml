@@ -1,0 +1,101 @@
+name: implement-review
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 199, y: 47 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 204, y: 316 }
+  - id: implementer
+    name: implementer
+    type: agent
+    isolated_worktree: false
+    pin_harness: claude
+    harnesses:
+      claude: { model: claude-opus-5-5, effort: medium }
+    inputs:
+      - { name: task, side: left }
+    outputs:
+      - { name: code, side: right }
+    view: { x: 196, y: 135 }
+  - id: reviewer
+    name: reviewer
+    type: agent
+    isolated_worktree: false
+    pin_harness: claude
+    harnesses:
+      claude: { model: claude-opus-5-5, effort: medium }
+    inputs:
+      - { name: code, side: left }
+    outputs:
+      - name: review
+        side: right
+        frontmatter:
+          verdict:
+            allowed: [pass, fail]
+            type: enum
+        instructions: "Your verdict, then a small Mermaid diagram of the flow you checked."
+      - name: screenshots
+        side: right
+        port_type: image_list
+        instructions: "Screenshots of the app, annotated with Pillow."
+    view: { x: 197, y: 208 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: implementer, port: task }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 95 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 81 }
+    target_anchor: { side: top, offset: 84 }
+  - source: { node: implementer, port: code }
+    target: { node: reviewer, port: code }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 168 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 84 }
+    target_anchor: { side: top, offset: 83 }
+  - source:
+      node: reviewer
+      ports: [review, screenshots]
+    target: { node: implementer, port: task }
+    when:
+      review.verdict: { eq: fail }
+    mode: manual
+    waypoints:
+      - { x: 397, y: 154 }
+      - { x: 396, y: 154 }
+    target_side: right
+    source_anchor: { side: right, offset: 26 }
+    target_anchor: { side: right, offset: 19 }
+    output_label_pos:
+      review: { x: 381, y: 225 }
+      screenshots: { x: 395, y: 244 }
+    condition_label_pos: { x: 395, y: 192 }
+  - source: { node: reviewer, port: review }
+    target: { node: end, port: result }
+    when:
+      verdict: { eq: pass }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 276 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 83 }
+    target_anchor: { side: top, offset: 76 }
+    output_label_pos:
+      review: { x: 253, y: 256 }
+    condition_label_pos: { x: 284, y: 284 }
+loops:
+  - id: loop-7d8ce70b3a6784e7
+    kind: bounded
+    members: [implementer, reviewer]
+    max_iter: 5

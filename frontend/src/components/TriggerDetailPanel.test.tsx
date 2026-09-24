@@ -5,10 +5,12 @@ import type { Trigger, TriggerFire } from "../types";
 
 const fetchTriggerFires = vi.fn();
 const testGuard = vi.fn();
+const fetchSettings = vi.fn();
 
 vi.mock("../api", () => ({
   fetchTriggerFires: (id: string) => fetchTriggerFires(id),
   testGuard: (cmd: string, repo?: string) => testGuard(cmd, repo),
+  fetchSettings: () => fetchSettings(),
 }));
 
 function trigger(overrides: Partial<Trigger> = {}): Trigger {
@@ -55,6 +57,22 @@ describe("TriggerDetailPanel", () => {
     fetchTriggerFires.mockReset();
     fetchTriggerFires.mockResolvedValue([]);
     testGuard.mockReset();
+    fetchSettings.mockReset();
+    fetchSettings.mockResolvedValue({ home: "/home/me" });
+  });
+
+  it("reads a repo under the daemon's home as ~/…, the full path in its title", async () => {
+    render(<TriggerDetailPanel trigger={trigger({ target_repo: "/home/me/code/shop-app" })} onSelectRun={noop} />);
+    const repo = screen.getByTestId("trigger-detail-repo");
+    await waitFor(() => expect(repo).toHaveTextContent("~/code/shop-app"));
+    expect(repo).toHaveAttribute("title", "/home/me/code/shop-app");
+  });
+
+  it("shows a repo outside the home, or with no known home, as is", async () => {
+    fetchSettings.mockRejectedValue(new Error("offline"));
+    render(<TriggerDetailPanel trigger={trigger({ target_repo: "/home/me/code/shop-app" })} onSelectRun={noop} />);
+    await waitFor(() => expect(fetchSettings).toHaveBeenCalled());
+    expect(screen.getByTestId("trigger-detail-repo")).toHaveTextContent("/home/me/code/shop-app");
   });
 
   it("shows the trigger's configuration without entering edit mode", async () => {

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hearth &amp; Co. — shop</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <h1>Hearth &amp; Co.</h1>
+      <button id="cart-button" type="button">Cart (<span id="cart-count">0</span>)</button>
+    </header>
+    <main>
+      <ul id="products" class="grid"></ul>
+    </main>
+    <aside id="cart" hidden>
+      <h2>Your cart</h2>
+      <ul id="cart-lines"></ul>
+      <p>Total: <strong id="cart-total">$0.00</strong></p>
+    </aside>
+    <script src="app.js"></script>
+  </body>
+</html>

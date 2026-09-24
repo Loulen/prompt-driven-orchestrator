@@ -11,11 +11,12 @@ import {
   Zap,
 } from "lucide-react";
 import type { Trigger, TriggerFire } from "../types";
-import { fetchTriggerFires, testGuard } from "../api";
+import { fetchSettings, fetchTriggerFires, testGuard } from "../api";
 import type { TestGuardResponse } from "../api";
 import { humanizeCron } from "../cronPresets";
 import GuardOutput from "./GuardOutput";
 import GuardTestResult from "./GuardTestResult";
+import { tildify } from "../lib/homePath";
 
 interface Props {
   trigger: Trigger;
@@ -57,6 +58,20 @@ export default function TriggerDetailPanel({
   const [guardTest, setGuardTest] = useState<TestGuardResponse | null>(null);
   const [guardTesting, setGuardTesting] = useState(false);
   const [guardTestError, setGuardTestError] = useState<string | null>(null);
+  // The daemon's home, to read the repo as `~/code/…` (the title keeps the full path).
+  const [home, setHome] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSettings()
+      .then((settings) => {
+        if (!cancelled) setHome(settings.home ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,8 +152,12 @@ export default function TriggerDetailPanel({
 
         {trigger.target_repo && (
           <ConfigRow icon={<FolderGit2 size={12} />} label="Repo">
-            <span className="truncate font-mono text-fg-2" title={trigger.target_repo}>
-              {trigger.target_repo}
+            <span
+              className="truncate font-mono text-fg-2"
+              title={trigger.target_repo}
+              data-testid="trigger-detail-repo"
+            >
+              {tildify(trigger.target_repo, home)}
             </span>
           </ConfigRow>
         )}

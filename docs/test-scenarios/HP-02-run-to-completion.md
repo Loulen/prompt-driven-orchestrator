@@ -45,7 +45,7 @@ Features validated while crossing the run screens (grafted from retired per-issu
   control, exactly as for the sandbox: a single-harness Run that silently resolved to the `claude`
   floor is indistinguishable from a correctly resolved one, so the others are what make the four-tier
   resolution observable at all. The four are also the whole spread of PDO's instrumentation in one Run
-  — which is what the README's **Support** table publishes. See the journey's §14-16.
+  — which is what the **support table** of `docs/reference/harnesses.md` publishes. See the journey's §14-16.
 
 ## Preconditions
 
@@ -56,7 +56,7 @@ Features validated while crossing the run screens (grafted from retired per-issu
   **daemon's**, enriched from your login shell (ADR-0055) — a harness installed by a user package
   manager and invisible to a systemd service is the usual reason a pin fails to spawn.
 - Each harness is **logged in**, and the target repository's root has been **trusted once** for
-  `copilot`. Both are documented prerequisites, not PDO's job (README § Prerequisites): `--allow-all`
+  `copilot`. Both are documented prerequisites, not PDO's job (`docs/reference/harnesses.md` § Prerequisites): `--allow-all`
   does not cover the trust dialog, and an untrusted root leaves the `copilot` node alive and mute.
   Trust cascades to subdirectories, so one approval at the repo root covers every node sub-worktree.
 - A valid pipeline and a target git repo are available. No hard-coded ports/ids in the journey — see
@@ -209,7 +209,7 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - No pane sits on an interactive dialog: `--auto` is `opencode`'s bypass flag and `--allow-all
   --no-ask-user` is `copilot`'s, so a permission prompt on either is a finding. A **trust dialog** on
   the `copilot` pane is *not* a product finding — it is the unmet prerequisite from the preconditions
-  (README § Prerequisites); approve the repo root once and rerun.
+  (`docs/reference/harnesses.md` § Prerequisites); approve the repo root once and rerun.
 - **The finished node's terminal shows its frozen pane, in the browser.** Restore the folded terminal
   bar on a completed node: the inset renders the snapshot, says it is one, and offers no detach. Raw
   tmux error text (`can't find session: pdo-…`) under a `disconnected` badge is a **finding** — it
@@ -219,15 +219,15 @@ Features validated while crossing the run screens (grafted from retired per-issu
   auto-complete. A `copilot` node still `running` after its pane has visibly finished is a finding,
   and it is the one this graft exists to catch.
 
-#### README Support & Prerequisites (read once, before or after the Run)
+#### Harness support & Prerequisites (read once, before or after the Run)
 
-- The README's **Support** section shows a capability × harness table naming, for each of the five
+- The **support table** of `docs/reference/harnesses.md` shows a capability × harness table naming, for each of the five
   capabilities, what `claude`, `opencode` and `copilot` do, the **motive** of every absence, and the
   **last validated version** of each binary. What the table says must match what the three nodes just
   did — that is the only place these two are compared.
 - Edit a cell by hand so it lies, run **`make check`** → it **fails and names the drift**. Run
   **`make support-table`** → the table is back to what the code declares and `make check` passes.
-  Leave the README clean.
+  Leave `docs/reference/harnesses.md` clean.
 - The **Prerequisites** section names authentication, the approved working directory and the installed
   version, says PDO stages no harness's home outside a sandbox, and says the trust dialog is not
   covered by the autonomy flags — with the cascade-to-subdirectories consequence that makes one
@@ -315,7 +315,7 @@ Harness three-way pin, read-only probes:
   playbook) before expecting chat output. That one is **`claude`'s**, not the product's: `opencode
   --auto` shows no such dialog, so a dialog on an `opencode` pane is a finding rather than a step.
   `copilot`'s equivalent is a **prerequisite**, not a step: trust the repo root once, before the Run
-  (README § Prerequisites), and it cascades to every node sub-worktree beneath it.
+  (`docs/reference/harnesses.md` § Prerequisites), and it cascades to every node sub-worktree beneath it.
 - A node with no output yet returns **409 `missing_outputs`** on "Mark complete" — that guard is
   expected, not a bug.
 

@@ -432,7 +432,7 @@ pub enum DocsAction {
         #[arg(long, conflicts_with = "check")]
         write: bool,
         /// The file carrying the generated block, between its two markers.
-        #[arg(long, default_value = "README.md")]
+        #[arg(long, default_value = crate::harness_support::DOCUMENT)]
         file: std::path::PathBuf,
     },
 }

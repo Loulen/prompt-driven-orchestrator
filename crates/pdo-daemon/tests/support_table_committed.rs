@@ -1,35 +1,62 @@
-//! The committed README support table must match what the code declares (#617).
+//! The committed harness support table must match what the code declares (#617).
 //!
 //! `make check` is the gate a developer feels ([`Makefile`]'s `docs support-table
 //! --check`); this test is the same gate in CI, so a PR that changes a capability
 //! and forgets `make support-table` fails on `cargo test --workspace` rather than
-//! shipping a README that quietly lies.
+//! shipping a reference page that quietly lies.
+//!
+//! Since #855 the table lives in `docs/reference/harnesses.md`, the CLI command
+//! table in `docs/reference/cli.md`, and the README is a showcase with no
+//! generated block.
 
 use std::path::PathBuf;
 
-/// The repository's README — the one file carrying the generated block.
-fn readme() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../README.md")
+fn repo_file(relative: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative)
+}
+
+fn read(relative: &str) -> String {
+    let path = repo_file(relative);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
+}
+
+/// The one file carrying the generated block.
+fn harnesses() -> String {
+    read(pdo_daemon::harness_support::DOCUMENT)
 }
 
 #[test]
 fn the_committed_support_table_matches_the_capability_declaration() {
-    let path = readme();
-    let document = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-
+    let document = harnesses();
     if let Err(why) = pdo_daemon::harness_support::check(&document) {
-        panic!("{}: {why}", path.display());
+        panic!("{}: {why}", pdo_daemon::harness_support::DOCUMENT);
     }
 }
 
 #[test]
-fn the_readme_carries_the_harness_prerequisites() {
+fn the_readme_carries_no_generated_block() {
+    // One generated copy, one gate: a second block left in the README would
+    // drift silently, since `make check` only looks at the reference page.
+    for readme in ["README.md", "docs/readme/README.fr.md"] {
+        let document = read(readme);
+        assert!(
+            !document.contains(pdo_daemon::harness_support::BEGIN_MARKER)
+                && !document.contains(pdo_daemon::harness_support::END_MARKER),
+            "{readme} still carries a generated support-table block"
+        );
+    }
+}
+
+#[test]
+fn the_harness_reference_carries_the_harness_prerequisites() {
     // The other half of #617's promise: what PDO *assumes* you configured, and
     // does not configure for you, is named. Pinned so the section cannot be
-    // dropped in a README tidy — the trust-dialog paragraph in particular is the
+    // dropped in a docs tidy — the trust-dialog paragraph in particular is the
     // one measured failure that leaves a node alive and mute.
-    let document = std::fs::read_to_string(readme()).expect("README is readable");
+    let document = harnesses();
     assert!(
         document.contains("## Prerequisites"),
         "the harness prerequisites section is gone"
@@ -49,8 +76,8 @@ fn the_readme_carries_the_harness_prerequisites() {
 }
 
 #[test]
-fn the_readme_has_one_command_table_and_no_scattered_daemon_or_service_blocks() {
-    let document = std::fs::read_to_string(readme()).expect("README is readable");
+fn the_cli_reference_has_one_command_table_and_no_scattered_daemon_or_service_blocks() {
+    let document = read("docs/reference/cli.md");
     let commands = [
         "pdo daemon",
         "pdo service install",
@@ -63,6 +90,7 @@ fn the_readme_has_one_command_table_and_no_scattered_daemon_or_service_blocks() 
         "pdo run wait",
         "pdo migrate",
         "pdo reap",
+        "pdo docs support-table",
         "pdo run create",
         "pdo page mount",
         "pdo review list",

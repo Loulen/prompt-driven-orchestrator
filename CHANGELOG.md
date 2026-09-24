@@ -48,6 +48,16 @@ story #888, ADR-0077).
 - L'absorption est stockée dans `pdo.db` et appliquée à la lecture : le log d'événements
   n'est jamais réécrit, et `uncombined=true` sur les routes Stats rend les chiffres bruts.
 
+## 1.103.2
+**Profils agents : seul le bouton Edit ouvre l'éditeur, dans une modale partagée avec New
+profile** (#899).
+
+- Le crayon de chaque ligne de Settings › Agents › Agent profiles est un vrai bouton
+  `Edit <nom>`. Cliquer sur le reste de la ligne n'ouvre plus rien.
+- L'éditeur (Name, Harness, Model, Effort) quitte le formulaire sous la liste pour une modale.
+  **New profile** ouvre la même modale, vide, avec `Create`. Les règles et appels REST ne
+  changent pas ; Cancel, Échap ou un clic sur le fond ferment sans rien enregistrer.
+
 ## 1.103.1
 **Enregistrer un pipeline sans changer son nom ne le renomme plus** (#886).
 

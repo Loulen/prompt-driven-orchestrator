@@ -79,8 +79,11 @@ cd "$(git rev-parse --show-toplevel)"
 #   Settings › General › Stats absorptions list (every absorption, its origin, uncombine as
 #   you go). SettingsSurface renders it; it reuses StatsAbsorption's UncombineButton and
 #   lib/statsAbsorption, so only the Settings layout is new.
+# frontend/src/components: 205 (#899, release 1.103.2) admits AgentProfileModal.tsx — the
+#   agent profile editor moved out of AgentProfilesPanel's inline form into ONE modal shared
+#   by the row's Edit button and New profile (like ProjectEditModal). The panel keeps the list.
 BASELINES='
-frontend/src/components 204
+frontend/src/components 205
 crates/pdo-daemon/src 93
 '
 

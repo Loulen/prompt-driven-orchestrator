@@ -395,3 +395,42 @@ describe("Stats absorption — Cost (#890)", () => {
     expect(screen.queryByTestId("stats-combined-icon")).not.toBeInTheDocument();
   });
 });
+
+describe("Stats absorption — under « Uncombined » (#891)", () => {
+  it("offers no selection on the raw rows: they are a comparison, not a place to combine", async () => {
+    const user = userEvent.setup();
+    render(
+      <StatsCharts
+        tab="sessions"
+        overview={overview([OTHER, OLD, NEW])}
+        cost={null}
+        costError={null}
+        uncombined
+        showUncombined
+      />,
+    );
+    expect(screen.getByTestId("stats-uncombined")).toHaveAttribute("aria-checked", "true");
+
+    await ctrlClick(user, masterRow(22));
+    await ctrlClick(user, masterRow(12));
+    expect(masterRow(22)).not.toHaveAttribute("data-checked", "true");
+    expect(screen.queryByText(/Combine \(2\)/)).not.toBeInTheDocument();
+  });
+
+  it("hands a flip of the chip back to the shell", async () => {
+    const onUncombinedChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <StatsCharts
+        tab="triggers"
+        overview={overview([OTHER])}
+        cost={null}
+        costError={null}
+        showUncombined
+        onUncombinedChange={onUncombinedChange}
+      />,
+    );
+    await user.click(screen.getByTestId("stats-uncombined"));
+    expect(onUncombinedChange).toHaveBeenCalledWith(true);
+  });
+});

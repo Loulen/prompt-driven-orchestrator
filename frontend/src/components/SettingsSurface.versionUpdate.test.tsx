@@ -14,6 +14,8 @@ const checkForUpdateNowMock = vi.fn();
 
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
+  uncombineStatsMember: vi.fn(),
   createAgentProfile: vi.fn(),
   updateAgentProfile: vi.fn(),
   deleteAgentProfile: vi.fn(),

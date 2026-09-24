@@ -50,6 +50,7 @@ import { announceSkillTiersChanged } from "../hooks/useSkillTiers";
 import { useScrollSpy } from "../hooks/useScrollSpy";
 import AgentProfilesPanel from "./AgentProfilesPanel";
 import StagingProfilesPanel from "./StagingProfilesPanel";
+import StatsAbsorptionsPanel from "./StatsAbsorptionsPanel";
 import TutorialsSection from "./tour/TutorialsSection";
 import {
   SETTINGS_CATEGORIES,
@@ -812,6 +813,10 @@ export default function SettingsSurface({
                     onStartTour={(tourId) => startTourAfterClose(() => onStartTour?.(tourId))}
                     onStartFullTour={() => startTourAfterClose(() => onStartFullTour?.())}
                   />
+                </Section>
+                {/* #891 — Stats absorptions: saves as you go, whatever `GET /settings` said. */}
+                <Section section={item.sections[5]}>
+                  <StatsAbsorptionsPanel active={open} />
                 </Section>
               </>
             )}

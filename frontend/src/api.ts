@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -491,6 +491,7 @@ export function fetchStatsOverview(
   to: string,
   bucket: string,
   completedOnly = false,
+  uncombined = false,
 ): Promise<StatsOverview> {
   return request<StatsOverview>("GET", "/stats/overview", {
     query: {
@@ -498,6 +499,9 @@ export function fetchStatsOverview(
       to,
       bucket,
       ...(completedOnly ? { completed_only: true } : {}),
+      // #891 — « Uncombined »: the rows as the event log wrote them. Omitted
+      // when off, so an unchanged call sends the query it always did.
+      ...(uncombined ? { uncombined: true } : {}),
     },
   });
 }
@@ -512,6 +516,7 @@ export function fetchStatsCost(
   to: string,
   bucket: string,
   completedOnly = false,
+  uncombined = false,
 ): Promise<StatsCost> {
   return request<StatsCost>("GET", "/stats/cost", {
     query: {
@@ -519,6 +524,7 @@ export function fetchStatsCost(
       to,
       bucket,
       ...(completedOnly ? { completed_only: true } : {}),
+      ...(uncombined ? { uncombined: true } : {}),
     },
   });
 }
@@ -534,6 +540,7 @@ export function fetchStatsPerformance(
   to: string,
   refresh = false,
   completedOnly = false,
+  uncombined = false,
 ): Promise<StatsPerformance> {
   return request<StatsPerformance>("GET", "/stats/performance", {
     query: {
@@ -541,6 +548,7 @@ export function fetchStatsPerformance(
       to,
       ...(refresh ? { refresh: true } : {}),
       ...(completedOnly ? { completed_only: true } : {}),
+      ...(uncombined ? { uncombined: true } : {}),
     },
   });
 }
@@ -566,8 +574,19 @@ export function combineStatsPipelines(
 
 /** Take one Pipeline out of its absorption — the ✕ of the members list. */
 export function uncombineStatsPipeline(member: string): Promise<StatsAbsorptionList> {
+  return uncombineStatsMember("pipeline", "", member);
+}
+
+/** Take one member of any dimension out of its absorption — the ✕ of
+ *  Settings › General › Stats absorptions (#891). `scope` is empty outside a
+ *  Node absorption. */
+export function uncombineStatsMember(
+  dimension: StatsAbsorption["dimension"],
+  scope: string,
+  member: string,
+): Promise<StatsAbsorptionList> {
   return request<StatsAbsorptionList>("DELETE", "/stats/absorptions/member", {
-    query: { dimension: "pipeline", member },
+    query: { dimension, ...(scope ? { scope } : {}), member },
   });
 }
 

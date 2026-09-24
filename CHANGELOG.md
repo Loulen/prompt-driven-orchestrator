@@ -29,6 +29,17 @@ déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règ
 contribution sont dans `CONTRIBUTING.md`.
 
 ## Non publié
+**Stats : absorption au renommage, liste des absorptions, interrupteur Uncombined** (#891,
+story #888, ADR-0077).
+
+- Renommer un Pipeline dans la bibliothèque (id changé) crée l'absorption ancien → nouveau,
+  d'origine `rename`. Une chaîne A → B → C donne C absorbant de A et de B ; un renommage
+  d'affichage qui garde l'id ne crée rien.
+- Settings › General › *Stats absorptions* (`saves as you go`) liste toutes les absorptions,
+  leur absorbant, leurs absorbés et leur origine ; la croix retire un absorbé aussitôt.
+- Un interrupteur *Uncombined* sur Sessions, Cost, Performance et Triggers montre les
+  chiffres bruts (`uncombined=true`) ; il revient à son défaut à chaque ouverture de Stats.
+
 **Stats : absorber des Pipelines** (#890, story #888, ADR-0077).
 
 - Dans Stats › Sessions, sélectionner plusieurs Pipelines (Ctrl/Maj-clic) puis « Combine » :

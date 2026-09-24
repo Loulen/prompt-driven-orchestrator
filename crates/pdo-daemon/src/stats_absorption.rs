@@ -18,9 +18,10 @@
 //!   ONE place instead of being copied into Sessions, Cost and Performance. It is
 //!   where the resolver substitutes an absorbed key with its absorbent's.
 //!
-//! #890 ships the `pipeline` dimension. The table already carries `dimension`
-//! and `scope` so Nodes (scoped to their Pipeline) and Models (#892) and the
-//! rename-born `origin` (#891) land without a migration.
+//! #890 ships the `pipeline` dimension; #891 adds the rename-born absorption
+//! ([`record_rename`], origin `rename`). The table already carries `dimension`
+//! and `scope` so Nodes (scoped to their Pipeline) and Models (#892) land
+//! without a migration.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -43,6 +44,7 @@ pub(crate) const PIPELINE: &str = "pipeline";
 /// Where an absorption came from: the operator's Combine (`manual`) or a
 /// Pipeline rename that changed its id (`rename`, #891).
 pub(crate) const ORIGIN_MANUAL: &str = "manual";
+pub(crate) const ORIGIN_RENAME: &str = "rename";
 
 /// The Pipeline key of a Run whose `run_started` names neither an id nor a name.
 pub(crate) const UNKNOWN_PIPELINE: &str = "(unknown)";
@@ -169,6 +171,65 @@ pub(crate) async fn combine(
     tx.commit().await
 }
 
+/// A library rename that changed a Pipeline's id (ADR-0077 §4): the new key
+/// carries the old key's series, as a Combine would, origin `rename`. Flattened
+/// like any Combine — a chain A → B → C ends as C absorbing A and B. When the
+/// old key was itself absorbed, the new key joins that same absorbent instead:
+/// the operator's reading is kept, and there is still only one level.
+pub(crate) async fn record_rename(
+    db: &SqlitePool,
+    old: &Named,
+    new: &Named,
+) -> Result<(), sqlx::Error> {
+    if old.key == new.key {
+        return Ok(());
+    }
+    let absorbent: Option<(String, String)> = sqlx::query_as(
+        "SELECT absorbent, absorbent_name FROM stats_absorptions \
+         WHERE dimension = ? AND scope = '' AND member = ?",
+    )
+    .bind(PIPELINE)
+    .bind(&old.key)
+    .fetch_optional(db)
+    .await?;
+    match absorbent {
+        Some((key, name)) if key != new.key => {
+            combine(
+                db,
+                PIPELINE,
+                "",
+                &Named { key, name },
+                std::slice::from_ref(new),
+                ORIGIN_RENAME,
+            )
+            .await
+        }
+        _ => {
+            combine(
+                db,
+                PIPELINE,
+                "",
+                new,
+                std::slice::from_ref(old),
+                ORIGIN_RENAME,
+            )
+            .await
+        }
+    }
+}
+
+/// [`record_rename`] for the rename handlers: the files have already moved, so
+/// a failed write here is logged, never turned into a failed rename.
+pub(crate) async fn record_rename_best_effort(db: &SqlitePool, old: Named, new: Named) {
+    if let Err(e) = record_rename(db, &old, &new).await {
+        tracing::warn!(
+            "stats absorption for the rename {} -> {} failed: {e}",
+            old.key,
+            new.key
+        );
+    }
+}
+
 /// Take one member out of its absorption. Removing the last member leaves no
 /// row for that absorbent — the absorption is gone, and its rows come back.
 /// `false` when the key was not absorbed.
@@ -256,6 +317,12 @@ impl AbsorptionResolver {
     /// The key a Run of Pipeline `key` is counted under.
     pub(crate) fn pipeline<'a>(&'a self, key: &'a str) -> &'a str {
         self.pipelines.get(key).map(String::as_str).unwrap_or(key)
+    }
+
+    /// The name stored for an absorbent key at its last Combine or rename — for
+    /// a row that has no Run of its own to name it.
+    pub(crate) fn stored_name(&self, key: &str) -> Option<&str> {
+        self.absorbent_names.get(key).map(String::as_str)
     }
 
     /// Folded into every cache that keeps an already-aggregated result (ADR-0077
@@ -762,6 +829,65 @@ mod tests {
         let list = group(list(&db).await.unwrap());
         assert_eq!(list.absorptions.len(), 1);
         assert_eq!(list.absorptions[0].absorbent, named("d"));
+    }
+
+    async fn rename(db: &SqlitePool, old: &str, new: &str) {
+        record_rename(db, &named(old), &named(new)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_rename_chain_ends_as_one_absorbent_with_every_old_key() {
+        let db = mem_db().await;
+        rename(&db, "a", "b").await;
+        rename(&db, "b", "c").await;
+        assert_eq!(edges(&db).await, vec![edge("a", "c"), edge("b", "c")]);
+        let rows = list(&db).await.unwrap();
+        assert!(rows.iter().all(|row| row.origin == ORIGIN_RENAME));
+        assert!(rows.iter().all(|row| row.absorbent_name == "C"));
+    }
+
+    #[tokio::test]
+    async fn renaming_back_swaps_the_absorbent() {
+        let db = mem_db().await;
+        rename(&db, "a", "b").await;
+        rename(&db, "b", "a").await;
+        assert_eq!(edges(&db).await, vec![edge("b", "a")]);
+    }
+
+    #[tokio::test]
+    async fn renaming_an_absorbed_pipeline_joins_its_absorbent() {
+        let db = mem_db().await;
+        combine_manual(&db, "keeper", &["old"]).await;
+        rename(&db, "old", "new").await;
+        assert_eq!(
+            edges(&db).await,
+            vec![edge("new", "keeper"), edge("old", "keeper")]
+        );
+        let origins: Vec<(String, String)> = list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.member, row.origin))
+            .collect();
+        assert!(origins.contains(&("old".to_string(), ORIGIN_MANUAL.to_string())));
+        assert!(origins.contains(&("new".to_string(), ORIGIN_RENAME.to_string())));
+    }
+
+    #[tokio::test]
+    async fn renaming_a_manual_absorbent_keeps_its_members_manual() {
+        let db = mem_db().await;
+        combine_manual(&db, "b", &["a"]).await;
+        rename(&db, "b", "c").await;
+        let rows = list(&db).await.unwrap();
+        let origin = |member: &str| {
+            rows.iter()
+                .find(|row| row.member == member)
+                .map(|row| row.origin.clone())
+                .unwrap()
+        };
+        assert_eq!(edges(&db).await, vec![edge("a", "c"), edge("b", "c")]);
+        assert_eq!(origin("a"), ORIGIN_MANUAL);
+        assert_eq!(origin("b"), ORIGIN_RENAME);
     }
 
     #[tokio::test]

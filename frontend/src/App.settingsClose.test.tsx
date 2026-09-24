@@ -286,6 +286,8 @@ vi.mock("./api", () => {
       }),
       closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
       putLibassistFocus: vi.fn().mockResolvedValue(undefined),
+      fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
+      uncombineStatsMember: vi.fn(),
       fetchStatsOverview: vi.fn().mockResolvedValue({
         buckets: [],
         runs: [],

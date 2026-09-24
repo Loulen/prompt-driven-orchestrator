@@ -121,6 +121,7 @@ The targets follow the product's edge model (#840): if that model changes, redra
 | `withNodeFlags(yaml, node, { orchestrator: true, interactive: true })` | the target with flags (any `key: value` line) on for one node, every other byte kept |
 | `targetPipeline(id)`, `readTarget(id)`, `targetYaml(id)` | a target parsed, its YAML and prompts, its YAML under the demo name |
 | `runSnapshot(pipeline)` | the run snapshot a daemon freezes at run start (`node_defs`, and the edges as drawn) |
+| `startState(target, drawn)`, `gestureDrift(saved, target)`, `drawnRoute`, `cursorPath` (`lib/build-scene.mjs`) | a building scene's start, and what its gestures missed (see [Scenes that build](#scenes-that-build)) |
 
 ## Choosing and publishing
 
@@ -174,11 +175,12 @@ What `play(ctx)` gets:
 | --- | --- |
 | `ctx.page`, `ctx.instance` | the Playwright page, and the demo instance (`url`, `repo`, `home`, `api(method, route, body)`) |
 | `ctx.goto(route)` | open a route of the demo UI; the cursor stays where it was |
-| `ctx.moveTo(target)`, `ctx.click(target)`, `ctx.hover(target)`, `ctx.drag(from, to)`, `ctx.scroll(dy)` | eased, real mouse gestures. `target` is a locator or `{x, y}`. The cursor shows a green ring on click, is pressed (×0.88) during a drag, and draws a dashed orange line |
+| `ctx.moveTo(target)`, `ctx.click(target)`, `ctx.hover(target)`, `ctx.drag(from, to)`, `ctx.scroll(dy)` | eased, real mouse gestures. `target` is a locator or `{x, y}`. The cursor shows a green ring on click, is pressed (×0.88) during a drag, and draws a dashed orange line. It follows the real pointer with no transition: a transition retargeted on every move froze it during a canvas connection drag |
 | `ctx.mark(name, { before, after })` | a key moment. The GIF keeps `before`/`after` ms around it (default 1.2 s / 1.8 s) |
 | `await ctx.keep(fn)` | keep what `fn` films at normal speed (a gesture between markers) |
 | `await ctx.fast(fn, { speed: 8 })` | film `fn` fast-forwarded (an agent working) |
 | `await ctx.hold(ms)` | stand still and keep it. End every variant on one: the last frame is the poster |
+| `ctx.warn(message)` | a warning for the manifest, the take kept (a building scene's drift from its target) |
 
 Whatever is not in a marker window, a `keep`, a `fast` or a `hold` is cut. A gesture made with
 `ctx.page` directly (a `locator.click()`, `page.mouse`) is fine off camera, but the cursor overlay
@@ -196,8 +198,8 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 | Scene | Live | What it films | Helpers |
 | --- | --- | --- | --- |
 | `hero` | `claude` | a real run of the complete `implement-review`, loop included, to a final `pass`: a → zoom on `implementer` and its live terminal ×8, cut, the reviewer's verdict; b (published, design « Variant B ») → live terminal ×8, cut, the `reviewer`'s outputs (verdict + `image_list`) at 1280×760. A lap the reviewer sends back is in the cut; a final verdict other than `pass` fails the variant | `scenes/_live.mjs` |
-| `pipelines` | — | from the pipeline's skeleton (Start, End): + → Node (`implementer`), then its edges | `scenes/_canvas.mjs` |
-| `routing` | — | the loop edge `reviewer → implementer`, `verdict != pass`, the exit as `else`, saved | `scenes/_canvas.mjs` |
+| `pipelines` | — | builds the target `implement-review.pipelines`: from Start and End, + → Node, `implementer` dragged to its place, then `Start → implementer` and `implementer → End` from the rims (see [Scenes that build](#scenes-that-build)) | `scenes/_canvas.mjs`, `lib/build-scene.mjs` |
+| `routing` | — | builds the complete target: the loop edge `reviewer → implementer` and its region ↻ 5, `review.verdict = fail` then `verdict = pass` on the exit, each pill dragged to its place | `scenes/_canvas.mjs`, `lib/build-scene.mjs` |
 | `stats` | — | the Stats page over the mocked history | |
 | `outputs` | `claude` | a finished run's `reviewer`: its two ports in Edit, then in Run an annotated screenshot (lightbox) and the `review` markdown with its Mermaid diagram rendered | `scenes/_live.mjs` |
 | `review` | `claude` | a finished run's Review page, zoomed on the commented hunk: a comment on a line, sent to the manager, cut ×8, the manager's own answer in the thread, on one line (the demo HOME's `~/.claude/CLAUDE.md` asks for it; a wrapped answer fails the variant) | `scenes/_live.mjs` |
@@ -217,9 +219,70 @@ also takes them off the runs rail). `scrollUntil` wheel-scrolls a panel until an
 given height: point it `over` a visible element of the panel, never the (off-screen) target. `openRun` selects a run on the rail off camera. Opening a run selects
 its live node by itself, so select `Start` first if the filmed click must open the node.
 `scenes/_canvas.mjs` is for the edit canvas: `installTargetPipeline` / `installPipeline` /
-`restoreDemoPipeline` put a variant's starting pipeline in place (a variant that saves changes the
-library for the next one), `handle`,
-`pointOnEdge` (a point on an edge's drawn route: its hit box's centre is not on it) and `zoomCanvas`.
+`restoreDemoPipeline` / `installStartState` put a variant's starting pipeline in place (a variant
+that saves changes the library for the next one), `pointOnEdge` (a point on an edge's drawn route:
+its hit box's centre is not on it), `zoomCanvas`, `clearToolbar`, `clearSides`, and the gestures of the scenes
+that build (below).
+
+## Scenes that build
+
+`pipelines` and `routing` (#882) build on the canvas, and they build **toward their target**: the
+last frame, the poster, is the maintainer's drawing (ADR-0074 §6, 2nd grilling Q30 and Q41). The
+contract, `lib/build-scene.mjs`, is two pure functions any new building scene reuses:
+
+1. **The scene declares what its gestures draw**, as `drawn` on the scene object:
+
+   ```js
+   export default {
+     name: "routing",
+     drawn: { edges: ["reviewer→implementer"], conditions: ["reviewer→end"] },
+     // …
+   };
+   ```
+
+   `nodes` are node ids (every edge touching them goes too), `edges` are
+   `"<source node>→<target node>"` (a loop region whose cycle they close goes too: the editor
+   creates it again when the gesture closes the cycle), `conditions` are edges whose `when` and
+   pill the gesture sets (the edge itself stays, route and output labels included).
+2. **`startState(target, drawn)`** is the target without those elements. It throws when `drawn`
+   names something the target does not have. `installStartState(instance, id, drawn)` installs it
+   under the demo name before the take (`pipelines`: Start and End where they are drawn; `routing`:
+   the complete target without its loop edge, its region and the exit's condition).
+3. **The gestures aim at the target's own coordinates**, in flow px, whatever the zoom:
+   `dragNodeTo` moves a card to its `view` (`nudgeNodeTo` then corrects, off camera, the few px
+   xyflow's drag threshold eats: it presses, jumps past the threshold in one move, the baseline
+   xyflow measures from, then goes the missing px exactly, so the card lands on `view` to the px and
+   the cut to the final shot shows no shift), `drawEdge` presses the source card's rim at its `source_anchor`,
+   drags along the wire the canvas draws for the edge and drops on the target card at its
+   `target_anchor` (#840: no port dot, the drop point anchors the arrow). The wire is
+   `drawnRoute` (the editor's rule: a 40 px leg straight out of the source side, the waypoints
+   squared up, a leg straight into the target side), and `cursorPath` turns it into moves on one
+   axis each, without the reversals the canvas merges away. A diagonal move would let the editor's
+   grid trace pick its bends by pointer sampling, so the saved route would change from take to take. `dragLabelTo` drags a condition pill or an output tag
+   so its centre lands on its `condition_label_pos` / `output_label_pos`. Each measures first,
+   then keeps only the gesture on camera (`film: false`: off camera).
+4. **`saveCanvas`, then `landOnTarget(ctx, id)`**, off camera, after the last gesture:
+   `gestureDrift(saved, target)` lists where the saved file differs *visibly* from the target
+   (node set, positions and isolation marker, edges and the ports their tags name, conditions,
+   anchor sides, routes end to end, label positions, loop regions; `DRIFT_TOLERANCE` = 6 flow px).
+   A route is compared as `drawnRoute` draws it, not as its waypoints: one bend saved where the
+   target has two draws the same wire, and that is no drift.
+   Each line lands in the variant's manifest `warnings` as `drift from the target: …`, through
+   `ctx.warn`: the take is kept, the maintainer knows the scene needs a retouch. Then the target
+   is reinstalled; the helper waits out the daemon's 2 s self-write window (its own save would
+   swallow the change), until the tab has reloaded every node at its `view`, and until the tab's
+   « changed » dot has faded. The final `hold` films the target: no jump, no « changed on disk ».
+   The one trace of the reinstall is the toolbar's Undo/Redo turning grey at the cut: the reload
+   resets the editor's history.
+
+What the canvas does not draw is not a drift: prompts, harnesses, a port name without a tag, the
+id the editor gives a new node (nodes match by name) or a loop region. A new agent node is
+isolated, the target's `implementer` is not: `pipelines` sets « Run worktree » off camera before
+the drag, so the marker never shows. Keep every node clear of the toolbar with `clearToolbar`
+(24 px under it) and what the take will draw clear of the canvas' sides with `clearSides` (24 px:
+the canvas meets the inspector on its right, where a pill came out clipped), once the viewport is
+set; crop below the tab bar when the frame has no other use for it, so its « unsaved » dot never
+shows.
 
 ## Artifact scenes (#859)
 
@@ -285,7 +348,8 @@ trip and the refused overwrite, on a throwaway `HOME`), the history plan,
 the prod-check fires (about 10 % real incidents, each run on the branch of its `Incident_found`, the
 Stats unchanged), the screen guard (filmed for real: a demo path on screen fails the variant), the
 cut plan, selection and publication, scene discovery (and the markers of each scene), the
-manifest (and a variant's atomic landing), a SIGINT mid-encode, the video/timeline alignment, and a
+building scenes (the start state is the target minus what `pipelines` and `routing` draw, and a
+simulated drift lands in the manifest), the manifest (and a variant's atomic landing), a SIGINT mid-encode, the video/timeline alignment, and a
 real demo instance
 (its library is the targets as is, Stats API ratios, teardown after success / Ctrl+C / crash / hard kill, and an agent that outlives
 the hangup; needs `cargo build`), plus

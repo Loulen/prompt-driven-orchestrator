@@ -56,8 +56,8 @@ test("the canvas scenes (#858): hero, pipelines and routing, two variants each a
     ["b", ["node-added", "edge-dropped"]],
   ]);
   assert.deepEqual(markers("routing"), [
-    ["a", ["edge-dropped", "condition-saved"]],
-    ["b", ["edge-dropped", "condition-saved"]],
+    ["a", ["edge-dropped", "condition-set", "condition-saved"]],
+    ["b", ["edge-dropped", "condition-set", "condition-saved"]],
   ]);
   // Only the hero plays agents live (and needs their auth); the canvas rows do not.
   assert.deepEqual(scenes.get("hero").live, ["claude"]);

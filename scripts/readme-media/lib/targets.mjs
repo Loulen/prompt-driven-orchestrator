@@ -53,6 +53,12 @@ export function parseYaml(text) {
   return yamlLib.load(text);
 }
 
+/** A pipeline object as YAML — for a state the tool derives (a building scene's
+ *  start), never for a target, which is installed as drawn. */
+export function dumpYaml(pipeline) {
+  return yamlLib.dump(pipeline, { lineWidth: -1, noRefs: true });
+}
+
 const NAME_LINE = /^name:[^\n]*$/m;
 
 /** `yaml` with its top-level `name:` set to `name`; every other byte kept. */

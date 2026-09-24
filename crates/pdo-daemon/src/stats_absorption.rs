@@ -19,9 +19,15 @@
 //!   where the resolver substitutes an absorbed key with its absorbent's.
 //!
 //! #890 ships the `pipeline` dimension; #891 adds the rename-born absorption
-//! ([`record_rename`], origin `rename`). The table already carries `dimension`
-//! and `scope` so Nodes (scoped to their Pipeline) and Models (#892) land
-//! without a migration.
+//! ([`record_rename`], origin `rename`); #892 adds the two other dimensions:
+//!
+//! - **Nodes**, scoped to the key of their absorbent Pipeline (or of a lone
+//!   Pipeline). A Node absorption applies to every Run counted under that
+//!   Pipeline row — in every tree where the Node shows. Taking a Pipeline out
+//!   of its absorption takes its Nodes out of the Node absorptions of that
+//!   scope ([`remove_member`]).
+//! - **Models**, by verbatim id (ADR-0065): they only fold the « By model »
+//!   axis of Cost and Performance; their model × effort couples meet by effort.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -38,8 +44,10 @@ use sqlx::SqlitePool;
 
 use crate::AppState;
 
-/// The only dimension #890 accepts. `node` and `model` come with #892.
+/// The three dimensions an absorption can have.
 pub(crate) const PIPELINE: &str = "pipeline";
+pub(crate) const NODE: &str = "node";
+pub(crate) const MODEL: &str = "model";
 
 /// Where an absorption came from: the operator's Combine (`manual`) or a
 /// Pipeline rename that changed its id (`rename`, #891).
@@ -67,6 +75,19 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(db)
     .await?;
+    // #892: the name of a Node absorption's Pipeline, shown by Settings — never
+    // its key. Added idempotently to a table created by #890.
+    let has_scope_name = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('stats_absorptions') WHERE name = 'scope_name'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_scope_name {
+        sqlx::query("ALTER TABLE stats_absorptions ADD COLUMN scope_name TEXT NOT NULL DEFAULT ''")
+            .execute(db)
+            .await?;
+    }
     Ok(())
 }
 
@@ -75,6 +96,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
 pub(crate) struct AbsorptionRow {
     pub dimension: String,
     pub scope: String,
+    pub scope_name: String,
     pub member: String,
     pub member_name: String,
     pub absorbent: String,
@@ -92,11 +114,21 @@ pub(crate) struct Named {
 
 pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<AbsorptionRow>, sqlx::Error> {
     sqlx::query_as::<_, AbsorptionRow>(
-        "SELECT dimension, scope, member, member_name, absorbent, absorbent_name, origin, created_at \
+        "SELECT dimension, scope, scope_name, member, member_name, absorbent, absorbent_name, \
+                origin, created_at \
          FROM stats_absorptions ORDER BY dimension, scope, absorbent, created_at, member",
     )
     .fetch_all(db)
     .await
+}
+
+/// Where an absorption lives: its dimension, and — for a Node absorption — the
+/// key and name of the Pipeline row it is scoped to (empty otherwise).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Scope<'a> {
+    pub dimension: &'a str,
+    pub key: &'a str,
+    pub name: &'a str,
 }
 
 /// Create or extend an absorption, flattened on write (ADR-0077 §3):
@@ -110,6 +142,10 @@ pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<AbsorptionRow>, sqlx::Er
 ///    when the absorbent has no Run in the period.
 ///
 /// A chain A → B → C therefore always ends as C absorbing A and B.
+///
+/// A Pipeline Combine also carries the members' Node absorptions over to the
+/// absorbent's scope (#892): a Node absorption is scoped to the Pipeline row
+/// that shows the Node, and the members' rows are now the absorbent's.
 pub(crate) async fn combine(
     db: &SqlitePool,
     dimension: &str,
@@ -118,11 +154,50 @@ pub(crate) async fn combine(
     members: &[Named],
     origin: &str,
 ) -> Result<(), sqlx::Error> {
-    let now = crate::event_log::now_iso();
+    combine_scoped(
+        db,
+        Scope {
+            dimension,
+            key: scope,
+            name: "",
+        },
+        absorbent,
+        members,
+        origin,
+    )
+    .await
+}
+
+/// [`combine`], with the scope's display name (a Node absorption's Pipeline).
+pub(crate) async fn combine_scoped(
+    db: &SqlitePool,
+    scope: Scope<'_>,
+    absorbent: &Named,
+    members: &[Named],
+    origin: &str,
+) -> Result<(), sqlx::Error> {
     let mut tx = db.begin().await?;
+    combine_in(&mut tx, scope, absorbent, members, origin).await?;
+    if scope.dimension == PIPELINE {
+        for member in members.iter().filter(|m| m.key != absorbent.key) {
+            carry_node_absorptions(&mut tx, &member.key, absorbent).await?;
+        }
+    }
+    tx.commit().await
+}
+
+async fn combine_in(
+    tx: &mut sqlx::SqliteConnection,
+    scope: Scope<'_>,
+    absorbent: &Named,
+    members: &[Named],
+    origin: &str,
+) -> Result<(), sqlx::Error> {
+    let now = crate::event_log::now_iso();
+    let (dimension, scope_key) = (scope.dimension, scope.key);
     sqlx::query("DELETE FROM stats_absorptions WHERE dimension = ? AND scope = ? AND member = ?")
         .bind(dimension)
-        .bind(scope)
+        .bind(scope_key)
         .bind(&absorbent.key)
         .execute(&mut *tx)
         .await?;
@@ -134,21 +209,23 @@ pub(crate) async fn combine(
         .bind(&absorbent.key)
         .bind(&absorbent.name)
         .bind(dimension)
-        .bind(scope)
+        .bind(scope_key)
         .bind(&member.key)
         .execute(&mut *tx)
         .await?;
         sqlx::query(
             "INSERT INTO stats_absorptions \
-               (dimension, scope, member, member_name, absorbent, absorbent_name, origin, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+               (dimension, scope, scope_name, member, member_name, absorbent, absorbent_name, \
+                origin, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (dimension, scope, member) DO UPDATE SET \
                member_name = excluded.member_name, absorbent = excluded.absorbent, \
                absorbent_name = excluded.absorbent_name, origin = excluded.origin, \
                created_at = excluded.created_at",
         )
         .bind(dimension)
-        .bind(scope)
+        .bind(scope_key)
+        .bind(scope.name)
         .bind(&member.key)
         .bind(&member.name)
         .bind(&absorbent.key)
@@ -164,11 +241,103 @@ pub(crate) async fn combine(
     )
     .bind(&absorbent.name)
     .bind(dimension)
-    .bind(scope)
+    .bind(scope_key)
     .bind(&absorbent.key)
     .execute(&mut *tx)
     .await?;
-    tx.commit().await
+    if !scope.name.is_empty() {
+        sqlx::query(
+            "UPDATE stats_absorptions SET scope_name = ? WHERE dimension = ? AND scope = ?",
+        )
+        .bind(scope.name)
+        .bind(dimension)
+        .bind(scope_key)
+        .execute(&mut *tx)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn rows_of_scope(
+    tx: &mut sqlx::SqliteConnection,
+    dimension: &str,
+    scope: &str,
+) -> Result<Vec<AbsorptionRow>, sqlx::Error> {
+    sqlx::query_as::<_, AbsorptionRow>(
+        "SELECT dimension, scope, scope_name, member, member_name, absorbent, absorbent_name, \
+                origin, created_at \
+         FROM stats_absorptions WHERE dimension = ? AND scope = ? \
+         ORDER BY absorbent, created_at, member",
+    )
+    .bind(dimension)
+    .bind(scope)
+    .fetch_all(&mut *tx)
+    .await
+}
+
+/// Move the Node absorptions scoped to Pipeline `from` under `to`, which just
+/// absorbed it. What `to`'s scope already says wins: a Node it already
+/// absorbs stays where it is, and a moved absorbent that `to` already absorbs
+/// hands over to that absorbent — one level, always.
+async fn carry_node_absorptions(
+    tx: &mut sqlx::SqliteConnection,
+    from: &str,
+    to: &Named,
+) -> Result<(), sqlx::Error> {
+    let moved = rows_of_scope(tx, NODE, from).await?;
+    if moved.is_empty() {
+        return Ok(());
+    }
+    sqlx::query("DELETE FROM stats_absorptions WHERE dimension = ? AND scope = ?")
+        .bind(NODE)
+        .bind(from)
+        .execute(&mut *tx)
+        .await?;
+    let mut groups: BTreeMap<(String, String), Vec<(Named, String)>> = BTreeMap::new();
+    for row in moved {
+        groups
+            .entry((row.absorbent.clone(), row.absorbent_name.clone()))
+            .or_default()
+            .push((
+                Named {
+                    key: row.member,
+                    name: row.member_name,
+                },
+                row.origin,
+            ));
+    }
+    for ((absorbent_key, absorbent_name), members) in groups {
+        let target = rows_of_scope(tx, NODE, &to.key).await?;
+        let absorbent = target
+            .iter()
+            .find(|row| row.member == absorbent_key)
+            .map(|row| Named {
+                key: row.absorbent.clone(),
+                name: row.absorbent_name.clone(),
+            })
+            .unwrap_or(Named {
+                key: absorbent_key,
+                name: absorbent_name,
+            });
+        for (member, origin) in members {
+            if member.key == absorbent.key || target.iter().any(|row| row.member == member.key) {
+                continue;
+            }
+            combine_in(
+                tx,
+                Scope {
+                    dimension: NODE,
+                    key: &to.key,
+                    name: &to.name,
+                },
+                &absorbent,
+                std::slice::from_ref(&member),
+                &origin,
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// A library rename that changed a Pipeline's id (ADR-0077 §4): the new key
@@ -233,35 +402,160 @@ pub(crate) async fn record_rename_best_effort(db: &SqlitePool, old: Named, new: 
 /// Take one member out of its absorption. Removing the last member leaves no
 /// row for that absorbent — the absorption is gone, and its rows come back.
 /// `false` when the key was not absorbed.
+///
+/// Taking a Pipeline out also takes its Nodes out of the Node absorptions of
+/// its former absorbent's scope (#892, grilling Q13): a Node that ran under
+/// the removed Pipeline and under none of the Pipelines still counted in that
+/// row leaves, and so does every member of a Node absorbent in that case —
+/// they find their own rows again. Which Pipeline a Node ran under is read off
+/// the event log, never guessed.
 pub(crate) async fn remove_member(
     db: &SqlitePool,
     dimension: &str,
     scope: &str,
     member: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
-        "DELETE FROM stats_absorptions WHERE dimension = ? AND scope = ? AND member = ?",
+    let mut tx = db.begin().await?;
+    let absorbent: Option<(String,)> = sqlx::query_as(
+        "SELECT absorbent FROM stats_absorptions WHERE dimension = ? AND scope = ? AND member = ?",
     )
     .bind(dimension)
     .bind(scope)
     .bind(member)
-    .execute(db)
+    .fetch_optional(&mut *tx)
     .await?;
-    Ok(result.rows_affected() > 0)
+    let Some((absorbent,)) = absorbent else {
+        return Ok(false);
+    };
+    sqlx::query("DELETE FROM stats_absorptions WHERE dimension = ? AND scope = ? AND member = ?")
+        .bind(dimension)
+        .bind(scope)
+        .bind(member)
+        .execute(&mut *tx)
+        .await?;
+    if dimension == PIPELINE {
+        release_nodes_of(&mut tx, member, &absorbent).await?;
+    }
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// The Node ids that ran under the raw Pipeline key `pipeline`, whole history.
+async fn nodes_that_ran_under(
+    tx: &mut sqlx::SqliteConnection,
+    pipeline: &str,
+) -> Result<BTreeSet<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT ns.node_id FROM events ns \
+         JOIN events rs ON rs.run_id = ns.run_id AND rs.kind = 'run_started' \
+         WHERE ns.kind = 'node_started' AND ns.node_id IS NOT NULL \
+           AND COALESCE(json_extract(rs.payload, '$.pipeline_id'), \
+                        json_extract(rs.payload, '$.pipeline_name'), ?) = ?",
+    )
+    .bind(UNKNOWN_PIPELINE)
+    .bind(pipeline)
+    .fetch_all(&mut *tx)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// The cascade of [`remove_member`] for a Pipeline `removed` that left
+/// `absorbent`'s row.
+async fn release_nodes_of(
+    tx: &mut sqlx::SqliteConnection,
+    removed: &str,
+    absorbent: &str,
+) -> Result<(), sqlx::Error> {
+    let rows = rows_of_scope(tx, NODE, absorbent).await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let gone = nodes_that_ran_under(tx, removed).await?;
+    let mut staying = nodes_that_ran_under(tx, absorbent).await?;
+    let remaining: Vec<(String,)> = sqlx::query_as(
+        "SELECT member FROM stats_absorptions WHERE dimension = ? AND scope = '' AND absorbent = ?",
+    )
+    .bind(PIPELINE)
+    .bind(absorbent)
+    .fetch_all(&mut *tx)
+    .await?;
+    for (pipeline,) in remaining {
+        staying.extend(nodes_that_ran_under(tx, &pipeline).await?);
+    }
+    let leaves = |node: &str| gone.contains(node) && !staying.contains(node);
+    for row in rows {
+        if leaves(&row.member) || leaves(&row.absorbent) {
+            sqlx::query(
+                "DELETE FROM stats_absorptions WHERE dimension = ? AND scope = ? AND member = ?",
+            )
+            .bind(NODE)
+            .bind(absorbent)
+            .bind(&row.member)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 // --- The resolver ---------------------------------------------------------------
+
+/// One dimension's absorptions within one scope: member → absorbent, the name
+/// stored for each absorbent at its last Combine, and each absorbent's members.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ScopeAbsorptions {
+    absorbent_of: HashMap<String, String>,
+    absorbent_names: HashMap<String, String>,
+    members: BTreeMap<String, Vec<Named>>,
+}
+
+impl ScopeAbsorptions {
+    fn insert(&mut self, row: &AbsorptionRow) {
+        self.absorbent_of
+            .insert(row.member.clone(), row.absorbent.clone());
+        self.absorbent_names
+            .insert(row.absorbent.clone(), row.absorbent_name.clone());
+        self.members
+            .entry(row.absorbent.clone())
+            .or_default()
+            .push(Named {
+                key: row.member.clone(),
+                name: row.member_name.clone(),
+            });
+    }
+
+    /// The key a row of `key` is counted under.
+    pub(crate) fn resolve<'a>(&'a self, key: &'a str) -> &'a str {
+        self.absorbent_of
+            .get(key)
+            .map(String::as_str)
+            .unwrap_or(key)
+    }
+
+    fn stored_name(&self, key: &str) -> Option<&str> {
+        self.absorbent_names.get(key).map(String::as_str)
+    }
+
+    /// The members of `absorbent` as its row lists them, with what each did in
+    /// the period — every member, including one with no Run in it.
+    fn absorbed(&self, absorbent: &str, tallies: &PipelineTallies) -> Vec<AbsorbedMember> {
+        self.members
+            .get(absorbent)
+            .into_iter()
+            .flatten()
+            .map(|member| tallies.member(member))
+            .collect()
+    }
+}
 
 /// The absorptions of one Stats read. Empty under `uncombined=true`, which is
 /// exactly « the rows as the event log wrote them ».
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AbsorptionResolver {
-    /// member → absorbent, for the `pipeline` dimension.
-    pipelines: HashMap<String, String>,
-    /// absorbent → the name stored at the last Combine.
-    absorbent_names: HashMap<String, String>,
-    /// absorbent → its members, in stored order.
-    members: BTreeMap<String, Vec<Named>>,
+    pipelines: ScopeAbsorptions,
+    /// Pipeline key (of the row the Node shows under) → its Node absorptions.
+    nodes: HashMap<String, Arc<ScopeAbsorptions>>,
+    models: Arc<ScopeAbsorptions>,
     fingerprint: u64,
 }
 
@@ -273,6 +567,8 @@ impl AbsorptionResolver {
         sorted.sort_by(|a, b| {
             (&a.dimension, &a.scope, &a.member).cmp(&(&b.dimension, &b.scope, &b.member))
         });
+        let mut nodes: HashMap<String, ScopeAbsorptions> = HashMap::new();
+        let mut models = ScopeAbsorptions::default();
         for row in sorted {
             (
                 &row.dimension,
@@ -283,24 +579,18 @@ impl AbsorptionResolver {
                 &row.absorbent_name,
             )
                 .hash(&mut hasher);
-            if row.dimension != PIPELINE {
-                continue;
+            match row.dimension.as_str() {
+                PIPELINE => resolver.pipelines.insert(row),
+                NODE => nodes.entry(row.scope.clone()).or_default().insert(row),
+                MODEL => models.insert(row),
+                _ => {}
             }
-            resolver
-                .pipelines
-                .insert(row.member.clone(), row.absorbent.clone());
-            resolver
-                .absorbent_names
-                .insert(row.absorbent.clone(), row.absorbent_name.clone());
-            resolver
-                .members
-                .entry(row.absorbent.clone())
-                .or_default()
-                .push(Named {
-                    key: row.member.clone(),
-                    name: row.member_name.clone(),
-                });
         }
+        resolver.nodes = nodes
+            .into_iter()
+            .map(|(scope, absorptions)| (scope, Arc::new(absorptions)))
+            .collect();
+        resolver.models = Arc::new(models);
         resolver.fingerprint = hasher.finish();
         resolver
     }
@@ -316,13 +606,13 @@ impl AbsorptionResolver {
 
     /// The key a Run of Pipeline `key` is counted under.
     pub(crate) fn pipeline<'a>(&'a self, key: &'a str) -> &'a str {
-        self.pipelines.get(key).map(String::as_str).unwrap_or(key)
+        self.pipelines.resolve(key)
     }
 
     /// The name stored for an absorbent key at its last Combine or rename — for
     /// a row that has no Run of its own to name it.
     pub(crate) fn stored_name(&self, key: &str) -> Option<&str> {
-        self.absorbent_names.get(key).map(String::as_str)
+        self.pipelines.stored_name(key)
     }
 
     /// Folded into every cache that keeps an already-aggregated result (ADR-0077
@@ -339,44 +629,53 @@ impl AbsorptionResolver {
         let name = if own {
             raw_name.clone()
         } else {
-            self.absorbent_names
-                .get(&key)
-                .cloned()
+            self.pipelines
+                .stored_name(&key)
+                .map(str::to_string)
                 .unwrap_or_else(|| key.clone())
         };
         RunIdentity {
+            nodes: self.nodes.get(&key).cloned().unwrap_or_default(),
+            models: self.models.clone(),
             pipeline_key: key,
             pipeline_name: name,
             own_name: own,
             raw_pipeline_key: raw_key,
             node_defs: node_defs(payload),
+            run_id: String::new(),
+            started_at: String::new(),
         }
     }
 
-    /// The members of `absorbent` as a row lists them, with what each did in the
-    /// period — every member, including one with no Run in it.
+    /// The members of Pipeline `absorbent` as its row lists them.
     pub(crate) fn absorbed(
         &self,
         absorbent: &str,
         tallies: &PipelineTallies,
     ) -> Vec<AbsorbedMember> {
-        self.members
-            .get(absorbent)
-            .into_iter()
-            .flatten()
-            .map(|member| {
-                let tally = tallies.by_key.get(&member.key);
-                AbsorbedMember {
-                    key: member.key.clone(),
-                    name: member.name.clone(),
-                    runs: tally.map_or(0, |t| t.runs.len() as u64),
-                    executions: tallies
-                        .count_executions
-                        .then(|| tally.map_or(0, |t| t.executions)),
-                    last_run: tally.and_then(|t| t.last_run.clone()),
-                }
-            })
-            .collect()
+        self.pipelines.absorbed(absorbent, tallies)
+    }
+
+    /// The members of Node `absorbent` under Pipeline row `pipeline`.
+    pub(crate) fn absorbed_nodes(
+        &self,
+        pipeline: &str,
+        absorbent: &str,
+        tallies: &PipelineTallies,
+    ) -> Vec<AbsorbedMember> {
+        self.nodes
+            .get(pipeline)
+            .map(|scope| scope.absorbed(absorbent, tallies))
+            .unwrap_or_default()
+    }
+
+    /// The members of model `absorbent` on the « By model » axis.
+    pub(crate) fn absorbed_models(
+        &self,
+        absorbent: &str,
+        tallies: &PipelineTallies,
+    ) -> Vec<AbsorbedMember> {
+        self.models.absorbed(absorbent, tallies)
     }
 }
 
@@ -449,9 +748,45 @@ pub(crate) struct RunIdentity {
     /// The key the event log wrote, before substitution — the member tallies.
     pub raw_pipeline_key: String,
     pub node_defs: BTreeMap<String, NodeDef>,
+    /// The Node absorptions of the Pipeline row this Run is counted under.
+    nodes: Arc<ScopeAbsorptions>,
+    /// The Model absorptions (the « By model » axis only).
+    models: Arc<ScopeAbsorptions>,
+    /// The Run itself, for the tallies of a fold that only sees the identity
+    /// (Performance's « By model » axis) — empty unless [`Self::for_run`] set it.
+    pub run_id: String,
+    pub started_at: String,
+}
+
+/// A Node of a Run as a Stats row counts it, Node absorptions applied.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NodeIdentity {
+    /// The Node id the row is keyed by — its absorbent's when it is absorbed.
+    pub key: String,
+    /// The Node id the event log wrote — the member tallies.
+    pub raw_key: String,
+    pub name: String,
+    /// Same naming rule as a Pipeline row: an absorbed Node only names the row
+    /// when the absorbent Node has no execution of its own.
+    pub own_name: bool,
+}
+
+impl NodeIdentity {
+    /// Apply the naming rule to a Node row's name slot (latest own wins).
+    pub(crate) fn adopt_name(&self, slot: &mut String) {
+        if self.own_name || slot.is_empty() {
+            *slot = self.name.clone();
+        }
+    }
 }
 
 impl RunIdentity {
+    pub(crate) fn for_run(mut self, run_id: &str, started_at: &str) -> Self {
+        self.run_id = run_id.to_string();
+        self.started_at = started_at.to_string();
+        self
+    }
+
     /// Apply the naming rule to a row's name slot (folds walk Runs oldest first,
     /// so « latest own Run wins » is a plain overwrite).
     pub(crate) fn adopt_name(&self, slot: &mut String) {
@@ -466,20 +801,47 @@ impl RunIdentity {
             .map(|def| def.name.clone())
             .unwrap_or_else(|| node_id.to_string())
     }
+
+    /// Node `raw` of this Run, as the Pipeline row counts it.
+    pub(crate) fn node(&self, raw: &str) -> NodeIdentity {
+        let key = self.nodes.resolve(raw).to_string();
+        let own_name = key == raw;
+        let name = if own_name {
+            self.node_name(raw)
+        } else {
+            self.nodes
+                .stored_name(&key)
+                .map(str::to_string)
+                .unwrap_or_else(|| self.node_name(&key))
+        };
+        NodeIdentity {
+            key,
+            raw_key: raw.to_string(),
+            name,
+            own_name,
+        }
+    }
+
+    /// The model id the « By model » axis counts model `raw` under.
+    pub(crate) fn model(&self, raw: &str) -> String {
+        self.models.resolve(raw).to_string()
+    }
 }
 
 // --- What a row says about its members -------------------------------------------
 
-/// What one raw Pipeline key did in the period, under the row that counts it.
+/// What one raw key did in the period, under the row that counts it.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct KeyTally {
     runs: BTreeSet<String>,
     executions: u64,
     last_run: Option<String>,
+    observed: u64,
+    requested: u64,
 }
 
-/// The per-raw-key tallies of one Pipeline row: the row's own `runs` /
-/// `last_run`, and what each absorbed member contributed.
+/// The per-raw-key tallies of one row (a Pipeline, a Node or a model): the
+/// row's own `runs` / `last_run`, and what each absorbed member contributed.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PipelineTallies {
     by_key: BTreeMap<String, KeyTally>,
@@ -490,16 +852,22 @@ impl PipelineTallies {
     /// Sessions counts executions; Cost and Performance count Runs only.
     pub(crate) fn counting_executions() -> Self {
         Self {
-            by_key: BTreeMap::new(),
             count_executions: true,
+            ..Self::default()
         }
     }
 
     pub(crate) fn record_run(&mut self, identity: &RunIdentity, run_id: &str, started_at: &str) {
-        let tally = self
-            .by_key
-            .entry(identity.raw_pipeline_key.clone())
-            .or_default();
+        self.record_run_as(&identity.raw_pipeline_key, run_id, started_at);
+    }
+
+    pub(crate) fn record_execution(&mut self, identity: &RunIdentity) {
+        self.record_execution_as(&identity.raw_pipeline_key);
+    }
+
+    /// A Run seen under raw key `key` (a Pipeline key, a Node id or a model id).
+    pub(crate) fn record_run_as(&mut self, key: &str, run_id: &str, started_at: &str) {
+        let tally = self.by_key.entry(key.to_string()).or_default();
         tally.runs.insert(run_id.to_string());
         if tally
             .last_run
@@ -510,15 +878,27 @@ impl PipelineTallies {
         }
     }
 
-    pub(crate) fn record_execution(&mut self, identity: &RunIdentity) {
-        self.by_key
-            .entry(identity.raw_pipeline_key.clone())
-            .or_default()
-            .executions += 1;
+    pub(crate) fn record_execution_as(&mut self, key: &str) {
+        self.by_key.entry(key.to_string()).or_default().executions += 1;
+    }
+
+    /// One observation of model `key`, read from the source or requested — only
+    /// model rows record it (#892), so only their members carry a provenance.
+    pub(crate) fn record_provenance_as(&mut self, key: &str, observed: bool) {
+        let tally = self.by_key.entry(key.to_string()).or_default();
+        if observed {
+            tally.observed += 1;
+        } else {
+            tally.requested += 1;
+        }
     }
 
     pub(crate) fn runs(&self) -> u64 {
-        self.by_key.values().map(|t| t.runs.len() as u64).sum()
+        self.by_key
+            .values()
+            .flat_map(|t| t.runs.iter())
+            .collect::<BTreeSet<_>>()
+            .len() as u64
     }
 
     pub(crate) fn last_run(&self) -> Option<String> {
@@ -527,10 +907,27 @@ impl PipelineTallies {
             .filter_map(|t| t.last_run.clone())
             .max()
     }
+
+    fn member(&self, member: &Named) -> AbsorbedMember {
+        let tally = self.by_key.get(&member.key);
+        AbsorbedMember {
+            key: member.key.clone(),
+            name: member.name.clone(),
+            runs: tally.map_or(0, |t| t.runs.len() as u64),
+            executions: self
+                .count_executions
+                .then(|| tally.map_or(0, |t| t.executions)),
+            last_run: tally.and_then(|t| t.last_run.clone()),
+            provenance: tally
+                .filter(|t| t.observed + t.requested > 0)
+                .map(|t| crate::stats::provenance(t.observed as i64, t.requested as i64)),
+        }
+    }
 }
 
-/// One absorbed member as a Pipeline row lists it: its name, and what it did in
-/// the period (`runs` always; `executions` on Sessions rows only).
+/// One absorbed member as a row lists it: its name, and what it did in the
+/// period (`runs` always; `executions` on Sessions rows only; `provenance` on
+/// model rows only — where its id was read from, ADR-0065 §1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct AbsorbedMember {
     pub key: String,
@@ -540,6 +937,8 @@ pub(crate) struct AbsorbedMember {
     pub executions: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::stats::StatsProvenance>,
 }
 
 // --- HTTP ----------------------------------------------------------------------
@@ -550,6 +949,9 @@ pub(crate) struct AbsorbedMember {
 pub(crate) struct AbsorptionView {
     pub dimension: String,
     pub scope: String,
+    /// A Node absorption's Pipeline, by name (#892) — empty on the others.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub scope_name: String,
     pub absorbent: Named,
     pub members: Vec<AbsorptionMemberView>,
 }
@@ -579,6 +981,7 @@ pub(crate) fn group(rows: Vec<AbsorptionRow>) -> AbsorptionList {
             .or_insert_with(|| AbsorptionView {
                 dimension: row.dimension.clone(),
                 scope: row.scope.clone(),
+                scope_name: row.scope_name.clone(),
                 absorbent: Named {
                     key: row.absorbent.clone(),
                     name: row.absorbent_name.clone(),
@@ -616,23 +1019,94 @@ pub(crate) async fn list_absorptions(State(state): State<Arc<AppState>>) -> Resp
     current(&state.db).await
 }
 
+/// One row of a Combine request. `scope` names the Pipeline row a Node was
+/// selected under (#892): the daemon refuses Nodes of two different Pipelines
+/// rather than trust the request's single `scope`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CombineRow {
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+impl CombineRow {
+    fn named(&self) -> Named {
+        Named {
+            key: self.key.clone(),
+            name: self.name.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct CombineRequest {
     pub dimension: String,
+    /// The key of the Pipeline row a Node absorption is scoped to; empty on the
+    /// other dimensions.
     #[serde(default)]
     pub scope: String,
-    pub absorbent: Named,
-    pub members: Vec<Named>,
+    /// That Pipeline's name, for Settings.
+    #[serde(default)]
+    pub scope_name: String,
+    pub absorbent: CombineRow,
+    pub members: Vec<CombineRow>,
 }
 
-/// The refusal for a dimension this build does not combine yet, if any.
+/// The refusal for a dimension Stats does not combine, if any.
 fn unsupported_dimension(dimension: &str) -> Option<Response> {
-    (dimension != PIPELINE).then(|| {
+    (![PIPELINE, NODE, MODEL].contains(&dimension)).then(|| {
         error(
             StatusCode::BAD_REQUEST,
             format!("unsupported absorption dimension: {dimension}"),
         )
     })
+}
+
+/// The refusal for a scope that does not fit the dimension, if any: a Node
+/// absorption lives under ONE Pipeline row — one that is not itself counted
+/// under another — and the other dimensions have no scope.
+async fn invalid_scope(
+    db: &SqlitePool,
+    body: &CombineRequest,
+) -> Result<Option<Response>, sqlx::Error> {
+    if body.dimension != NODE {
+        return Ok((!body.scope.is_empty()).then(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                format!("a {} absorption has no scope", body.dimension),
+            )
+        }));
+    }
+    if body.scope.trim().is_empty() {
+        return Ok(Some(error(
+            StatusCode::BAD_REQUEST,
+            "a node absorption needs the pipeline its nodes run under",
+        )));
+    }
+    let rows = std::iter::once(&body.absorbent).chain(body.members.iter());
+    if rows
+        .filter_map(|row| row.scope.as_deref())
+        .any(|scope| scope != body.scope)
+    {
+        return Ok(Some(error(
+            StatusCode::BAD_REQUEST,
+            "nodes of different pipelines cannot be combined",
+        )));
+    }
+    let absorbed: Option<(String,)> = sqlx::query_as(
+        "SELECT absorbent FROM stats_absorptions WHERE dimension = ? AND scope = '' AND member = ?",
+    )
+    .bind(PIPELINE)
+    .bind(&body.scope)
+    .fetch_optional(db)
+    .await?;
+    Ok(absorbed.map(|_| {
+        error(
+            StatusCode::BAD_REQUEST,
+            "this pipeline is combined into another: combine its nodes there",
+        )
+    }))
 }
 
 /// `POST /stats/absorptions` — create or extend an absorption. Answers the
@@ -645,13 +1119,25 @@ pub(crate) async fn create_absorption(
     if let Some(response) = unsupported_dimension(&body.dimension) {
         return response;
     }
+    match invalid_scope(&state.db, &body).await {
+        Ok(Some(response)) => return response,
+        Ok(None) => {}
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("stats absorption failed: {e}"),
+            )
+        }
+    }
     if body.absorbent.key.trim().is_empty() {
         return error(StatusCode::BAD_REQUEST, "absorbent key is empty");
     }
+    let absorbent = body.absorbent.named();
     let members: Vec<Named> = body
         .members
-        .into_iter()
-        .filter(|m| m.key != body.absorbent.key)
+        .iter()
+        .filter(|m| m.key != absorbent.key)
+        .map(CombineRow::named)
         .collect();
     if members.is_empty() {
         return error(
@@ -662,11 +1148,14 @@ pub(crate) async fn create_absorption(
     if members.iter().any(|m| m.key.trim().is_empty()) {
         return error(StatusCode::BAD_REQUEST, "member key is empty");
     }
-    if let Err(e) = combine(
+    if let Err(e) = combine_scoped(
         &state.db,
-        &body.dimension,
-        &body.scope,
-        &body.absorbent,
+        Scope {
+            dimension: &body.dimension,
+            key: &body.scope,
+            name: &body.scope_name,
+        },
+        &absorbent,
         &members,
         ORIGIN_MANUAL,
     )
@@ -683,11 +1172,12 @@ pub(crate) async fn create_absorption(
             actor_hint: actor.as_hint().to_string(),
             action: "stats_absorption.combine".to_string(),
             target_kind: Some("stats_absorption".to_string()),
-            target_id: Some(body.absorbent.key.clone()),
+            target_id: Some(absorbent.key.clone()),
             before: None,
             after: Some(serde_json::json!({
                 "dimension": body.dimension,
-                "absorbent": body.absorbent,
+                "scope": body.scope,
+                "absorbent": absorbent,
                 "members": members,
             })),
         },
@@ -726,6 +1216,7 @@ pub(crate) async fn delete_absorption_member(
                     target_id: Some(q.member.clone()),
                     before: Some(serde_json::json!({
                         "dimension": q.dimension,
+                        "scope": q.scope,
                         "member": q.member,
                     })),
                     after: None,
@@ -927,6 +1418,7 @@ mod tests {
         let rows = vec![AbsorptionRow {
             dimension: PIPELINE.to_string(),
             scope: String::new(),
+            scope_name: String::new(),
             member: "old".to_string(),
             member_name: "Old".to_string(),
             absorbent: "new".to_string(),
@@ -961,6 +1453,218 @@ mod tests {
         assert_eq!(
             pipeline_identity(&serde_json::json!({})),
             (UNKNOWN_PIPELINE.to_string(), UNKNOWN_PIPELINE.to_string())
+        );
+    }
+
+    // --- Nodes and Models (#892) ---
+
+    async fn combine_nodes(db: &SqlitePool, scope: &str, absorbent: &str, members: &[&str]) {
+        let members: Vec<Named> = members.iter().map(|m| named(m)).collect();
+        combine_scoped(
+            db,
+            Scope {
+                dimension: NODE,
+                key: scope,
+                name: &scope.to_uppercase(),
+            },
+            &named(absorbent),
+            &members,
+            ORIGIN_MANUAL,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// (scope, member → absorbent) of every Node row, sorted.
+    async fn node_edges(db: &SqlitePool) -> Vec<(String, String, String)> {
+        let mut edges: Vec<(String, String, String)> = list(db)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.dimension == NODE)
+            .map(|row| (row.scope, row.member, row.absorbent))
+            .collect();
+        edges.sort();
+        edges
+    }
+
+    fn node_edge(scope: &str, member: &str, absorbent: &str) -> (String, String, String) {
+        (scope.to_string(), member.to_string(), absorbent.to_string())
+    }
+
+    /// A Run of `pipeline` that started Node `node` — what the cascade reads.
+    async fn ran(db: &SqlitePool, run: &str, pipeline: &str, nodes: &[&str]) {
+        sqlx::query(
+            "INSERT INTO events (run_id, ts, kind, payload) VALUES (?, ?, 'run_started', ?)",
+        )
+        .bind(run)
+        .bind("2026-09-24T00:00:00Z")
+        .bind(serde_json::json!({"pipeline_id": pipeline, "pipeline_name": pipeline}).to_string())
+        .execute(db)
+        .await
+        .unwrap();
+        for node in nodes {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, 'node_started', ?, 1, '{}')",
+            )
+            .bind(run)
+            .bind("2026-09-24T00:01:00Z")
+            .bind(node)
+            .execute(db)
+            .await
+            .unwrap();
+        }
+    }
+
+    fn run_of(pipeline: &str) -> serde_json::Value {
+        serde_json::json!({"pipeline_id": pipeline, "pipeline_name": pipeline})
+    }
+
+    #[tokio::test]
+    async fn a_node_absorption_applies_to_the_runs_of_its_pipeline_row_only() {
+        let db = mem_db().await;
+        combine_manual(&db, "b", &["a"]).await;
+        combine_nodes(&db, "b", "code-review", &["review"]).await;
+        let resolver = AbsorptionResolver::from_rows(&list(&db).await.unwrap());
+
+        // A's Run counts under B, so B's Node absorption applies to it.
+        let node = resolver.run_identity(&run_of("a")).node("review");
+        assert_eq!(node.key, "code-review");
+        assert_eq!(node.raw_key, "review");
+        assert_eq!(node.name, "CODE-REVIEW", "the absorbent's stored name");
+        assert!(!node.own_name);
+        assert_eq!(
+            resolver.run_identity(&run_of("b")).node("review").key,
+            "code-review"
+        );
+        // Another Pipeline's `review` is not touched.
+        assert_eq!(
+            resolver.run_identity(&run_of("c")).node("review").key,
+            "review"
+        );
+        // The absorbent Node keeps its own name.
+        let own = resolver.run_identity(&run_of("b")).node("code-review");
+        assert!(own.own_name);
+    }
+
+    #[tokio::test]
+    async fn a_pipeline_taken_out_takes_its_nodes_out_of_the_node_absorption() {
+        let db = mem_db().await;
+        // `review` only ever ran under A; `code-review` under B; `shared` under both.
+        ran(&db, "r-a", "a", &["review", "shared"]).await;
+        ran(&db, "r-b", "b", &["code-review", "shared"]).await;
+        combine_manual(&db, "b", &["a"]).await;
+        combine_nodes(&db, "b", "code-review", &["review"]).await;
+        combine_nodes(&db, "b", "shared-new", &["shared"]).await;
+
+        // The resolver alone already reads A's Nodes under their own ids once
+        // A is out (read-time cascade)…
+        let without_a: Vec<AbsorptionRow> = list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| !(row.dimension == PIPELINE && row.member == "a"))
+            .collect();
+        let resolver = AbsorptionResolver::from_rows(&without_a);
+        assert_eq!(
+            resolver.run_identity(&run_of("a")).node("review").key,
+            "review"
+        );
+
+        // …and the store drops the Node rows that only A's Runs explained.
+        assert!(remove_member(&db, PIPELINE, "", "a").await.unwrap());
+        assert_eq!(
+            node_edges(&db).await,
+            vec![node_edge("b", "shared", "shared-new")],
+            "`shared` still runs under B: its absorption stays"
+        );
+        let resolver = AbsorptionResolver::from_rows(&list(&db).await.unwrap());
+        assert_eq!(
+            resolver.run_identity(&run_of("b")).node("shared").key,
+            "shared-new"
+        );
+        assert_eq!(
+            resolver.run_identity(&run_of("a")).node("review").key,
+            "review"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_node_absorbent_that_only_ran_under_the_removed_pipeline_dissolves() {
+        let db = mem_db().await;
+        ran(&db, "r-a", "a", &["writer-v2"]).await;
+        ran(&db, "r-b", "b", &["writer"]).await;
+        combine_manual(&db, "b", &["a"]).await;
+        combine_nodes(&db, "b", "writer-v2", &["writer"]).await;
+        remove_member(&db, PIPELINE, "", "a").await.unwrap();
+        assert!(node_edges(&db).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn combining_pipelines_carries_the_members_node_absorptions_over() {
+        let db = mem_db().await;
+        combine_nodes(&db, "a", "y", &["x"]).await;
+        combine_nodes(&db, "b", "z", &["y"]).await;
+        combine_manual(&db, "b", &["a"]).await;
+        // A's `x → y` moves under B, where `y` is already absorbed by `z`: one
+        // level, so `x` joins `z`.
+        assert_eq!(
+            node_edges(&db).await,
+            vec![node_edge("b", "x", "z"), node_edge("b", "y", "z")]
+        );
+        let rows = list(&db).await.unwrap();
+        assert!(rows
+            .iter()
+            .filter(|row| row.dimension == NODE)
+            .all(|row| row.scope_name == "B"));
+    }
+
+    #[tokio::test]
+    async fn a_rename_keeps_the_node_absorptions_of_the_pipeline() {
+        let db = mem_db().await;
+        combine_nodes(&db, "old", "code-review", &["review"]).await;
+        rename(&db, "old", "new").await;
+        assert_eq!(
+            node_edges(&db).await,
+            vec![node_edge("new", "review", "code-review")]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_absorption_only_folds_the_model_id() {
+        let db = mem_db().await;
+        let absorbent = Named {
+            key: "claude-opus-4-8".to_string(),
+            name: "claude-opus-4-8".to_string(),
+        };
+        let alias = Named {
+            key: "opus".to_string(),
+            name: "opus".to_string(),
+        };
+        combine(&db, MODEL, "", &absorbent, &[alias], ORIGIN_MANUAL)
+            .await
+            .unwrap();
+        let resolver = AbsorptionResolver::from_rows(&list(&db).await.unwrap());
+        let identity = resolver.run_identity(&run_of("p"));
+        assert_eq!(identity.model("opus"), "claude-opus-4-8");
+        assert_eq!(identity.model("claude-sonnet-5"), "claude-sonnet-5");
+        assert_eq!(
+            identity.pipeline_key, "p",
+            "the Pipeline axis is not touched"
+        );
+        assert_eq!(identity.node("opus").key, "opus");
+
+        let mut tallies = PipelineTallies::default();
+        tallies.record_run_as("opus", "r1", "2026-09-24T00:00:00Z");
+        tallies.record_provenance_as("opus", false);
+        let members = resolver.absorbed_models("claude-opus-4-8", &tallies);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].runs, 1);
+        assert_eq!(
+            members[0].provenance,
+            Some(crate::stats::StatsProvenance::Requested),
+            "the member says where its id was read from"
         );
     }
 

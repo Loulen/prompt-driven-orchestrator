@@ -1,11 +1,34 @@
-import type { StatsAbsorbedMember, StatsPipelineRowMeta } from "../types";
+import type {
+  StatsAbsorbedMember,
+  StatsAbsorption,
+  StatsPipelineRowMeta,
+  StatsProvenance,
+} from "../types";
 
-// The pure half of the Stats absorption pattern (#890, ADR-0077): what a
+// The pure half of the Stats absorption pattern (#890, #892, ADR-0077): what a
 // selectable row is, how a tab counts it, and which row the Combine modal
 // proposes as the absorbent.
 
-/** A row the pattern can select: a Stats Pipeline row. */
+/** What a row absorbs: Pipelines, Nodes of one Pipeline row, or Models. */
+export type AbsorptionDimension = StatsAbsorption["dimension"];
+
+/** The word the pattern uses for a row of each dimension — never a key. */
+export const NOUN: Record<AbsorptionDimension, string> = {
+  pipeline: "pipeline",
+  node: "node",
+  model: "model",
+};
+
+/** A row the pattern can select: a Stats Pipeline, Node or Model row. */
 export type AbsorbableRow = { id: string; name: string } & StatsPipelineRowMeta;
+
+/** Where a model member's id was read from (ADR-0065 §1), said in words. */
+export function provenanceNote(provenance: StatsProvenance | null | undefined): string | null {
+  if (provenance === "requested") return "requested id";
+  if (provenance === "mixed") return "observed and requested";
+  if (provenance === "observed") return "observed id";
+  return null;
+}
 
 /** How a tab counts its rows in the modals: Sessions counts executions, Cost
  *  and Performance count Runs. */

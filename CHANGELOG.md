@@ -16,6 +16,16 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.103.2
+**Profils agents : seul le bouton Edit ouvre l'éditeur, dans une modale partagée avec New
+profile** (#899).
+
+- Le crayon de chaque ligne de Settings › Agents › Agent profiles est un vrai bouton
+  `Edit <nom>`. Cliquer sur le reste de la ligne n'ouvre plus rien.
+- L'éditeur (Name, Harness, Model, Effort) quitte le formulaire sous la liste pour une modale.
+  **New profile** ouvre la même modale, vide, avec `Create`. Les règles et appels REST ne
+  changent pas ; Cancel, Échap ou un clic sur le fond ferment sans rien enregistrer.
+
 ## 1.103.1
 **Enregistrer un pipeline sans changer son nom ne le renomme plus** (#886).
 

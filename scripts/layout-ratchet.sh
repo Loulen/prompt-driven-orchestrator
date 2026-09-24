@@ -67,8 +67,11 @@ cd "$(git rev-parse --show-toplevel)"
 #   terminal presence registry (one pilot per tmux session, read-only spectators, role
 #   messages, `ignore-size` switching; ADR-0075). It is ONE new concern that #870 (take
 #   control) extends; pty_bridge.rs only moves bytes and keeps its size, lib.rs only wires it.
+# frontend/src/components: 202 (#899, release 1.103.2) admits AgentProfileModal.tsx — the
+#   agent profile editor moved out of AgentProfilesPanel's inline form into ONE modal shared
+#   by the row's Edit button and New profile (like ProjectEditModal). The panel keeps the list.
 BASELINES='
-frontend/src/components 201
+frontend/src/components 202
 crates/pdo-daemon/src 92
 '
 

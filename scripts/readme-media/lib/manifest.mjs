@@ -42,8 +42,9 @@ export function landVariant({ file, sceneName, title, entry, moves }) {
   return updateManifest(file, sceneName, { title, variants: [entry] });
 }
 
-/** One variant's manifest entry. Warnings say what misses the target. */
-export function variantEntry({ variant, facts, plan, gif, poster, posterBytes, target }) {
+/** One variant's manifest entry. Warnings say what misses the target, then
+ *  what the take itself reported (`sceneWarnings`, `ctx.warn`). */
+export function variantEntry({ variant, facts, plan, gif, poster, posterBytes, target, sceneWarnings = [] }) {
   const warnings = [];
   if (facts.durationS < target.min / 1000 || facts.durationS > target.max / 1000) {
     warnings.push(`duration ${facts.durationS}s outside ${target.min / 1000}–${target.max / 1000}s`);
@@ -51,6 +52,7 @@ export function variantEntry({ variant, facts, plan, gif, poster, posterBytes, t
   const names = plan.markers.map((m) => m.name);
   const missing = variant.markers.filter((name) => !names.includes(name));
   if (missing.length > 0) warnings.push(`missing markers: ${missing.join(", ")}`);
+  warnings.push(...sceneWarnings);
   return {
     id: variant.id,
     label: variant.label ?? variant.id,

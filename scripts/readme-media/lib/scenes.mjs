@@ -43,6 +43,12 @@ export function validateScene(scene, file = scene?.name) {
   for (const key of ["live", "needs"]) {
     if (scene[key] !== undefined && !Array.isArray(scene[key])) fail(`\`${key}\` must be an array`);
   }
+  // A scene that builds from its target (#882) names what its gestures draw.
+  if (scene.drawn !== undefined) {
+    for (const [key, value] of Object.entries(scene.drawn)) {
+      if (!["nodes", "edges", "conditions"].includes(key) || !Array.isArray(value)) fail("`drawn` lists `nodes`, `edges` and `conditions` (arrays)");
+    }
+  }
 }
 
 /** Which scenes a run records: all of them, or the comma-separated `SCENE`. */

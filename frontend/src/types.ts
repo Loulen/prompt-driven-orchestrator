@@ -1829,6 +1829,10 @@ export interface StatsAbsorbedMember {
   executions?: number;
   last_run?: string | null;
   provenance?: StatsProvenance;
+  /** On effort and couple rows (#906): the raw scopes (model ids, or
+   *  `["pipeline","node"]` pairs) whose absorption holds this member — its ✕
+   *  takes it out of every one of them. */
+  scopes?: string[];
 }
 
 /** `GET /stats/absorptions` — every absorption of the instance. */
@@ -1837,10 +1841,13 @@ export interface StatsAbsorptionList {
 }
 
 export interface StatsAbsorption {
-  dimension: "pipeline" | "node" | "model";
-  /** The key of the Pipeline row a Node absorption lives under; "" otherwise. */
+  dimension: "pipeline" | "node" | "model" | "effort" | "couple";
+  /** The key of the Pipeline row a Node absorption lives under, the raw model
+   *  id of an effort absorption, the raw `["pipeline","node"]` pair of a couple
+   *  absorption (#906); "" otherwise. */
   scope: string;
-  /** That Pipeline's name — what Settings shows (#892). */
+  /** That scope's name — what Settings shows (#892): the Pipeline, the model,
+   *  or « Node (Pipeline) ». */
   scope_name?: string;
   absorbent: { key: string; name: string };
   members: { key: string; name: string; origin: "manual" | "rename"; created_at: string }[];
@@ -1915,6 +1922,16 @@ export interface StatsModelEffortPair extends StatsCostAggregate {
   model_provenance: StatsProvenance;
   effort: string | null;
   effort_provenance: StatsProvenance | null;
+  /** The couple's key (`model|effort`, #906) — what a couple absorption
+   *  names; never shown. */
+  key: string;
+  runs?: number;
+  last_run?: string | null;
+  /** The couples it absorbs locally, in this Node row (#906). */
+  absorbed?: StatsAbsorbedMember[];
+  /** The raw couples a global absorption (models, efforts) counts here — the
+   *  grey, read-only « Global absorption » mark (#906). */
+  global_absorbed?: StatsAbsorbedMember[];
 }
 
 /** One effort level under a model in the « By model » tree: `id` is the effort
@@ -2051,6 +2068,16 @@ export interface PerformanceModelEffortPair extends StatsPerformanceAggregate {
   model_provenance: StatsProvenance;
   effort: string | null;
   effort_provenance: StatsProvenance | null;
+  /** The couple's key (`model|effort`, #906) — what a couple absorption
+   *  names; never shown. */
+  key: string;
+  runs?: number;
+  last_run?: string | null;
+  /** The couples it absorbs locally, in this Node row (#906). */
+  absorbed?: StatsAbsorbedMember[];
+  /** The raw couples a global absorption (models, efforts) counts here — the
+   *  grey, read-only « Global absorption » mark (#906). */
+  global_absorbed?: StatsAbsorbedMember[];
 }
 
 /** One effort level under a model in Performance « By model »: `id` is the

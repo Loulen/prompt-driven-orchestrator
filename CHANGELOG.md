@@ -60,6 +60,21 @@ déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règ
 contribution sont dans `CONTRIBUTING.md`.
 
 ## Non publié
+**Stats : absorber les efforts d'un modèle et les couples d'un Node** (#906, story #888,
+ADR-0078).
+
+- Sur l'axe « By model » de Cost et de Performance, sélectionner des efforts d'un même modèle
+  (`not set` + `high`) puis « Combine » : une ligne d'effort, pastille `[⧉ N]` et modale des
+  membres. Une sélection sur deux modèles est refusée, dans l'UI et par l'API (400).
+- Les absorptions globales (Modèles, efforts) réunissent aussi les couples modèle × effort de
+  chaque Node, dans les arbres Pipeline et Projet. Le couple touché porte une pastille grisée
+  « Global absorption » : modale en lecture seule, lien vers l'axe « By model ».
+- Dans le détail d'un Node, deux couples quelconques se combinent en une ligne. L'absorption
+  est locale au Node, n'apparaît jamais sur « By model », et s'applique après le global.
+- Portée figée : une absorption d'efforts ou de couples couvre les clés brutes présentes à la
+  pose ; un membre absorbé plus tard n'est pas couvert.
+- Settings › Stats absorptions liste les entrées « Effort · <modèle> » et « Couple · <Node> ».
+
 **Stats : absorber des Nodes et des Modèles** (#892, story #888, ADR-0077).
 
 - Sous un même Pipeline, sélectionner deux lignes Node (Ctrl/Maj-clic dans le détail) puis

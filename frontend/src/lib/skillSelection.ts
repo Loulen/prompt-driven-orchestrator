@@ -27,8 +27,8 @@ export interface InheritedTier {
   label?: string;
 }
 
-/** One row of the effective list a selector renders. */
-export interface EffectiveRow {
+/** One row of the active-skills resolution a selector renders. */
+export interface ActiveRow {
   id: string;
   /** The bank's current name, else the stored label. */
   name: string;
@@ -42,23 +42,23 @@ export interface EffectiveRow {
   missing: boolean;
 }
 
-export interface EffectiveSkills {
-  rows: EffectiveRow[];
+export interface ActiveSkills {
+  rows: ActiveRow[];
   /** Distinct known skills the NodeRun would receive (missing ones excluded). */
-  effectiveCount: number;
-  missing: EffectiveRow[];
+  activeCount: number;
+  missing: ActiveRow[];
 }
 
 /**
  * Union `inherited` (coarser tiers) with `own` at `ownTier`, naming each id from
  * `bank`. Order: first tier that names an id decides its position.
  */
-export function resolveEffectiveSkills(
+export function resolveActiveSkills(
   ownTier: SkillTier,
   own: SkillRef[],
   inherited: InheritedTier[],
   bank: Pick<SkillBank, "skills">,
-): EffectiveSkills {
+): ActiveSkills {
   const known = new Map(bank.skills.map((skill) => [skill.id, skill]));
   const order: string[] = [];
   const acc = new Map<string, { label: string; tiers: SkillTier[] }>();
@@ -79,7 +79,7 @@ export function resolveEffectiveSkills(
       }
     }
   }
-  const rows: EffectiveRow[] = order.map((id) => {
+  const rows: ActiveRow[] = order.map((id) => {
     const { label, tiers } = acc.get(id)!;
     const inBank = known.get(id);
     const own = tiers.includes(ownTier);
@@ -94,7 +94,7 @@ export function resolveEffectiveSkills(
   });
   return {
     rows,
-    effectiveCount: rows.filter((row) => !row.missing).length,
+    activeCount: rows.filter((row) => !row.missing).length,
     missing: rows.filter((row) => row.missing),
   };
 }
@@ -144,8 +144,8 @@ export function missingIds(own: SkillRef[], bank: Pick<SkillBank, "skills">): Sk
   return own.filter((skill) => !known.has(skill.id));
 }
 
-/** `3 effective skills` / `1 effective skill` / `No skill`. */
-export function effectiveCountLabel(count: number): string {
+/** `3 active skills` / `1 active skill` / `No skill`. */
+export function activeCountLabel(count: number): string {
   if (count === 0) return "No skill";
-  return `${count} effective skill${count === 1 ? "" : "s"}`;
+  return `${count} active skill${count === 1 ? "" : "s"}`;
 }

@@ -576,7 +576,7 @@ pub(crate) async fn spawn_node(
         }
         Some(resolved.combo)
     };
-    // #669 / ADR-0062: the **skills effectifs** of this NodeRun — the strict
+    // #669 / ADR-0062: the **skills actifs** of this NodeRun — the strict
     // additive union of the four tiers, resolved HERE at spawn like the harness
     // (ADR-0046 sharing: editing a tier reaches a node not yet launched, never a
     // live one). The Run tier is the list FROZEN on `RunStarted`; the Projet and
@@ -957,7 +957,7 @@ pub(crate) async fn spawn_node(
         spawn_ctx.worktree_dir.to_path_buf()
     };
 
-    // #672 / ADR-0062: deliver the skills effectifs into the tree this NodeRun works
+    // #672 / ADR-0062: deliver the skills actifs into the tree this NodeRun works
     // in — its own sub-worktree, or the shared Run worktree (where the Run's frozen
     // base already sits since create; only what is new is written). The content
     // comes from the Run snapshot, extended here (additively) with what this node's
@@ -1245,7 +1245,7 @@ pub(crate) async fn spawn_node(
                 // resume path re-poses what was launched, never what the YAML or a
                 // tier says now (ADR-0007). `null` for a `script` node (no agent).
                 "harness": resolved_harness.as_ref().map(|r| r.harness.as_str()),
-                // #669/ADR-0062: the skills effectifs this session receives, FROZEN
+                // #669/ADR-0062: the skills actifs this session receives, FROZEN
                 // with their origin tier (ids + current bank names), and the ids the
                 // bank no longer had — the node runs without those, and the Run view
                 // says so. `null` / empty for a `script` node (no agent).

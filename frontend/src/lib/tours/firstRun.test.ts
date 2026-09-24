@@ -65,7 +65,8 @@ const SKILLS_TRIGGER = t("run-skill-selector");
 const SKILLS_POPOVER = t("run-skill-selector-popover");
 const SKILLS_FOLDER = t("run-skill-selector-folder-skf-pdo");
 const skillOption = (id: string) => t(`run-skill-selector-option-${id}`);
-const skillChosen = (id: string) => t(`run-skill-selector-row-${id}`);
+/** #849 — a skill reads as chosen by its **ticked box** in the popover. */
+const skillChecked = (id: string) => `${t(`run-skill-selector-check-${id}`)}:checked`;
 const PROMPT_INPUT = t("input-textarea");
 // #825 — the reading half: the Run, its node, and what the node produced.
 const NODE_ID = "assistant";
@@ -172,11 +173,21 @@ class FakeApp {
   openSkillsPopover() {
     this.show(SKILLS_POPOVER, SKILLS_FOLDER, skillOption("pdo-orchestrate"), skillOption("pdo-interactive"));
   }
+  /** Ticking leaves the picker open (#849): the box stays on screen, ticked. */
   tickSkill(id: string) {
-    this.show(skillChosen(id));
+    this.show(skillChecked(id));
   }
+  /** Folding the picker takes its boxes with it — nothing is un-ticked, but
+   *  nothing is readable either. */
   closeSkillsPopover() {
-    this.hide(SKILLS_POPOVER, SKILLS_FOLDER, skillOption("pdo-orchestrate"), skillOption("pdo-interactive"));
+    this.hide(
+      SKILLS_POPOVER,
+      SKILLS_FOLDER,
+      skillOption("pdo-orchestrate"),
+      skillOption("pdo-interactive"),
+      skillChecked("pdo-orchestrate"),
+      skillChecked("pdo-interactive"),
+    );
   }
   /** The folder's chevron: its rows go, the folder itself stays on screen. */
   collapseSkillsFolder() {
@@ -277,7 +288,6 @@ function gestures(fake: FakeApp): Record<string, () => void> {
       fake.openSkillsPopover();
       fake.tickSkill("pdo-orchestrate");
       fake.tickSkill("pdo-interactive");
-      fake.closeSkillsPopover();
     },
     "write-prompt": () => fake.type(PROMPT_INPUT, TUTORIAL_PROMPT),
     launch: () => fake.launch(),
@@ -344,8 +354,8 @@ describe("walking the whole tour", () => {
     expect(fake.obs().value(REPO_INPUT)).toBe(TUTORIAL_REPO_PATH);
     expect(fake.obs().present(PIPELINE_CHOSEN)).toBe(true);
     expect(fake.obs().present(AGENT_DEFAULT_CHOSEN)).toBe(true);
-    expect(fake.obs().present(skillChosen("pdo-orchestrate"))).toBe(true);
-    expect(fake.obs().present(skillChosen("pdo-interactive"))).toBe(true);
+    expect(fake.obs().present(skillChecked("pdo-orchestrate"))).toBe(true);
+    expect(fake.obs().present(skillChecked("pdo-interactive"))).toBe(true);
     expect(fake.obs().value(PROMPT_INPUT)).toBe(TUTORIAL_PROMPT);
     expect(fake.app.runCount).toBe(3);
   });
@@ -501,27 +511,47 @@ describe("a wrong choice does not advance the tour", () => {
       { label: "pdo-interactive", done: true },
     ]);
 
+    // Order is free — and the second tick is read while the first is still on
+    // screen, because a pick no longer folds the picker away (#849).
     fake.tickSkill("pdo-orchestrate");
     expect(step.done!(fake.obs())).toBe(true);
-    // Order is free, and closing the popover afterwards does not un-tick anything:
-    // the condition reads the Run's selection, not the picker being open.
+  });
+
+  /**
+   * #849 — the list of active skills under the trigger is gone, so the boxes in
+   * the picker are the only thing left to read. Folding the picker takes them off
+   * screen: the step goes back to pointing at the trigger instead of claiming a
+   * selection it can no longer see. Nothing was un-ticked, and reopening says so.
+   */
+  it("reads the boxes, so folding the picker sends the step back to the trigger", () => {
+    const fake = new FakeApp();
+    const step = stepById("add-skills");
+    fake.openModal();
+    fake.openSkillsPopover();
+    fake.tickSkill("pdo-orchestrate");
+    fake.tickSkill("pdo-interactive");
+    expect(step.done!(fake.obs())).toBe(true);
+
     fake.closeSkillsPopover();
+    expect(step.done!(fake.obs())).toBe(false);
+    expect(step.target(fake.obs())).toEqual([SKILLS_TRIGGER]);
+
+    fake.openSkillsPopover();
+    fake.tickSkill("pdo-orchestrate");
+    fake.tickSkill("pdo-interactive");
     expect(step.done!(fake.obs())).toBe(true);
   });
 
   /**
    * An instance that already delivers both PDO skills to every Run shows them
    * ticked AND disabled — there is no gesture left to make. The step reads the
-   * Run's *effective* skills, so it is satisfied on entry: the popover then waits
-   * for an explicit `Next` (engine rule) instead of flashing past the one thing
-   * this step has to give, which is the explanation.
+   * boxes, inherited ones included, so opening the picker is enough: the reader
+   * still gets the card and its explanation first, since the step before it hands
+   * over with the picker shut.
    */
   it("counts a skill the Run inherits, since the user cannot tick it", () => {
     const fake = new FakeApp();
     fake.openModal();
-    // Inherited rows land in the same effective list as the ticked ones.
-    fake.tickSkill("pdo-orchestrate");
-    fake.tickSkill("pdo-interactive");
 
     // Entered through the machine's own path (the step before it completing), so
     // `satisfiedOnEntry` is computed rather than assumed.
@@ -535,12 +565,18 @@ describe("a wrong choice does not advance the tour", () => {
     run = observeTour(TOUR, run, fake.obs(), 100);
 
     expect(currentStep(TOUR, run)?.id).toBe("add-skills");
-    expect(run.satisfiedOnEntry).toBe(true);
-    expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
-    expect(canAdvance(TOUR, run, fake.obs())).toBe(true);
+    // The picker is shut, so nothing is readable yet: the card is shown, not skipped.
+    expect(run.satisfiedOnEntry).toBe(false);
+    expect(canAdvance(TOUR, run, fake.obs())).toBe(false);
 
-    // And it does NOT flash past: another tick leaves it exactly where it is.
-    expect(currentStep(TOUR, observeTour(TOUR, run, fake.obs(), 300))?.id).toBe("add-skills");
+    // Opening it shows both already ticked by a coarser tier — no gesture left.
+    fake.openSkillsPopover();
+    fake.tickSkill("pdo-orchestrate");
+    fake.tickSkill("pdo-interactive");
+    expect(stepById("add-skills").done!(fake.obs())).toBe(true);
+    expect(canAdvance(TOUR, run, fake.obs())).toBe(true);
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(false);
+    expect(currentStep(TOUR, observeTour(TOUR, run, fake.obs(), 300))?.id).toBe("write-prompt");
   });
 });
 

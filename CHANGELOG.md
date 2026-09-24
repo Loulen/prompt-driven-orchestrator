@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.108.0
+**Sélecteur de skills compact, « active skills » partout** (#849, story #847).
+
+- Replié, le sélecteur tient sur une ligne : icône, « Skills », sous-ligne « No skill » /
+  « n active skills ». La liste de noms sous le bouton et le paragraphe d'avertissement rouge
+  disparaissent ; un skill sélectionné qui n'existe plus dans la banque se signale par une icône
+  d'alerte (message en tooltip) et n'est pas compté.
+- Déplié : skills hérités cochés, grisés, tier d'origine à droite ; skills disparus listés barrés
+  en tête, décochables ; le popover reste ouvert après chaque coche et s'ouvre aussi en lecture
+  seule, cases figées.
+- Le tour *First run* (étape « Add the two PDO skills ») lit l'état coché dans le popover.
+- Vocabulaire : « effective » devient « active » côté skills (types du résolveur front, type du
+  skill gelé côté daemon, identifiants de test, scénarios HP, documentation). Format des
+  pipelines stockés inchangé.
+
 ## 1.107.1 — README vitrine : les médias publiés sont ceux des pipelines cibles (#852)
 
 Le README montre enfin les scènes rejouées sur les pipelines cibles dessinés par le mainteneur

@@ -246,6 +246,23 @@ describe("SkillBankPanel (#668)", () => {
     expect(screen.getByTestId("folder-source-badge")).toBeInTheDocument();
   });
 
+  it("a local source under the home reads ~/…, in the folder and in its skills' provenance", () => {
+    const local = "/home/user/code/qa-skills";
+    const localFolder: SkillFolder = { ...folder("f-qa", "qa-skills"), source: { ...sourceFolder.source!, url: local, path: "" } };
+    setup({
+      root_path: "/home/user/.pdo/skills",
+      folders: [localFolder],
+      skills: [{ ...skill("s-a11y", "a11y-audit", "f-qa", "Audit a page."), source: { url: local, ref: "main", commit: "3f9c2e1deadbeef", path: "skills/a11y-audit" } }],
+    });
+    fireEvent.click(screen.getByTestId("tree-folder-f-qa"));
+    const folderProvenance = screen.getByTestId("folder-provenance");
+    expect(folderProvenance).toHaveTextContent("~/code/qa-skills");
+    expect(folderProvenance).not.toHaveTextContent("/home/user/code/qa-skills");
+    fireEvent.click(screen.getByLabelText("Expand qa-skills"));
+    fireEvent.click(screen.getByTestId("tree-skill-s-a11y"));
+    expect(screen.getByTestId("skill-detail-provenance")).toHaveTextContent("~/code/qa-skills@3f9c2e1 · skills/a11y-audit");
+  });
+
   it("FP step 4: Update from source re-scans, shows the diff in the right panel, then updates", async () => {
     const { onChanged } = setup(WITH_SOURCE);
     let resolveRescan: (v: unknown) => void = () => undefined;

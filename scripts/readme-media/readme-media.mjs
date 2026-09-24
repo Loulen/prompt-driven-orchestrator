@@ -26,6 +26,7 @@ import { DemoInstance } from "./lib/demo-instance.mjs";
 import { landVariant, variantEntry } from "./lib/manifest.mjs";
 import { chromeLayout, planCuts, renderChrome, renderVariant, TARGET_MS } from "./lib/montage.mjs";
 import { Recorder } from "./lib/recorder.mjs";
+import { assertCleanScreen } from "./lib/screen-guard.mjs";
 import { loadScenes, selectScenes } from "./lib/scenes.mjs";
 import { seedHistory } from "./lib/seed.mjs";
 import { publish, readSelection } from "./lib/selection.mjs";
@@ -56,9 +57,13 @@ async function record(filter) {
       const instance = new DemoInstance({ repoRoot, liveHarnesses: scene.live ?? [], keep: process.env.KEEP_DEMO === "1" });
       try {
         await instance.start();
+        // The first GET /settings pays the host probes (tens of seconds on a busy
+        // machine), then the daemon caches them: pay it here, off camera, before
+        // a Settings page waits on it (profiles, skills, the trigger's `~` path).
+        await instance.api("GET", "/settings");
         if ((scene.needs ?? []).includes("history")) {
           const seeded = await seedHistory(instance);
-          console.log(`mocked history: ${seeded.runs} runs, ${seeded.fires} trigger fires`);
+          console.log(`mocked history: ${seeded.runs} runs, ${seeded.fires} trigger fires (${seeded.incidents} real incidents)`);
         }
         await scene.setup?.(instance);
         const variants = process.env.VARIANT ? scene.variants.filter((v) => v.id === process.env.VARIANT) : scene.variants;
@@ -107,6 +112,8 @@ async function recordVariant({ browser, instance, scene, variant, manifestFile }
 
   const plan = planCuts(timeline);
   fs.writeFileSync(path.join(workDir, "timeline.json"), `${JSON.stringify({ timeline, plan }, null, 2)}\n`);
+  // No demo path (/tmp/pdo-readme-media-*) in what the GIF keeps: the variant fails.
+  assertCleanScreen(timeline);
   const layout = chromeLayout({ gifWidth, crop });
   const chromePng = path.join(workDir, "chrome.png");
   await renderChrome(browser, layout, chromePng);

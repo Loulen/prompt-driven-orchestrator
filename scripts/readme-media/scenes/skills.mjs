@@ -9,6 +9,9 @@
 //       add the handwritten one to `reviewer` (the published one).
 //   b — import, then add an imported one (annotate-screenshots: the reviewer
 //       annotates its screenshots with Pillow) to `reviewer`.
+//
+// Both end on Save: the poster never shows an unsaved pipeline. Each variant
+// starts from the target `implement-review` again (the previous one saved).
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -16,6 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sleep } from "../lib/demo-instance.mjs";
 import { DEMO_PIPELINE } from "../lib/demo-pipeline.mjs";
+import { restoreDemoPipeline } from "./_canvas.mjs";
 import { assertNoAgent, forbidAgentLaunch, waitForRuns } from "./_no-agent.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -59,6 +63,7 @@ async function resetBank(instance) {
 async function openBank(ctx) {
   const { page } = ctx;
   await resetBank(ctx.instance);
+  await restoreDemoPipeline(ctx.instance);
   await forbidAgentLaunch(page);
   await ctx.goto("/");
   await waitForRuns(page);
@@ -109,10 +114,9 @@ async function importFromFolder(ctx) {
  *  inspector's scroll down to the picker is cut. */
 async function backToReviewer(ctx) {
   const { page } = ctx;
-  await ctx.keep(async () => {
-    await ctx.click(page.getByRole("button", { name: "Close settings" }), { duration: 480 });
-    await page.getByTestId("settings-surface").waitFor({ state: "detached" });
-  });
+  await ctx.keep(() => ctx.click(page.getByRole("button", { name: "Close settings" }), { duration: 480 }));
+  // The overlay's exit is cut.
+  await page.getByTestId("settings-surface").waitFor({ state: "detached" });
   const picker = page.getByTestId("node-skill-selector");
   await picker.evaluate((el) => el.scrollIntoView({ block: "center" }));
   await sleep(250);
@@ -136,6 +140,25 @@ async function pickSkill(ctx, picker, name) {
   await page.getByTestId("node-skill-selector-effective").getByText(name, { exact: true }).waitFor();
   await sleep(200);
   ctx.mark("skill-added", { before: 100, after: 400 });
+}
+
+/** Save the pipeline (kept), and wait until its tab reads saved (cut). */
+async function saveCanvas(ctx) {
+  const { page } = ctx;
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  await ctx.keep(async () => {
+    await ctx.click(save, { duration: 550 });
+    await sleep(150);
+  });
+  const deadline = Date.now() + 15_000;
+  while (!(await save.isDisabled())) {
+    if (Date.now() > deadline) throw new Error("the pipeline still reads unsaved after Save");
+    await sleep(100);
+  }
+  await sleep(200);
+  // Off the button before the poster.
+  const box = await save.boundingBox();
+  await ctx.keep(() => ctx.moveTo({ x: box.x + box.width / 2 - 60, y: box.y + 120 }, { duration: 450 }));
 }
 
 export default {
@@ -186,7 +209,8 @@ export default {
         await importFromFolder(ctx);
         const picker = await backToReviewer(ctx);
         await pickSkill(ctx, picker, HANDMADE);
-        await ctx.hold(1500);
+        await saveCanvas(ctx);
+        await ctx.hold(1100);
         assertNoAgent(ctx.instance);
       },
     },
@@ -202,7 +226,8 @@ export default {
         await importFromFolder(ctx);
         const picker = await backToReviewer(ctx);
         await pickSkill(ctx, picker, "annotate-screenshots");
-        await ctx.hold(1500);
+        await saveCanvas(ctx);
+        await ctx.hold(1100);
         assertNoAgent(ctx.instance);
       },
     },

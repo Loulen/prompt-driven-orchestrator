@@ -3,6 +3,7 @@
 > Statut : accepted (grilling du 2026-09-07, #733). Vocabulaire : CONTEXT.md §*Modèle et effort*
 > (« observé » / « demandé »). **Amende ADR-0029** : la contribution de coût porte désormais le
 > modèle et l'effort de l'exécution, et Stats gagne un axe « par modèle ».
+> Amendé par ADR-0077 : une absorption explicite de l'opérateur peut réunir deux ids de modèle.
 
 ## Contexte
 
@@ -24,7 +25,8 @@ pas de capacité coût (#561). Tout harnais qui a une source de coût dit donc q
 2. **Un modèle est son id verbatim, tous harnais confondus.** Le même id lancé via deux harnais est
    une seule ligne, le harnais restant une colonne. Pas de table d'alias, pas de repli sur la
    famille non datée de la table de prix : un alias épinglé (`sonnet`) et un id observé
-   (`claude-sonnet-4-5-20250929`) font deux lignes, et l'écart se voit au lieu d'être deviné. Le
+   (`claude-sonnet-4-5-20250929`) font deux lignes, et l'écart se voit au lieu d'être deviné. Seule
+   une **absorption** posée par l'opérateur les réunit : elle est visible et réversible (ADR-0077). Le
    fournisseur (`openrouter`) n'entre pas dans l'identité.
 3. **Une exécution compte dans chaque bucket modèle où elle a coûté.** Le coût se ventile par
    message ; le pic de contexte suit le fichier de session (le sous-agent a le sien). La moyenne

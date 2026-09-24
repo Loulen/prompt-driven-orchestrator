@@ -1,5 +1,7 @@
 # Statistiques d'instance agrégées : dérivées à la lecture + indexées, jamais matérialisées
 
+> Amendé par ADR-0077 : la continuité « par pipeline » après un renommage repose sur l'absorption automatique.
+
 ## Contexte
 
 Sans cette ADR, la modale de stats (#377 : runs/sessions/erreurs par période, fires de trigger, coût
@@ -22,8 +24,10 @@ liste. Tout est aujourd'hui *par-run* ou *par-trigger* ; le daemon n'a **aucun i
   `events(run_id, kind, id)` pour joindre seulement leurs démarrages de Node dans l'ordre, et
   `trigger_fires(ts)`. `CREATE INDEX IF NOT EXISTS` est nativement idempotent — pas de garde PRAGMA,
   contrairement aux `ALTER ADD COLUMN` de #239/#244.
-- **`pipeline_id` porté par `RunStarted`** (fallback `pipeline_name`) pour que « par pipeline »
-  survive un renommage (#230). Additif, rétro-compatible.
+- **`pipeline_id` porté par `RunStarted`** (fallback `pipeline_name`) : c'est la clé « par pipeline ».
+  Depuis #774 elle suit le nom de fichier, donc un renommage la change ; la série reste continue
+  parce que le renommage crée une **absorption** ancien → nouveau, appliquée à la lecture (ADR-0077).
+  Additif, rétro-compatible.
 - **Axes catégoriels du coût pliés côté app (Rust).** La sélection des cohortes et des sessions reste
   du SQL indexé ; le pli hiérarchique reste en mémoire. « Par projet » = `effective_repo_root`.
 - **Ventilation multi-harnais par exécution (#638).** La fenêtre sélectionne une cohorte de Runs par

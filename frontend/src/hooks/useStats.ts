@@ -40,6 +40,13 @@ export function useStats(
    * tab opens narrowed.
    */
   cohorts: { overview?: boolean; cost?: boolean; performance?: boolean } = {},
+  /**
+   * Bumped after every Combine / Uncombine (#890). Like `reloadKey`, a
+   * **dependency only** — but it never asks Performance to bypass its memo: the
+   * daemon keys that memo on the absorptions already (ADR-0077 §2). The data on
+   * screen stays until the new answer lands, so a Combine never blanks a tab.
+   */
+  absorptionsVersion: number = 0,
 ) {
   const {
     overview: overviewCompletedOnly = false,
@@ -56,9 +63,9 @@ export function useStats(
   const [overviewReloadKey, setOverviewReloadKey] = useState(0);
   const [costReloadKey, setCostReloadKey] = useState(0);
   const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
-  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${costCompletedOnly}`;
+  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${costCompletedOnly}\u0000${absorptionsVersion}`;
   const requestedCostKey = useRef<string | null>(null);
-  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}\u0000${performanceCompletedOnly}`;
+  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}\u0000${performanceCompletedOnly}\u0000${absorptionsVersion}`;
   const requestedPerformanceKey = useRef<string | null>(null);
 
   // Overview: eager on open + on every period change.
@@ -83,7 +90,7 @@ export function useStats(
     return () => {
       cancelled = true;
     };
-  }, [open, from, to, bucket, reloadKey, overviewCompletedOnly]);
+  }, [open, from, to, bucket, reloadKey, overviewCompletedOnly, absorptionsVersion]);
 
   // Cost: lazy — only once the cost tab is active, then on period change too.
   useEffect(() => {

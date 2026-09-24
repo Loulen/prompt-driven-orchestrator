@@ -27,6 +27,7 @@ import type {
   StatsPerformanceAggregate,
   StatsPerformanceEntity,
   StatsProjectCostEntity,
+  StatsAbsorbedMember,
   StatsSessionEntity,
   StatsSessionHarness,
   StatsSessionPeriod,
@@ -37,6 +38,13 @@ import { harnessColor } from "../lib/harness";
 import { cssColor } from "../lib/cssColor";
 import { useTheme } from "../hooks/useTheme";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
+import SelectControl from "./SelectControl";
+import { CombinedIcon } from "./StatsAbsorption";
+import {
+  usePipelineAbsorption,
+  type MasterSelection,
+} from "../hooks/usePipelineAbsorption";
+import type { AbsorbableRow } from "../lib/statsAbsorption";
 import {
   ALL_NODE_KINDS,
   DEFAULT_PERFORMANCE_BAND,
@@ -283,13 +291,14 @@ function RunsTab({
   );
 }
 
-function MasterList<T extends { id: string; name: string }>({
+function MasterList<T extends AbsorbableRow>({
   rows,
   selected,
   valueLabel,
   onSelect,
   ariaLabel = "Spenders",
   monoName = false,
+  selection,
 }: {
   rows: T[];
   selected: string | null;
@@ -300,8 +309,13 @@ function MasterList<T extends { id: string; name: string }>({
   ariaLabel?: string;
   /** Model ids are ids — render them mono (ADR-0065 §2). */
   monoName?: boolean;
+  /** The Pipeline multi-select of the absorption (#890). A plain click still
+   *  opens the detail; the ring, Ctrl/Cmd-click, Shift-click and Space select.
+   *  Absent on axes whose rows are not Pipelines. */
+  selection?: MasterSelection;
 }) {
   const options = [{ id: "__total__", name: "Total" } as T, ...rows];
+  const order = rows.map((row) => row.id);
   const selectedIndex = Math.max(
     0,
     options.findIndex((row) => (selected === null ? row.id === "__total__" : row.id === selected)),
@@ -326,28 +340,67 @@ function MasterList<T extends { id: string; name: string }>({
         } else if (event.key === "Backspace" || event.key === "ArrowLeft") {
           event.preventDefault();
           onSelect(null);
+        } else if (event.key === " " && selection) {
+          event.preventDefault();
+          const row = options[activeFocusIndex];
+          if (selection.isSelectable(row.id)) selection.toggle(row.id, false);
         }
       }}
     >
       {options.map((row, index) => {
         const isSelected = row.id === (selected ?? "__total__");
+        const isTotal = row.id === "__total__";
+        const selectable = selection?.isSelectable(row.id) ?? false;
+        const checked = selectable && (selection?.selected.has(row.id) ?? false);
+        const absorbed = row.absorbed?.length ?? 0;
         return (
           <button
             key={row.id}
             type="button"
             role="option"
             aria-selected={isSelected}
+            data-checked={selectable ? checked : undefined}
             tabIndex={index === activeFocusIndex ? 0 : -1}
             onFocus={() => setFocusIndex(index)}
-            onClick={() => onSelect(row.id === "__total__" ? null : row.id)}
-            className={`flex items-center justify-between gap-3 rounded px-2 py-2 text-left ${
-              isSelected ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-3"
-            }`}
+            onClick={(event) => {
+              if (selection && selectable && (event.ctrlKey || event.metaKey || event.shiftKey)) {
+                selection.toggle(row.id, event.shiftKey, order);
+                return;
+              }
+              onSelect(isTotal ? null : row.id);
+            }}
+            className={`group flex items-center justify-between gap-3 rounded px-2 py-2 text-left ${
+              checked
+                ? "bg-acc-bg text-fg"
+                : isSelected
+                  ? "bg-bg-5 text-fg"
+                  : "text-fg-3 hover:bg-bg-3"
+            } ${selection?.flashId === row.id ? "ring-1 ring-acc" : ""}`}
             style={{ fontSize: "11.5px" }}
           >
-            <span className={`truncate ${monoName ? "font-mono" : ""}`}>{row.name}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              {selection &&
+                (selectable ? (
+                  <SelectControl
+                    selected={checked}
+                    dotClass={null}
+                    label={`Select ${row.name}`}
+                    testId="stats-row-select"
+                    onSelect={(event) => selection.toggle(row.id, event.shiftKey, order)}
+                  />
+                ) : (
+                  <span className="w-4 shrink-0" aria-hidden="true" />
+                ))}
+              <span className={`truncate ${monoName ? "font-mono" : ""}`}>{row.name}</span>
+              {selection && absorbed > 0 && (
+                <CombinedIcon
+                  count={absorbed}
+                  onOpen={() => selection.onOpenMembers(row.id)}
+                />
+              )}
+            </span>
             <span className="shrink-0 font-mono text-fg-2">
-              {row.id === "__total__" ? "" : valueLabel(row)}
+              {isTotal ? "" : valueLabel(row)}
             </span>
           </button>
         );
@@ -356,7 +409,27 @@ function MasterList<T extends { id: string; name: string }>({
   );
 }
 
-function SessionsTab({ overview }: { overview: StatsOverview }) {
+/** Sessions counts a Pipeline in executions, like its column. */
+const SESSIONS_COUNT = {
+  of: (row: StatsSessionEntity) => row.executions,
+  ofMember: (member: StatsAbsorbedMember) => member.executions ?? member.runs,
+  word: "execution" as const,
+};
+
+/** Cost and Performance count a Pipeline in Runs. */
+const RUNS_COUNT = {
+  of: (row: AbsorbableRow) => row.runs ?? 0,
+  ofMember: (member: StatsAbsorbedMember) => member.runs,
+  word: "run" as const,
+};
+
+function SessionsTab({
+  overview,
+  onAbsorptionsChanged,
+}: {
+  overview: StatsOverview;
+  onAbsorptionsChanged: () => void;
+}) {
   const rows = useMemo(
     () => [...overview.sessions_by_pipeline].sort((a, b) => b.executions - a.executions),
     [overview.sessions_by_pipeline],
@@ -365,6 +438,12 @@ function SessionsTab({ overview }: { overview: StatsOverview }) {
   const selected = rows.find((row) => row.id === selectedId) ?? null;
   const periods = selected ? selected.by_period : overview.sessions_by_period;
   const detailRows = selected?.nodes ?? rows;
+  const absorption = usePipelineAbsorption({
+    rows,
+    enabled: true,
+    count: SESSIONS_COUNT,
+    onChanged: onAbsorptionsChanged,
+  });
 
   return (
     <div className="flex flex-col gap-4" data-testid="stats-chart-sessions">
@@ -377,20 +456,53 @@ function SessionsTab({ overview }: { overview: StatsOverview }) {
             selected={selectedId}
             valueLabel={(row) => String(row.executions)}
             onSelect={setSelectedId}
+            selection={absorption.selection}
           />
         </div>
         <div className="min-w-0 flex-1">
           <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
             Total{selected ? ` / ${selected.name}` : ""}
           </div>
-          <SessionTable rows={detailRows} harnesses={overview.session_harnesses} />
+          <SessionTable
+            rows={detailRows}
+            harnesses={overview.session_harnesses}
+            onOpenMembers={selected ? undefined : absorption.openMembers}
+          />
         </div>
       </div>
+      {absorption.overlay}
     </div>
   );
 }
 
-function SessionTable({ rows, harnesses }: { rows: StatsSessionEntity[]; harnesses: string[] }) {
+/** A Pipeline row's name, with the `[⧉ N]` icon when it absorbs others. */
+function PipelineName({
+  row,
+  onOpenMembers,
+}: {
+  row: AbsorbableRow;
+  onOpenMembers?: (id: string) => void;
+}) {
+  const absorbed = row.absorbed?.length ?? 0;
+  if (!onOpenMembers || absorbed === 0) return <>{row.name}</>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {row.name}
+      <CombinedIcon count={absorbed} onOpen={() => onOpenMembers(row.id)} />
+    </span>
+  );
+}
+
+function SessionTable({
+  rows,
+  harnesses,
+  onOpenMembers,
+}: {
+  rows: StatsSessionEntity[];
+  harnesses: string[];
+  /** Pipeline rows at Total level: the combined icon opens the members. */
+  onOpenMembers?: (id: string) => void;
+}) {
   return (
     <table className="w-full table-fixed text-left" style={{ fontSize: "11px" }}>
       <thead className="text-fg-4">
@@ -413,7 +525,9 @@ function SessionTable({ rows, harnesses }: { rows: StatsSessionEntity[]; harness
       <tbody>
         {rows.map((row) => (
           <tr key={row.id} className="border-t border-line text-fg-2" tabIndex={0}>
-            <td className="py-2 pr-2">{row.name}</td>
+            <td className="py-2 pr-2">
+              <PipelineName row={row} onOpenMembers={onOpenMembers} />
+            </td>
             <td className="py-2 text-right font-mono">{row.executions}</td>
             {harnesses.map((harness) => (
               <td
@@ -913,11 +1027,21 @@ type CostAxis = "pipeline" | "project" | "model";
 function CostTab({
   cost,
   error,
+  onAbsorptionsChanged,
 }: {
   cost: StatsCost | null;
   error: string | null;
+  onAbsorptionsChanged: () => void;
 }) {
   const [axis, setAxis] = useState<CostAxis>("pipeline");
+  // #890: only the « By pipeline » rows are Pipelines to combine; switching the
+  // grouping drops the selection with them.
+  const absorption = usePipelineAbsorption({
+    rows: cost?.by_pipeline ?? [],
+    enabled: axis === "pipeline",
+    count: RUNS_COUNT,
+    onChanged: onAbsorptionsChanged,
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drilledPipelineId, setDrilledPipelineId] = useState<string | null>(null);
   // The model axis drills Model → Effort → Pipeline → Node (ADR-0065). The
@@ -1023,6 +1147,11 @@ function CostTab({
     detailRows = drilledPipeline.nodes;
   } else if (!selected) {
     detailRows = rows;
+    if (axis === "pipeline") {
+      detailRenderName = (row) => (
+        <PipelineName row={row} onOpenMembers={absorption.openMembers} />
+      );
+    }
   } else if (axis === "project") {
     detailRows = (selected as StatsProjectCostEntity).pipelines;
     onOpen = (pipeline) => setDrilledPipelineId(pipeline.id);
@@ -1096,6 +1225,7 @@ function CostTab({
           selected={axis === "model" ? selectedModelId : selectedId}
           monoName={axis === "model"}
           valueLabel={(row) => formatCostAmount(row.usd, row.partial, row.estimated)}
+          selection={absorption.selection}
           onSelect={(id) => {
             if (axis === "model") {
               setSelectedModelId(id);
@@ -1159,6 +1289,7 @@ function CostTab({
           />
         </div>
       </div>
+      {absorption.overlay}
     </div>
   );
 }
@@ -2481,6 +2612,7 @@ function PerformanceTab({
   band,
   onBandChange,
   onResetFilters,
+  onAbsorptionsChanged,
 }: {
   performance: StatsPerformance | null;
   error: string | null;
@@ -2490,6 +2622,7 @@ function PerformanceTab({
   band: PerformanceBand;
   onBandChange: (band: PerformanceBand) => void;
   onResetFilters: () => void;
+  onAbsorptionsChanged: () => void;
 }) {
   // The second select (#737): grouping (« By pipeline » / « By model »), fully
   // independent of the sort (« By context » / « By duration ») beside it.
@@ -2513,6 +2646,14 @@ function PerformanceTab({
     onBandChange({ ...band, durationMode: next });
   const onNodeKindsChange = (kinds: NodeKind[]) =>
     onBandChange({ ...band, nodeKinds: kinds });
+  // #890: the « By pipeline » Pipeline rows are the ones to combine — never the
+  // Infrastructure row beside them, never the « By model » axis.
+  const absorption = usePipelineAbsorption({
+    rows: performance?.by_pipeline ?? [],
+    enabled: axis === "pipeline",
+    count: RUNS_COUNT,
+    onChanged: onAbsorptionsChanged,
+  });
 
   if (error) {
     return (
@@ -2716,6 +2857,9 @@ function PerformanceTab({
     }
   } else {
     detailRows = masterRows;
+    detailRenderName = (row) => (
+      <PipelineName row={row} onOpenMembers={absorption.openMembers} />
+    );
   }
 
   // A Node level the filter emptied: the table would stand there with its
@@ -2825,6 +2969,7 @@ function PerformanceTab({
             </div>
             <MasterList
               rows={masterRows}
+              selection={absorption.selection}
               selected={axis === "model" ? selectedModelId : selectedId}
               monoName={axis === "model"}
               ariaLabel="Performance groups"
@@ -2944,6 +3089,8 @@ export interface StatsChartsProps {
   band?: PerformanceBand;
   onBandChange?: (band: PerformanceBand) => void;
   onResetFilters?: () => void;
+  /** A Combine or an Uncombine landed (#890): the host refetches every tab. */
+  onAbsorptionsChanged?: () => void;
 }
 
 /** The legend each tab's band carries — it names the tab, not the endpoint. */
@@ -2966,6 +3113,7 @@ export default function StatsCharts({
   band = DEFAULT_PERFORMANCE_BAND,
   onBandChange = () => {},
   onResetFilters = () => {},
+  onAbsorptionsChanged = () => {},
 }: StatsChartsProps) {
   // #759: subscribing here re-renders the whole chart subtree on a theme switch,
   // so every `CHART.*` / `harnessColor()` read below resolves against the new
@@ -2984,15 +3132,20 @@ export default function StatsCharts({
         band={band}
         onBandChange={onBandChange}
         onResetFilters={onResetFilters}
+        onAbsorptionsChanged={onAbsorptionsChanged}
       />
     );
   }
   const body = () => {
-    if (tab === "cost") return <CostTab cost={cost} error={costError} />;
+    if (tab === "cost")
+      return (
+        <CostTab cost={cost} error={costError} onAbsorptionsChanged={onAbsorptionsChanged} />
+      );
     if (!overview) return <EmptyNote>Loading…</EmptyNote>;
     if (tab === "runs")
       return <RunsTab overview={overview} completedOnly={completedOnly} />;
-    if (tab === "sessions") return <SessionsTab overview={overview} />;
+    if (tab === "sessions")
+      return <SessionsTab overview={overview} onAbsorptionsChanged={onAbsorptionsChanged} />;
     return <TriggersTab overview={overview} />;
   };
   return (

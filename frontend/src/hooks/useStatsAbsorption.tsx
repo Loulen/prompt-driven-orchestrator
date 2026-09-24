@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Combine } from "lucide-react";
 import BulkActionBar from "../components/BulkActionBar";
-import { CombineModal, MembersModal } from "../components/StatsAbsorption";
+import {
+  CombineModal,
+  GlobalMembersModal,
+  MembersModal,
+} from "../components/StatsAbsorption";
 import { combineStatsRows, uncombineStatsMember } from "../api";
 import type { StatsAbsorbedMember } from "../types";
 import {
@@ -27,18 +31,23 @@ export interface MasterSelection {
   /** The absorbent that just absorbed, ringed for a moment. */
   flashId: string | null;
   onOpenMembers: (id: string) => void;
+  /** A couple's greyed « Global absorption » mark (#906): the read-only list. */
+  onOpenGlobal: (id: string) => void;
 }
 
 /** One list a tab offers to the absorption: its rows, their dimension and — for
  *  Nodes — the Pipeline row they sit under (#892). */
 export interface AbsorptionListSpec<T extends AbsorbableRow> {
   dimension: AbsorptionDimension;
-  /** The Pipeline row a Node list belongs to; absent on the other dimensions. */
+  /** The Pipeline row a Node list belongs to, the model row of an effort list,
+   *  the Node row of a couple list (#906); absent on the other dimensions. */
   scope?: { key: string; name: string } | null;
   rows: T[];
   count: AbsorptionCount<T>;
   /** Rows the list shows that are not of the dimension (Infrastructure…). */
   selectable?: (row: T) => boolean;
+  /** Rows the Combine modal prefers as the absorbent (an explicit effort). */
+  preferred?: (row: T) => boolean;
   /** Off where the list does not combine (another grouping, Uncombined). */
   enabled?: boolean;
 }
@@ -50,7 +59,22 @@ interface Entry {
   scopeName: string;
   row: AbsorbableRow;
   count: AbsorptionCount<AbsorbableRow>;
+  preferred?: (row: AbsorbableRow) => boolean;
 }
+
+/** The dimensions whose absorption lives in one scope of the request. */
+const SCOPED: ReadonlySet<AbsorptionDimension> = new Set([
+  "node",
+  "effort",
+  "couple",
+]);
+
+/** What one scope of each scoped dimension is, said in a refusal. */
+const SCOPE_OF: Partial<Record<AbsorptionDimension, string>> = {
+  node: "pipeline",
+  effort: "model",
+  couple: "node",
+};
 
 const FLASH_MS = 1600;
 const REFUSAL_MS = 3500;
@@ -59,15 +83,22 @@ const flashKey = (dimension: string, scope: string, id: string) =>
   `${dimension}\u0000${scope}\u0000${id}`;
 
 /** Why a row cannot join the current selection (#892), or `null`. Names only. */
-function refusal(current: Entry[], dimension: AbsorptionDimension, scope: { key: string; name: string }) {
+function refusal(
+  current: Entry[],
+  dimension: AbsorptionDimension,
+  scope: { key: string; name: string },
+) {
   const first = current[0];
   if (!first) return null;
   if (first.dimension !== dimension) {
     const [a, b] = [NOUN[first.dimension], NOUN[dimension]];
     return `${a.charAt(0).toUpperCase()}${a.slice(1)}s and ${b}s can't be combined together. Clear the selection first.`;
   }
-  if (dimension === "node" && first.scopeKey !== scope.key) {
-    return `Nodes of ${first.scopeName} and nodes of ${scope.name} can't be combined: only nodes of one pipeline combine.`;
+  const scopeWord = SCOPE_OF[dimension];
+  if (scopeWord && first.scopeKey !== scope.key) {
+    const noun = NOUN[dimension];
+    const capital = `${noun.charAt(0).toUpperCase()}${noun.slice(1)}s`;
+    return `${capital} of ${first.scopeName} and ${noun}s of ${scope.name} can't be combined: only ${noun}s of one ${scopeWord} combine.`;
   }
   return null;
 }
@@ -85,16 +116,21 @@ function refusal(current: Entry[], dimension: AbsorptionDimension, scope: { key:
 export function useStatsAbsorption({
   enabled,
   onChanged,
+  onOpenModelAxis,
 }: {
   /** Off under « Uncombined »: the raw rows are a comparison. */
   enabled: boolean;
   /** A write landed: the host refetches every tab. */
   onChanged: () => void;
+  /** The link of a « Global absorption » list: open the « By model » axis on
+   *  the couple's model, where the absorption is undone (#906). */
+  onOpenModelAxis?: (row: AbsorbableRow) => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const anchor = useRef<string | null>(null);
   const [combining, setCombining] = useState(false);
   const [membersOf, setMembersOf] = useState<Entry | null>(null);
+  const [globalOf, setGlobalOf] = useState<Entry | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -122,18 +158,27 @@ export function useStatsAbsorption({
     return () => window.clearTimeout(timer);
   }, [refused]);
 
-  const modalOpen = combining || membersOf !== null;
+  const modalOpen = combining || membersOf !== null || globalOf !== null;
   const closeModal = useCallback(() => {
     setCombining(false);
     setMembersOf(null);
+    setGlobalOf(null);
     setError(null);
   }, []);
 
   // Escape: the open modal, else the selection. Capture on window, and marked
   // handled, so the shell (drawer, then Stats) only sees an Escape left over.
-  const escapeState = useRef({ modalOpen, hasSelection: selection.length > 0, busy });
+  const escapeState = useRef({
+    modalOpen,
+    hasSelection: selection.length > 0,
+    busy,
+  });
   useEffect(() => {
-    escapeState.current = { modalOpen, hasSelection: selection.length > 0, busy };
+    escapeState.current = {
+      modalOpen,
+      hasSelection: selection.length > 0,
+      busy,
+    };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -152,12 +197,17 @@ export function useStatsAbsorption({
   }, [clear, closeModal]);
 
   /** The selection of one list, or `undefined` where it does not combine. */
-  function selectionFor<T extends AbsorbableRow>(spec: AbsorptionListSpec<T>): MasterSelection | undefined {
+  function selectionFor<T extends AbsorbableRow>(
+    spec: AbsorptionListSpec<T>,
+  ): MasterSelection | undefined {
     if (!enabled || spec.enabled === false) return undefined;
     const scope = spec.scope ?? { key: "", name: "" };
-    const selectableRows = spec.rows.filter((row) => spec.selectable?.(row) ?? true);
+    const selectableRows = spec.rows.filter(
+      (row) => spec.selectable?.(row) ?? true,
+    );
     const ids = selectableRows.map((row) => row.id);
-    const mine = (entry: Entry) => entry.dimension === spec.dimension && entry.scopeKey === scope.key;
+    const mine = (entry: Entry) =>
+      entry.dimension === spec.dimension && entry.scopeKey === scope.key;
     const listKey = flashKey(spec.dimension, scope.key, "");
     const entryOf = (row: T): Entry => ({
       dimension: spec.dimension,
@@ -165,10 +215,16 @@ export function useStatsAbsorption({
       scopeName: scope.name,
       row,
       count: spec.count as AbsorptionCount<AbsorbableRow>,
+      preferred: spec.preferred as
+        ((row: AbsorbableRow) => boolean) | undefined,
     });
     return {
       dimension: spec.dimension,
-      selected: new Set(selection.filter((entry) => mine(entry) && ids.includes(entry.row.id)).map((entry) => entry.row.id)),
+      selected: new Set(
+        selection
+          .filter((entry) => mine(entry) && ids.includes(entry.row.id))
+          .map((entry) => entry.row.id),
+      ),
       isSelectable: (id) => ids.includes(id),
       toggle: (id, range, order) => {
         const refusedBy = refusal(selection, spec.dimension, scope);
@@ -178,18 +234,33 @@ export function useStatsAbsorption({
         }
         setRefused(null);
         const line = (order ?? ids).filter((item) => ids.includes(item));
-        const from = anchor.current?.startsWith(listKey) ? anchor.current.slice(listKey.length) : null;
+        const from = anchor.current?.startsWith(listKey)
+          ? anchor.current.slice(listKey.length)
+          : null;
         setEntries((current) => {
-          const has = (rowId: string) => current.some((entry) => mine(entry) && entry.row.id === rowId);
-          if (range && from !== null && line.includes(from) && line.includes(id)) {
-            const [a, b] = [line.indexOf(from), line.indexOf(id)].sort((x, y) => x - y);
+          const has = (rowId: string) =>
+            current.some((entry) => mine(entry) && entry.row.id === rowId);
+          if (
+            range &&
+            from !== null &&
+            line.includes(from) &&
+            line.includes(id)
+          ) {
+            const [a, b] = [line.indexOf(from), line.indexOf(id)].sort(
+              (x, y) => x - y,
+            );
             const added = line
               .slice(a, b + 1)
               .filter((rowId) => !has(rowId))
-              .map((rowId) => entryOf(selectableRows.find((row) => row.id === rowId)!));
+              .map((rowId) =>
+                entryOf(selectableRows.find((row) => row.id === rowId)!),
+              );
             return [...current, ...added];
           }
-          if (has(id)) return current.filter((entry) => !(mine(entry) && entry.row.id === id));
+          if (has(id))
+            return current.filter(
+              (entry) => !(mine(entry) && entry.row.id === id),
+            );
           const row = selectableRows.find((item) => item.id === id);
           return row ? [...current, entryOf(row)] : current;
         });
@@ -203,6 +274,10 @@ export function useStatsAbsorption({
         setError(null);
         setMembersOf(entryOf(row));
       },
+      onOpenGlobal: (id) => {
+        const row = spec.rows.find((item) => item.id === id);
+        if (row) setGlobalOf(entryOf(row));
+      },
     };
   }
 
@@ -211,18 +286,21 @@ export function useStatsAbsorption({
     if (!first) return;
     setBusy(absorbent.id);
     setError(null);
-    const scoped = first.dimension === "node" ? { scope: first.scopeKey } : {};
+    const scopedDimension = SCOPED.has(first.dimension);
+    const scoped = scopedDimension ? { scope: first.scopeKey } : {};
     try {
       await combineStatsRows({
         dimension: first.dimension,
-        ...(first.dimension === "node" ? { scope: first.scopeKey, scope_name: first.scopeName } : {}),
+        ...(scopedDimension
+          ? { scope: first.scopeKey, scope_name: first.scopeName }
+          : {}),
         absorbent: { key: absorbent.id, name: absorbent.name, ...scoped },
         members: selection
           .filter((entry) => entry.row.id !== absorbent.id)
           .map((entry) => ({
             key: entry.row.id,
             name: entry.row.name,
-            ...(entry.dimension === "node" ? { scope: entry.scopeKey } : {}),
+            ...(SCOPED.has(entry.dimension) ? { scope: entry.scopeKey } : {}),
           })),
       });
       setCombining(false);
@@ -236,7 +314,9 @@ export function useStatsAbsorption({
     }
   };
 
-  const members = (membersOf?.row.absorbed ?? []).filter((member) => !removed.has(member.key));
+  const members = (membersOf?.row.absorbed ?? []).filter(
+    (member) => !removed.has(member.key),
+  );
 
   const uncombine = async (member: StatsAbsorbedMember) => {
     if (!membersOf) return;
@@ -244,14 +324,21 @@ export function useStatsAbsorption({
     setBusy(member.key);
     setError(null);
     try {
-      const list = await uncombineStatsMember(dimension, scopeKey, member.key);
+      // An effort or couple member is held by one absorption per raw scope it
+      // was posed on (ADR-0078): its ✕ takes it out of every one of them.
+      const scopes = member.scopes?.length ? member.scopes : [scopeKey];
+      let list = null;
+      for (const scope of scopes)
+        list = await uncombineStatsMember(dimension, scope, member.key);
       setRemoved((current) => new Set([...current, member.key]));
-      const left = list.absorptions.some(
-        (absorption) =>
-          absorption.dimension === dimension &&
-          absorption.scope === scopeKey &&
-          absorption.absorbent.key === row.id,
-      );
+      const left = member.scopes?.length
+        ? members.some((other) => other.key !== member.key)
+        : (list?.absorptions ?? []).some(
+            (absorption) =>
+              absorption.dimension === dimension &&
+              absorption.scope === scopeKey &&
+              absorption.absorbent.key === row.id,
+          );
       if (!left) setMembersOf(null);
       onChanged();
     } catch (cause) {
@@ -297,6 +384,7 @@ export function useStatsAbsorption({
           count={first.count}
           dimension={first.dimension}
           scopeName={first.scopeName}
+          preferred={first.preferred}
           busy={busy !== null}
           error={error}
           onCancel={closeModal}
@@ -315,6 +403,25 @@ export function useStatsAbsorption({
           onClose={closeModal}
         />
       )}
+      {globalOf &&
+      (globalOf.row as { global_absorbed?: StatsAbsorbedMember[] })
+        .global_absorbed?.length ? (
+        <GlobalMembersModal
+          absorbent={globalOf.row}
+          members={
+            (globalOf.row as { global_absorbed?: StatsAbsorbedMember[] })
+              .global_absorbed ?? []
+          }
+          count={globalOf.count}
+          onOpenAxis={() => {
+            const row = globalOf.row;
+            closeModal();
+            clear();
+            onOpenModelAxis?.(row);
+          }}
+          onClose={closeModal}
+        />
+      ) : null}
     </>
   );
 

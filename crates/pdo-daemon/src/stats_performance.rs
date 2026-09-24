@@ -291,6 +291,17 @@ pub(crate) struct PerformanceModelEffortPair {
     pub model_provenance: crate::stats::StatsProvenance,
     pub effort: Option<String>,
     pub effort_provenance: Option<crate::stats::StatsProvenance>,
+    /// Same #906 fields as `stats::StatsModelEffortPair`: the couple's key,
+    /// its Runs, its local members and the raw couples a global absorption
+    /// counts here.
+    pub key: String,
+    pub runs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub absorbed: Vec<AbsorbedMember>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub global_absorbed: Vec<AbsorbedMember>,
 }
 
 /// One effort level under a model, in the Performance « By model » tree: the
@@ -620,7 +631,7 @@ fn finish_node(
         subagents: finish_subagents(acc.subagents),
         interactive: Some(acc.kind.interactive),
         orchestrator: Some(acc.kind.orchestrator),
-        models: wire_model_pairs(acc.pairs),
+        models: wire_model_pairs(acc.pairs, resolver),
     }
 }
 
@@ -709,6 +720,12 @@ struct ModelPairAcc {
     model_requested: i64,
     effort_observed: i64,
     effort_requested: i64,
+    /// #906, on a Node's own couples only: the Runs landed here by globally
+    /// resolved couple key, by raw couple key for those a global absorption
+    /// moved, and the raw `(Pipeline, Node)` scopes they came from.
+    tallies: PipelineTallies,
+    global_tallies: PipelineTallies,
+    scopes: std::collections::BTreeSet<String>,
 }
 
 impl ModelPairAcc {
@@ -764,6 +781,8 @@ struct ModelAxisPipelineAcc {
 struct ModelAxisEffortAcc {
     pairs: BTreeMap<ModelEffortKey, ModelPairAcc>,
     pipelines: BTreeMap<String, ModelAxisPipelineAcc>,
+    /// Which raw efforts' Runs landed here (#906), by effort key.
+    tallies: PipelineTallies,
 }
 
 /// One model (verbatim id) of the by_model axis.
@@ -794,10 +813,29 @@ fn record_model_observation(
     steering: Reading<'_>,
 ) {
     let key = (identity.model.clone(), identity.effort.clone());
-    node_pairs
-        .entry(key.clone())
-        .or_default()
-        .observe(harness, context, durations, steering, identity);
+    // #906: the Node's couple goes through the global absorptions, then the
+    // couple absorptions of its raw Node; the « By model » axis below stops
+    // before that last step.
+    let couple = pipeline.couple(
+        Some(&node.raw_key),
+        &identity.model,
+        identity.effort.as_deref(),
+    );
+    let node_pair = node_pairs
+        .entry((couple.model.clone(), couple.effort.clone()))
+        .or_default();
+    node_pair.observe(harness, context, durations, steering, identity);
+    node_pair
+        .tallies
+        .record_run_as(&couple.global_key, &pipeline.run_id, &pipeline.started_at);
+    if couple.global {
+        node_pair.global_tallies.record_run_as(
+            &couple.raw_key,
+            &pipeline.run_id,
+            &pipeline.started_at,
+        );
+    }
+    node_pair.scopes.insert(couple.scope);
 
     // #892: an absorbed model id counts under its absorbent on this axis only;
     // its efforts meet the absorbent's by effort.
@@ -810,10 +848,16 @@ fn record_model_observation(
     model_acc
         .tallies
         .record_provenance_as(&identity.model, identity.model_observed);
+    // #906: an effort absorption resolves on the RAW model id.
     let effort_acc = model_acc
         .efforts
-        .entry(identity.effort.clone())
+        .entry(pipeline.effort(&identity.model, identity.effort.as_deref()))
         .or_default();
+    effort_acc.tallies.record_run_as(
+        &crate::stats_absorption::effort_key(identity.effort.as_deref()),
+        &pipeline.run_id,
+        &pipeline.started_at,
+    );
     let pipeline_acc = effort_acc
         .pipelines
         .entry(pipeline.pipeline_key.clone())
@@ -869,19 +913,28 @@ fn provenance_totals(pairs: &BTreeMap<ModelEffortKey, ModelPairAcc>) -> (i64, i6
 
 fn wire_model_pairs(
     pairs: BTreeMap<ModelEffortKey, ModelPairAcc>,
+    resolver: &AbsorptionResolver,
 ) -> Vec<PerformanceModelEffortPair> {
     pairs
         .into_iter()
-        .map(|((model, effort), acc)| PerformanceModelEffortPair {
-            model_provenance: crate::stats::provenance(acc.model_observed, acc.model_requested),
-            effort_provenance: effort
-                .as_ref()
-                .map(|_| crate::stats::provenance(acc.effort_observed, acc.effort_requested)),
-            aggregate: PerformanceAggregate {
-                harnesses: finish_by_harness(acc.by_harness),
-            },
-            model,
-            effort,
+        .map(|((model, effort), acc)| {
+            let key = crate::stats_absorption::couple_key(&model, effort.as_deref());
+            PerformanceModelEffortPair {
+                absorbed: resolver.absorbed_couples(&acc.scopes, &key, &acc.tallies),
+                global_absorbed: acc.global_tallies.global_members(),
+                runs: acc.tallies.runs(),
+                last_run: acc.tallies.last_run(),
+                key,
+                model_provenance: crate::stats::provenance(acc.model_observed, acc.model_requested),
+                effort_provenance: effort
+                    .as_ref()
+                    .map(|_| crate::stats::provenance(acc.effort_observed, acc.effort_requested)),
+                aggregate: PerformanceAggregate {
+                    harnesses: finish_by_harness(acc.by_harness),
+                },
+                model,
+                effort,
+            }
         })
         .collect()
 }
@@ -944,8 +997,16 @@ fn wire_model_axis(
                             }
                         })
                         .collect();
+                    let absorbed = resolver.absorbed_efforts(
+                        model_acc.tallies.keys(),
+                        &crate::stats_absorption::effort_key(effort.as_deref()),
+                        &effort_acc.tallies,
+                    );
                     PerformanceEffortEntity {
                         entity: PerformanceEntity {
+                            runs: Some(effort_acc.tallies.runs()),
+                            last_run: effort_acc.tallies.last_run(),
+                            absorbed,
                             id: effort.clone().unwrap_or_default(),
                             name: effort.clone().unwrap_or_else(|| "not set".to_string()),
                             harnesses: pool_pairs(&effort_acc.pairs).harnesses,
@@ -954,7 +1015,6 @@ fn wire_model_axis(
                             interactive: None,
                             orchestrator: None,
                             models: Vec::new(),
-                            ..Default::default()
                         },
                         effort,
                         provenance: effort_provenance,

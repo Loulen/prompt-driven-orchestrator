@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -19,7 +25,8 @@ const fetchUpdateStatusMock = vi.fn().mockResolvedValue({
   newer_available: false,
   checked_at: null,
   source: "GitHub Releases",
-  source_url: "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest",
+  source_url:
+    "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest",
   check_enabled: true,
   install_method: "unknown",
   manual_command: "Build from source, then restart the daemon.",
@@ -35,7 +42,9 @@ const checkForUpdateNowMock = vi.fn();
 const fetchUpdateAttemptLogMock = vi.fn();
 const createAgentProfileMock = vi.fn();
 // #891: Settings › General › Stats absorptions reads its own resource.
-const fetchStatsAbsorptionsMock = vi.fn().mockResolvedValue({ absorptions: [] });
+const fetchStatsAbsorptionsMock = vi
+  .fn()
+  .mockResolvedValue({ absorptions: [] });
 const uncombineStatsMemberMock = vi.fn();
 
 // #431: `browseFs` MUST be in this factory now that the Dockerfile picker renders
@@ -54,26 +63,38 @@ vi.mock("../api", () => ({
   updateAgentProfile: vi.fn(),
   deleteAgentProfile: vi.fn(),
   fetchAgentProfileReferents: vi.fn(),
-  saveInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
+  saveInstanceProvisioning: vi
+    .fn()
+    .mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
   // #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
   fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
   applyUpdate: vi.fn(),
-  fetchUpdateAttemptLog: (...args: unknown[]) => fetchUpdateAttemptLogMock(...args),
+  fetchUpdateAttemptLog: (...args: unknown[]) =>
+    fetchUpdateAttemptLogMock(...args),
   checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   browseFs: (...args: unknown[]) => browseFsMock(...args),
   // #432: same Proxy trap as `browseFs` above — a missing key here throws the moment the
   // staging-profile panel mounts, not at import.
-  fetchSandboxProfiles: (...args: unknown[]) => fetchSandboxProfilesMock(...args),
+  fetchSandboxProfiles: (...args: unknown[]) =>
+    fetchSandboxProfilesMock(...args),
   saveSandboxProfile: (...args: unknown[]) => saveSandboxProfileMock(...args),
-  deleteSandboxProfile: (...args: unknown[]) => deleteSandboxProfileMock(...args),
+  deleteSandboxProfile: (...args: unknown[]) =>
+    deleteSandboxProfileMock(...args),
   fetchSandboxProfileReferents: (...args: unknown[]) =>
     fetchSandboxProfileReferentsMock(...args),
-  fetchInstanceProvisioning: (...args: unknown[]) => fetchInstanceProvisioningMock(...args),
+  fetchInstanceProvisioning: (...args: unknown[]) =>
+    fetchInstanceProvisioningMock(...args),
   // #668: the skill bank drill-down. Same Proxy trap: every function `SkillBankPanel`
   // / `PasteSkillModal` import must exist here or the panel throws on first access.
-  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
+  fetchSkillBank: vi
+    .fn()
+    .mockResolvedValue({
+      skills: [],
+      folders: [],
+      root_path: "/home/user/.pdo/skills",
+    }),
   createSkill: vi.fn(),
   fetchSkill: vi.fn(),
   updateSkill: vi.fn(),
@@ -82,8 +103,10 @@ vi.mock("../api", () => ({
   createSkillFolder: vi.fn(),
   updateSkillFolder: vi.fn(),
   deleteSkillFolder: vi.fn(),
-  fetchStatsAbsorptions: (...args: unknown[]) => fetchStatsAbsorptionsMock(...args),
-  uncombineStatsMember: (...args: unknown[]) => uncombineStatsMemberMock(...args),
+  fetchStatsAbsorptions: (...args: unknown[]) =>
+    fetchStatsAbsorptionsMock(...args),
+  uncombineStatsMember: (...args: unknown[]) =>
+    uncombineStatsMemberMock(...args),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;
@@ -99,19 +122,66 @@ import type { InstanceSettings, SandboxProfile } from "../types";
 function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
   return {
     // Cap sourced from env (9) so the shadow-disclosure path is exercised.
-    session_cap: { effective: 9, source: "env", stored: null, env: 9, default: 20 },
-    reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
-    guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
-    max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+    session_cap: {
+      effective: 9,
+      source: "env",
+      stored: null,
+      env: 9,
+      default: 20,
+    },
+    reaper_ttl_secs: {
+      effective: 3600,
+      source: "default",
+      stored: null,
+      env: null,
+      default: 3600,
+    },
+    guard_timeout_secs: {
+      effective: 60,
+      source: "default",
+      stored: null,
+      env: null,
+      default: 60,
+    },
+    max_attachments_mb: {
+      effective: 50,
+      source: "default",
+      stored: null,
+      env: null,
+      default: 50,
+    },
     // Unset by default (account default): effective/stored/env/default all null.
-    default_model: { effective: null, source: "default", stored: null, env: null, default: null },
-    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_model: {
+      effective: null,
+      source: "default",
+      stored: null,
+      env: null,
+      default: null,
+    },
+    default_harness: {
+      effective: null,
+      source: "default",
+      stored: null,
+      env: null,
+      default: null,
+    },
     default_harness_model: { effective: {}, stored: {} },
     // Default sandbox (#410): built-in default `off`, nothing stored/env. The ONLY sandbox
     // knob on this screen since #471 — image and Dockerfile belong to a staging profile.
-    default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+    default_sandbox: {
+      effective: "off",
+      source: "default",
+      stored: null,
+      env: null,
+      default: "off",
+      reason: null,
+    },
     // Advisory Docker probe (#410): available by default in the fixture.
-    sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+    sandbox_docker: {
+      available: true,
+      reason: null,
+      checked_at: "2026-07-01T10:00:00.000Z",
+    },
     // Staging profiles (#432): the two virtual defaults, no materialised row. NAMES ONLY —
     // the editor reads `GET /settings/sandbox-profiles` for the entry lists.
     sandbox_profiles: [
@@ -137,12 +207,36 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       default: true,
     },
     // Manager on demand: off by default (a Run starts managerless), no pin (« Follow the Run »).
-    manager_enabled: { effective: false, source: "default", stored: null, env: null, default: false },
-    review_agent_can_resolve: { effective: false, source: "default", stored: null, env: null, default: false },
-    manager_profile: { effective: null, source: "default", stored: null, env: null, default: null },
+    manager_enabled: {
+      effective: false,
+      source: "default",
+      stored: null,
+      env: null,
+      default: false,
+    },
+    review_agent_can_resolve: {
+      effective: false,
+      source: "default",
+      stored: null,
+      env: null,
+      default: false,
+    },
+    manager_profile: {
+      effective: null,
+      source: "default",
+      stored: null,
+      env: null,
+      default: null,
+    },
     // Price table (#427): the default state of every instance — neither file exists,
     // never synced, nothing inert. The paths are reported all the same.
-    update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+    update_check: {
+      effective: true,
+      source: "default",
+      stored: null,
+      env: null,
+      default: true,
+    },
     price_table: {
       manual_path: "/home/user/.pdo/prices/models.yaml",
       fetched_path: "/home/user/.pdo/prices/fetched.json",
@@ -230,7 +324,9 @@ function profileFixture(
     materialised: false,
     disabled: [],
     extras: [],
-    resolved: isMinimal ? [] : [".claude/settings.json", ".claude/plugins", ".claude/skills"],
+    resolved: isMinimal
+      ? []
+      : [".claude/settings.json", ".claude/plugins", ".claude/skills"],
     entries: isMinimal
       ? []
       : [
@@ -268,8 +364,16 @@ function profileFixture(
     redundant_extras: [],
     inactive_disabled: [],
     floor: [
-      { id: "credentials", label: "Valid Claude credentials", path: ".claude/.credentials.json" },
-      { id: "empty-projects", label: "An empty projects/ transcript sink", path: ".claude/projects" },
+      {
+        id: "credentials",
+        label: "Valid Claude credentials",
+        path: ".claude/.credentials.json",
+      },
+      {
+        id: "empty-projects",
+        label: "An empty projects/ transcript sink",
+        path: ".claude/projects",
+      },
     ],
     sensitive_prefixes: [".ssh", ".aws", ".gnupg"],
     // #468: no env by default — the negative control of the "not a vault" copy and of the
@@ -320,7 +424,10 @@ describe("SettingsSurface", () => {
     deleteSandboxProfileMock.mockReset();
     fetchSandboxProfileReferentsMock.mockReset();
     fetchSandboxProfilesMock.mockResolvedValue({
-      profiles: [profileFixture("full"), profileFixture("minimal", { virtual: true })],
+      profiles: [
+        profileFixture("full"),
+        profileFixture("minimal", { virtual: true }),
+      ],
       home: "/home/user",
     });
     fetchInstanceProvisioningMock.mockReset();
@@ -341,31 +448,52 @@ describe("SettingsSurface", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
 
-    expect(await screen.findByTestId("setting-default-sandbox")).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("setting-default-sandbox"),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("settings-category-sandbox"));
     // #691: the provisioning editor is the Worktree provisioning section, no button to open it.
-    expect(await screen.findByRole("button", { name: "Save provisioning" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Save provisioning" }),
+    ).toBeInTheDocument();
     // The page scrolls, not the surface: the shell is fixed, each category page owns its
     // scroll container.
-    expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass("overflow-y-auto");
+    expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass(
+      "overflow-y-auto",
+    );
   });
 
   it("loads and seeds the effective values", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const cap = (await screen.findByTestId("setting-session-cap")) as HTMLInputElement;
+    const cap = (await screen.findByTestId(
+      "setting-session-cap",
+    )) as HTMLInputElement;
     expect(cap.value).toBe("9");
-    expect((screen.getByTestId("setting-reaper-ttl") as HTMLInputElement).value).toBe("3600");
-    expect((screen.getByTestId("setting-guard-timeout") as HTMLInputElement).value).toBe("60");
+    expect(
+      (screen.getByTestId("setting-reaper-ttl") as HTMLInputElement).value,
+    ).toBe("3600");
+    expect(
+      (screen.getByTestId("setting-guard-timeout") as HTMLInputElement).value,
+    ).toBe("60");
     // #779: the per-run attachment budget sits with the other runtime limits.
-    expect((screen.getByTestId("setting-max-attachments-mb") as HTMLInputElement).value).toBe("50");
+    expect(
+      (screen.getByTestId("setting-max-attachments-mb") as HTMLInputElement)
+        .value,
+    ).toBe("50");
   });
 
   it("saves the attachment budget and refuses one outside 1–4096 MB (#779)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     updateSettingsMock.mockResolvedValue(
       sample({
-        max_attachments_mb: { effective: 120, source: "stored", stored: 120, env: null, default: 50 },
+        max_attachments_mb: {
+          effective: 120,
+          source: "stored",
+          stored: 120,
+          env: null,
+          default: 50,
+        },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
@@ -381,7 +509,9 @@ describe("SettingsSurface", () => {
     fireEvent.change(field, { target: { value: "120" } });
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ max_attachments_mb: 120 });
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      max_attachments_mb: 120,
+    });
   });
 
   it("names both price paths even though neither file exists", async () => {
@@ -389,18 +519,22 @@ describe("SettingsSurface", () => {
     // the paths IS the whole discoverability story.
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    expect(await screen.findByTestId("setting-price-table")).toBeInTheDocument();
-    expect(screen.getByTestId("setting-price-table-manual-path")).toHaveTextContent(
-      "/home/user/.pdo/prices/models.yaml",
-    );
-    expect(screen.getByTestId("setting-price-table-fetched-path")).toHaveTextContent(
-      "/home/user/.pdo/prices/fetched.json",
-    );
-    expect(screen.getByTestId("setting-price-table-fetched-at")).toHaveTextContent(
-      /never synced/i,
-    );
+    expect(
+      await screen.findByTestId("setting-price-table"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("setting-price-table-manual-path"),
+    ).toHaveTextContent("/home/user/.pdo/prices/models.yaml");
+    expect(
+      screen.getByTestId("setting-price-table-fetched-path"),
+    ).toHaveTextContent("/home/user/.pdo/prices/fetched.json");
+    expect(
+      screen.getByTestId("setting-price-table-fetched-at"),
+    ).toHaveTextContent(/never synced/i);
     // Absent is SILENT: no advisory when nothing is wrong.
-    expect(screen.queryByTestId("setting-price-table-reason")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("setting-price-table-reason"),
+    ).not.toBeInTheDocument();
   });
 
   it("surfaces the daemon's reason when a price row went inert", async () => {
@@ -409,7 +543,13 @@ describe("SettingsSurface", () => {
     // recurring blind spot.
     fetchSettingsMock.mockResolvedValue(
       sample({
-        update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+        update_check: {
+          effective: true,
+          source: "default",
+          stored: null,
+          env: null,
+          default: true,
+        },
         price_table: {
           manual_path: "/home/user/.pdo/prices/models.yaml",
           fetched_path: "/home/user/.pdo/prices/fetched.json",
@@ -427,25 +567,27 @@ describe("SettingsSurface", () => {
     expect(reason).toHaveTextContent("claude-opus-5");
     // The vintage is readable, not guessed — a third-party source is now a
     // correctness dependency of the numbers shown.
-    expect(screen.getByTestId("setting-price-table-fetched-at")).toHaveTextContent(
-      "2026-07-30T14:12:03Z",
-    );
+    expect(
+      screen.getByTestId("setting-price-table-fetched-at"),
+    ).toHaveTextContent("2026-07-30T14:12:03Z");
     // And what the manual tier shadows is visible.
-    expect(screen.getByTestId("setting-price-table-manual-path")).toHaveTextContent(
-      "claude-opus-4-8",
-    );
+    expect(
+      screen.getByTestId("setting-price-table-manual-path"),
+    ).toHaveTextContent("claude-opus-4-8");
   }, 20_000);
 
   it("lists the resolved harnesses and stays silent when no descriptor is inert (#553)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const names = await screen.findByTestId("setting-harness-descriptors-names");
+    const names = await screen.findByTestId(
+      "setting-harness-descriptors-names",
+    );
     // A declared harness "appears" here (floor ∪ disk); the clean fixture shows the floor.
     expect(names).toHaveTextContent("claude");
     expect(names).toHaveTextContent("opencode");
-    expect(screen.getByTestId("setting-harness-descriptors-path")).toHaveTextContent(
-      "/home/user/.pdo/harnesses/descriptors.yaml",
-    );
+    expect(
+      screen.getByTestId("setting-harness-descriptors-path"),
+    ).toHaveTextContent("/home/user/.pdo/harnesses/descriptors.yaml");
     // Absent is SILENT: no advisory when nothing is wrong.
     expect(
       screen.queryByTestId("setting-harness-descriptors-reason"),
@@ -461,22 +603,22 @@ describe("SettingsSurface", () => {
         harness_descriptors: {
           path: "/home/user/.pdo/harnesses/descriptors.yaml",
           names: ["claude", "opencode"],
-          rejected: [
-            { name: "claude", why: "missing `binary`" },
-          ],
+          rejected: [{ name: "claude", why: "missing `binary`" }],
           reason:
             "harness descriptors (#553) — harness descriptor tier (/home/user/.pdo/harnesses/descriptors.yaml) refused 1 descriptor(s), each key falling through to the next tier: `claude` (missing `binary`)",
         },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const reason = await screen.findByTestId("setting-harness-descriptors-reason");
+    const reason = await screen.findByTestId(
+      "setting-harness-descriptors-reason",
+    );
     expect(reason).toHaveTextContent("claude");
     expect(reason).toHaveTextContent(/falling through/);
     // …and the floor still resolves alongside the diagnostic.
-    expect(screen.getByTestId("setting-harness-descriptors-names")).toHaveTextContent(
-      "opencode",
-    );
+    expect(
+      screen.getByTestId("setting-harness-descriptors-names"),
+    ).toHaveTextContent("opencode");
   });
 
   it("discloses a shadowed env source for the cap", async () => {
@@ -490,7 +632,15 @@ describe("SettingsSurface", () => {
   it("saves only the changed field", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     updateSettingsMock.mockResolvedValue(
-      sample({ session_cap: { effective: 4, source: "stored", stored: 4, env: 9, default: 20 } }),
+      sample({
+        session_cap: {
+          effective: 4,
+          source: "stored",
+          stored: 4,
+          env: 9,
+          default: 20,
+        },
+      }),
     );
     const onClose = vi.fn();
     const onSaved = vi.fn();
@@ -507,9 +657,13 @@ describe("SettingsSurface", () => {
     // #690: Save keeps the surface open — the footer confirms, the dirty dot clears.
     expect(onClose).not.toHaveBeenCalled();
     await waitFor(() =>
-      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
     );
-    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-category-general-dirty"),
+    ).not.toBeInTheDocument();
   });
 
   it("rejects invalid input client-side without hitting the API", async () => {
@@ -552,10 +706,14 @@ describe("SettingsSurface", () => {
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("settings-save"));
     expect(updateSettingsMock).not.toHaveBeenCalled();
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+      "No unsaved changes",
+    );
 
     fireEvent.click(screen.getByTestId("settings-cancel"));
-    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-confirm-close"),
+    ).not.toBeInTheDocument();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -564,7 +722,9 @@ describe("SettingsSurface", () => {
     render(<SettingsSurface open onClose={() => {}} />);
     const cap = await screen.findByTestId("setting-session-cap");
     fireEvent.change(cap, { target: { value: "40" } });
-    expect(await screen.findByTestId("settings-cap-advisory")).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("settings-cap-advisory"),
+    ).toBeInTheDocument();
   });
 
   it("saves the picked default model (#347)", async () => {
@@ -572,8 +732,20 @@ describe("SettingsSurface", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     updateSettingsMock.mockResolvedValue(
       sample({
-        default_model: { effective: "opus", source: "stored", stored: "opus", env: null, default: null },
-        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_model: {
+          effective: "opus",
+          source: "stored",
+          stored: "opus",
+          env: null,
+          default: null,
+        },
+        default_harness: {
+          effective: null,
+          source: "default",
+          stored: null,
+          env: null,
+          default: null,
+        },
         default_harness_model: { effective: {}, stored: {} },
       }),
     );
@@ -588,7 +760,9 @@ describe("SettingsSurface", () => {
     // Only the model changed; the numeric knobs were left at their effective values.
     expect(updateSettingsMock).toHaveBeenCalledWith({ default_model: "opus" });
     await waitFor(() =>
-      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
     );
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -610,7 +784,9 @@ describe("SettingsSurface", () => {
     render(<SettingsSurface open onClose={() => {}} />);
 
     // Edit claude's per-harness default model, leaving copilot's untouched.
-    const claudeInput = await screen.findByTestId("setting-default-model-claude");
+    const claudeInput = await screen.findByTestId(
+      "setting-default-model-claude",
+    );
     await user.clear(claudeInput);
     await user.type(claudeInput, "sonnet");
     fireEvent.click(screen.getByTestId("settings-save"));
@@ -629,8 +805,20 @@ describe("SettingsSurface", () => {
     const user = userEvent.setup();
     fetchSettingsMock.mockResolvedValue(
       sample({
-        default_model: { effective: "opus", source: "stored", stored: "opus", env: null, default: null },
-        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_model: {
+          effective: "opus",
+          source: "stored",
+          stored: "opus",
+          env: null,
+          default: null,
+        },
+        default_harness: {
+          effective: null,
+          source: "default",
+          stored: null,
+          env: null,
+          default: null,
+        },
         default_harness_model: { effective: {}, stored: {} },
       }),
     );
@@ -652,8 +840,20 @@ describe("SettingsSurface", () => {
   it("discloses a shadowed env source for the default model (#347)", async () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
-        default_model: { effective: "opus", source: "stored", stored: "opus", env: "sonnet", default: null },
-        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_model: {
+          effective: "opus",
+          source: "stored",
+          stored: "opus",
+          env: "sonnet",
+          default: null,
+        },
+        default_harness: {
+          effective: null,
+          source: "default",
+          stored: null,
+          env: null,
+          default: null,
+        },
         default_harness_model: { effective: {}, stored: {} },
       }),
     );
@@ -662,10 +862,6 @@ describe("SettingsSurface", () => {
     expect(note).toHaveTextContent("PDO_DEFAULT_MODEL=sonnet");
     expect(note).toHaveTextContent(/overridden/i);
   });
-
-
-
-
 
   it("seeds the default-sandbox select from the effective value (#410)", async () => {
     fetchSettingsMock.mockResolvedValue(
@@ -681,7 +877,9 @@ describe("SettingsSurface", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const select = (await screen.findByTestId("setting-default-sandbox")) as HTMLSelectElement;
+    const select = (await screen.findByTestId(
+      "setting-default-sandbox",
+    )) as HTMLSelectElement;
     expect(select.value).toBe("minimal");
   });
 
@@ -707,9 +905,13 @@ describe("SettingsSurface", () => {
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ default_sandbox: "full" });
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      default_sandbox: "full",
+    });
     await waitFor(() =>
-      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
     );
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -720,7 +922,9 @@ describe("SettingsSurface", () => {
     render(<SettingsSurface open onClose={onClose} />);
     await screen.findByTestId("setting-default-sandbox");
     fireEvent.click(screen.getByTestId("settings-save"));
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+      "No unsaved changes",
+    );
     expect(updateSettingsMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -734,12 +938,16 @@ describe("SettingsSurface", () => {
   it("keeps only Default sandbox in its section; the profiles are the next section (#471, #691)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    expect(await screen.findByTestId("setting-default-sandbox")).toBeInTheDocument();
-    expect(screen.queryByTestId("setting-manage-staging-profiles")).not.toBeInTheDocument();
     expect(
-      within(screen.getByTestId("settings-section-body-staging-profiles")).getByTestId(
-        "staging-profiles-panel",
-      ),
+      await screen.findByTestId("setting-default-sandbox"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("setting-manage-staging-profiles"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(
+        screen.getByTestId("settings-section-body-staging-profiles"),
+      ).getByTestId("staging-profiles-panel"),
     ).toBeInTheDocument();
     for (const gone of [
       "setting-image-source",
@@ -826,9 +1034,9 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
       "setting-autocomplete-turn-end",
     )) as HTMLInputElement;
     expect(box.checked).toBe(true);
-    expect(screen.getByTestId("setting-source-autocomplete-turn-end")).toHaveTextContent(
-      "PDO_AUTOCOMPLETE_TURN_END=on",
-    );
+    expect(
+      screen.getByTestId("setting-source-autocomplete-turn-end"),
+    ).toHaveTextContent("PDO_AUTOCOMPLETE_TURN_END=on");
   });
 
   it("saves the ticked box and nothing else", async () => {
@@ -851,9 +1059,13 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ autocomplete_turn_end: true });
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      autocomplete_turn_end: true,
+    });
     await waitFor(() =>
-      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
     );
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -880,9 +1092,13 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ autocomplete_turn_end: false });
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      autocomplete_turn_end: false,
+    });
     await waitFor(() =>
-      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
     );
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -894,7 +1110,9 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
     await screen.findByTestId("setting-autocomplete-turn-end");
     fireEvent.click(screen.getByTestId("settings-save"));
     // Nothing changed at all → no round-trip, the footer says so.
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+      "No unsaved changes",
+    );
     expect(updateSettingsMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -914,7 +1132,9 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-source-autocomplete-turn-end");
+    const note = await screen.findByTestId(
+      "setting-source-autocomplete-turn-end",
+    );
     expect(note).toHaveTextContent(/stored value \(off\)/i);
     expect(note).toHaveTextContent("PDO_AUTOCOMPLETE_TURN_END=on");
     expect(note).toHaveTextContent(/overridden/i);
@@ -934,55 +1154,87 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     updateSettingsMock.mockResolvedValue(
       sample({
-        review_agent_can_resolve: { effective: true, source: "stored", stored: true, env: null, default: false },
+        review_agent_can_resolve: {
+          effective: true,
+          source: "stored",
+          stored: true,
+          env: null,
+          default: false,
+        },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = (await screen.findByTestId("setting-review-agent-can-resolve")) as HTMLInputElement;
+    const box = (await screen.findByTestId(
+      "setting-review-agent-can-resolve",
+    )) as HTMLInputElement;
     expect(box.checked).toBe(false);
-    expect(screen.getByTestId("setting-source-review-agent-can-resolve")).toHaveTextContent(
-      /built-in default \(off\)/i,
-    );
-    expect(screen.getByTestId("setting-source-review-agent-can-resolve")).toHaveTextContent("PDO_REVIEW_AGENT_CAN_RESOLVE");
+    expect(
+      screen.getByTestId("setting-source-review-agent-can-resolve"),
+    ).toHaveTextContent(/built-in default \(off\)/i);
+    expect(
+      screen.getByTestId("setting-source-review-agent-can-resolve"),
+    ).toHaveTextContent("PDO_REVIEW_AGENT_CAN_RESOLVE");
     // Right after auto-name in the DOM.
     const autoName = screen.getByTestId("setting-default-auto-name");
-    expect(autoName.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      autoName.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     fireEvent.click(box);
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ review_agent_can_resolve: true });
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      review_agent_can_resolve: true,
+    });
     await waitFor(() =>
-      expect(screen.getByTestId("setting-source-review-agent-can-resolve")).toHaveTextContent(/stored value \(on\)/i),
+      expect(
+        screen.getByTestId("setting-source-review-agent-can-resolve"),
+      ).toHaveTextContent(/stored value \(on\)/i),
     );
   });
 
   it("is checked on a fresh instance (default is ON — pre-#338 behaviour)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = (await screen.findByTestId("setting-default-auto-name")) as HTMLInputElement;
+    const box = (await screen.findByTestId(
+      "setting-default-auto-name",
+    )) as HTMLInputElement;
     expect(box.checked).toBe(true);
   });
 
   it("seeds from the effective value when a stored off overrides the default", async () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
-        default_auto_name: { effective: false, source: "stored", stored: false, env: null, default: true },
+        default_auto_name: {
+          effective: false,
+          source: "stored",
+          stored: false,
+          env: null,
+          default: true,
+        },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = (await screen.findByTestId("setting-default-auto-name")) as HTMLInputElement;
+    const box = (await screen.findByTestId(
+      "setting-default-auto-name",
+    )) as HTMLInputElement;
     expect(box.checked).toBe(false);
-    expect(screen.getByTestId("setting-source-default-auto-name")).toHaveTextContent(
-      /stored value \(off\)/i,
-    );
+    expect(
+      screen.getByTestId("setting-source-default-auto-name"),
+    ).toHaveTextContent(/stored value \(off\)/i);
   });
 
   it("sends `false` when unticked — never a clear sentinel", async () => {
     fetchSettingsMock.mockResolvedValue(sample()); // default ON
     updateSettingsMock.mockResolvedValue(
       sample({
-        default_auto_name: { effective: false, source: "stored", stored: false, env: null, default: true },
+        default_auto_name: {
+          effective: false,
+          source: "stored",
+          stored: false,
+          env: null,
+          default: true,
+        },
       }),
     );
     const onClose = vi.fn();
@@ -992,9 +1244,13 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ default_auto_name: false });
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      default_auto_name: false,
+    });
     await waitFor(() =>
-      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
     );
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -1005,7 +1261,9 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
     render(<SettingsSurface open onClose={onClose} />);
     await screen.findByTestId("setting-default-auto-name");
     fireEvent.click(screen.getByTestId("settings-save"));
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+      "No unsaved changes",
+    );
     expect(updateSettingsMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -1013,7 +1271,13 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
   it("discloses a shadowed env var", async () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
-        default_auto_name: { effective: false, source: "stored", stored: false, env: true, default: true },
+        default_auto_name: {
+          effective: false,
+          source: "stored",
+          stored: false,
+          env: true,
+          default: true,
+        },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
@@ -1034,8 +1298,20 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
     fetchAgentProfilesMock.mockReset();
     fetchAgentProfilesMock.mockResolvedValue({
       profiles: [
-        { id: "default", name: "Default", harness: "claude", model: null, effort: null },
-        { id: "p-easy", name: "claude very easy", harness: "claude", model: "sonnet", effort: "low" },
+        {
+          id: "default",
+          name: "Default",
+          harness: "claude",
+          model: null,
+          effort: null,
+        },
+        {
+          id: "p-easy",
+          name: "claude very easy",
+          harness: "claude",
+          model: "sonnet",
+          effort: "low",
+        },
       ],
     });
   });
@@ -1044,33 +1320,51 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
     fireEvent.click(screen.getByTestId("settings-category-agents"));
-    const box = (await screen.findByTestId("setting-manager-enabled")) as HTMLInputElement;
+    const box = (await screen.findByTestId(
+      "setting-manager-enabled",
+    )) as HTMLInputElement;
     expect(box.checked).toBe(false);
-    const select = screen.getByTestId("setting-manager-profile") as HTMLSelectElement;
+    const select = screen.getByTestId(
+      "setting-manager-profile",
+    ) as HTMLSelectElement;
     expect(select.value).toBe("");
     // The profile options arrive with the async profiles fetch.
     await waitFor(() =>
       expect(
-        within(select).getAllByRole("option").map((o) => o.textContent),
+        within(select)
+          .getAllByRole("option")
+          .map((o) => o.textContent),
       ).toContain("claude very easy"),
     );
-    const options = within(select).getAllByRole("option").map((o) => o.textContent);
+    const options = within(select)
+      .getAllByRole("option")
+      .map((o) => o.textContent);
     expect(options).toContain("Follow the Run");
   });
 
   it("shows the tombstone and a warning for a stored pin whose profile is gone — never a rewrite", async () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
-        manager_profile: { effective: "gone", source: "stored", stored: "gone", env: null, default: null },
+        manager_profile: {
+          effective: "gone",
+          source: "stored",
+          stored: "gone",
+          env: null,
+          default: null,
+        },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const select = (await screen.findByTestId("setting-manager-profile")) as HTMLSelectElement;
+    const select = (await screen.findByTestId(
+      "setting-manager-profile",
+    )) as HTMLSelectElement;
     expect(select.value).toBe("gone");
-    expect(screen.getByTestId("setting-manager-profile-missing")).toBeInTheDocument();
-    expect(screen.getByTestId("setting-manager-profile-missing-note")).toHaveTextContent(
-      /falls back to « Follow the Run »/i,
-    );
+    expect(
+      screen.getByTestId("setting-manager-profile-missing"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("setting-manager-profile-missing-note"),
+    ).toHaveTextContent(/falls back to « Follow the Run »/i);
   });
 
   it("saves the flag as a plain bool and the pin as a profile name; Save stays clean otherwise", async () => {
@@ -1083,11 +1377,17 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
     // Wait for the profiles fetch so the option exists before the change.
     await screen.findByTestId("settings-section-body-pipeline-manager");
     await waitFor(() =>
-      expect(screen.getByTestId("setting-manager-profile").textContent).toContain("Follow the Run"),
+      expect(
+        screen.getByTestId("setting-manager-profile").textContent,
+      ).toContain("Follow the Run"),
     );
     await waitFor(() => {
       const select = screen.getByTestId("setting-manager-profile");
-      expect([...select.querySelectorAll("option")].some((o) => o.value === "claude very easy")).toBe(true);
+      expect(
+        [...select.querySelectorAll("option")].some(
+          (o) => o.value === "claude very easy",
+        ),
+      ).toBe(true);
     });
     fireEvent.change(screen.getByTestId("setting-manager-profile"), {
       target: { value: "claude very easy" },
@@ -1100,14 +1400,22 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
       manager_profile: "claude very easy",
     });
     await waitFor(() =>
-      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
     );
   });
 
   it("clears the pin with the empty-string sentinel when back on « Follow the Run »", async () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
-        manager_profile: { effective: "claude very easy", source: "stored", stored: "claude very easy", env: null, default: null },
+        manager_profile: {
+          effective: "claude very easy",
+          source: "stored",
+          stored: "claude very easy",
+          env: null,
+          default: null,
+        },
       }),
     );
     updateSettingsMock.mockResolvedValue(sample());
@@ -1139,7 +1447,9 @@ describe("SettingsSurface — Interface / child runs default (#783)", () => {
     const collapsed = screen.getByTestId("setting-child-runs-collapsed");
     expect(expanded).toHaveAttribute("aria-checked", "true");
     expect(collapsed).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByTestId("setting-child-runs-badge")).toHaveTextContent("Device-local · saved immediately");
+    expect(screen.getByTestId("setting-child-runs-badge")).toHaveTextContent(
+      "Device-local · saved immediately",
+    );
 
     fireEvent.click(collapsed);
     expect(localStorage.getItem("pdo.ui.childRunsExpanded")).toBe("false");
@@ -1154,7 +1464,9 @@ describe("SettingsSurface — Interface / child runs default (#783)", () => {
     localStorage.setItem("pdo.ui.childRunsExpanded", "false");
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    expect(await screen.findByTestId("setting-child-runs-collapsed")).toHaveAttribute("aria-checked", "true");
+    expect(
+      await screen.findByTestId("setting-child-runs-collapsed"),
+    ).toHaveAttribute("aria-checked", "true");
   });
 });
 
@@ -1178,7 +1490,9 @@ describe("SettingsSurface — Interface / wiring grid size (#877)", () => {
     expect(m).toHaveTextContent("30px");
     expect(l).toHaveTextContent("40px");
     // No « Global » option here: this IS the global default.
-    expect(screen.queryByTestId("setting-wiring-grid-size-global")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("setting-wiring-grid-size-global"),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(s);
     expect(localStorage.getItem("pdo.ui.wiringGridSize")).toBe('"S"');
@@ -1201,7 +1515,12 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
     updateSettingsMock.mockReset();
     localStorage.clear();
     // Reset the shared store so a prior test's toggle doesn't leak in.
-    useEditStore.setState({ singleTabMode: false, pendingSingleTab: null, openTabs: [], activeTabId: null });
+    useEditStore.setState({
+      singleTabMode: false,
+      pendingSingleTab: null,
+      openTabs: [],
+      activeTabId: null,
+    });
   });
 
   it("persists to localStorage at the change, WITHOUT the numeric Save button", async () => {
@@ -1256,10 +1575,16 @@ describe("relativiseToHome (#432)", () => {
   // path, an entry is RELATIVE to `$HOME`. Returning `null` (instead of guessing) is what
   // lets the panel say "must live under $HOME" inline rather than firing a doomed PUT.
   it("relativises a path under $HOME and refuses anything else", () => {
-    expect(relativiseToHome("/home/user/.gitconfig", "/home/user")).toBe(".gitconfig");
-    expect(relativiseToHome("/home/user/.config/gh", "/home/user")).toBe(".config/gh");
+    expect(relativiseToHome("/home/user/.gitconfig", "/home/user")).toBe(
+      ".gitconfig",
+    );
+    expect(relativiseToHome("/home/user/.config/gh", "/home/user")).toBe(
+      ".config/gh",
+    );
     // A trailing slash on either side must not leak into the entry.
-    expect(relativiseToHome("/home/user/.config/gh/", "/home/user/")).toBe(".config/gh");
+    expect(relativiseToHome("/home/user/.config/gh/", "/home/user/")).toBe(
+      ".config/gh",
+    );
     // Outside $HOME, $HOME itself, and an unknown $HOME are all `null`.
     expect(relativiseToHome("/etc/passwd", "/home/user")).toBeNull();
     expect(relativiseToHome("/home/user", "/home/user")).toBeNull();
@@ -1288,7 +1613,9 @@ describe("SettingsSurface — default sandbox is profile-driven (#432)", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const select = (await screen.findByTestId("setting-default-sandbox")) as HTMLSelectElement;
+    const select = (await screen.findByTestId(
+      "setting-default-sandbox",
+    )) as HTMLSelectElement;
     expect(Array.from(select.options).map((o) => o.value)).toEqual([
       "off",
       "full",
@@ -1312,17 +1639,24 @@ describe("SettingsSurface — default sandbox is profile-driven (#432)", () => {
           stored: "gone",
           env: null,
           default: "off",
-          reason: "no staging profile named `gone` — every Run that falls back to this default will fail at launch (tier: stored)",
+          reason:
+            "no staging profile named `gone` — every Run that falls back to this default will fail at launch (tier: stored)",
         },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const select = (await screen.findByTestId("setting-default-sandbox")) as HTMLSelectElement;
+    const select = (await screen.findByTestId(
+      "setting-default-sandbox",
+    )) as HTMLSelectElement;
     expect(select.value).toBe("gone");
-    expect(screen.getByTestId("setting-default-sandbox-missing")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("setting-default-sandbox-missing"),
+    ).toBeInTheDocument();
     // The daemon-supplied reason is rendered (the env tier passes no validator, so this is
     // the only place a dangling default is visible before a launch 400s).
-    expect(screen.getByTestId("setting-default-sandbox-reason")).toHaveTextContent(/gone/);
+    expect(
+      screen.getByTestId("setting-default-sandbox-reason"),
+    ).toHaveTextContent(/gone/);
 
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() =>
@@ -1356,16 +1690,22 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
    */
   it("is mounted inline with its own persistence, no drawer and no Done", async () => {
     const panel = await openPanel();
-    expect(panel.closest('[data-testid="settings-section-body-staging-profiles"]')).not.toBeNull();
+    expect(
+      panel.closest('[data-testid="settings-section-body-staging-profiles"]'),
+    ).not.toBeNull();
     expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("staging-profiles-done")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("staging-profiles-done"),
+    ).not.toBeInTheDocument();
     // No inner scroll: the category page is the one scroll container.
     expect(panel).not.toHaveClass("overflow-y-auto");
-    expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass("overflow-y-auto");
+    expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass(
+      "overflow-y-auto",
+    );
     expect(
-      within(screen.getByTestId("settings-section-body-staging-profiles")).getByText(
-        "saves as you go",
-      ),
+      within(
+        screen.getByTestId("settings-section-body-staging-profiles"),
+      ).getByText("saves as you go"),
     ).toBeInTheDocument();
 
     // The form's draft and the panel's edits never compete: a panel write leaves the form
@@ -1374,9 +1714,14 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     expect(screen.getByTestId("settings-save")).toBeDisabled();
     fireEvent.change(cap, { target: { value: "7" } });
     expect(screen.getByTestId("settings-save")).toBeEnabled();
-    expect(screen.getByTestId("settings-footer-status")).toHaveAttribute("data-dirty", "true");
+    expect(screen.getByTestId("settings-footer-status")).toHaveAttribute(
+      "data-dirty",
+      "true",
+    );
     fireEvent.click(screen.getByTestId("settings-category-general"));
-    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("7");
+    expect(
+      (screen.getByTestId("setting-session-cap") as HTMLInputElement).value,
+    ).toBe("7");
   });
 
   it("unchecking a default entry PUTs the diff, not a snapshot", async () => {
@@ -1384,7 +1729,9 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     const entry = await screen.findByTestId("staging-entry-.claude/plugins");
     fireEvent.click(entry.querySelector("input[type=checkbox]")!);
 
-    await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1),
+    );
     // The DIFF: the one unchecked path, and no `resolved` snapshot. A snapshot would
     // freeze the install out of every future default entry (ADR-0031 §2).
     expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
@@ -1404,11 +1751,13 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     // Without this block the screen looks broken and the user wrongly concludes the
     // container starts with no credentials.
     await waitFor(() =>
-      expect(screen.getByTestId("staging-profile-floor")).toHaveTextContent(/credentials/i),
+      expect(screen.getByTestId("staging-profile-floor")).toHaveTextContent(
+        /credentials/i,
+      ),
     );
-    expect(screen.getByTestId("staging-profile-no-default-entries")).toHaveTextContent(
-      /is.*the\s+floor/i,
-    );
+    expect(
+      screen.getByTestId("staging-profile-no-default-entries"),
+    ).toHaveTextContent(/is.*the\s+floor/i);
   });
 
   it("relativises an explorer pick into a $HOME-relative extra", async () => {
@@ -1416,10 +1765,14 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     fireEvent.click(await screen.findByTestId("staging-extra-add-file"));
     // The generic explorer, consumed UNCHANGED (#431): select-then-confirm in file mode.
     const rows = await screen.findAllByTestId("fs-browse-entry");
-    fireEvent.click(rows.find((r) => r.textContent?.includes("sbx.Dockerfile"))!);
+    fireEvent.click(
+      rows.find((r) => r.textContent?.includes("sbx.Dockerfile"))!,
+    );
     fireEvent.click(screen.getByTestId("fs-browse-select"));
 
-    await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1),
+    );
     expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
       disabled: [],
       extras: ["sbx.Dockerfile"],
@@ -1433,7 +1786,13 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
       path: "/etc",
       parent: "/",
       entries: [
-        { name: "passwd", path: "/etc/passwd", is_git_repo: false, is_symlink: false, is_dir: false },
+        {
+          name: "passwd",
+          path: "/etc/passwd",
+          is_git_repo: false,
+          is_symlink: false,
+          is_dir: false,
+        },
       ],
       truncated: false,
       error: null,
@@ -1458,7 +1817,10 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
    */
   it("lists referents before confirming a delete", async () => {
     fetchSandboxProfilesMock.mockResolvedValue({
-      profiles: [profileFixture("full", { materialised: true }), profileFixture("minimal")],
+      profiles: [
+        profileFixture("full", { materialised: true }),
+        profileFixture("minimal"),
+      ],
       home: "/home/user",
     });
     fetchSandboxProfileReferentsMock.mockResolvedValue({
@@ -1473,23 +1835,33 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     const dialog = await screen.findByTestId("staging-profile-delete-dialog");
     expect(dialog).toHaveTextContent(/will\s+not\s+repoint/i);
     expect(dialog).toHaveTextContent(/fails/i);
-    expect(screen.getByTestId("staging-profile-referents")).toHaveTextContent("Nightly audit");
+    expect(screen.getByTestId("staging-profile-referents")).toHaveTextContent(
+      "Nightly audit",
+    );
     expect(screen.getByTestId("staging-profile-referents")).toHaveTextContent(
       /Instance default sandbox/i,
     );
-    expect(screen.getByTestId("staging-profile-referent-runs")).toHaveTextContent(/unaffected/i);
+    expect(
+      screen.getByTestId("staging-profile-referent-runs"),
+    ).toHaveTextContent(/unaffected/i);
     // Nothing deleted until the user confirms.
     expect(deleteSandboxProfileMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("staging-profile-delete-confirm"));
-    await waitFor(() => expect(deleteSandboxProfileMock).toHaveBeenCalledWith("full"));
+    await waitFor(() =>
+      expect(deleteSandboxProfileMock).toHaveBeenCalledWith("full"),
+    );
   });
 
   it("offers no delete for an unedited built-in default (there is no row)", async () => {
     await openPanel();
     await screen.findByTestId("staging-profile-row-full");
-    expect(screen.queryByTestId("staging-profile-delete-full")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("staging-profile-delete-minimal")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("staging-profile-delete-full"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("staging-profile-delete-minimal"),
+    ).not.toBeInTheDocument();
   });
 
   it("creates a profile with a blank diff (a copy of the current default)", async () => {
@@ -1511,7 +1883,9 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
 
   it("surfaces the daemon's 400 verbatim", async () => {
     saveSandboxProfileMock.mockRejectedValue(
-      new Error("`/etc/passwd`: an entry is relative to $HOME, not an absolute path"),
+      new Error(
+        "`/etc/passwd`: an entry is relative to $HOME, not an absolute path",
+      ),
     );
     await openPanel();
     const entry = await screen.findByTestId("staging-entry-.claude/plugins");
@@ -1539,18 +1913,22 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     // ADR-0031 §2: unchecking an entry a FUTURE release will add must be remembered, so
     // the day it lands the profile still says no.
     await waitFor(() =>
-      expect(screen.getByTestId("staging-profile-inactive-disabled")).toHaveTextContent(
-        ".claude/future-thing",
-      ),
+      expect(
+        screen.getByTestId("staging-profile-inactive-disabled"),
+      ).toHaveTextContent(".claude/future-thing"),
     );
-    expect(screen.queryByTestId("staging-profiles-error")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("staging-profiles-error"),
+    ).not.toBeInTheDocument();
   });
 
   it("sets an environment variable through a full-replacement PUT", async () => {
     await openPanel();
     // A profile with no env says so explicitly — an empty area would read as a loading
     // failure, the same reason `minimal`'s entry list has its own copy.
-    expect(await screen.findByTestId("staging-profile-no-env")).toHaveTextContent(/None/);
+    expect(
+      await screen.findByTestId("staging-profile-no-env"),
+    ).toHaveTextContent(/None/);
 
     fireEvent.change(screen.getByTestId("staging-env-new-key"), {
       target: { value: "PUPPETEER_EXECUTABLE_PATH" },
@@ -1560,7 +1938,9 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     });
     fireEvent.click(screen.getByTestId("staging-env-add"));
 
-    await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1),
+    );
     expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
       disabled: [],
       extras: [],
@@ -1582,10 +1962,14 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     await openPanel();
     // The value is rendered in CLEAR, on purpose (see the "not a vault" copy): masking it
     // would suggest PDO is protecting something it is not.
-    expect(await screen.findByTestId("staging-env-FOO")).toHaveTextContent("bar");
+    expect(await screen.findByTestId("staging-env-FOO")).toHaveTextContent(
+      "bar",
+    );
     fireEvent.click(screen.getByTestId("staging-env-remove-FOO"));
 
-    await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1),
+    );
     expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
       disabled: [],
       extras: [],
@@ -1624,7 +2008,9 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
    */
   it("says in as many words that the env is not a secret store", async () => {
     await openPanel();
-    const warning = await screen.findByTestId("staging-profile-env-not-a-vault");
+    const warning = await screen.findByTestId(
+      "staging-profile-env-not-a-vault",
+    );
     expect(warning).toHaveTextContent(/not a secret store/i);
     expect(warning).toHaveTextContent(/database/i);
     expect(warning).toHaveTextContent(/event log/i);
@@ -1641,7 +2027,9 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     });
     fireEvent.click(screen.getByTestId("staging-image-set"));
 
-    await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(saveSandboxProfileMock).toHaveBeenCalledTimes(1),
+    );
     expect(saveSandboxProfileMock).toHaveBeenCalledWith("full", {
       disabled: [],
       extras: [],
@@ -1665,7 +2053,10 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
         disabled: [],
         extras: [],
         env: {},
-        image: { kind: "dockerfile", path: "/repo/docker/Dockerfile.chrome-dev" },
+        image: {
+          kind: "dockerfile",
+          path: "/repo/docker/Dockerfile.chrome-dev",
+        },
       }),
     );
   });
@@ -1687,9 +2078,9 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     // ignored the profile would silently offer to overwrite it with a blank.
     const kind = await screen.findByTestId("staging-image-kind");
     expect((kind as HTMLSelectElement).value).toBe("registry");
-    expect((screen.getByTestId("staging-image-ref") as HTMLInputElement).value).toBe(
-      "ghcr.io/acme/agent:1.4",
-    );
+    expect(
+      (screen.getByTestId("staging-image-ref") as HTMLInputElement).value,
+    ).toBe("ghcr.io/acme/agent:1.4");
 
     fireEvent.change(kind, { target: { value: "default" } });
     await waitFor(() =>
@@ -1761,8 +2152,12 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
       home: "/home/user",
     });
     await openPanel();
-    expect(await screen.findByTestId("staging-extra-sensitive-.ssh")).toBeInTheDocument();
-    expect(screen.getByTestId("staging-profile-sensitive-warning")).toHaveTextContent(/.ssh/);
+    expect(
+      await screen.findByTestId("staging-extra-sensitive-.ssh"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("staging-profile-sensitive-warning"),
+    ).toHaveTextContent(/.ssh/);
   });
 });
 
@@ -1775,7 +2170,12 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     resetProfileMocks();
     fetchSettingsMock.mockResolvedValue(sample());
     localStorage.clear();
-    useEditStore.setState({ singleTabMode: false, pendingSingleTab: null, openTabs: [], activeTabId: null });
+    useEditStore.setState({
+      singleTabMode: false,
+      pendingSingleTab: null,
+      openTabs: [],
+      activeTabId: null,
+    });
   });
 
   it("is a full-window overlay with exactly four categories, in order, General selected", async () => {
@@ -1790,14 +2190,21 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       "Sandbox & worktrees",
       "Diagnostics",
     ]);
-    expect(screen.getByTestId("settings-category-general")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-category-general")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("lists the sections of the open category in the second column", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
     const entries = () =>
-      within(screen.getByTestId("settings-page-general").querySelector("nav") as HTMLElement)
+      within(
+        screen
+          .getByTestId("settings-page-general")
+          .querySelector("nav") as HTMLElement,
+      )
         .getAllByRole("button")
         .map((button) => button.textContent);
     // #823 added Tutorials as General's fifth section, #891 Stats absorptions.
@@ -1809,10 +2216,15 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       "Tutorials",
       "Stats absorptions",
     ]);
-    expect(screen.getByTestId("settings-section-interface")).toHaveAttribute("aria-current", "true");
+    expect(screen.getByTestId("settings-section-interface")).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
 
     fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
-    expect(screen.getByTestId("settings-page-general")).toHaveAttribute("hidden");
+    expect(screen.getByTestId("settings-page-general")).toHaveAttribute(
+      "hidden",
+    );
     const diagnostics = screen.getByTestId("settings-page-diagnostics");
     expect(diagnostics).not.toHaveAttribute("hidden");
     expect(
@@ -1821,8 +2233,12 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
         .map((button) => button.textContent),
     ).toEqual(["Price table", "Harness descriptors"]);
     // Read-only: values are there, nothing to edit, and the sync lives in Stats.
-    expect(screen.getByTestId("setting-price-table-fetched-path")).toHaveTextContent("fetched.json");
-    expect(screen.getByTestId("setting-harness-descriptors-names")).toHaveTextContent("claude");
+    expect(
+      screen.getByTestId("setting-price-table-fetched-path"),
+    ).toHaveTextContent("fetched.json");
+    expect(
+      screen.getByTestId("setting-harness-descriptors-names"),
+    ).toHaveTextContent("claude");
     expect(within(diagnostics).getAllByText("read-only")).toHaveLength(2);
   });
 
@@ -1831,7 +2247,10 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     await screen.findByTestId("setting-session-cap");
     const rail = screen.getByRole("tablist", { name: "Settings categories" });
     fireEvent.keyDown(rail, { key: "ArrowDown" });
-    expect(screen.getByTestId("settings-category-agents")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-category-agents")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     fireEvent.keyDown(rail, { key: "ArrowUp" });
     fireEvent.keyDown(rail, { key: "ArrowUp" });
     expect(screen.getByTestId("settings-category-diagnostics")).toHaveAttribute(
@@ -1848,11 +2267,19 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       render(<SettingsSurface open onClose={() => {}} />);
       await screen.findByTestId("setting-session-cap");
       fireEvent.click(screen.getByTestId("settings-section-runs"));
-      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "start",
+      });
       const target = scrollIntoView.mock.instances[0] as HTMLElement;
       expect(target).toBe(screen.getByTestId("settings-section-body-runs"));
-      expect(screen.getByTestId("settings-section-runs")).toHaveAttribute("aria-current", "true");
-      expect(screen.getByTestId("settings-section-interface")).not.toHaveAttribute("aria-current");
+      expect(screen.getByTestId("settings-section-runs")).toHaveAttribute(
+        "aria-current",
+        "true",
+      );
+      expect(
+        screen.getByTestId("settings-section-interface"),
+      ).not.toHaveAttribute("aria-current");
     } finally {
       Element.prototype.scrollIntoView = original;
     }
@@ -1860,32 +2287,52 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
 
   it("keeps the draft across categories and rolls the dirty state up to the rail", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
-    const cap = (await screen.findByTestId("setting-session-cap")) as HTMLInputElement;
-    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
+    const cap = (await screen.findByTestId(
+      "setting-session-cap",
+    )) as HTMLInputElement;
+    expect(
+      screen.queryByTestId("settings-category-general-dirty"),
+    ).not.toBeInTheDocument();
 
     fireEvent.change(cap, { target: { value: "12" } });
     // Three altitudes: field, section, category — plus the footer names the place.
     expect(cap).toHaveClass("border-st-await");
-    expect(screen.getByTestId("settings-section-runtime-limits-dirty")).toBeInTheDocument();
-    expect(screen.getByTestId("settings-category-general-dirty")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("settings-section-runtime-limits-dirty"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("settings-category-general-dirty"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
       "Unsaved changes in General (1 field)",
     );
 
     fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
     // Still dirty from Diagnostics, and the footer is still there.
-    expect(screen.getByTestId("settings-category-general-dirty")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("settings-category-general-dirty"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("settings-save")).toBeInTheDocument();
-    expect(screen.queryByTestId("settings-category-diagnostics-dirty")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-category-diagnostics-dirty"),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("settings-category-general"));
-    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("12");
+    expect(
+      (screen.getByTestId("setting-session-cap") as HTMLInputElement).value,
+    ).toBe("12");
   });
 
   it("Save sends only the changed fields and clears the indicator", async () => {
     updateSettingsMock.mockResolvedValue(
       sample({
-        session_cap: { effective: 12, source: "stored", stored: 12, env: 9, default: 20 },
+        session_cap: {
+          effective: 12,
+          source: "stored",
+          stored: 12,
+          env: 9,
+          default: 20,
+        },
         updated_at: "2026-07-01T11:00:00.000Z",
       }),
     );
@@ -1893,25 +2340,42 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     const cap = await screen.findByTestId("setting-session-cap");
     fireEvent.change(cap, { target: { value: "12" } });
     fireEvent.click(screen.getByTestId("settings-category-sandbox"));
-    fireEvent.change(screen.getByTestId("setting-default-sandbox"), { target: { value: "full" } });
-    expect(screen.getByTestId("settings-category-sandbox-dirty")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("setting-default-sandbox"), {
+      target: { value: "full" },
+    });
+    expect(
+      screen.getByTestId("settings-category-sandbox-dirty"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
-    expect(updateSettingsMock).toHaveBeenCalledWith({ session_cap: 12, default_sandbox: "full" });
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      session_cap: 12,
+      default_sandbox: "full",
+    });
     await waitFor(() =>
-      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
     );
-    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("settings-category-sandbox-dirty")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-category-general-dirty"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-category-sandbox-dirty"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId("settings-error")).not.toBeInTheDocument();
     // The saved value is what the form now shows.
     fireEvent.click(screen.getByTestId("settings-category-general"));
-    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("12");
+    expect(
+      (screen.getByTestId("setting-session-cap") as HTMLInputElement).value,
+    ).toBe("12");
   });
 
   it("shows a rejected save next to the Save button and keeps the draft", async () => {
-    updateSettingsMock.mockRejectedValue(new Error("session_cap must be between 1 and 64"));
+    updateSettingsMock.mockRejectedValue(
+      new Error("session_cap must be between 1 and 64"),
+    );
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
     const cap = await screen.findByTestId("setting-session-cap");
@@ -1920,9 +2384,15 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
 
     const error = await screen.findByTestId("settings-error");
     expect(error).toHaveTextContent("session_cap must be between 1 and 64");
-    expect(error.parentElement).toContainElement(screen.getByTestId("settings-save"));
-    expect(screen.getByTestId("settings-category-general-dirty")).toBeInTheDocument();
-    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("99");
+    expect(error.parentElement).toContainElement(
+      screen.getByTestId("settings-save"),
+    );
+    expect(
+      screen.getByTestId("settings-category-general-dirty"),
+    ).toBeInTheDocument();
+    expect(
+      (screen.getByTestId("setting-session-cap") as HTMLInputElement).value,
+    ).toBe("99");
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -1941,21 +2411,29 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     expect(screen.getByTestId("settings-confirm-keep")).toHaveFocus();
 
     fireEvent.click(screen.getByTestId("settings-confirm-keep"));
-    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-confirm-close"),
+    ).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
-    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("12");
+    expect(
+      (screen.getByTestId("setting-session-cap") as HTMLInputElement).value,
+    ).toBe("12");
 
     // Escape → confirm → Save & close: one PUT, then closed.
     fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.click(await screen.findByTestId("settings-confirm-save-close"));
-    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ session_cap: 12 }));
+    await waitFor(() =>
+      expect(updateSettingsMock).toHaveBeenCalledWith({ session_cap: 12 }),
+    );
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it("Discard closes and drops the draft", async () => {
     const onClose = vi.fn();
     const { rerender } = render(<SettingsSurface open onClose={onClose} />);
-    fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+    fireEvent.change(await screen.findByTestId("setting-session-cap"), {
+      target: { value: "12" },
+    });
     fireEvent.click(screen.getByTestId("settings-cancel"));
     fireEvent.click(await screen.findByTestId("settings-confirm-discard"));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -1963,8 +2441,13 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
 
     rerender(<SettingsSurface open={false} onClose={onClose} />);
     rerender(<SettingsSurface open onClose={onClose} />);
-    expect((await screen.findByTestId("setting-session-cap") as HTMLInputElement).value).toBe("9");
-    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
+    expect(
+      ((await screen.findByTestId("setting-session-cap")) as HTMLInputElement)
+        .value,
+    ).toBe("9");
+    expect(
+      screen.queryByTestId("settings-category-general-dirty"),
+    ).not.toBeInTheDocument();
   });
 
   it("Escape closes a clean surface", async () => {
@@ -1981,13 +2464,22 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("settings-category-agents"));
     fireEvent.click(screen.getByTestId("setting-open-skill-bank"));
-    expect(screen.getByTestId("settings-drawer")).toHaveAttribute("data-drawer", "skills");
-    expect(screen.getByTestId("settings-drawer")).toHaveTextContent("Esc returns to Settings");
+    expect(screen.getByTestId("settings-drawer")).toHaveAttribute(
+      "data-drawer",
+      "skills",
+    );
+    expect(screen.getByTestId("settings-drawer")).toHaveTextContent(
+      "Esc returns to Settings",
+    );
     // The rail stays visible under the drawer.
-    expect(screen.getByRole("tablist", { name: "Settings categories" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("tablist", { name: "Settings categories" }),
+    ).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument(),
+    );
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -2003,8 +2495,12 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     ]) {
       expect(screen.queryByTestId(gone)).not.toBeInTheDocument();
     }
-    expect(screen.queryByRole("button", { name: /Manage/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Configure worktree provisioning/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Manage/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Configure worktree provisioning/ }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
   });
 
@@ -2013,19 +2509,29 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("setting-tabs-disabled"));
     expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
-    expect(screen.getByTestId("setting-tabs-disabled-badge")).toHaveTextContent(/device-local/i);
-    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+    expect(screen.getByTestId("setting-tabs-disabled-badge")).toHaveTextContent(
+      /device-local/i,
+    );
+    expect(
+      screen.queryByTestId("settings-category-general-dirty"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+      "No unsaved changes",
+    );
     // Closing needs no confirmation.
     const onClose = vi.fn();
     fireEvent.click(screen.getByTestId("settings-cancel"));
-    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-confirm-close"),
+    ).not.toBeInTheDocument();
     void onClose;
   });
 
   it("remembers the last category for the page session; a fresh mount lands on General", async () => {
     const onClose = vi.fn();
-    const { rerender, unmount } = render(<SettingsSurface open onClose={onClose} />);
+    const { rerender, unmount } = render(
+      <SettingsSurface open onClose={onClose} />,
+    );
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
@@ -2034,18 +2540,16 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     rerender(<SettingsSurface open={false} onClose={onClose} />);
     expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
     rerender(<SettingsSurface open onClose={onClose} />);
-    expect(await screen.findByTestId("settings-category-diagnostics")).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(
+      await screen.findByTestId("settings-category-diagnostics"),
+    ).toHaveAttribute("aria-selected", "true");
 
     // A reload = a fresh mount.
     unmount();
     render(<SettingsSurface open onClose={onClose} />);
-    expect(await screen.findByTestId("settings-category-general")).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(
+      await screen.findByTestId("settings-category-general"),
+    ).toHaveAttribute("aria-selected", "true");
   });
 
   it("lands on a programmatic position and links Diagnostics to Stats › Cost › Pricing details", async () => {
@@ -2054,18 +2558,26 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       <SettingsSurface
         open
         onClose={() => {}}
-        initialPosition={{ category: "diagnostics", section: "harness-descriptors" }}
+        initialPosition={{
+          category: "diagnostics",
+          section: "harness-descriptors",
+        }}
         onOpenStats={onOpenStats}
       />,
     );
     await screen.findByTestId("setting-harness-descriptors-names");
-    expect(screen.getByTestId("settings-category-diagnostics")).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByTestId("settings-section-harness-descriptors")).toHaveAttribute(
-      "aria-current",
+    expect(screen.getByTestId("settings-category-diagnostics")).toHaveAttribute(
+      "aria-selected",
       "true",
     );
+    expect(
+      screen.getByTestId("settings-section-harness-descriptors"),
+    ).toHaveAttribute("aria-current", "true");
     fireEvent.click(screen.getByTestId("settings-open-stats-pricing"));
-    expect(onOpenStats).toHaveBeenCalledWith({ tab: "cost", pricingOpen: true });
+    expect(onOpenStats).toHaveBeenCalledWith({
+      tab: "cost",
+      pricingOpen: true,
+    });
   });
 
   it("names a refused harness descriptor as a red row, the only place it is named", async () => {
@@ -2080,7 +2592,9 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const row = await screen.findByTestId("setting-harness-descriptor-rejected-opencode");
+    const row = await screen.findByTestId(
+      "setting-harness-descriptor-rejected-opencode",
+    );
     expect(row).toHaveTextContent("refused: missing `command`");
     expect(row).toHaveClass("text-st-failed");
   });
@@ -2095,12 +2609,28 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     resetProfileMocks();
     fetchSettingsMock.mockResolvedValue(sample());
     fetchInstanceProvisioningMock.mockReset();
-    fetchInstanceProvisioningMock.mockResolvedValue({ copy: [], hardlink: [], symlink: [] });
+    fetchInstanceProvisioningMock.mockResolvedValue({
+      copy: [],
+      hardlink: [],
+      symlink: [],
+    });
     fetchAgentProfilesMock.mockReset();
     fetchAgentProfilesMock.mockResolvedValue({
       profiles: [
-        { id: "default", name: "Default", harness: "claude", model: null, effort: null },
-        { id: "p-easy", name: "claude very easy", harness: "claude", model: "sonnet", effort: "low" },
+        {
+          id: "default",
+          name: "Default",
+          harness: "claude",
+          model: null,
+          effort: null,
+        },
+        {
+          id: "p-easy",
+          name: "claude very easy",
+          harness: "claude",
+          model: "sonnet",
+          effort: "low",
+        },
       ],
     });
     createAgentProfileMock.mockReset();
@@ -2133,8 +2663,12 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
 
     // The instance form fields sit in Harness & models.
     const harness = screen.getByTestId("settings-section-body-harness-models");
-    expect(within(harness).getByTestId("setting-default-harness")).toBeInTheDocument();
-    expect(within(harness).queryByTestId("instance-skill-selector")).not.toBeInTheDocument();
+    expect(
+      within(harness).getByTestId("setting-default-harness"),
+    ).toBeInTheDocument();
+    expect(
+      within(harness).queryByTestId("instance-skill-selector"),
+    ).not.toBeInTheDocument();
 
     // Agent profiles: inline, `saves as you go`, list-first (no editor until Edit / New profile).
     const profiles = screen.getByTestId("settings-section-body-agent-profiles");
@@ -2143,8 +2677,12 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
       expect.stringMatching(/Save button below does not apply/),
     );
     const panel = within(profiles).getByTestId("agent-profiles-panel");
-    expect(await within(panel).findByText("claude very easy")).toBeInTheDocument();
-    expect(within(panel).queryByRole("button", { name: /Save profile|Create/ })).not.toBeInTheDocument();
+    expect(
+      await within(panel).findByText("claude very easy"),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).queryByRole("button", { name: /Save profile|Create/ }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
   });
 
@@ -2163,23 +2701,48 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     const inputs = within(modal).getAllByRole("textbox");
     fireEvent.change(inputs[0], { target: { value: "fast" } });
     await user.click(within(modal).getByTestId("agent-profile-harness"));
-    await user.click(await screen.findByTestId("agent-profile-harness-option-claude"));
+    await user.click(
+      await screen.findByTestId("agent-profile-harness-option-claude"),
+    );
     expect(create).toBeEnabled();
 
     fetchAgentProfilesMock.mockResolvedValue({
       profiles: [
-        { id: "default", name: "Default", harness: "claude", model: null, effort: null },
-        { id: "p-new", name: "fast", harness: "claude", model: null, effort: null },
+        {
+          id: "default",
+          name: "Default",
+          harness: "claude",
+          model: null,
+          effort: null,
+        },
+        {
+          id: "p-new",
+          name: "fast",
+          harness: "claude",
+          model: null,
+          effort: null,
+        },
       ],
     });
     fireEvent.click(create);
-    await waitFor(() => expect(createAgentProfileMock).toHaveBeenCalledTimes(1));
-    expect(createAgentProfileMock.mock.calls[0][0]).toMatchObject({ name: "fast", harness: "claude" });
-    expect(await within(screen.getByTestId("agent-profiles-panel")).findByText("fast")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(createAgentProfileMock).toHaveBeenCalledTimes(1),
+    );
+    expect(createAgentProfileMock.mock.calls[0][0]).toMatchObject({
+      name: "fast",
+      harness: "claude",
+    });
+    expect(
+      await within(screen.getByTestId("agent-profiles-panel")).findByText(
+        "fast",
+      ),
+    ).toBeInTheDocument();
     // Modal closed; the form stayed clean, so Save stayed disabled — panel writes are not form writes.
     expect(screen.queryByTestId("agent-profile-modal")).not.toBeInTheDocument();
     expect(screen.getByTestId("settings-save")).toBeDisabled();
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+      "No unsaved changes",
+    );
     expect(updateSettingsMock).not.toHaveBeenCalled();
   });
 
@@ -2192,8 +2755,12 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     const panel = screen.getByTestId("agent-profiles-panel");
     await within(panel).findByText("claude very easy");
 
-    await user.click(within(panel).getByRole("button", { name: "Edit claude very easy" }));
-    expect(screen.getByRole("dialog", { name: "Edit claude very easy" })).toBeInTheDocument();
+    await user.click(
+      within(panel).getByRole("button", { name: "Edit claude very easy" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Edit claude very easy" }),
+    ).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByTestId("agent-profile-modal")).not.toBeInTheDocument();
@@ -2207,23 +2774,34 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("settings-category-agents"));
     const skills = screen.getByTestId("settings-section-body-skills");
-    expect(within(skills).getByTestId("instance-skill-selector")).toBeInTheDocument();
-    expect(within(skills).queryByText("saves as you go")).not.toBeInTheDocument();
+    expect(
+      within(skills).getByTestId("instance-skill-selector"),
+    ).toBeInTheDocument();
+    expect(
+      within(skills).queryByText("saves as you go"),
+    ).not.toBeInTheDocument();
     const card = within(skills).getByTestId("setting-skill-bank-card");
     await waitFor(() =>
-      expect(within(card).getByTestId("setting-skills-count")).toHaveTextContent(
-        "0 skills · 0 folders · ~/.pdo/skills",
-      ),
+      expect(
+        within(card).getByTestId("setting-skills-count"),
+      ).toHaveTextContent("0 skills · 0 folders · ~/.pdo/skills"),
     );
-    expect(within(skills).queryByTestId("skill-bank-panel")).not.toBeInTheDocument();
+    expect(
+      within(skills).queryByTestId("skill-bank-panel"),
+    ).not.toBeInTheDocument();
     fireEvent.click(within(card).getByTestId("setting-open-skill-bank"));
     const drawer = screen.getByTestId("settings-drawer");
     expect(drawer).toHaveAttribute("data-drawer", "skills");
     expect(drawer).toHaveTextContent("Skill bank");
     fireEvent.click(screen.getByTestId("settings-drawer-close"));
-    await waitFor(() => expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument(),
+    );
     // Back on Settings › Skills, nothing moved.
-    expect(screen.getByTestId("settings-category-agents")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-category-agents")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("Sandbox & worktrees lists Default sandbox, Staging profiles, Worktree provisioning, each inline", async () => {
@@ -2237,18 +2815,32 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
       "Worktree provisioning",
     ]);
     const defaultSandbox = screen.getByTestId("settings-section-body-sandbox");
-    expect(within(defaultSandbox).getByTestId("setting-default-sandbox")).toBeInTheDocument();
-    expect(within(defaultSandbox).queryByText("saves as you go")).not.toBeInTheDocument();
+    expect(
+      within(defaultSandbox).getByTestId("setting-default-sandbox"),
+    ).toBeInTheDocument();
+    expect(
+      within(defaultSandbox).queryByText("saves as you go"),
+    ).not.toBeInTheDocument();
 
-    const staging = screen.getByTestId("settings-section-body-staging-profiles");
+    const staging = screen.getByTestId(
+      "settings-section-body-staging-profiles",
+    );
     expect(within(staging).getByText("saves as you go")).toBeInTheDocument();
-    expect((await within(staging).findAllByText("full")).length).toBeGreaterThan(0);
+    expect(
+      (await within(staging).findAllByText("full")).length,
+    ).toBeGreaterThan(0);
     expect(within(staging).getAllByText("minimal").length).toBeGreaterThan(0);
 
-    const provisioning = screen.getByTestId("settings-section-body-worktree-provisioning");
-    expect(within(provisioning).getByText("saves as you go")).toBeInTheDocument();
+    const provisioning = screen.getByTestId(
+      "settings-section-body-worktree-provisioning",
+    );
     expect(
-      await within(provisioning).findByRole("button", { name: "Save provisioning" }),
+      within(provisioning).getByText("saves as you go"),
+    ).toBeInTheDocument();
+    expect(
+      await within(provisioning).findByRole("button", {
+        name: "Save provisioning",
+      }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
   });
@@ -2269,7 +2861,9 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     render(<SettingsSurface open onClose={() => {}} />);
     const reason = await screen.findByTestId("setting-default-sandbox-reason");
     expect(reason).toHaveTextContent("no staging profile named `gone`");
-    expect(reason.closest('[data-testid="settings-section-body-sandbox"]')).not.toBeNull();
+    expect(
+      reason.closest('[data-testid="settings-section-body-sandbox"]'),
+    ).not.toBeNull();
   });
 
   it("creating a staging profile inline refetches settings and announces pdo:settings-changed", async () => {
@@ -2279,7 +2873,9 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
       render(<SettingsSurface open onClose={() => {}} />);
       await screen.findByTestId("setting-session-cap");
       fireEvent.click(screen.getByTestId("settings-category-sandbox"));
-      const staging = screen.getByTestId("settings-section-body-staging-profiles");
+      const staging = screen.getByTestId(
+        "settings-section-body-staging-profiles",
+      );
       await within(staging).findAllByText("full");
       expect(fetchSettingsMock).toHaveBeenCalled();
       const before = fetchSettingsMock.mock.calls.length;
@@ -2288,7 +2884,12 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
       const nameInput = within(staging).getByTestId("staging-profile-new-name");
       fireEvent.change(nameInput, { target: { value: "mine" } });
       fireEvent.click(within(staging).getByTestId("staging-profile-create"));
-      await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledWith("mine", expect.anything()));
+      await waitFor(() =>
+        expect(saveSandboxProfileMock).toHaveBeenCalledWith(
+          "mine",
+          expect.anything(),
+        ),
+      );
       await waitFor(() => expect(heard).toHaveBeenCalledTimes(1));
       expect(fetchSettingsMock.mock.calls.length).toBeGreaterThan(before);
       // The form is still clean: the panel's write went straight to the daemon.
@@ -2308,33 +2909,37 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
       />,
     );
     await screen.findByTestId("staging-profiles-panel");
-    expect(screen.getByTestId("settings-category-sandbox")).toHaveAttribute("aria-selected", "true");
-    await waitFor(() =>
-      expect(screen.getByTestId("settings-section-staging-profiles")).toHaveAttribute(
-        "aria-current",
-        "true",
-      ),
-    );
-    expect(screen.getByTestId("settings-section-body-staging-profiles")).toHaveAttribute(
-      "data-landed",
+    expect(screen.getByTestId("settings-category-sandbox")).toHaveAttribute(
+      "aria-selected",
       "true",
     );
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("settings-section-staging-profiles"),
+      ).toHaveAttribute("aria-current", "true"),
+    );
+    expect(
+      screen.getByTestId("settings-section-body-staging-profiles"),
+    ).toHaveAttribute("data-landed", "true");
     // Only the requested section is pulsed.
-    expect(screen.getByTestId("settings-section-body-sandbox")).not.toHaveAttribute("data-landed");
+    expect(
+      screen.getByTestId("settings-section-body-sandbox"),
+    ).not.toHaveAttribute("data-landed");
   });
 
   it("a user click on the second column never pulses", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("settings-category-sandbox"));
-    fireEvent.click(screen.getByTestId("settings-section-worktree-provisioning"));
-    expect(screen.getByTestId("settings-section-worktree-provisioning")).toHaveAttribute(
-      "aria-current",
-      "true",
+    fireEvent.click(
+      screen.getByTestId("settings-section-worktree-provisioning"),
     );
-    expect(screen.getByTestId("settings-section-body-worktree-provisioning")).not.toHaveAttribute(
-      "data-landed",
-    );
+    expect(
+      screen.getByTestId("settings-section-worktree-provisioning"),
+    ).toHaveAttribute("aria-current", "true");
+    expect(
+      screen.getByTestId("settings-section-body-worktree-provisioning"),
+    ).not.toHaveAttribute("data-landed");
   });
 
   it("Save is disabled while the form is clean and enabled once a field changes", async () => {
@@ -2345,18 +2950,40 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     expect(save).toBeDisabled();
     fireEvent.click(screen.getByTestId("settings-category-agents"));
     await user.click(screen.getByTestId("setting-default-harness-select"));
-    await user.click(await screen.findByTestId("setting-default-harness-select-option-opencode"));
+    await user.click(
+      await screen.findByTestId(
+        "setting-default-harness-select-option-opencode",
+      ),
+    );
     expect(save).toBeEnabled();
-    expect(screen.getByTestId("settings-section-harness-models-dirty")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("settings-section-harness-models-dirty"),
+    ).toBeInTheDocument();
     updateSettingsMock.mockResolvedValue(
       sample({
-        default_harness: { effective: "opencode", source: "stored", stored: "opencode", env: null, default: null },
+        default_harness: {
+          effective: "opencode",
+          source: "stored",
+          stored: "opencode",
+          env: null,
+          default: null,
+        },
       }),
     );
     fireEvent.click(save);
-    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ default_harness: "opencode" }));
-    await waitFor(() => expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"));
-    expect(screen.queryByTestId("settings-section-harness-models-dirty")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(updateSettingsMock).toHaveBeenCalledWith({
+        default_harness: "opencode",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+        "Saved",
+      ),
+    );
+    expect(
+      screen.queryByTestId("settings-section-harness-models-dirty"),
+    ).not.toBeInTheDocument();
     expect(save).toBeDisabled();
   });
 
@@ -2364,7 +2991,14 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     const { fetchSkillBank } = await import("../api");
     vi.mocked(fetchSkillBank).mockResolvedValue({
       skills: [
-        { id: "sk-1", name: "tdd", description: "test first", folder_id: null, created_at: "x", updated_at: "x" },
+        {
+          id: "sk-1",
+          name: "tdd",
+          description: "test first",
+          folder_id: null,
+          created_at: "x",
+          updated_at: "x",
+        },
       ],
       folders: [],
       root_path: "/home/user/.pdo/skills",
@@ -2373,10 +3007,18 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("settings-category-agents"));
     fireEvent.click(screen.getByTestId("instance-skill-selector"));
-    fireEvent.click(await screen.findByTestId("instance-skill-selector-check-sk-1"));
-    expect(screen.getByTestId("settings-section-skills-dirty")).toBeInTheDocument();
-    expect(screen.queryByTestId("settings-section-harness-models-dirty")).not.toBeInTheDocument();
-    updateSettingsMock.mockResolvedValue(sample({ skills: [{ id: "sk-1", name: "tdd" }] }));
+    fireEvent.click(
+      await screen.findByTestId("instance-skill-selector-check-sk-1"),
+    );
+    expect(
+      screen.getByTestId("settings-section-skills-dirty"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-section-harness-models-dirty"),
+    ).not.toBeInTheDocument();
+    updateSettingsMock.mockResolvedValue(
+      sample({ skills: [{ id: "sk-1", name: "tdd" }] }),
+    );
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     expect(updateSettingsMock.mock.calls[0][0].skills).toEqual([
@@ -2400,23 +3042,32 @@ describe("SettingsSurface — Tutorials (#823)", () => {
     resetProfileMocks();
     fetchSettingsMock.mockResolvedValue(sample());
     localStorage.clear();
-    useEditStore.setState({ singleTabMode: false, pendingSingleTab: null, openTabs: [], activeTabId: null });
+    useEditStore.setState({
+      singleTabMode: false,
+      pendingSingleTab: null,
+      openTabs: [],
+      activeTabId: null,
+    });
   });
 
   it("sits in General, badged as this browser's memory", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
-    expect(screen.getByTestId("settings-section-body-tutorials")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("settings-section-body-tutorials"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("settings-tutorials")).toBeInTheDocument();
-    expect(screen.getByTestId("settings-section-tutorials-device-local")).toHaveTextContent(
-      "Device-local",
-    );
+    expect(
+      screen.getByTestId("settings-section-tutorials-device-local"),
+    ).toHaveTextContent("Device-local");
   });
 
   it("closes the surface, then starts the tour", async () => {
     const onClose = vi.fn();
     const onStartTour = vi.fn();
-    render(<SettingsSurface open onClose={onClose} onStartTour={onStartTour} />);
+    render(
+      <SettingsSurface open onClose={onClose} onStartTour={onStartTour} />,
+    );
     await screen.findByTestId("setting-session-cap");
 
     fireEvent.click(screen.getByTestId("tutorials-start-first-pipeline"));
@@ -2433,15 +3084,21 @@ describe("SettingsSurface — Tutorials (#823)", () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("tutorials-reset"));
-    expect(screen.getByTestId("settings-footer")).toHaveTextContent("No unsaved changes");
+    expect(screen.getByTestId("settings-footer")).toHaveTextContent(
+      "No unsaved changes",
+    );
   });
 
   it("asks about a dirty form before leaving for a tour, and cancels the tour if you stay", async () => {
     const onClose = vi.fn();
     const onStartTour = vi.fn();
-    render(<SettingsSurface open onClose={onClose} onStartTour={onStartTour} />);
+    render(
+      <SettingsSurface open onClose={onClose} onStartTour={onStartTour} />,
+    );
     await screen.findByTestId("setting-session-cap");
-    fireEvent.change(screen.getByTestId("setting-session-cap"), { target: { value: "12" } });
+    fireEvent.change(screen.getByTestId("setting-session-cap"), {
+      target: { value: "12" },
+    });
 
     fireEvent.click(screen.getByTestId("tutorials-start-first-pipeline"));
     expect(screen.getByTestId("settings-confirm-close")).toBeInTheDocument();
@@ -2454,9 +3111,17 @@ describe("SettingsSurface — Tutorials (#823)", () => {
   it("runs the parked tour once the dirty draft is discarded", async () => {
     const onClose = vi.fn();
     const onStartFullTour = vi.fn();
-    render(<SettingsSurface open onClose={onClose} onStartFullTour={onStartFullTour} />);
+    render(
+      <SettingsSurface
+        open
+        onClose={onClose}
+        onStartFullTour={onStartFullTour}
+      />,
+    );
     await screen.findByTestId("setting-session-cap");
-    fireEvent.change(screen.getByTestId("setting-session-cap"), { target: { value: "12" } });
+    fireEvent.change(screen.getByTestId("setting-session-cap"), {
+      target: { value: "12" },
+    });
 
     fireEvent.click(screen.getByTestId("tutorials-start-full"));
     fireEvent.click(screen.getByTestId("settings-confirm-discard"));
@@ -2467,13 +3132,18 @@ describe("SettingsSurface — Tutorials (#823)", () => {
 });
 
 describe("SettingsSurface — Stats absorptions (#891)", () => {
-  const list = (members: { key: string; name: string; origin: "manual" | "rename" }[]) => ({
+  const list = (
+    members: { key: string; name: string; origin: "manual" | "rename" }[],
+  ) => ({
     absorptions: [
       {
         dimension: "pipeline" as const,
         scope: "",
         absorbent: { key: "digest-v3", name: "Digest v3" },
-        members: members.map((member) => ({ ...member, created_at: "2026-09-20T10:00:00Z" })),
+        members: members.map((member) => ({
+          ...member,
+          created_at: "2026-09-20T10:00:00Z",
+        })),
       },
     ],
   });
@@ -2492,11 +3162,13 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
 
   it("lists every absorption under General, with its origin and no technical key", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
-    const body = await screen.findByTestId("settings-section-body-stats-absorptions");
-    expect(within(body).getByText("saves as you go")).toBeInTheDocument();
-    expect(screen.getByTestId("settings-section-stats-absorptions")).toHaveTextContent(
-      "Stats absorptions",
+    const body = await screen.findByTestId(
+      "settings-section-body-stats-absorptions",
     );
+    expect(within(body).getByText("saves as you go")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("settings-section-stats-absorptions"),
+    ).toHaveTextContent("Stats absorptions");
 
     expect(await within(body).findByText("Digest v3")).toBeInTheDocument();
     const members = within(body).getAllByTestId("stats-absorption-member");
@@ -2516,12 +3188,22 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
     );
     const user = userEvent.setup();
     render(<SettingsSurface open onClose={() => {}} />);
-    const body = await screen.findByTestId("settings-section-body-stats-absorptions");
-    await user.click(await within(body).findByRole("button", { name: "Uncombine Digest" }));
+    const body = await screen.findByTestId(
+      "settings-section-body-stats-absorptions",
+    );
+    await user.click(
+      await within(body).findByRole("button", { name: "Uncombine Digest" }),
+    );
 
-    expect(uncombineStatsMemberMock).toHaveBeenCalledWith("pipeline", "", "digest");
+    expect(uncombineStatsMemberMock).toHaveBeenCalledWith(
+      "pipeline",
+      "",
+      "digest",
+    );
     await waitFor(() =>
-      expect(within(body).getAllByTestId("stats-absorption-member")).toHaveLength(1),
+      expect(
+        within(body).getAllByTestId("stats-absorption-member"),
+      ).toHaveLength(1),
     );
     expect(within(body).queryByText("Digest")).not.toBeInTheDocument();
     expect(updateSettingsMock).not.toHaveBeenCalled();
@@ -2531,34 +3213,53 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
   it("lists the Node and Model absorptions in their own groups, the Node's under its pipeline (#892)", async () => {
     fetchStatsAbsorptionsMock.mockResolvedValue({
       absorptions: [
-        ...list([{ key: "digest", name: "Digest", origin: "rename" }]).absorptions,
+        ...list([{ key: "digest", name: "Digest", origin: "rename" }])
+          .absorptions,
         {
           dimension: "node",
           scope: "digest-v3",
           scope_name: "Digest v3",
           absorbent: { key: "code-review", name: "Code review" },
-          members: [{ key: "review", name: "Review", origin: "manual", created_at: "2026-09-21T10:00:00Z" }],
+          members: [
+            {
+              key: "review",
+              name: "Review",
+              origin: "manual",
+              created_at: "2026-09-21T10:00:00Z",
+            },
+          ],
         },
         {
           dimension: "model",
           scope: "",
           absorbent: { key: "claude-opus-4-8", name: "claude-opus-4-8" },
-          members: [{ key: "opus", name: "opus", origin: "manual", created_at: "2026-09-22T10:00:00Z" }],
+          members: [
+            {
+              key: "opus",
+              name: "opus",
+              origin: "manual",
+              created_at: "2026-09-22T10:00:00Z",
+            },
+          ],
         },
       ],
     });
     uncombineStatsMemberMock.mockResolvedValue({ absorptions: [] });
     const user = userEvent.setup();
     render(<SettingsSurface open onClose={() => {}} />);
-    const body = await screen.findByTestId("settings-section-body-stats-absorptions");
+    const body = await screen.findByTestId(
+      "settings-section-body-stats-absorptions",
+    );
 
     const nodes = await within(body).findByTestId("stats-absorptions-node");
     expect(nodes).toHaveTextContent("Nodes");
     expect(nodes).toHaveTextContent("Code review");
-    expect(within(nodes).getByTestId("stats-absorption-scope")).toHaveTextContent("in Digest v3");
-    expect(within(nodes).getByTestId("stats-absorption-member")).toHaveTextContent(
-      "combined in Stats on 2026-09-21",
-    );
+    expect(
+      within(nodes).getByTestId("stats-absorption-scope"),
+    ).toHaveTextContent("in Digest v3");
+    expect(
+      within(nodes).getByTestId("stats-absorption-member"),
+    ).toHaveTextContent("combined in Stats on 2026-09-21");
     const models = within(body).getByTestId("stats-absorptions-model");
     expect(models).toHaveTextContent("Models");
     expect(models).toHaveTextContent("claude-opus-4-8");
@@ -2566,14 +3267,127 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
     // The Node absorption's scope is a key: only its name is shown.
     expect(body).not.toHaveTextContent("digest-v3");
 
-    await user.click(within(nodes).getByRole("button", { name: "Uncombine Review" }));
-    expect(uncombineStatsMemberMock).toHaveBeenCalledWith("node", "digest-v3", "review");
+    await user.click(
+      within(nodes).getByRole("button", { name: "Uncombine Review" }),
+    );
+    expect(uncombineStatsMemberMock).toHaveBeenCalledWith(
+      "node",
+      "digest-v3",
+      "review",
+    );
+  });
+
+  it("lists the Effort and Couple absorptions with their model and their node (#906)", async () => {
+    const scope = JSON.stringify(["delta", "coder"]);
+    const absorptions = {
+      absorptions: [
+        {
+          dimension: "effort" as const,
+          scope: "claude-opus-5",
+          scope_name: "claude-opus-5",
+          absorbent: { key: "high", name: "high" },
+          members: [
+            {
+              key: "",
+              name: "not set",
+              origin: "manual" as const,
+              created_at: "2026-09-24T10:00:00Z",
+            },
+          ],
+        },
+        {
+          dimension: "couple" as const,
+          scope,
+          scope_name: "Coder (Delta)",
+          absorbent: {
+            key: "claude-opus-5|high",
+            name: "claude-opus-5 · high",
+          },
+          members: [
+            {
+              key: "claude-opus-4-8|",
+              name: "claude-opus-4-8 · not set",
+              origin: "manual" as const,
+              created_at: "2026-09-24T11:00:00Z",
+            },
+          ],
+        },
+      ],
+    };
+    fetchStatsAbsorptionsMock.mockResolvedValue(absorptions);
+    uncombineStatsMemberMock
+      .mockResolvedValueOnce({ absorptions: [absorptions.absorptions[1]] })
+      .mockResolvedValueOnce({ absorptions: [] });
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={() => {}} />);
+    const body = await screen.findByTestId(
+      "settings-section-body-stats-absorptions",
+    );
+
+    const efforts = await within(body).findByTestId("stats-absorptions-effort");
+    expect(efforts).toHaveTextContent("Efforts");
+    expect(
+      within(efforts).getByTestId("stats-absorption-scope"),
+    ).toHaveTextContent("Effort · claude-opus-5");
+    expect(
+      within(efforts).getByTestId("stats-absorption-member"),
+    ).toHaveTextContent("not set");
+    const couples = within(body).getByTestId("stats-absorptions-couple");
+    expect(couples).toHaveTextContent("Couples");
+    expect(
+      within(couples).getByTestId("stats-absorption-scope"),
+    ).toHaveTextContent("Couple · Coder (Delta)");
+    expect(couples).toHaveTextContent("claude-opus-5 · high");
+    // Keys never reach the screen: neither the couple key nor the scope.
+    expect(body).not.toHaveTextContent("claude-opus-4-8|");
+    expect(body).not.toHaveTextContent('["delta"');
+
+    await user.click(
+      within(efforts).getByRole("button", { name: "Uncombine not set" }),
+    );
+    expect(uncombineStatsMemberMock).toHaveBeenCalledWith(
+      "effort",
+      "claude-opus-5",
+      "",
+    );
+    await waitFor(() =>
+      expect(within(body).queryByTestId("stats-absorptions-effort")).toBeNull(),
+    );
+    await user.click(
+      within(within(body).getByTestId("stats-absorptions-couple")).getByRole(
+        "button",
+        {
+          name: "Uncombine claude-opus-4-8 · not set",
+        },
+      ),
+    );
+    expect(uncombineStatsMemberMock).toHaveBeenCalledWith(
+      "couple",
+      scope,
+      "claude-opus-4-8|",
+    );
+  });
+
+  it("draws the ✕ like Settings' other actions, not as a faint glyph (#906)", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    const body = await screen.findByTestId(
+      "settings-section-body-stats-absorptions",
+    );
+    const cross = await within(body).findByRole("button", {
+      name: "Uncombine Digest",
+    });
+    // The same readable foreground and bordered box as Settings' buttons.
+    expect(cross.className).toContain("text-fg-2");
+    expect(cross.className).toContain("border-line-strong");
+    expect(cross.className).not.toContain("text-fg-4");
   });
 
   it("says so when nothing is combined, and re-reads the list at each open", async () => {
     fetchStatsAbsorptionsMock.mockResolvedValue({ absorptions: [] });
     const { rerender } = render(<SettingsSurface open onClose={() => {}} />);
-    expect(await screen.findByTestId("stats-absorptions-empty")).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("stats-absorptions-empty"),
+    ).toBeInTheDocument();
 
     fetchStatsAbsorptionsMock.mockResolvedValue(
       list([{ key: "digest", name: "Digest", origin: "rename" }]),

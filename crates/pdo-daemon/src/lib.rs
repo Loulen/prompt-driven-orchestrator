@@ -26154,15 +26154,19 @@ mod tests {
         assert_eq!(opus["absorbed"][0]["key"], "opus");
         assert_eq!(opus["absorbed"][0]["runs"], 1);
         assert!(opus["provenance"].is_string());
-        // The Pipeline axis is not touched: the Node's own couples keep both ids.
-        let pairs: Vec<String> = find(&find(&cost["by_pipeline"], "beta")["nodes"], "code-review")
-            ["models"]
+        // #906 (ADR-0078 amending ADR-0077): the model absorption reaches the
+        // Node's own couples too — one couple, marked as globally absorbed.
+        let node_pairs =
+            find(&find(&cost["by_pipeline"], "beta")["nodes"], "code-review")["models"].clone();
+        let pairs: Vec<String> = node_pairs
             .as_array()
             .unwrap()
             .iter()
             .map(|pair| pair["model"].as_str().unwrap().to_string())
             .collect();
-        assert!(pairs.contains(&"opus".to_string()), "{pairs:?}");
+        assert_eq!(pairs, strs(&["claude-opus-4-8"]), "{node_pairs:#}");
+        assert_eq!(node_pairs[0]["global_absorbed"][0]["key"], "opus|high");
+        assert_eq!(node_pairs[0]["global_absorbed"][0]["name"], "opus · high");
         let (_, performance) = send(&state, "GET", &performance_uri, None).await;
         assert_eq!(
             ids(&performance["by_model"]),
@@ -26271,6 +26275,680 @@ mod tests {
             ids(&find(&overview["sessions_by_pipeline"], "beta")["nodes"]),
             strs(&["code-review", "review"])
         );
+    }
+
+    /// #906 (ADR-0078) — the effort absorption of one model and the couple
+    /// absorption of one Node, both with a frozen scope, and the global
+    /// absorptions reaching the couples of every Node. The figures are ADR-0078's:
+    /// claude-opus-5 has *not set* 10 and high 20, claude-opus-5-5 has *not set* 5
+    /// and high 8, claude-opus-4-8 has *not set* 3.
+    #[tokio::test]
+    async fn stats_absorption_folds_efforts_and_couples_with_a_frozen_scope() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-absorption-906")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(node.map(|_| 1_i64))
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        // Pipeline `delta`: `coder` ran on claude-opus-5 and claude-opus-4-8,
+        // `implementer` on claude-opus-5-5. One execution per Run.
+        let groups: [(&str, &str, Option<&str>, usize); 5] = [
+            ("coder", "claude-opus-5", None, 10),
+            ("coder", "claude-opus-5", Some("high"), 20),
+            ("implementer", "claude-opus-5-5", None, 5),
+            ("implementer", "claude-opus-5-5", Some("high"), 8),
+            ("coder", "claude-opus-4-8", None, 3),
+        ];
+        let mut index = 0;
+        for (node, model, effort, count) in groups {
+            for _ in 0..count {
+                index += 1;
+                let run = format!("e-{index:02}");
+                let minute = format!("{:02}", index % 60);
+                let hour = 8 + index / 60;
+                let at = |second: &str| format!("2034-05-15T{hour:02}:{minute}:{second}Z");
+                insert_event(
+                    &state.db,
+                    &run,
+                    &at("00"),
+                    "run_started",
+                    None,
+                    serde_json::json!({
+                        "pipeline_id": "delta",
+                        "pipeline_name": "Delta",
+                        "target_repo": repo,
+                        "harness": "claude",
+                        "node_defs": [
+                            {"id": "coder", "name": "Coder", "node_type": "agent", "isolated_worktree": true},
+                            {"id": "implementer", "name": "Implementer", "node_type": "agent", "isolated_worktree": true}
+                        ]
+                    }),
+                )
+                .await;
+                let mut started = serde_json::json!({
+                    "node_type": "agent", "isolated_worktree": true, "harness": "claude",
+                    "session_id": format!("{run}-s"), "model": model,
+                });
+                if let Some(effort) = effort {
+                    started["effort"] = serde_json::json!(effort);
+                }
+                insert_event(
+                    &state.db,
+                    &run,
+                    &at("10"),
+                    "node_started",
+                    Some(node),
+                    started,
+                )
+                .await;
+                insert_event(
+                    &state.db,
+                    &run,
+                    &at("40"),
+                    "node_completed",
+                    Some(node),
+                    serde_json::json!({}),
+                )
+                .await;
+                insert_event(
+                    &state.db,
+                    &run,
+                    &at("50"),
+                    "run_completed",
+                    None,
+                    serde_json::json!({}),
+                )
+                .await;
+                let dir =
+                    home.join(".claude")
+                        .join("projects")
+                        .join(stale_detector::encode_working_dir(
+                            &worktree_ops::sub_worktree_path(&state.repo_root, &run, node, 1),
+                        ));
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join(format!("{run}-s.jsonl")),
+                    format!(
+                        r#"{{"type":"assistant","requestId":"{run}","message":{{"id":"{run}-m","model":"{model}","usage":{{"input_tokens":1000,"output_tokens":0}}}}}}"#
+                    ),
+                )
+                .unwrap();
+            }
+        }
+
+        async fn send(
+            state: &Arc<AppState>,
+            method: &str,
+            uri: &str,
+            body: Option<serde_json::Value>,
+        ) -> (StatusCode, serde_json::Value) {
+            let mut request = Request::builder().method(method).uri(uri);
+            if body.is_some() {
+                request = request.header("content-type", "application/json");
+            }
+            let response = build_router(state.clone())
+                .oneshot(
+                    request
+                        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+            )
+        }
+        let (from, to) = ("2034-05-15T00:00:00Z", "2034-05-16T00:00:00Z");
+        let window = format!("from={from}&to={to}");
+        let cost_uri = format!("/stats/cost?{window}&bucket=day");
+        let performance_uri = format!("/stats/performance?{window}");
+        let uncombined = "&uncombined=true";
+        let find = |rows: &serde_json::Value, id: &str| -> serde_json::Value {
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id)
+                .cloned()
+                .unwrap_or_else(|| panic!("no row {id} in {rows:#}"))
+        };
+        // effort id → executions (Cost) of one model row of the « By model » axis.
+        let cost_efforts = |cost: &serde_json::Value, model: &str| -> Vec<(String, i64)> {
+            find(&cost["by_model"], model)["efforts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| {
+                    (
+                        e["id"].as_str().unwrap().to_string(),
+                        e["executions"].as_i64().unwrap(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect()
+        };
+        // effort id → measured durations (Performance), the same way.
+        let performance_efforts = |perf: &serde_json::Value, model: &str| -> Vec<(String, i64)> {
+            find(&perf["by_model"], model)["efforts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| {
+                    (
+                        e["id"].as_str().unwrap().to_string(),
+                        e["harnesses"][0]["duration"]["measured"].as_i64().unwrap(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect()
+        };
+        let counts = |pairs: &[(&str, i64)]| -> Vec<(String, i64)> {
+            pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+        };
+        // couple key → executions of one Node row, in every tree it shows in:
+        // Cost by pipeline, Cost by project, Performance by pipeline.
+        let node_couples = |cost: &serde_json::Value,
+                            perf: &serde_json::Value,
+                            node: &str|
+         -> Vec<Vec<(String, i64)>> {
+            let cost_rows = [
+                find(&find(&cost["by_pipeline"], "delta")["nodes"], node),
+                find(
+                    &find(&cost["by_project"][0]["pipelines"], "delta")["nodes"],
+                    node,
+                ),
+            ];
+            let mut trees: Vec<Vec<(String, i64)>> = cost_rows
+                .iter()
+                .map(|row| {
+                    let mut pairs: Vec<(String, i64)> = row["models"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|p| {
+                            (
+                                p["key"].as_str().unwrap().to_string(),
+                                p["executions"].as_i64().unwrap(),
+                            )
+                        })
+                        .collect();
+                    pairs.sort();
+                    pairs
+                })
+                .collect();
+            let perf_row = find(&find(&perf["by_pipeline"], "delta")["nodes"], node);
+            let mut pairs: Vec<(String, i64)> = perf_row["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| {
+                    (
+                        p["key"].as_str().unwrap().to_string(),
+                        p["harnesses"][0]["duration"]["measured"].as_i64().unwrap(),
+                    )
+                })
+                .collect();
+            pairs.sort();
+            trees.push(pairs);
+            trees
+        };
+        let couple_of = |tree: &serde_json::Value, node: &str, key: &str| -> serde_json::Value {
+            find(&find(tree, "delta")["nodes"], node)["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["key"] == key)
+                .cloned()
+                .unwrap_or_else(|| panic!("no couple {key} under {node}"))
+        };
+        let post = |body: serde_json::Value| {
+            let state = state.clone();
+            async move { send(&state, "POST", "/stats/absorptions", Some(body)).await }
+        };
+        let delete = |query: String| {
+            let state = state.clone();
+            async move {
+                send(
+                    &state,
+                    "DELETE",
+                    &format!("/stats/absorptions/member?{query}"),
+                    None,
+                )
+                .await
+            }
+        };
+        let enc = |value: &str| -> String {
+            value
+                .bytes()
+                .map(|byte| {
+                    if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+                        (byte as char).to_string()
+                    } else {
+                        format!("%{byte:02X}")
+                    }
+                })
+                .collect()
+        };
+        let coder_scope = stats_absorption::couple_scope("delta", "coder");
+
+        // --- Before: two efforts under claude-opus-5.
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        assert_eq!(
+            cost_efforts(&cost, "claude-opus-5"),
+            counts(&[("", 10), ("high", 20)])
+        );
+        let before_high = find(&find(&cost["by_model"], "claude-opus-5")["efforts"], "high");
+        let before_not_set = find(&find(&cost["by_model"], "claude-opus-5")["efforts"], "");
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            performance_efforts(&performance, "claude-opus-5"),
+            counts(&[("", 10), ("high", 20)])
+        );
+        let recomputes = stats_performance::recompute_count_for_test(from, to);
+
+        // --- Efforts of two models are refused, and nothing is written.
+        let (status, refusal) = post(serde_json::json!({
+            "dimension": "effort",
+            "scope": "claude-opus-5",
+            "absorbent": {"key": "high", "name": "high", "scope": "claude-opus-5"},
+            "members": [{"key": "", "name": "not set", "scope": "claude-opus-5-5"}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+        let (_, list) = send(&state, "GET", "/stats/absorptions", None).await;
+        assert_eq!(list["absorptions"], serde_json::json!([]));
+
+        // --- Effort absorption: *not set* → high on claude-opus-5.
+        let (status, list) = post(serde_json::json!({
+            "dimension": "effort",
+            "scope": "claude-opus-5",
+            "scope_name": "claude-opus-5",
+            "absorbent": {"key": "high", "name": "high", "scope": "claude-opus-5"},
+            "members": [{"key": "", "name": "not set", "scope": "claude-opus-5"}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(list["absorptions"][0]["dimension"], "effort");
+        assert_eq!(list["absorptions"][0]["scope"], "claude-opus-5");
+        assert_eq!(list["absorptions"][0]["scope_name"], "claude-opus-5");
+        assert_eq!(list["absorptions"][0]["members"][0]["key"], "");
+
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        assert_eq!(
+            cost_efforts(&cost, "claude-opus-5"),
+            counts(&[("high", 30)])
+        );
+        let high = find(&find(&cost["by_model"], "claude-opus-5")["efforts"], "high");
+        assert_eq!(high["runs"], 30);
+        assert_eq!(high["absorbed"][0]["key"], "");
+        assert_eq!(high["absorbed"][0]["name"], "not set");
+        assert_eq!(high["absorbed"][0]["runs"], 10);
+        assert_eq!(
+            high["absorbed"][0]["scopes"],
+            serde_json::json!(["claude-opus-5"])
+        );
+        // The honesty marks add up, they are never smoothed away.
+        for field in ["readable", "unknown"] {
+            assert_eq!(
+                high[field].as_i64().unwrap(),
+                before_high[field].as_i64().unwrap() + before_not_set[field].as_i64().unwrap(),
+                "{field}"
+            );
+        }
+        assert_eq!(
+            high["partial"].as_bool().unwrap(),
+            before_high["partial"].as_bool().unwrap()
+                || before_not_set["partial"].as_bool().unwrap()
+        );
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            recomputes + 1,
+            "an effort absorption must recompute the Performance memo"
+        );
+        assert_eq!(
+            performance_efforts(&performance, "claude-opus-5"),
+            counts(&[("high", 30)])
+        );
+        assert_eq!(
+            find(
+                &find(&performance["by_model"], "claude-opus-5")["efforts"],
+                "high"
+            )["absorbed"][0]["key"],
+            ""
+        );
+        // It reaches the couples of `coder`, in every tree, marked as global.
+        for tree in node_couples(&cost, &performance, "coder") {
+            assert_eq!(
+                tree,
+                counts(&[("claude-opus-4-8|", 3), ("claude-opus-5|high", 30)])
+            );
+        }
+        for tree in [&cost["by_pipeline"], &performance["by_pipeline"]] {
+            let couple = couple_of(tree, "coder", "claude-opus-5|high");
+            assert_eq!(couple["global_absorbed"][0]["key"], "claude-opus-5|");
+            assert_eq!(
+                couple["global_absorbed"][0]["name"],
+                "claude-opus-5 · not set"
+            );
+            assert_eq!(couple["global_absorbed"][0]["runs"], 10);
+            assert!(couple_of(tree, "coder", "claude-opus-4-8|")["global_absorbed"].is_null());
+        }
+        // Uncombined: both efforts and both couples again.
+        let (_, raw_cost) = send(&state, "GET", &format!("{cost_uri}{uncombined}"), None).await;
+        let (_, raw_performance) = send(
+            &state,
+            "GET",
+            &format!("{performance_uri}{uncombined}"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            cost_efforts(&raw_cost, "claude-opus-5"),
+            counts(&[("", 10), ("high", 20)])
+        );
+        assert_eq!(
+            performance_efforts(&raw_performance, "claude-opus-5"),
+            counts(&[("", 10), ("high", 20)])
+        );
+        for tree in node_couples(&raw_cost, &raw_performance, "coder") {
+            assert_eq!(
+                tree,
+                counts(&[
+                    ("claude-opus-4-8|", 3),
+                    ("claude-opus-5|", 10),
+                    ("claude-opus-5|high", 20)
+                ])
+            );
+        }
+
+        // --- ADR-0078, case 2: claude-opus-5 absorbs claude-opus-4-8 after the
+        // pose — the newcomer's *not set* stays apart.
+        let (status, _) = post(serde_json::json!({
+            "dimension": "model",
+            "absorbent": {"key": "claude-opus-5", "name": "claude-opus-5"},
+            "members": [{"key": "claude-opus-4-8", "name": "claude-opus-4-8"}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        assert_eq!(
+            cost_efforts(&cost, "claude-opus-5"),
+            counts(&[("", 3), ("high", 30)])
+        );
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            performance_efforts(&performance, "claude-opus-5"),
+            counts(&[("", 3), ("high", 30)])
+        );
+        // The model absorption reaches `coder`'s couples too.
+        for tree in node_couples(&cost, &performance, "coder") {
+            assert_eq!(
+                tree,
+                counts(&[("claude-opus-5|", 3), ("claude-opus-5|high", 30)])
+            );
+        }
+        for tree in [&cost["by_pipeline"], &performance["by_pipeline"]] {
+            let couple = couple_of(tree, "coder", "claude-opus-5|");
+            assert_eq!(couple["global_absorbed"][0]["key"], "claude-opus-4-8|");
+        }
+        let (status, _) = delete("dimension=model&member=claude-opus-4-8".to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // --- ADR-0078, case 1: claude-opus-5-5 absorbs claude-opus-5 — the
+        // absorption keeps to claude-opus-5's Runs: high 38, *not set* 5.
+        let (status, _) = post(serde_json::json!({
+            "dimension": "model",
+            "absorbent": {"key": "claude-opus-5-5", "name": "claude-opus-5-5"},
+            "members": [{"key": "claude-opus-5", "name": "claude-opus-5"}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        assert_eq!(
+            cost_efforts(&cost, "claude-opus-5-5"),
+            counts(&[("", 5), ("high", 38)])
+        );
+        let high = find(
+            &find(&cost["by_model"], "claude-opus-5-5")["efforts"],
+            "high",
+        );
+        assert_eq!(high["absorbed"][0]["key"], "", "the member still shows");
+        assert_eq!(
+            high["absorbed"][0]["scopes"],
+            serde_json::json!(["claude-opus-5"])
+        );
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            performance_efforts(&performance, "claude-opus-5-5"),
+            counts(&[("", 5), ("high", 38)])
+        );
+        // An effort absorption on a model row counted under another is refused.
+        let (status, _) = post(serde_json::json!({
+            "dimension": "effort",
+            "scope": "claude-opus-5",
+            "absorbent": {"key": "high", "name": "high"},
+            "members": [{"key": "low", "name": "low"}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // --- ADR-0078, case 3: taking claude-opus-5 out — it comes back with
+        // high 30 and no *not set*.
+        let (status, _) = delete("dimension=model&member=claude-opus-5".to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        assert_eq!(
+            cost_efforts(&cost, "claude-opus-5"),
+            counts(&[("high", 30)])
+        );
+        assert_eq!(
+            cost_efforts(&cost, "claude-opus-5-5"),
+            counts(&[("", 5), ("high", 8)])
+        );
+
+        // --- Couple absorption in `coder`: claude-opus-4-8 · not set into
+        // claude-opus-5 · high. One couple row, never on the « By model » axis.
+        let (status, refusal) = post(serde_json::json!({
+            "dimension": "couple",
+            "scope": coder_scope,
+            "absorbent": {"key": "claude-opus-5|high", "name": "claude-opus-5 · high", "scope": coder_scope},
+            "members": [{"key": "claude-opus-5-5|high", "name": "claude-opus-5-5 · high",
+                         "scope": stats_absorption::couple_scope("delta", "implementer")}],
+        }))
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "couples of two Nodes: {refusal}"
+        );
+        let recomputes = stats_performance::recompute_count_for_test(from, to);
+        let (status, list) = post(serde_json::json!({
+            "dimension": "couple",
+            "scope": coder_scope,
+            "scope_name": "Coder (Delta)",
+            "absorbent": {"key": "claude-opus-5|high", "name": "claude-opus-5 · high", "scope": coder_scope},
+            "members": [{"key": "claude-opus-4-8|", "name": "claude-opus-4-8 · not set", "scope": coder_scope}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        let couple_view = list["absorptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["dimension"] == "couple")
+            .cloned()
+            .unwrap();
+        assert_eq!(couple_view["scope_name"], "Coder (Delta)");
+        assert_eq!(couple_view["absorbent"]["name"], "claude-opus-5 · high");
+
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            recomputes + 1,
+            "a couple absorption must recompute the Performance memo"
+        );
+        for tree in node_couples(&cost, &performance, "coder") {
+            assert_eq!(tree, counts(&[("claude-opus-5|high", 33)]));
+        }
+        for tree in [&cost["by_pipeline"], &performance["by_pipeline"]] {
+            let couple = couple_of(tree, "coder", "claude-opus-5|high");
+            assert_eq!(couple["absorbed"][0]["key"], "claude-opus-4-8|");
+            assert_eq!(couple["absorbed"][0]["runs"], 3);
+            assert_eq!(
+                couple["absorbed"][0]["scopes"],
+                serde_json::json!([coder_scope])
+            );
+        }
+        // The « By model » axis never sees it.
+        assert_eq!(cost_efforts(&cost, "claude-opus-4-8"), counts(&[("", 3)]));
+        assert_eq!(
+            performance_efforts(&performance, "claude-opus-4-8"),
+            counts(&[("", 3)])
+        );
+        let (_, raw_cost) = send(&state, "GET", &format!("{cost_uri}{uncombined}"), None).await;
+        let (_, raw_performance) = send(
+            &state,
+            "GET",
+            &format!("{performance_uri}{uncombined}"),
+            None,
+        )
+        .await;
+        for tree in node_couples(&raw_cost, &raw_performance, "coder") {
+            assert_eq!(tree.len(), 3, "Uncombined shows every raw couple: {tree:?}");
+        }
+
+        // --- Global before local: claude-opus-5-5 absorbs claude-opus-5, the
+        // local absorbent's model — it carries the local absorption along.
+        let (status, _) = post(serde_json::json!({
+            "dimension": "model",
+            "absorbent": {"key": "claude-opus-5-5", "name": "claude-opus-5-5"},
+            "members": [{"key": "claude-opus-5", "name": "claude-opus-5"}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        for tree in node_couples(&cost, &performance, "coder") {
+            assert_eq!(tree, counts(&[("claude-opus-5-5|high", 33)]));
+        }
+        let (status, _) = delete("dimension=model&member=claude-opus-5".to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // --- Frozen scope of couples: `implementer` absorbs `coder` — its own
+        // couples are not combined; `coder`'s stay combined.
+        let (status, _) = post(serde_json::json!({
+            "dimension": "node",
+            "scope": "delta",
+            "scope_name": "Delta",
+            "absorbent": {"key": "implementer", "name": "Implementer", "scope": "delta"},
+            "members": [{"key": "coder", "name": "Coder", "scope": "delta"}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        for tree in node_couples(&cost, &performance, "implementer") {
+            assert_eq!(
+                tree,
+                counts(&[
+                    ("claude-opus-5-5|", 5),
+                    ("claude-opus-5-5|high", 8),
+                    ("claude-opus-5|high", 33)
+                ])
+            );
+        }
+        let (status, _) = delete("dimension=node&scope=delta&member=coder".to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        for tree in node_couples(&cost, &performance, "coder") {
+            assert_eq!(
+                tree,
+                counts(&[("claude-opus-5|high", 33)]),
+                "coder comes back with its couple combined"
+            );
+        }
+
+        // --- Uncombine from the members list / Settings: the rows come back.
+        // (A state the memo has already seen is served from it: take the effort
+        // out first, leaving a couple-only state it never computed.)
+        let recomputes = stats_performance::recompute_count_for_test(from, to);
+        let (status, _) = delete("dimension=effort&scope=claude-opus-5&member=".to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            recomputes + 1,
+            "an Uncombine must recompute the Performance memo"
+        );
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        for tree in node_couples(&cost, &performance, "coder") {
+            assert_eq!(
+                tree,
+                counts(&[("claude-opus-5|", 10), ("claude-opus-5|high", 23)]),
+                "the couple absorption stays, the effort one is gone"
+            );
+        }
+        let (status, list) = delete(format!(
+            "dimension=couple&scope={}&member={}",
+            enc(&coder_scope),
+            enc("claude-opus-4-8|")
+        ))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list["absorptions"], serde_json::json!([]));
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            cost_efforts(&cost, "claude-opus-5"),
+            counts(&[("", 10), ("high", 20)])
+        );
+        for tree in node_couples(&cost, &performance, "coder") {
+            assert_eq!(tree.len(), 3);
+        }
     }
 
     /// #890 — an absorption is instance configuration, not a property of the

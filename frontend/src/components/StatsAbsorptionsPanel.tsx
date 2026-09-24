@@ -2,18 +2,32 @@ import { useEffect, useState } from "react";
 import { Combine } from "lucide-react";
 import { fetchStatsAbsorptions, uncombineStatsMember } from "../api";
 import type { StatsAbsorption } from "../types";
-import { day } from "../lib/statsAbsorption";
+import { day, MONO_DIMENSIONS } from "../lib/statsAbsorption";
 import { UncombineButton } from "./StatsAbsorption";
 
 type Dimension = StatsAbsorption["dimension"];
 type Member = StatsAbsorption["members"][number];
 
-/** The list's groups, in the order Stats reads them (#892 adds Nodes and Models). */
+/** The list's groups, in the order Stats reads them (#892 adds Nodes and
+ *  Models, #906 efforts and couples). */
 const DIMENSIONS: { id: Dimension; label: string }[] = [
   { id: "pipeline", label: "Pipelines" },
   { id: "node", label: "Nodes" },
   { id: "model", label: "Models" },
+  { id: "effort", label: "Efforts" },
+  { id: "couple", label: "Couples" },
 ];
+
+/** What a scoped absorption lives in, said in words (#892, #906): the Pipeline
+ *  of a Node absorption, « Effort · <model> », « Couple · <Node> (<Pipeline>) ». */
+function scopeLabel(absorption: StatsAbsorption): string | null {
+  const name = absorption.scope_name || null;
+  if (!name) return null;
+  if (absorption.dimension === "node") return `in ${name}`;
+  if (absorption.dimension === "effort") return `Effort · ${name}`;
+  if (absorption.dimension === "couple") return `Couple · ${name}`;
+  return null;
+}
 
 function originNote(member: Member): string {
   const how = member.origin === "rename" ? "renamed" : "combined in Stats";
@@ -29,7 +43,9 @@ function originNote(member: Member): string {
  * sends anything from here. Names only, never a key.
  */
 export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
-  const [absorptions, setAbsorptions] = useState<StatsAbsorption[] | null>(null);
+  const [absorptions, setAbsorptions] = useState<StatsAbsorption[] | null>(
+    null,
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +61,8 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
         setLoadError(null);
       })
       .catch((cause) => {
-        if (!cancelled) setLoadError(cause instanceof Error ? cause.message : String(cause));
+        if (!cancelled)
+          setLoadError(cause instanceof Error ? cause.message : String(cause));
       });
     return () => {
       cancelled = true;
@@ -57,7 +74,11 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
     setBusyKey(busy);
     setError(null);
     try {
-      const list = await uncombineStatsMember(absorption.dimension, absorption.scope, member.key);
+      const list = await uncombineStatsMember(
+        absorption.dimension,
+        absorption.scope,
+        member.key,
+      );
       setAbsorptions(list.absorptions);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -91,20 +112,34 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
         style={{ fontSize: "11px" }}
         data-testid="stats-absorptions-empty"
       >
-        Nothing is combined. In Stats, Ctrl/Cmd-click two rows and choose Combine; renaming a
-        pipeline in the library combines its old and new name by itself.
+        Nothing is combined. In Stats, Ctrl/Cmd-click two rows and choose
+        Combine; renaming a pipeline in the library combines its old and new
+        name by itself.
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-4" data-testid="stats-absorptions-panel" style={{ fontSize: "12px" }}>
+    <div
+      className="flex flex-col gap-4"
+      data-testid="stats-absorptions-panel"
+      style={{ fontSize: "12px" }}
+    >
       {DIMENSIONS.map(({ id, label }) => {
-        const group = absorptions.filter((absorption) => absorption.dimension === id);
+        const group = absorptions.filter(
+          (absorption) => absorption.dimension === id,
+        );
         if (group.length === 0) return null;
         return (
-          <div key={id} className="flex flex-col gap-2" data-testid={`stats-absorptions-${id}`}>
-            <div className="uppercase tracking-wide text-fg-4" style={{ fontSize: "9.5px" }}>
+          <div
+            key={id}
+            className="flex flex-col gap-2"
+            data-testid={`stats-absorptions-${id}`}
+          >
+            <div
+              className="uppercase tracking-wide text-fg-4"
+              style={{ fontSize: "9.5px" }}
+            >
               {label}
             </div>
             {group.map((absorption) => (
@@ -115,25 +150,33 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
               >
                 <li className="flex items-center justify-between gap-3 px-3 py-2">
                   <span className="flex min-w-0 items-center gap-2">
-                    <Combine size={12} className="shrink-0 text-acc" aria-hidden="true" />
+                    <Combine
+                      size={12}
+                      className="shrink-0 text-acc"
+                      aria-hidden="true"
+                    />
                     <span
-                      className={`truncate text-fg ${id === "model" ? "font-mono" : ""}`}
+                      className={`truncate text-fg ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
                       data-testid="stats-absorption-absorbent"
                     >
                       {absorption.absorbent.name}
                     </span>
-                    {id === "node" && absorption.scope_name && (
-                      // A Node absorption lives under one Pipeline: say which.
+                    {scopeLabel(absorption) && (
+                      // A scoped absorption lives in one Pipeline, model or
+                      // Node: say which.
                       <span
                         className="truncate text-fg-4"
                         style={{ fontSize: "10.5px" }}
                         data-testid="stats-absorption-scope"
                       >
-                        in {absorption.scope_name}
+                        {scopeLabel(absorption)}
                       </span>
                     )}
                   </span>
-                  <span className="shrink-0 text-fg-4" style={{ fontSize: "10.5px" }}>
+                  <span
+                    className="shrink-0 text-fg-4"
+                    style={{ fontSize: "10.5px" }}
+                  >
                     keeps its name
                   </span>
                 </li>
@@ -144,7 +187,9 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                     data-testid="stats-absorption-member"
                   >
                     <span className="min-w-0">
-                      <span className={`block truncate text-fg ${id === "model" ? "font-mono" : ""}`}>
+                      <span
+                        className={`block truncate text-fg ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
+                      >
                         {member.name}
                       </span>
                       <span
@@ -177,8 +222,8 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
         </div>
       )}
       <p className="text-fg-4" style={{ fontSize: "10.5px" }}>
-        Uncombining a name brings its own row back in Stats. Nothing is rewritten: Stats only
-        reads the rows differently.
+        Uncombining a name brings its own row back in Stats. Nothing is
+        rewritten: Stats only reads the rows differently.
       </p>
     </div>
   );

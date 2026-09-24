@@ -26,8 +26,24 @@
 //!   Pipeline row — in every tree where the Node shows. Taking a Pipeline out
 //!   of its absorption takes its Nodes out of the Node absorptions of that
 //!   scope ([`remove_member`]).
-//! - **Models**, by verbatim id (ADR-0065): they only fold the « By model »
-//!   axis of Cost and Performance; their model × effort couples meet by effort.
+//! - **Models**, by verbatim id (ADR-0065): they fold the « By model » axis
+//!   of Cost and Performance and, since #906 (ADR-0078 amending ADR-0077), the
+//!   model × effort couples of every Node too; their couples meet by effort.
+//!
+//! #906 adds two more (ADR-0078), both with a **frozen scope**: an absorption
+//! is written once per RAW key it covered when it was posed, and read on the
+//! raw key — no carry, no cascade:
+//!
+//! - **Efforts** of one model, scoped to a raw model id. Posed on a model row,
+//!   it is written for the row's key and for every model it absorbed then.
+//! - **Couples** (model × effort) of one Node, scoped to a raw `(Pipeline,
+//!   Node)` pair ([`couple_scope`]). Local to the Node row: never on the
+//!   « By model » axis. Its keys are couples as the global absorptions resolve
+//!   them, and they go through that resolution again at read time.
+//!
+//! A couple of a Node resolves in this order ([`RunIdentity::couple`]): (1) the
+//! effort, on the raw model; (2) the model; (3) the couples meet by effort;
+//! (4) the couple, on the raw Node. The « By model » axis stops at step 3.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -48,6 +64,50 @@ use crate::AppState;
 pub(crate) const PIPELINE: &str = "pipeline";
 pub(crate) const NODE: &str = "node";
 pub(crate) const MODEL: &str = "model";
+pub(crate) const EFFORT: &str = "effort";
+pub(crate) const COUPLE: &str = "couple";
+
+/// The key of an effort: the effort itself, `""` for « not set ».
+pub(crate) fn effort_key(effort: Option<&str>) -> String {
+    effort.unwrap_or("").to_string()
+}
+
+fn effort_of_key(key: &str) -> Option<String> {
+    (!key.is_empty()).then(|| key.to_string())
+}
+
+/// The name of an effort, as its row shows it.
+pub(crate) fn effort_name(effort: Option<&str>) -> String {
+    effort.unwrap_or("not set").to_string()
+}
+
+/// The key of a model × effort couple: `model|effort` (`model|` for « not
+/// set »). A model id never carries a `|`.
+pub(crate) fn couple_key(model: &str, effort: Option<&str>) -> String {
+    format!("{model}|{}", effort.unwrap_or(""))
+}
+
+/// `model|effort` → `(model, effort)`; `None` on a key that is no couple.
+pub(crate) fn split_couple_key(key: &str) -> Option<(String, Option<String>)> {
+    let (model, effort) = key.rsplit_once('|')?;
+    (!model.is_empty()).then(|| (model.to_string(), effort_of_key(effort)))
+}
+
+/// The name of a couple, as its row shows it: `model · effort`.
+pub(crate) fn couple_name(model: &str, effort: Option<&str>) -> String {
+    format!("{model} · {}", effort_name(effort))
+}
+
+/// The scope of a couple absorption: one `(Pipeline, Node)` pair, as a JSON
+/// array — unambiguous whatever the two keys hold.
+pub(crate) fn couple_scope(pipeline: &str, node: &str) -> String {
+    serde_json::json!([pipeline, node]).to_string()
+}
+
+fn parse_couple_scope(scope: &str) -> Option<(String, String)> {
+    let pair: (String, String) = serde_json::from_str(scope).ok()?;
+    (!pair.0.is_empty() && !pair.1.is_empty()).then_some(pair)
+}
 
 /// Where an absorption came from: the operator's Combine (`manual`) or a
 /// Pipeline rename that changed its id (`rename`, #891).
@@ -256,6 +316,144 @@ async fn combine_in(
         .await?;
     }
     Ok(())
+}
+
+/// Pose an effort or couple absorption with its **frozen scope** (ADR-0078):
+/// one write per raw key the row covers right now — its own key and the keys
+/// it absorbs at this moment — each flattened like any Combine. Nothing is
+/// carried later: a row absorbed afterwards keeps its own rows, a member
+/// absorbed afterwards is not covered, a member taken out keeps its rows.
+///
+/// - `effort`: `scope` is the model row's key; the raw scopes are that id and
+///   the model ids it absorbs.
+/// - `couple`: `scope` is [`couple_scope`] of the Node row's Pipeline and Node
+///   keys; the raw scopes are every raw `(Pipeline, Node)` pair counted there —
+///   the row's Pipeline and the Pipelines it absorbs, crossed with the row's
+///   Node and the Nodes it absorbs, kept where the Node really ran.
+pub(crate) async fn combine_frozen(
+    db: &SqlitePool,
+    dimension: &str,
+    scope: &str,
+    scope_name: &str,
+    absorbent: &Named,
+    members: &[Named],
+    origin: &str,
+) -> Result<(), sqlx::Error> {
+    let mut tx = db.begin().await?;
+    let covered = covered_scopes(&mut tx, dimension, scope, scope_name).await?;
+    for raw in &covered {
+        combine_in(
+            &mut tx,
+            Scope {
+                dimension,
+                key: &raw.key,
+                name: &raw.name,
+            },
+            absorbent,
+            members,
+            origin,
+        )
+        .await?;
+    }
+    tx.commit().await
+}
+
+async fn members_of(
+    tx: &mut sqlx::SqliteConnection,
+    dimension: &str,
+    scope: &str,
+    absorbent: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT member FROM stats_absorptions \
+         WHERE dimension = ? AND scope = ? AND absorbent = ? ORDER BY member",
+    )
+    .bind(dimension)
+    .bind(scope)
+    .bind(absorbent)
+    .fetch_all(&mut *tx)
+    .await?;
+    Ok(rows.into_iter().map(|(key,)| key).collect())
+}
+
+/// The raw scopes an effort or couple absorption posed on `scope` covers now.
+async fn covered_scopes(
+    tx: &mut sqlx::SqliteConnection,
+    dimension: &str,
+    scope: &str,
+    scope_name: &str,
+) -> Result<Vec<Named>, sqlx::Error> {
+    if dimension == EFFORT {
+        let mut covered = vec![Named {
+            key: scope.to_string(),
+            name: scope.to_string(),
+        }];
+        for model in members_of(tx, MODEL, "", scope).await? {
+            covered.push(Named {
+                key: model.clone(),
+                name: model,
+            });
+        }
+        return Ok(covered);
+    }
+    let Some((pipeline, node)) = parse_couple_scope(scope) else {
+        return Ok(Vec::new());
+    };
+    let mut pipelines = vec![pipeline.clone()];
+    pipelines.extend(members_of(tx, PIPELINE, "", &pipeline).await?);
+    let mut nodes = vec![node.clone()];
+    nodes.extend(members_of(tx, NODE, &pipeline, &node).await?);
+    let mut covered = Vec::new();
+    for raw_pipeline in &pipelines {
+        let ran = nodes_that_ran_under(tx, raw_pipeline).await?;
+        for raw_node in &nodes {
+            let own = raw_pipeline == &pipeline && raw_node == &node;
+            if !own && !ran.contains(raw_node) {
+                continue;
+            }
+            let name = if own && !scope_name.is_empty() {
+                scope_name.to_string()
+            } else {
+                node_label(tx, raw_pipeline, raw_node).await?
+            };
+            covered.push(Named {
+                key: couple_scope(raw_pipeline, raw_node),
+                name,
+            });
+        }
+    }
+    Ok(covered)
+}
+
+/// « Node (Pipeline) », by the names the most recent Run of `pipeline` froze.
+async fn node_label(
+    tx: &mut sqlx::SqliteConnection,
+    pipeline: &str,
+    node: &str,
+) -> Result<String, sqlx::Error> {
+    let payload: Option<(String,)> = sqlx::query_as(
+        "SELECT payload FROM events WHERE kind = 'run_started' \
+           AND COALESCE(json_extract(payload, '$.pipeline_id'), \
+                        json_extract(payload, '$.pipeline_name'), ?) = ? \
+         ORDER BY ts DESC LIMIT 1",
+    )
+    .bind(UNKNOWN_PIPELINE)
+    .bind(pipeline)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let payload: Value = payload
+        .and_then(|(text,)| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null);
+    let (_, pipeline_name) = if payload.is_null() {
+        (pipeline.to_string(), pipeline.to_string())
+    } else {
+        pipeline_identity(&payload)
+    };
+    let node_name = node_defs(&payload)
+        .get(node)
+        .map(|def| def.name.clone())
+        .unwrap_or_else(|| node.to_string());
+    Ok(format!("{node_name} ({pipeline_name})"))
 }
 
 async fn rows_of_scope(
@@ -536,6 +734,13 @@ impl ScopeAbsorptions {
         self.absorbent_names.get(key).map(String::as_str)
     }
 
+    fn members_of(&self, absorbent: &str) -> &[Named] {
+        self.members
+            .get(absorbent)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     /// The members of `absorbent` as its row lists them, with what each did in
     /// the period — every member, including one with no Run in it.
     fn absorbed(&self, absorbent: &str, tallies: &PipelineTallies) -> Vec<AbsorbedMember> {
@@ -548,6 +753,53 @@ impl ScopeAbsorptions {
     }
 }
 
+/// The couple absorptions of one raw `(Pipeline, Node)` pair (#906), their
+/// keys resolved through the global absorptions — step 4 runs on couples the
+/// global steps already resolved, so a global absorption posed later carries
+/// a local one along (ADR-0078 §2).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CoupleScope {
+    /// Resolved member couple → resolved absorbent couple.
+    to: HashMap<String, String>,
+    /// Each stored member, with its resolved key and its resolved absorbent's.
+    members: Vec<(Named, String, String)>,
+}
+
+/// The global absorptions a couple goes through (steps 1–2): the efforts of a
+/// raw model, then the model.
+#[derive(Debug, Clone, Default)]
+struct GlobalAbsorptions {
+    models: Arc<ScopeAbsorptions>,
+    /// Raw model id → its effort absorptions.
+    efforts: Arc<HashMap<String, ScopeAbsorptions>>,
+}
+
+impl GlobalAbsorptions {
+    fn effort(&self, raw_model: &str, raw_effort: Option<&str>) -> Option<String> {
+        let key = effort_key(raw_effort);
+        let resolved = self
+            .efforts
+            .get(raw_model)
+            .map(|scope| scope.resolve(&key).to_string())
+            .unwrap_or(key);
+        effort_of_key(&resolved)
+    }
+
+    fn couple(&self, raw_model: &str, raw_effort: Option<&str>) -> (String, Option<String>) {
+        (
+            self.models.resolve(raw_model).to_string(),
+            self.effort(raw_model, raw_effort),
+        )
+    }
+
+    /// A stored couple key, resolved as if it were a raw couple.
+    fn couple_key(&self, key: &str) -> Option<String> {
+        let (model, effort) = split_couple_key(key)?;
+        let (model, effort) = self.couple(&model, effort.as_deref());
+        Some(couple_key(&model, effort.as_deref()))
+    }
+}
+
 /// The absorptions of one Stats read. Empty under `uncombined=true`, which is
 /// exactly « the rows as the event log wrote them ».
 #[derive(Debug, Clone, Default)]
@@ -555,7 +807,9 @@ pub(crate) struct AbsorptionResolver {
     pipelines: ScopeAbsorptions,
     /// Pipeline key (of the row the Node shows under) → its Node absorptions.
     nodes: HashMap<String, Arc<ScopeAbsorptions>>,
-    models: Arc<ScopeAbsorptions>,
+    global: GlobalAbsorptions,
+    /// [`couple_scope`] of a raw `(Pipeline, Node)` → its couple absorptions.
+    couples: Arc<HashMap<String, CoupleScope>>,
     fingerprint: u64,
 }
 
@@ -569,6 +823,8 @@ impl AbsorptionResolver {
         });
         let mut nodes: HashMap<String, ScopeAbsorptions> = HashMap::new();
         let mut models = ScopeAbsorptions::default();
+        let mut efforts: HashMap<String, ScopeAbsorptions> = HashMap::new();
+        let mut couple_rows: Vec<&AbsorptionRow> = Vec::new();
         for row in sorted {
             (
                 &row.dimension,
@@ -583,6 +839,8 @@ impl AbsorptionResolver {
                 PIPELINE => resolver.pipelines.insert(row),
                 NODE => nodes.entry(row.scope.clone()).or_default().insert(row),
                 MODEL => models.insert(row),
+                EFFORT => efforts.entry(row.scope.clone()).or_default().insert(row),
+                COUPLE => couple_rows.push(row),
                 _ => {}
             }
         }
@@ -590,7 +848,35 @@ impl AbsorptionResolver {
             .into_iter()
             .map(|(scope, absorptions)| (scope, Arc::new(absorptions)))
             .collect();
-        resolver.models = Arc::new(models);
+        resolver.global = GlobalAbsorptions {
+            models: Arc::new(models),
+            efforts: Arc::new(efforts),
+        };
+        let mut couples: HashMap<String, CoupleScope> = HashMap::new();
+        for row in couple_rows {
+            let (Some(member), Some(absorbent)) = (
+                resolver.global.couple_key(&row.member),
+                resolver.global.couple_key(&row.absorbent),
+            ) else {
+                continue;
+            };
+            let scope = couples.entry(row.scope.clone()).or_default();
+            if member != absorbent {
+                scope
+                    .to
+                    .entry(member.clone())
+                    .or_insert_with(|| absorbent.clone());
+            }
+            scope.members.push((
+                Named {
+                    key: row.member.clone(),
+                    name: row.member_name.clone(),
+                },
+                member,
+                absorbent,
+            ));
+        }
+        resolver.couples = Arc::new(couples);
         resolver.fingerprint = hasher.finish();
         resolver
     }
@@ -636,7 +922,8 @@ impl AbsorptionResolver {
         };
         RunIdentity {
             nodes: self.nodes.get(&key).cloned().unwrap_or_default(),
-            models: self.models.clone(),
+            global: self.global.clone(),
+            couples: self.couples.clone(),
             pipeline_key: key,
             pipeline_name: name,
             own_name: own,
@@ -675,8 +962,91 @@ impl AbsorptionResolver {
         absorbent: &str,
         tallies: &PipelineTallies,
     ) -> Vec<AbsorbedMember> {
-        self.models.absorbed(absorbent, tallies)
+        self.global.models.absorbed(absorbent, tallies)
     }
+
+    /// The members of effort `absorbent` (its key, `""` for « not set ») under
+    /// a model row that counts the raw model ids `raw_models` (#906). Each
+    /// member lists the raw models whose absorption holds it — its ✕ takes it
+    /// out of all of them. `tallies` are keyed by raw effort key.
+    pub(crate) fn absorbed_efforts<'a>(
+        &self,
+        raw_models: impl IntoIterator<Item = &'a str>,
+        absorbent: &str,
+        tallies: &PipelineTallies,
+    ) -> Vec<AbsorbedMember> {
+        let mut members: BTreeMap<String, AbsorbedMember> = BTreeMap::new();
+        for raw_model in raw_models {
+            let Some(scope) = self.global.efforts.get(raw_model) else {
+                continue;
+            };
+            for member in scope.members_of(absorbent) {
+                members
+                    .entry(member.key.clone())
+                    .or_insert_with(|| AbsorbedMember {
+                        name: effort_name(effort_of_key(&member.key).as_deref()),
+                        ..tallies.member(member)
+                    })
+                    .scopes
+                    .push(raw_model.to_string());
+            }
+        }
+        members.into_values().collect()
+    }
+
+    /// The members of couple `absorbent` of a Node row that counts the raw
+    /// `(Pipeline, Node)` scopes `scopes` (#906), each with the scopes that hold
+    /// it. `tallies` are keyed by globally resolved couple key.
+    pub(crate) fn absorbed_couples<'a>(
+        &self,
+        scopes: impl IntoIterator<Item = &'a String>,
+        absorbent: &str,
+        tallies: &PipelineTallies,
+    ) -> Vec<AbsorbedMember> {
+        let mut members: BTreeMap<String, AbsorbedMember> = BTreeMap::new();
+        for scope_key in scopes {
+            let Some(scope) = self.couples.get(scope_key) else {
+                continue;
+            };
+            for (member, resolved, resolved_absorbent) in &scope.members {
+                if resolved_absorbent != absorbent {
+                    continue;
+                }
+                members
+                    .entry(member.key.clone())
+                    .or_insert_with(|| AbsorbedMember {
+                        key: member.key.clone(),
+                        name: member.name.clone(),
+                        ..tallies.member(&Named {
+                            key: resolved.clone(),
+                            name: member.name.clone(),
+                        })
+                    })
+                    .scopes
+                    .push(scope_key.clone());
+            }
+        }
+        members.into_values().collect()
+    }
+}
+
+/// A model × effort couple of a Node as its row counts it (#906): the four
+/// resolution steps applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CoupleIdentity {
+    /// The couple the row is keyed by, after step 4.
+    pub model: String,
+    pub effort: Option<String>,
+    pub key: String,
+    /// The couple after the global steps (1–3) — the local members' tallies.
+    pub global_key: String,
+    /// The couple the event log wrote — the global members' tallies.
+    pub raw_key: String,
+    /// Whether a global absorption (models, efforts) moved it.
+    pub global: bool,
+    /// The raw `(Pipeline, Node)` scope its couple absorptions live in; empty
+    /// on a row that is no Node (Infrastructure, Unassigned).
+    pub scope: String,
 }
 
 // --- The Run identity read (prefactored out of Sessions, Cost, Performance) ----
@@ -750,8 +1120,10 @@ pub(crate) struct RunIdentity {
     pub node_defs: BTreeMap<String, NodeDef>,
     /// The Node absorptions of the Pipeline row this Run is counted under.
     nodes: Arc<ScopeAbsorptions>,
-    /// The Model absorptions (the « By model » axis only).
-    models: Arc<ScopeAbsorptions>,
+    /// The Model and effort absorptions (steps 1–2 of a couple).
+    global: GlobalAbsorptions,
+    /// The couple absorptions, by raw `(Pipeline, Node)` scope.
+    couples: Arc<HashMap<String, CoupleScope>>,
     /// The Run itself, for the tallies of a fold that only sees the identity
     /// (Performance's « By model » axis) — empty unless [`Self::for_run`] set it.
     pub run_id: String,
@@ -822,9 +1194,50 @@ impl RunIdentity {
         }
     }
 
-    /// The model id the « By model » axis counts model `raw` under.
+    /// The model id model `raw` is counted under (step 2).
     pub(crate) fn model(&self, raw: &str) -> String {
-        self.models.resolve(raw).to_string()
+        self.global.models.resolve(raw).to_string()
+    }
+
+    /// The effort the « By model » axis counts `raw_effort` of raw model
+    /// `raw_model` under (step 1, on the raw model — ADR-0078).
+    pub(crate) fn effort(&self, raw_model: &str, raw_effort: Option<&str>) -> Option<String> {
+        self.global.effort(raw_model, raw_effort)
+    }
+
+    /// The couple `raw_model` × `raw_effort` of Node `raw_node` of this Run is
+    /// counted as (steps 1–4). `raw_node` is `None` on a row that is no Node:
+    /// only the global steps apply there.
+    pub(crate) fn couple(
+        &self,
+        raw_node: Option<&str>,
+        raw_model: &str,
+        raw_effort: Option<&str>,
+    ) -> CoupleIdentity {
+        let raw_key = couple_key(raw_model, raw_effort);
+        let (model, effort) = self.global.couple(raw_model, raw_effort);
+        let global_key = couple_key(&model, effort.as_deref());
+        let scope = raw_node
+            .map(|node| couple_scope(&self.raw_pipeline_key, node))
+            .unwrap_or_default();
+        let local = self
+            .couples
+            .get(&scope)
+            .and_then(|couples| couples.to.get(&global_key))
+            .and_then(|key| split_couple_key(key).map(|split| (key.clone(), split)));
+        let (key, model, effort) = match local {
+            Some((key, (model, effort))) => (key, model, effort),
+            None => (global_key.clone(), model, effort),
+        };
+        CoupleIdentity {
+            model,
+            effort,
+            key,
+            global: global_key != raw_key,
+            global_key,
+            raw_key,
+            scope,
+        }
     }
 }
 
@@ -908,6 +1321,29 @@ impl PipelineTallies {
             .max()
     }
 
+    /// The raw keys seen (a model row's raw model ids…).
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &str> {
+        self.by_key.keys().map(String::as_str)
+    }
+
+    /// The raw couples a couple row counts through a global absorption (#906),
+    /// as its read-only « Global absorption » list shows them. `self` is keyed
+    /// by raw couple key, and only records the moved ones.
+    pub(crate) fn global_members(&self) -> Vec<AbsorbedMember> {
+        self.by_key
+            .keys()
+            .map(|key| {
+                let name = split_couple_key(key)
+                    .map(|(model, effort)| couple_name(&model, effort.as_deref()))
+                    .unwrap_or_else(|| key.clone());
+                self.member(&Named {
+                    key: key.clone(),
+                    name,
+                })
+            })
+            .collect()
+    }
+
     fn member(&self, member: &Named) -> AbsorbedMember {
         let tally = self.by_key.get(&member.key);
         AbsorbedMember {
@@ -921,6 +1357,7 @@ impl PipelineTallies {
             provenance: tally
                 .filter(|t| t.observed + t.requested > 0)
                 .map(|t| crate::stats::provenance(t.observed as i64, t.requested as i64)),
+            scopes: Vec::new(),
         }
     }
 }
@@ -939,6 +1376,10 @@ pub(crate) struct AbsorbedMember {
     pub last_run: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<crate::stats::StatsProvenance>,
+    /// The raw scopes whose absorption holds this member — on effort and
+    /// couple rows only (#906): their ✕ takes it out of every one of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<String>,
 }
 
 // --- HTTP ----------------------------------------------------------------------
@@ -1055,7 +1496,7 @@ pub(crate) struct CombineRequest {
 
 /// The refusal for a dimension Stats does not combine, if any.
 fn unsupported_dimension(dimension: &str) -> Option<Response> {
-    (![PIPELINE, NODE, MODEL].contains(&dimension)).then(|| {
+    (![PIPELINE, NODE, MODEL, EFFORT, COUPLE].contains(&dimension)).then(|| {
         error(
             StatusCode::BAD_REQUEST,
             format!("unsupported absorption dimension: {dimension}"),
@@ -1070,6 +1511,11 @@ async fn invalid_scope(
     db: &SqlitePool,
     body: &CombineRequest,
 ) -> Result<Option<Response>, sqlx::Error> {
+    match body.dimension.as_str() {
+        EFFORT => return invalid_effort_scope(db, body).await,
+        COUPLE => return invalid_couple_scope(db, body).await,
+        _ => {}
+    }
     if body.dimension != NODE {
         return Ok((!body.scope.is_empty()).then(|| {
             error(
@@ -1109,6 +1555,98 @@ async fn invalid_scope(
     }))
 }
 
+/// Whether every row of the request was selected under the request's scope.
+fn rows_share_the_scope(body: &CombineRequest) -> bool {
+    std::iter::once(&body.absorbent)
+        .chain(body.members.iter())
+        .filter_map(|row| row.scope.as_deref())
+        .all(|scope| scope == body.scope)
+}
+
+async fn absorbent_of(
+    db: &SqlitePool,
+    dimension: &str,
+    scope: &str,
+    member: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT absorbent FROM stats_absorptions WHERE dimension = ? AND scope = ? AND member = ?",
+    )
+    .bind(dimension)
+    .bind(scope)
+    .bind(member)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(key,)| key))
+}
+
+/// An effort absorption lives in ONE model row (grilling Q1): efforts of two
+/// models are refused, and so is a model row counted under another.
+async fn invalid_effort_scope(
+    db: &SqlitePool,
+    body: &CombineRequest,
+) -> Result<Option<Response>, sqlx::Error> {
+    if body.scope.trim().is_empty() {
+        return Ok(Some(error(
+            StatusCode::BAD_REQUEST,
+            "an effort absorption needs the model its efforts ran on",
+        )));
+    }
+    if !rows_share_the_scope(body) {
+        return Ok(Some(error(
+            StatusCode::BAD_REQUEST,
+            "efforts of different models cannot be combined",
+        )));
+    }
+    Ok(absorbent_of(db, MODEL, "", &body.scope).await?.map(|_| {
+        error(
+            StatusCode::BAD_REQUEST,
+            "this model is combined into another: combine its efforts there",
+        )
+    }))
+}
+
+/// A couple absorption lives in ONE Node row (grilling Q4): couples of two
+/// Nodes are refused, and so is a Node row counted under another.
+async fn invalid_couple_scope(
+    db: &SqlitePool,
+    body: &CombineRequest,
+) -> Result<Option<Response>, sqlx::Error> {
+    let Some((pipeline, node)) = parse_couple_scope(&body.scope) else {
+        return Ok(Some(error(
+            StatusCode::BAD_REQUEST,
+            "a couple absorption needs the pipeline and the node its couples ran under",
+        )));
+    };
+    if !rows_share_the_scope(body) {
+        return Ok(Some(error(
+            StatusCode::BAD_REQUEST,
+            "couples of different nodes cannot be combined",
+        )));
+    }
+    if let Some(row) = std::iter::once(&body.absorbent)
+        .chain(body.members.iter())
+        .find(|row| split_couple_key(&row.key).is_none())
+    {
+        return Ok(Some(error(
+            StatusCode::BAD_REQUEST,
+            format!("not a model × effort couple: {}", row.name),
+        )));
+    }
+    if absorbent_of(db, PIPELINE, "", &pipeline).await?.is_some() {
+        return Ok(Some(error(
+            StatusCode::BAD_REQUEST,
+            "this pipeline is combined into another: combine its couples there",
+        )));
+    }
+    Ok(absorbent_of(db, NODE, &pipeline, &node).await?.map(|_| {
+        error(
+            StatusCode::BAD_REQUEST,
+            "this node is combined into another: combine its couples there",
+        )
+    }))
+}
+
 /// `POST /stats/absorptions` — create or extend an absorption. Answers the
 /// whole list, as it stands after the write.
 pub(crate) async fn create_absorption(
@@ -1129,7 +1667,9 @@ pub(crate) async fn create_absorption(
             )
         }
     }
-    if body.absorbent.key.trim().is_empty() {
+    // « not set » is the effort key `""`: an effort row may be keyed by it.
+    let empty_allowed = body.dimension == EFFORT;
+    if !empty_allowed && body.absorbent.key.trim().is_empty() {
         return error(StatusCode::BAD_REQUEST, "absorbent key is empty");
     }
     let absorbent = body.absorbent.named();
@@ -1145,22 +1685,35 @@ pub(crate) async fn create_absorption(
             "an absorption needs at least one other member",
         );
     }
-    if members.iter().any(|m| m.key.trim().is_empty()) {
+    if !empty_allowed && members.iter().any(|m| m.key.trim().is_empty()) {
         return error(StatusCode::BAD_REQUEST, "member key is empty");
     }
-    if let Err(e) = combine_scoped(
-        &state.db,
-        Scope {
-            dimension: &body.dimension,
-            key: &body.scope,
-            name: &body.scope_name,
-        },
-        &absorbent,
-        &members,
-        ORIGIN_MANUAL,
-    )
-    .await
-    {
+    let written = if [EFFORT, COUPLE].contains(&body.dimension.as_str()) {
+        combine_frozen(
+            &state.db,
+            &body.dimension,
+            &body.scope,
+            &body.scope_name,
+            &absorbent,
+            &members,
+            ORIGIN_MANUAL,
+        )
+        .await
+    } else {
+        combine_scoped(
+            &state.db,
+            Scope {
+                dimension: &body.dimension,
+                key: &body.scope,
+                name: &body.scope_name,
+            },
+            &absorbent,
+            &members,
+            ORIGIN_MANUAL,
+        )
+        .await
+    };
+    if let Err(e) = written {
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("stats absorption failed: {e}"),
@@ -1665,6 +2218,223 @@ mod tests {
             members[0].provenance,
             Some(crate::stats::StatsProvenance::Requested),
             "the member says where its id was read from"
+        );
+    }
+
+    fn model(key: &str) -> Named {
+        Named {
+            key: key.to_string(),
+            name: key.to_string(),
+        }
+    }
+
+    /// (dimension, scope, member, absorbent) of the effort and couple rows.
+    async fn frozen_rows(db: &SqlitePool) -> Vec<(String, String, String, String)> {
+        let mut rows: Vec<_> = list(db)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| [EFFORT, COUPLE].contains(&row.dimension.as_str()))
+            .map(|row| (row.dimension, row.scope, row.member, row.absorbent))
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    #[tokio::test]
+    async fn an_effort_absorption_is_written_once_per_raw_model_it_covers() {
+        let db = mem_db().await;
+        combine(&db, MODEL, "", &model("m55"), &[model("m5")], ORIGIN_MANUAL)
+            .await
+            .unwrap();
+        combine_frozen(
+            &db,
+            EFFORT,
+            "m55",
+            "m55",
+            &model("high"),
+            &[model("")],
+            ORIGIN_MANUAL,
+        )
+        .await
+        .unwrap();
+        let row = |scope: &str| {
+            (
+                EFFORT.to_string(),
+                scope.to_string(),
+                String::new(),
+                "high".to_string(),
+            )
+        };
+        assert_eq!(frozen_rows(&db).await, vec![row("m5"), row("m55")]);
+
+        // A model absorbed later is not covered; one taken out keeps its rows.
+        combine(
+            &db,
+            MODEL,
+            "",
+            &model("m55"),
+            &[model("m48")],
+            ORIGIN_MANUAL,
+        )
+        .await
+        .unwrap();
+        remove_member(&db, MODEL, "", "m5").await.unwrap();
+        let resolver = AbsorptionResolver::from_rows(&list(&db).await.unwrap());
+        let identity = resolver.run_identity(&run_of("p"));
+        assert_eq!(identity.effort("m5", None).as_deref(), Some("high"));
+        assert_eq!(identity.effort("m55", None).as_deref(), Some("high"));
+        assert_eq!(identity.effort("m48", None), None, "not covered");
+        assert_eq!(identity.effort("m5", Some("low")).as_deref(), Some("low"));
+    }
+
+    #[tokio::test]
+    async fn a_couple_absorption_covers_the_raw_nodes_of_its_row_where_they_ran() {
+        let db = mem_db().await;
+        ran(&db, "r1", "p", &["coder", "implementer"]).await;
+        ran(&db, "r2", "q", &["coder"]).await;
+        combine_manual(&db, "p", &["q"]).await;
+        combine_nodes(&db, "p", "implementer", &["coder"]).await;
+        combine_frozen(
+            &db,
+            COUPLE,
+            &couple_scope("p", "implementer"),
+            "Implementer (P)",
+            &model("m|high"),
+            &[model("m|")],
+            ORIGIN_MANUAL,
+        )
+        .await
+        .unwrap();
+        let scopes: Vec<String> = frozen_rows(&db)
+            .await
+            .into_iter()
+            .map(|(_, scope, _, _)| scope)
+            .collect();
+        assert_eq!(
+            scopes,
+            vec![
+                couple_scope("p", "coder"),
+                couple_scope("p", "implementer"),
+                couple_scope("q", "coder"),
+            ],
+            "q never ran `implementer`: no row for it"
+        );
+        let names: Vec<String> = list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.dimension == COUPLE)
+            .map(|row| row.scope_name)
+            .collect();
+        assert!(names.contains(&"Implementer (P)".to_string()), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn a_couple_resolves_global_first_then_on_its_raw_node() {
+        let db = mem_db().await;
+        combine_frozen(
+            &db,
+            EFFORT,
+            "m5",
+            "m5",
+            &model("high"),
+            &[model("")],
+            ORIGIN_MANUAL,
+        )
+        .await
+        .unwrap();
+        combine_frozen(
+            &db,
+            COUPLE,
+            &couple_scope("p", "coder"),
+            "",
+            &model("m5|high"),
+            &[model("m48|")],
+            ORIGIN_MANUAL,
+        )
+        .await
+        .unwrap();
+        let resolver = AbsorptionResolver::from_rows(&list(&db).await.unwrap());
+        let identity = resolver.run_identity(&run_of("p"));
+        let couple = identity.couple(Some("coder"), "m5", None);
+        assert_eq!(couple.key, "m5|high");
+        assert!(couple.global, "the effort absorption moved it");
+        assert_eq!(couple.raw_key, "m5|");
+        let local = identity.couple(Some("coder"), "m48", None);
+        assert_eq!(local.key, "m5|high");
+        assert!(!local.global);
+        assert_eq!(local.global_key, "m48|");
+        let elsewhere = identity.couple(Some("reviewer"), "m48", None);
+        assert_eq!(elsewhere.key, "m48|", "local to its Node");
+        assert_eq!(
+            identity.couple(None, "m48", None).key,
+            "m48|",
+            "a row that is no Node only takes the global steps"
+        );
+
+        // A model absorption posed later carries the local absorbent along.
+        combine(&db, MODEL, "", &model("m55"), &[model("m5")], ORIGIN_MANUAL)
+            .await
+            .unwrap();
+        let resolver = AbsorptionResolver::from_rows(&list(&db).await.unwrap());
+        let identity = resolver.run_identity(&run_of("p"));
+        assert_eq!(identity.couple(Some("coder"), "m48", None).key, "m55|high");
+        assert_eq!(identity.couple(Some("coder"), "m5", None).key, "m55|high");
+        assert_eq!(identity.model("m5"), "m55");
+    }
+
+    #[tokio::test]
+    async fn the_fingerprint_covers_efforts_and_couples() {
+        let db = mem_db().await;
+        let empty = AbsorptionResolver::from_rows(&list(&db).await.unwrap()).fingerprint();
+        combine_frozen(
+            &db,
+            EFFORT,
+            "m",
+            "m",
+            &model("high"),
+            &[model("")],
+            ORIGIN_MANUAL,
+        )
+        .await
+        .unwrap();
+        let effort = AbsorptionResolver::from_rows(&list(&db).await.unwrap()).fingerprint();
+        combine_frozen(
+            &db,
+            COUPLE,
+            &couple_scope("p", "n"),
+            "",
+            &model("m|high"),
+            &[model("x|")],
+            ORIGIN_MANUAL,
+        )
+        .await
+        .unwrap();
+        let couple = AbsorptionResolver::from_rows(&list(&db).await.unwrap()).fingerprint();
+        assert_ne!(empty, effort);
+        assert_ne!(effort, couple);
+        remove_member(&db, COUPLE, &couple_scope("p", "n"), "x|")
+            .await
+            .unwrap();
+        let back = AbsorptionResolver::from_rows(&list(&db).await.unwrap()).fingerprint();
+        assert_eq!(effort, back);
+    }
+
+    #[test]
+    fn couple_keys_and_scopes_round_trip() {
+        assert_eq!(couple_key("m", None), "m|");
+        assert_eq!(
+            split_couple_key("m|high"),
+            Some(("m".to_string(), Some("high".to_string())))
+        );
+        assert_eq!(split_couple_key("m|"), Some(("m".to_string(), None)));
+        assert_eq!(split_couple_key("nope"), None);
+        assert_eq!(couple_name("m", None), "m · not set");
+        let scope = couple_scope("a \"b\"", "n");
+        assert_eq!(
+            parse_couple_scope(&scope),
+            Some(("a \"b\"".to_string(), "n".to_string()))
         );
     }
 

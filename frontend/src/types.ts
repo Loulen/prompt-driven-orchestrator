@@ -1795,13 +1795,46 @@ export interface StatsSessionPeriod {
   harnesses: StatsSessionHarness[];
 }
 
-export interface StatsSessionEntity {
+export interface StatsSessionEntity extends StatsPipelineRowMeta {
   id: string;
   name: string;
   executions: number;
   harnesses: StatsSessionHarness[];
   by_period: StatsSessionPeriod[];
   nodes: StatsSessionEntity[];
+}
+
+/**
+ * What a Pipeline row carries beside its numbers (#890): the Runs it counts,
+ * the most recent one's start (ISO), and — on an **absorbent** — its absorbed
+ * members (ADR-0077). Omitted by the daemon on every other level.
+ */
+export interface StatsPipelineRowMeta {
+  runs?: number;
+  last_run?: string | null;
+  absorbed?: StatsAbsorbedMember[];
+}
+
+/** One absorbed member as its absorbent's row lists it. `executions` rides on
+ *  Sessions rows only; `last_run` is absent when it did not run in the period. */
+export interface StatsAbsorbedMember {
+  key: string;
+  name: string;
+  runs: number;
+  executions?: number;
+  last_run?: string | null;
+}
+
+/** `GET /stats/absorptions` — every absorption of the instance. */
+export interface StatsAbsorptionList {
+  absorptions: StatsAbsorption[];
+}
+
+export interface StatsAbsorption {
+  dimension: "pipeline" | "node" | "model";
+  scope: string;
+  absorbent: { key: string; name: string };
+  members: { key: string; name: string; origin: "manual" | "rename"; created_at: string }[];
 }
 
 /** One harness's cost and denominator coverage within an aggregate. */
@@ -1851,7 +1884,7 @@ export interface StatsCostPeriod extends StatsCostAggregate {
   bucket: string;
 }
 
-export interface StatsCostEntity extends StatsCostAggregate {
+export interface StatsCostEntity extends StatsCostAggregate, StatsPipelineRowMeta {
   id: string;
   name: string;
   by_period: StatsCostPeriod[];
@@ -1979,7 +2012,9 @@ export interface StatsPerformanceAggregate {
   harnesses: StatsHarnessPerformance[];
 }
 
-export interface StatsPerformanceEntity extends StatsPerformanceAggregate {
+export interface StatsPerformanceEntity
+  extends StatsPerformanceAggregate,
+    StatsPipelineRowMeta {
   id: string;
   name: string;
   nodes: StatsPerformanceEntity[];

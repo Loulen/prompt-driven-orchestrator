@@ -32,12 +32,14 @@ vi.mock("./StatsCharts", () => ({
     band,
     onBandChange,
     onResetFilters,
+    onAbsorptionsChanged,
   }: {
     completedOnly: boolean;
     onCompletedOnlyChange: (value: boolean) => void;
     band: PerformanceBand;
     onBandChange: (band: PerformanceBand) => void;
     onResetFilters: () => void;
+    onAbsorptionsChanged: () => void;
   }) => (
     <div
       data-testid="stats-charts-stub"
@@ -58,6 +60,7 @@ vi.mock("./StatsCharts", () => ({
         onClick={() => onBandChange({ ...band, durationMode: "waiting" })}
       />
       <button type="button" data-testid="stub-reset" onClick={onResetFilters} />
+      <button type="button" data-testid="stub-combined" onClick={onAbsorptionsChanged} />
     </div>
   ),
 }));
@@ -530,5 +533,31 @@ describe("StatsModal — per-tab filters, ephemeral (#819)", () => {
     expect(
       screen.queryByTestId("stats-tab-performance-dirty"),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("StatsModal — absorptions (#890)", () => {
+  it("refetches the tab on screen after a Combine, without forcing Performance past its memo", async () => {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} initialTab="performance" />);
+    await screen.findByTestId("stats-charts-stub");
+    await waitFor(() => expect(fetchStatsPerformanceMock).toHaveBeenCalledTimes(1));
+    const overviewCalls = fetchStatsOverviewMock.mock.calls.length;
+
+    await user.click(screen.getByTestId("stub-combined"));
+
+    await waitFor(() => expect(fetchStatsPerformanceMock).toHaveBeenCalledTimes(2));
+    // `refresh` stays false: the daemon keys its memo on the absorptions.
+    expect(fetchStatsPerformanceMock.mock.calls[1][2]).toBe(false);
+    expect(fetchStatsOverviewMock.mock.calls.length).toBe(overviewCalls + 1);
+  });
+
+  it("keeps the scrollbar gutter and paints no caret on the Stats pane", async () => {
+    render(<StatsModal open onClose={() => {}} />);
+    await screen.findByTestId("stats-charts-stub");
+    const main = screen.getByRole("main");
+    expect(main.className).toContain("[scrollbar-gutter:stable]");
+    expect(main.className).toContain("[caret-color:transparent]");
+    expect(main.className).toContain("[&_input]:[caret-color:auto]");
   });
 });

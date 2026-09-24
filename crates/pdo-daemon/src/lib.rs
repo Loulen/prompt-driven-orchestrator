@@ -7392,9 +7392,15 @@ async fn save_pipeline(
     // sidecar → the slug of the new name) instead of leaving a stale id
     // behind. Collisions are refused, so two distinct pipelines can never end
     // up listed under the same name.
+    //
+    // #886 — only a save that actually CHANGES `name:` is a rename, the same
+    // rule as `rename_pipeline`. Comparing the slug to the raw stem alone turned
+    // every save of a stem with an uppercase letter (`Mixed-Case.yaml`, whose
+    // slug is `mixed-case`) into a silent move — or a 409 while a run used it.
     let new_name = saved.name.trim().to_string();
     let desired_id = pipeline_slug(&new_name);
-    if desired_id != pipeline_id {
+    let name_changed = current_pipeline_name(&path).as_deref() != Some(new_name.as_str());
+    if name_changed && desired_id != pipeline_id {
         let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -7699,17 +7705,19 @@ async fn create_pipeline(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreatePipelineRequest>,
 ) -> Response {
-    let safe_name = req
-        .name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
+    // #886 — the file stem is `pipeline_slug(name)`, like duplicate/import and
+    // the rename paths. A stem built with its own case-keeping sanitiser
+    // (`Bugfix-auto-clean.yaml`) never equals the slug of its name, so the very
+    // first save took it for a rename.
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "name is required" })),
+        )
+            .into_response();
+    }
+    let id = pipeline_slug(&name);
 
     let response_scope = "instance";
     let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
@@ -7722,10 +7730,26 @@ async fn create_pipeline(
     let _ = req.scope;
 
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!("{safe_name}.yaml"));
+    let path = dir.join(format!("{id}.yaml"));
+    // Two stems can carry the same visible name ("Foo Bar" in `x.yaml`): the
+    // name ⇄ stem 1:1 rule refuses that as a collision too.
+    if scan_pipeline_dir(&dir, "instance")
+        .iter()
+        .any(|entry| entry.name.trim() == name)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "pipeline already exists" })),
+        )
+            .into_response();
+    }
 
+    // Quoted exactly when the name needs it (`my: name`), so the scaffold parses.
+    let name_scalar = serde_yaml::to_string(&name)
+        .map(|scalar| scalar.trim_end().to_string())
+        .unwrap_or_else(|_| id.clone());
     let scaffold = format!(
-        "name: {safe_name}\nversion: \"1.0\"\n\nvariables: {{}}\n\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n\nedges: []\n"
+        "name: {name_scalar}\nversion: \"1.0\"\n\nvariables: {{}}\n\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n\nedges: []\n"
     );
     // #823: every other handler that writes a pipeline file marks the write as its
     // own; this one never did, so the watcher's debounce (1 s) re-announced the
@@ -7755,16 +7779,30 @@ async fn create_pipeline(
             .into_response();
     }
 
-    info!("Created pipeline {safe_name} at {}", path.display());
+    info!("Created pipeline {id} at {}", path.display());
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "id": safe_name,
+            "id": id,
             "scope": response_scope,
             "path": path.to_string_lossy(),
         })),
     )
         .into_response()
+}
+
+/// #886 — the trimmed top-level `name:` of the pipeline file currently on disk.
+/// Read leniently (plain YAML, not the pipeline schema) so a save can tell
+/// whether it changes the name even when the stored document is out of date;
+/// `None` when the file is unreadable or has no string `name:`.
+fn current_pipeline_name(path: &Path) -> Option<String> {
+    let yaml = std::fs::read_to_string(path).ok()?;
+    let value = serde_yaml::from_str::<serde_yaml::Value>(&yaml).ok()?;
+    value
+        .as_mapping()?
+        .get(serde_yaml::Value::String("name".into()))?
+        .as_str()
+        .map(|name| name.trim().to_string())
 }
 
 fn read_pipeline_prompts(path: &Path) -> HashMap<String, String> {
@@ -37013,6 +37051,174 @@ edges:
             "old file must be untouched"
         );
         assert!(dir.join("occupied.yaml").exists());
+    }
+
+    /// #886 — PUT one pipeline YAML and return (status, JSON body).
+    async fn put_pipeline_yaml(
+        state: Arc<AppState>,
+        id: &str,
+        yaml: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let body = serde_json::json!({ "yaml": yaml, "prompts": {} });
+        let resp = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/pipelines/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    /// #886 — a save that keeps `name:` is not a rename, whatever the case of the
+    /// stem: `pipeline_slug("Mixed-Case")` is `mixed-case`, and comparing that to
+    /// the raw stem sent every save of `Mixed-Case.yaml` into the rename branch,
+    /// refused with a 409 while a run used the pipeline.
+    #[tokio::test]
+    async fn save_pipeline_same_name_on_mixed_case_stem_with_active_run_is_not_a_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "Mixed-Case");
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_started = event_log::Event {
+            id: None,
+            run_id: "run-886".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "Mixed-Case" })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+
+        let yaml =
+            format!("name: Mixed-Case\nversion: \"1.1\"\nnodes:\n{START_END_YAML}edges: []\n");
+        let (status, val) = put_pipeline_yaml(state, "Mixed-Case", &yaml).await;
+
+        assert_eq!(status, StatusCode::OK, "{val}");
+        assert_eq!(val["renamed"], false);
+        assert_eq!(val["id"], "Mixed-Case");
+        let dir = tmp.path().join(".pdo/pipelines");
+        let content = std::fs::read_to_string(dir.join("Mixed-Case.yaml")).unwrap();
+        assert!(
+            content.contains("version: \"1.1\""),
+            "the edit must be saved"
+        );
+        assert!(!dir.join("mixed-case.yaml").exists(), "nothing may move");
+    }
+
+    /// #886 — without a run to refuse it, the same save used to move the file to
+    /// the lowercase slug silently.
+    #[tokio::test]
+    async fn save_pipeline_same_name_on_mixed_case_stem_never_moves_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "Mixed-Case");
+        let dir = tmp.path().join(".pdo/pipelines");
+        std::fs::create_dir_all(dir.join("Mixed-Case.prompts")).unwrap();
+        std::fs::write(dir.join("Mixed-Case.prompts/start.md"), "Kept.").unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let yaml =
+            format!("name: Mixed-Case\nversion: \"1.1\"\nnodes:\n{START_END_YAML}edges: []\n");
+        let (status, val) = put_pipeline_yaml(state, "Mixed-Case", &yaml).await;
+
+        assert_eq!(status, StatusCode::OK, "{val}");
+        assert_eq!(val["renamed"], false);
+        assert!(dir.join("Mixed-Case.yaml").exists());
+        assert!(dir.join("Mixed-Case.prompts/start.md").exists());
+        assert!(!dir.join("mixed-case.yaml").exists());
+        assert!(!dir.join("mixed-case.prompts").exists());
+    }
+
+    /// #886 / #774 — a save that really changes `name:` on a mixed-case stem
+    /// still moves the entry to the slug of the new name.
+    #[tokio::test]
+    async fn save_pipeline_changed_name_on_mixed_case_stem_still_moves_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "Mixed-Case");
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let yaml =
+            format!("name: Other Name\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n");
+        let (status, val) = put_pipeline_yaml(state, "Mixed-Case", &yaml).await;
+
+        assert_eq!(status, StatusCode::OK, "{val}");
+        assert_eq!(val["renamed"], true);
+        assert_eq!(val["id"], "other-name");
+        let dir = tmp.path().join(".pdo/pipelines");
+        assert!(!dir.join("Mixed-Case.yaml").exists());
+        assert!(dir.join("other-name.yaml").exists());
+    }
+
+    /// #886 — `create_pipeline` names the file with `pipeline_slug`, like
+    /// duplicate and import, and keeps the requested name as the visible one.
+    /// Its first save is then an ordinary save, not a rename.
+    #[tokio::test]
+    async fn create_pipeline_names_the_file_with_the_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/pipelines")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Foo Bar"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(created["id"], "foo-bar");
+
+        let dir = tmp.path().join(".pdo/pipelines");
+        assert!(dir.join("foo-bar.yaml").exists());
+        assert!(!dir.join("Foo-Bar.yaml").exists());
+        let content = std::fs::read_to_string(dir.join("foo-bar.yaml")).unwrap();
+        let parsed = pipeline::parse_pipeline(&content).unwrap();
+        assert_eq!(parsed.pipeline.name, "Foo Bar");
+
+        let yaml = content.replace("version: \"1.0\"", "version: \"1.1\"");
+        let (status, val) = put_pipeline_yaml(state, "foo-bar", &yaml).await;
+        assert_eq!(status, StatusCode::OK, "{val}");
+        assert_eq!(val["renamed"], false);
+        assert!(dir.join("foo-bar.yaml").exists());
+    }
+
+    /// #886 — a create whose visible name another stem already carries is the
+    /// same collision the rename paths refuse.
+    #[tokio::test]
+    async fn create_pipeline_conflict_on_an_existing_visible_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "Foo_Bar");
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let resp = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/pipelines")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Foo_Bar"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        assert!(!tmp.path().join(".pdo/pipelines/foo_bar.yaml").exists());
     }
 
     #[tokio::test]

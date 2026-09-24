@@ -54,6 +54,26 @@ story #888, ADR-0077).
 - L'absorption est stockée dans `pdo.db` et appliquée à la lecture : le log d'événements
   n'est jamais réécrit, et `uncombined=true` sur les routes Stats rend les chiffres bruts.
 
+## 1.103.2
+**Profils agents : seul le bouton Edit ouvre l'éditeur, dans une modale partagée avec New
+profile** (#899).
+
+- Le crayon de chaque ligne de Settings › Agents › Agent profiles est un vrai bouton
+  `Edit <nom>`. Cliquer sur le reste de la ligne n'ouvre plus rien.
+- L'éditeur (Name, Harness, Model, Effort) quitte le formulaire sous la liste pour une modale.
+  **New profile** ouvre la même modale, vide, avec `Create`. Les règles et appels REST ne
+  changent pas ; Cancel, Échap ou un clic sur le fond ferment sans rien enregistrer.
+
+## 1.103.1
+**Enregistrer un pipeline sans changer son nom ne le renomme plus** (#886).
+
+- Un save ne compte comme renommage que si `name:` change vraiment. Avant, un fichier dont le
+  nom contient une majuscule (`Mixed-Case.yaml`) était déplacé à chaque save, ou refusé en 409
+  pendant qu'un run l'utilisait.
+- Un nouveau pipeline prend pour nom de fichier le slug de son nom (`Bugfix-auto-clean` →
+  `bugfix-auto-clean.yaml`), comme duplicate, import et rename. Son nom visible ne change pas.
+  Un nom vide est refusé (400), un nom déjà pris aussi (409).
+
 ## 1.103.0
 **Grille de câblage : 30px par défaut, taille S/M/L réglable** (#877).
 

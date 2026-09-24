@@ -67,6 +67,9 @@ cd "$(git rev-parse --show-toplevel)"
 #   terminal presence registry (one pilot per tmux session, read-only spectators, role
 #   messages, `ignore-size` switching; ADR-0075). It is ONE new concern that #870 (take
 #   control) extends; pty_bridge.rs only moves bytes and keeps its size, lib.rs only wires it.
+# frontend/src/components: 202 (#899, release 1.103.2) admits AgentProfileModal.tsx — the
+#   agent profile editor moved out of AgentProfilesPanel's inline form into ONE modal shared
+#   by the row's Edit button and New profile (like ProjectEditModal). The panel keeps the list.
 # frontend/src/components: 203 (#890, story #888) admits StatsAbsorption.tsx and its test —
 #   the multi-select bar, the Combine modal, the `[⧉ N]` pill and the members modal of a
 #   Stats Absorption (ADR-0077). StatsModal/StatsCharts render it; the grouping rule lives in
@@ -75,12 +78,13 @@ cd "$(git rev-parse --show-toplevel)"
 #   absorptions and folding absorbed Pipelines into their absorber across every Stats tab. It
 #   is ONE concern that stats.rs and stats_performance.rs consume, as stats_performance.rs
 #   already sits beside stats.rs; lib.rs only wires the routes.
-# frontend/src/components: 204 (#891, story #888) admits StatsAbsorptionsPanel.tsx — the
+# frontend/src/components: 205 (#891, story #888; 204 + #899's AgentProfileModal.tsx once
+#   main merged in) admits StatsAbsorptionsPanel.tsx — the
 #   Settings › General › Stats absorptions list (every absorption, its origin, uncombine as
 #   you go). SettingsSurface renders it; it reuses StatsAbsorption's UncombineButton and
 #   lib/statsAbsorption, so only the Settings layout is new.
 BASELINES='
-frontend/src/components 204
+frontend/src/components 205
 crates/pdo-daemon/src 93
 '
 

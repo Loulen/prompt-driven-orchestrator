@@ -1,26 +1,18 @@
 import { useState } from "react";
 import { Lock, Pencil, Plus, Trash2 } from "lucide-react";
-import {
-  createAgentProfile,
-  deleteAgentProfile,
-  fetchAgentProfileReferents,
-  updateAgentProfile,
-} from "../api";
+import { deleteAgentProfile, fetchAgentProfileReferents } from "../api";
 import type { AgentProfile, AgentProfileReferents } from "../types";
-import ModelPicker from "./ModelPicker";
-import EffortPicker from "./EffortPicker";
-import HarnessSelect from "./HarnessSelect";
-import { findHarnessOption, effortOffer } from "../lib/harness";
-import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
+import AgentProfileModal from "./AgentProfileModal";
 
 /**
- * Agent profiles editor, mounted inline in Settings › Agents › Agent profiles (#691). Each
+ * Agent profiles list, mounted inline in Settings › Agents › Agent profiles (#691). Each
  * create / update / delete is its own request — profiles are their own REST resource, not
  * part of the grouped `PUT /settings`, which is why the section says `saves as you go` and
  * the form's Save never sends anything from here.
  *
- * List-first: the editor stays folded until a row or **New profile** opens it, so a visit
- * to the Agents page reads as a list and never shows a second primary button next to the
+ * List-first: the list stays inline, the editor opens in a modal (#899) — only from a row's
+ * **Edit** pencil or from **New profile**, the same modal for both. A row itself is plain
+ * content, so a visit to the Agents page never shows a second primary button next to the
  * footer's Save.
  */
 export default function AgentProfilesPanel({
@@ -30,54 +22,11 @@ export default function AgentProfilesPanel({
   profiles: AgentProfile[];
   onChanged: () => Promise<void>;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState(() => ({
-    name: "",
-    harness: "",
-    model: null as string | null,
-    effort: null as string | null,
-  }));
+  // The profile open in the modal, `"new"` for New profile, `null` when closed.
+  const [editing, setEditing] = useState<AgentProfile | "new" | null>(null);
   const [referents, setReferents] = useState<AgentProfileReferents | null>(null);
   const [deleting, setDeleting] = useState<AgentProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const catalog = useHarnessCatalog();
-  const selected = profiles.find((profile) => profile.id === selectedId) ?? null;
-  const harnessOption = findHarnessOption(catalog, draft.harness);
-  // #798: the effort offer is read against the model the form has selected — a
-  // per-model key in the served `model_efforts` is authoritative for it
-  // (`[]` included), a missing key retains the harness's global efforts. When
-  // authoritative, a stored effort outside the offer renders as an unsupported
-  // passthrough — warned, kept, never silently deleted (ADR-0001).
-  const effort = effortOffer(harnessOption, draft.model);
-
-  const edit = (profile: AgentProfile) => {
-    setSelectedId(profile.id);
-    setCreating(false);
-    setError(null);
-    setDraft({
-      name: profile.name,
-      harness: profile.harness,
-      model: profile.model ?? null,
-      effort: profile.effort ?? null,
-    });
-  };
-
-  const save = async () => {
-    setError(null);
-    try {
-      if (creating) {
-        await createAgentProfile(draft);
-      } else if (selected) {
-        await updateAgentProfile(selected.id, draft);
-      }
-      setCreating(false);
-      setDraft({ name: "", harness: "", model: null, effort: null });
-      await onChanged();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to save agent profile");
-    }
-  };
 
   const inspectDelete = async (profile: AgentProfile) => {
     setError(null);
@@ -95,8 +44,6 @@ export default function AgentProfilesPanel({
       await deleteAgentProfile(deleting.id);
       setDeleting(null);
       setReferents(null);
-      setSelectedId(null);
-      setDraft({ name: "", harness: "", model: null, effort: null });
       await onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to delete agent profile");
@@ -136,19 +83,26 @@ export default function AgentProfilesPanel({
     <div className="flex flex-col p-4" data-testid="agent-profiles-panel">
       <div className="space-y-1">
         {profiles.map((profile) => (
-          <div
-            key={profile.id}
-            className={`flex items-center rounded px-2 py-2 ${selectedId === profile.id ? "bg-bg-3" : ""}`}
-          >
-            <button type="button" onClick={() => edit(profile)} className="min-w-0 flex-1 text-left">
+          <div key={profile.id} className="flex items-center rounded px-2 py-2">
+            <div className="min-w-0 flex-1">
               <span className="flex items-center gap-1 font-medium text-fg" style={{ fontSize: 11 }}>
                 {profile.name} {profile.id === "default" && <Lock size={10} className="text-fg-4" />}
               </span>
               <span className="block font-mono text-fg-4" style={{ fontSize: 9.5 }}>
                 {[profile.harness, profile.model || "—", profile.effort || "—"].join(" · ")}
               </span>
+            </div>
+            <button
+              type="button"
+              aria-label={`Edit ${profile.name}`}
+              onClick={() => {
+                setError(null);
+                setEditing(profile);
+              }}
+              className="mr-3 text-fg-4 hover:text-fg"
+            >
+              <Pencil size={11} />
             </button>
-            <Pencil size={11} className="mr-3 text-fg-4" />
             <button
               type="button"
               aria-label={`Delete ${profile.name}`}
@@ -164,73 +118,24 @@ export default function AgentProfilesPanel({
       <button
         type="button"
         onClick={() => {
-          setCreating(true);
-          setSelectedId(null);
-          setDraft({ name: "", harness: "", model: null, effort: null });
+          setError(null);
+          setEditing("new");
         }}
         className="mt-2 self-start rounded border border-line px-2 py-1 text-fg-2"
         data-testid="agent-profile-new"
       >
         <Plus size={11} className="mr-1 inline" /> New profile
       </button>
+      {error && <p className="mt-2 text-st-failed" style={{ fontSize: 10 }}>{error}</p>}
 
-      {(creating || selected) && (
-        <div className="mt-3 space-y-2 border-t border-line pt-3">
-          <label className="block text-fg-3" style={{ fontSize: 10 }}>
-            Name
-            <input
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-              className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg"
-            />
-          </label>
-          <label className="block text-fg-3" style={{ fontSize: 10 }}>
-            Harness <span className="text-acc">required</span>
-            <HarnessSelect
-              value={draft.harness}
-              onChange={(harness) => setDraft({ ...draft, harness, model: null, effort: null })}
-              catalog={catalog}
-              inheritLabel="Choose a harness…"
-              data-testid="agent-profile-harness"
-              className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5"
-            />
-          </label>
-          {draft.harness && (
-            <>
-              <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                Model <span className="text-fg-4">optional</span>
-                <ModelPicker
-                  value={draft.model}
-                  onChange={(model) => setDraft({ ...draft, model })}
-                  models={harnessOption?.models ?? []}
-                  contexts={harnessOption?.modelContexts}
-                  testid="agent-profile-model"
-                  subject={selectedId ?? "new"}
-                />
-              </label>
-              <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                Effort <span className="text-fg-4">optional</span>
-                <EffortPicker
-                  value={draft.effort}
-                  onChange={(next) => setDraft({ ...draft, effort: next })}
-                  efforts={effort.levels}
-                  strict={effort.authoritative}
-                  testid="agent-profile-effort"
-                  disabled={!(harnessOption?.hasEffort ?? true)}
-                />
-              </label>
-            </>
-          )}
-          {error && <p className="text-st-failed" style={{ fontSize: 10 }}>{error}</p>}
-          <div className="flex justify-end gap-2">
-            <button onClick={() => { setSelectedId(null); setCreating(false); setDraft({ name: "", harness: "", model: null, effort: null }); }} className="rounded border border-line px-2 py-1 text-fg-3">Cancel</button>
-            <button disabled={!draft.name.trim() || !draft.harness || profiles.some((p) => p.id !== selectedId && p.name.toLowerCase() === draft.name.trim().toLowerCase())} onClick={() => void save()} className="rounded bg-acc px-2 py-1 text-bg-1 disabled:opacity-40">
-              {creating ? "Create" : "Save profile"}
-            </button>
-          </div>
-        </div>
+      {editing && (
+        <AgentProfileModal
+          profile={editing === "new" ? null : editing}
+          profiles={profiles}
+          onClose={() => setEditing(null)}
+          onSaved={onChanged}
+        />
       )}
     </div>
   );
 }
-

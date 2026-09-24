@@ -2130,7 +2130,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     expect(within(harness).getByTestId("setting-default-harness")).toBeInTheDocument();
     expect(within(harness).queryByTestId("instance-skill-selector")).not.toBeInTheDocument();
 
-    // Agent profiles: inline, `saves as you go`, list-first (editor folded).
+    // Agent profiles: inline, `saves as you go`, list-first (no editor until Edit / New profile).
     const profiles = screen.getByTestId("settings-section-body-agent-profiles");
     expect(within(profiles).getByText("saves as you go")).toHaveAttribute(
       "title",
@@ -2142,7 +2142,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
   });
 
-  it("creates an agent profile from the inline section through the same endpoint, and folds back", async () => {
+  it("creates an agent profile from the section's modal through the same endpoint, and closes it", async () => {
     const user = userEvent.setup();
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
@@ -2151,11 +2151,12 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     await within(panel).findByText("claude very easy");
 
     fireEvent.click(within(panel).getByTestId("agent-profile-new"));
-    const create = within(panel).getByRole("button", { name: "Create" });
+    const modal = screen.getByRole("dialog", { name: "New agent profile" });
+    const create = within(modal).getByRole("button", { name: "Create" });
     expect(create).toBeDisabled();
-    const inputs = within(panel).getAllByRole("textbox");
+    const inputs = within(modal).getAllByRole("textbox");
     fireEvent.change(inputs[0], { target: { value: "fast" } });
-    await user.click(within(panel).getByTestId("agent-profile-harness"));
+    await user.click(within(modal).getByTestId("agent-profile-harness"));
     await user.click(await screen.findByTestId("agent-profile-harness-option-claude"));
     expect(create).toBeEnabled();
 
@@ -2169,11 +2170,30 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     await waitFor(() => expect(createAgentProfileMock).toHaveBeenCalledTimes(1));
     expect(createAgentProfileMock.mock.calls[0][0]).toMatchObject({ name: "fast", harness: "claude" });
     expect(await within(screen.getByTestId("agent-profiles-panel")).findByText("fast")).toBeInTheDocument();
-    // Folded again; the form stayed clean, so Save stayed disabled — panel writes are not form writes.
-    expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
+    // Modal closed; the form stayed clean, so Save stayed disabled — panel writes are not form writes.
+    expect(screen.queryByTestId("agent-profile-modal")).not.toBeInTheDocument();
     expect(screen.getByTestId("settings-save")).toBeDisabled();
     expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
     expect(updateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("Escape closes the agent profile modal before closing Settings (#899)", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={onClose} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    const panel = screen.getByTestId("agent-profiles-panel");
+    await within(panel).findByText("claude very easy");
+
+    await user.click(within(panel).getByRole("button", { name: "Edit claude very easy" }));
+    expect(screen.getByRole("dialog", { name: "Edit claude very easy" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("agent-profile-modal")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("Skills: the instance selector saves with the form; the bank is a summary card that opens its own surface", async () => {

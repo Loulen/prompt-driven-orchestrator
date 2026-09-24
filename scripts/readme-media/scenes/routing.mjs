@@ -19,6 +19,7 @@ import { sleep } from "../lib/demo-instance.mjs";
 import { targetPipeline } from "../lib/targets.mjs";
 import {
   choose,
+  clearSides,
   clearToolbar,
   dragLabelTo,
   drawEdge,
@@ -36,6 +37,21 @@ const TARGET = "implement-review";
 const DRAWN = { edges: ["reviewer→implementer"], conditions: ["reviewer→end"] };
 
 const quick = { duration: 150, pause: 40 };
+
+/** Flow px the loop region reaches left of its members' cards, and half the
+ *  widest condition pill (`review.verdict = fail`), measured on the canvas. */
+const REGION_PAD = 28;
+const PILL_HALF = 66;
+
+/** What the take draws, left to right (flow px): the loop region around the
+ *  cards, out to the pills and the loop's own bend on the right. */
+function drawnSpan(target) {
+  const xs = target.edges.flatMap((e) => [
+    ...(e.waypoints ?? []).map((p) => p.x),
+    ...(e.condition_label_pos ? [e.condition_label_pos.x + PILL_HALF] : []),
+  ]);
+  return { left: Math.min(...target.nodes.map((n) => n.view.x)) - REGION_PAD, right: Math.max(...xs) };
+}
 
 /** The target edge `from → to`. */
 function edgeOf(target, from, to) {
@@ -58,10 +74,10 @@ async function setCondition(ctx, { port, op, value, film }) {
   const panel = page.getByTestId("edge-detail-panel");
   const add = panel.getByTestId("add-condition");
   await add.waitFor();
-  await ctx.click(add, film ? { duration: 550 } : quick);
+  await ctx.click(add, film ? { duration: 450 } : quick);
   const row = panel.getByTestId("condition-row").first();
   await row.waitFor();
-  await sleep(250);
+  await sleep(150);
   // A control already on its value (the row defaults to the first port, its
   // only field, `=`) is left alone: the camera only sees the picks that matter.
   const pick = async (select, v) => {
@@ -72,7 +88,7 @@ async function setCondition(ctx, { port, op, value, film }) {
   await pick(row.getByTestId("field-dropdown"), "verdict");
   await pick(row.getByTestId("op-dropdown"), op);
   await pick(row.getByTestId("value-dropdown"), value);
-  await sleep(400);
+  await sleep(300);
 }
 
 /** The loop edge carries both of reviewer's outputs, as drawn: a drawn edge
@@ -89,7 +105,14 @@ async function carryBothOutputs(ctx, id, loop) {
   }
 }
 
-async function play(ctx, { film, zoom }) {
+/** The pace of the filmed gestures (ms). a films three canvas gestures; b adds
+ *  the panel pick, so it moves quicker to stay under the loop's 15 s. */
+const PACE = {
+  a: { edge: 1200, afterEdge: 400, pill: 700, end: 1800 },
+  b: { edge: 1000, afterEdge: 300, pill: 550, end: 1500 },
+};
+
+async function play(ctx, { film, zoom, pace }) {
   const { page } = ctx;
   const target = targetPipeline(TARGET);
   const loop = edgeOf(target, "reviewer", "implementer");
@@ -105,14 +128,15 @@ async function play(ctx, { film, zoom }) {
     const b = await page.getByTestId("rf__node-reviewer").boundingBox();
     await zoomCanvas(ctx, { x: a.x + a.width / 2 + 30, y: (a.y + b.y + b.height) / 2 + 25 });
   }
+  await clearSides(ctx, drawnSpan(target));
   await clearToolbar(ctx);
   await ctx.moveTo(await emptyCanvasSpot(page), { duration: 300 });
 
   // 1. The loop edge, from reviewer's rim back to implementer: the region ↻ 5 appears.
   await ctx.hold(300);
-  await drawEdge(ctx, loop, { duration: 1200 });
+  await drawEdge(ctx, loop, { duration: pace.edge });
   await page.getByTestId("loop-region").waitFor();
-  await ctx.hold(400);
+  await ctx.hold(pace.afterEdge);
   ctx.mark("edge-dropped", { before: 200, after: 400 });
 
   // 2. Its condition, `review.verdict = fail`, then the pill to its place.
@@ -122,7 +146,7 @@ async function play(ctx, { film, zoom }) {
   if (film) await ctx.keep(() => setCondition(ctx, { port: "review", op: lop, value: lvalue, film: true }));
   else await setCondition(ctx, { port: "review", op: lop, value: lvalue, film: false });
   await ctx.moveTo(await emptyCanvasSpot(page), quick);
-  await dragLabelTo(ctx, page.getByTestId(`edge-condition-label-${loopId}`), loop.condition_label_pos, { duration: 700 });
+  await dragLabelTo(ctx, page.getByTestId(`edge-condition-label-${loopId}`), loop.condition_label_pos, { duration: pace.pill });
   ctx.mark("condition-set", { before: 200, after: 500 });
 
   // 3. The exit: `verdict = pass`, then its pill to its place.
@@ -131,7 +155,7 @@ async function play(ctx, { film, zoom }) {
   // The panel gesture was shown once (b, on the loop edge): this one is set off camera.
   await setCondition(ctx, { op: eop, value: evalue, film: false });
   await ctx.moveTo(await emptyCanvasSpot(page), quick);
-  await dragLabelTo(ctx, page.getByTestId(`edge-condition-label-${exitId}`), exit.condition_label_pos, { duration: 700 });
+  await dragLabelTo(ctx, page.getByTestId(`edge-condition-label-${exitId}`), exit.condition_label_pos, { duration: pace.pill });
   const spot = await emptyCanvasSpot(page);
   await ctx.keep(async () => {
     await ctx.click(spot, { duration: 500 });
@@ -142,7 +166,7 @@ async function play(ctx, { film, zoom }) {
   // Off camera: save, record the drift, the target back in place.
   await saveCanvas(ctx);
   await landOnTarget(ctx, TARGET);
-  await ctx.hold(1800);
+  await ctx.hold(pace.end);
 }
 
 export default {
@@ -160,7 +184,7 @@ export default {
       // The canvas' full width, from above Start to below End; the toolbar is above the frame.
       crop: { x: 188, y: 150, width: 570, height: 470 },
       markers: ["edge-dropped", "condition-set", "condition-saved"],
-      play: (ctx) => play(ctx, { film: false, zoom: true }),
+      play: (ctx) => play(ctx, { film: false, zoom: true, pace: PACE.a }),
     },
     {
       id: "b",
@@ -170,7 +194,7 @@ export default {
       // Canvas and inspector, from the tab bar (the edge panel's header reads whole).
       crop: { x: 188, y: 44, width: 912, height: 656 },
       markers: ["edge-dropped", "condition-set", "condition-saved"],
-      play: (ctx) => play(ctx, { film: true, zoom: true }),
+      play: (ctx) => play(ctx, { film: true, zoom: true, pace: PACE.b }),
     },
   ],
 };

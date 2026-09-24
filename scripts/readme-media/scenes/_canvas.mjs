@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sleep } from "../lib/demo-instance.mjs";
-import { driftWarnings, gestureDrift, startState } from "../lib/build-scene.mjs";
+import { cursorPath, drawnRoute, driftWarnings, gestureDrift, startState } from "../lib/build-scene.mjs";
 import { DEMO_PIPELINE_ID, dumpYaml, installTarget, parseYaml, readTarget, target, targetPipeline, withName } from "../lib/targets.mjs";
 
 /** Replace `implement-review` in the instance's library with `yaml`, and wait
@@ -197,15 +197,20 @@ async function dragThrough(ctx, screen, { duration }) {
 
 /**
  * Draw `edge` (a target edge) the way #840 wires it: pressed on the source
- * card's rim at its `source_anchor`, dragged through its waypoints, released on
- * the target card at its `target_anchor` — the drop point is what anchors it.
+ * card's rim at its `source_anchor`, dragged along the wire the canvas draws for
+ * it (its legs and squared waypoints, `drawnRoute`), released on the target card
+ * at its `target_anchor` — the drop point is what anchors it. The cursor never
+ * cuts a corner: a diagonal move let the editor's grid trace pick its bends by
+ * pointer sampling, a different route from one take to the next.
  */
 export async function drawEdge(ctx, edge, { duration = 850, film = true } = {}) {
   const { page } = ctx;
   const from = await nodeRect(page, edge.source.node);
   const to = await nodeRect(page, edge.target.node);
   const bends = edge.mode === "manual" ? (edge.waypoints ?? []) : [];
-  const points = [anchorPoint(from, edge.source_anchor, 3), ...bends, anchorPoint(to, edge.target_anchor, 5)];
+  const [src, tgt] = [anchorPoint(from, edge.source_anchor), anchorPoint(to, edge.target_anchor)];
+  const wire = drawnRoute([src, ...bends, tgt], edge.source_anchor.side, edge.target_anchor.side);
+  const points = cursorPath(wire, anchorPoint(from, edge.source_anchor, 3), anchorPoint(to, edge.target_anchor, 5));
   const screen = [];
   for (const p of points) screen.push(await toScreen(page, p));
   await filmed(ctx, film, async () => {
@@ -334,5 +339,24 @@ export async function clearToolbar(ctx, { margin = 24 } = {}) {
   const pane = await page.getByTestId("rf__wrapper").boundingBox();
   const from = { x: pane.x + pane.width - 30, y: pane.y + pane.height / 2 };
   await ctx.drag(from, { x: from.x, y: from.y + (margin - gap) }, { duration: 200 });
+  await sleep(300);
+}
+
+/**
+ * Keep the span `left`..`right` (flow px: what the take will draw, labels
+ * included) clear of the canvas' side edges (#882): when either end comes closer
+ * than `margin` px to its edge, pan the canvas, off camera, to centre the span.
+ * The canvas meets the inspector on its right, where a pill dragged near the
+ * edge came out clipped. Call it once the viewport is set (after a zoom).
+ */
+export async function clearSides(ctx, { left, right }, { margin = 24 } = {}) {
+  const { page } = ctx;
+  const pane = await page.getByTestId("rf__wrapper").boundingBox();
+  const [a, b] = [await toScreen(page, { x: left, y: 0 }), await toScreen(page, { x: right, y: 0 })];
+  if (a.x - pane.x >= margin && pane.x + pane.width - b.x >= margin) return;
+  const dx = Math.round(pane.x + (pane.width - (b.x - a.x)) / 2 - a.x);
+  // From an empty corner at the bottom, on the side the canvas moves away from.
+  const from = { x: dx < 0 ? pane.x + pane.width - 30 : pane.x + 30, y: pane.y + pane.height - 28 };
+  await ctx.drag(from, { x: from.x + dx, y: from.y }, { duration: 200 });
   await sleep(300);
 }

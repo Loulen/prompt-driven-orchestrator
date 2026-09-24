@@ -110,7 +110,7 @@ The targets follow the product's edge model (#840): if that model changes, redra
 | `withNodeFlags(yaml, node, { orchestrator: true, interactive: true })` | the target with flags on for one node, every other byte kept |
 | `targetPipeline(id)`, `readTarget(id)`, `targetYaml(id)` | a target parsed, its YAML and prompts, its YAML under the demo name |
 | `runSnapshot(pipeline)` | the run snapshot a daemon freezes at run start (`node_defs`, and the edges as drawn) |
-| `startState(target, drawn)`, `gestureDrift(saved, target)` (`lib/build-scene.mjs`) | a building scene's start, and what its gestures missed (see [Scenes that build](#scenes-that-build)) |
+| `startState(target, drawn)`, `gestureDrift(saved, target)`, `drawnRoute`, `cursorPath` (`lib/build-scene.mjs`) | a building scene's start, and what its gestures missed (see [Scenes that build](#scenes-that-build)) |
 
 ## Choosing and publishing
 
@@ -210,7 +210,7 @@ its live node by itself, so select `Start` first if the filmed click must open t
 `scenes/_canvas.mjs` is for the edit canvas: `installTargetPipeline` / `installPipeline` /
 `restoreDemoPipeline` / `installStartState` put a variant's starting pipeline in place (a variant
 that saves changes the library for the next one), `pointOnEdge` (a point on an edge's drawn route:
-its hit box's centre is not on it), `zoomCanvas`, `clearToolbar`, and the gestures of the scenes
+its hit box's centre is not on it), `zoomCanvas`, `clearToolbar`, `clearSides`, and the gestures of the scenes
 that build (below).
 
 ## Scenes that build
@@ -240,14 +240,20 @@ contract, `lib/build-scene.mjs`, is two pure functions any new building scene re
 3. **The gestures aim at the target's own coordinates**, in flow px, whatever the zoom:
    `dragNodeTo` moves a card to its `view` (`nudgeNodeTo` then corrects, off camera, the few px
    xyflow's drag threshold eats), `drawEdge` presses the source card's rim at its `source_anchor`,
-   drags through its waypoints and drops on the target card at its `target_anchor` (#840: no port
-   dot, the drop point anchors the arrow), `dragLabelTo` drags a condition pill or an output tag
+   drags along the wire the canvas draws for the edge and drops on the target card at its
+   `target_anchor` (#840: no port dot, the drop point anchors the arrow). The wire is
+   `drawnRoute` (the editor's rule: a 40 px leg straight out of the source side, the waypoints
+   squared up, a leg straight into the target side), and `cursorPath` turns it into moves on one
+   axis each, without the reversals the canvas merges away. A diagonal move would let the editor's
+   grid trace pick its bends by pointer sampling, so the saved route would change from take to take. `dragLabelTo` drags a condition pill or an output tag
    so its centre lands on its `condition_label_pos` / `output_label_pos`. Each measures first,
    then keeps only the gesture on camera (`film: false`: off camera).
 4. **`saveCanvas`, then `landOnTarget(ctx, id)`**, off camera, after the last gesture:
    `gestureDrift(saved, target)` lists where the saved file differs *visibly* from the target
    (node set, positions and isolation marker, edges and the ports their tags name, conditions,
    anchor sides, routes end to end, label positions, loop regions; `DRIFT_TOLERANCE` = 6 flow px).
+   A route is compared as `drawnRoute` draws it, not as its waypoints: one bend saved where the
+   target has two draws the same wire, and that is no drift.
    Each line lands in the variant's manifest `warnings` as `drift from the target: …`, through
    `ctx.warn`: the take is kept, the maintainer knows the scene needs a retouch. Then the target
    is reinstalled; the helper waits out the daemon's 2 s self-write window (its own save would
@@ -258,8 +264,10 @@ What the canvas does not draw is not a drift: prompts, harnesses, a port name wi
 id the editor gives a new node (nodes match by name) or a loop region. A new agent node is
 isolated, the target's `implementer` is not: `pipelines` sets « Run worktree » off camera before
 the drag, so the marker never shows. Keep every node clear of the toolbar with `clearToolbar`
-(24 px under it) once the viewport is set; crop below the tab bar when the frame has no other use
-for it, so its « unsaved » dot never shows.
+(24 px under it) and what the take will draw clear of the canvas' sides with `clearSides` (24 px:
+the canvas meets the inspector on its right, where a pill came out clipped), once the viewport is
+set; crop below the tab bar when the frame has no other use for it, so its « unsaved » dot never
+shows.
 
 ## Artifact scenes (#859)
 

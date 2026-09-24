@@ -121,21 +121,92 @@ function borderPoint(node, size, anchor, side) {
   return { x: x + size.width, y: y + along };
 }
 
-/** An edge's route as the canvas draws it, in flow px: from its source anchor,
- *  through its pinned waypoints, to its target anchor. The auto router's bends
- *  are not modelled: two auto edges between the same anchors read the same. */
+/** The perpendicular leg the canvas draws out of and into a card (flow px):
+ *  the editor's `landingLeg(WIRING_GRID_STEP)`, one 40 px grid cell. */
+export const LANDING_LEG = 40;
+
+const outward = { left: { x: -1, y: 0 }, right: { x: 1, y: 0 }, top: { x: 0, y: -1 }, bottom: { x: 0, y: 1 } };
+const same = (a, b) => Math.abs(a - b) < 1e-6;
+
+/** Merge straight runs (a reversal on one axis included): what the canvas'
+ *  collinear merge does. The first and last point stay. */
+function dedupeCollinear(points) {
+  const out = [];
+  for (const p of points) {
+    const last = out[out.length - 1];
+    if (last && same(last.x, p.x) && same(last.y, p.y)) continue;
+    out.push({ ...p });
+    while (out.length >= 3) {
+      const [a, b, c] = out.slice(-3);
+      if (!((same(a.y, b.y) && same(b.y, c.y)) || (same(a.x, b.x) && same(b.x, c.x)))) break;
+      out.splice(out.length - 2, 1);
+    }
+  }
+  return out;
+}
+
+/** Insert a bend into each diagonal, carrying on the way the wire goes unless
+ *  that reverses it (the canvas' `squareUp`). */
+function squareUp(points) {
+  const out = [{ ...points[0] }];
+  for (const b of points.slice(1)) {
+    const a = out[out.length - 1];
+    if (!same(a.x, b.x) && !same(a.y, b.y)) {
+      const before = out[out.length - 2];
+      const horizontal = before ? same(before.y, a.y) : false;
+      const reverses = before ? (horizontal ? Math.sign(b.x - a.x) === -Math.sign(a.x - before.x) : Math.sign(b.y - a.y) === -Math.sign(a.y - before.y)) : false;
+      out.push(horizontal !== reverses ? { x: b.x, y: a.y } : { x: a.x, y: b.y });
+    }
+    out.push({ ...b });
+  }
+  return out;
+}
+
+/**
+ * The wire the canvas draws for `[source anchor, ...waypoints, target anchor]`
+ * (flow px): a leg straight out of `sourceSide`, the waypoints squared up, a leg
+ * straight into `targetSide` — the editor's `enforcePerpendicularEnds`, without
+ * its detour around the target card. Two waypoint lists that draw the same wire
+ * give the same route; the scenes' cursor follows it when it draws an edge.
+ */
+export function drawnRoute(points, sourceSide, targetSide, leg = LANDING_LEG) {
+  const src = points[0];
+  const tgt = points[points.length - 1];
+  const approach = (p, side) => ({ x: p.x + outward[side].x * leg, y: p.y + outward[side].y * leg });
+  const onEnd = (p) => (same(p.x, src.x) && same(p.y, src.y)) || (same(p.x, tgt.x) && same(p.y, tgt.y));
+  const mid = dedupeCollinear([approach(src, sourceSide), ...points.slice(1, -1).filter((p) => !onEnd(p)), approach(tgt, targetSide)]);
+  const squared = squareUp([src, ...mid, tgt]);
+  return [squared[0], ...dedupeCollinear(squared.slice(1, -1)), squared[squared.length - 1]];
+}
+
+/**
+ * The cursor's path to draw an edge whose wire is `route` (`drawnRoute`):
+ * pressed at `press` (on the source rim), along the wire's corners, released at
+ * `drop` (on the target, where it anchors). Straight runs are one move — a
+ * reversal the canvas merges away is never shown — and every move is on one
+ * axis, so the editor's grid trace commits the same bends on every take.
+ */
+export function cursorPath(route, press, drop) {
+  return dedupeCollinear([press, ...route.slice(1, -1), drop]);
+}
+
+/** An edge's route as the canvas draws it, in flow px (`drawnRoute`): from its
+ *  source anchor, through its pinned waypoints, to its target anchor. The auto
+ *  router's bends are not modelled: two auto edges between the same anchors
+ *  read the same. */
 function route(edge, pipeline, sizeOf) {
   const node = (id) => (pipeline.nodes ?? []).find((n) => n.id === id);
   const from = node(edge.source.node);
   const to = node(edge.target.node);
   const port = (list, name) => (list ?? []).find((p) => p.name === name)?.side;
-  const sourceSide = port(from?.outputs, edge.source.ports?.[0] ?? edge.source.port) ?? "right";
-  const targetSide = edge.target_side ?? port(to?.inputs, edge.target.port) ?? "left";
-  return [
+  const sourceSide = edge.source_anchor?.side ?? port(from?.outputs, edge.source.ports?.[0] ?? edge.source.port) ?? "right";
+  const targetSide = edge.target_anchor?.side ?? edge.target_side ?? port(to?.inputs, edge.target.port) ?? "left";
+  const ends = [
     borderPoint(from, sizeOf(edge.source.node), edge.source_anchor, sourceSide),
     ...(edge.mode === "manual" ? (edge.waypoints ?? []) : []),
     borderPoint(to, sizeOf(edge.target.node), edge.target_anchor, targetSide),
   ].map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+  return drawnRoute(ends, sourceSide, targetSide);
 }
 
 /** The source ports an edge carries, sorted. */

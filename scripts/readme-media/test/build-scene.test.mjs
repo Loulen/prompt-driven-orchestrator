@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { DRIFT_TOLERANCE, driftWarnings, edgeKey, gestureDrift, startState } from "../lib/build-scene.mjs";
+import { DRIFT_TOLERANCE, cursorPath, drawnRoute, driftWarnings, edgeKey, gestureDrift, startState } from "../lib/build-scene.mjs";
 import { variantEntry } from "../lib/manifest.mjs";
 import { TARGET_MS } from "../lib/montage.mjs";
 import { loadScenes, validateScene } from "../lib/scenes.mjs";
@@ -95,6 +95,38 @@ test("a gesture that lands on the target has no drift, whatever the editor's ids
   assert.deepEqual(gestureDrift(loop, complete), []);
 });
 
+test("the drift reads the wire the canvas draws, not the waypoints it was saved with", () => {
+  // routing/a, FP of #882: the loop edge saved with one bend instead of the
+  // target's two, pressed one px higher on reviewer's rim. The canvas adds the
+  // leg out of reviewer's right and squares the bend: the same wire.
+  const saved = structuredClone(complete);
+  const loop = saved.edges.find((e) => edgeKey(e) === "reviewer→implementer");
+  loop.waypoints = [{ x: 396, y: 233 }];
+  loop.source_anchor = { side: "right", offset: 25 };
+  assert.deepEqual(gestureDrift(saved, complete), []);
+  assert.deepEqual(drawnRoute([{ x: 357, y: 234 }, { x: 397, y: 154 }, { x: 396, y: 154 }, { x: 356, y: 154 }], "right", "right"), [
+    { x: 357, y: 234 },
+    { x: 397, y: 234 },
+    { x: 397, y: 154 },
+    { x: 396, y: 154 },
+    { x: 356, y: 154 },
+  ]);
+  // A wire that really goes elsewhere still drifts: the loop squared on the left.
+  loop.waypoints = [{ x: 150, y: 234 }, { x: 150, y: 154 }];
+  assert.equal(gestureDrift(saved, complete).filter((l) => l.startsWith("edge reviewer→implementer: route")).length, 1);
+});
+
+test("the cursor draws an edge along its wire, one axis per move, without a reversal", () => {
+  const wire = drawnRoute([{ x: 357, y: 234 }, { x: 397, y: 154 }, { x: 396, y: 154 }, { x: 356, y: 154 }], "right", "right");
+  const path = cursorPath(wire, { x: 354, y: 234 }, { x: 351, y: 154 });
+  assert.deepEqual(path, [{ x: 354, y: 234 }, { x: 397, y: 234 }, { x: 397, y: 154 }, { x: 351, y: 154 }]);
+  // Start → implementer: the leg out of Start overshoots the pinned bend, which
+  // the canvas merges away; the cursor goes straight down.
+  const straight = drawnRoute([{ x: 280, y: 82 }, { x: 280, y: 95 }, { x: 280, y: 135 }], "bottom", "top");
+  assert.deepEqual(cursorPath(straight, { x: 280, y: 79 }, { x: 280, y: 140 }), [{ x: 280, y: 79 }, { x: 280, y: 140 }]);
+  for (const [a, b] of path.slice(1).map((p, i) => [path[i], p])) assert.ok(a.x === b.x || a.y === b.y);
+});
+
 test("a gesture that drifts from the target is recorded, one line per visible difference", () => {
   const saved = structuredClone(complete);
   const loopEdge = saved.edges.find((e) => edgeKey(e) === "reviewer→implementer");
@@ -114,7 +146,7 @@ test("a gesture that drifts from the target is recorded, one line per visible di
     "edge reviewer→implementer: condition label at (435, 192) vs target (395, 192)",
     'edge reviewer→end: condition {"verdict":{"neq":"fail"}} vs target {"verdict":{"eq":"pass"}}',
     "edge reviewer→end: target_anchor on left vs target top",
-    "edge reviewer→end: route (280, 243) (280, 276) (204, 380) vs target (280, 243) (280, 276) (280, 316)",
+    "edge reviewer→end: route (280, 243) (280, 283) (280, 276) (164, 276) (164, 380) (204, 380) vs target (280, 243) (280, 283) (280, 276) (280, 316)",
     "loop region implementer,reviewer: bounded ↻ 3 vs target bounded ↻ 5",
   ]);
   // Under the tolerance, a position reads the same.
@@ -147,8 +179,8 @@ test("the manifest records a simulated drift as a warning, without failing the v
   // The card moved, and the ends of its two edges with it.
   assert.deepEqual(entry.warnings, [
     "drift from the target: node implementer: at (260, 135) vs target (196, 135)",
-    "drift from the target: edge start→implementer: route (280, 82) (280, 95) (344, 135) vs target (280, 82) (280, 95) (280, 135)",
-    "drift from the target: edge implementer→end: route (344, 170) (280, 178) (280, 218) vs target (280, 170) (280, 178) (280, 218)",
+    "drift from the target: edge start→implementer: route (280, 82) (280, 122) (280, 95) (344, 95) (344, 135) vs target (280, 82) (280, 122) (280, 95) (280, 135)",
+    "drift from the target: edge implementer→end: route (344, 170) (344, 210) (280, 210) (280, 178) (280, 218) vs target (280, 170) (280, 210) (280, 178) (280, 218)",
   ]);
   assert.equal(entry.gif, "pipelines/a.gif");
 });

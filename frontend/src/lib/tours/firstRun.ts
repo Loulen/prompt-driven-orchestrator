@@ -177,10 +177,12 @@ const SKILLS_PDO_FOLDER = testId("run-skill-selector-folder-skf-pdo");
 const ORCHESTRATE_ID = "pdo-orchestrate";
 const INTERACTIVE_ID = "pdo-interactive";
 const skillRow = (id: string) => testId(`run-skill-selector-option-${id}`);
-/** The « effective » list under the trigger — one row per selected skill, whether
- *  the popover is open or not. What the checklist reads, so closing the popover
- *  after ticking does not un-tick anything (design §9). */
-const skillChosen = (id: string) => testId(`run-skill-selector-row-${id}`);
+/** The skill's **ticked box** inside the popover (#849). The list of active skills
+ *  under the trigger is gone — the popover is where a selection is read now — and
+ *  since a pick no longer folds the picker away, the box the user just ticked is
+ *  still on screen for the checklist to read. Inherited skills are ticked too
+ *  (disabled), which is what makes an instance that already delivers both pass. */
+const skillChecked = (id: string) => `${testId(`run-skill-selector-check-${id}`)}:checked`;
 const PROMPT_INPUT = testId("input-textarea");
 const LAUNCH_BUTTON = testId("launch-button");
 const LAUNCH_ERROR = testId("launch-error");
@@ -275,9 +277,9 @@ function filled(o: TourObservation, selector: string): boolean {
   return (o.value(selector) ?? "").trim().length > 0;
 }
 
-/** Is this skill in the Run's own selection? */
+/** Is this skill ticked in the picker — by the user, or by a coarser tier? */
 function hasSkill(o: TourObservation, id: string): boolean {
-  return o.present(skillChosen(id));
+  return o.present(skillChecked(id));
 }
 
 /**
@@ -395,8 +397,10 @@ const STEPS: TourStep[] = [
       { label: ORCHESTRATE_ID, done: hasSkill(o, ORCHESTRATE_ID) },
       { label: INTERACTIVE_ID, done: hasSkill(o, INTERACTIVE_ID) },
     ],
-    // On the Run's selection, not on the popover being open — closing it after
-    // ticking passes the step.
+    // Both boxes ticked, in the open picker (#849). A pick no longer folds the
+    // picker away, so the second tick is read while the first is still on screen;
+    // a reader who folds the PDO folder back up hides its boxes, and the step
+    // simply keeps pointing at the folder until they are visible again.
     done: (o) => hasSkill(o, ORCHESTRATE_ID) && hasSkill(o, INTERACTIVE_ID),
   },
   {

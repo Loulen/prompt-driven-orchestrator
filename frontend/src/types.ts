@@ -892,11 +892,11 @@ export interface NodeState {
    */
   isolated_worktree?: boolean;
   /**
-   * #669/ADR-0062: the skills effectifs this NodeRun was FROZEN with at spawn
+   * #669/ADR-0062: the active skills this NodeRun was FROZEN with at spawn
    * (union of the four tiers, each with its origin). Absent for a node that never
    * started, a `script` node, or a pre-#669 daemon.
    */
-  skills?: EffectiveSkill[];
+  skills?: ActiveSkill[];
   /** #669: selected ids the bank no longer knew at spawn — the node ran without them. */
   missing_skills?: MissingSkill[];
   /**
@@ -2314,8 +2314,8 @@ export interface SkillRef {
 /** The four additive tiers, coarsest first. */
 export type SkillTier = "instance" | "project" | "run" | "node";
 
-/** An effective skill frozen on a NodeRun, with every tier that selected it. */
-export interface EffectiveSkill extends SkillRef {
+/** An active skill frozen on a NodeRun, with every tier that selected it. */
+export interface ActiveSkill extends SkillRef {
   tiers: SkillTier[];
 }
 

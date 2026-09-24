@@ -1,10 +1,15 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build test check lint fmt clean support-table install update service-install service-status service-restart service-logs
+.PHONY: help dev build test check lint fmt clean support-table readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
 SANDBOX := /tmp/pdo-dev-sandbox
+# The one file carrying the generated harness support table (#855).
+SUPPORT_TABLE := docs/reference/harnesses.md
+# The README media tool (#856, ADR-0074). `node:sqlite` is still flagged
+# experimental: its warning is noise here.
+README_MEDIA := node --disable-warning=ExperimentalWarning scripts/readme-media/readme-media.mjs
 
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git
@@ -17,11 +22,15 @@ help:
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build + pnpm run build (frontend embedded into daemon)"
 	@echo "  make test    cargo nextest + doctests + vitest"
-	@echo "  make check   cargo check + tsc --noEmit + the README support table is current"
+	@echo "  make check   cargo check + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
 	@echo "  make clean   cargo clean + rm frontend/dist"
-	@echo "  make support-table  Regenerate the README harness support table from the code"
+	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
+	@echo "  make readme-media [SCENE=stats]   Record the README media (2 variants per scene) into .readme-media/ — see CONTRIBUTING"
+	@echo "  make readme-media-publish [SCENE=…]  Copy the selected variants into docs/assets/readme/"
+	@echo "  make readme-media-export   Copy the README target pipelines into your library as readme-* (to redraw them)"
+	@echo "  make readme-media-import   Bring your readme-* pipelines back into scripts/readme-media/fixture/targets/"
 	@echo ""
 	@echo "Installed global daemon ($(PDO_PROD_DIR), port $(PDO_PROD_PORT)):"
 	@echo "  make install          Clone if needed + build release + install $(PDO_BIN)"
@@ -53,20 +62,40 @@ test:
 	cargo nextest run --workspace
 	cargo test --workspace --doc
 	cd frontend && pnpm test
+	node --disable-warning=ExperimentalWarning --test 'scripts/readme-media/test/*.test.mjs'
 
 check:
 	cargo check --workspace
 	cd frontend && pnpm run typecheck
-	# The README support table is generated from the capability declaration in
-	# crates/pdo-daemon/src/harness_probes.rs (#617). A hand-edited table would be
-	# wrong at the next capability; this fails and names the drift instead. Fix it
-	# with `make support-table`, never by editing the README block.
-	cargo run --quiet -p pdo-daemon -- docs support-table --check --file $(CURDIR)/README.md
+	# The harness support table in docs/reference/harnesses.md is generated from the
+	# capability declaration in crates/pdo-daemon/src/harness_probes.rs (#617). A
+	# hand-edited table would be wrong at the next capability; this fails and names
+	# the drift instead. Fix it with `make support-table`, never by editing the block.
+	cargo run --quiet -p pdo-daemon -- docs support-table --check --file $(CURDIR)/$(SUPPORT_TABLE)
 
-# Rewrite the README's generated block from the code. Run it after adding a
-# harness, adding a capability, or moving a "last validated version".
+# Rewrite the generated block of docs/reference/harnesses.md from the code. Run it
+# after adding a harness, adding a capability, or moving a "last validated version".
 support-table:
-	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/README.md
+	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/$(SUPPORT_TABLE)
+
+# README media (ADR-0074): a sealed demo instance, real UI, real agents for the
+# live scenes. Costs an agent session per live scene — regenerate only when a
+# scene visibly changed. `SCENE=a,b` limits the run; `VARIANT=a` one variant.
+readme-media:
+	cargo build
+	SCENE=$(SCENE) VARIANT=$(VARIANT) KEEP_DEMO=$(KEEP_DEMO) $(README_MEDIA) record
+
+readme-media-publish:
+	SCENE=$(SCENE) $(README_MEDIA) publish
+
+# The target pipelines of the README scenes (ADR-0074 §6), between the fixture
+# and your library (~/.pdo/pipelines): export as readme-*, redraw them in the
+# editor, import. The export never overwrites a readme-* you modified.
+readme-media-export:
+	$(README_MEDIA) export
+
+readme-media-import:
+	$(README_MEDIA) import
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

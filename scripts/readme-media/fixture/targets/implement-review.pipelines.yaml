@@ -1,0 +1,44 @@
+name: implement-review
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 199, y: 47 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 202, y: 218 }
+  - id: implementer
+    name: implementer
+    type: agent
+    isolated_worktree: false
+    pin_harness: claude
+    harnesses:
+      claude: { model: claude-opus-5-5, effort: medium }
+    inputs:
+      - { name: task, side: left }
+    outputs:
+      - { name: code, side: right }
+    view: { x: 196, y: 135 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: implementer, port: task }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 95 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 81 }
+    target_anchor: { side: top, offset: 84 }
+  - source: { node: implementer, port: code }
+    target: { node: end, port: result }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 178 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 84 }
+    target_anchor: { side: top, offset: 78 }

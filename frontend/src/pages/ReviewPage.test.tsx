@@ -833,7 +833,9 @@ describe("ReviewPage — reported / outdated comments (#752)", () => {
     mockedList.mockResolvedValue({ comments: [{ ...stale, outdated: true }] });
     mockedResolve.mockResolvedValue({ comment: { ...stale, status: "resolved", resolved_by: "user", resolved_at: "2026-09-09T02:00:00Z" }, changed: true });
     render(<ReviewPage runId={RUN_ID} />);
-    const group = await screen.findByTestId("review-outdated-group");
+    // The group waits on the whole load chain (run, diff, re-mapped comments):
+    // under a loaded `make test` it takes longer than findBy's default 1 s.
+    const group = await screen.findByTestId("review-outdated-group", {}, { timeout: 5000 });
     expect(group).toHaveTextContent("1 outdated comment");
     expect(screen.queryAllByTestId("mock-extend")).toHaveLength(0);
     const card = within(group).getByTestId("review-comment");

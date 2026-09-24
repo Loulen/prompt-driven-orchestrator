@@ -1,0 +1,47 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #1f2328;
+  background: #faf7f2;
+}
+body {
+  margin: 0;
+}
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  background: #3b2f2a;
+  color: #faf7f2;
+}
+.top h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+  padding: 24px;
+  list-style: none;
+  margin: 0;
+}
+.card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
+}
+.card button {
+  margin-top: 8px;
+}
+#cart {
+  position: fixed;
+  top: 64px;
+  right: 24px;
+  width: 260px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
+}

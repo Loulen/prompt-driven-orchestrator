@@ -1,0 +1,97 @@
+name: prod-check
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
+    view: { x: 197, y: 23 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: left }
+    view: { x: 209, y: 378 }
+  - id: RlRyUvAz
+    name: Incident-debugger
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - { name: in, side: left }
+    outputs:
+      - name: incidents
+        side: right
+        frontmatter:
+          Incident_found: { type: bool }
+    view: { x: 202, y: 120 }
+  - id: wHpeFwT0
+    name: Orchestrate Fix
+    type: agent
+    isolated_worktree: false
+    orchestrator: true
+    skills:
+      - { id: pdo-orchestrate, name: pdo-orchestrate }
+    inputs:
+      - { name: in, side: left }
+    outputs:
+      - name: report
+        side: right
+        frontmatter:
+          fixed: { type: bool }
+    view: { x: 203, y: 202 }
+  - id: XxIN3yX6
+    name: Notify Slack
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - { name: in, side: left }
+    outputs:
+      - { name: out, side: right }
+    view: { x: 209, y: 281 }
+edges:
+  - source: { node: RlRyUvAz, port: incidents }
+    target: { node: wHpeFwT0, port: in }
+    when:
+      Incident_found: { eq: true }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 162 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 78 }
+    target_anchor: { side: top, offset: 77 }
+    condition_label_pos: { x: 276, y: 177 }
+  - source: { node: RlRyUvAz, port: incidents }
+    target: { node: end, port: result }
+    when:
+      Incident_found: { eq: false }
+    mode: manual
+    waypoints:
+      - { x: 162, y: 399 }
+    source_anchor: { side: left, offset: 10 }
+    target_anchor: { side: left, offset: 21 }
+    condition_label_pos: { x: 104, y: 245 }
+  - source: { node: wHpeFwT0, port: report }
+    target: { node: XxIN3yX6, port: in }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 241 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 77 }
+    target_anchor: { side: top, offset: 71 }
+  - source: { node: XxIN3yX6, port: out }
+    target: { node: end, port: result }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 338 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 71 }
+    target_anchor: { side: top, offset: 71 }
+  - source: { node: start, port: user_prompt }
+    target: { node: RlRyUvAz, port: in }
+    mode: manual
+    waypoints:
+      - { x: 280, y: 80 }
+    target_side: top
+    source_anchor: { side: bottom, offset: 83 }
+    target_anchor: { side: top, offset: 78 }

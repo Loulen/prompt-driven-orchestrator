@@ -87,6 +87,7 @@ mod skill_selection;
 mod skill_sidecar;
 pub mod stale_detector;
 mod stats;
+mod stats_absorption;
 mod stats_performance;
 pub mod steering;
 mod structured_diff;
@@ -5445,6 +5446,16 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/stats/performance",
             get(stats_performance::stats_performance),
         )
+        // Absorptions (#888, ADR-0077): instance configuration, applied on read by
+        // the three `/stats/*` folds above.
+        .route(
+            "/stats/absorptions",
+            get(stats_absorption::list_absorptions).post(stats_absorption::create_absorption),
+        )
+        .route(
+            "/stats/absorptions/member",
+            axum::routing::delete(stats_absorption::delete_absorption_member),
+        )
         // Out-of-Run audit feed (ADR-0044).
         .route("/audit", get(get_audit))
         // Projets (ADR-0046) — the group-header pencil's CRUD and the middle tier of
@@ -6278,6 +6289,11 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     skill_bank::init(db)
         .await
         .context("failed to create skill bank tables")?;
+
+    // Stats absorptions (ADR-0077): instance configuration, nothing seeded.
+    stats_absorption::init(db)
+        .await
+        .context("failed to create stats_absorptions table")?;
 
     Ok(())
 }
@@ -25299,6 +25315,503 @@ mod tests {
         assert_eq!(body["by_project"][0]["unknown"], 3);
         assert_eq!(body["by_project"][0]["pipelines"][0]["id"], "p1");
         assert!(!body["resolved"].as_array().unwrap().is_empty());
+    }
+
+    /// #890 / ADR-0077 — the HTTP contract of an absorption: posed through the
+    /// API, it folds Pipeline A into Pipeline B in Sessions, Cost (all three
+    /// trees), Performance (both trees) and the Triggers fires; `uncombined=true`
+    /// reads the raw rows; the Performance memo recomputes on every write; and
+    /// removing the last member brings the original rows back.
+    #[tokio::test]
+    async fn stats_absorption_folds_pipelines_in_every_tab_and_undoes_cleanly() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-absorption")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        // Two versions of one Pipeline: A (`alpha-old`, older) and B
+        // (`alpha-new`). Both have a `worker` Node (same id → one Node row under
+        // the absorbent); B's worker ran on a model nobody prices (a lower
+        // bound, `partial`), and B has a Node on a harness with no cost source.
+        let runs = [
+            (
+                "abs-a1",
+                "alpha-old",
+                "Alpha",
+                "2032-03-15",
+                "claude-opus-4-8",
+                10,
+            ),
+            (
+                "abs-b1",
+                "alpha-new",
+                "Alpha",
+                "2032-03-16",
+                "claude-unpriced-9",
+                20,
+            ),
+        ];
+        for (run, pipeline_id, name, day, model, minutes) in runs {
+            insert_event(
+                &state.db,
+                run,
+                &format!("{day}T09:00:00Z"),
+                "run_started",
+                None,
+                None,
+                serde_json::json!({
+                    "pipeline_id": pipeline_id,
+                    "pipeline_name": name,
+                    "target_repo": repo,
+                    "harness": "claude",
+                    "node_defs": [
+                        {"id":"worker","name":"Worker","node_type":"agent","isolated_worktree":true},
+                        {"id":"extra","name":"Extra","node_type":"agent","isolated_worktree":true}
+                    ]
+                }),
+            )
+            .await;
+            insert_event(
+                &state.db,
+                run,
+                &format!("{day}T09:01:00Z"),
+                "node_started",
+                Some("worker"),
+                Some(1),
+                serde_json::json!({"node_type":"agent","isolated_worktree":true,"harness":"claude","session_id":format!("{run}-s")}),
+            )
+            .await;
+            insert_event(
+                &state.db,
+                run,
+                &format!("{day}T09:{:02}:00Z", 1 + minutes),
+                "node_completed",
+                Some("worker"),
+                Some(1),
+                serde_json::json!({}),
+            )
+            .await;
+            insert_event(
+                &state.db,
+                run,
+                &format!("{day}T09:40:00Z"),
+                "run_completed",
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await;
+            let dir =
+                home.join(".claude")
+                    .join("projects")
+                    .join(stale_detector::encode_working_dir(
+                        &worktree_ops::sub_worktree_path(&state.repo_root, run, "worker", 1),
+                    ));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(format!("{run}-s.jsonl")),
+                format!(
+                    r#"{{"type":"assistant","requestId":"{run}","message":{{"id":"{run}-m","model":"{model}","usage":{{"input_tokens":1000000,"output_tokens":0}}}}}}"#
+                ),
+            )
+            .unwrap();
+        }
+        insert_event(
+            &state.db,
+            "abs-b1",
+            "2032-03-16T09:30:00Z",
+            "node_started",
+            Some("extra"),
+            Some(1),
+            serde_json::json!({"node_type":"agent","isolated_worktree":true,"harness":"future-harness","session_id":"abs-b1-extra"}),
+        )
+        .await;
+        // Trigger fires: 2 for A, 1 for B.
+        for (id, pipeline) in [("abs-ta", "alpha-old"), ("abs-tb", "alpha-new")] {
+            sqlx::query(
+                "INSERT INTO triggers (id, name, pipeline_id, cron, enabled, created_at) \
+                 VALUES (?, ?, ?, '0 2 * * *', 1, '2032-03-01T00:00:00Z')",
+            )
+            .bind(id)
+            .bind(id)
+            .bind(pipeline)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        }
+        for (trigger, ts) in [
+            ("abs-ta", "2032-03-15T02:00:00Z"),
+            ("abs-ta", "2032-03-16T02:00:00Z"),
+            ("abs-tb", "2032-03-16T03:00:00Z"),
+        ] {
+            sqlx::query(
+                "INSERT INTO trigger_fires (trigger_id, ts, outcome) VALUES (?, ?, 'fired')",
+            )
+            .bind(trigger)
+            .bind(ts)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        }
+
+        async fn send(
+            state: &Arc<AppState>,
+            method: &str,
+            uri: &str,
+            body: Option<serde_json::Value>,
+        ) -> (StatusCode, serde_json::Value) {
+            let mut request = Request::builder().method(method).uri(uri);
+            if body.is_some() {
+                request = request.header("content-type", "application/json");
+            }
+            let response = build_router(state.clone())
+                .oneshot(
+                    request
+                        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+            )
+        }
+        let window = "from=2032-03-15T00:00:00Z&to=2032-03-17T00:00:00Z";
+        let (from, to) = ("2032-03-15T00:00:00Z", "2032-03-17T00:00:00Z");
+        let overview_uri = format!("/stats/overview?{window}&bucket=day");
+        let cost_uri = format!("/stats/cost?{window}&bucket=day");
+        let performance_uri = format!("/stats/performance?{window}");
+        let ids = |rows: &serde_json::Value| -> Vec<String> {
+            let mut ids: Vec<String> = rows
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["id"].as_str().unwrap().to_string())
+                .collect();
+            ids.sort();
+            ids
+        };
+        let find = |rows: &serde_json::Value, id: &str| -> serde_json::Value {
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id)
+                .cloned()
+                .unwrap_or_else(|| panic!("no row {id} in {rows:#}"))
+        };
+
+        // --- Before: two Pipeline rows everywhere, and the raw costs to add up.
+        let (_, overview) = send(&state, "GET", &overview_uri, None).await;
+        assert_eq!(
+            ids(&overview["sessions_by_pipeline"]),
+            vec!["alpha-new", "alpha-old"]
+        );
+        let (_, raw_cost) = send(&state, "GET", &cost_uri, None).await;
+        let usd_old = find(&raw_cost["by_pipeline"], "alpha-old")["usd"]
+            .as_f64()
+            .unwrap();
+        let usd_new = find(&raw_cost["by_pipeline"], "alpha-new")["usd"]
+            .as_f64()
+            .unwrap_or(0.0);
+        assert!(!find(&raw_cost["by_pipeline"], "alpha-old")["partial"]
+            .as_bool()
+            .unwrap());
+        let (_, performance_before) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            ids(&performance_before["by_pipeline"]),
+            vec!["alpha-new", "alpha-old"]
+        );
+        let recomputes = stats_performance::recompute_count_for_test(from, to);
+
+        // --- Combine: B absorbs A.
+        let (status, list) = send(
+            &state,
+            "POST",
+            "/stats/absorptions",
+            Some(serde_json::json!({
+                "dimension": "pipeline",
+                "absorbent": {"key": "alpha-new", "name": "Alpha"},
+                "members": [{"key": "alpha-old", "name": "Alpha"}],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(list["absorptions"][0]["absorbent"]["key"], "alpha-new");
+        assert_eq!(list["absorptions"][0]["members"][0]["key"], "alpha-old");
+        assert_eq!(list["absorptions"][0]["members"][0]["origin"], "manual");
+
+        // Sessions: one row, cumulated executions, one `worker` Node, members.
+        let (_, overview) = send(&state, "GET", &overview_uri, None).await;
+        assert_eq!(ids(&overview["sessions_by_pipeline"]), vec!["alpha-new"]);
+        let row = find(&overview["sessions_by_pipeline"], "alpha-new");
+        assert_eq!(row["name"], "Alpha");
+        assert_eq!(row["executions"], 3);
+        assert_eq!(row["runs"], 2);
+        assert_eq!(row["last_run"], "2032-03-16T09:00:00Z");
+        assert_eq!(find(&row["nodes"], "worker")["executions"], 2);
+        assert_eq!(row["absorbed"][0]["key"], "alpha-old");
+        assert_eq!(row["absorbed"][0]["runs"], 1);
+        assert_eq!(row["absorbed"][0]["executions"], 1);
+        assert_eq!(row["absorbed"][0]["last_run"], "2032-03-15T09:00:00Z");
+        // Triggers: the fires follow the absorption.
+        assert_eq!(
+            overview["fires_by_pipeline"],
+            serde_json::json!([{"pipeline_id": "alpha-new", "count": 3}])
+        );
+
+        // Cost: one row per tree, the costs added up, the honesty marks kept.
+        let (_, cost) = send(&state, "GET", &cost_uri, None).await;
+        assert_eq!(ids(&cost["by_pipeline"]), vec!["alpha-new"]);
+        let pipeline = find(&cost["by_pipeline"], "alpha-new");
+        assert_eq!(pipeline["executions"], 2);
+        assert_eq!(pipeline["usd"].as_f64().unwrap(), usd_old + usd_new);
+        assert_eq!(pipeline["partial"], true, "B's lower bound shows through");
+        assert_eq!(pipeline["absorbed"][0]["key"], "alpha-old");
+        assert_eq!(find(&pipeline["nodes"], "worker")["executions"], 2);
+        let infrastructure: Vec<_> = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|node| node["name"] == "Infrastructure")
+            .collect();
+        assert_eq!(
+            infrastructure.len(),
+            1,
+            "one Infrastructure row per absorbent"
+        );
+        let extra = find(&pipeline["nodes"], "extra");
+        assert!(
+            extra["usd"].is_null(),
+            "an unknown cost stays unknown: {extra}"
+        );
+        let project_pipelines = &cost["by_project"][0]["pipelines"];
+        assert_eq!(ids(project_pipelines), vec!["alpha-new"]);
+        for model in cost["by_model"].as_array().unwrap() {
+            for effort in model["efforts"].as_array().unwrap() {
+                assert_eq!(ids(&effort["pipelines"]), vec!["alpha-new"]);
+            }
+        }
+
+        // Performance: one row per tree, the medians recomputed over both Runs.
+        let (_, performance) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            recomputes + 1,
+            "a Combine must recompute the Performance memo"
+        );
+        assert_eq!(ids(&performance["by_pipeline"]), vec!["alpha-new"]);
+        let pipeline = find(&performance["by_pipeline"], "alpha-new");
+        assert_eq!(pipeline["absorbed"][0]["key"], "alpha-old");
+        let claude = pipeline["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap()
+            .clone();
+        assert_eq!(claude["duration"]["measured"], 2);
+        assert_eq!(claude["duration"]["stats"]["median"], 900000.0);
+        assert_eq!(
+            find(&pipeline["nodes"], "worker")["harnesses"][0]["duration"]["measured"],
+            2
+        );
+        for model in performance["by_model"].as_array().unwrap() {
+            for effort in model["efforts"].as_array().unwrap() {
+                assert_eq!(ids(&effort["pipelines"]), vec!["alpha-new"]);
+            }
+        }
+
+        // Uncombined: the raw rows, absorption kept.
+        let (_, overview) = send(
+            &state,
+            "GET",
+            &format!("{overview_uri}&uncombined=true"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            ids(&overview["sessions_by_pipeline"]),
+            vec!["alpha-new", "alpha-old"]
+        );
+        assert!(find(&overview["sessions_by_pipeline"], "alpha-new")["absorbed"].is_null());
+        assert_eq!(overview["fires_by_pipeline"].as_array().unwrap().len(), 2);
+        let (_, cost) = send(&state, "GET", &format!("{cost_uri}&uncombined=true"), None).await;
+        assert_eq!(ids(&cost["by_pipeline"]), vec!["alpha-new", "alpha-old"]);
+        let (_, performance) = send(
+            &state,
+            "GET",
+            &format!("{performance_uri}&uncombined=true"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            ids(&performance["by_pipeline"]),
+            vec!["alpha-new", "alpha-old"]
+        );
+
+        // Uncombine the last member: the absorption is gone, the rows are back.
+        // The store is then exactly what it was before the Combine, so the
+        // Performance memo answers from the entry that state computed — never
+        // from the combined one.
+        let recomputes = stats_performance::recompute_count_for_test(from, to);
+        let (status, list) = send(
+            &state,
+            "DELETE",
+            "/stats/absorptions/member?dimension=pipeline&member=alpha-old",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list["absorptions"], serde_json::json!([]));
+        let (_, overview) = send(&state, "GET", &overview_uri, None).await;
+        assert_eq!(
+            ids(&overview["sessions_by_pipeline"]),
+            vec!["alpha-new", "alpha-old"]
+        );
+        let (_, after) = send(&state, "GET", &performance_uri, None).await;
+        assert_eq!(
+            after, performance_before,
+            "the uncombined state reads as before"
+        );
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            recomputes,
+            "the pre-Combine memo entry serves the pre-Combine state"
+        );
+        let (status, _) = send(
+            &state,
+            "DELETE",
+            "/stats/absorptions/member?dimension=pipeline&member=alpha-old",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// #890 — an absorption is instance configuration, not a property of the
+    /// library: deleting the absorbed Pipeline's YAML leaves it in place, and a
+    /// dimension this build does not combine yet is refused.
+    #[tokio::test]
+    async fn stats_absorption_survives_a_library_delete_and_refuses_unknown_dimensions() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "doomed");
+        let state = test_state_with_dir(tmp.path()).await;
+        let post = |body: serde_json::Value| {
+            let state = state.clone();
+            async move {
+                build_router(state)
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/stats/absorptions")
+                            .header("content-type", "application/json")
+                            .body(Body::from(body.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+        assert_eq!(
+            post(serde_json::json!({
+                "dimension": "pipeline",
+                "absorbent": {"key": "keeper", "name": "Keeper"},
+                "members": [{"key": "doomed", "name": "doomed"}],
+            }))
+            .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            post(serde_json::json!({
+                "dimension": "project",
+                "absorbent": {"key": "a", "name": "A"},
+                "members": [{"key": "b", "name": "B"}],
+            }))
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post(serde_json::json!({
+                "dimension": "pipeline",
+                "absorbent": {"key": "a", "name": "A"},
+                "members": [{"key": "a", "name": "A"}],
+            }))
+            .await,
+            StatusCode::BAD_REQUEST,
+            "absorbing only itself is no absorption"
+        );
+
+        let deleted = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/pipelines/doomed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(deleted.status().is_success(), "{}", deleted.status());
+
+        let listed = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/absorptions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(listed.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["absorptions"][0]["members"][0]["key"], "doomed");
     }
 
     /// `GET /stats/performance` — the whole shape in one cohort: success-only

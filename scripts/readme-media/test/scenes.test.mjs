@@ -115,8 +115,10 @@ test("review: the manager answers in one line (the demo HOME's CLAUDE.md)", asyn
   const { MANAGER_RULE } = await import("../scenes/review.mjs");
   assert.match(MANAGER_RULE, /pdo review reply/);
   assert.match(MANAGER_RULE, /ONE short sentence of at most 80 characters/);
-  const example = MANAGER_RULE.match(/--text "([^"]+)"/)[1];
-  assert.ok(example.length <= 80, `the example answer is ${example.length} characters`);
+  // A format, no sample answer: the manager would echo it, or take its SHA for a commit to find.
+  assert.doesNotMatch(MANAGER_RULE, /--text "/);
+  assert.doesNotMatch(MANAGER_RULE, /\b[0-9a-f]{7}\b/);
+  assert.match(MANAGER_RULE, /not a task/);
 });
 
 test("interactive-orchestrator: its target, implementer interactive and orchestrator with their skills, nothing else", async () => {

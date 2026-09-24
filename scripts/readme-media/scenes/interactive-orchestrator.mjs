@@ -183,11 +183,27 @@ async function untilQuestion(ctx, runId) {
 /** How long the typed answer stays on screen before the Enter. */
 export const ANSWER_HOLD_MS = 1000;
 
+/** What the browser's terminal paints (xterm's DOM renderer), spaces normalized. */
+export async function screenText(page) {
+  const text = await page.locator('[data-testid="xterm-container"] .xterm-rows').first().innerText();
+  return text.replace(/\u00a0/g, " ");
+}
+
+/** Wait until the browser's terminal paints `text`: tmux echoes a key a few
+ *  hundred ms before the WebSocket bridge brings it to the page. */
+async function untilOnScreen(page, text, timeout = 5_000) {
+  const deadline = Date.now() + timeout;
+  while (!(await screenText(page)).includes(text)) {
+    if (Date.now() > deadline) throw new Error(`« ${text} » never showed in the browser's terminal`);
+    await sleep(40);
+  }
+}
+
 /** Filmed: a click in the terminal, the answer typed a word at a time (a key
  *  per character round-trips through the PTY bridge and drags over seconds).
- *  Each word waits for the pane to echo it, so the words land one by one
- *  instead of all at once after a lag; the whole answer stays up
- *  `ANSWER_HOLD_MS` before the Enter. */
+ *  Each word waits for the pane to echo it and the page to paint it, so the
+ *  words land one by one instead of all at once after a lag; the whole answer
+ *  stays up `ANSWER_HOLD_MS` on screen before the Enter. */
 async function typeAnswer(ctx, runId) {
   const { page, instance } = ctx;
   await ctx.click(page.getByTestId("xterm-container"), { duration: 700 });
@@ -202,6 +218,7 @@ async function typeAnswer(ctx, runId) {
       if (Date.now() > deadline) throw new Error(`« ${echoed} » never reached the implementer's terminal`);
       await sleep(50);
     }
+    await untilOnScreen(page, echoed);
     await sleep(180);
   }
   await sleep(ANSWER_HOLD_MS);

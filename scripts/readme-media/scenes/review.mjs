@@ -15,7 +15,9 @@
 // manager's answer): the unified view, the file list closed, a narrow window
 // cropped under the Review toolbar to ~720 px, scaled up to the GIF's 960. The
 // toolbar and the file list are out of frame; the send bar (sticky at the
-// bottom) is in, and the crop ends with it. The manager answers in one line
+// bottom) is in, and the crop ends with it. The other files are collapsed off
+// camera (`focusFile`): under the commented file, only their headers show,
+// whole, never a hunk of theirs. Every toast is waited out off camera. The manager answers in one line
 // (`MANAGER_RULE`, the demo HOME's `~/.claude/CLAUDE.md`, written once the demo
 // runs are done). It is stopped as soon as each variant is filmed
 // (`stopDemoRun`).
@@ -45,12 +47,15 @@ const LAYOUT = { "pdo.review.view": "unified", "pdo.review.list": "closed" };
 const LINE_TOP = CROP.y + 74;
 
 /** What the manager reads, in the demo HOME's `~/.claude/CLAUDE.md`: its
- *  answer fits on one line of the thread (~100 characters at the crop's width). */
+ *  answer fits on one line of the thread (~100 characters at the crop's width).
+ *  A format, not a sample answer: a ready-made sentence (a SHA, a fix) gets
+ *  echoed word for word, or taken for an instruction the manager then refuses. */
 export const MANAGER_RULE = [
   "# Review answers",
   "",
+  "This file only sets the format of your answers; it is not a task. Wait for a review comment to reach you.",
   "When you answer a review comment with `pdo review reply`, answer in ONE short sentence of at most 80 characters,",
-  'for example: --text "Done in 1a2b3c4: debounced at 150 ms, the list re-renders once typing pauses."',
+  "in your own words: the short SHA of the commit you made for it, then what you changed.",
   "",
 ].join("\n");
 
@@ -84,6 +89,7 @@ async function openReview(ctx, runId, { file, line, text, fallback }) {
   const main = await page.getByTestId("review-main").boundingBox();
   if (main.y > CROP.y) throw new Error(`the diff starts at ${main.y} px, under the crop's top (${CROP.y} px): the toolbar would show`);
   if ((await page.getByTestId("review-view-toggle").getAttribute("data-view")) !== "unified") throw new Error("the review is not in the unified view");
+  await focusFile(page, file);
   // One table, added lines only.
   const rows = card.locator("tr").filter({ has: page.locator('[data-operator="+"]') });
   await rows.first().waitFor({ timeout: 30_000 });
@@ -98,7 +104,51 @@ async function openReview(ctx, runId, { file, line, text, fallback }) {
     main.scrollTop += el.getBoundingClientRect().top - top;
   }, LINE_TOP);
   await sleep(700);
+  await frameBottom(page);
   return { row, comment };
+}
+
+/** Off camera: collapse every file but `file`, from its header (the page's own
+ *  toggle). Under the commented file, the next ones show as a header row each,
+ *  not as hunks filling the bottom of the frame. */
+async function focusFile(page, file) {
+  const others = page.getByTestId("review-file").filter({ hasNot: page.getByTestId("review-file-header").filter({ hasText: file }) });
+  for (let i = 0; i < (await others.count()); i++) {
+    const card = others.nth(i);
+    if ((await card.getAttribute("data-collapsed")) === "true") continue;
+    await card.getByTestId("review-file-header").click();
+    await page.waitForFunction((el) => el.dataset.collapsed === "true", await card.elementHandle(), { timeout: 5_000 });
+  }
+}
+
+/** The bottom of the frame cuts no row: a diff row or a file header across the
+ *  crop's bottom edge is scrolled below it (the content moves down by less than
+ *  a row, the thread stays whole). No toast shows either. */
+async function frameBottom(page) {
+  await noToast(page);
+  const bottom = CROP.y + CROP.height;
+  const cut = await page.evaluate((edge) => {
+    const main = document.querySelector('[data-testid="review-main"]');
+    const rows = main.querySelectorAll('[data-testid="review-file"] tr, [data-testid="review-file-header"]');
+    for (const el of rows) {
+      const r = el.getBoundingClientRect();
+      // The thread's own row is framed by `waitForAnswer`, never pushed out.
+      if (el.querySelector('[data-testid="review-comment"], [data-testid="review-editor-text"]')) continue;
+      if (r.height > 0 && r.top < edge - 1 && r.bottom > edge + 1) return edge - r.top;
+    }
+    return 0;
+  }, bottom);
+  if (cut > 0) {
+    await page.evaluate((dy) => {
+      document.querySelector('[data-testid="review-main"]').scrollTop -= dy;
+    }, cut);
+    await sleep(300);
+  }
+}
+
+/** No toast on screen: it would sit over the bottom of the frame. */
+async function noToast(page) {
+  await page.getByTestId("review-toast").waitFor({ state: "detached", timeout: 10_000 });
 }
 
 /** Type `text` a word at a time: a key per character re-renders the editor on
@@ -127,9 +177,24 @@ async function writeDraft(ctx, row, comment) {
     await ctx.click(page.getByTestId("review-editor-save"), { duration: 600 });
   });
   await page.getByTestId("review-send-bar").waitFor({ timeout: 5_000 });
-  await page.getByTestId("review-toast").waitFor({ state: "detached", timeout: 10_000 });
+  await noToast(page);
+  await pinSendBar(page);
   await assertSendBarEndsCrop(page);
   await sleep(200);
+}
+
+/** With the other files collapsed, the page can end above the window's bottom:
+ *  the send bar then sits in the flow, higher than the crop's bottom. Scroll
+ *  up until it reaches its sticky spot. */
+async function pinSendBar(page) {
+  const bar = await page.getByTestId("review-send-bar").boundingBox();
+  const gap = CROP.y + CROP.height - (bar.y + bar.height);
+  if (gap > 2) {
+    await page.evaluate((dy) => {
+      document.querySelector('[data-testid="review-main"]').scrollTop -= dy;
+    }, gap);
+    await sleep(300);
+  }
 }
 
 /** The crop ends with the send bar: nothing of the next file shows under it. */
@@ -141,10 +206,12 @@ async function assertSendBarEndsCrop(page) {
   }
 }
 
-/** The send landed: no draft is left, so the send bar is gone. */
+/** Off camera: the send landed (no draft is left, so the send bar is gone),
+ *  its toast went, and the bottom of the frame cuts no row. */
 async function sent(page) {
   await page.getByTestId("review-send-bar").waitFor({ state: "detached", timeout: 30_000 });
-  await sleep(300);
+  await frameBottom(page);
+  await sleep(200);
 }
 
 /** The sent comment whose text is `comment` — the one this variant posted. */
@@ -170,6 +237,7 @@ async function waitForAnswer(ctx, comment) {
     }, box.y + box.height - bottom);
     await sleep(400);
   }
+  await frameBottom(page);
   await assertOneLineAnswer(card);
 }
 
@@ -229,11 +297,9 @@ export default {
           await writeDraft(ctx, row, comment);
           ctx.mark("comment-posted", { before: 0, after: 500 });
           await sleep(500);
-          await ctx.keep(async () => {
-            await ctx.click(page.getByTestId("review-send-all"), { duration: 700 });
-            await sent(page);
-            await rest(ctx, comment);
-          });
+          await ctx.keep(() => ctx.click(page.getByTestId("review-send-all"), { duration: 700 }));
+          await sent(page);
+          await ctx.keep(() => rest(ctx, comment));
           ctx.mark("sent-to-manager", { before: 0, after: 800 });
           await sleep(800);
           await waitForAnswer(ctx, comment);
@@ -261,11 +327,9 @@ export default {
           await writeDraft(ctx, row, comment);
           ctx.mark("comment-posted", { before: 0, after: 500 });
           await sleep(500);
-          await ctx.keep(async () => {
-            await ctx.click(page.getByTestId("review-comment-send").first(), { duration: 700 });
-            await sent(page);
-            await rest(ctx, comment);
-          });
+          await ctx.keep(() => ctx.click(page.getByTestId("review-comment-send").first(), { duration: 700 }));
+          await sent(page);
+          await ctx.keep(() => rest(ctx, comment));
           ctx.mark("sent-to-manager", { before: 0, after: 800 });
           await sleep(800);
           await waitForAnswer(ctx, comment);

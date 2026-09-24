@@ -6,8 +6,8 @@ const combineMock = vi.fn();
 const uncombineMock = vi.fn();
 
 vi.mock("../api", () => ({
-  combineStatsPipelines: (...args: unknown[]) => combineMock(...args),
-  uncombineStatsPipeline: (...args: unknown[]) => uncombineMock(...args),
+  combineStatsRows: (...args: unknown[]) => combineMock(...args),
+  uncombineStatsMember: (...args: unknown[]) => uncombineMock(...args),
 }));
 
 import StatsCharts from "./StatsCharts";
@@ -17,7 +17,11 @@ import type {
   StatsCost,
   StatsCostAggregate,
   StatsCostEntity,
+  StatsDistribution,
+  StatsHarnessPerformance,
   StatsOverview,
+  StatsPerformance,
+  StatsPerformanceEntity,
   StatsSessionEntity,
 } from "../types";
 
@@ -222,9 +226,11 @@ describe("Stats absorption — the Combine modal (#890)", () => {
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(combineMock).toHaveBeenCalledTimes(1));
-    expect(combineMock).toHaveBeenCalledWith({ key: "interactive-old", name: "interactive" }, [
-      { key: "interactive", name: "interactive" },
-    ]);
+    expect(combineMock).toHaveBeenCalledWith({
+      dimension: "pipeline",
+      absorbent: { key: "interactive-old", name: "interactive" },
+      members: [{ key: "interactive", name: "interactive" }],
+    });
     await waitFor(() => expect(onAbsorptionsChanged).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("stats-combine-modal")).not.toBeInTheDocument();
     expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument();
@@ -302,7 +308,9 @@ describe("Stats absorption — the combined icon and its members (#890)", () => 
 
     await user.click(screen.getByRole("button", { name: "Uncombine interactive" }));
 
-    await waitFor(() => expect(uncombineMock).toHaveBeenCalledWith("interactive-old"));
+    await waitFor(() =>
+      expect(uncombineMock).toHaveBeenCalledWith("pipeline", "", "interactive-old"),
+    );
     await waitFor(() =>
       expect(screen.queryByTestId("stats-members-modal")).not.toBeInTheDocument(),
     );
@@ -432,5 +440,400 @@ describe("Stats absorption — under « Uncombined » (#891)", () => {
     );
     await user.click(screen.getByTestId("stats-uncombined"));
     expect(onUncombinedChange).toHaveBeenCalledWith(true);
+  });
+});
+
+// --- Nodes and Models (#892) -------------------------------------------------------
+
+function node(
+  id: string,
+  name: string,
+  executions: number,
+  lastRun: string,
+  absorbed?: StatsAbsorbedMember[],
+): StatsSessionEntity {
+  return {
+    id,
+    name,
+    executions,
+    harnesses: [{ harness: "claude", executions }],
+    by_period: [],
+    nodes: [],
+    runs: executions,
+    last_run: lastRun,
+    ...(absorbed ? { absorbed } : {}),
+  };
+}
+
+function withNodes(row: StatsSessionEntity, nodes: StatsSessionEntity[]): StatsSessionEntity {
+  return { ...row, nodes };
+}
+
+/** A Node row of the detail table, by its name. */
+function nodeRow(name: string): HTMLElement {
+  const row = screen
+    .getAllByTestId("stats-session-row")
+    .find((item) => item.textContent?.includes(name));
+  if (!row) throw new Error(`no node row ${name}`);
+  return row;
+}
+
+const REVIEWED = withNodes(pipeline("reviewer", "Reviewer", 8, "2026-09-23T09:00:00Z"), [
+  node("code-review", "Code review", 5, "2026-09-23T09:00:00Z"),
+  node("review", "Review", 3, "2026-09-10T09:00:00Z"),
+]);
+const TRIAGE = withNodes(pipeline("triager", "Triager", 4, "2026-09-22T09:00:00Z"), [
+  node("triage", "Triage", 4, "2026-09-22T09:00:00Z"),
+]);
+
+describe("Stats absorption — Nodes (#892)", () => {
+  it("selects two Node rows of one pipeline and combines them under its row", async () => {
+    const user = userEvent.setup();
+    combineMock.mockResolvedValue({ absorptions: [] });
+    const { onAbsorptionsChanged } = renderSessions([REVIEWED, TRIAGE]);
+    await user.click(masterRow(8));
+    expect(screen.getByText("Total / Reviewer")).toBeInTheDocument();
+
+    await ctrlClick(user, nodeRow("Review"));
+    expect(nodeRow("Review")).toHaveAttribute("data-checked", "true");
+    expect(nodeRow("Review").className).toContain("bg-acc-bg");
+    await user.click(within(nodeRow("Code review")).getByTestId("stats-row-select"));
+    const bar = screen.getByTestId("bulk-action-bar");
+    expect(within(bar).getByTestId("bulk-count")).toHaveTextContent("2 selected");
+
+    await user.click(within(bar).getByTestId("bulk-action-combine"));
+    const modal = screen.getByTestId("stats-combine-modal");
+    expect(within(modal).getByText("Combine 2 nodes")).toBeInTheDocument();
+    expect(modal).toHaveTextContent("Stats will read them as one node of Reviewer, in every tab.");
+    // The Node that ran last is proposed.
+    const checked = within(modal)
+      .getAllByTestId("stats-combine-option")
+      .find((option) => option.getAttribute("aria-checked") === "true")!;
+    expect(checked).toHaveTextContent("Code review");
+    expect(modal.textContent).not.toContain("code-review");
+
+    await user.click(within(modal).getByTestId("stats-combine-confirm"));
+    await waitFor(() =>
+      expect(combineMock).toHaveBeenCalledWith({
+        dimension: "node",
+        scope: "reviewer",
+        scope_name: "Reviewer",
+        absorbent: { key: "code-review", name: "Code review", scope: "reviewer" },
+        members: [{ key: "review", name: "Review", scope: "reviewer" }],
+      }),
+    );
+    await waitFor(() => expect(onAbsorptionsChanged).toHaveBeenCalledTimes(1));
+    expect(nodeRow("Code review").className).toContain("ring-acc");
+  });
+
+  it("refuses, visibly, a selection that mixes Pipeline and Node rows", async () => {
+    const user = userEvent.setup();
+    renderSessions([REVIEWED, TRIAGE]);
+    await ctrlClick(user, masterRow(4));
+    await user.click(masterRow(8));
+
+    await ctrlClick(user, nodeRow("Review"));
+    expect(nodeRow("Review")).not.toHaveAttribute("data-checked", "true");
+    expect(screen.getByTestId("stats-absorption-refusal")).toHaveTextContent(
+      "Pipelines and nodes can't be combined together.",
+    );
+    expect(masterRow(4)).toHaveAttribute("data-checked", "true");
+  });
+
+  it("refuses, visibly, Nodes of two different pipelines", async () => {
+    const user = userEvent.setup();
+    renderSessions([REVIEWED, TRIAGE]);
+    await user.click(masterRow(8));
+    await ctrlClick(user, nodeRow("Review"));
+
+    await user.click(masterRow(4));
+    await ctrlClick(user, nodeRow("Triage"));
+    expect(nodeRow("Triage")).not.toHaveAttribute("data-checked", "true");
+    const refusal = screen.getByTestId("stats-absorption-refusal");
+    expect(refusal).toHaveTextContent("Nodes of Reviewer and nodes of Triager can't be combined");
+    // Names only.
+    expect(refusal.textContent).not.toContain("triager");
+  });
+
+  it("marks a Node absorbent with [⧉ N] and its ✕ uncombines under the pipeline's row", async () => {
+    const user = userEvent.setup();
+    uncombineMock.mockResolvedValue({ absorptions: [] });
+    const combined = withNodes(pipeline("reviewer", "Reviewer", 8, "2026-09-23T09:00:00Z"), [
+      node("code-review", "Code review", 8, "2026-09-23T09:00:00Z", [
+        { key: "review", name: "Review", runs: 3, executions: 3, last_run: "2026-09-10T09:00:00Z" },
+      ]),
+    ]);
+    const { onAbsorptionsChanged } = renderSessions([combined]);
+    await user.click(masterRow(8));
+
+    const icon = within(nodeRow("Code review")).getByTestId("stats-combined-icon");
+    expect(icon).toHaveAttribute("aria-label", "Combined with 1 other node");
+    await user.click(icon);
+    const modal = screen.getByTestId("stats-members-modal");
+    expect(within(modal).getByText("Counts the runs of 1 other node too.")).toBeInTheDocument();
+    expect(within(modal).getByTestId("stats-member-row")).toHaveTextContent(
+      "3 executions · last run 2026-09-10",
+    );
+
+    await user.click(within(modal).getByRole("button", { name: "Uncombine Review" }));
+    await waitFor(() => expect(uncombineMock).toHaveBeenCalledWith("node", "reviewer", "review"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("stats-members-modal")).not.toBeInTheDocument(),
+    );
+    expect(onAbsorptionsChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Stats absorption — Cost Nodes and Models (#892)", () => {
+  const aggregate: StatsCostAggregate = {
+    usd: 3,
+    average_usd: 1,
+    median_usd: 1,
+    estimated: true,
+    partial: false,
+    executions: 3,
+    readable: 3,
+    unknown: 0,
+    unpriced_models: [],
+    missing_reasons: [],
+    harnesses: [],
+  };
+  const row = (id: string, name: string, extra: Partial<StatsCostEntity> = {}): StatsCostEntity => ({
+    id,
+    name,
+    ...aggregate,
+    by_period: [],
+    nodes: [],
+    runs: 3,
+    last_run: "2026-09-20T00:00:00Z",
+    ...extra,
+  });
+  const modelRow = (id: string, usd: number, extra: Partial<StatsCostEntity> = {}) => ({
+    ...row(id, id, { usd, ...extra }),
+    provenance: "observed" as const,
+    efforts: [],
+  });
+  const cost: StatsCost = {
+    harnesses: [],
+    total: aggregate,
+    by_period: [],
+    by_pipeline: [
+      row("reviewer", "Reviewer", {
+        nodes: [
+          row("code-review", "Code review", { usd: 2 }),
+          row("review", "Review", { usd: 1 }),
+          { ...row("reviewer:infrastructure", "Infrastructure"), runs: undefined, last_run: undefined },
+        ],
+      }),
+    ],
+    by_project: [],
+    by_model: [
+      modelRow("claude-opus-4-8", 5, {
+        absorbed: [
+          { key: "opus-pinned", name: "opus-pinned", runs: 2, provenance: "requested" },
+        ],
+      }),
+      modelRow("claude-sonnet-5", 2, { last_run: "2026-09-23T00:00:00Z" }),
+      modelRow("sonnet", 1),
+    ],
+    resolved: [],
+  };
+
+  it("selects Node rows in the Cost detail, never the Infrastructure bucket", async () => {
+    const user = userEvent.setup();
+    render(<StatsCharts tab="cost" overview={null} cost={cost} costError={null} />);
+    const list = screen.getByRole("listbox");
+    await user.click(within(list).getByText("Reviewer"));
+    const rows = screen.getAllByTestId("stats-detail-row");
+    const infrastructure = rows.find((item) => item.textContent?.includes("Infrastructure"))!;
+    expect(within(infrastructure).queryByTestId("stats-row-select")).not.toBeInTheDocument();
+    const review = rows.find((item) => item.textContent?.startsWith("Review"))!;
+    const codeReview = rows.find((item) => item.textContent?.includes("Code review"))!;
+    await ctrlClick(user, review);
+    await ctrlClick(user, codeReview);
+    expect(screen.getByTestId("bulk-action-combine")).toHaveTextContent("Combine (2)…");
+  });
+
+  it("combines two Model rows on « By model », and marks the absorbent with its members' provenance", async () => {
+    const user = userEvent.setup();
+    combineMock.mockResolvedValue({ absorptions: [] });
+    render(<StatsCharts tab="cost" overview={null} cost={cost} costError={null} />);
+    await user.selectOptions(screen.getByLabelText("Cost grouping"), "model");
+
+    // The icon, in the master list and on the Total-level table.
+    const icons = screen.getAllByTestId("stats-combined-icon");
+    expect(icons).toHaveLength(2);
+    expect(icons[0]).toHaveAttribute("aria-label", "Combined with 1 other model");
+    await user.click(icons[0]);
+    expect(screen.getByTestId("stats-member-row")).toHaveTextContent(
+      "2 runs · no run in this period · requested id",
+    );
+    await user.click(screen.getByTestId("stats-members-close"));
+
+    const list = screen.getByRole("listbox");
+    const option = (name: string) =>
+      within(list)
+        .getAllByRole("option")
+        .find((item) => item.textContent?.startsWith(name))!;
+    await ctrlClick(user, option("claude-sonnet-5"));
+    await ctrlClick(user, option("sonnet"));
+    await user.click(screen.getByTestId("bulk-action-combine"));
+    const modal = screen.getByTestId("stats-combine-modal");
+    expect(within(modal).getByText("Combine 2 models")).toBeInTheDocument();
+    expect(modal).toHaveTextContent("one model on the « By model » axis of Cost and Performance");
+    await user.click(within(modal).getByTestId("stats-combine-confirm"));
+    await waitFor(() =>
+      expect(combineMock).toHaveBeenCalledWith({
+        dimension: "model",
+        absorbent: { key: "claude-sonnet-5", name: "claude-sonnet-5" },
+        members: [{ key: "sonnet", name: "sonnet" }],
+      }),
+    );
+  });
+
+  it("refuses to mix a Model row with the Nodes reached under it", async () => {
+    const user = userEvent.setup();
+    const drilled: StatsCost = {
+      ...cost,
+      by_model: [
+        {
+          ...modelRow("claude-opus-4-8", 5),
+          efforts: [
+            {
+              ...row("high", "high"),
+              effort: "high",
+              provenance: "observed",
+              pipelines: [
+                row("reviewer", "Reviewer", {
+                  nodes: [row("code-review", "Code review"), row("review", "Review")],
+                }),
+              ],
+            },
+          ],
+        },
+        modelRow("claude-sonnet-5", 2),
+      ],
+    };
+    render(<StatsCharts tab="cost" overview={null} cost={drilled} costError={null} />);
+    await user.selectOptions(screen.getByLabelText("Cost grouping"), "model");
+    const list = screen.getByRole("listbox");
+    await ctrlClick(
+      user,
+      within(list)
+        .getAllByRole("option")
+        .find((item) => item.textContent?.startsWith("claude-sonnet-5"))!,
+    );
+    await user.click(within(list).getByText("claude-opus-4-8"));
+    await user.click(screen.getByRole("button", { name: "Open high" }));
+    await user.click(screen.getByRole("button", { name: "Open Reviewer" }));
+    const review = screen
+      .getAllByTestId("stats-detail-row")
+      .find((item) => item.textContent?.startsWith("Review"))!;
+    await ctrlClick(user, review);
+    expect(screen.getByTestId("stats-absorption-refusal")).toHaveTextContent(
+      "Models and nodes can't be combined together.",
+    );
+  });
+});
+
+describe("Stats absorption — Performance Nodes (#892)", () => {
+  const measured = (median: number): StatsDistribution => ({
+    stats: {
+      min: median,
+      q1: median,
+      median,
+      mean: median,
+      q3: median,
+      max: median,
+      fence_low: median,
+      fence_high: median,
+    },
+    measured: 1,
+    expected: 1,
+    missing_reasons: [],
+  });
+  const harness = (median: number): StatsHarnessPerformance => ({
+    harness: "claude",
+    context: measured(median),
+    duration: measured(median),
+    active_duration: measured(median),
+    wait_duration: measured(0),
+    steering: measured(0),
+    steered: { steered: 0, readable: 1 },
+  });
+  const entity = (
+    id: string,
+    name: string,
+    extra: Partial<StatsPerformanceEntity> = {},
+  ): StatsPerformanceEntity => ({
+    id,
+    name,
+    harnesses: [harness(1000)],
+    nodes: [],
+    subagents: [],
+    ...extra,
+  });
+  const performance: StatsPerformance = {
+    harnesses: ["claude"],
+    total: { harnesses: [harness(1000)] },
+    infrastructure_total: { harnesses: [harness(500)] },
+    by_pipeline: [
+      entity("reviewer", "Reviewer", {
+        runs: 2,
+        last_run: "2026-09-23T00:00:00Z",
+        nodes: [
+          entity("code-review", "Code review", {
+            interactive: false,
+            orchestrator: false,
+            runs: 1,
+            last_run: "2026-09-23T00:00:00Z",
+            absorbed: [{ key: "review-old", name: "Review (old)", runs: 1 }],
+            subagents: [entity("explore", "Explore")],
+          }),
+          entity("review", "Review", {
+            interactive: false,
+            orchestrator: false,
+            runs: 1,
+            last_run: "2026-09-01T00:00:00Z",
+          }),
+        ],
+      }),
+    ],
+    infrastructure: [entity("pipeline-manager", "Pipeline Manager")],
+    by_model: [],
+    waited_executions: 0,
+    executions: 2,
+  };
+
+  it("selects Node rows and marks a Node absorbent — never a subagent, never Infrastructure", async () => {
+    const user = userEvent.setup();
+    render(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={performance}
+      />,
+    );
+    const list = screen.getByRole("listbox");
+    await user.click(within(list).getByText("Reviewer"));
+    const row = (name: string) =>
+      screen
+        .getAllByTestId("stats-detail-row")
+        .find((item) => item.textContent?.startsWith(name))!;
+    expect(within(row("Code review")).getByTestId("stats-combined-icon")).toHaveAttribute(
+      "aria-label",
+      "Combined with 1 other node",
+    );
+    await user.click(screen.getByRole("button", { name: "Expand Code review subagents" }));
+    expect(within(row("Explore")).queryByTestId("stats-row-select")).not.toBeInTheDocument();
+
+    await ctrlClick(user, row("Review"));
+    await ctrlClick(user, row("Code review"));
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
+
+    await user.click(within(list).getByText("Infrastructure"));
+    expect(within(row("Pipeline Manager")).queryByTestId("stats-row-select")).not.toBeInTheDocument();
   });
 });

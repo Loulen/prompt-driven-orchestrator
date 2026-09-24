@@ -2528,6 +2528,48 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
     expect(screen.getByTestId("settings-save")).toBeDisabled();
   });
 
+  it("lists the Node and Model absorptions in their own groups, the Node's under its pipeline (#892)", async () => {
+    fetchStatsAbsorptionsMock.mockResolvedValue({
+      absorptions: [
+        ...list([{ key: "digest", name: "Digest", origin: "rename" }]).absorptions,
+        {
+          dimension: "node",
+          scope: "digest-v3",
+          scope_name: "Digest v3",
+          absorbent: { key: "code-review", name: "Code review" },
+          members: [{ key: "review", name: "Review", origin: "manual", created_at: "2026-09-21T10:00:00Z" }],
+        },
+        {
+          dimension: "model",
+          scope: "",
+          absorbent: { key: "claude-opus-4-8", name: "claude-opus-4-8" },
+          members: [{ key: "opus", name: "opus", origin: "manual", created_at: "2026-09-22T10:00:00Z" }],
+        },
+      ],
+    });
+    uncombineStatsMemberMock.mockResolvedValue({ absorptions: [] });
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={() => {}} />);
+    const body = await screen.findByTestId("settings-section-body-stats-absorptions");
+
+    const nodes = await within(body).findByTestId("stats-absorptions-node");
+    expect(nodes).toHaveTextContent("Nodes");
+    expect(nodes).toHaveTextContent("Code review");
+    expect(within(nodes).getByTestId("stats-absorption-scope")).toHaveTextContent("in Digest v3");
+    expect(within(nodes).getByTestId("stats-absorption-member")).toHaveTextContent(
+      "combined in Stats on 2026-09-21",
+    );
+    const models = within(body).getByTestId("stats-absorptions-model");
+    expect(models).toHaveTextContent("Models");
+    expect(models).toHaveTextContent("claude-opus-4-8");
+    expect(models).toHaveTextContent("opus");
+    // The Node absorption's scope is a key: only its name is shown.
+    expect(body).not.toHaveTextContent("digest-v3");
+
+    await user.click(within(nodes).getByRole("button", { name: "Uncombine Review" }));
+    expect(uncombineStatsMemberMock).toHaveBeenCalledWith("node", "digest-v3", "review");
+  });
+
   it("says so when nothing is combined, and re-reads the list at each open", async () => {
     fetchStatsAbsorptionsMock.mockResolvedValue({ absorptions: [] });
     const { rerender } = render(<SettingsSurface open onClose={() => {}} />);

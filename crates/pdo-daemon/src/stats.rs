@@ -149,8 +149,8 @@ pub(crate) struct StatsSessionEntity {
     pub harnesses: Vec<StatsSessionHarness>,
     pub by_period: Vec<StatsSessionPeriod>,
     pub nodes: Vec<StatsSessionEntity>,
-    /// Pipeline rows only (#890): the Runs counted, the most recent one's start,
-    /// and — on an absorbent — its absorbed members. Omitted on Node rows.
+    /// Pipeline and Node rows (#890, #892): the Runs counted, the most recent
+    /// one's start, and — on an absorbent — its absorbed members.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -159,11 +159,24 @@ pub(crate) struct StatsSessionEntity {
     pub absorbed: Vec<crate::stats_absorption::AbsorbedMember>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct SessionNodeBuilder {
     name: String,
     count: HarnessCount,
     periods: BTreeMap<String, HarnessCount>,
+    /// Which raw Node ids' executions landed here (#892).
+    tallies: crate::stats_absorption::PipelineTallies,
+}
+
+impl Default for SessionNodeBuilder {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            count: HarnessCount::default(),
+            periods: BTreeMap::new(),
+            tallies: crate::stats_absorption::PipelineTallies::counting_executions(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -212,7 +225,13 @@ fn period_rows(periods: BTreeMap<String, HarnessCount>) -> Vec<StatsSessionPerio
         .collect()
 }
 
-fn finish_node(id: String, builder: SessionNodeBuilder) -> StatsSessionEntity {
+fn finish_node(
+    pipeline: &str,
+    id: String,
+    builder: SessionNodeBuilder,
+    resolver: &crate::stats_absorption::AbsorptionResolver,
+) -> StatsSessionEntity {
+    let absorbed = resolver.absorbed_nodes(pipeline, &id, &builder.tallies);
     StatsSessionEntity {
         id,
         name: builder.name,
@@ -220,9 +239,9 @@ fn finish_node(id: String, builder: SessionNodeBuilder) -> StatsSessionEntity {
         harnesses: harness_rows(builder.count.by_harness),
         by_period: period_rows(builder.periods),
         nodes: Vec::new(),
-        runs: None,
-        last_run: None,
-        absorbed: Vec::new(),
+        runs: Some(builder.tallies.runs()),
+        last_run: builder.tallies.last_run(),
+        absorbed,
     }
 }
 
@@ -234,7 +253,7 @@ fn finish_pipeline(
     let mut nodes: Vec<StatsSessionEntity> = builder
         .nodes
         .into_iter()
-        .map(|(id, node)| finish_node(id, node))
+        .map(|(node_id, node)| finish_node(&id, node_id, node, resolver))
         .collect();
     nodes.sort_by(|a, b| {
         b.executions
@@ -484,9 +503,14 @@ async fn session_stats(
         );
 
         *session_periods.entry(bucket.clone()).or_default() += 1;
-        let node_name = identity.node_name(&node_id);
-        let node = pipeline.nodes.entry(node_id.clone()).or_default();
-        node.name = node_name;
+        // #892: a Node absorbed under this Pipeline row counts under its
+        // absorbent Node.
+        let node_identity = identity.node(&node_id);
+        let node = pipeline.nodes.entry(node_identity.key.clone()).or_default();
+        node_identity.adopt_name(&mut node.name);
+        node.tallies
+            .record_run_as(&node_identity.raw_key, &run_id, &started_at);
+        node.tallies.record_execution_as(&node_identity.raw_key);
         increment_harness(&mut node.count, &harness);
         increment_harness(node.periods.entry(bucket).or_default(), &harness);
     }
@@ -685,8 +709,9 @@ pub(crate) struct StatsCostEntity {
     /// other levels.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<StatsModelEffortPair>,
-    /// Pipeline rows only (#890): the Runs counted, the most recent one's start,
-    /// and — on an absorbent — its absorbed members. Omitted on the other levels.
+    /// Pipeline, Node and « By model » model rows (#890, #892): the Runs
+    /// counted, the most recent one's start, and — on an absorbent — its
+    /// absorbed members. Omitted on the other levels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1037,7 +1062,8 @@ struct CostEntityAcc {
     /// The Node leaf's model × effort pairs (ADR-0065) — only node-level accs
     /// ever receive slices, so pipeline-level wiring emits an empty vec.
     pairs: BTreeMap<(String, Option<String>), ModelPairAcc>,
-    /// Pipeline-level accs only: which raw keys' Runs landed here (#890).
+    /// Which raw keys' Runs landed here: Pipeline keys on a Pipeline acc
+    /// (#890), Node ids on a Node acc (#892).
     tallies: crate::stats_absorption::PipelineTallies,
 }
 
@@ -1150,6 +1176,8 @@ struct ModelAcc {
     efforts: BTreeMap<Option<String>, ModelEffortAcc>,
     model_observed: i64,
     model_requested: i64,
+    /// Which raw model ids landed here, and where each was read from (#892).
+    tallies: crate::stats_absorption::PipelineTallies,
 }
 
 /// Wire the whole « By model » tree: Model → Effort → Pipeline → Node, ranked by
@@ -1170,12 +1198,12 @@ fn wire_by_model(
                         .pipelines
                         .into_iter()
                         .map(|(id, pipeline_acc)| {
-                            let mut entity = wire_cost_pipeline(id, pipeline_acc.entity, resolver);
                             let mut nodes: Vec<StatsCostEntity> = pipeline_acc
                                 .nodes
                                 .into_iter()
-                                .map(|(id, node)| wire_cost_entity(id, node))
+                                .map(|(node_id, node)| wire_cost_node(&id, node_id, node, resolver))
                                 .collect();
+                            let mut entity = wire_cost_pipeline(id, pipeline_acc.entity, resolver);
                             nodes.sort_by(|a, b| {
                                 cost_then_id(a.aggregate.usd, &a.id, b.aggregate.usd, &b.id)
                             });
@@ -1216,15 +1244,15 @@ fn wire_by_model(
             });
             StatsModelCostEntity {
                 entity: StatsCostEntity {
+                    absorbed: resolver.absorbed_models(&model, &acc.tallies),
+                    runs: Some(acc.tallies.runs()),
+                    last_run: acc.tallies.last_run(),
                     id: model.clone(),
                     name: model,
                     aggregate: acc.aggregate.wire(),
                     by_period: wire_periods(acc.periods),
                     nodes: Vec::new(),
                     models: Vec::new(),
-                    runs: None,
-                    last_run: None,
-                    absorbed: Vec::new(),
                 },
                 provenance: provenance(acc.model_observed, acc.model_requested),
                 efforts,
@@ -1287,18 +1315,45 @@ fn wire_cost_entity(id: String, entity: CostEntityAcc) -> StatsCostEntity {
     }
 }
 
-/// A Pipeline row: the entity, plus what its Runs and its absorbed members say.
+/// A Pipeline row: the entity, plus what its Runs and its absorbed members say
+/// — and the same for each of its Node rows (#892).
 fn wire_cost_pipeline(
+    id: String,
+    mut entity: CostEntityAcc,
+    resolver: &crate::stats_absorption::AbsorptionResolver,
+) -> StatsCostEntity {
+    let runs = entity.tallies.runs();
+    let last_run = entity.tallies.last_run();
+    let absorbed = resolver.absorbed(&id, &entity.tallies);
+    let mut nodes: Vec<StatsCostEntity> = std::mem::take(&mut entity.nodes)
+        .into_iter()
+        .map(|(node_id, node)| wire_cost_node(&id, node_id, node, resolver))
+        .collect();
+    nodes.sort_by(|a, b| cost_then_id(a.aggregate.usd, &a.id, b.aggregate.usd, &b.id));
+    let mut wired = wire_cost_entity(id, entity);
+    wired.nodes = nodes;
+    wired.runs = Some(runs);
+    wired.last_run = last_run;
+    wired.absorbed = absorbed;
+    wired
+}
+
+/// A Node row under Pipeline row `pipeline`: its Runs and its absorbed Nodes.
+/// The Infrastructure and Unassigned rows are no Node: they record no Run.
+fn wire_cost_node(
+    pipeline: &str,
     id: String,
     entity: CostEntityAcc,
     resolver: &crate::stats_absorption::AbsorptionResolver,
 ) -> StatsCostEntity {
     let runs = entity.tallies.runs();
     let last_run = entity.tallies.last_run();
-    let absorbed = resolver.absorbed(&id, &entity.tallies);
+    let absorbed = resolver.absorbed_nodes(pipeline, &id, &entity.tallies);
     let mut wired = wire_cost_entity(id, entity);
-    wired.runs = Some(runs);
-    wired.last_run = last_run;
+    if runs > 0 {
+        wired.runs = Some(runs);
+        wired.last_run = last_run;
+    }
     wired.absorbed = absorbed;
     wired
 }
@@ -1423,26 +1478,41 @@ fn fold_harness_cost(
             if contribution.executions > 0 {
                 active_harnesses.insert(contribution.harness.clone());
             }
-            let (id, name) = match contribution.scope {
+            // #892: a Node absorbed under this Pipeline row counts under its
+            // absorbent Node, in every tree the Node shows in.
+            let node_identity = match contribution.scope {
                 crate::run_cost::CostScope::Node => {
-                    let id = contribution
-                        .node_id
-                        .clone()
-                        .unwrap_or_else(|| "(unknown)".to_string());
-                    let name = identity.node_name(&id);
-                    (id, name)
+                    identity.node(contribution.node_id.as_deref().unwrap_or("(unknown)"))
                 }
-                crate::run_cost::CostScope::Infrastructure => (
-                    format!("{pipeline_key}:infrastructure"),
-                    "Infrastructure".to_string(),
-                ),
-                crate::run_cost::CostScope::Unassigned => (
-                    format!("{pipeline_key}:unassigned"),
-                    "Unassigned".to_string(),
-                ),
+                crate::run_cost::CostScope::Infrastructure => {
+                    crate::stats_absorption::NodeIdentity {
+                        key: format!("{pipeline_key}:infrastructure"),
+                        raw_key: String::new(),
+                        name: "Infrastructure".to_string(),
+                        own_name: true,
+                    }
+                }
+                crate::run_cost::CostScope::Unassigned => crate::stats_absorption::NodeIdentity {
+                    key: format!("{pipeline_key}:unassigned"),
+                    raw_key: String::new(),
+                    name: "Unassigned".to_string(),
+                    own_name: true,
+                },
+            };
+            let id = node_identity.key.clone();
+            let is_node = contribution.scope == crate::run_cost::CostScope::Node;
+            let tally = |node: &mut CostEntityAcc| {
+                node_identity.adopt_name(&mut node.name);
+                if is_node {
+                    node.tallies.record_run_as(
+                        &node_identity.raw_key,
+                        &run.run_id,
+                        &run.started_at,
+                    );
+                }
             };
             let node = pipeline.nodes.entry(id.clone()).or_default();
-            node.name = name.clone();
+            tally(node);
             node.aggregate.add_contribution(contribution);
             node.periods
                 .entry(run.bucket.clone())
@@ -1450,7 +1520,7 @@ fn fold_harness_cost(
                 .add_contribution(contribution);
 
             let project_node = project_pipeline.nodes.entry(id.clone()).or_default();
-            project_node.name = name.clone();
+            tally(project_node);
             project_node.aggregate.add_contribution(contribution);
             project_node
                 .periods
@@ -1474,7 +1544,15 @@ fn fold_harness_cost(
                     .or_default()
                     .add_slice(&contribution.harness, slice);
 
-                let model = models_axis.entry(slice.model.clone()).or_default();
+                // #892: an absorbed model id counts under its absorbent on
+                // this axis only; its efforts meet the absorbent's by effort.
+                let model = models_axis.entry(identity.model(&slice.model)).or_default();
+                model
+                    .tallies
+                    .record_run_as(&slice.model, &run.run_id, &run.started_at);
+                model
+                    .tallies
+                    .record_provenance_as(&slice.model, slice.model_observed);
                 model.aggregate.add_slice(&contribution.harness, slice);
                 model
                     .periods
@@ -1530,7 +1608,7 @@ fn fold_harness_cost(
                 }
 
                 let axis_node = axis_pipeline.nodes.entry(id.clone()).or_default();
-                axis_node.name = name.clone();
+                tally(axis_node);
                 axis_node.aggregate.add_slice(&contribution.harness, slice);
                 axis_node
                     .periods

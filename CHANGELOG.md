@@ -16,6 +16,15 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.104.0
+**Stats : absorber des Pipelines** (#890, story #888, ADR-0077).
+
+- Dans Stats › Sessions, sélectionner plusieurs Pipelines (Ctrl/Maj-clic) puis « Combine » :
+  une seule ligne, au nom de l'absorbant, cumule leurs Runs dans Sessions, Cost, Performance
+  et Triggers. La pastille `[⧉ N]` ouvre la liste des membres, d'où l'on retire un absorbé.
+- L'absorption est stockée dans `pdo.db` et appliquée à la lecture : le log d'événements
+  n'est jamais réécrit, et `uncombined=true` sur les routes Stats rend les chiffres bruts.
+
 ## 1.103.0
 **Grille de câblage : 30px par défaut, taille S/M/L réglable** (#877).
 

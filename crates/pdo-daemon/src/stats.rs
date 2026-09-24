@@ -752,6 +752,19 @@ pub(crate) struct StatsModelEffortPair {
     pub model_provenance: StatsProvenance,
     pub effort: Option<String>,
     pub effort_provenance: Option<StatsProvenance>,
+    /// The couple's key (`model|effort`, #906) — what a couple absorption
+    /// names; the UI shows `model · effort`, never the key.
+    pub key: String,
+    pub runs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<String>,
+    /// The couples this one absorbs locally, in this Node row (#906).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub absorbed: Vec<crate::stats_absorption::AbsorbedMember>,
+    /// The raw couples a global absorption (models, efforts) counts here —
+    /// the grey, read-only « Global absorption » mark (#906).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub global_absorbed: Vec<crate::stats_absorption::AbsorbedMember>,
 }
 
 /// One effort level under a model, in the « By model » tree: the entity's `id`
@@ -1079,9 +1092,33 @@ struct ModelPairAcc {
     model_requested: i64,
     effort_observed: i64,
     effort_requested: i64,
+    /// #906: the Runs landed here, by globally resolved couple key (the local
+    /// members), and by raw couple key for those a global absorption moved.
+    tallies: crate::stats_absorption::PipelineTallies,
+    global_tallies: crate::stats_absorption::PipelineTallies,
+    /// The raw `(Pipeline, Node)` scopes whose couples landed here.
+    scopes: BTreeSet<String>,
 }
 
 impl ModelPairAcc {
+    /// Record which Run, under which couple identity, landed here (#906).
+    fn record(
+        &mut self,
+        couple: &crate::stats_absorption::CoupleIdentity,
+        run_id: &str,
+        started_at: &str,
+    ) {
+        self.tallies
+            .record_run_as(&couple.global_key, run_id, started_at);
+        if couple.global {
+            self.global_tallies
+                .record_run_as(&couple.raw_key, run_id, started_at);
+        }
+        if !couple.scope.is_empty() {
+            self.scopes.insert(couple.scope.clone());
+        }
+    }
+
     fn add_slice(&mut self, harness: &str, slice: &crate::run_cost::ModelEffortSlice) {
         self.metric.add_slice(slice);
         self.harnesses
@@ -1100,14 +1137,25 @@ impl ModelPairAcc {
         }
     }
 
-    fn wire(self, model: String, effort: Option<String>) -> StatsModelEffortPair {
+    fn wire(
+        self,
+        model: String,
+        effort: Option<String>,
+        resolver: &crate::stats_absorption::AbsorptionResolver,
+    ) -> StatsModelEffortPair {
         let mut aggregate = self.metric.wire();
         aggregate.harnesses = self
             .harnesses
             .into_iter()
             .map(|(harness, acc)| acc.wire(harness))
             .collect();
+        let key = crate::stats_absorption::couple_key(&model, effort.as_deref());
         StatsModelEffortPair {
+            absorbed: resolver.absorbed_couples(&self.scopes, &key, &self.tallies),
+            global_absorbed: self.global_tallies.global_members(),
+            runs: self.tallies.runs(),
+            last_run: self.tallies.last_run(),
+            key,
             aggregate,
             model_provenance: provenance(self.model_observed, self.model_requested),
             effort_provenance: effort
@@ -1136,10 +1184,11 @@ fn cost_then_id(
 
 fn wire_pairs(
     pairs: BTreeMap<(String, Option<String>), ModelPairAcc>,
+    resolver: &crate::stats_absorption::AbsorptionResolver,
 ) -> Vec<StatsModelEffortPair> {
     let mut rows: Vec<StatsModelEffortPair> = pairs
         .into_iter()
-        .map(|((model, effort), acc)| acc.wire(model, effort))
+        .map(|((model, effort), acc)| acc.wire(model, effort, resolver))
         .collect();
     rows.sort_by(|a, b| {
         cost_then_id(a.aggregate.usd, &a.model, b.aggregate.usd, &b.model)
@@ -1166,6 +1215,8 @@ struct ModelEffortAcc {
     model_requested: i64,
     effort_observed: i64,
     effort_requested: i64,
+    /// Which raw efforts' Runs landed here (#906), by effort key.
+    tallies: crate::stats_absorption::PipelineTallies,
 }
 
 /// One model (verbatim id) of the « By model » axis.
@@ -1222,9 +1273,13 @@ fn wire_by_model(
                             by_period: wire_periods(effort_acc.periods),
                             nodes: Vec::new(),
                             models: Vec::new(),
-                            runs: None,
-                            last_run: None,
-                            absorbed: Vec::new(),
+                            runs: Some(effort_acc.tallies.runs()),
+                            last_run: effort_acc.tallies.last_run(),
+                            absorbed: resolver.absorbed_efforts(
+                                acc.tallies.keys(),
+                                &crate::stats_absorption::effort_key(effort.as_deref()),
+                                &effort_acc.tallies,
+                            ),
                         },
                         provenance: effort.as_ref().map(|_| {
                             provenance(effort_acc.effort_observed, effort_acc.effort_requested)
@@ -1288,11 +1343,15 @@ fn wire_periods(periods: BTreeMap<String, CostAggregateAcc>) -> Vec<StatsCostPer
         .collect()
 }
 
-fn wire_cost_entity(id: String, entity: CostEntityAcc) -> StatsCostEntity {
+fn wire_cost_entity(
+    id: String,
+    entity: CostEntityAcc,
+    resolver: &crate::stats_absorption::AbsorptionResolver,
+) -> StatsCostEntity {
     let mut nodes: Vec<_> = entity
         .nodes
         .into_iter()
-        .map(|(id, node)| wire_cost_entity(id, node))
+        .map(|(id, node)| wire_cost_entity(id, node, resolver))
         .collect();
     nodes.sort_by(|a, b| {
         b.aggregate
@@ -1308,7 +1367,7 @@ fn wire_cost_entity(id: String, entity: CostEntityAcc) -> StatsCostEntity {
         aggregate: entity.aggregate.wire(),
         by_period: wire_periods(entity.periods),
         nodes,
-        models: wire_pairs(entity.pairs),
+        models: wire_pairs(entity.pairs, resolver),
         runs: None,
         last_run: None,
         absorbed: Vec::new(),
@@ -1330,7 +1389,7 @@ fn wire_cost_pipeline(
         .map(|(node_id, node)| wire_cost_node(&id, node_id, node, resolver))
         .collect();
     nodes.sort_by(|a, b| cost_then_id(a.aggregate.usd, &a.id, b.aggregate.usd, &b.id));
-    let mut wired = wire_cost_entity(id, entity);
+    let mut wired = wire_cost_entity(id, entity, resolver);
     wired.nodes = nodes;
     wired.runs = Some(runs);
     wired.last_run = last_run;
@@ -1349,7 +1408,7 @@ fn wire_cost_node(
     let runs = entity.tallies.runs();
     let last_run = entity.tallies.last_run();
     let absorbed = resolver.absorbed_nodes(pipeline, &id, &entity.tallies);
-    let mut wired = wire_cost_entity(id, entity);
+    let mut wired = wire_cost_entity(id, entity, resolver);
     if runs > 0 {
         wired.runs = Some(runs);
         wired.last_run = last_run;
@@ -1533,16 +1592,21 @@ fn fold_harness_cost(
             // identity as the axes above. Slices land in every level of both
             // hierarchies so headline, cards and period bars all re-scope.
             for slice in &contribution.model_slices {
-                let pair_key = (slice.model.clone(), slice.effort.clone());
-                node.pairs
-                    .entry(pair_key.clone())
-                    .or_default()
-                    .add_slice(&contribution.harness, slice);
-                project_node
-                    .pairs
-                    .entry(pair_key)
-                    .or_default()
-                    .add_slice(&contribution.harness, slice);
+                // #906: the Node's couple goes through the global absorptions
+                // (effort on the raw model, then model), then the couple
+                // absorptions of its raw Node — the « By model » axis below
+                // stops before that last step.
+                let couple = identity.couple(
+                    is_node.then_some(node_identity.raw_key.as_str()),
+                    &slice.model,
+                    slice.effort.as_deref(),
+                );
+                let pair_key = (couple.model.clone(), couple.effort.clone());
+                for pairs in [&mut node.pairs, &mut project_node.pairs] {
+                    let pair = pairs.entry(pair_key.clone()).or_default();
+                    pair.add_slice(&contribution.harness, slice);
+                    pair.record(&couple, &run.run_id, &run.started_at);
+                }
 
                 // #892: an absorbed model id counts under its absorbent on
                 // this axis only; its efforts meet the absorbent's by effort.
@@ -1565,7 +1629,16 @@ fn fold_harness_cost(
                     model.model_requested += 1;
                 }
 
-                let effort = model.efforts.entry(slice.effort.clone()).or_default();
+                // #906: an effort absorption resolves on the RAW model id.
+                let effort = model
+                    .efforts
+                    .entry(identity.effort(&slice.model, slice.effort.as_deref()))
+                    .or_default();
+                effort.tallies.record_run_as(
+                    &crate::stats_absorption::effort_key(slice.effort.as_deref()),
+                    &run.run_id,
+                    &run.started_at,
+                );
                 effort.aggregate.add_slice(&contribution.harness, slice);
                 effort
                     .periods

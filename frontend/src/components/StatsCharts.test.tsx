@@ -284,6 +284,7 @@ COST.by_project[0].pipelines = [COST.by_pipeline[0]];
 // "sonnet") beside one observed one, each with its effort tree — including the
 // "not set" bucket — and the Node leaves of by_pipeline carrying pairs.
 const MODEL_PAIR: StatsModelEffortPair = {
+  key: "claude-opus-4-8|high",
   model: "claude-opus-4-8",
   model_provenance: "observed",
   effort: "high",
@@ -540,6 +541,7 @@ const steering = (mean: number, steered = 1, readable = 2, expected = readable) 
 
 const DESIGN_MODELS: PerformanceModelEffortPair[] = [
   {
+    key: "claude-opus-4-8|",
     model: "claude-opus-4-8",
     model_provenance: "observed",
     effort: null,
@@ -554,6 +556,7 @@ const DESIGN_MODELS: PerformanceModelEffortPair[] = [
     ],
   },
   {
+    key: "sonnet|high",
     model: "sonnet",
     model_provenance: "requested",
     effort: "high",
@@ -1161,6 +1164,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
             subagents: [],
             models: [
               {
+                key: "claude-opus-4-8|high",
                 model: "claude-opus-4-8",
                 model_provenance: "observed",
                 effort: "high",

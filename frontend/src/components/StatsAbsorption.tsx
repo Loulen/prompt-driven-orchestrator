@@ -1,0 +1,544 @@
+import { useEffect, useRef, useState } from "react";
+import { Check, Combine, X } from "lucide-react";
+import type { StatsAbsorbedMember } from "../types";
+import {
+  activity,
+  defaultAbsorbent,
+  MONO_DIMENSIONS,
+  NOUN,
+  plural,
+  provenanceNote,
+  type AbsorbableRow,
+  type AbsorptionCount,
+  type AbsorptionDimension,
+} from "../lib/statsAbsorption";
+
+/**
+ * **Absorption** in Stats (#890, ADR-0077) — the visual pattern #891, #892 and
+ * #906 reuse: a multi-select on Pipeline, Node, Model, effort and couple rows
+ * (hover ring, Ctrl/Cmd-click, Shift-click range, Space), the « N selected ·
+ * Combine (N)… » bar from two rows, the modal that picks the **absorbent** (the
+ * row that keeps its name), the `[⧉ N]` icon on an absorbent, and the members
+ * list whose ✕ takes one member out. A couple a global absorption reached shows
+ * the same icon greyed, read-only (#906, ADR-0078). Nothing here shows a key:
+ * names only.
+ */
+
+// --- The combined icon ----------------------------------------------------------
+
+/** `[⧉ N]` on an absorbent row: icon and count only. Opens the members list. */
+export function CombinedIcon({
+  count,
+  dimension = "pipeline",
+  onOpen,
+}: {
+  count: number;
+  dimension?: AbsorptionDimension;
+  onOpen: () => void;
+}) {
+  const label = `Combined with ${count} other ${NOUN[dimension]}${count === 1 ? "" : "s"}`;
+  return (
+    <span
+      role="button"
+      tabIndex={-1}
+      aria-label={label}
+      title={label}
+      data-testid="stats-combined-icon"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-line-strong bg-bg-3 px-1.5 font-mono text-fg-3 transition-colors hover:border-acc hover:text-fg-2"
+      style={{ fontSize: "9.5px", lineHeight: "15px" }}
+    >
+      <Combine size={10} aria-hidden="true" />
+      {count}
+    </span>
+  );
+}
+
+/**
+ * `[⧉ N]` greyed, on a Node couple a global absorption (models, efforts)
+ * reached (#906): the same pill, muted, dashed — it says why rows meet here,
+ * and opens a read-only list that points to the « By model » axis, where the
+ * absorption is undone.
+ */
+export function GlobalAbsorptionIcon({
+  count,
+  onOpen,
+}: {
+  count: number;
+  onOpen: () => void;
+}) {
+  const label = `Global absorption: counts ${count} other couple${count === 1 ? "" : "s"}`;
+  return (
+    <span
+      role="button"
+      tabIndex={-1}
+      aria-label={label}
+      title={label}
+      data-testid="stats-global-absorption-icon"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-dashed border-line bg-bg-2 px-1.5 font-mono text-fg-4 opacity-80 transition-colors hover:border-line-strong hover:text-fg-3"
+      style={{ fontSize: "9.5px", lineHeight: "15px" }}
+    >
+      <Combine size={10} aria-hidden="true" />
+      {count}
+    </span>
+  );
+}
+
+/** The ✕ that takes one member out of its absorption — in the members list and
+ *  in Settings › General › Stats absorptions (#891), the same gesture. Drawn
+ *  like Settings' other actions (#906): a readable glyph in a bordered box. */
+export function UncombineButton({
+  name,
+  disabled,
+  onClick,
+}: {
+  name: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`Uncombine ${name}`}
+      title={`Uncombine ${name}`}
+      disabled={disabled}
+      onClick={onClick}
+      data-testid="stats-uncombine"
+      className="shrink-0 cursor-pointer rounded border border-line-strong bg-bg-3 p-1 text-fg-2 transition-colors hover:border-st-failed hover:text-st-failed disabled:opacity-50"
+    >
+      <X size={12} strokeWidth={2.5} />
+    </button>
+  );
+}
+
+// --- Modals ---------------------------------------------------------------------
+
+function ModalFrame({
+  testid,
+  onDismiss,
+  children,
+}: {
+  testid: string;
+  onDismiss: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      data-testid={`${testid}-backdrop`}
+      onClick={onDismiss}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="w-[400px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+        style={{ fontSize: "12px" }}
+        onClick={(event) => event.stopPropagation()}
+        data-testid={testid}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pick the absorbent among the selected rows. ↑/↓ change the choice, Enter
+ * combines, Escape cancels (the host routes Escape — see `useStatsAbsorption`).
+ */
+/** What Stats will do with the combined rows, said per dimension. */
+function combineSubtitle(
+  dimension: AbsorptionDimension,
+  scopeName: string | undefined,
+): string {
+  if (dimension === "node")
+    return `Stats will read them as one node${scopeName ? ` of ${scopeName}` : ""}, in every tab. Keep the name of:`;
+  if (dimension === "model")
+    return "Stats will read them as one model in Cost and Performance, the couples of every node included. Keep the name of:";
+  if (dimension === "effort")
+    return `Stats will read them as one effort of ${scopeName ?? "this model"}, in Cost and Performance, the couples of every node included. Keep the name of:`;
+  if (dimension === "couple")
+    return `Stats will read them as one couple of ${scopeName ?? "this node"} only, in Cost and Performance. Keep the name of:`;
+  return "Stats will read them as one pipeline, in every tab. Keep the name of:";
+}
+
+export function CombineModal<T extends AbsorbableRow>({
+  rows,
+  count,
+  dimension = "pipeline",
+  scopeName,
+  preferred,
+  busy,
+  error,
+  onCancel,
+  onCombine,
+}: {
+  rows: T[];
+  count: AbsorptionCount<T>;
+  dimension?: AbsorptionDimension;
+  /** The Pipeline a Node absorption lives under, the model of an effort
+   *  absorption, the Node of a couple absorption — by name. */
+  scopeName?: string;
+  /** Rows the default absorbent prefers (an explicit effort, #906). */
+  preferred?: (row: T) => boolean;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onCombine: (absorbent: T) => void;
+}) {
+  const [chosenId, setChosenId] = useState<string | null>(
+    () => defaultAbsorbent(rows, count.of, preferred)?.id ?? null,
+  );
+  const chosen = rows.find((row) => row.id === chosenId) ?? rows[0];
+  const others = rows.filter((row) => row.id !== chosen.id);
+  const nameCounts = new Map<string, number>();
+  for (const row of rows)
+    nameCounts.set(row.name, (nameCounts.get(row.name) ?? 0) + 1);
+
+  const latest = useRef({ rows, chosen, busy, onCombine });
+  useEffect(() => {
+    latest.current = { rows, chosen, busy, onCombine };
+  });
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const { rows, chosen, busy, onCombine } = latest.current;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        const index = rows.findIndex((row) => row.id === chosen.id);
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        setChosenId(rows[(index + delta + rows.length) % rows.length].id);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!busy) onCombine(chosen);
+      }
+    };
+    // Capture on window: the modal answers before the master list behind it
+    // (whose Enter would open a detail) ever sees the key.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  const otherLabel = others.every((row) => row.name === chosen.name)
+    ? others.length === 1
+      ? "The other version"
+      : "The other versions"
+    : others.map((row) => row.name).join(", ");
+  const alreadyCombined = chosen.absorbed?.length ?? 0;
+
+  return (
+    <ModalFrame testid="stats-combine-modal" onDismiss={onCancel}>
+      <h3
+        className="flex items-center gap-2 font-medium text-fg"
+        style={{ fontSize: "13px" }}
+      >
+        <Combine size={14} className="shrink-0 text-acc" aria-hidden="true" />
+        Combine {rows.length} {NOUN[dimension]}s
+      </h3>
+      <p className="mt-1.5 text-fg-3" style={{ fontSize: "11.5px" }}>
+        {combineSubtitle(dimension, scopeName)}
+      </p>
+      <div
+        role="radiogroup"
+        aria-label="Keep the name of"
+        className="mt-3 flex flex-col gap-1.5"
+      >
+        {rows.map((row) => {
+          const checked = row.id === chosen.id;
+          const notes = [activity(count.of(row), count.word, row.last_run)];
+          if ((row.absorbed?.length ?? 0) > 0)
+            notes.push(`already combines ${row.absorbed!.length}`);
+          if ((nameCounts.get(row.name) ?? 0) > 1)
+            notes.push("same name, other version");
+          return (
+            <button
+              key={row.id}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              data-testid="stats-combine-option"
+              onClick={() => setChosenId(row.id)}
+              className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-left transition-colors ${
+                checked ? "border-acc bg-acc-bg" : "border-line hover:bg-bg-3"
+              }`}
+            >
+              {checked ? (
+                <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-acc text-on-acc">
+                  <Check size={11} strokeWidth={3} />
+                </span>
+              ) : (
+                <span
+                  className="h-4 w-4 shrink-0 rounded-full border-2 border-fg-4"
+                  aria-hidden="true"
+                />
+              )}
+              <span className="min-w-0">
+                <span
+                  className={`block truncate text-fg ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+                  style={{ fontSize: "12px" }}
+                >
+                  {row.name}
+                </span>
+                <span
+                  className="block text-fg-4"
+                  style={{ fontSize: "10.5px" }}
+                >
+                  {notes.join(" · ")}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p
+        className="mt-3 text-fg-3"
+        style={{ fontSize: "11px" }}
+        data-testid="stats-combine-consequence"
+      >
+        {/* No count here (#906): the absorbent's own count is not the combined
+            one, and Runs overlap across members, so no sum would be honest. */}
+        {otherLabel} will be counted under{" "}
+        <span className="text-fg">{chosen.name}</span>
+        {alreadyCombined > 0
+          ? `, together with the ${plural(alreadyCombined, NOUN[dimension])} already combined into it`
+          : ""}
+        . Nothing is rewritten: undo it any time from the combined icon on its
+        row.
+      </p>
+      {error && (
+        <div
+          className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          data-testid="stats-absorption-error"
+        >
+          {error}
+        </div>
+      )}
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          data-testid="stats-combine-cancel"
+          className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+          style={{ fontSize: "11.5px" }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onCombine(chosen)}
+          data-testid="stats-combine-confirm"
+          className="cursor-pointer rounded-md bg-acc px-3 py-1.5 text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-60"
+          style={{ fontSize: "11.5px" }}
+        >
+          Combine
+        </button>
+      </div>
+    </ModalFrame>
+  );
+}
+
+/**
+ * The members of one absorbent: the absorbent first (« keeps its name », no ✕),
+ * then each absorbed row with its ✕ — a model says where its id was read from
+ * (ADR-0065 §1). Removing the last one closes the list: the absorption is gone
+ * and the original rows are back.
+ */
+export function MembersModal<T extends AbsorbableRow>({
+  absorbent,
+  members,
+  count,
+  dimension = "pipeline",
+  busyKey,
+  error,
+  onUncombine,
+  onClose,
+}: {
+  absorbent: T;
+  members: StatsAbsorbedMember[];
+  count: AbsorptionCount<T>;
+  dimension?: AbsorptionDimension;
+  busyKey: string | null;
+  error: string | null;
+  onUncombine: (member: StatsAbsorbedMember) => void;
+  onClose: () => void;
+}) {
+  return (
+    <ModalFrame testid="stats-members-modal" onDismiss={onClose}>
+      <h3
+        className="flex items-center gap-2 font-medium text-fg"
+        style={{ fontSize: "13px" }}
+      >
+        <Combine size={14} className="shrink-0 text-acc" aria-hidden="true" />
+        {absorbent.name}
+      </h3>
+      <p className="mt-1.5 text-fg-3" style={{ fontSize: "11.5px" }}>
+        Counts the runs of {plural(members.length, `other ${NOUN[dimension]}`)}{" "}
+        too.
+      </p>
+      <ul
+        className="mt-3 rounded-md border border-line"
+        data-testid="stats-members-list"
+      >
+        <li className="flex items-center justify-between gap-3 px-3 py-2">
+          <span
+            className={`truncate text-fg ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+          >
+            {absorbent.name}
+          </span>
+          <span className="shrink-0 text-fg-4" style={{ fontSize: "10.5px" }}>
+            keeps its name
+          </span>
+        </li>
+        {members.map((member) => (
+          <li
+            key={member.key}
+            className="flex items-center justify-between gap-3 border-t border-line px-3 py-2"
+            data-testid="stats-member-row"
+          >
+            <span className="min-w-0">
+              <span
+                className={`block truncate text-fg ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+              >
+                {member.name}
+              </span>
+              <span className="block text-fg-4" style={{ fontSize: "10.5px" }}>
+                {[
+                  activity(count.ofMember(member), count.word, member.last_run),
+                  provenanceNote(member.provenance),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </span>
+            <UncombineButton
+              name={member.name}
+              disabled={busyKey !== null}
+              onClick={() => onUncombine(member)}
+            />
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+        Uncombining the last one brings every row back. All combinations are
+        also listed in Settings › General › Stats absorptions.
+      </p>
+      {error && (
+        <div
+          className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          data-testid="stats-absorption-error"
+        >
+          {error}
+        </div>
+      )}
+      <div className="mt-4 flex justify-end">
+        <button
+          type="button"
+          onClick={onClose}
+          data-testid="stats-members-close"
+          className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+          style={{ fontSize: "11.5px" }}
+        >
+          Close
+        </button>
+      </div>
+    </ModalFrame>
+  );
+}
+
+/**
+ * The raw couples a global absorption counts under a Node couple (#906): the
+ * members list, read-only — the absorption was posed on the « By model » axis
+ * and is undone there, which the link opens.
+ */
+export function GlobalMembersModal<T extends AbsorbableRow>({
+  absorbent,
+  members,
+  count,
+  onOpenAxis,
+  onClose,
+}: {
+  absorbent: T;
+  members: StatsAbsorbedMember[];
+  count: AbsorptionCount<T>;
+  onOpenAxis: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <ModalFrame testid="stats-global-members-modal" onDismiss={onClose}>
+      <h3
+        className="flex items-center gap-2 font-medium text-fg"
+        style={{ fontSize: "13px" }}
+      >
+        <Combine size={14} className="shrink-0 text-fg-4" aria-hidden="true" />
+        <span className="truncate font-mono">{absorbent.name}</span>
+        <span
+          className="shrink-0 rounded-full border border-dashed border-line px-1.5 text-fg-4"
+          style={{ fontSize: "9.5px" }}
+        >
+          Global absorption
+        </span>
+      </h3>
+      <p className="mt-1.5 text-fg-3" style={{ fontSize: "11.5px" }}>
+        Counts the runs of {plural(members.length, "other couple")} too, because
+        models or efforts are combined on the « By model » axis. It applies to
+        every node, and is undone there, not here.
+      </p>
+      <ul
+        className="mt-3 rounded-md border border-line"
+        data-testid="stats-global-members-list"
+      >
+        <li className="flex items-center justify-between gap-3 px-3 py-2">
+          <span className="truncate font-mono text-fg">{absorbent.name}</span>
+          <span className="shrink-0 text-fg-4" style={{ fontSize: "10.5px" }}>
+            keeps its name
+          </span>
+        </li>
+        {members.map((member) => (
+          <li
+            key={member.key}
+            className="flex items-center justify-between gap-3 border-t border-line px-3 py-2"
+            data-testid="stats-global-member-row"
+          >
+            <span className="min-w-0">
+              <span className="block truncate font-mono text-fg">
+                {member.name}
+              </span>
+              <span className="block text-fg-4" style={{ fontSize: "10.5px" }}>
+                {activity(count.ofMember(member), count.word, member.last_run)}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={onOpenAxis}
+          data-testid="stats-global-open-axis"
+          className="cursor-pointer text-acc underline-offset-2 hover:underline"
+          style={{ fontSize: "11.5px" }}
+        >
+          Open the « By model » axis
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          data-testid="stats-global-members-close"
+          className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+          style={{ fontSize: "11.5px" }}
+        >
+          Close
+        </button>
+      </div>
+    </ModalFrame>
+  );
+}

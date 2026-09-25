@@ -481,6 +481,13 @@ async fn retrying_the_failed_child_lets_the_node_complete_itself() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
+    // The orchestrator's own output is on disk BEFORE its child can settle, as
+    // in `the_node_completes_itself_once_every_child_is_terminal`: the binding's
+    // watcher drives the completion the moment the retried child settles, and
+    // under the full parallel suite that can land before the test's next line
+    // runs — an output written after it was refused once, never retried.
+    write_output(&daemon, &parent, "worker", "result");
+
     // The user tranches by RETRYING the failed child: a targeted
     // `mark_node_done` re-opens the failed run and completes it (ADR-0049).
     write_output(&daemon, &child, "doer", "work");
@@ -500,7 +507,6 @@ async fn retrying_the_failed_child_lets_the_node_complete_itself() {
     wait_node_status(&daemon, &child, "doer", "completed").await;
 
     // The retried child settled → the orchestrator completes itself.
-    write_output(&daemon, &parent, "worker", "result");
     wait_node_status(&daemon, &parent, "worker", "completed").await;
 }
 

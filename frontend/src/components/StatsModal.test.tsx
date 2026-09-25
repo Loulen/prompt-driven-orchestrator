@@ -6,6 +6,10 @@ const fetchStatsOverviewMock = vi.fn();
 const fetchStatsCostMock = vi.fn();
 const fetchStatsPerformanceMock = vi.fn();
 const syncCostPricesMock = vi.fn();
+const fetchStatsAbsorptionsMock = vi.fn();
+// #891: the few tests about the band's chips render the REAL charts; the rest
+// keep the stub below.
+let realCharts = false;
 
 // Every api function StatsModal (or anything it renders) touches MUST be in this
 // factory: Vitest 4 wraps the return in a Proxy whose `get` trap throws, and the SSR
@@ -16,6 +20,7 @@ vi.mock("../api", () => ({
   fetchStatsCost: (...args: unknown[]) => fetchStatsCostMock(...args),
   fetchStatsPerformance: (...args: unknown[]) => fetchStatsPerformanceMock(...args),
   syncCostPrices: (...args: unknown[]) => syncCostPricesMock(...args),
+  fetchStatsAbsorptions: (...args: unknown[]) => fetchStatsAbsorptionsMock(...args),
 }));
 
 // recharts is heavy and code-split behind `React.lazy`; the charts are strictly
@@ -25,23 +30,34 @@ vi.mock("../api", () => ({
 // The stub DOES surface the filter contract (#819): the band lives in the
 // charts, its state in the shell, so what this file can assert about the band is
 // what crosses that seam — the values handed down, and what a change sends back.
-vi.mock("./StatsCharts", () => ({
-  default: ({
+vi.mock("./StatsCharts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./StatsCharts")>();
+  const Stub = ({
     completedOnly,
     onCompletedOnlyChange,
     band,
     onBandChange,
     onResetFilters,
+    onAbsorptionsChanged,
+    uncombined,
+    onUncombinedChange,
+    showUncombined,
   }: {
     completedOnly: boolean;
     onCompletedOnlyChange: (value: boolean) => void;
     band: PerformanceBand;
     onBandChange: (band: PerformanceBand) => void;
     onResetFilters: () => void;
+    onAbsorptionsChanged: () => void;
+    uncombined: boolean;
+    onUncombinedChange: (value: boolean) => void;
+    showUncombined: boolean;
   }) => (
     <div
       data-testid="stats-charts-stub"
       data-completed-only={String(completedOnly)}
+      data-uncombined={String(uncombined)}
+      data-show-uncombined={String(showUncombined)}
       data-duration-mode={band.durationMode}
       data-zoom={band.zoom}
       data-axis={band.axis}
@@ -58,9 +74,23 @@ vi.mock("./StatsCharts", () => ({
         onClick={() => onBandChange({ ...band, durationMode: "waiting" })}
       />
       <button type="button" data-testid="stub-reset" onClick={onResetFilters} />
+      <button type="button" data-testid="stub-combined" onClick={onAbsorptionsChanged} />
+      <button
+        type="button"
+        data-testid="stub-toggle-uncombined"
+        onClick={() => onUncombinedChange(!uncombined)}
+      />
     </div>
-  ),
-}));
+  );
+  return {
+    default: (props: React.ComponentProps<typeof actual.default>) =>
+      realCharts ? (
+        <actual.default {...props} />
+      ) : (
+        <Stub {...(props as React.ComponentProps<typeof Stub>)} />
+      ),
+  };
+});
 
 import StatsModal from "./StatsModal";
 import type { PerformanceBand } from "../lib/statsFilters";
@@ -138,6 +168,8 @@ beforeEach(() => {
     executions: 0,
   });
   syncCostPricesMock.mockReset().mockResolvedValue(report());
+  fetchStatsAbsorptionsMock.mockReset().mockResolvedValue({ absorptions: [] });
+  realCharts = false;
   localStorage.clear();
 });
 
@@ -326,18 +358,20 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
     await user.click(screen.getByTestId("stats-sync-prices"));
     await waitFor(() => expect(fetchStatsCostMock).toHaveBeenCalledTimes(2));
 
-    // And the reload key never reaches the API: the call keeps its 3-arg shape, which
-    // `useStats.test.ts` asserts exactly (Vitest compares arity strictly). The modal
-    // owns the period, so assert the SHAPE, not literal dates.
+    // And the reload key never reaches the API: the call keeps its shape (period,
+    // bucket, cohort, uncombined), which `useStats.test.ts` asserts exactly (Vitest
+    // compares arity strictly). The modal owns the period, so assert the SHAPE, not
+    // literal dates.
     const args = fetchStatsCostMock.mock.calls.at(-1)!;
-    expect(args).toHaveLength(4);
+    expect(args).toHaveLength(5);
     expect(args[2]).toBe("day"); // the 30d default preset's bucket
   });
 });
 
 describe("StatsModal — per-tab filters, ephemeral (#819)", () => {
   const stub = () => screen.getByTestId("stats-charts-stub");
-  const cohortOf = (calls: unknown[][]) => calls.at(-1)!.at(-1);
+  // `completed_only` is the 4th argument of all three fetchers.
+  const cohortOf = (calls: unknown[][]) => calls.at(-1)![3];
 
   it("keeps only the period in the title bar", async () => {
     const user = userEvent.setup();
@@ -530,5 +564,136 @@ describe("StatsModal — per-tab filters, ephemeral (#819)", () => {
     expect(
       screen.queryByTestId("stats-tab-performance-dirty"),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("StatsModal — absorptions (#890)", () => {
+  it("refetches the tab on screen after a Combine, without forcing Performance past its memo", async () => {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} initialTab="performance" />);
+    await screen.findByTestId("stats-charts-stub");
+    await waitFor(() => expect(fetchStatsPerformanceMock).toHaveBeenCalledTimes(1));
+    const overviewCalls = fetchStatsOverviewMock.mock.calls.length;
+
+    await user.click(screen.getByTestId("stub-combined"));
+
+    await waitFor(() => expect(fetchStatsPerformanceMock).toHaveBeenCalledTimes(2));
+    // `refresh` stays false: the daemon keys its memo on the absorptions.
+    expect(fetchStatsPerformanceMock.mock.calls[1][2]).toBe(false);
+    expect(fetchStatsOverviewMock.mock.calls.length).toBe(overviewCalls + 1);
+  });
+
+  it("keeps the scrollbar gutter and paints no caret on the Stats pane", async () => {
+    render(<StatsModal open onClose={() => {}} />);
+    await screen.findByTestId("stats-charts-stub");
+    const main = screen.getByRole("main");
+    expect(main.className).toContain("[scrollbar-gutter:stable]");
+    expect(main.className).toContain("[caret-color:transparent]");
+    expect(main.className).toContain("[&_input]:[caret-color:auto]");
+  });
+});
+
+describe("StatsModal — « Uncombined » (#891)", () => {
+  const ABSORPTION = {
+    absorptions: [
+      {
+        dimension: "pipeline",
+        scope: "",
+        absorbent: { key: "digest-v2", name: "Digest v2" },
+        members: [
+          { key: "digest", name: "Digest", origin: "rename", created_at: "2026-09-20T10:00:00Z" },
+        ],
+      },
+    ],
+  };
+  const uncombinedOf = (calls: unknown[][]) => calls.at(-1)!.at(-1);
+
+  it("is on the Sessions, Triggers, Cost and Performance bands, never on Overview", async () => {
+    realCharts = true;
+    fetchStatsAbsorptionsMock.mockResolvedValue(ABSORPTION);
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+
+    await screen.findByTestId("stats-filter-band");
+    await waitFor(() => expect(fetchStatsAbsorptionsMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("stats-uncombined")).not.toBeInTheDocument();
+
+    for (const tab of ["sessions", "triggers", "cost", "performance"]) {
+      await user.click(screen.getByTestId(`stats-tab-${tab}`));
+      const chip = await screen.findByTestId("stats-uncombined");
+      expect(chip).toHaveAttribute("aria-checked", "false");
+      expect(chip).toHaveTextContent("uncombined");
+    }
+    await user.click(screen.getByTestId("stats-tab-runs"));
+    expect(screen.queryByTestId("stats-uncombined")).not.toBeInTheDocument();
+  });
+
+  it("is absent while the instance has no absorption", async () => {
+    realCharts = true;
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+    await waitFor(() => expect(fetchStatsAbsorptionsMock).toHaveBeenCalled());
+    for (const tab of ["sessions", "triggers", "cost", "performance"]) {
+      await user.click(screen.getByTestId(`stats-tab-${tab}`));
+      await screen.findByTestId(
+        tab === "performance" ? "stats-performance-filters" : "stats-filter-band",
+      );
+      expect(screen.queryByTestId("stats-uncombined")).not.toBeInTheDocument();
+    }
+  });
+
+  it("reads every tab without the absorptions when on, and is off again at the next open", async () => {
+    realCharts = true;
+    fetchStatsAbsorptionsMock.mockResolvedValue(ABSORPTION);
+    const user = userEvent.setup();
+    const onClose = () => {};
+    const { rerender } = render(<StatsModal open onClose={onClose} initialTab="sessions" />);
+
+    await user.click(await screen.findByTestId("stats-uncombined"));
+    await waitFor(() => expect(uncombinedOf(fetchStatsOverviewMock.mock.calls)).toBe(true));
+    expect(screen.getByTestId("stats-uncombined")).toHaveAttribute("aria-checked", "true");
+
+    // One reading for the four tabs: Cost and Performance fetch uncombined too.
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    await waitFor(() => expect(uncombinedOf(fetchStatsCostMock.mock.calls)).toBe(true));
+    expect(screen.getByTestId("stats-uncombined")).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByTestId("stats-tab-performance"));
+    await waitFor(() =>
+      expect(uncombinedOf(fetchStatsPerformanceMock.mock.calls)).toBe(true),
+    );
+
+    // Closing forgets it, like every Stats setting.
+    rerender(<StatsModal open={false} onClose={onClose} />);
+    rerender(<StatsModal open onClose={onClose} initialTab="sessions" />);
+    const chip = await screen.findByTestId("stats-uncombined");
+    expect(chip).toHaveAttribute("aria-checked", "false");
+    expect(uncombinedOf(fetchStatsOverviewMock.mock.calls)).toBe(false);
+  });
+
+  it("re-reads the absorptions after a Combine, and keeps the chip while it is on", async () => {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} initialTab="sessions" />);
+    const stub = await screen.findByTestId("stats-charts-stub");
+    await waitFor(() => expect(fetchStatsAbsorptionsMock).toHaveBeenCalledTimes(1));
+    expect(stub).toHaveAttribute("data-show-uncombined", "false");
+
+    fetchStatsAbsorptionsMock.mockResolvedValue(ABSORPTION);
+    await user.click(screen.getByTestId("stub-combined"));
+    await waitFor(() =>
+      expect(screen.getByTestId("stats-charts-stub")).toHaveAttribute(
+        "data-show-uncombined",
+        "true",
+      ),
+    );
+
+    await user.click(screen.getByTestId("stub-toggle-uncombined"));
+    fetchStatsAbsorptionsMock.mockResolvedValue({ absorptions: [] });
+    await user.click(screen.getByTestId("stub-combined"));
+    await waitFor(() => expect(fetchStatsAbsorptionsMock).toHaveBeenCalledTimes(3));
+    // No absorption left, but the reading is on: the chip stays to turn it off.
+    expect(screen.getByTestId("stats-charts-stub")).toHaveAttribute(
+      "data-show-uncombined",
+      "true",
+    );
   });
 });

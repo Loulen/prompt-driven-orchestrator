@@ -1,7 +1,7 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { RotateCw } from "lucide-react";
 import FullWindowShell from "./FullWindowShell";
-import { syncCostPrices } from "../api";
+import { fetchStatsAbsorptions, syncCostPrices } from "../api";
 import { useStats } from "../hooks/useStats";
 import type { PriceRow, StatsCost, SyncCostPricesReport } from "../types";
 import type { StatsTab } from "./StatsCharts";
@@ -223,6 +223,26 @@ function StatsSurface({
     initialPricingOpen && initialTab === "cost",
   );
   const [reloadKey, setReloadKey] = useState(0);
+  // Bumped by every Combine / Uncombine (#890): all tabs read the new absorptions.
+  const [absorptionsVersion, setAbsorptionsVersion] = useState(0);
+  // « Uncombined » (#891): off at each open like every Stats setting, one
+  // reading for Sessions, Triggers, Cost and Performance. Its chip only shows
+  // once the instance has an absorption to set aside.
+  const [uncombined, setUncombined] = useState(false);
+  const [hasAbsorptions, setHasAbsorptions] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetchStatsAbsorptions()
+      .then((list) => {
+        if (!cancelled) setHasAbsorptions(list.absorptions.length > 0);
+      })
+      .catch(() => {
+        // No list, no chip: the tabs still read with the absorptions applied.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [absorptionsVersion]);
   const [syncReport, setSyncReport] = useState<SyncCostPricesReport | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -254,6 +274,8 @@ function StatsSurface({
       cost: costCompletedOnly,
       performance: performanceCompletedOnly,
     },
+    absorptionsVersion,
+    uncombined,
   );
 
   const refreshing =
@@ -306,7 +328,9 @@ function StatsSurface({
     }
   };
 
-  // Escape order (Stats behaviour, kept by the shell contract): drawer first, then Stats.
+  // Escape order (Stats behaviour, kept by the shell contract): an open absorption
+  // modal, then the row selection (both consumed by the tab, #890), then the
+  // drawer, then Stats.
   const onEscape = () => {
     if (pricingOpen) setPricingOpen(false);
     else onClose();
@@ -327,7 +351,12 @@ function StatsSurface({
       }}
       railAriaLabel="Stats sections"
       railTestIdPrefix="stats-tab"
-      mainClassName={`min-w-0 flex-1 overflow-y-auto p-5 ${refreshing ? "opacity-65" : ""}`}
+      // `scrollbar-gutter:stable` (#890): a Combine that removes rows must not
+      // widen the pane — one scrollbar less made the charts reflow and print
+      // x-axis labels they had been hiding. `caret-color:transparent`: nothing
+      // in Stats is editable, so Chrome's caret browsing paints no blinking
+      // caret on a clicked label; inputs and textareas keep theirs.
+      mainClassName={`min-w-0 flex-1 overflow-y-auto p-5 [scrollbar-gutter:stable] [caret-color:transparent] [&_input]:[caret-color:auto] [&_textarea]:[caret-color:auto] ${refreshing ? "opacity-65" : ""}`}
       headerExtras={
         // #819 — the period is the only global setting left in the bar: every
         // other filter belongs to the tab it changes, in that tab's band.
@@ -435,6 +464,11 @@ function StatsSurface({
           band={band}
           onBandChange={setBand}
           onResetFilters={onResetFilters}
+          onAbsorptionsChanged={() => setAbsorptionsVersion((value) => value + 1)}
+          uncombined={uncombined}
+          onUncombinedChange={setUncombined}
+          // Kept while on, so the reading can always be turned back off.
+          showUncombined={hasAbsorptions || uncombined}
         />
       </Suspense>
     </FullWindowShell>

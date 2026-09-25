@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Info } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Combine, Info } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -27,6 +27,7 @@ import type {
   StatsPerformanceAggregate,
   StatsPerformanceEntity,
   StatsProjectCostEntity,
+  StatsAbsorbedMember,
   StatsSessionEntity,
   StatsSessionHarness,
   StatsSessionPeriod,
@@ -37,6 +38,19 @@ import { harnessColor } from "../lib/harness";
 import { cssColor } from "../lib/cssColor";
 import { useTheme } from "../hooks/useTheme";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
+import SelectControl from "./SelectControl";
+import { CombinedIcon, GlobalAbsorptionIcon } from "./StatsAbsorption";
+import {
+  useStatsAbsorption,
+  type MasterSelection,
+} from "../hooks/useStatsAbsorption";
+import {
+  coupleRows,
+  coupleScope,
+  hasExplicitEffort,
+  type AbsorbableRow,
+  type CoupleRow,
+} from "../lib/statsAbsorption";
 import {
   ALL_NODE_KINDS,
   DEFAULT_PERFORMANCE_BAND,
@@ -49,7 +63,8 @@ import {
   type StatsZoom,
 } from "../lib/statsFilters";
 
-export type StatsTab = "runs" | "sessions" | "triggers" | "cost" | "performance";
+export type StatsTab =
+  "runs" | "sessions" | "triggers" | "cost" | "performance";
 
 /**
  * Chart colours (#759). Getters, not constants: recharts takes resolved colours
@@ -100,7 +115,10 @@ function ChartFrame({ children }: { children: React.ReactElement }) {
 
 function EmptyNote({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-1 py-8 text-center text-fg-4" style={{ fontSize: "11.5px" }}>
+    <div
+      className="px-1 py-8 text-center text-fg-4"
+      style={{ fontSize: "11.5px" }}
+    >
       {children}
     </div>
   );
@@ -138,7 +156,10 @@ function CohortLine({
 
 function HarnessLegend({ harnesses }: { harnesses: string[] }) {
   return (
-    <div className="flex flex-wrap gap-3 text-fg-3" style={{ fontSize: "10.5px" }}>
+    <div
+      className="flex flex-wrap gap-3 text-fg-3"
+      style={{ fontSize: "10.5px" }}
+    >
       {harnesses.map((harness) => (
         <span key={harness} className="flex items-center gap-1.5">
           <span
@@ -162,7 +183,11 @@ function flattenPeriods(
     ...Object.fromEntries(
       period.harnesses.map((harness) => [
         harness.harness,
-        value === "usd" ? ("usd" in harness ? harness.usd : null) : harness.executions,
+        value === "usd"
+          ? "usd" in harness
+            ? harness.usd
+            : null
+          : harness.executions,
       ]),
     ),
   }));
@@ -183,15 +208,27 @@ function HarnessBars({
   harnesses: string[];
   value: "executions" | "usd";
 }) {
-  if (periods.length === 0) return <EmptyNote>No activity in this period.</EmptyNote>;
+  if (periods.length === 0)
+    return <EmptyNote>No activity in this period.</EmptyNote>;
   return (
     <ChartFrame>
-      <BarChart data={flattenPeriods(periods, value)} margin={{ top: 8, right: 8, left: -12 }}>
-        <CartesianGrid stroke={CHART.grid} strokeDasharray="3 3" vertical={false} />
+      <BarChart
+        data={flattenPeriods(periods, value)}
+        margin={{ top: 8, right: 8, left: -12 }}
+      >
+        <CartesianGrid
+          stroke={CHART.grid}
+          strokeDasharray="3 3"
+          vertical={false}
+        />
         <XAxis dataKey="bucket" {...AXIS_PROPS} />
         <YAxis allowDecimals={value === "usd"} {...AXIS_PROPS} />
         <RTooltip
-          contentStyle={{ background: CHART.tooltipBg, border: `1px solid ${CHART.grid}`, fontSize: 11 }}
+          contentStyle={{
+            background: CHART.tooltipBg,
+            border: `1px solid ${CHART.grid}`,
+            fontSize: 11,
+          }}
           formatter={(raw, name) => {
             if (raw == null) return ["—", String(name)];
             const amount = typeof raw === "number" ? raw : Number(raw);
@@ -268,11 +305,19 @@ function RunsTab({
       )}
       <ChartFrame>
         <BarChart data={data} margin={{ top: 8, right: 8, left: -18 }}>
-          <CartesianGrid stroke={CHART.grid} strokeDasharray="3 3" vertical={false} />
+          <CartesianGrid
+            stroke={CHART.grid}
+            strokeDasharray="3 3"
+            vertical={false}
+          />
           <XAxis dataKey="bucket" {...AXIS_PROPS} />
           <YAxis allowDecimals={false} {...AXIS_PROPS} />
           <RTooltip
-            contentStyle={{ background: CHART.tooltipBg, border: `1px solid ${CHART.grid}`, fontSize: 11 }}
+            contentStyle={{
+              background: CHART.tooltipBg,
+              border: `1px solid ${CHART.grid}`,
+              fontSize: 11,
+            }}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
           <Bar dataKey="runs" name="Runs" fill={CHART.runs} />
@@ -283,13 +328,14 @@ function RunsTab({
   );
 }
 
-function MasterList<T extends { id: string; name: string }>({
+function MasterList<T extends AbsorbableRow>({
   rows,
   selected,
   valueLabel,
   onSelect,
   ariaLabel = "Spenders",
   monoName = false,
+  selection,
 }: {
   rows: T[];
   selected: string | null;
@@ -300,11 +346,19 @@ function MasterList<T extends { id: string; name: string }>({
   ariaLabel?: string;
   /** Model ids are ids — render them mono (ADR-0065 §2). */
   monoName?: boolean;
+  /** The multi-select of the absorption (#890): Pipelines, or Models on the
+   *  « By model » axis (#892). A plain click still opens the detail; the ring,
+   *  Ctrl/Cmd-click, Shift-click and Space select. Absent where the rows do not
+   *  combine (« By project »). */
+  selection?: MasterSelection;
 }) {
   const options = [{ id: "__total__", name: "Total" } as T, ...rows];
+  const order = rows.map((row) => row.id);
   const selectedIndex = Math.max(
     0,
-    options.findIndex((row) => (selected === null ? row.id === "__total__" : row.id === selected)),
+    options.findIndex((row) =>
+      selected === null ? row.id === "__total__" : row.id === selected,
+    ),
   );
   const [focusIndex, setFocusIndex] = useState(selectedIndex);
   const activeFocusIndex = Math.min(focusIndex, options.length - 1);
@@ -318,7 +372,9 @@ function MasterList<T extends { id: string; name: string }>({
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
           const delta = event.key === "ArrowDown" ? 1 : -1;
-          setFocusIndex((activeFocusIndex + delta + options.length) % options.length);
+          setFocusIndex(
+            (activeFocusIndex + delta + options.length) % options.length,
+          );
         } else if (event.key === "Enter") {
           event.preventDefault();
           const row = options[activeFocusIndex];
@@ -326,28 +382,77 @@ function MasterList<T extends { id: string; name: string }>({
         } else if (event.key === "Backspace" || event.key === "ArrowLeft") {
           event.preventDefault();
           onSelect(null);
+        } else if (event.key === " " && selection) {
+          event.preventDefault();
+          const row = options[activeFocusIndex];
+          if (selection.isSelectable(row.id)) selection.toggle(row.id, false);
         }
       }}
     >
       {options.map((row, index) => {
         const isSelected = row.id === (selected ?? "__total__");
+        const isTotal = row.id === "__total__";
+        const selectable = selection?.isSelectable(row.id) ?? false;
+        const checked =
+          selectable && (selection?.selected.has(row.id) ?? false);
+        const absorbed = row.absorbed?.length ?? 0;
         return (
           <button
             key={row.id}
             type="button"
             role="option"
             aria-selected={isSelected}
+            data-checked={selectable ? checked : undefined}
             tabIndex={index === activeFocusIndex ? 0 : -1}
             onFocus={() => setFocusIndex(index)}
-            onClick={() => onSelect(row.id === "__total__" ? null : row.id)}
-            className={`flex items-center justify-between gap-3 rounded px-2 py-2 text-left ${
-              isSelected ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-3"
-            }`}
+            onClick={(event) => {
+              if (
+                selection &&
+                selectable &&
+                (event.ctrlKey || event.metaKey || event.shiftKey)
+              ) {
+                selection.toggle(row.id, event.shiftKey, order);
+                return;
+              }
+              onSelect(isTotal ? null : row.id);
+            }}
+            className={`group flex items-center justify-between gap-3 rounded px-2 py-2 text-left ${
+              checked
+                ? "bg-acc-bg text-fg"
+                : isSelected
+                  ? "bg-bg-5 text-fg"
+                  : "text-fg-3 hover:bg-bg-3"
+            } ${selection?.flashId === row.id ? "ring-1 ring-acc" : ""}`}
             style={{ fontSize: "11.5px" }}
           >
-            <span className={`truncate ${monoName ? "font-mono" : ""}`}>{row.name}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              {selection &&
+                (selectable ? (
+                  <SelectControl
+                    selected={checked}
+                    dotClass={null}
+                    label={`Select ${row.name}`}
+                    testId="stats-row-select"
+                    onSelect={(event) =>
+                      selection.toggle(row.id, event.shiftKey, order)
+                    }
+                  />
+                ) : (
+                  <span className="w-4 shrink-0" aria-hidden="true" />
+                ))}
+              <span className={`truncate ${monoName ? "font-mono" : ""}`}>
+                {row.name}
+              </span>
+              {selection && absorbed > 0 && (
+                <CombinedIcon
+                  count={absorbed}
+                  dimension={selection.dimension}
+                  onOpen={() => selection.onOpenMembers(row.id)}
+                />
+              )}
+            </span>
             <span className="shrink-0 font-mono text-fg-2">
-              {row.id === "__total__" ? "" : valueLabel(row)}
+              {isTotal ? "" : valueLabel(row)}
             </span>
           </button>
         );
@@ -356,20 +461,175 @@ function MasterList<T extends { id: string; name: string }>({
   );
 }
 
-function SessionsTab({ overview }: { overview: StatsOverview }) {
+/** Sessions counts a Pipeline in executions, like its column. */
+const SESSIONS_COUNT = {
+  of: (row: StatsSessionEntity) => row.executions,
+  ofMember: (member: StatsAbsorbedMember) => member.executions ?? member.runs,
+  word: "execution" as const,
+};
+
+/** Cost and Performance count a Pipeline, a Node or a Model in Runs. */
+const RUNS_COUNT = {
+  of: (row: AbsorbableRow) => row.runs ?? 0,
+  ofMember: (member: StatsAbsorbedMember) => member.runs,
+  word: "run" as const,
+};
+
+/** A Cost Node level lists the Infrastructure and Unassigned buckets beside the
+ *  Nodes: those are no Node, so they never combine (#892). */
+const isCostNodeRow = (row: StatsCostEntity) =>
+  !row.id.endsWith(":infrastructure") && !row.id.endsWith(":unassigned");
+
+/**
+ * The Node rows of a detail table carry the same selection as the master list
+ * (#892): the ring before the name, Ctrl/Cmd-click and Shift-click on the row,
+ * Space on the focused row, the selected background, the `[⧉ N]` icon. A plain
+ * click is left to the row.
+ */
+function tableSelection(
+  selection: MasterSelection | undefined,
+  { id, name }: { id: string; name: string },
+  order: string[],
+) {
+  const selectable = selection?.isSelectable(id) ?? false;
+  const checked = selectable && (selection?.selected.has(id) ?? false);
+  return {
+    className: `${checked ? "bg-acc-bg" : ""} ${selection?.flashId === id ? "ring-1 ring-acc" : ""}`,
+    rowProps: selectable
+      ? {
+          "data-checked": checked,
+          onClick: (event: React.MouseEvent) => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey) {
+              event.preventDefault();
+              selection!.toggle(id, event.shiftKey, order);
+            }
+          },
+          onKeyDown: (event: React.KeyboardEvent) => {
+            if (event.key === " " && event.target === event.currentTarget) {
+              event.preventDefault();
+              selection!.toggle(id, false, order);
+            }
+          },
+        }
+      : {},
+    control: !selection ? null : selectable ? (
+      <SelectControl
+        selected={checked}
+        dotClass={null}
+        label={`Select ${name}`}
+        testId="stats-row-select"
+        onSelect={(event) => selection.toggle(id, event.shiftKey, order)}
+      />
+    ) : (
+      <span className="w-4 shrink-0" aria-hidden="true" />
+    ),
+  };
+}
+
+/** The `[⧉ N]` icon of an absorbent row of a detail table. */
+function TableCombinedIcon({
+  selection,
+  row,
+}: {
+  selection: MasterSelection | undefined;
+  row: AbsorbableRow;
+}) {
+  const absorbed = row.absorbed?.length ?? 0;
+  if (!selection || absorbed === 0) return null;
+  return (
+    <CombinedIcon
+      count={absorbed}
+      dimension={selection.dimension}
+      onOpen={() => selection.onOpenMembers(row.id)}
+    />
+  );
+}
+
+/**
+ * What a Node row's couples carry of the absorption (#906): the selection of
+ * that one Node's couples — its own scope, so couples of two Nodes never mix —
+ * and, per couple, the ring, the `[⧉ N]` of a local absorbent and the greyed
+ * mark of a global absorption.
+ */
+type CoupleSelection = (node: {
+  id: string;
+  name: string;
+}) => MasterSelection | undefined;
+
+function coupleLine(
+  selection: MasterSelection | undefined,
+  couples: CoupleRow[],
+): {
+  rows: CoupleRow[];
+  pick: (couple: CoupleRow) => ReturnType<typeof tableSelection>;
+  marks: (couple: CoupleRow) => React.ReactNode;
+} {
+  const order = couples.map((couple) => couple.id);
+  return {
+    rows: couples,
+    pick: (couple) => tableSelection(selection, couple, order),
+    marks: (couple) => (
+      <>
+        <TableCombinedIcon selection={selection} row={couple} />
+        {selection && (couple.global_absorbed?.length ?? 0) > 0 && (
+          <GlobalAbsorptionIcon
+            count={couple.global_absorbed!.length}
+            onOpen={() => selection.onOpenGlobal(couple.id)}
+          />
+        )}
+      </>
+    ),
+  };
+}
+
+function SessionsTab({
+  overview,
+  uncombined,
+  onAbsorptionsChanged,
+}: {
+  overview: StatsOverview;
+  /** « Uncombined » (#891): the raw rows are a comparison, not a place to combine. */
+  uncombined: boolean;
+  onAbsorptionsChanged: () => void;
+}) {
   const rows = useMemo(
-    () => [...overview.sessions_by_pipeline].sort((a, b) => b.executions - a.executions),
+    () =>
+      [...overview.sessions_by_pipeline].sort(
+        (a, b) => b.executions - a.executions,
+      ),
     [overview.sessions_by_pipeline],
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = rows.find((row) => row.id === selectedId) ?? null;
   const periods = selected ? selected.by_period : overview.sessions_by_period;
   const detailRows = selected?.nodes ?? rows;
+  const absorption = useStatsAbsorption({
+    enabled: !uncombined,
+    onChanged: onAbsorptionsChanged,
+  });
+  const pipelines = absorption.selectionFor({
+    dimension: "pipeline",
+    rows,
+    count: SESSIONS_COUNT,
+  });
+  // #892: the Nodes of the Pipeline on screen, scoped to its row.
+  const nodes = selected
+    ? absorption.selectionFor({
+        dimension: "node",
+        scope: { key: selected.id, name: selected.name },
+        rows: selected.nodes,
+        count: SESSIONS_COUNT,
+      })
+    : undefined;
 
   return (
     <div className="flex flex-col gap-4" data-testid="stats-chart-sessions">
       <HarnessLegend harnesses={overview.session_harnesses} />
-      <HarnessBars periods={periods} harnesses={overview.session_harnesses} value="executions" />
+      <HarnessBars
+        periods={periods}
+        harnesses={overview.session_harnesses}
+        value="executions"
+      />
       <div className="flex min-h-[220px] gap-4">
         <div className="min-w-[250px] border-r border-line pr-3">
           <MasterList
@@ -377,22 +637,63 @@ function SessionsTab({ overview }: { overview: StatsOverview }) {
             selected={selectedId}
             valueLabel={(row) => String(row.executions)}
             onSelect={setSelectedId}
+            selection={pipelines}
           />
         </div>
         <div className="min-w-0 flex-1">
           <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
             Total{selected ? ` / ${selected.name}` : ""}
           </div>
-          <SessionTable rows={detailRows} harnesses={overview.session_harnesses} />
+          <SessionTable
+            rows={detailRows}
+            harnesses={overview.session_harnesses}
+            onOpenMembers={selected ? undefined : pipelines?.onOpenMembers}
+            selection={nodes}
+          />
         </div>
       </div>
+      {absorption.overlay}
     </div>
   );
 }
 
-function SessionTable({ rows, harnesses }: { rows: StatsSessionEntity[]; harnesses: string[] }) {
+/** A Pipeline row's name, with the `[⧉ N]` icon when it absorbs others. */
+function PipelineName({
+  row,
+  onOpenMembers,
+}: {
+  row: AbsorbableRow;
+  onOpenMembers?: (id: string) => void;
+}) {
+  const absorbed = row.absorbed?.length ?? 0;
+  if (!onOpenMembers || absorbed === 0) return <>{row.name}</>;
   return (
-    <table className="w-full table-fixed text-left" style={{ fontSize: "11px" }}>
+    <span className="inline-flex items-center gap-1.5">
+      {row.name}
+      <CombinedIcon count={absorbed} onOpen={() => onOpenMembers(row.id)} />
+    </span>
+  );
+}
+
+function SessionTable({
+  rows,
+  harnesses,
+  onOpenMembers,
+  selection,
+}: {
+  rows: StatsSessionEntity[];
+  harnesses: string[];
+  /** Pipeline rows at Total level: the combined icon opens the members. */
+  onOpenMembers?: (id: string) => void;
+  /** Node rows under one Pipeline (#892): select and combine them. */
+  selection?: MasterSelection;
+}) {
+  const order = rows.map((row) => row.id);
+  return (
+    <table
+      className="w-full table-fixed text-left"
+      style={{ fontSize: "11px" }}
+    >
       <thead className="text-fg-4">
         <tr>
           <th className="pb-2 font-medium">Name</th>
@@ -411,21 +712,37 @@ function SessionTable({ rows, harnesses }: { rows: StatsSessionEntity[]; harness
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr key={row.id} className="border-t border-line text-fg-2" tabIndex={0}>
-            <td className="py-2 pr-2">{row.name}</td>
-            <td className="py-2 text-right font-mono">{row.executions}</td>
-            {harnesses.map((harness) => (
-              <td
-                key={harness}
-                className="py-2 text-right font-mono"
-                data-harness={harness}
-              >
-                {row.harnesses.find((item) => item.harness === harness)?.executions ?? "—"}
+        {rows.map((row) => {
+          const pick = tableSelection(selection, row, order);
+          return (
+            <tr
+              key={row.id}
+              className={`group border-t border-line text-fg-2 ${pick.className}`}
+              tabIndex={0}
+              data-testid="stats-session-row"
+              {...pick.rowProps}
+            >
+              <td className="py-2 pr-2">
+                <span className="inline-flex items-center gap-1.5">
+                  {pick.control}
+                  <PipelineName row={row} onOpenMembers={onOpenMembers} />
+                  <TableCombinedIcon selection={selection} row={row} />
+                </span>
               </td>
-            ))}
-          </tr>
-        ))}
+              <td className="py-2 text-right font-mono">{row.executions}</td>
+              {harnesses.map((harness) => (
+                <td
+                  key={harness}
+                  className="py-2 text-right font-mono"
+                  data-harness={harness}
+                >
+                  {row.harnesses.find((item) => item.harness === harness)
+                    ?.executions ?? "—"}
+                </td>
+              ))}
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -436,21 +753,38 @@ function TriggersTab({ overview }: { overview: StatsOverview }) {
   return (
     <div data-testid="stats-chart-triggers" className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2" style={{ fontSize: "11px" }}>
-        <span className="rounded bg-bg-3 px-2 py-1 text-fg-2" data-testid="stats-kpi-created-runs">
-          Fires that created a run: <span className="font-mono text-fg">{kpi.fired}</span>
+        <span
+          className="rounded bg-bg-3 px-2 py-1 text-fg-2"
+          data-testid="stats-kpi-created-runs"
+        >
+          Fires that created a run:{" "}
+          <span className="font-mono text-fg">{kpi.fired}</span>
         </span>
-        <span className="rounded bg-bg-3 px-2 py-1 text-fg-2" data-testid="stats-kpi-distinct">
+        <span
+          className="rounded bg-bg-3 px-2 py-1 text-fg-2"
+          data-testid="stats-kpi-distinct"
+        >
           <span className="font-mono text-fg">{kpi.distinct_triggers}</span> of{" "}
-          <span className="font-mono text-fg">{kpi.enabled_triggers}</span> enabled triggers fired
+          <span className="font-mono text-fg">{kpi.enabled_triggers}</span>{" "}
+          enabled triggers fired
         </span>
       </div>
       {overview.fires_by_pipeline.length === 0 ? (
         <EmptyNote>No trigger fires in this period.</EmptyNote>
       ) : (
         <ChartFrame>
-          <BarChart data={overview.fires_by_pipeline}>
-            <CartesianGrid stroke={CHART.grid} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="pipeline_id" {...AXIS_PROPS} />
+          <BarChart
+            data={overview.fires_by_pipeline.map((fire) => ({
+              ...fire,
+              label: fire.name ?? fire.pipeline_id,
+            }))}
+          >
+            <CartesianGrid
+              stroke={CHART.grid}
+              strokeDasharray="3 3"
+              vertical={false}
+            />
+            <XAxis dataKey="label" {...AXIS_PROPS} />
             <YAxis allowDecimals={false} {...AXIS_PROPS} />
             <RTooltip
               contentStyle={{
@@ -476,7 +810,8 @@ function coverage(metric: StatsHarnessCost, unit: "Run" | "execution"): string {
   if (metric.unpriced_models.length) {
     parts.push(`Lower bound; unpriced: ${metric.unpriced_models.join(", ")}`);
   }
-  if (metric.missing_reasons.length) parts.push(metric.missing_reasons.join("; "));
+  if (metric.missing_reasons.length)
+    parts.push(metric.missing_reasons.join("; "));
   return parts.join(". ");
 }
 
@@ -489,7 +824,10 @@ function HarnessCards({ aggregate }: { aggregate: StatsCostAggregate }) {
           className="rounded-md border border-line bg-bg-3 p-3"
           data-testid={`stats-harness-card-${metric.harness}`}
         >
-          <div className="mb-2 flex items-center gap-1.5 text-fg-3" style={{ fontSize: "10.5px" }}>
+          <div
+            className="mb-2 flex items-center gap-1.5 text-fg-3"
+            style={{ fontSize: "10.5px" }}
+          >
             <span
               className="h-2 w-2 rounded-full"
               style={{ backgroundColor: harnessColor(metric.harness) }}
@@ -521,7 +859,9 @@ function CostCell({
   const detail = coverage(metric, unit);
   return (
     <div className="flex flex-col items-end font-mono">
-      <span>{formatCostAmount(metric.usd, metric.partial, metric.estimated)}</span>
+      <span>
+        {formatCostAmount(metric.usd, metric.partial, metric.estimated)}
+      </span>
       <Tooltip content={detail} side="top">
         <button
           type="button"
@@ -547,12 +887,15 @@ const PROVENANCE_COPY: Record<Exclude<StatsProvenance, "observed">, string> = {
 };
 
 /** Hovering the italic "not set" effort says why the bucket exists. */
-const NOT_SET_COPY = "no effort requested at node startup nor observed in transcripts";
+const NOT_SET_COPY =
+  "no effort requested at node startup nor observed in transcripts";
 
 /** The Performance « By model » tooltip (#737): the wire carries the provenance
  *  but not the per-harness source lines Cost shows, so the copy is the axis's
  *  own honest summary (ADR-0065 §1). */
-function performanceProvenanceCopy(provenance: StatsProvenance | null | undefined): string {
+function performanceProvenanceCopy(
+  provenance: StatsProvenance | null | undefined,
+): string {
   if (!provenance || provenance === "observed") {
     return "observed — the harness's source named the value";
   }
@@ -601,7 +944,10 @@ const OBSERVED_HOW: Record<"model" | "effort", Record<string, string>> = {
   },
 };
 
-function sourceLines(harnesses: StatsHarnessCost[], target: "model" | "effort"): string[] {
+function sourceLines(
+  harnesses: StatsHarnessCost[],
+  target: "model" | "effort",
+): string[] {
   return harnesses
     .filter((h) => h.usd !== null || h.executions > 0)
     .map((h) => {
@@ -613,7 +959,8 @@ function sourceLines(harnesses: StatsHarnessCost[], target: "model" | "effort"):
           : prov === "requested"
             ? "requested — node startup event, the source is silent"
             : "mixed — requested in some executions, observed in others";
-      const via = target === "model" && h.provider ? ` · via ${h.provider}` : "";
+      const via =
+        target === "model" && h.provider ? ` · via ${h.provider}` : "";
       return `${h.harness}: ${how}${via}`;
     })
     .filter((line): line is string => line !== null);
@@ -640,7 +987,8 @@ function ProvenanceName({
   content?: string;
 }) {
   const lines = sourceLines(harnesses, target);
-  const tooltip = content ?? (lines.length ? lines.join("\n") : (provenance ?? "observed"));
+  const tooltip =
+    content ?? (lines.length ? lines.join("\n") : (provenance ?? "observed"));
   return (
     <span className="inline-flex items-baseline gap-0.5">
       <Tooltip content={tooltip} side="top">
@@ -738,10 +1086,17 @@ function CostTable({
   onOpen,
   renderName,
   expandablePairs = false,
+  selection,
+  coupleSelection,
 }: {
   rows: StatsCostEntity[];
   harnesses: string[];
   unit: "Run" | "execution";
+  /** Node rows under one Pipeline (#892), or the efforts of one model (#906):
+   *  select and combine them. */
+  selection?: MasterSelection;
+  /** The couples of each Node row (#906): select and combine them. */
+  coupleSelection?: CoupleSelection;
   onOpen?: (row: StatsCostEntity) => void;
   /** Replaces the default (button-or-plain) name cell — the model axis marks
    *  provenance and renders "not set" in its own voice. */
@@ -751,12 +1106,16 @@ function CostTable({
   expandablePairs?: boolean;
 }) {
   const sorted = [...rows].sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1));
+  const order = sorted.map((row) => row.id);
   // Expansion state lives HERE and dies with the table: the parent keys the
   // table on the drill path, so a stale expanded set never leaks across Nodes.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   return (
     <TooltipProvider>
-      <table className="w-full table-fixed text-left" style={{ fontSize: "11px" }}>
+      <table
+        className="w-full table-fixed text-left"
+        style={{ fontSize: "11px" }}
+      >
         <thead className="text-fg-4">
           <tr>
             <th className="pb-2 font-medium">Name</th>
@@ -777,15 +1136,22 @@ function CostTable({
         <tbody>
           {sorted.map((row) => {
             const pairs = expandablePairs ? (row.models ?? []) : [];
+            const pick = tableSelection(selection, row, order);
+            const couples = coupleLine(
+              coupleSelection?.(row),
+              coupleRows(pairs),
+            );
             return (
               <Fragment key={row.id}>
                 <tr
-                  className="border-t border-line text-fg-2"
+                  className={`group border-t border-line text-fg-2 ${pick.className}`}
                   tabIndex={0}
                   data-testid="stats-detail-row"
+                  {...pick.rowProps}
                 >
                   <td className="py-2 pr-2">
                     <span className="inline-flex items-center gap-1">
+                      {pick.control}
                       {pairs.length > 0 ? (
                         <button
                           type="button"
@@ -823,6 +1189,7 @@ function CostTable({
                           <span>{content}</span>
                         );
                       })()}
+                      <TableCombinedIcon selection={selection} row={row} />
                     </span>
                   </td>
                   <td className="py-2 text-right">
@@ -847,57 +1214,71 @@ function CostTable({
                     <td key={harness} className="py-2 text-right">
                       <CostCell
                         unit={unit}
-                        metric={row.harnesses.find((item) => item.harness === harness)}
+                        metric={row.harnesses.find(
+                          (item) => item.harness === harness,
+                        )}
                       />
                     </td>
                   ))}
                 </tr>
                 {expanded.has(row.id)
-                  ? pairs.map((pair) => (
-                      <tr
-                        key={`${row.id}-${pair.model}-${pair.effort ?? ""}`}
-                        className="border-t border-line bg-bg-3/40 text-fg-3"
-                        data-testid="stats-model-effort-row"
-                      >
-                        <td className="py-2 pl-7 pr-2">
-                          <span className="inline-flex items-baseline gap-1">
-                            <ProvenanceName
-                              name={pair.model}
-                              mono
-                              provenance={pair.model_provenance}
-                              harnesses={pair.harnesses}
-                              target="model"
-                            />
-                            <span className="text-fg-4">·</span>
-                            {pair.effort === null ? (
-                              <Tooltip content={NOT_SET_COPY} side="top">
-                                <span className="italic text-fg-4">not set</span>
-                              </Tooltip>
-                            ) : (
-                              <ProvenanceName
-                                name={pair.effort}
-                                provenance={pair.effort_provenance}
-                                harnesses={pair.harnesses}
-                                target="effort"
-                              />
-                            )}
-                          </span>
-                        </td>
-                        <td className="py-2 text-right">
-                          <CostCell unit={unit} metric={pairMetric(pair)} />
-                        </td>
-                        {harnesses.map((harness) => (
-                          <td key={harness} className="py-2 text-right">
-                            <CostCell
-                              unit={unit}
-                              metric={pair.harnesses.find(
-                                (item) => item.harness === harness,
-                              )}
-                            />
+                  ? pairs.map((pair, index) => {
+                      const couple = couples.rows[index];
+                      const coupled = couples.pick(couple);
+                      return (
+                        <tr
+                          key={`${row.id}-${pair.key}`}
+                          className={`group border-t border-line bg-bg-3/40 text-fg-3 ${coupled.className}`}
+                          data-testid="stats-model-effort-row"
+                          tabIndex={coupled.control ? 0 : undefined}
+                          {...coupled.rowProps}
+                        >
+                          <td className="py-2 pl-7 pr-2">
+                            <span className="inline-flex items-center gap-1">
+                              {coupled.control}
+                              <span className="inline-flex items-baseline gap-1">
+                                <ProvenanceName
+                                  name={pair.model}
+                                  mono
+                                  provenance={pair.model_provenance}
+                                  harnesses={pair.harnesses}
+                                  target="model"
+                                />
+                                <span className="text-fg-4">·</span>
+                                {pair.effort === null ? (
+                                  <Tooltip content={NOT_SET_COPY} side="top">
+                                    <span className="italic text-fg-4">
+                                      not set
+                                    </span>
+                                  </Tooltip>
+                                ) : (
+                                  <ProvenanceName
+                                    name={pair.effort}
+                                    provenance={pair.effort_provenance}
+                                    harnesses={pair.harnesses}
+                                    target="effort"
+                                  />
+                                )}
+                              </span>
+                              {couples.marks(couple)}
+                            </span>
                           </td>
-                        ))}
-                      </tr>
-                    ))
+                          <td className="py-2 text-right">
+                            <CostCell unit={unit} metric={pairMetric(pair)} />
+                          </td>
+                          {harnesses.map((harness) => (
+                            <td key={harness} className="py-2 text-right">
+                              <CostCell
+                                unit={unit}
+                                metric={pair.harnesses.find(
+                                  (item) => item.harness === harness,
+                                )}
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })
                   : null}
               </Fragment>
             );
@@ -913,19 +1294,40 @@ type CostAxis = "pipeline" | "project" | "model";
 function CostTab({
   cost,
   error,
+  uncombined,
+  onAbsorptionsChanged,
 }: {
   cost: StatsCost | null;
   error: string | null;
+  uncombined: boolean;
+  onAbsorptionsChanged: () => void;
 }) {
   const [axis, setAxis] = useState<CostAxis>("pipeline");
+  // #890 / #892: Pipelines on « By pipeline », Models on « By model », the Nodes
+  // of the Pipeline on screen on every axis — never the Projects. #906: the
+  // efforts of one model, and the couples of one Node. Switching the grouping
+  // drops the selection with its rows.
+  const absorption = useStatsAbsorption({
+    enabled: !uncombined,
+    onChanged: onAbsorptionsChanged,
+    onOpenModelAxis: (row) => {
+      setAxis("model");
+      toTotal();
+      setSelectedModelId((row as CoupleRow).model ?? null);
+    },
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [drilledPipelineId, setDrilledPipelineId] = useState<string | null>(null);
+  const [drilledPipelineId, setDrilledPipelineId] = useState<string | null>(
+    null,
+  );
   // The model axis drills Model → Effort → Pipeline → Node (ADR-0065). The
   // effort id is "" for the "not set" bucket, so selection is `null` vs value,
   // never falsy-compared.
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedEffortId, setSelectedEffortId] = useState<string | null>(null);
-  const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
+  const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(
+    null,
+  );
 
   if (error) {
     return (
@@ -965,7 +1367,9 @@ function CostTab({
         ? cost.by_project
         : cost.by_model;
   const selected =
-    axis === "model" ? null : (rows.find((row) => row.id === selectedId) ?? null);
+    axis === "model"
+      ? null
+      : (rows.find((row) => row.id === selectedId) ?? null);
   const drilledPipeline =
     axis === "project" && selected
       ? ((selected as StatsProjectCostEntity).pipelines.find(
@@ -979,7 +1383,7 @@ function CostTab({
       : (drilledPipeline ?? selected ?? cost.total);
   const periods =
     axis === "model"
-      ? (modelPipeline ?? effort ?? model)?.by_period ?? cost.by_period
+      ? ((modelPipeline ?? effort ?? model)?.by_period ?? cost.by_period)
       : drilledPipeline
         ? drilledPipeline.by_period
         : selected
@@ -990,8 +1394,73 @@ function CostTab({
   // executions — the whole model axis reads "per execution" — and so does the
   // Node level of the other axes.
   const atNodeLevel =
-    axis === "model" ? true : axis === "pipeline" ? selected !== null : drilledPipeline !== null;
+    axis === "model"
+      ? true
+      : axis === "pipeline"
+        ? selected !== null
+        : drilledPipeline !== null;
   const detailUnit: "Run" | "execution" = atNodeLevel ? "execution" : "Run";
+
+  const masterSelection =
+    axis === "pipeline"
+      ? absorption.selectionFor({
+          dimension: "pipeline",
+          rows: cost.by_pipeline,
+          count: RUNS_COUNT,
+        })
+      : axis === "model"
+        ? absorption.selectionFor({
+            dimension: "model",
+            rows: cost.by_model,
+            count: RUNS_COUNT,
+          })
+        : undefined;
+  // The Pipeline whose Nodes the table shows, on whichever axis it was reached.
+  const nodePipeline =
+    axis === "model"
+      ? modelPipeline
+      : axis === "project"
+        ? drilledPipeline
+        : selected;
+  const nodeSelection = nodePipeline
+    ? absorption.selectionFor({
+        dimension: "node",
+        scope: { key: nodePipeline.id, name: nodePipeline.name },
+        rows: nodePipeline.nodes,
+        count: RUNS_COUNT,
+        selectable: isCostNodeRow,
+      })
+    : undefined;
+  // #906: the efforts of the model on screen, and the couples of each Node.
+  const effortSelection =
+    model && !effort
+      ? absorption.selectionFor({
+          dimension: "effort",
+          scope: { key: model.id, name: model.name },
+          rows: model.efforts,
+          count: RUNS_COUNT,
+          preferred: hasExplicitEffort,
+        })
+      : undefined;
+  const coupleSelection: CoupleSelection | undefined = nodePipeline
+    ? (node) =>
+        absorption.selectionFor({
+          dimension: "couple",
+          scope: {
+            key: coupleScope(nodePipeline.id, node.id),
+            name: `${node.name} (${nodePipeline.name})`,
+          },
+          rows: coupleRows(
+            nodePipeline.nodes.find((item) => item.id === node.id)?.models ??
+              [],
+          ),
+          count: RUNS_COUNT,
+          // Infrastructure and Unassigned are no Node: their couples show the
+          // global mark, never a ring.
+          selectable: () => isCostNodeRow(node as StatsCostEntity),
+          preferred: hasExplicitEffort,
+        })
+    : undefined;
 
   let detailRows: StatsCostEntity[];
   let detailRenderName: ((row: StatsCostEntity) => React.ReactNode) | undefined;
@@ -1009,13 +1478,16 @@ function CostTab({
     } else {
       detailRows = cost.by_model;
       detailRenderName = (row) => (
-        <ProvenanceName
-          name={row.name}
-          mono
-          provenance={cost.by_model.find((m) => m.id === row.id)?.provenance}
-          harnesses={row.harnesses}
-          target="model"
-        />
+        <span className="inline-flex items-center gap-1.5">
+          <ProvenanceName
+            name={row.name}
+            mono
+            provenance={cost.by_model.find((m) => m.id === row.id)?.provenance}
+            harnesses={row.harnesses}
+            target="model"
+          />
+          <TableCombinedIcon selection={masterSelection} row={row} />
+        </span>
       );
       onOpen = (row) => setSelectedModelId(row.id);
     }
@@ -1023,6 +1495,14 @@ function CostTab({
     detailRows = drilledPipeline.nodes;
   } else if (!selected) {
     detailRows = rows;
+    if (axis === "pipeline") {
+      detailRenderName = (row) => (
+        <PipelineName
+          row={row}
+          onOpenMembers={masterSelection?.onOpenMembers}
+        />
+      );
+    }
   } else if (axis === "project") {
     detailRows = (selected as StatsProjectCostEntity).pipelines;
     onOpen = (pipeline) => setDrilledPipelineId(pipeline.id);
@@ -1040,7 +1520,9 @@ function CostTab({
       ?.missing_reasons.some((r) => r.includes("no cost source")),
   );
   const tableHarnesses =
-    axis === "model" ? cost.harnesses.filter((h) => !noCostSource.includes(h)) : cost.harnesses;
+    axis === "model"
+      ? cost.harnesses.filter((h) => !noCostSource.includes(h))
+      : cost.harnesses;
 
   const crumbs: { label: string; onClick?: () => void }[] = [
     { label: "Total", onClick: toTotal },
@@ -1055,10 +1537,17 @@ function CostTab({
         },
       });
     if (effort)
-      crumbs.push({ label: effort.name, onClick: () => setSelectedPipelineId(null) });
+      crumbs.push({
+        label: effort.name,
+        onClick: () => setSelectedPipelineId(null),
+      });
     if (modelPipeline) crumbs.push({ label: modelPipeline.name });
   } else {
-    if (selected) crumbs.push({ label: selected.name, onClick: () => setDrilledPipelineId(null) });
+    if (selected)
+      crumbs.push({
+        label: selected.name,
+        onClick: () => setDrilledPipelineId(null),
+      });
     if (drilledPipeline) crumbs.push({ label: drilledPipeline.name });
   }
   // Every crumb but the last pops the levels it shadows (design: clickable
@@ -1083,6 +1572,7 @@ function CostTab({
             onChange={(event) => {
               setAxis(event.target.value as CostAxis);
               toTotal();
+              absorption.clear();
             }}
             className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
           >
@@ -1095,7 +1585,10 @@ function CostTab({
           rows={rows}
           selected={axis === "model" ? selectedModelId : selectedId}
           monoName={axis === "model"}
-          valueLabel={(row) => formatCostAmount(row.usd, row.partial, row.estimated)}
+          valueLabel={(row) =>
+            formatCostAmount(row.usd, row.partial, row.estimated)
+          }
+          selection={masterSelection}
           onSelect={(id) => {
             if (axis === "model") {
               setSelectedModelId(id);
@@ -1115,25 +1608,31 @@ function CostTab({
             {noCostSource.length > 0 && (
               <>
                 {" "}
-                <span className="font-mono">{noCostSource.join(", ")}</span> has no cost
-                source and is not on this axis.
+                <span className="font-mono">{noCostSource.join(", ")}</span> has
+                no cost source and is not on this axis.
               </>
             )}
           </div>
         )}
       </aside>
 
-      <div
-        className="min-w-0 flex-1 pl-5"
-        data-testid="stats-drilldown-detail"
-      >
+      <div className="min-w-0 flex-1 pl-5" data-testid="stats-drilldown-detail">
         <Breadcrumb crumbs={clickableCrumbs} />
         <HarnessLegend harnesses={cost.harnesses} />
         <div className="mt-4 text-fg" data-testid="stats-selection-headline">
-          {formatCostAmount(aggregate.usd, aggregate.partial, aggregate.estimated)} total
+          {formatCostAmount(
+            aggregate.usd,
+            aggregate.partial,
+            aggregate.estimated,
+          )}{" "}
+          total
           {" · "}
-          {formatCostAmount(aggregate.median_usd, aggregate.partial, aggregate.estimated)} median
-          per {detailUnit}
+          {formatCostAmount(
+            aggregate.median_usd,
+            aggregate.partial,
+            aggregate.estimated,
+          )}{" "}
+          median per {detailUnit}
         </div>
         <div className="mt-4">
           <HarnessCards aggregate={aggregate} />
@@ -1145,7 +1644,11 @@ function CostTab({
           </div>
         )}
         <div className="mt-4">
-          <HarnessBars periods={periods} harnesses={cost.harnesses} value="usd" />
+          <HarnessBars
+            periods={periods}
+            harnesses={cost.harnesses}
+            value="usd"
+          />
         </div>
         <div className="mt-4 min-h-[240px]">
           <CostTable
@@ -1156,16 +1659,31 @@ function CostTab({
             onOpen={onOpen}
             renderName={detailRenderName}
             expandablePairs={axis !== "model"}
+            selection={
+              detailRows === nodePipeline?.nodes
+                ? nodeSelection
+                : detailRows === model?.efforts
+                  ? effortSelection
+                  : undefined
+            }
+            coupleSelection={
+              detailRows === nodePipeline?.nodes ? coupleSelection : undefined
+            }
           />
         </div>
       </div>
+      {absorption.overlay}
     </div>
   );
 }
 
 type PerformanceMetric = "context" | "duration" | "steering";
 
-const PERFORMANCE_METRICS: readonly PerformanceMetric[] = ["context", "duration", "steering"];
+const PERFORMANCE_METRICS: readonly PerformanceMetric[] = [
+  "context",
+  "duration",
+  "steering",
+];
 
 /**
  * The box-plot zoom level (#811, CONTEXT.md « Niveau de zoom d'un box-plot »):
@@ -1237,8 +1755,17 @@ function ZoomGlyph({ level }: { level: StatsZoom }) {
         stroke="currentColor"
         strokeWidth="1"
       />
-      <line x1="8" y1="0.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="1" />
-      {level === "fenced" && <circle cx="15" cy="4" r="1" fill="currentColor" opacity="0.55" />}
+      <line
+        x1="8"
+        y1="0.5"
+        x2="8"
+        y2="7.5"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      {level === "fenced" && (
+        <circle cx="15" cy="4" r="1" fill="currentColor" opacity="0.55" />
+      )}
     </svg>
   );
 }
@@ -1263,7 +1790,10 @@ function ZoomSegments({
         event.preventDefault();
         const delta = event.key === "ArrowRight" ? 1 : -1;
         const index = ZOOM_LEVELS.indexOf(value);
-        const next = ZOOM_LEVELS[(index + delta + ZOOM_LEVELS.length) % ZOOM_LEVELS.length];
+        const next =
+          ZOOM_LEVELS[
+            (index + delta + ZOOM_LEVELS.length) % ZOOM_LEVELS.length
+          ];
         onChange(next);
         // Roving tabindex: the selection carries the focus, so a second arrow
         // press keeps walking instead of falling back to the group.
@@ -1335,11 +1865,7 @@ function IndependentScalesSwitch({
  *  declared wait, or that wait alone — with **no refetch**: the three always
  *  travel together, over the same executions and the same coverage. */
 type PerformanceField =
-  | "context"
-  | "duration"
-  | "active_duration"
-  | "wait_duration"
-  | "steering";
+  "context" | "duration" | "active_duration" | "wait_duration" | "steering";
 
 /** Which duration field each mode reads. */
 const MODE_FIELD: Record<DurationMode, PerformanceField> = {
@@ -1556,9 +2082,14 @@ function sortPerformance<
   });
 }
 
-function formatPerformanceValue(value: number, metric: PerformanceMetric): string {
+function formatPerformanceValue(
+  value: number,
+  metric: PerformanceMetric,
+): string {
   if (metric === "context") {
-    return value >= 1_000 ? `${Math.round(value / 1_000)}k` : Math.round(value).toString();
+    return value >= 1_000
+      ? `${Math.round(value / 1_000)}k`
+      : Math.round(value).toString();
   }
   if (metric === "steering") {
     // Messages: an integer reads as one (`0`, `2`), a mean keeps one decimal (`0.8`).
@@ -1567,7 +2098,9 @@ function formatPerformanceValue(value: number, metric: PerformanceMetric): strin
   }
   const seconds = Math.round(value / 1_000);
   const minutes = Math.floor(seconds / 60);
-  return minutes ? `${minutes}m${String(seconds % 60).padStart(2, "0")}s` : `${seconds}s`;
+  return minutes
+    ? `${minutes}m${String(seconds % 60).padStart(2, "0")}s`
+    : `${seconds}s`;
 }
 
 function distributionDetail(
@@ -1732,7 +2265,8 @@ function DistributionPlot({
           className="w-fit text-left font-mono text-fg-4 underline decoration-dotted underline-offset-2"
           style={{ fontSize: "9.5px" }}
         >
-          {formatPerformanceValue(stats.median, metric)} median · n={value.measured}
+          {formatPerformanceValue(stats.median, metric)} median · n=
+          {value.measured}
           {partial ? " ⚠" : ""}
           {steeredLine ? ` · ${steeredLine} steered` : ""}
           {waitMillis ? (
@@ -1745,7 +2279,10 @@ function DistributionPlot({
             </span>
           ) : null}
           {rowMax !== null && (
-            <span className="text-fg-5"> · ⤒ {formatPerformanceValue(rowMax, metric)}</span>
+            <span className="text-fg-5">
+              {" "}
+              · ⤒ {formatPerformanceValue(rowMax, metric)}
+            </span>
           )}
         </button>
       </Tooltip>
@@ -1875,7 +2412,10 @@ function SteeredCard({
                   <span className="relative h-1 min-w-10 flex-1 rounded bg-bg-2">
                     <span
                       className="absolute inset-y-0 left-0 rounded"
-                      style={{ width: `${ratio}%`, backgroundColor: harnessColor(item.harness) }}
+                      style={{
+                        width: `${ratio}%`,
+                        backgroundColor: harnessColor(item.harness),
+                      }}
                     />
                   </span>
                 </>
@@ -1883,7 +2423,8 @@ function SteeredCard({
                 <FilteredValue />
               ) : (
                 <span className="text-fg-4">
-                  — {item.steering.missing_reasons[0] ?? "no readable execution"}
+                  —{" "}
+                  {item.steering.missing_reasons[0] ?? "no readable execution"}
                 </span>
               )}
             </div>
@@ -1891,7 +2432,8 @@ function SteeredCard({
         })}
       </div>
       <div className="mt-2 text-fg-4" style={{ fontSize: "10px" }}>
-        share of successful executions with ≥ 1 steering message · steered / readable
+        share of successful executions with ≥ 1 steering message · steered /
+        readable
       </div>
     </div>
   );
@@ -1928,6 +2470,8 @@ function PerformanceTable({
   onOpen,
   expandablePairs = false,
   filteredRowIds,
+  selection,
+  coupleSelection,
 }: {
   rows: StatsPerformanceEntity[];
   harnesses: string[];
@@ -1950,6 +2494,11 @@ function PerformanceTable({
    *  their cells read « filtered » rather than a total that no longer describes
    *  what is on screen. */
   filteredRowIds?: Set<string>;
+  /** Node rows under one Pipeline (#892), or the efforts of one model (#906):
+   *  select and combine them. */
+  selection?: MasterSelection;
+  /** The couples of each Node row (#906): select and combine them. */
+  coupleSelection?: CoupleSelection;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // The couples' own expansion, dying with the table like `expanded` — the
@@ -1961,14 +2510,18 @@ function PerformanceTable({
   // A metric's axis tops out at the chosen level's high statistic over the
   // entities it covers — `max`, `fence_high` or `q3` (#811). `1` as a floor so
   // an all-zero metric never divides by zero.
-  const axisMax = (entities: StatsPerformanceEntity[], field: PerformanceField) =>
+  const axisMax = (
+    entities: StatsPerformanceEntity[],
+    field: PerformanceField,
+  ) =>
     Math.max(
       1,
       ...entities.flatMap((row) =>
         row.harnesses.map((item) => item[field].stats?.[ZOOM_HIGH[zoom]] ?? 0),
       ),
     );
-  const fieldByMetric = (metric: PerformanceMetric) => metricField(metric, mode);
+  const fieldByMetric = (metric: PerformanceMetric) =>
+    metricField(metric, mode);
   const scalesOf = (
     entities: StatsPerformanceEntity[],
   ): Record<PerformanceMetric, number> => ({
@@ -2060,7 +2613,10 @@ function PerformanceTable({
 
   return (
     <TooltipProvider>
-      <table className="w-full table-fixed text-left" style={{ fontSize: "11px" }}>
+      <table
+        className="w-full table-fixed text-left"
+        style={{ fontSize: "11px" }}
+      >
         <thead className="text-fg-4">
           <tr>
             <th className="w-48 pb-2 font-medium">Name</th>
@@ -2105,11 +2661,28 @@ function PerformanceTable({
         <tbody>
           {visible.map(({ row, child, scales }) => {
             const couples = !child && expandablePairs ? (row.models ?? []) : [];
+            // A subagent group is no Node: it never combines.
+            const rowSelection = child ? undefined : selection;
+            const pick = tableSelection(
+              rowSelection,
+              row,
+              ordered.map((item) => item.id),
+            );
+            const coupleLines = coupleLine(
+              child ? undefined : coupleSelection?.(row),
+              coupleRows(couples),
+            );
             return (
               <Fragment key={`${child ? "subagent" : "entity"}-${row.id}`}>
-                <tr className="border-t border-line" data-testid="stats-detail-row">
+                <tr
+                  className={`group border-t border-line ${pick.className}`}
+                  data-testid="stats-detail-row"
+                  tabIndex={rowSelection ? 0 : undefined}
+                  {...pick.rowProps}
+                >
                   <td className={`py-2 pr-2 text-fg-2 ${child ? "pl-7" : ""}`}>
                     <span className="inline-flex items-center gap-1">
+                      {pick.control}
                       {couples.length > 0 ? (
                         <button
                           type="button"
@@ -2168,6 +2741,7 @@ function PerformanceTable({
                           <span>{content}</span>
                         );
                       })()}
+                      <TableCombinedIcon selection={rowSelection} row={row} />
                       {!child && <KindBadges row={row} />}
                     </span>
                   </td>
@@ -2182,48 +2756,64 @@ function PerformanceTable({
                       )}
                 </tr>
                 {couplesExpanded.has(row.id)
-                  ? couples.map((pair) => (
-                      <tr
-                        key={`${row.id}-${pair.model}-${pair.effort ?? ""}`}
-                        className="border-t border-line bg-bg-3/40 text-fg-3"
-                        data-testid="stats-performance-model-effort-row"
-                      >
-                        <td className="py-2 pl-7 pr-2">
-                          <span className="inline-flex items-baseline gap-1">
-                            <ProvenanceName
-                              name={pair.model}
-                              mono
-                              provenance={pair.model_provenance}
-                              harnesses={[]}
-                              target="model"
-                              content={performanceProvenanceCopy(pair.model_provenance)}
-                            />
-                            <span className="text-fg-4">·</span>
-                            {pair.effort === null ? (
-                              <Tooltip content={NOT_SET_COPY} side="top">
-                                <span className="italic text-fg-4">not set</span>
-                              </Tooltip>
-                            ) : (
-                              <ProvenanceName
-                                name={pair.effort}
-                                provenance={pair.effort_provenance}
-                                harnesses={[]}
-                                target="effort"
-                                content={performanceProvenanceCopy(pair.effort_provenance)}
-                              />
-                            )}
-                          </span>
-                        </td>
-                        {PERFORMANCE_METRICS.map((metric) =>
-                          metricCell(
-                            `${pair.model} · ${pair.effort ?? "not set"}`,
-                            pair.harnesses,
-                            metric,
-                            scales,
-                          ),
-                        )}
-                      </tr>
-                    ))
+                  ? couples.map((pair, index) => {
+                      const couple = coupleLines.rows[index];
+                      const coupled = coupleLines.pick(couple);
+                      return (
+                        <tr
+                          key={`${row.id}-${pair.key}`}
+                          className={`group border-t border-line bg-bg-3/40 text-fg-3 ${coupled.className}`}
+                          data-testid="stats-performance-model-effort-row"
+                          tabIndex={coupled.control ? 0 : undefined}
+                          {...coupled.rowProps}
+                        >
+                          <td className="py-2 pl-7 pr-2">
+                            <span className="inline-flex items-center gap-1">
+                              {coupled.control}
+                              <span className="inline-flex items-baseline gap-1">
+                                <ProvenanceName
+                                  name={pair.model}
+                                  mono
+                                  provenance={pair.model_provenance}
+                                  harnesses={[]}
+                                  target="model"
+                                  content={performanceProvenanceCopy(
+                                    pair.model_provenance,
+                                  )}
+                                />
+                                <span className="text-fg-4">·</span>
+                                {pair.effort === null ? (
+                                  <Tooltip content={NOT_SET_COPY} side="top">
+                                    <span className="italic text-fg-4">
+                                      not set
+                                    </span>
+                                  </Tooltip>
+                                ) : (
+                                  <ProvenanceName
+                                    name={pair.effort}
+                                    provenance={pair.effort_provenance}
+                                    harnesses={[]}
+                                    target="effort"
+                                    content={performanceProvenanceCopy(
+                                      pair.effort_provenance,
+                                    )}
+                                  />
+                                )}
+                              </span>
+                              {coupleLines.marks(couple)}
+                            </span>
+                          </td>
+                          {PERFORMANCE_METRICS.map((metric) =>
+                            metricCell(
+                              `${pair.model} · ${pair.effort ?? "not set"}`,
+                              pair.harnesses,
+                              metric,
+                              scales,
+                            ),
+                          )}
+                        </tr>
+                      );
+                    })
                   : null}
               </Fragment>
             );
@@ -2308,6 +2898,41 @@ function CohortChip({
     >
       {checked && <Check size={10} strokeWidth={3} aria-hidden="true" />}
       completed runs only
+    </button>
+  );
+}
+
+/** « Uncombined » (#891, ADR-0077): read the tab without the absorptions, to
+ *  compare before and after without undoing anything. One reading for every
+ *  tab that shows Pipelines, off at each open (« Réglages de Stats éphémères »),
+ *  and shown only once the instance has an absorption to set aside. */
+function UncombinedChip({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      data-testid="stats-uncombined"
+      title="Show the original rows, as if nothing were combined"
+      onClick={() => onChange(!checked)}
+      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+        checked
+          ? "border-st-done bg-st-done/15 text-fg"
+          : "border-line-strong bg-bg-3 text-fg-2"
+      }`}
+    >
+      {checked ? (
+        <Check size={10} strokeWidth={3} aria-hidden="true" />
+      ) : (
+        <Combine size={10} aria-hidden="true" />
+      )}
+      uncombined
     </button>
   );
 }
@@ -2460,15 +3085,24 @@ function CohortOnlyBand({
   label,
   completedOnly,
   onCompletedOnlyChange,
+  uncombined,
 }: {
   label: string;
   completedOnly: boolean;
   onCompletedOnlyChange: (value: boolean) => void;
+  /** The « Uncombined » chip, on the tabs that show Pipelines (not Overview). */
+  uncombined?: { checked: boolean; onChange: (value: boolean) => void };
 }) {
   return (
     <StatsFilterBand label={label} testid="stats-filter-band">
       <CohortChip checked={completedOnly} onChange={onCompletedOnlyChange} />
       <span className="text-fg-4">default: all runs</span>
+      {uncombined && (
+        <UncombinedChip
+          checked={uncombined.checked}
+          onChange={uncombined.onChange}
+        />
+      )}
     </StatsFilterBand>
   );
 }
@@ -2481,15 +3115,23 @@ function PerformanceTab({
   band,
   onBandChange,
   onResetFilters,
+  uncombined,
+  onUncombinedChange,
+  showUncombined,
+  onAbsorptionsChanged,
 }: {
   performance: StatsPerformance | null;
   error: string | null;
   completedOnly: boolean;
   onCompletedOnlyChange: (value: boolean) => void;
+  uncombined: boolean;
+  onUncombinedChange: (value: boolean) => void;
+  showUncombined: boolean;
   /** The band's controls, owned by the shell so a tab switch keeps them (#819). */
   band: PerformanceBand;
   onBandChange: (band: PerformanceBand) => void;
   onResetFilters: () => void;
+  onAbsorptionsChanged: () => void;
 }) {
   // The second select (#737): grouping (« By pipeline » / « By model »), fully
   // independent of the sort (« By context » / « By duration ») beside it.
@@ -2501,7 +3143,9 @@ function PerformanceTab({
   // never falsy-compared.
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedEffortId, setSelectedEffortId] = useState<string | null>(null);
-  const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
+  const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(
+    null,
+  );
   // #819 — the band's controls come from the shell, which outlives the section:
   // they survive the drill, the grouping switch, the table's keyed remount AND
   // a trip to another tab, while a fresh Stats always opens on the defaults.
@@ -2513,6 +3157,18 @@ function PerformanceTab({
     onBandChange({ ...band, durationMode: next });
   const onNodeKindsChange = (kinds: NodeKind[]) =>
     onBandChange({ ...band, nodeKinds: kinds });
+  // #890 / #892: the « By pipeline » Pipeline rows — never the Infrastructure
+  // row beside them —, the « By model » Model rows, and the Nodes of the
+  // Pipeline on screen.
+  const absorption = useStatsAbsorption({
+    enabled: !uncombined,
+    onChanged: onAbsorptionsChanged,
+    onOpenModelAxis: (row) => {
+      setAxis("model");
+      toTotal();
+      setSelectedModelId((row as CoupleRow).model ?? null);
+    },
+  });
 
   if (error) {
     return (
@@ -2546,10 +3202,15 @@ function PerformanceTab({
       label="Performance filters"
       testid="stats-performance-filters"
       onReset={
-        performanceBandDeviates(completedOnly, band) ? onResetFilters : undefined
+        performanceBandDeviates(completedOnly, band)
+          ? onResetFilters
+          : undefined
       }
     >
       <CohortChip checked={completedOnly} onChange={onCompletedOnlyChange} />
+      {showUncombined && (
+        <UncombinedChip checked={uncombined} onChange={onUncombinedChange} />
+      )}
       <BandDivider />
       <span className="text-fg-4">Duration</span>
       <DurationModeSegments value={mode} onChange={onDurationModeChange} />
@@ -2644,13 +3305,11 @@ function PerformanceTab({
   const masterRows =
     axis === "model"
       ? sortPerformance(performance.by_model, sort, mode)
-      : sortPerformance(
-          [...pipelineRows, infrastructureRow],
-          sort,
-          mode,
-        );
+      : sortPerformance([...pipelineRows, infrastructureRow], sort, mode);
   const selected =
-    axis === "pipeline" ? (masterRows.find((row) => row.id === selectedId) ?? null) : null;
+    axis === "pipeline"
+      ? (masterRows.find((row) => row.id === selectedId) ?? null)
+      : null;
   const aggregate =
     axis === "model"
       ? (modelPipeline ?? effort ?? model ?? performance.total)
@@ -2668,12 +3327,68 @@ function PerformanceTab({
           ? false
           : hasHiddenNode(selected, nodeKinds);
 
+  const masterSelection =
+    axis === "model"
+      ? absorption.selectionFor({
+          dimension: "model",
+          rows: performance.by_model,
+          count: RUNS_COUNT,
+        })
+      : absorption.selectionFor({
+          dimension: "pipeline",
+          rows: performance.by_pipeline,
+          count: RUNS_COUNT,
+        });
+  // The Pipeline whose Nodes the table shows (never Infrastructure's roles).
+  const nodePipeline =
+    axis === "model"
+      ? modelPipeline
+      : selected && selected.id !== "__infrastructure__"
+        ? selected
+        : null;
+  const nodeSelection = nodePipeline
+    ? absorption.selectionFor({
+        dimension: "node",
+        scope: { key: nodePipeline.id, name: nodePipeline.name },
+        rows: nodePipeline.nodes,
+        count: RUNS_COUNT,
+      })
+    : undefined;
+  // #906: the efforts of the model on screen, and the couples of each Node.
+  const effortSelection =
+    model && !effort
+      ? absorption.selectionFor({
+          dimension: "effort",
+          scope: { key: model.id, name: model.name },
+          rows: model.efforts,
+          count: RUNS_COUNT,
+          preferred: hasExplicitEffort,
+        })
+      : undefined;
+  const coupleSelection: CoupleSelection | undefined = nodePipeline
+    ? (node) =>
+        absorption.selectionFor({
+          dimension: "couple",
+          scope: {
+            key: coupleScope(nodePipeline.id, node.id),
+            name: `${node.name} (${nodePipeline.name})`,
+          },
+          rows: coupleRows(
+            nodePipeline.nodes.find((item) => item.id === node.id)?.models ??
+              [],
+          ),
+          count: RUNS_COUNT,
+          preferred: hasExplicitEffort,
+        })
+    : undefined;
+
   let detailRows: StatsPerformanceEntity[];
   // The Node population the level would show without the kind filter — set only
   // on a Node level, so an empty table can tell « nothing here » from « the
   // filter took everything » (#810).
   let unfilteredNodes: StatsPerformanceEntity[] | null = null;
-  let detailRenderName: ((row: StatsPerformanceEntity) => React.ReactNode) | undefined;
+  let detailRenderName:
+    ((row: StatsPerformanceEntity) => React.ReactNode) | undefined;
   let onOpen: ((row: StatsPerformanceEntity) => void) | undefined;
   if (axis === "model") {
     if (modelPipeline) {
@@ -2693,16 +3408,21 @@ function PerformanceTab({
     } else {
       detailRows = performance.by_model;
       detailRenderName = (row) => {
-        const provenance = performance.by_model.find((m) => m.id === row.id)?.provenance;
+        const provenance = performance.by_model.find(
+          (m) => m.id === row.id,
+        )?.provenance;
         return (
-          <ProvenanceName
-            name={row.name}
-            mono
-            provenance={provenance}
-            harnesses={[]}
-            target="model"
-            content={performanceProvenanceCopy(provenance)}
-          />
+          <span className="inline-flex items-center gap-1.5">
+            <ProvenanceName
+              name={row.name}
+              mono
+              provenance={provenance}
+              harnesses={[]}
+              target="model"
+              content={performanceProvenanceCopy(provenance)}
+            />
+            <TableCombinedIcon selection={masterSelection} row={row} />
+          </span>
         );
       };
       onOpen = (row) => setSelectedModelId(row.id);
@@ -2716,6 +3436,9 @@ function PerformanceTab({
     }
   } else {
     detailRows = masterRows;
+    detailRenderName = (row) => (
+      <PipelineName row={row} onOpenMembers={masterSelection?.onOpenMembers} />
+    );
   }
 
   // A Node level the filter emptied: the table would stand there with its
@@ -2742,7 +3465,9 @@ function PerformanceTab({
 
   const durationField = metricField("duration", mode);
   const contexts = aggregate.harnesses.map((item) =>
-    item.context.stats ? formatPerformanceValue(item.context.stats.median, "context") : "—",
+    item.context.stats
+      ? formatPerformanceValue(item.context.stats.median, "context")
+      : "—",
   );
   const durations = aggregate.harnesses.map((item) =>
     item[durationField].stats
@@ -2768,7 +3493,11 @@ function PerformanceTab({
           setSelectedPipelineId(null);
         },
       });
-    if (effort) crumbs.push({ label: effort.name, onClick: () => setSelectedPipelineId(null) });
+    if (effort)
+      crumbs.push({
+        label: effort.name,
+        onClick: () => setSelectedPipelineId(null),
+      });
     if (modelPipeline) crumbs.push({ label: modelPipeline.name });
   }
   // Every crumb but the last pops the levels it shadows.
@@ -2801,6 +3530,7 @@ function PerformanceTab({
                   onChange={(event) => {
                     setAxis(event.target.value as PerformanceAxis);
                     toTotal();
+                    absorption.clear();
                   }}
                   className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
                 >
@@ -2816,15 +3546,14 @@ function PerformanceTab({
                   className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
                 >
                   <option value="context">By context</option>
-                  <option value="duration">
-                    By {durationWord(mode)}
-                  </option>
+                  <option value="duration">By {durationWord(mode)}</option>
                   <option value="steering">By steering</option>
                 </select>
               </span>
             </div>
             <MasterList
               rows={masterRows}
+              selection={masterSelection}
               selected={axis === "model" ? selectedModelId : selectedId}
               monoName={axis === "model"}
               ariaLabel="Performance groups"
@@ -2851,8 +3580,8 @@ function PerformanceTab({
             {axis === "model" && (
               <div className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
                 Model ids verbatim, one row per id — the same id run through two
-                harnesses is one row, one column per harness. Hover a model or an
-                effort for where the value was read.
+                harnesses is one row, one column per harness. Hover a model or
+                an effort for where the value was read.
               </div>
             )}
           </aside>
@@ -2917,11 +3646,20 @@ function PerformanceTab({
                   onOpen={onOpen}
                   expandablePairs={axis === "pipeline"}
                   filteredRowIds={filteredRowIds}
+                  selection={
+                    nodePipeline
+                      ? nodeSelection
+                      : detailRows === model?.efforts
+                        ? effortSelection
+                        : undefined
+                  }
+                  coupleSelection={nodePipeline ? coupleSelection : undefined}
                 />
               )}
             </div>
           </div>
         </div>
+        {absorption.overlay}
       </div>
     </TooltipProvider>
   );
@@ -2944,6 +3682,14 @@ export interface StatsChartsProps {
   band?: PerformanceBand;
   onBandChange?: (band: PerformanceBand) => void;
   onResetFilters?: () => void;
+  /** A Combine or an Uncombine landed (#890): the host refetches every tab. */
+  onAbsorptionsChanged?: () => void;
+  /** « Uncombined » (#891): the rows as the event log wrote them. Owned by the
+   *  shell (one reading for Sessions, Triggers, Cost and Performance, back to
+   *  off at each open); the chip only shows when `showUncombined`. */
+  uncombined?: boolean;
+  onUncombinedChange?: (value: boolean) => void;
+  showUncombined?: boolean;
 }
 
 /** The legend each tab's band carries — it names the tab, not the endpoint. */
@@ -2966,6 +3712,10 @@ export default function StatsCharts({
   band = DEFAULT_PERFORMANCE_BAND,
   onBandChange = () => {},
   onResetFilters = () => {},
+  onAbsorptionsChanged = () => {},
+  uncombined = false,
+  onUncombinedChange = () => {},
+  showUncombined = false,
 }: StatsChartsProps) {
   // #759: subscribing here re-renders the whole chart subtree on a theme switch,
   // so every `CHART.*` / `harnessColor()` read below resolves against the new
@@ -2984,15 +3734,34 @@ export default function StatsCharts({
         band={band}
         onBandChange={onBandChange}
         onResetFilters={onResetFilters}
+        uncombined={uncombined}
+        onUncombinedChange={onUncombinedChange}
+        showUncombined={showUncombined}
+        onAbsorptionsChanged={onAbsorptionsChanged}
       />
     );
   }
   const body = () => {
-    if (tab === "cost") return <CostTab cost={cost} error={costError} />;
+    if (tab === "cost")
+      return (
+        <CostTab
+          cost={cost}
+          error={costError}
+          uncombined={uncombined}
+          onAbsorptionsChanged={onAbsorptionsChanged}
+        />
+      );
     if (!overview) return <EmptyNote>Loading…</EmptyNote>;
     if (tab === "runs")
       return <RunsTab overview={overview} completedOnly={completedOnly} />;
-    if (tab === "sessions") return <SessionsTab overview={overview} />;
+    if (tab === "sessions")
+      return (
+        <SessionsTab
+          overview={overview}
+          uncombined={uncombined}
+          onAbsorptionsChanged={onAbsorptionsChanged}
+        />
+      );
     return <TriggersTab overview={overview} />;
   };
   return (
@@ -3002,6 +3771,12 @@ export default function StatsCharts({
           label={TAB_BAND_LABEL[tab]}
           completedOnly={completedOnly}
           onCompletedOnlyChange={onCompletedOnlyChange}
+          uncombined={
+            // Overview (the Runs tab) has no Pipeline rows: nothing to uncombine.
+            tab !== "runs" && showUncombined
+              ? { checked: uncombined, onChange: onUncombinedChange }
+              : undefined
+          }
         />
         <CohortLine
           completedOnly={completedOnly}

@@ -10,6 +10,61 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.109.0 — Stats : absorption des Pipelines, Nodes, Modèles, efforts et couples (story #888)
+
+Les tickets #890, #891, #892 et #906 de la story #888 (ADR-0077, ADR-0078), livrés ensemble.
+
+**Stats : absorber les efforts d'un modèle et les couples d'un Node** (#906, story #888,
+ADR-0078).
+
+- Sur l'axe « By model » de Cost et de Performance, sélectionner des efforts d'un même modèle
+  (`not set` + `high`) puis « Combine » : une ligne d'effort, pastille `[⧉ N]` et modale des
+  membres. Une sélection sur deux modèles est refusée, dans l'UI et par l'API (400).
+- Les absorptions globales (Modèles, efforts) réunissent aussi les couples modèle × effort de
+  chaque Node, dans les arbres Pipeline et Projet. Le couple touché porte une pastille grisée
+  « Global absorption » : modale en lecture seule, lien vers l'axe « By model ».
+- Dans le détail d'un Node, deux couples quelconques se combinent en une ligne. L'absorption
+  est locale au Node, n'apparaît jamais sur « By model », et s'applique après le global.
+- Portée figée : une absorption d'efforts ou de couples couvre les clés brutes présentes à la
+  pose ; un membre absorbé plus tard n'est pas couvert.
+- Settings › Stats absorptions liste les entrées « Effort · <modèle> » et « Couple · <Node> ».
+
+**Stats : absorber des Nodes et des Modèles** (#892, story #888, ADR-0077).
+
+- Sous un même Pipeline, sélectionner deux lignes Node (Ctrl/Maj-clic dans le détail) puis
+  « Combine » : un Node renommé d'une version à l'autre (`review` → `code-review`) se lit sur
+  une seule ligne dans Sessions, Cost (arbres Pipeline, Projet et Modèle) et Performance.
+  La sélection refuse, visiblement, de mélanger Pipelines et Nodes, ou des Nodes de deux
+  Pipelines ; l'API refuse aussi ce dernier cas.
+- Retirer un Pipeline absorbé fait sortir ses Nodes de l'absorption de Nodes de son ancien
+  absorbant : ils retrouvent leur ligne sous leur Pipeline.
+- Sur l'axe « By model » de Cost et de Performance, deux lignes Modèle (un alias épinglé et
+  son id observé) se combinent ; l'absorbant garde son id verbatim, leurs efforts se
+  réunissent par effort, et la liste des membres dit si chaque id a été observé ou demandé.
+  L'axe Pipeline n'est pas touché.
+- Settings › Stats absorptions liste les Nodes (avec leur Pipeline) et les Modèles.
+- Correctif : la barre « Combine » et ses modales manquaient dans l'onglet Performance.
+
+**Stats : absorption au renommage, liste des absorptions, interrupteur Uncombined** (#891,
+story #888, ADR-0077).
+
+- Renommer un Pipeline dans la bibliothèque (id changé) crée l'absorption ancien → nouveau,
+  d'origine `rename`. Une chaîne A → B → C donne C absorbant de A et de B ; un renommage
+  d'affichage qui garde l'id ne crée rien.
+- Settings › General › *Stats absorptions* (`saves as you go`) liste toutes les absorptions,
+  leur absorbant, leurs absorbés et leur origine ; la croix retire un absorbé aussitôt.
+- Un interrupteur *Uncombined* sur Sessions, Cost, Performance et Triggers montre les
+  chiffres bruts (`uncombined=true`) ; il revient à son défaut à chaque ouverture de Stats.
+
+**Stats : absorber des Pipelines** (#890, story #888, ADR-0077).
+
+- Dans Stats › Sessions, sélectionner plusieurs Pipelines (Ctrl/Maj-clic) puis « Combine » :
+  une seule ligne, au nom de l'absorbant, cumule leurs Runs dans Sessions, Cost, Performance
+  et Triggers. La pastille `[⧉ N]` ouvre la liste des membres, d'où l'on retire un absorbé.
+- L'absorption est stockée dans `pdo.db` et appliquée à la lecture : le log d'événements
+  n'est jamais réécrit, et `uncombined=true` sur les routes Stats rend les chiffres bruts.
+
+
 ## 1.108.0
 **Sélecteur de skills compact, « active skills » partout** (#849, story #847).
 

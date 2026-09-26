@@ -1167,10 +1167,7 @@ async fn skills_of_the_four_tiers_are_unioned_at_spawn_with_their_origin() {
         tiers_of(active, &a["id"]),
         serde_json::json!(["instance", "project"])
     );
-    assert_eq!(
-        tiers_of(active, &b["id"]),
-        serde_json::json!(["project"])
-    );
+    assert_eq!(tiers_of(active, &b["id"]), serde_json::json!(["project"]));
     assert_eq!(tiers_of(active, &d["id"]), serde_json::json!(["run"]));
     assert_eq!(tiers_of(active, &c["id"]), serde_json::json!(["node"]));
     assert_eq!(payload["missing_skills"], serde_json::json!([]));

@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::event_log::{self, EventKind, NodeStatus};
 use crate::pipeline::{self, PipelineDef};
-use crate::worktree_ops::{ensure_sub_worktree, sub_worktree_branch, sub_worktree_path};
+use crate::worktrees::{ensure_sub_worktree, sub_worktree_branch, sub_worktree_path};
 use crate::{blackboard, harness_registry, harness_resolver, tmux_session_manager};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -224,7 +224,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     // in `node_spawn`.
     let mut spawn_base_sha: Option<String> = None;
     let node_provisioning = if has_sub_worktree {
-        match crate::provisioning::node_rules_from_pipeline(params.pipeline_path, &node.id) {
+        match crate::node_rules_from_pipeline(params.pipeline_path, &node.id) {
             Ok(rules) => rules,
             Err(e) => {
                 return StartNodeResult {
@@ -261,14 +261,14 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             Ok(ensured) => {
                 spawn_base_sha = ensured.base_sha;
                 if ensured.created {
-                    if let Err(e) = crate::provisioning::provision_node_worktree(
+                    if let Err(e) = crate::provisioner::provision_node_worktree(
                         params.repo_root,
                         &sub_wt_dir,
                         &params.run_state.provisioning_rules,
                         &node_provisioning,
                         &pipeline_branch,
                     ) {
-                        crate::worktree_ops::reap_orphan_sub_worktree(
+                        crate::worktrees::reap_orphan_sub_worktree(
                             params.repo_root,
                             &sub_wt_dir,
                             &sub_branch,

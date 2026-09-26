@@ -63,9 +63,6 @@ vi.mock("../api", () => ({
   updateAgentProfile: vi.fn(),
   deleteAgentProfile: vi.fn(),
   fetchAgentProfileReferents: vi.fn(),
-  saveInstanceProvisioning: vi
-    .fn()
-    .mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
   // #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
@@ -74,7 +71,6 @@ vi.mock("../api", () => ({
   fetchUpdateAttemptLog: (...args: unknown[]) =>
     fetchUpdateAttemptLogMock(...args),
   checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
-  browseFs: (...args: unknown[]) => browseFsMock(...args),
   // #432: same Proxy trap as `browseFs` above — a missing key here throws the moment the
   // staging-profile panel mounts, not at import.
   fetchSandboxProfiles: (...args: unknown[]) =>
@@ -84,8 +80,6 @@ vi.mock("../api", () => ({
     deleteSandboxProfileMock(...args),
   fetchSandboxProfileReferents: (...args: unknown[]) =>
     fetchSandboxProfileReferentsMock(...args),
-  fetchInstanceProvisioning: (...args: unknown[]) =>
-    fetchInstanceProvisioningMock(...args),
   // #668: the skill bank drill-down. Same Proxy trap: every function `SkillBankPanel`
   // / `PasteSkillModal` import must exist here or the panel throws on first access.
   fetchSkillBank: vi
@@ -111,6 +105,20 @@ vi.mock("../api", () => ({
     status?: number;
     body?: unknown;
   },
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+  browseFs: (...args: unknown[]) => browseFsMock(...args),
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+  saveInstanceProvisioning: vi
+    .fn()
+    .mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
+  fetchInstanceProvisioning: (...args: unknown[]) =>
+    fetchInstanceProvisioningMock(...args),
 }));
 
 import SettingsSurface from "./SettingsSurface";

@@ -10,12 +10,16 @@ vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   // #669: the skills selector's reads (bank + inherited tiers), empty by default.
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
-  fetchProjects: vi.fn().mockResolvedValue([]),
   saveToLibrary: vi.fn(),
   deleteFromLibrary: vi.fn(),
   instantiateFromLibrary: vi.fn(),
   // #586: NodeInspector's harness picker fetches /settings for its options.
   fetchSettings: vi.fn().mockResolvedValue({ harness_descriptors: null }),
+}));
+
+vi.mock("../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
 }));
 
 describe("SidePicker", () => {

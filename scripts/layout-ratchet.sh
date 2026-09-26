@@ -83,9 +83,14 @@ cd "$(git rev-parse --show-toplevel)"
 #   Settings › General › Stats absorptions list (every absorption, its origin, uncombine as
 #   you go). SettingsSurface renders it; it reuses StatsAbsorption's UncombineButton and
 #   lib/statsAbsorption, so only the Settings layout is new.
+# frontend/src/components: 194 and crates/pdo-daemon/src: 89 (#917, spec #913) ratchet down:
+#   the workspace context moved out — project_store.rs, provisioning.rs, worktree_ops.rs and
+#   repo_scaffold.rs to crates/pdo-workspace; ProjectEditModal, SourceBranchField,
+#   ProvisioningRulesEditor, PersistedProvisioningEditor, FsExplorerModal, RepoCombobox and
+#   their tests to frontend/src/workspace/components.
 BASELINES='
-frontend/src/components 205
-crates/pdo-daemon/src 93
+frontend/src/components 194
+crates/pdo-daemon/src 89
 '
 
 fail=0

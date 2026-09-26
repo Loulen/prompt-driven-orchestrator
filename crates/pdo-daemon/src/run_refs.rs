@@ -217,7 +217,7 @@ fn live_nodes(run_id: &str, run_state: &RunState) -> Vec<(String, i64, String)> 
             (
                 n.node_id.clone(),
                 n.iter,
-                crate::worktree_ops::sub_worktree_branch(run_id, &n.node_id, n.iter),
+                crate::worktrees::sub_worktree_branch(run_id, &n.node_id, n.iter),
             )
         })
         .collect();

@@ -234,8 +234,19 @@ async fn wait_for_node_status(daemon: &TestDaemon, run_id: &str, node_id: &str, 
 
 /// **The pre-kill contract, as a reusable oracle.** A refusal that leaves any
 /// trace at all has already broken ADR-0037 §3, whatever its status code.
+///
+/// `pipeline_modified` is set aside on both sides: the pipeline watcher appends it
+/// on its own clock when the debounced echo of the Run's creation outlives the
+/// daemon's self-write window (a loaded machine), and it is never the refusal's.
 async fn assert_no_trace(daemon: &TestDaemon, run_id: &str, before: &[serde_json::Value]) {
-    let after = events_of(daemon, run_id).await;
+    let not_watcher = |e: &&serde_json::Value| e["kind"] != "pipeline_modified";
+    let before: Vec<_> = before.iter().filter(not_watcher).cloned().collect();
+    let after: Vec<_> = events_of(daemon, run_id)
+        .await
+        .iter()
+        .filter(not_watcher)
+        .cloned()
+        .collect();
     assert_eq!(
         after.len(),
         before.len(),

@@ -39,7 +39,6 @@ vi.mock("../api", () => ({
   deleteSkillFile: (...args: unknown[]) => deleteSkillFileMock(...args),
   uploadSkillFiles: (...args: unknown[]) => uploadSkillFilesMock(...args),
   uploadSkillFileFromPath: (...args: unknown[]) => uploadSkillFileFromPathMock(...args),
-  browseFs: (...args: unknown[]) => browseFsMock(...args),
   // Defined INSIDE the hoisted factory (a top-level class would not exist yet),
   // with the real constructor signature so tests read like production code.
   ApiError: class ApiError extends Error {
@@ -51,6 +50,11 @@ vi.mock("../api", () => ({
       this.body = opts.body;
     }
   },
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+  browseFs: (...args: unknown[]) => browseFsMock(...args),
 }));
 
 import { ApiError } from "../shared/http/client";

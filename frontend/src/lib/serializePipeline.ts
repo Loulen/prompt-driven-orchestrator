@@ -28,7 +28,7 @@ import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldD
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
 import { foldNodeIntoHarnesses } from "./harness";
 import { nodeIsolation } from "./nodeIsolation";
-import { hasProvisioningRules } from "./provisioning";
+import { hasProvisioningRules } from "../workspace/model/provisioning";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 /**

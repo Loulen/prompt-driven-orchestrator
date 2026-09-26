@@ -713,7 +713,7 @@ pub(crate) fn merge_back(home_root: &Path, sandbox_root: &Path, run_id: &str) ->
 }
 
 /// Supprime `<sandbox_root>/<run_id>/`. No-op si absent (best-effort, miroir de
-/// [`crate::worktree_ops::reap_orphan_sub_worktree`]).
+/// [`crate::worktrees::reap_orphan_sub_worktree`]).
 pub(crate) fn teardown(sandbox_root: &Path, run_id: &str) -> Result<()> {
     let _ = std::fs::remove_dir_all(staging_dir_for_run(sandbox_root, run_id));
     Ok(())

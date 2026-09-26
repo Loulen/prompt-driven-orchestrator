@@ -73,6 +73,26 @@ legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, pack
 delegates to the legacy crate. The daemon's integration tests (stage 4) live there too, in
 `crates/pdo/tests/`, and every test daemon goes through the same `identify` head as `pdo daemon`.
 
+Extracted so far: `workspace` (`crates/pdo-workspace`, `frontend/src/workspace/`). While the
+legacy crate still assembles the daemon, it wires an extracted context's adapters onto its ports
+(`workspace_context` in `lib.rs`) and `.merge(…)`s its `router()` into `build_router`; list every
+merged router in `ROUTER_SOURCES` of `route_coverage.rs`. The legacy crate may call an extracted
+context's public API (its use cases, its adapters' free functions, re-exported at the root of
+`lib.rs` for the modules that still read them), never the other way round.
+
+Two patterns the workspace set for the contexts that follow:
+
+- **A port for a whole technology.** Every `git` call of the workspace lives in
+  `adapters/git/`, behind the `Git` port for the workspace's own use cases. A context that still
+  lives in the legacy crate calls the adapter's functions directly until it migrates onto the
+  port.
+- **Settings a downstream context owns.** A Projet carries the agentic profile and the skills
+  selection, which belong to contexts downstream of the workspace. The workspace stores them as
+  opaque JSON (`StoredSetting`) and never reads them; its HTTP adapter is generic over a
+  `ProjectSettings` trait that names their real types, so the wire keeps its shape and the
+  generated TypeScript type is `Project<A, S>` (the front aliases it in
+  `workspace/model/project.ts`).
+
 The HTTP and WebSocket contract stays frozen for the whole migration. A temporary suite,
 `crates/pdo/tests/snapshots_temporary/`, plays eight business scenarios against the real
 daemon and freezes every response and every `/ws` message as a masked `insta` snapshot. A move

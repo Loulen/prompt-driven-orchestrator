@@ -6,7 +6,7 @@ import type { RunStatus } from "../shared/generated/RunStatus";
 import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
-import type { Project } from "../shared/generated/Project";
+import type { Project } from "../workspace/model/project";
 import type { LibraryPipelineEntry } from "../api";
 import { ApiError } from "../shared/http/client";
 import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
@@ -29,14 +29,14 @@ import {
   type RunTreeNode,
 } from "../lib/runTree";
 import { loadChildRunsExpanded } from "../lib/uiPrefs";
-import { projectLookup } from "../lib/projectLookup";
+import { projectLookup } from "../workspace/model/projectLookup";
 import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
 import LibraryRow from "./LibraryRow";
-import ProjectEditModal from "./ProjectEditModal";
+import ProjectEditModal from "../workspace/components/ProjectEditModal";
 import RunFilters from "./RunFilters";
 import { EMPTY_RUN_FILTER, isFilterActive, runMatchesFilter } from "./runFilter";
 import { ChildCountPills } from "./OrchestrationTab";

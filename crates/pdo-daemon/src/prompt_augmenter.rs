@@ -54,7 +54,7 @@ pub(crate) fn secondary_repo_contexts(
     pins.iter()
         .map(|pin| SecondaryRepoContext {
             alias: pin.alias.clone(),
-            abs_path: crate::worktree_ops::secondary_snapshot_path(repo_root, run_id, &pin.alias)
+            abs_path: crate::worktrees::secondary_snapshot_path(repo_root, run_id, &pin.alias)
                 .to_string_lossy()
                 .to_string(),
             sha: pin.sha.clone(),

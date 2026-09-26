@@ -2034,7 +2034,6 @@ dependencies = [
  "clap",
  "filetime",
  "futures-util",
- "ignore",
  "insta",
  "libc",
  "mime_guess",
@@ -2045,6 +2044,7 @@ dependencies = [
  "oxc_parser",
  "oxc_span",
  "pdo-kernel",
+ "pdo-workspace",
  "portable-pty",
  "pretty_assertions",
  "reqwest",
@@ -2065,6 +2065,27 @@ dependencies = [
  "ts-rs",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "pdo-workspace"
+version = "1.111.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "futures-util",
+ "ignore",
+ "pdo-extension-api",
+ "pdo-kernel",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]

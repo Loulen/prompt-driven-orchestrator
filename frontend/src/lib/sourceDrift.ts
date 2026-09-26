@@ -1,6 +1,6 @@
 import type { BranchFetchError } from "../shared/generated/BranchFetchError";
 import type { SourceDrift } from "../shared/generated/SourceDrift";
-import { shortAge } from "./branchSelect";
+import { shortAge } from "../workspace/model/branchSelect";
 
 /**
  * How the **dérive de la source** reads on a Run (#803, ADR-0070 §4; CONTEXT.md

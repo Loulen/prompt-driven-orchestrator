@@ -1,0 +1,42 @@
+[package]
+# The `workspace` bounded context (ADR-0079): Projets, the repositories a Run
+# works in, provisioning rules, and git — behind the `Git` port, served by a
+# single adapter.
+name = "pdo-workspace"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's workspace context: projects, repositories, provisioning, git"
+publish = false
+autotests = false
+
+[lib]
+name = "pdo_workspace"
+path = "src/lib.rs"
+
+[dependencies]
+pdo-kernel.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+ignore.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+
+[[test]]
+name = "adapters"
+path = "tests/adapters/main.rs"
+
+[dev-dependencies]
+# The in-memory extension host of the use-case tests implements the kernel's
+# `ExtensionHost`, whose signature names the API's types.
+pdo-extension-api.workspace = true
+tempfile.workspace = true
+futures-util = "0.3"

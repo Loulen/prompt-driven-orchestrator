@@ -760,7 +760,7 @@ Le save de l'assistant **ne nomme ni id ni scope** : le daemon écrit dans le fi
 
 ### Cap de sessions concurrentes (admission control)
 
-Borne globale sur le nombre de **sessions NodeRun vivantes** — la ressource qui s'effondre réellement (tmux-collapse, #77/#78).
+Borne globale sur le nombre de **sessions NodeRun vivantes** — la ressource qui s'effondre réellement (tmux-collapse, #77/#78). _Éviter_ : « admission » pour le contrôle d'une Extension sur une mutation (c'est l'**Autorisation d'opération**).
 
 - **« Session vivante »** (#215) : un nœud `Running`/`AwaitingUser` dans un **Run lui-même vivant**. Un nœud session-holding dans un Run terminal est un artefact de projection, pas une session.
 - **Admission par spawn de nœud**, pas par Run : au cap, le nœud passe **`waiting`** jusqu'à libération d'un slot. Le Run est admis immédiatement ; ce sont les nœuds qui s'étranglent.
@@ -934,7 +934,7 @@ Pas de notifications système v1. Le status icon suffit. Si ça manque, opt-in p
 
 ## Stack technique
 
-Choix et pourquoi → ADR-0003. Daemon **Rust**, frontend **React + Vite** (canvas **xyflow**) **embarqué dans le binaire du daemon**.
+Choix et pourquoi → ADR-0003. Daemon **Rust**, frontend **React + Vite** (canvas **xyflow**) **embarqué dans le binaire du daemon**. Le daemon est un **monolithe modulaire** : un crate par bounded context, hexagonal à l'intérieur (ADR-0079) ; le frontend suit les mêmes contextes.
 
 ### Service unit persistant (ADR-0019)
 
@@ -982,6 +982,24 @@ Un **onglet de pipeline** = un document ouvert dans la zone centrale (un `Pipeli
 ### Création d'un nouveau nœud
 
 La création **depuis un YAML** (#345) est le round-trip natif de l'*Export as YAML…* — à ne pas confondre avec l'*Import de workflow*, format étranger avec perte (ADR-0016). **Pas de library de templates PDO-shipped** (ADR-0001 : pas d'opinion vendor sur « à quoi ressemble un Implementer »).
+
+---
+
+## Extensions
+
+PDO s'étend sans modifier son core, par une **API d'extension** versionnée à part et composée à la compilation (ADR-0081). Le core ne nomme aucune extension ; sans extension installée, il se comporte exactement comme avant.
+
+**Extension** *(terme)* : module tiers enregistré au démarrage du daemon, qui se branche sur les hooks génériques du core (identité, autorisation, attributs, événements, routes, emplacements d'UI). _Éviter_ : « plugin », « module » (le mot désigne le rangement du code), « feature » (une extension n'est pas une option du core).
+
+**Acteur** *(terme)* : qui déclenche une mutation. **Opérateur local** par défaut (sans extension, tout appel vient de lui), un **Agent** (un NodeRun, via `pdo complete`/`fail`…), un **Trigger**, ou un acteur identifié par une Extension. Une chaîne falsifiable (`actor_hint`) tant qu'aucune Extension ne l'établit. _Éviter_ : « utilisateur » (le core n'a pas d'utilisateurs), « user ».
+
+**Opération** *(terme)* : la description générique d'une mutation que le core s'apprête à exécuter : ressource × verbe (créer, modifier, supprimer, action nommée), plus la cible. Toute mutation a son Opération. _Éviter_ : une Opération nommée d'après un besoin (« UpdateProfileAsAdmin ») ; « commande » (réservé aux commandes de Run, `/commands`).
+
+**Autorisation d'opération** *(terme)* : le point où les Extensions acceptent ou refusent une Opération avant son exécution. Elle couvre ce qui entre par l'UI, la CLI, les agents et les Triggers, **jamais les transitions internes du scheduler**. Une Extension en panne refuse. _Éviter_ : « admission » (réservé au cap de sessions), « permission ».
+
+**Attribut d'entité** *(terme)* : paire clé/valeur préfixée par l'id de l'Extension qui l'a posée sur une entité (Run, Projet, Profil…). Le core la stocke et filtre les listes dessus **sans l'interpréter**, comme un label Kubernetes. Hors de l'event log : c'est une métadonnée ajoutée, pas un fait du Run. _Éviter_ : « étiquette », « label » (déjà pris par les labels d'edge), « tag ».
+
+**Emplacement d'UI** *(terme)* : un point générique de l'interface où une Extension peut ajouter un élément : entrée de navigation, panneau de réglages, filtre de liste, onglet de détail d'entité. _Éviter_ : « slot » dans la prose française.
 
 ---
 

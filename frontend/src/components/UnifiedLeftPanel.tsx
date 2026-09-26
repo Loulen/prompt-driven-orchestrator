@@ -397,6 +397,7 @@ export default function UnifiedLeftPanel({
           pulse={run.status === "running" && !run.stalled}
           dotTitle={run.failure_reason ?? run.awaiting_reason ?? undefined}
           dotTestId="run-status-dot"
+          testId="run-select-control"
           label={rowSelected ? `Deselect ${run.name || run.run_id}` : `Select ${run.name || run.run_id}`}
           onSelect={(e) => {
             if (e.shiftKey) selectRange("runs", run.run_id, visibleRunIds);

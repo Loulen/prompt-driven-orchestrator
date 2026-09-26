@@ -28,7 +28,9 @@ import {
   skipStep,
   startTour,
   stepBody,
+  stepAsides,
   stepNote,
+  stepReadOnly,
   stepSoft,
   type TourAppState,
   type TourChecklistItem,
@@ -39,6 +41,7 @@ import {
   type TourStep,
 } from "../lib/tour";
 import { markTourDone } from "../lib/tourMemory";
+import { installReadOnlyGuard, type ReadOnlyScope } from "../lib/tourReadOnly";
 
 /** Viewport-space rectangle, the shape the Projecteur draws with. */
 export interface TourRect {
@@ -64,6 +67,13 @@ export interface TourView {
   zone: TourRect | null;
   /** The zone IS the target: the dim lightens and no ring is drawn (#825). */
   wideZone: boolean;
+  /**
+   * The step's read-only areas, lit beside the hole (#911) — the panel its
+   * gesture opened. Empty when it declares none, or none is on screen.
+   */
+  lit: TourRect[];
+  /** The step's side bubbles whose target is on screen, once its condition holds (#911). */
+  asides: TourAsideView[];
   /** The step's condition holds: `Next` is enabled. */
   ready: boolean;
   /** The step waits for `Next` instead of advancing on its own. */
@@ -87,6 +97,14 @@ export interface TourView {
    * whole difference between "the Full tour" and "two tours you start by hand".
    */
   nextTour: TourDef | null;
+}
+
+/** One side bubble, resolved to where its target is (#911). */
+export interface TourAsideView {
+  /** The aside's selector — stable across ticks, so React keeps the bubble. */
+  target: string;
+  text: string;
+  rect: TourRect;
 }
 
 /** What the intro card shows while it prepares what the tour needs (#824). */
@@ -138,6 +156,26 @@ function union(rects: TourRect[], padding: number): TourRect | null {
     width: right - left + padding * 2,
     height: bottom - top + padding * 2,
   };
+}
+
+function sameRects(a: TourRect[], b: TourRect[]): boolean {
+  return a.length === b.length && a.every((r, i) => sameRect(r, b[i]));
+}
+
+function sameAsides(a: TourAsideView[], b: TourAsideView[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((x, i) => x.target === b[i].target && x.text === b[i].text && sameRect(x.rect, b[i].rect))
+  );
+}
+
+/** `querySelector` that answers `null` to a malformed selector rather than throwing. */
+function query(selector: string): Element | null {
+  try {
+    return document.querySelector(selector);
+  } catch {
+    return null;
+  }
 }
 
 function sameRect(a: TourRect | null, b: TourRect | null): boolean {
@@ -342,6 +380,8 @@ export interface TourController {
 }
 
 const NO_PREP: TourPrepView = { items: [], ready: true, failure: null };
+const NO_RECTS: TourRect[] = [];
+const NO_ASIDES: TourAsideView[] = [];
 
 export function useTour(
   runs: TourRunsInput,
@@ -352,6 +392,8 @@ export function useTour(
   const [hole, setHole] = useState<TourRect | null>(null);
   const [zone, setZone] = useState<TourRect | null>(null);
   const [wideZone, setWideZone] = useState(false);
+  const [lit, setLit] = useState<TourRect[]>(NO_RECTS);
+  const [asides, setAsides] = useState<TourAsideView[]>(NO_ASIDES);
   const [ready, setReady] = useState(false);
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
   const [body, setBody] = useState("");
@@ -370,6 +412,8 @@ export function useTour(
   const tourRef = useRef<TourDef | null>(null);
   const runsRef = useRef<TourRunsInput>(runs);
   const runDetailRef = useRef<TourRunDetailInput | null>(runDetail);
+  /** What the read-only guard protects right now (#911), refreshed by the pump. */
+  const guardRef = useRef<ReadOnlyScope | null>(null);
   /** The last aim scrolled to — step and selectors both (see the pump's scroll block). */
   const scrolledFor = useRef<string | null>(null);
   // What the app looked like when this tour started — every observation carries
@@ -485,6 +529,9 @@ export function useTour(
     setHole(null);
     setZone(null);
     setWideZone(false);
+    setLit(NO_RECTS);
+    setAsides(NO_ASIDES);
+    guardRef.current = null;
     setChecklist([]);
     setBody("");
     setNote(null);
@@ -506,6 +553,9 @@ export function useTour(
     setHole(null);
     setZone(null);
     setWideZone(false);
+    setLit(NO_RECTS);
+    setAsides(NO_ASIDES);
+    guardRef.current = null;
     setChecklist([]);
     setBody("");
     setNote(null);
@@ -634,20 +684,15 @@ export function useTour(
         setHole(null);
         setZone(null);
         setWideZone(false);
+        setLit(NO_RECTS);
+        setAsides(NO_ASIDES);
+        guardRef.current = null;
         setChecklist([]);
         return;
       }
 
       const selectors = step.target(obs);
-      const elements = selectors
-        .map((selector) => {
-          try {
-            return document.querySelector(selector);
-          } catch {
-            return null;
-          }
-        })
-        .filter(visible);
+      const elements = selectors.map(query).filter(visible);
 
       const nextHole = union(elements.map(rectOf), HOLE_PADDING);
       setHole((prev) => (sameRect(prev, nextHole) ? prev : nextHole));
@@ -667,6 +712,23 @@ export function useTour(
       const nextZone = menu ? union([rectOf(menu)], HOLE_PADDING) : wide ? nextHole : null;
       setZone((prev) => (sameRect(prev, nextZone) ? prev : nextZone));
       setWideZone(wide);
+
+      // The read-only areas (#911): lit at their own size — no padding, a panel
+      // runs to the window's edge — and handed to the guard with the step's own
+      // targets, which stay fully clickable inside them.
+      const regions = stepReadOnly(step, obs).map(query).filter(visible);
+      const nextLit = regions.map(rectOf);
+      setLit((prev) => (sameRects(prev, nextLit) ? prev : nextLit));
+      guardRef.current =
+        regions.length > 0 ? { regions, open: elements, explore: step.explore ?? [] } : null;
+
+      // Side bubbles (#911): only once the step holds, and only those whose
+      // target is on screen — an aside is a remark, never something to wait for.
+      const nextAsides = stepAsides(step, obs).flatMap((aside) => {
+        const el = query(aside.target);
+        return visible(el) ? [{ target: aside.target, text: aside.text, rect: rectOf(el) }] : [];
+      });
+      setAsides((prev) => (sameAsides(prev, nextAsides) ? prev : nextAsides));
 
       setReady(canAdvance(tour, active, obs));
       setAwaitingConfirm(needsConfirm(tour, active, obs));
@@ -735,6 +797,15 @@ export function useTour(
     };
   }, [tour, observe, commit]);
 
+  // The read-only guard (#911): one set of capture listeners per tour, reading
+  // the scope the pump keeps current. Only a *running* step guards anything —
+  // an end card that inherited the last step's scope would keep swallowing the
+  // keystrokes of a field the reader has every right to type in again.
+  useEffect(() => {
+    if (!tour) return;
+    return installReadOnlyGuard(() => (runRef.current?.phase === "running" ? guardRef.current : null));
+  }, [tour]);
+
   const view = useMemo<TourView | null>(() => {
     if (!tour || !run) return null;
     return {
@@ -746,6 +817,8 @@ export function useTour(
       hole,
       zone,
       wideZone,
+      lit,
+      asides,
       ready,
       awaitingConfirm,
       body,
@@ -755,7 +828,7 @@ export function useTour(
       nextTour: chain[0] ?? null,
       tidyUpFailure,
     };
-  }, [tour, run, hole, zone, wideZone, ready, awaitingConfirm, body, note, checklist, prep, chain, tidyUpFailure]);
+  }, [tour, run, hole, zone, wideZone, lit, asides, ready, awaitingConfirm, body, note, checklist, prep, chain, tidyUpFailure]);
 
   return { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep };
 }

@@ -2,7 +2,7 @@
 /**
  * The *Overview* tour (#911, spec #910).
  *
- * The **walk** plays the seventeen steps against a simulated app: the reader
+ * The **walk** plays the eighteen steps against a simulated app: the reader
  * does exactly the gesture each step asks for, and the machine must reach
  * `finished` in the spec's order. Then the cases the walk cannot express — the
  * gestures that must NOT advance before the state says so, the targets that
@@ -22,7 +22,9 @@ import {
   skipStep,
   startTour,
   beginSteps,
+  stepAsides,
   stepBody,
+  stepReadOnly,
   stepSoft,
   type TourAppState,
   type TourObservation,
@@ -76,7 +78,8 @@ const TRIGGER_ID = "trg-tour";
 
 const t = (id: string) => `[data-testid="${id}"]`;
 const RUN_ROW = `[data-run-row="${RUN_ID}"]`;
-const RUN_DOT = `${RUN_ROW} ${t("run-status-dot")}`;
+/** The status-dot step's target: the row's leading slot, which keeps its box on hover. */
+const RUN_SELECT = `${RUN_ROW} ${t("run-select-control")}`;
 const TRIGGER_ROW = `[data-trigger-row="${TRIGGER_ID}"]`;
 const CANVAS = "[data-panel]#center";
 const LEFT = "[data-panel]#left";
@@ -89,12 +92,18 @@ const TRIGGERS_LIST = t("triggers-list-panel");
 const NEW_PIPELINE = t("new-pipeline-button");
 const PIPELINE_ROW = t("library-row-tutorial-overview");
 const INSPECTOR_RUN = t("inspector-pane-run");
+const INSPECTOR_EDIT = t("inspector-pane-edit");
+const TAB_RUN = t("inspector-tab-run");
 const TERMINAL = t("tmux-terminal");
 const TERMINAL_RESTORE = t("term-restore");
 const RUNS_TAB_OPEN = `${RUNS_TAB}[aria-selected="true"]`;
 const CODE_ROW = `${t("port-row")}[data-kind="output"][data-port="code"]`;
+const CODE_VIEWER = `${t("artifact-modal")}[data-port="code"]`;
+const TASK_ROW = `${t("port-row")}[data-kind="input"][data-port="task"]`;
 const START_INSPECTOR = t("start-inspector");
+const START_INPUT = `${START_INSPECTOR} ${t("start-input-text")}`;
 const EDGE_PANEL = t("edge-detail-panel");
+const EDGE_CONDITION = `${EDGE_PANEL} ${t("condition-row")}`;
 const CLEANUP_MODAL = t("cleanup-confirm-modal");
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`;
 
@@ -177,7 +186,7 @@ class FakeApp {
     latestRun: { id: "run-other", name: "other", nodes: [] },
   };
   readonly baseline: TourAppState = { ...this.app };
-  private dom = new Set<string>([CANVAS, LEFT, RIGHT, RUNS_TAB, RUNS_TAB_OPEN, TRIGGERS_TAB, PIPELINES_TAB, NEW_RUN, RUN_ROW, RUN_DOT, t("open-settings"), t("open-stats")]);
+  private dom = new Set<string>([CANVAS, LEFT, RIGHT, RUNS_TAB, RUNS_TAB_OPEN, TRIGGERS_TAB, PIPELINES_TAB, NEW_RUN, RUN_ROW, RUN_SELECT, t("open-settings"), t("open-stats")]);
 
   obs(): TourObservation {
     return {
@@ -210,7 +219,23 @@ class FakeApp {
   /** A finished node opens with its terminal folded to a bar (#346). */
   clickImplementer() {
     this.select("node", "implementer");
+    this.show(INSPECTOR_RUN, CODE_ROW, TERMINAL_RESTORE, TAB_RUN);
+  }
+  /** The inspector's Edit tab hides the Run pane — its outputs and its terminal. */
+  openEditTab() {
+    this.hide(INSPECTOR_RUN, CODE_ROW, TERMINAL_RESTORE);
+    this.show(INSPECTOR_EDIT);
+  }
+  openRunTab() {
+    this.hide(INSPECTOR_EDIT);
     this.show(INSPECTOR_RUN, CODE_ROW, TERMINAL_RESTORE);
+  }
+  /** A click on the `code` row opens the artifact viewer, over everything. */
+  openCode() {
+    this.show(CODE_VIEWER);
+  }
+  closeCode() {
+    this.hide(CODE_VIEWER);
   }
   unfoldTerminal() {
     this.hide(TERMINAL_RESTORE);
@@ -235,10 +260,10 @@ class FakeApp {
   }
   openRunsTab() {
     this.hide(TRIGGERS_LIST, TRIGGER_ROW, NEW_PIPELINE, PIPELINE_ROW);
-    this.show(RUNS_TAB_OPEN, NEW_RUN, RUN_ROW, RUN_DOT);
+    this.show(RUNS_TAB_OPEN, NEW_RUN, RUN_ROW, RUN_SELECT);
   }
   openTriggers() {
-    this.hide(RUNS_TAB_OPEN, NEW_RUN, RUN_ROW, RUN_DOT);
+    this.hide(RUNS_TAB_OPEN, NEW_RUN, RUN_ROW, RUN_SELECT);
     this.show(TRIGGERS_LIST, TRIGGER_ROW);
   }
   openPipelines() {
@@ -256,7 +281,8 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "left-panel": read,
     "right-panel": read,
     "open-implementer": () => fake.clickImplementer(),
-    outputs: read,
+    outputs: () => fake.openCode(),
+    "output-viewer": () => fake.closeCode(),
     terminal: () => fake.unfoldTerminal(),
     "open-end-edge": () => fake.clickEndEdge(),
     "open-start": () => fake.clickStart(),
@@ -321,6 +347,7 @@ describe("walking the whole tour", () => {
       "right-panel",
       "open-implementer",
       "outputs",
+      "output-viewer",
       "terminal",
       "open-end-edge",
       "open-start",
@@ -335,12 +362,14 @@ describe("walking the whole tour", () => {
     ]);
   });
 
-  it("is seventeen steps: seven gestures, and two that ask for a click only when their subject is hidden", () => {
-    expect(STEPS).toHaveLength(17);
+  it("is eighteen steps: nine gestures, and two that ask for a click only when their subject is hidden", () => {
+    expect(STEPS).toHaveLength(18);
     const gestures = STEPS.filter((s) => s.done).map((s) => s.id);
     expect(gestures).toEqual([
       "open-run",
       "open-implementer",
+      "outputs",
+      "output-viewer",
       "terminal",
       "open-end-edge",
       "open-start",
@@ -429,7 +458,86 @@ describe("gestures advance only on the observed state", () => {
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.show(START_INSPECTOR);
     expectStopsForNext(run, fake, 200);
-    expect(stepBody(stepById("open-start"), fake.obs())).toContain("shown here");
+    expect(stepBody(stepById("open-start"), fake.obs())).toContain("shown on the right");
+  });
+
+  it("says why Start is worth a click before asking for it", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    expect(stepBody(stepById("open-start"), fake.obs())).toMatch(/^Click Start at the top to see the prompt this Run was started with/);
+  });
+
+  it("asks for the code output to be opened, then stops on the viewer for Next", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.clickImplementer();
+    const step = stepById("outputs");
+    const run = at("outputs", fake);
+    expect(step.target(fake.obs())).toEqual([CODE_ROW]);
+    expect(stepBody(step, fake.obs())).toMatch(/Click code/);
+    expect(needsConfirm(TOUR, run, fake.obs()), "no Next before the click").toBe(false);
+    expect(observeTour(TOUR, run, fake.obs(), 100).index, "no advance before the click").toBe(run.index);
+    fake.openCode();
+    // Re-aimed onto the viewer, lit as a page to read.
+    expect(step.target(fake.obs())).toEqual([CODE_VIEWER]);
+    expect(stepSoft(step, fake.obs())).toBe(true);
+    expectStopsForNext(run, fake, 200);
+  });
+
+  it("asks for the viewer to be closed, and advances by itself once it is", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.clickImplementer();
+    fake.openCode();
+    const step = stepById("output-viewer");
+    const run = at("output-viewer", fake);
+    expect(step.target(fake.obs())).toEqual([CODE_VIEWER]);
+    expect(step.done!(fake.obs()), "not done while the viewer is up").toBe(false);
+    expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
+    fake.closeCode();
+    const after = observeTour(TOUR, run, fake.obs(), 200);
+    // Closing destroys the target: that is the step done, not a missing target.
+    expect(after.phase).toBe("running");
+    expect(currentStep(TOUR, after)?.id).toBe("terminal");
+  });
+
+  it("keeps the implementer step satisfied and lit while the reader explores the Edit tab", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.clickImplementer();
+    fake.openEditTab();
+    const step = stepById("open-implementer");
+    expect(step.done!(fake.obs())).toBe(true);
+    expect(stepReadOnly(step, fake.obs())).toEqual([RIGHT]);
+  });
+
+  it("sends a reader left on the Edit tab back to the Run tab for the outputs and the terminal", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.clickImplementer();
+    fake.openEditTab();
+    for (const id of ["outputs", "terminal"]) {
+      const step = stepById(id);
+      expect(step.target(fake.obs()), id).toEqual([TAB_RUN]);
+      expect(stepBody(step, fake.obs()), id).toMatch(/^Click the Run tab/);
+    }
+    fake.openRunTab();
+    expect(stepById("outputs").target(fake.obs())).toEqual([CODE_ROW]);
+    expect(stepById("terminal").target(fake.obs())).toEqual([TERMINAL_RESTORE]);
+  });
+
+  it("does not let the tour walk on to the terminal behind an open viewer", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.clickImplementer();
+    const run = at("outputs", fake);
+    // Next on the outputs step is refused until the viewer is observed open…
+    expect(confirmStep(TOUR, run, fake.obs())).toBe(run);
+    fake.openCode();
+    const next = confirmStep(TOUR, run, fake.obs());
+    // …and it lands on the close-the-viewer step, not the terminal.
+    expect(currentStep(TOUR, next)?.id).toBe("output-viewer");
+    expect(next.satisfiedOnEntry).toBe(false);
   });
 
   it("asks for the folded terminal to be unfolded, then stops on it for Next", () => {
@@ -518,6 +626,67 @@ describe("gestures advance only on the observed state", () => {
     fake.openPipelines();
     expect(step.target(fake.obs())).toEqual([PIPELINE_ROW]);
     expect(stepBody(step, fake.obs())).toContain("First pipeline");
+  });
+
+  it("aims the status-dot step at the row's leading slot, never at the dot hover hides", () => {
+    const step = stepById("status-dots");
+    const targets = step.target(new FakeApp().obs());
+    expect(targets).toEqual([RUN_SELECT]);
+    // The resting dot is `display: none` while the row is hovered: a hole on it
+    // collapsed under the pointer and the card jumped — the flicker loop.
+    for (const target of targets) expect(target).not.toContain("run-status-dot");
+  });
+
+  it("draws the three status colours inside the status-dot card, with the app's own classes", () => {
+    const illustration = stepById("status-dots").illustration!;
+    expect(illustration.kind).toBe("rows");
+    expect(illustration.rows.map((r) => [r.dotClass, r.detail])).toEqual([
+      ["bg-st-await", "waits for you"],
+      ["bg-st-running", "running"],
+      ["bg-st-done", "finished"],
+    ]);
+  });
+
+  it("keeps the panel a gesture opened lit and read-only, and only once it is open", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    expect(stepReadOnly(stepById("open-implementer"), fake.obs()), "nothing to light before the click").toEqual([]);
+    fake.clickImplementer();
+    expect(stepReadOnly(stepById("open-implementer"), fake.obs())).toEqual([RIGHT]);
+    expect(stepReadOnly(stepById("outputs"), fake.obs())).toEqual([RIGHT]);
+    expect(stepReadOnly(stepById("terminal"), fake.obs())).toEqual([RIGHT]);
+    // The inspector's tabs stay clickable inside the read-only panel.
+    expect(stepById("open-implementer").explore).toContain(t("inspector-tab-edit"));
+    // With the viewer up its backdrop covers the panel: nothing else is lit.
+    fake.openCode();
+    expect(stepReadOnly(stepById("outputs"), fake.obs())).toEqual([]);
+    fake.closeCode();
+
+    expect(stepReadOnly(stepById("open-end-edge"), fake.obs())).toEqual([]);
+    fake.clickEndEdge();
+    expect(stepReadOnly(stepById("open-end-edge"), fake.obs())).toEqual([RIGHT]);
+    expect(stepReadOnly(stepById("open-start"), fake.obs())).toEqual([]);
+    fake.clickStart();
+    expect(stepReadOnly(stepById("open-start"), fake.obs())).toEqual([RIGHT]);
+  });
+
+  it("pins side bubbles only once the gesture is done: input, condition, the Run's prompt", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    expect(stepAsides(stepById("open-implementer"), fake.obs())).toEqual([]);
+    expect(stepAsides(stepById("open-end-edge"), fake.obs())).toEqual([]);
+    expect(stepAsides(stepById("open-start"), fake.obs())).toEqual([]);
+
+    fake.clickImplementer();
+    expect(stepAsides(stepById("open-implementer"), fake.obs()).map((a) => a.target)).toEqual([TASK_ROW]);
+    fake.clickEndEdge();
+    const [condition] = stepAsides(stepById("open-end-edge"), fake.obs());
+    expect(condition.target).toBe(EDGE_CONDITION);
+    expect(condition.text).toContain("verdict eq pass");
+    fake.clickStart();
+    const [prompt] = stepAsides(stepById("open-start"), fake.obs());
+    expect(prompt.target).toBe(START_INPUT);
+    expect(prompt.text).toMatch(/input this Run was started with/);
   });
 
   it("lights Settings and Stats without asking for a click", () => {

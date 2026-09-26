@@ -4,11 +4,17 @@
  * depth. It needs **no harness**: the Run it visits is a pipeline of `script`
  * nodes (ADR-0017), which finish in seconds and cost nothing.
  *
- * Seventeen steps, seven of them gestures that advance only on the observed state
- * (open the Run, click implementer, the reviewer → End edge, Start, archive,
- * Triggers, Pipelines); the other ten are read and acknowledged with Next. Two of
- * those ask for a click first when what they show is not on screen: the folded
- * terminal of a finished node, and the Runs tab a reader left.
+ * Eighteen steps, nine of them gestures that advance only on the observed state
+ * (open the Run, click implementer, open its `code` output, close the viewer, the
+ * reviewer → End edge, Start, archive, Triggers, Pipelines); the other nine are
+ * read and acknowledged with Next. Two of those ask for a click first when what
+ * they show is not on screen: the folded terminal of a finished node, and the
+ * Runs tab a reader left.
+ *
+ * The panel a gesture opens stays lit and explorable but **read-only** (#911,
+ * after the human test): the reader may switch tabs, scroll and unfold, never
+ * change a value. A few steps pin **side bubbles** on what that panel shows —
+ * the implementer's input, the edge's condition, the Run's prompt in Start.
  *
  * Its intro card prepares four things through verbs that know nothing about tours
  * (ADR-0071 §3–4): the training repository, the `tutorial-overview` pipeline, an
@@ -36,7 +42,14 @@ import {
 } from "../../api";
 import { useEditStore } from "../../stores/editStore";
 import type { NodeDef } from "../../types";
-import type { TourAppState, TourDef, TourObservation, TourRunSummary, TourStep } from "../tour";
+import type {
+  TourAppState,
+  TourDef,
+  TourIllustration,
+  TourObservation,
+  TourRunSummary,
+  TourStep,
+} from "../tour";
 import { prepareRepo, TUTORIAL_REPO_PATH } from "./firstRun";
 
 /** The pipeline the tour's Run executes. A normal Library pipeline, kept after the tour. */
@@ -479,16 +492,61 @@ const TRIGGERS_LIST = testId("triggers-list-panel");
 const NEW_PIPELINE_BUTTON = testId("new-pipeline-button");
 const PIPELINE_ROW = testId(`library-row-${TUTORIAL_OVERVIEW_PIPELINE_ID}`);
 const INSPECTOR_RUN = testId("inspector-pane-run");
+const INSPECTOR_EDIT = testId("inspector-pane-edit");
+/** The inspector's Run tab — where a node's outputs and terminal live. */
+const INSPECTOR_TAB_RUN = testId("inspector-tab-run");
 const TERMINAL = testId("tmux-terminal");
 /** A finished node's terminal opens folded to this bar, to leave room for its outputs. */
 const TERMINAL_RESTORE = testId("term-restore");
 /** The Runs tab, and it is the one showing. */
 const RUNS_TAB_OPEN = `${RUNS_TAB}[aria-selected="true"]`;
 const CODE_ROW = `${testId("port-row")}[data-kind="output"][data-port="code"]`;
+/** The viewer a click on the `code` row opens — the artifact modal, keyed by port. */
+const CODE_VIEWER = `${testId("artifact-modal")}[data-port="code"]`;
+/** implementer's input row, where Start's prompt arrived. */
+const TASK_ROW = `${testId("port-row")}[data-kind="input"][data-port="task"]`;
 const START_INSPECTOR = testId("start-inspector");
+/** The Run's input, as the Start inspector prints it. */
+const START_INPUT = `${START_INSPECTOR} ${testId("start-input-text")}`;
 const EDGE_PANEL = testId("edge-detail-panel");
+/** The first condition row of the edge panel — `verdict eq pass` on reviewer → End. */
+const EDGE_CONDITION = `${EDGE_PANEL} ${testId("condition-row")}`;
+/**
+ * The row's leading slot, not the dot in it: on row hover the resting dot is
+ * `display: none` (it turns into the select ring), so a hole drawn on it
+ * collapsed under the reader's own pointer, the card jumped away, the row lost
+ * its hover, the dot came back — a flicker loop (#911, human test). The slot
+ * keeps its box in both states.
+ */
+const RUN_SELECT = testId("run-select-control");
 const CLEANUP_MODAL = testId("cleanup-confirm-modal");
 const SETTINGS_BUTTON = testId("open-settings");
+
+/**
+ * The inspector's navigation, which a read-only step still lets through (#911):
+ * the Run / Edit tabs, the I/O / Orchestration tabs, the « Initial Prompt » fold,
+ * and the terminal's own unfold / expand / copy. Everything else in the panel
+ * that is a control stays refused while the tour shows it.
+ */
+const INSPECTOR_EXPLORE = [
+  testId("inspector-tab-run"),
+  testId("inspector-tab-edit"),
+  '[data-testid^="detail-tab-"]',
+  testId("prompt-toggle"),
+  TERMINAL_RESTORE,
+  testId("term-expand"),
+  testId("term-copy"),
+];
+
+/** The status dot, drawn three times over (#911): the tour's Run only ever shows green. */
+const STATUS_DOTS: TourIllustration = {
+  kind: "rows",
+  rows: [
+    { label: "fix-login", detail: "waits for you", dotClass: "bg-st-await" },
+    { label: "add-tests", detail: "running", dotClass: "bg-st-running", pulse: true },
+    { label: OVERVIEW_RUN_NAME, detail: "finished", dotClass: "bg-st-done" },
+  ],
+};
 const STATS_BUTTON = testId("open-stats");
 
 function runRow(id: string): string {
@@ -546,8 +604,25 @@ function endEdgeIndex(app: TourAppState): number {
   return app.pipeline.edges.findIndex((e) => e.source.node === reviewer.id && e.target.node === end.id);
 }
 
+/**
+ * implementer is selected and its inspector is up — on either tab. The reader
+ * may explore the Edit tab from the read-only panel (#911); a condition that
+ * only knew the Run tab would drop the step back to « Click implementer » and
+ * dim the very panel they were looking at.
+ */
 function implementerOpen(o: TourObservation): boolean {
-  return selectedNode(o.app, worker(o.app, "implementer")) && o.present(INSPECTOR_RUN);
+  return (
+    selectedNode(o.app, worker(o.app, "implementer")) && (o.present(INSPECTOR_RUN) || o.present(INSPECTOR_EDIT))
+  );
+}
+
+/**
+ * The reader left the inspector on its Edit tab (#911): what the Run tab shows —
+ * the outputs, the terminal — is not on screen, and the step points at the tab
+ * instead of starving on a target that will not appear by itself.
+ */
+function onEditTab(o: TourObservation): boolean {
+  return !o.present(INSPECTOR_RUN) && o.present(INSPECTOR_TAB_RUN);
 }
 
 function endEdgeOpen(o: TourObservation): boolean {
@@ -644,31 +719,82 @@ const STEPS: TourStep[] = [
     // a node is, and advancing at once would flash it past (FP #911).
     confirm: (o) => implementerOpen(o),
     done: (o) => implementerOpen(o),
+    // The inspector it opened stays bright, to look around in — not to edit.
+    readOnly: (o) => (implementerOpen(o) ? [RIGHT_PANEL] : []),
+    explore: INSPECTOR_EXPLORE,
+    asides: () => [{ target: TASK_ROW, text: "Its input, task: what the edge from Start delivered — the Run's prompt." }],
   },
-  readStep({
+  {
     id: "outputs",
-    title: "Its outputs",
-    body: "A finished node's outputs are listed here: implementer wrote code, the file reviewer received. Click one any time to read it.",
-    target: () => [CODE_ROW],
+    title: "Open its output",
+    // A gesture now (#911, human test): the reader clicked `code` anyway, and a
+    // tour that did not notice walked on to the terminal behind an open viewer.
+    body: (o) => {
+      if (o.present(CODE_VIEWER)) {
+        return "This is code, the file implementer wrote — and exactly what reviewer received through their edge.";
+      }
+      return onEditTab(o)
+        ? "Click the Run tab: a finished node's outputs are listed there."
+        : "A finished node's outputs are listed here: implementer wrote one, code. Click code to read it.";
+    },
+    // Re-aims onto the viewer the click opened, lit as a page to read — the way
+    // *First run*'s last step re-aims onto its `out` file.
+    target: (o) => {
+      if (o.present(CODE_VIEWER)) return [CODE_VIEWER];
+      return onEditTab(o) ? [INSPECTOR_TAB_RUN] : [CODE_ROW];
+    },
+    soft: (o) => o.present(CODE_VIEWER),
     waitingFor: "the outputs of implementer",
     failureHint: "They are in the node's inspector on the right, under Outputs.",
-  }),
+    targetTimeoutMs: READING_TIMEOUT_MS,
+    advanceHint: "advances when the output opens",
+    confirm: (o) => o.present(CODE_VIEWER),
+    done: (o) => o.present(CODE_VIEWER),
+    // Until then the inspector is lit to explore; once the viewer is up, its
+    // backdrop covers the panel and lighting it would only expose that.
+    readOnly: (o) => (o.present(CODE_VIEWER) ? [] : [RIGHT_PANEL]),
+    explore: INSPECTOR_EXPLORE,
+  },
+  {
+    id: "output-viewer",
+    title: "Close the output",
+    body: "Outputs open in this viewer, markdown rendered; a looped node's iterations page through here too. Close it with ✕ or Escape to go on.",
+    target: () => [CODE_VIEWER],
+    soft: true,
+    waitingFor: "the viewer of the code output",
+    failureHint: "It opens from the code row, under Outputs in the node's inspector.",
+    targetTimeoutMs: READING_TIMEOUT_MS,
+    advanceHint: "advances when the viewer closes",
+    // Closing the viewer destroys the target — the condition is read first, so
+    // that is the step done, not a missing target (`observeTour`).
+    done: (o) => !o.present(CODE_VIEWER),
+  },
   {
     id: "terminal",
     title: "Its terminal",
     // A finished node opens with its terminal folded to a bar (#346), so the
     // step is a gesture until it is unfolded — then a card to read, with Next.
-    body: (o) =>
-      o.present(TERMINAL)
-        ? "Every node runs in its own terminal; this one is frozen on the lines the script printed. While a node runs it is live and interactive — you talk to the harness there, and First run shows you how."
-        : "Click Terminal to unfold it. Every node runs in its own terminal; a finished node's is folded to leave room for its outputs.",
-    target: (o) => (!o.present(TERMINAL) && o.present(TERMINAL_RESTORE) ? [TERMINAL_RESTORE] : [TERMINAL]),
+    body: (o) => {
+      if (o.present(TERMINAL)) {
+        return "Every node runs in its own terminal; this one is frozen on the lines the script printed. While a node runs it is live and interactive — you talk to the harness there, and First run shows you how.";
+      }
+      return onEditTab(o)
+        ? "Click the Run tab: every node runs in its own terminal, and it is shown there."
+        : "Click Terminal to unfold it. Every node runs in its own terminal; a finished node's is folded to leave room for its outputs.";
+    },
+    target: (o) => {
+      if (o.present(TERMINAL)) return [TERMINAL];
+      if (onEditTab(o)) return [INSPECTOR_TAB_RUN];
+      return o.present(TERMINAL_RESTORE) ? [TERMINAL_RESTORE] : [TERMINAL];
+    },
     waitingFor: "the node's terminal",
     failureHint: "The terminal is in the Run tab of the node's inspector.",
     targetTimeoutMs: READING_TIMEOUT_MS,
     advanceHint: "advances when the terminal opens",
     confirm: (o) => o.present(TERMINAL),
     done: (o) => o.present(TERMINAL),
+    readOnly: () => [RIGHT_PANEL],
+    explore: INSPECTOR_EXPLORE,
   },
   {
     id: "open-end-edge",
@@ -691,20 +817,33 @@ const STEPS: TourStep[] = [
     advanceHint: "advances when the edge is selected",
     confirm: (o) => endEdgeOpen(o),
     done: (o) => endEdgeOpen(o),
+    readOnly: (o) => (endEdgeOpen(o) ? [RIGHT_PANEL] : []),
+    asides: () => [
+      { target: EDGE_CONDITION, text: "The condition: this edge fires only when reviewer's review says verdict eq pass." },
+    ],
   },
   {
     id: "open-start",
     title: "Click Start",
+    // The why before the click (#911, human test): the reader clicked Start
+    // without knowing what for, then could not find the prompt it opened.
     body: (o) =>
       selectedNode(o.app, marker(o.app, "start"))
-        ? "Start and End are special nodes: Start carries the Run's prompt, shown here, and End is where a Run stops."
-        : "Click Start at the top. Start and End are special nodes: Start carries the Run's prompt, End is where a Run stops.",
+        ? "Start and End are special nodes: Start holds the prompt this Run was started with, shown on the right, and End is where a Run stops."
+        : "Click Start at the top to see the prompt this Run was started with. Start and End are special nodes: Start carries the Run's input, End is where a Run stops.",
     target: (o) => nodeSel(marker(o.app, "start")),
     waitingFor: "the Start node on the canvas",
     targetTimeoutMs: READING_TIMEOUT_MS,
     advanceHint: "advances when Start is selected",
     confirm: (o) => startOpen(o),
     done: (o) => startOpen(o),
+    readOnly: (o) => (startOpen(o) ? [RIGHT_PANEL] : []),
+    asides: () => [
+      {
+        target: START_INPUT,
+        text: "The input this Run was started with — the prompt typed in New Run. Start hands it to implementer through their edge.",
+      },
+    ],
   },
   {
     id: "runs-tab",
@@ -725,17 +864,20 @@ const STEPS: TourStep[] = [
     confirm: (o) => o.present(RUNS_TAB_OPEN),
     done: (o) => o.present(RUNS_TAB_OPEN),
   },
-  readStep({
-    id: "status-dots",
-    title: "The status dot",
-    body: "Green means finished. Orange means the Run waits for you, blue means it is running.",
-    target: () => {
-      const id = overviewRunId();
-      return id ? [`${runRow(id)} ${testId("run-status-dot")}`] : [];
-    },
-    waitingFor: "the status dot of your Run",
-    failureHint: "It is on your Run's row, in the Runs tab.",
-  }),
+  {
+    ...readStep({
+      id: "status-dots",
+      title: "The status dot",
+      body: "Green means finished. Orange means the Run waits for you, blue means it is running.",
+      target: () => {
+        const id = overviewRunId();
+        return id ? [`${runRow(id)} ${RUN_SELECT}`] : [];
+      },
+      waitingFor: "the status dot of your Run",
+      failureHint: "It is on your Run's row, in the Runs tab.",
+    }),
+    illustration: STATUS_DOTS,
+  },
   readStep({
     id: "worktree",
     title: "Each Run has its worktree",
@@ -834,7 +976,7 @@ export const OVERVIEW_TOUR: TourDef = {
   steps: STEPS,
   intro: {
     title: "Tour of PDO",
-    body: "A walk around the screen on a real Run: the canvas, the panels, a node, an edge, the Runs, Triggers and Pipelines tabs. The tour prepares everything first; nothing needs an agent.",
+    body: "A walk around the screen on a real Run: the canvas, the panels, a node and its output, an edge, the Runs, Triggers and Pipelines tabs. The tour prepares everything first; nothing needs an agent.",
     footnote:
       "Nothing here touches your own repositories. The example Trigger is removed when the tour ends; the pipeline and the Run stay yours.",
     prepare: [

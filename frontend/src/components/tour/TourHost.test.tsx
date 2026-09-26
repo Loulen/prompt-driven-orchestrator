@@ -656,3 +656,117 @@ describe("the welcome modal", () => {
     expect(screen.getByTestId("tour-intro-card")).toHaveTextContent(OVERVIEW_TOUR.title);
   });
 });
+
+// ---- #911 — the panel a gesture opens: lit, explorable, read-only -----------
+
+const PANEL_TOUR: TourDef = {
+  id: "panel",
+  title: "Panel",
+  blurb: "",
+  minutes: 1,
+  recapIntro: "",
+  recap: [],
+  steps: [
+    {
+      id: "open-panel",
+      title: "Open the panel",
+      body: "Click Open.",
+      target: () => ["#open"],
+      waitingFor: "the Open button",
+      confirm: (o) => o.present("#panel"),
+      done: (o) => o.present("#panel"),
+      readOnly: (o) => (o.present("#panel") ? ["#panel"] : []),
+      asides: () => [
+        { target: "#prompt", text: "The input this Run was started with." },
+        // Not on screen: skipped, never waited for.
+        { target: "#nowhere", text: "Never shown." },
+      ],
+    },
+    { id: "after", title: "Read on", body: "Next.", target: () => ["#open"], waitingFor: "the Open button" },
+  ],
+};
+
+function PanelHarness() {
+  const controller = useTour([]);
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState("run");
+  const [saved, setSaved] = useState(false);
+  return (
+    <>
+      <button data-testid="start" onClick={() => controller.start(PANEL_TOUR)}>
+        start
+      </button>
+      <button id="open" data-testid="open" onClick={() => setOpen(true)}>
+        open
+      </button>
+      {open && (
+        <aside id="panel" data-testid="panel">
+          <button role="tab" data-testid="tab-edit" onClick={() => setTab("edit")}>
+            Edit
+          </button>
+          <span data-testid="tab-shown">{tab}</span>
+          <textarea id="prompt" data-testid="prompt" defaultValue="original" />
+          <button data-testid="save" onClick={() => setSaved(true)}>
+            Save
+          </button>
+          {saved && <span data-testid="saved" />}
+        </aside>
+      )}
+      <TourHost controller={controller} showWelcome={false} onWelcomeAnswered={() => {}} onOpenTutorials={() => {}} />
+    </>
+  );
+}
+
+describe("a panel the gesture opened", () => {
+  it("is lit, explorable and read-only while the step is current", async () => {
+    render(<PanelHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    expect(screen.queryByTestId("projecteur-lit"), "nothing lit before the gesture").not.toBeInTheDocument();
+
+    await user().click(screen.getByTestId("open"));
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "open-panel");
+    expect(screen.getByTestId("projecteur-lit")).toBeInTheDocument();
+
+    // Typing changes nothing…
+    const prompt = screen.getByTestId<HTMLTextAreaElement>("prompt");
+    await user().type(prompt, "edited");
+    expect(prompt.value).toBe("original");
+    // …a tab still switches…
+    await user().click(screen.getByTestId("tab-edit"));
+    expect(screen.getByTestId("tab-shown")).toHaveTextContent("edit");
+    // …and a button that could save does nothing.
+    await user().click(screen.getByTestId("save"));
+    expect(screen.queryByTestId("saved")).not.toBeInTheDocument();
+  });
+
+  it("gives the panel back once the tour has moved on", async () => {
+    render(<PanelHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("open"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "after");
+    expect(screen.queryByTestId("projecteur-lit")).not.toBeInTheDocument();
+    const prompt = screen.getByTestId<HTMLTextAreaElement>("prompt");
+    await user().type(prompt, "!");
+    expect(prompt.value).toBe("original!");
+  });
+
+  it("shows side bubbles only once the step holds, skipping a target not on screen", async () => {
+    render(<PanelHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    expect(screen.queryByTestId("tour-aside"), "not before the gesture").not.toBeInTheDocument();
+
+    await user().click(screen.getByTestId("open"));
+    tick();
+    const asides = screen.getAllByTestId("tour-aside");
+    expect(asides).toHaveLength(1);
+    expect(asides[0]).toHaveTextContent("The input this Run was started with.");
+    expect(screen.queryByText("Never shown.")).not.toBeInTheDocument();
+  });
+});

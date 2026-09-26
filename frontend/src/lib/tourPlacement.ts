@@ -83,3 +83,65 @@ export function placePopover(
     side,
   };
 }
+
+/**
+ * The dim around **several** openings (#911): the step's target, plus the
+ * read-only panels its gesture opened. Four blockers only ever frame one
+ * rectangle, and the union of a canvas card and the right-hand panel would light
+ * the whole middle of the screen — so the viewport minus the openings is cut
+ * into rectangles instead, still real elements that absorb the click, the
+ * property the whole Projecteur rests on.
+ *
+ * A sweep over x: the openings' left and right edges slice the viewport into
+ * vertical stripes, each stripe is dimmed wherever no opening spans it, and
+ * neighbouring stripes with the same gaps are merged so a panel against the
+ * window edge costs three or four blockers, not a dozen.
+ */
+export function blockerRects(openings: Box[], viewport: { width: number; height: number }): Box[] {
+  const { width, height } = viewport;
+  const holes = openings.filter((r) => r.width > 0 && r.height > 0);
+  const xs = [
+    ...new Set([0, width, ...holes.flatMap((r) => [clamp(r.left, 0, width), clamp(r.left + r.width, 0, width)])]),
+  ].sort((a, b) => a - b);
+
+  const out: Box[] = [];
+  // The stripe being grown, and its dimmed y-intervals.
+  let open: { left: number; right: number; gaps: [number, number][] } | null = null;
+  const flush = () => {
+    if (!open) return;
+    for (const [top, bottom] of open.gaps) {
+      out.push({ top, left: open.left, width: open.right - open.left, height: bottom - top });
+    }
+  };
+
+  for (let i = 0; i < xs.length - 1; i++) {
+    const left = xs[i];
+    const right = xs[i + 1];
+    if (right <= left) continue;
+    const spans = holes
+      .filter((r) => r.left <= left && r.left + r.width >= right)
+      .map((r) => [clamp(r.top, 0, height), clamp(r.top + r.height, 0, height)] as [number, number])
+      .filter(([a, b]) => b > a)
+      .sort((a, b) => a[0] - b[0]);
+    const gaps: [number, number][] = [];
+    let y = 0;
+    for (const [a, b] of spans) {
+      if (a > y) gaps.push([y, a]);
+      y = Math.max(y, b);
+    }
+    if (y < height) gaps.push([y, height]);
+
+    const same =
+      open !== null &&
+      open.gaps.length === gaps.length &&
+      open.gaps.every(([a, b], k) => a === gaps[k][0] && b === gaps[k][1]);
+    if (same && open) {
+      open.right = right;
+    } else {
+      flush();
+      open = { left, right, gaps };
+    }
+  }
+  flush();
+  return out;
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import Projecteur from "./Projecteur";
-import TourPopover from "./TourPopover";
+import TourPopover, { TourAside } from "./TourPopover";
 import { TourEndCard, TourFailedCard, TourIntroCard } from "./TourCards";
 import WelcomeModal from "./WelcomeModal";
 import { findTour, fullTourSequence } from "../../lib/tours";
@@ -144,7 +144,11 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
       )}
 
       {view && view.run.phase === "running" && view.step && (
-        <Projecteur hole={view.hole} zone={view.zone} wide={view.wideZone}>
+        <Projecteur hole={view.hole} zone={view.zone} wide={view.wideZone} lit={view.lit}>
+          {/* Side bubbles first, so the card paints over one that strays under it. */}
+          {view.asides.map((aside) => (
+            <TourAside key={aside.target} rect={aside.rect} text={aside.text} />
+          ))}
           <TourPopover
             tour={view.tour}
             step={view.step}

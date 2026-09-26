@@ -85,6 +85,7 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
           Input
         </div>
         <pre
+          data-testid="start-input-text"
           className="start-input-text overflow-auto rounded border border-line bg-bg-0 p-2 font-mono text-fg-2"
           style={{ fontSize: "10.5px", lineHeight: "1.5", whiteSpace: "pre-wrap" }}
         >

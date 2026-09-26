@@ -40,6 +40,9 @@ Features validated while crossing the tour:
   for until `completed` — then removes the example Trigger when the tour ends.
 - **Archiving a Run** (#911): the tour's Run is archived by the real gesture; its dot turns grey and
   its outputs stay readable.
+- **Read-only panels** (#911): the panel a gesture opens (node inspector, edge panel, Start
+  inspector) stays lit; its tabs switch, it scrolls and unfolds, but nothing in it can be edited
+  while the tour shows it.
 
 ## Preconditions
 
@@ -60,14 +63,18 @@ Features validated while crossing the tour:
    **preparation**: training repository, `tutorial-overview` pipeline, example Trigger, and a Run.
    `Start` stays dead until the Run is `completed` (a few seconds: its nodes are scripts, no harness
    involved).
-3. Walk *Overview*'s seventeen cards: open the tour's Run from the list, read the canvas and both
-   panels, click **implementer** (its outputs, then unfold its folded **Terminal**: frozen on the
-   script's lines), click the **reviewer → End** edge (`verdict eq pass`), click **Start** (the Run's
-   prompt), read the Runs tab (the card sends you back to it if you left it) and the green dot,
-   **archive** the Run (the dot turns grey), open **Triggers** (the example Trigger is listed) and
-   **Pipelines** (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but
-   not opened. The gestures advance on the observed state — and stop for `Next` when the card has
-   something new to say; the rest take `Next`.
+3. Walk *Overview*'s eighteen cards: open the tour's Run from the list, read the canvas and both
+   panels, click **implementer** (a side bubble names its `task` input), click its **`code`** output
+   (the viewer opens and the card stops on it for `Next`), **close the viewer** (✕ or Escape — the
+   card advances on the close), then unfold its folded **Terminal** (frozen on the script's lines),
+   click the **reviewer → End** edge (a bubble points at `verdict eq pass`), click **Start** — the
+   card says first that it shows the prompt the Run was started with, and a bubble points at that
+   input once it is open — read the Runs tab (the card sends you back to it if you left it) and the
+   status dot (the card draws the three colours: orange, blue, green), **archive** the Run (the dot
+   turns grey), open **Triggers** (the example Trigger is listed) and **Pipelines**
+   (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but not opened.
+   The gestures advance on the observed state — and stop for `Next` when the card has something new
+   to say; the rest take `Next`.
 4. The **intermediate card** recaps *Overview* and offers *Continue · First run*. **Continue** → the
    example Trigger is gone from the Triggers tab, and the *First run* tour opens on its card, which
    names what it is about to do and shows a line per **preparation** (training repository, training
@@ -111,6 +118,13 @@ Features validated while crossing the tour:
 - At every step: the target is lit, the rest of the window is dimmed, a click outside the target
   changes nothing, and the progress reads *n / N* with the way out in the card's corner.
 - No step advances on a timer: leaving the screen alone never moves the tour on.
+- Hovering the tour Run's row on the status-dot card does **not** make the card jump: the lit
+  area keeps its place while the dot turns into the select ring.
+- The panel a gesture opened is **not dimmed**: its tabs switch and it scrolls, yet typing into
+  one of its fields, ticking a box or pressing one of its buttons changes nothing. Once the tour
+  has moved past that step, the panel is editable again.
+- The tour never walks past an open output viewer: the card after *Open its output* asks for it to
+  be closed.
 - The launched Run is real — it is in the run list, on the training repository, with a live tmux
   session, and it completes.
 - `notes.txt` in the training repository carries the line the prompt asked for, and the node's `out`

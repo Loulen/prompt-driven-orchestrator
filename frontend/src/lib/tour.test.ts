@@ -16,6 +16,8 @@ import {
   shouldTidyUp,
   skipStep,
   startTour,
+  stepAsides,
+  stepReadOnly,
   stepSoft,
   type TourAppState,
   type TourDef,
@@ -389,5 +391,31 @@ describe("tidying up", () => {
   it("starts every tour untidied", () => {
     const tour = tidyTour(step("a"));
     expect(startTour(tour, obs(["#a"])).tidiedUp).toBe(false);
+  });
+});
+
+// #911 — the panel a gesture opens: lit read-only, with side bubbles on it.
+describe("read-only areas and side bubbles", () => {
+  const aside = { target: "#prompt", text: "The Run's input." };
+
+  it("shows a step's side bubbles only once its condition holds", () => {
+    const s = opensNext("start", "#inspector", { asides: () => [aside] });
+    expect(stepAsides(s, obs(["#start"]))).toEqual([]);
+    expect(stepAsides(s, obs(["#start", "#inspector"]))).toEqual([aside]);
+  });
+
+  it("shows them from the start on an acknowledge step, which has nothing to wait for", () => {
+    expect(stepAsides(step("read", { asides: () => [aside] }), obs())).toEqual([aside]);
+  });
+
+  it("has neither when the step declares none", () => {
+    expect(stepAsides(step("a"), obs())).toEqual([]);
+    expect(stepReadOnly(step("a"), obs())).toEqual([]);
+  });
+
+  it("resolves the read-only areas against the observation", () => {
+    const s = step("a", { readOnly: (o) => (o.present("#panel") ? ["#panel"] : []) });
+    expect(stepReadOnly(s, obs())).toEqual([]);
+    expect(stepReadOnly(s, obs(["#panel"]))).toEqual(["#panel"]);
   });
 });

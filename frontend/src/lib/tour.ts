@@ -266,6 +266,64 @@ export interface TourStep {
   refusalTitle?: string;
   /** One sentence under the quoted reason, in the user's terms. */
   refusalHint?: string;
+  /**
+   * A small picture inside the card, under the body — for the one step whose
+   * subject cannot be shown by lighting the app (#911, after the human test): the
+   * status dot has three colours and the tour's Run only ever wears one. Data,
+   * not markup, so the popover renders it without knowing which step asked.
+   */
+  illustration?: TourIllustration;
+  /**
+   * Secondary lit areas, **read-only** (#911, after the human test): the panel
+   * a gesture just opened stays bright and explorable — tabs, scroll, folds —
+   * but nothing in it can be changed while the step is current. The step's own
+   * target keeps every click. Resolved from the observation because most of these
+   * panels only exist once the gesture they follow has been made; a selector
+   * that resolves to nothing is simply not lit.
+   */
+  readOnly?: (o: TourObservation) => string[];
+  /**
+   * Controls inside a {@link readOnly} area that only *navigate* and stay
+   * clickable: an inspector's tab buttons, a « show the prompt » fold. The engine
+   * already lets `role="tab"`, `<summary>` and plain disclosures through; this is
+   * for the app's own buttons that carry none of those markers.
+   */
+  explore?: string[];
+  /**
+   * Side bubbles (#911): once the step's condition holds, short notes pinned to
+   * other parts of what the gesture opened — the Run's prompt in the Start
+   * inspector, the condition in the edge panel. Not part of the flow: no Next,
+   * no progress, and a target that is not on screen is skipped rather than
+   * waited for.
+   */
+  asides?: (o: TourObservation) => TourAside[];
+}
+
+/** One side bubble of a step (#911). */
+export interface TourAside {
+  /** CSS selector of what the bubble points at. */
+  target: string;
+  /** One sentence, two at most. */
+  text: string;
+}
+
+/**
+ * A card illustration (#911). One shape so far — a mock list whose rows lead
+ * with a status dot, drawn with the app's own colour classes so the picture and
+ * the real list cannot disagree.
+ */
+export interface TourIllustration {
+  kind: "rows";
+  rows: {
+    /** The row's name, e.g. a Run name. */
+    label: string;
+    /** What the dot means, in the reader's words — "waits for you". */
+    detail: string;
+    /** The dot's colour class, the app's own: `bg-st-await`, `bg-st-done`… */
+    dotClass: string;
+    /** Pulse the dot, as the real list does for a live row. */
+    pulse?: boolean;
+  }[];
 }
 
 export interface TourChecklistItem {
@@ -406,6 +464,23 @@ export function stepNote(step: TourStep, o: TourObservation): string | null {
 /** Is the step's lit area a zone to roam in **right now** (#825)? */
 export function stepSoft(step: TourStep, o: TourObservation): boolean {
   return typeof step.soft === "function" ? step.soft(o) : step.soft === true;
+}
+
+/** The step's read-only areas right now (#911), or none. */
+export function stepReadOnly(step: TourStep, o: TourObservation): string[] {
+  return step.readOnly?.(o) ?? [];
+}
+
+/**
+ * The step's side bubbles right now (#911): only once its condition holds.
+ * Before the gesture they would point into a panel that is not open yet — or,
+ * worse, into the one it replaces. An acknowledge step (no `done`) is satisfied
+ * from the start.
+ */
+export function stepAsides(step: TourStep, o: TourObservation): TourAside[] {
+  if (!step.asides) return [];
+  if (step.done && !step.done(o)) return [];
+  return step.asides(o);
 }
 
 /** Resolve the two end-card fields, which a tour may make depend on what it saw. */

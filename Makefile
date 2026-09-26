@@ -18,7 +18,7 @@ TS_CHECK_DIR := $(CURDIR)/target/ts-rs-check
 # PDO_SKIP_FRONTEND_BUILD: the crate's build.rs typechecks the frontend, which
 # imports these very files — generating them must not depend on them. An empty
 # dist/ is enough for rust-embed in a test build.
-EXPORT_TS := mkdir -p frontend/dist && PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet -p pdo-legacy --lib export_bindings_ -- --test-threads=1
+EXPORT_TS := mkdir -p frontend/dist && PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet -p pdo-legacy -p pdo-platform --lib export_bindings_ -- --test-threads=1
 
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git

@@ -83,9 +83,13 @@ cd "$(git rev-parse --show-toplevel)"
 #   Settings › General › Stats absorptions list (every absorption, its origin, uncombine as
 #   you go). SettingsSurface renders it; it reuses StatsAbsorption's UncombineButton and
 #   lib/statsAbsorption, so only the Settings layout is new.
+# frontend/src/components: 197 and crates/pdo-daemon/src: 89 (#916) — the platform
+#   context moved out: its components to frontend/src/platform/, its modules to
+#   crates/pdo-platform. contexts.rs is the one file admitted in the legacy crate: the
+#   seam the composition root wires the extracted contexts through.
 BASELINES='
-frontend/src/components 205
-crates/pdo-daemon/src 93
+frontend/src/components 197
+crates/pdo-daemon/src 89
 '
 
 fail=0

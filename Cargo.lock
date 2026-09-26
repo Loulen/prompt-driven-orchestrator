@@ -1986,6 +1986,7 @@ dependencies = [
  "pdo-extension-api",
  "pdo-kernel",
  "pdo-legacy",
+ "pdo-platform",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -2045,6 +2046,7 @@ dependencies = [
  "oxc_parser",
  "oxc_span",
  "pdo-kernel",
+ "pdo-platform",
  "portable-pty",
  "pretty_assertions",
  "reqwest",
@@ -2065,6 +2067,30 @@ dependencies = [
  "ts-rs",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "pdo-platform"
+version = "1.111.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "clap",
+ "libc",
+ "mime_guess",
+ "pdo-extension-api",
+ "pdo-kernel",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]

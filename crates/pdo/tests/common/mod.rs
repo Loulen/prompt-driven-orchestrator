@@ -174,6 +174,7 @@ impl TestDaemon {
         setup(tempdir.path())?;
         let mut config = DaemonConfig {
             tmux_cmd_override: Some("exec sleep 600".to_string()),
+            router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
             ..DaemonConfig::default()
         };
         configure(tempdir.path(), &mut config);
@@ -478,8 +479,8 @@ impl TestDaemon {
     pub async fn spawn_with_update_executor<F>(
         setup: F,
         executor: String,
-        install_method: pdo_daemon::update_check::InstallMethod,
-        supervision: pdo_daemon::update_check::Supervision,
+        install_method: pdo_platform::domain::install::InstallMethod,
+        supervision: pdo_platform::domain::install::Supervision,
     ) -> Result<Self>
     where
         F: FnOnce(&Path) -> Result<()>,

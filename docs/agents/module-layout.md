@@ -66,11 +66,22 @@ Frontend: `frontend/src/<context>/{api,model,store,components}/`, plus `shared/`
 
 The legacy crate (`crates/pdo-daemon`, package `pdo-legacy`, library still `pdo_daemon`) is
 strangled one context at a time. It only shrinks: new
-behaviour goes into the context crate once that crate exists. While it still exists,
+behaviour goes into the context crate once that crate exists. `platform` (`crates/pdo-platform`, `frontend/src/platform/`: page
+mounts, update, audit journal, service unit) is the first context out and the template the
+next ones copy: pure rules in `domain/`, `application/ports.rs` plus one use case per file,
+`adapters/` for the routes (`http/`), the CLI (`cli/`) and the implementations of the ports.
+Its use cases are tested against in-memory ports in `crates/pdo-platform/tests/use_cases/`
+(stage 2), its adapters against the real resource in their own `#[cfg(test)]` module
+(stage 3). While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package
 `pdo-daemon`: dist names the installer after it), which exposes `serve(config, extensions)` and
-delegates to the legacy crate. The daemon's integration tests (stage 4) live there too, in
+delegates to the legacy crate. The legacy daemon still opens the database and binds the
+listener; it hands the composition root its `ContextResources` (the pool, the per-daemon
+knobs, and the ports a context needs from what is still legacy, such as the Runs), and
+`crates/pdo/src/contexts.rs` wires each extracted context's adapters onto its ports and
+merges its `router()` before `identify` wraps everything. Route coverage reads each
+context's `router()` too (`ROUTER_SOURCES`). The daemon's integration tests (stage 4) live there too, in
 `crates/pdo/tests/`, and every test daemon goes through the same `identify` head as `pdo daemon`.
 
 The HTTP and WebSocket contract stays frozen for the whole migration. A temporary suite,

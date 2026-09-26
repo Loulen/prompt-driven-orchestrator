@@ -210,27 +210,6 @@ vi.mock("../api", () => {
       }),
       fetchProjects: vi.fn().mockResolvedValue([]),
       pauseTriggers: vi.fn().mockResolvedValue(undefined),
-      fetchUpdateStatus: vi.fn().mockResolvedValue({
-        installed_version: "9.9.9-test",
-        latest_version: null,
-        newer_available: false,
-        checked_at: null,
-        source: "GitHub Releases",
-        source_url: "https://example.invalid/releases/latest",
-        check_enabled: true,
-        install_method: "unknown",
-        manual_command: "Build from source, then restart the daemon.",
-        supervision: "none",
-        reason: "Not checked yet.",
-        last_error: null,
-        active_runs: 0,
-        can_apply: true,
-        apply_blocked_reason: null,
-        last_attempt: null,
-      }),
-      applyUpdate: vi.fn().mockResolvedValue({}),
-      fetchUpdateAttemptLog: vi.fn().mockResolvedValue(""),
-      checkForUpdateNow: vi.fn().mockResolvedValue({}),
       fetchLibrary: vi.fn().mockResolvedValue([]),
       fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
       fetchPipelines: vi.fn().mockResolvedValue([]),
@@ -354,6 +333,30 @@ vi.mock("../api", () => {
 
 // The canvas is outside the paths under test; collapse it like the EditCanvas
 // tests do so no real ReactFlow measurement runs under jsdom.
+vi.mock("../platform/api/update", () => ({
+  fetchUpdateStatus: vi.fn().mockResolvedValue({
+    installed_version: "9.9.9-test",
+    latest_version: null,
+    newer_available: false,
+    checked_at: null,
+    source: "GitHub Releases",
+    source_url: "https://example.invalid/releases/latest",
+    check_enabled: true,
+    install_method: "unknown",
+    manual_command: "Build from source, then restart the daemon.",
+    supervision: "none",
+    reason: "Not checked yet.",
+    last_error: null,
+    active_runs: 0,
+    can_apply: true,
+    apply_blocked_reason: null,
+    last_attempt: null,
+  }),
+  applyUpdate: vi.fn().mockResolvedValue({}),
+  fetchUpdateAttemptLog: vi.fn().mockResolvedValue(""),
+  checkForUpdateNow: vi.fn().mockResolvedValue({}),
+}));
+
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
   return {

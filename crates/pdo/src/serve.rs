@@ -10,6 +10,7 @@ use pdo_daemon::{DaemonConfig, DaemonHandle, RouterLayer};
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::{ExtensionHost, Extensions};
 
+use crate::contexts;
 use crate::identify::with_identify;
 
 /// How to start a daemon.
@@ -101,7 +102,8 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
     Ok(Daemon { handle })
 }
 
-/// Not covered by semver: what `serve` wraps the legacy router with — `inner`
+/// Not covered by semver: what `serve` plugs into the legacy daemon — the
+/// wiring of the extracted contexts, and around the assembled router `inner`
 /// (if any), then `identify` in front of everything. The test suite's daemons
 /// use it so every integration test goes through the same head as `pdo daemon`.
 #[doc(hidden)]
@@ -110,6 +112,7 @@ pub fn composed_router_layer(
     inner: Option<RouterLayer>,
 ) -> RouterLayer {
     let host: Arc<dyn ExtensionHost> = Arc::new(Extensions::new(extensions));
+    let contexts_host = host.clone();
     RouterLayer::new(move |router| {
         let router = match &inner {
             Some(inner) => inner.apply(router),
@@ -117,4 +120,5 @@ pub fn composed_router_layer(
         };
         with_identify(router, host.clone())
     })
+    .with_contexts(move |resources| contexts::wire(resources, contexts_host.clone()))
 }

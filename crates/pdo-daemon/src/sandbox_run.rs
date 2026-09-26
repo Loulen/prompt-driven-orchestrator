@@ -301,7 +301,7 @@ pub(crate) fn docker_bin(state: &AppState) -> String {
 /// terminal status): it stays correct even if the best-effort terminal
 /// `merge_back` failed, as long as the staging lives (cf. plan #408 D-1). The cwd
 /// encoding is unchanged — the caller still resolves the encoded dirname from
-/// this base via [`crate::stale_detector::encode_working_dir`], the single source
+/// this base via [`pdo_harness::claude_transcript::encode_working_dir`], the single source
 /// of truth (#373); the seam only swaps the base `projects/` root.
 /// `sandboxed` is a plain `bool`, not a [`SandboxMode`] (#432 D2): this seam only ever
 /// asked about off-ness, and since the mode owns a `String` a by-value parameter would
@@ -333,7 +333,7 @@ pub(crate) fn copilot_store_root(home_root: &Path) -> PathBuf {
 
 /// The `pi` sessions store root on the **host** — `<home_root>/.pi/agent/sessions/`,
 /// where each working directory's folder holds `<timestamp>_<session-id>.jsonl`
-/// files (#707, [`crate::pi_session`]). Path math only; the per-Run seam that moves
+/// files (#707, [`pdo_harness::pi_session`]). Path math only; the per-Run seam that moves
 /// it while a sandboxed Run lives is [`HarnessStores::for_run`].
 pub(crate) fn pi_store_root(home_root: &Path) -> PathBuf {
     home_root.join(".pi").join("agent").join("sessions")
@@ -405,14 +405,14 @@ impl HarnessStores {
     /// The store root `harness`'s transcript resolution reads from: this struct's
     /// own for `copilot` / `pi`, `claude_root` for `claude` **and for any other
     /// name** — a data-declared harness resolves no transcript at all
-    /// (`harness_probes::resolve_transcript` answers `None` before the root is ever
+    /// (`pdo_harness::adapters::transcripts::resolve_transcript` answers `None` before the root is ever
     /// joined), so handing it the claude root is inert. Picks between independently
     /// computed roots, not between behaviours (ADR-0051): behaviour dispatch stays in
     /// `harness_probes`.
     pub(crate) fn root_for<'a>(&'a self, harness: &str, claude_root: &'a Path) -> &'a Path {
         match harness {
-            crate::harness_registry::COPILOT => &self.copilot,
-            crate::harness_registry::PI => &self.pi,
+            pdo_harness::registry::COPILOT => &self.copilot,
+            pdo_harness::registry::PI => &self.pi,
             _ => claude_root,
         }
     }
@@ -954,7 +954,7 @@ mod tests {
             &ctx.home_root,
             &ctx.sandbox_root,
             "r1",
-            crate::harness_registry::CLAUDE,
+            pdo_harness::registry::CLAUDE,
             Some(ctx.repo_root.as_path()),
         )
         .unwrap();
@@ -996,7 +996,7 @@ mod tests {
             &home,
             &sandbox_root,
             "r1",
-            crate::harness_registry::PI,
+            pdo_harness::registry::PI,
             None,
         )
         .unwrap();
@@ -1023,7 +1023,7 @@ mod tests {
             &home,
             &sandbox_root,
             "r1",
-            crate::harness_registry::PI,
+            pdo_harness::registry::PI,
             None,
         )
         .unwrap();
@@ -1047,7 +1047,7 @@ mod tests {
             &home,
             &sandbox_root,
             "r1",
-            crate::harness_registry::CLAUDE,
+            pdo_harness::registry::CLAUDE,
             None,
         )
         .unwrap();
@@ -1454,7 +1454,7 @@ mod tests {
         let home = tmp.path().join("home");
         let sandbox_root = tmp.path().join("sandbox");
         let cwd = std::path::Path::new("/home/u/.pdo/runs/r1/worktree");
-        let enc = crate::stale_detector::encode_working_dir(cwd);
+        let enc = pdo_harness::claude_transcript::encode_working_dir(cwd);
 
         // Host arm (no staging).
         let host = transcripts_root(true, "r1", &home, &sandbox_root);

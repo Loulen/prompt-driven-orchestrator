@@ -32,7 +32,7 @@ import type { StatsSessionHarness } from "../shared/generated/StatsSessionHarnes
 import type { StatsSessionPeriod } from "../shared/generated/StatsSessionPeriod";
 import type { StatsSteeredRate } from "../shared/generated/StatsSteeredRate";
 import { formatCostAmount } from "../lib/costLabel";
-import { harnessColor } from "../lib/harness";
+import { harnessColor } from "../harness/model/color";
 import { cssColor } from "../lib/cssColor";
 import { useTheme } from "../hooks/useTheme";
 import { Tooltip, TooltipProvider } from "../shared/ui/tooltip";

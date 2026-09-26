@@ -66,7 +66,15 @@ Frontend: `frontend/src/<context>/{api,model,store,components}/`, plus `shared/`
 
 The legacy crate (`crates/pdo-daemon`, package `pdo-legacy`, library still `pdo_daemon`) is
 strangled one context at a time. It only shrinks: new
-behaviour goes into the context crate once that crate exists. While it still exists,
+behaviour goes into the context crate once that crate exists.
+
+Contexts already out of the legacy crate:
+
+- `harness` (#919): `crates/pdo-harness`, `frontend/src/harness/`. The parsers of each
+  harness's own artefacts (transcripts, turn state, reported cost, context peak, steering)
+  live in its `domain/`; cost, stale detection, staging, tmux and stats read them from
+  there. `RUST_LOG=pdo_daemon::harness_registry` becomes
+  `RUST_LOG=pdo_harness::application::load_registry`. While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package
 `pdo-daemon`: dist names the installer after it), which exposes `serve(config, extensions)` and

@@ -152,7 +152,7 @@ fn plant_session(daemon: &TestDaemon, run_id: &str, session_id: &str, lines: &[S
         .join(".pdo/runs")
         .join(run_id)
         .join("worktree");
-    let enc = pdo_daemon::stale_detector::encode_working_dir(&worktree);
+    let enc = pdo_harness::claude_transcript::encode_working_dir(&worktree);
     let proj = daemon.repo_root().join(".claude/projects").join(enc);
     std::fs::create_dir_all(&proj).unwrap();
     std::fs::write(proj.join(format!("{session_id}.jsonl")), lines.join("\n")).unwrap();

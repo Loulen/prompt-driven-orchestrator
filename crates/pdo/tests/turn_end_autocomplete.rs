@@ -94,11 +94,11 @@ edges:
 /// `text` message, then `system` records, then untimestamped metadata. Parses as
 /// `TurnEnded`.
 const FIXTURE_TURN_ENDED: &str =
-    include_str!("../../pdo-daemon/tests/fixtures/turn_state/turn_ended.jsonl");
+    include_str!("../../pdo-harness/tests/fixtures/turn_state/turn_ended.jsonl");
 /// The same transcript cut on a `docker build -q` whose `tool_result` landed
 /// 214 s later. Parses as `InToolCall` — alive, whatever the silence.
 const FIXTURE_IN_TOOL_CALL: &str =
-    include_str!("../../pdo-daemon/tests/fixtures/turn_state/in_tool_call.jsonl");
+    include_str!("../../pdo-harness/tests/fixtures/turn_state/in_tool_call.jsonl");
 
 fn tmux_available() -> bool {
     std::process::Command::new("tmux")
@@ -270,7 +270,7 @@ fn plant_transcript(
     contents: &str,
     quiet: Duration,
 ) {
-    let encoded = stale_detector::encode_working_dir(working_dir);
+    let encoded = pdo_harness::claude_transcript::encode_working_dir(working_dir);
     let proj = home.join(".claude").join("projects").join(encoded);
     std::fs::create_dir_all(&proj).unwrap();
     let jsonl = proj.join(format!("{session_id}.jsonl"));

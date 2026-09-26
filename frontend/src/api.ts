@@ -46,7 +46,7 @@ import type { StructuredDiff } from "./shared/generated/StructuredDiff";
 import type { RunRefs } from "./shared/generated/RunRefs";
 import type { ReviewCommentsListResponse, ReviewDecisionResponse, SendReviewCommentsResponse } from "./review/model/review";
 import type { SendReviewCommentInput } from "./shared/generated/SendReviewCommentInput";
-import { foldHarnessOntoNode } from "./lib/harness";
+import { foldHarnessOntoNode } from "./harness/model/nodeHarness";
 import { ApiError, apiErrorMessage, BASE, request } from "./shared/http/client";
 
 export function fetchRuns(): Promise<RunListEntry[]> {

@@ -87,7 +87,7 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
     let prompt_path = std::path::Path::new("/tmp/pdo-test/solo-iter-1.md");
     // #550: the `claude` descriptor — its launch template reproduces the legacy
     // tail byte for byte once the holes are empty (the state this test asserts).
-    let claude = pdo_daemon::harness_registry::claude();
+    let claude = pdo_harness::registry::claude();
     let script = build_tmux_script(
         "run-abc",
         "solo",

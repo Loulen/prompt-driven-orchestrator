@@ -261,11 +261,11 @@ pub(crate) fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> Library
         // `harnesses.claude` entry rather than the whole map.
         model: node
             .harnesses
-            .get(crate::harness_registry::CLAUDE)
+            .get(pdo_harness::registry::CLAUDE)
             .and_then(|e| e.model.clone()),
         effort: node
             .harnesses
-            .get(crate::harness_registry::CLAUDE)
+            .get(pdo_harness::registry::CLAUDE)
             .and_then(|e| e.effort.clone()),
         max_iter: None,
         branches: None,
@@ -1044,8 +1044,8 @@ mod tests {
 
     fn set_claude_entry(node: &mut pipeline::NodeDef, model: Option<&str>, effort: Option<&str>) {
         node.harnesses.insert(
-            crate::harness_registry::CLAUDE.to_string(),
-            crate::harness_resolver::HarnessEntry {
+            pdo_harness::registry::CLAUDE.to_string(),
+            pdo_harness::resolver::HarnessEntry {
                 model: model.map(str::to_string),
                 effort: effort.map(str::to_string),
             },

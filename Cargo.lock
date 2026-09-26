@@ -1984,6 +1984,7 @@ dependencies = [
  "futures-util",
  "insta",
  "pdo-extension-api",
+ "pdo-harness",
  "pdo-kernel",
  "pdo-legacy",
  "pretty_assertions",
@@ -2009,6 +2010,22 @@ dependencies = [
  "axum",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "pdo-harness"
+version = "1.111.0"
+dependencies = [
+ "filetime",
+ "pdo-kernel",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "ts-rs",
 ]
 
 [[package]]
@@ -2044,6 +2061,7 @@ dependencies = [
  "oxc_ast",
  "oxc_parser",
  "oxc_span",
+ "pdo-harness",
  "pdo-kernel",
  "portable-pty",
  "pretty_assertions",

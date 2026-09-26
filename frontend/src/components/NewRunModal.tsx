@@ -15,7 +15,7 @@ import SecondaryRepoRow, {
 import SourceBranchField from "./SourceBranchField";
 import GuardTestResult from "./GuardTestResult";
 import AgentControl from "./AgentControl";
-import HarnessSelect, { SelectedMarker } from "./HarnessSelect";
+import HarnessSelect, { SelectedMarker } from "../harness/components/HarnessSelect";
 import SkillSelector from "./SkillSelector";
 import {
   DropdownMenu,

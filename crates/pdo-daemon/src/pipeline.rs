@@ -216,14 +216,14 @@ pub(crate) struct NodeDef {
     /// in the pipeline diff and the library content hash.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[ts(optional = nullable)]
-    pub harnesses: BTreeMap<String, crate::harness_resolver::HarnessEntry>,
+    pub harnesses: BTreeMap<String, pdo_harness::resolver::HarnessEntry>,
     /// The node's tier of the agentic-profile union (ADR-0057). `Some(Profile |
     /// Custom)` supplies harness, model and effort atomically, and
     /// [`pin_harness`]/[`harnesses`] are then NOT consulted (ADR-0057 ¶1: Custom
     /// "ne réactive pas l'ancien résolveur"). Absent or `Some(Inherit)` preserves
     /// the legacy behaviour exactly. Semantic, not layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    pub agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
     /// The Node tier of the **skills** selection (#669, ADR-0062): the skills this
     /// node's NodeRun receives on top of the instance, Projet and Run tiers
     /// (strict additive union, `skill_selection::resolve`). Referenced by **id**;
@@ -970,7 +970,7 @@ pub(crate) fn fold_flat_model_effort_into_harnesses(node_map: &mut serde_yaml::M
         .and_then(serde_yaml::Value::as_mapping_mut)
         .expect("harnesses just ensured to be a mapping");
 
-    let claude_key = serde_yaml::Value::String(crate::harness_registry::CLAUDE.into());
+    let claude_key = serde_yaml::Value::String(pdo_harness::registry::CLAUDE.into());
     if !harnesses
         .get(&claude_key)
         .map(serde_yaml::Value::is_mapping)
@@ -3482,7 +3482,7 @@ nodes:
     }
 
     /// `agent_choice: {mode: profile, ...}` parses into
-    /// [`crate::agent_choice::AgentChoice::Profile`] and round-trips unchanged.
+    /// [`pdo_harness::agent_choice::AgentChoice::Profile`] and round-trips unchanged.
     #[test]
     fn node_agent_choice_profile_reference_round_trips() {
         let yaml = with_start_end(
@@ -3511,7 +3511,7 @@ nodes:
             .unwrap();
         assert_eq!(
             node.agent_choice,
-            Some(crate::agent_choice::AgentChoice::Profile {
+            Some(pdo_harness::agent_choice::AgentChoice::Profile {
                 profile_id: "reviewer".into()
             })
         );
@@ -3556,14 +3556,14 @@ nodes:
             .unwrap();
         assert_eq!(
             node.agent_choice,
-            Some(crate::agent_choice::AgentChoice::Custom {
+            Some(pdo_harness::agent_choice::AgentChoice::Custom {
                 harness: "opencode".into(),
                 model: Some("gpt-5".into()),
                 effort: Some("high".into()),
             })
         );
         // Legacy fields are still parsed and preserved verbatim — Custom wins
-        // at resolution time (agent_choice.rs), it does not erase them.
+        // at resolution time (`pdo_harness::agent_choice`), it does not erase them.
         assert_eq!(node.pin_harness.as_deref(), Some("claude"));
         assert!(node.harnesses.contains_key("claude"));
     }

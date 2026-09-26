@@ -22,7 +22,7 @@
 //! The third metric, additive on the same seam: at every level where `context`
 //! and `duration` exist, a `steering` distribution (unit: **messages** — the
 //! steering messages a human typed into the main session after its launch,
-//! read by [`crate::steering`] through the `harness_probes` dispatch) and a
+//! read by [`pdo_harness::steering`] through the `harness_probes` dispatch) and a
 //! `steered { steered, readable }` aggregate (executions with ≥ 1 message over
 //! executions whose count is readable). A readable transcript with no message
 //! counts `0` and enters `readable` without entering `steered`; a harness with
@@ -96,7 +96,7 @@
 //!
 //! ## Context resolution
 //!
-//! Context usage is resolved via [`crate::context_peak`] from the same
+//! Context usage is resolved via [`pdo_harness::context_peak`] from the same
 //! transcript/journal locations [`crate::run_cost`] already reads (Claude:
 //! `<projects_root>/<encoded_cwd>/<session_id>.jsonl`; Copilot:
 //! `<copilot_root>/<session_id>/events.jsonl`; `pi`'s session by identity inside its
@@ -162,6 +162,7 @@ use crate::stats_absorption::{
     AbsorbedMember, AbsorptionResolver, NodeIdentity, PipelineTallies, RunIdentity,
 };
 use crate::AppState;
+use pdo_harness::{adapters::transcripts, claude_transcript::cc_project_dirname};
 
 /// Query string: an ISO-8601 `[from, to)` window — the same cohort rule as
 /// `/stats/overview` and `/stats/cost`, but no `bucket`: Performance has no
@@ -1279,7 +1280,7 @@ fn main_session_steering(
     session_id: Option<&str>,
     already_read: Option<&str>,
 ) -> (Option<f64>, Option<String>) {
-    if !crate::harness_probes::can_count_steering(harness) {
+    if !pdo_harness::probes::can_count_steering(harness) {
         return (None, Some(format!("session not resolvable on {harness}")));
     }
     let Some(session_id) = session_id.filter(|s| !s.is_empty()) else {
@@ -1292,7 +1293,7 @@ fn main_session_steering(
     let Some(text) = text else {
         return (None, Some("no attributable transcript".to_string()));
     };
-    match crate::harness_probes::steering_count(harness, &text) {
+    match pdo_harness::probes::steering_count(harness, &text) {
         Some(count) => (Some(f64::from(count)), None),
         None => (
             None,
@@ -1314,20 +1315,19 @@ fn main_session_observation(
     session_id: Option<&str>,
     seen_roots: &mut HashSet<PathBuf>,
 ) -> Result<MainObservation, PerformanceError> {
-    if !crate::harness_probes::can_measure_context(harness) {
+    if !pdo_harness::probes::can_measure_context(harness) {
         return Ok((None, Some("harness has no context-usage source"), None));
     }
     check_root_once(root, &harness_display_label(harness), seen_roots)?;
     let Some(session_id) = session_id.filter(|s| !s.is_empty()) else {
         return Ok((None, Some("no session identity"), None));
     };
-    let Some(path) =
-        crate::harness_probes::resolve_transcript(harness, root, working_dir, Some(session_id))
+    let Some(path) = transcripts::resolve_transcript(harness, root, working_dir, Some(session_id))
     else {
         return Ok((None, Some("no attributable transcript"), None));
     };
     Ok(match std::fs::read_to_string(&path) {
-        Ok(text) => match crate::harness_probes::context_peak(harness, &text) {
+        Ok(text) => match pdo_harness::probes::context_peak(harness, &text) {
             Some(peak) => (Some(peak as f64), None, Some(text)),
             None => (
                 None,
@@ -1349,7 +1349,7 @@ fn session_file_text(
     working_dir: &Path,
     session_id: Option<&str>,
 ) -> Option<String> {
-    crate::harness_probes::resolve_transcript(harness, root, working_dir, session_id)
+    transcripts::resolve_transcript(harness, root, working_dir, session_id)
         .and_then(|path| std::fs::read_to_string(path).ok())
 }
 
@@ -1369,7 +1369,7 @@ fn main_session_identities(
     requested_effort: Option<&str>,
     already_read: Option<&str>,
 ) -> Vec<ModelIdentity> {
-    let source = crate::harness_probes::observed_identity_source(harness);
+    let source = pdo_harness::probes::observed_identity_source(harness);
     let mut observed = Vec::new();
     if source.is_some() {
         let text = match already_read {
@@ -1377,7 +1377,7 @@ fn main_session_identities(
             None => session_file_text(harness, root, working_dir, session_id),
         };
         if let Some(text) = text {
-            observed = crate::harness_probes::observed_identities(harness, &text)
+            observed = pdo_harness::probes::observed_identities(harness, &text)
                 .into_iter()
                 .map(|identity| {
                     // The source carries the effort (`pi`, `copilot`) — an
@@ -1385,7 +1385,7 @@ fn main_session_identities(
                     // startup event (source-first, ADR-0065 §1). `claude`'s
                     // source never writes one: the requested effort stands.
                     let (effort, effort_observed) = match source {
-                        Some(crate::harness_probes::ObservedIdentitySource::ModelAndEffort) => {
+                        Some(pdo_harness::probes::ObservedIdentitySource::ModelAndEffort) => {
                             let observed_effort = identity.effort;
                             let observed = observed_effort.clone();
                             (observed_effort, Some(observed.is_some()))
@@ -1433,7 +1433,7 @@ fn subagent_groups(
     let Some(session_id) = session_id.filter(|s| !s.is_empty()) else {
         return Vec::new();
     };
-    crate::harness_probes::subagent_transcripts(harness, root, working_dir, session_id)
+    transcripts::subagent_transcripts(harness, root, working_dir, session_id)
         .into_iter()
         .map(|(stem, text)| (claude_subagent_group(&stem), text))
         .collect()
@@ -1469,7 +1469,7 @@ struct MergeResolverPending {
 ///
 /// The duration span alone bypasses the `harness_probes` dispatch: no capability
 /// marker exists yet for "start/end bounds from a transcript", so
-/// [`crate::context_peak::claude_transcript_time_span`] stays a direct call —
+/// [`pdo_harness::context_peak::claude_transcript_time_span`] stays a direct call —
 /// the seam to extend when a second harness grows subagent transcripts.
 ///
 /// `node_pairs` / `model_axis` are `Some` only for a Node's own subagents —
@@ -1490,12 +1490,12 @@ fn fold_subagents(
     for (group, text) in files {
         let sub = subagents.entry(group).or_default();
         let sub_acc = sub.by_harness.entry(harness.to_string()).or_default();
-        let peak = crate::harness_probes::context_peak(harness, &text);
+        let peak = pdo_harness::probes::context_peak(harness, &text);
         sub_acc.context.observe(
             peak.map(|p| p as f64),
             (peak.is_none()).then_some("no readable context usage in transcript"),
         );
-        let span = crate::context_peak::claude_transcript_time_span(&text);
+        let span = pdo_harness::context_peak::claude_transcript_time_span(&text);
         let sub_duration = span.and_then(|(a, b)| duration_millis(&a, &b));
         let sub_duration_reason = sub_duration
             .is_none()
@@ -1519,14 +1519,14 @@ fn fold_subagents(
             model_axis.as_deref_mut(),
             pipeline,
         ) {
-            let source = crate::harness_probes::observed_identity_source(harness);
+            let source = pdo_harness::probes::observed_identity_source(harness);
             if source.is_some() {
-                for identity in crate::harness_probes::observed_identities(harness, &text) {
+                for identity in pdo_harness::probes::observed_identities(harness, &text) {
                     // Same source-first rule as a main session (ADR-0065 §1):
                     // `pi`/`copilot` subagents would carry their own observed
                     // effort; a mute effort is « not set », never requested.
                     let (effort, effort_observed) = match source {
-                        Some(crate::harness_probes::ObservedIdentitySource::ModelAndEffort) => {
+                        Some(pdo_harness::probes::ObservedIdentitySource::ModelAndEffort) => {
                             let observed_effort = identity.effort;
                             let observed = observed_effort.clone();
                             (observed_effort, Some(observed.is_some()))
@@ -1715,7 +1715,7 @@ fn resolve_infra_session(
     if directory_ambiguous {
         return InfraSession::Ambiguous;
     }
-    let project_dir = claude_root.join(crate::run_cost::cc_project_dirname(working_dir));
+    let project_dir = claude_root.join(cc_project_dirname(working_dir));
     let Ok(entries) = std::fs::read_dir(&project_dir) else {
         return InfraSession::None;
     };
@@ -1772,7 +1772,7 @@ fn infra_claude_observation(
             let path = project_dir.join(format!("{session_id}.jsonl"));
             match std::fs::read_to_string(&path) {
                 Ok(text) => {
-                    let peak = crate::harness_probes::context_peak(harness, &text);
+                    let peak = pdo_harness::probes::context_peak(harness, &text);
                     let subs =
                         subagent_groups(harness, claude_root, working_dir, Some(&session_id));
                     (
@@ -1807,7 +1807,7 @@ fn record_infra_success(
     waited_millis: f64,
     seen_roots: &mut HashSet<PathBuf>,
 ) -> Result<(), PerformanceError> {
-    let (context, reason, subs) = if run_harness != crate::harness_registry::CLAUDE {
+    let (context, reason, subs) = if run_harness != pdo_harness::registry::CLAUDE {
         (
             None,
             Some("harness has no context-usage source"),
@@ -1846,7 +1846,7 @@ fn record_infra_success(
         target.steering.observe(None, Some(INFRA_STEERING_REASON));
     }
 
-    if run_harness == crate::harness_registry::CLAUDE {
+    if run_harness == pdo_harness::registry::CLAUDE {
         // Infrastructure stays off the « By model » axis and its Node couples
         // (module doc): the role's residual sessions carry no model identity of
         // their own, and the axis compares Node executions.
@@ -2099,7 +2099,7 @@ fn fold_performance(
             .get("harness")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or(crate::harness_registry::CLAUDE)
+            .unwrap_or(pdo_harness::registry::CLAUDE)
             .to_string();
 
         let pipeline_acc = pipelines.entry(identity.pipeline_key.clone()).or_default();
@@ -2167,7 +2167,7 @@ fn fold_performance(
                         .and_then(|p| p.get("harness"))
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.is_empty())
-                        .unwrap_or(crate::harness_registry::CLAUDE)
+                        .unwrap_or(pdo_harness::registry::CLAUDE)
                         .to_string();
                     let session_id = event_payload
                         .and_then(|p| p.get("session_id"))
@@ -2300,7 +2300,7 @@ fn fold_performance(
                                         .filter_map(|r| r.session_id.clone())
                                         .collect();
                                     let ambiguous = records.iter().any(|r| {
-                                        r.harness == crate::harness_registry::CLAUDE
+                                        r.harness == pdo_harness::registry::CLAUDE
                                             && r.session_id.is_none()
                                     });
                                     (Some(dir), excluded, ambiguous)
@@ -2339,7 +2339,7 @@ fn fold_performance(
                         let ambiguous = node_starts.values().flatten().any(|r| {
                             r.node_type != "script"
                                 && !r.isolated
-                                && r.harness == crate::harness_registry::CLAUDE
+                                && r.harness == pdo_harness::registry::CLAUDE
                                 && r.session_id.is_none()
                         });
                         record_infra_success(

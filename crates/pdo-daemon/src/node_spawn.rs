@@ -15,17 +15,19 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Context;
+use pdo_harness::adapters::binary_path::{binary_available, harness_probe_path};
+use pdo_harness::agent_choice;
 use tracing::{error, info, warn};
 
 use crate::worktree_ops::{
     ensure_sub_worktree, reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path,
 };
 use crate::{
-    admission, agent_choice, agent_profile, append_event_with,
-    count_global_live_sessions_excluding, event_log, harness_registry, input_resolution,
-    merge_action, panic_payload_message, pipeline, prompt_augmenter, reload_run_state_with,
-    stored_autocomplete_turn_end, stored_default_harness, stored_default_harness_models,
-    stored_session_cap, tmux_session_manager, transition_guard, AppState,
+    admission, agent_profile, append_event_with, count_global_live_sessions_excluding, event_log,
+    input_resolution, merge_action, panic_payload_message, pipeline, prompt_augmenter,
+    reload_run_state_with, stored_autocomplete_turn_end, stored_default_harness,
+    stored_default_harness_models, stored_session_cap, tmux_session_manager, transition_guard,
+    AppState,
 };
 
 pub(crate) struct SpawnContext<'a> {
@@ -102,7 +104,7 @@ fn spawn_home_root(deps: &SpawnDeps<'_>) -> PathBuf {
 
 /// #553 / ADR-0063: say ONCE per `(run, harness)` that a sandboxed Run's node runs
 /// on a harness with no staging set. The message is the pure
-/// [`crate::harness_probes::staging_set_absence_note`] (so it is unit-tested
+/// [`pdo_harness::probes::staging_set_absence_note`] (so it is unit-tested
 /// there, not against a terminal); the process-static dedup keeps a busy scheduler
 /// from repeating it on every retry or collection lap. A no-op for `claude`, which
 /// declares a set.
@@ -111,7 +113,7 @@ fn warn_missing_staging_set_once(run_id: &str, harness: &str) {
     use std::sync::Mutex;
     static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
 
-    let Some(note) = crate::harness_probes::staging_set_absence_note(harness) else {
+    let Some(note) = pdo_harness::probes::staging_set_absence_note(harness) else {
         return;
     };
     let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
@@ -151,7 +153,7 @@ pub(crate) const HARNESS_BINARY_MISSING_CODE: &str = "harness_binary_missing";
 /// #613 / ADR-0051 (AC #7): say ONCE per `(run, harness)` that turn-end
 /// auto-completion is enabled but the node's harness has no end-of-turn substrate,
 /// so the setting cannot be honoured for it. The message is the pure
-/// [`crate::harness_probes::turn_end_absence_note`] (unit-tested there); the
+/// [`pdo_harness::probes::turn_end_absence_note`] (unit-tested there); the
 /// process-static dedup keeps a busy scheduler from repeating it. A no-op for
 /// `claude` (which has the substrate) and whenever the setting is off. Without this
 /// the setting was a **silent** no-op on a substrate-less harness — the very thing
@@ -161,7 +163,7 @@ fn warn_turn_end_unsupported_once(run_id: &str, harness: &str) {
     use std::sync::Mutex;
     static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
 
-    let Some(note) = crate::harness_probes::turn_end_absence_note(harness) else {
+    let Some(note) = pdo_harness::probes::turn_end_absence_note(harness) else {
         return;
     };
     let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
@@ -176,10 +178,7 @@ fn warn_turn_end_unsupported_once(run_id: &str, harness: &str) {
 /// behaved as `Inherit` for that tier rather than failing the spawn. Deduped the
 /// same way as [`warn_missing_staging_set_once`] so a busy scheduler replaying
 /// the same stale reference doesn't spam the log every retry.
-fn warn_missing_agent_profile_once(
-    run_id: &str,
-    warning: &crate::agent_choice::MissingProfileWarning,
-) {
+fn warn_missing_agent_profile_once(run_id: &str, warning: &agent_choice::MissingProfileWarning) {
     use std::collections::HashSet;
     use std::sync::Mutex;
     static SAID: Mutex<Option<HashSet<(String, String, String)>>> = Mutex::new(None);
@@ -682,7 +681,7 @@ pub(crate) async fn spawn_node(
             // descriptor tier (`~/.pdo/harnesses/`), so a harness declared in data
             // launches without a rebuild. The registry reads a root we hand it — it
             // never touches `$HOME` itself.
-            let registry = harness_registry::HarnessRegistry::load(&spawn_home_root(&deps));
+            let registry = pdo_harness::adapters::descriptor_file::load(&spawn_home_root(&deps));
             match registry.resolve(&r.harness) {
                 Some(d) => {
                     // #553 / ADR-0063: a sandboxed Run whose node runs on a harness
@@ -792,9 +791,7 @@ pub(crate) async fn spawn_node(
                     return SpawnOutcome::Failed { reason };
                 }
             }
-        } else if deps.tmux_cmd_override.is_none()
-            && !crate::harness_binary::binary_available(&d.binary)
-        {
+        } else if deps.tmux_cmd_override.is_none() && !binary_available(&d.binary) {
             return SpawnOutcome::Failed {
                 reason: format!(
                     "node {}: harness '{}' binary '{}' not found in PATH {} \
@@ -802,7 +799,7 @@ pub(crate) async fn spawn_node(
                     node.id,
                     d.name,
                     d.binary,
-                    crate::harness_binary::harness_probe_path()
+                    harness_probe_path()
                 ),
             };
         }

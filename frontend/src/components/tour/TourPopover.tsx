@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Check, Circle, Copy, LoaderCircle, X } from "lucide-react";
 import { placePopover, type PopoverSide } from "../../lib/tourPlacement";
 import type { TourRect } from "../../hooks/useTour";
-import type { TourChecklistItem, TourDef, TourStep } from "../../lib/tour";
+import type { TourChecklistItem, TourDef, TourIllustration, TourStep } from "../../lib/tour";
 
 /**
  * The instruction card of a running tour (#823).
@@ -148,6 +148,8 @@ export default function TourPopover({
         </p>
       )}
 
+      {step.illustration && <Illustration illustration={step.illustration} />}
+
       {/* A step that asks for two gestures says which one is still missing. The
           honest answer to "I ticked one and nothing happened": something did. */}
       {checklist.length > 0 && (
@@ -278,6 +280,77 @@ export default function TourPopover({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * A step's picture (#911): a mock of the Runs list, one row per status, with
+ * the dot colours the real list uses. Framed like a small panel so it reads as
+ * « what it looks like », not as rows of the real list.
+ */
+function Illustration({ illustration }: { illustration: TourIllustration }) {
+  return (
+    <ul
+      className="flex flex-col overflow-hidden rounded border border-line bg-bg-1"
+      data-testid="tour-illustration"
+      aria-label="Example"
+    >
+      {illustration.rows.map((row) => (
+        <li
+          key={row.label}
+          data-testid="tour-illustration-row"
+          className="flex items-center gap-2 border-b border-line-soft px-2 py-1 last:border-b-0"
+          style={{ fontSize: "10.5px" }}
+        >
+          <span
+            data-testid="tour-illustration-dot"
+            className={`block h-2 w-2 shrink-0 rounded-full ${row.dotClass} ${row.pulse ? "animate-pulse" : ""}`}
+          />
+          <span className="min-w-0 flex-1 truncate font-medium text-fg-2">{row.label}</span>
+          <span className="shrink-0 text-fg-4" style={{ fontSize: "9.5px" }}>
+            {row.detail}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const ASIDE_WIDTH = 190;
+
+/**
+ * A side bubble (#911): a short note pinned beside part of the panel a gesture
+ * opened. Quieter than the card — no header, no buttons, not part of the flow —
+ * and transparent to the pointer, so it never stands between the reader and the
+ * panel they are exploring.
+ */
+export function TourAside({ rect, text }: { rect: TourRect; text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState(() =>
+    placePopover(rect, { width: ASIDE_WIDTH, height: 60 }, { width: 1280, height: 800 }),
+  );
+  useLayoutEffect(() => {
+    const height = ref.current?.offsetHeight ?? 60;
+    setPlacement(
+      placePopover(rect, { width: ASIDE_WIDTH, height }, { width: window.innerWidth, height: window.innerHeight }),
+    );
+  }, [rect, text]);
+
+  return (
+    <div
+      ref={ref}
+      data-testid="tour-aside"
+      data-side={placement.side}
+      role="note"
+      className="pointer-events-none absolute rounded-md border border-acc-border bg-bg-3 px-2 py-1.5 text-fg-2 shadow-md"
+      style={{ top: placement.top, left: placement.left, width: ASIDE_WIDTH, fontSize: "10.5px", lineHeight: 1.45 }}
+    >
+      <span
+        aria-hidden="true"
+        className={`absolute h-2 w-2 rotate-45 border-acc-border bg-bg-3 ${arrowClass(placement.side)}`}
+      />
+      {text}
     </div>
   );
 }

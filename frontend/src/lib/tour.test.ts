@@ -9,15 +9,21 @@ import {
   canAdvance,
   confirmStep,
   currentStep,
+  exitOf,
+  markTidiedUp,
   needsConfirm,
   observeTour,
+  shouldTidyUp,
   skipStep,
   startTour,
+  stepAsides,
+  stepReadOnly,
   stepSoft,
   type TourAppState,
   type TourDef,
   type TourObservation,
   type TourStep,
+  type TourTidyUp,
 } from "./tour";
 
 const EMPTY_APP: TourAppState = {
@@ -28,6 +34,7 @@ const EMPTY_APP: TourAppState = {
   dirty: false,
   libraryPipelineIds: [],
   runCount: 0,
+  runs: [],
   latestRun: null,
   activeRunId: null,
 };
@@ -317,5 +324,98 @@ describe("a target that never appears", () => {
     expect(run.phase).toBe("failed");
     expect(observeTour(tour, run, obs(["#gone"]), 99_999)).toBe(run);
     expect(skipStep(tour, run, obs(["#gone"]))).toBe(run);
+  });
+});
+
+/**
+ * #911 — the teardown. The machine decides WHEN (the hook plays it): once, at any
+ * exit — the end card (a Full tour chaining on included), a clean stop, a quit —
+ * and never while the tour is under way.
+ */
+describe("tidying up", () => {
+  const TIDY: TourTidyUp = { id: "x", failureTitle: "x", run: async () => {} };
+  const tidyTour = (...steps: TourStep[]): TourDef => ({ ...tourOf(...steps), teardown: [TIDY] });
+
+  it("is due at the end card, once", () => {
+    const tour = tidyTour(step("a"));
+    let run = startTour(tour, obs(["#a"]));
+    expect(shouldTidyUp(tour, run), "not during the tour").toBe(false);
+    run = confirmStep(tour, run, obs(["#a"]));
+    expect(run.phase).toBe("finished");
+    expect(exitOf(run)).toBe("finish");
+    expect(shouldTidyUp(tour, run)).toBe(true);
+    run = markTidiedUp(run);
+    expect(shouldTidyUp(tour, run), "not a second time").toBe(false);
+    expect(shouldTidyUp(tour, run, "quit"), "not even on the way out").toBe(false);
+  });
+
+  it("is due on a clean stop: a target that never appeared", () => {
+    const tour = tidyTour(step("a"));
+    let run = startTour(tour, obs([]));
+    run = observeTour(tour, run, obs([]), 0);
+    expect(shouldTidyUp(tour, run)).toBe(false);
+    run = observeTour(tour, run, obs([]), DEFAULT_TARGET_TIMEOUT_MS);
+    expect(run.phase).toBe("failed");
+    expect(exitOf(run)).toBe("stopped");
+    expect(shouldTidyUp(tour, run)).toBe(true);
+  });
+
+  it("is due on a clean stop: a refusal", () => {
+    const tour = tidyTour(step("a", { refused: () => "no harness on PATH" }));
+    const run = observeTour(tour, startTour(tour, obs(["#a"])), obs(["#a"]), 0);
+    expect(run.phase).toBe("failed");
+    expect(shouldTidyUp(tour, run)).toBe(true);
+  });
+
+  it("is due on a quit, from a step or from the intro card", () => {
+    const tour = tidyTour(step("a"), step("b"));
+    const running = startTour(tour, obs(["#a"]));
+    expect(shouldTidyUp(tour, running, "quit")).toBe(true);
+    const intro = startTour(
+      { ...tour, intro: { title: "", body: "", footnote: "", prepare: [] } },
+      obs(),
+    );
+    expect(intro.phase).toBe("intro");
+    expect(shouldTidyUp(tour, intro)).toBe(false);
+    expect(shouldTidyUp(tour, intro, "quit")).toBe(true);
+  });
+
+  it("is never due for a tour that installs nothing", () => {
+    const tour = tourOf(step("a"));
+    const run = confirmStep(tour, startTour(tour, obs(["#a"])), obs(["#a"]));
+    expect(run.phase).toBe("finished");
+    expect(shouldTidyUp(tour, run)).toBe(false);
+    expect(shouldTidyUp(tour, run, "quit")).toBe(false);
+  });
+
+  it("starts every tour untidied", () => {
+    const tour = tidyTour(step("a"));
+    expect(startTour(tour, obs(["#a"])).tidiedUp).toBe(false);
+  });
+});
+
+// #911 — the panel a gesture opens: lit read-only, with side bubbles on it.
+describe("read-only areas and side bubbles", () => {
+  const aside = { target: "#prompt", text: "The Run's input." };
+
+  it("shows a step's side bubbles only once its condition holds", () => {
+    const s = opensNext("start", "#inspector", { asides: () => [aside] });
+    expect(stepAsides(s, obs(["#start"]))).toEqual([]);
+    expect(stepAsides(s, obs(["#start", "#inspector"]))).toEqual([aside]);
+  });
+
+  it("shows them from the start on an acknowledge step, which has nothing to wait for", () => {
+    expect(stepAsides(step("read", { asides: () => [aside] }), obs())).toEqual([aside]);
+  });
+
+  it("has neither when the step declares none", () => {
+    expect(stepAsides(step("a"), obs())).toEqual([]);
+    expect(stepReadOnly(step("a"), obs())).toEqual([]);
+  });
+
+  it("resolves the read-only areas against the observation", () => {
+    const s = step("a", { readOnly: (o) => (o.present("#panel") ? ["#panel"] : []) });
+    expect(stepReadOnly(s, obs())).toEqual([]);
+    expect(stepReadOnly(s, obs(["#panel"]))).toEqual(["#panel"]);
   });
 });

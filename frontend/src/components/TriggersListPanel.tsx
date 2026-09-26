@@ -176,6 +176,8 @@ export default function TriggersListPanel({
         } ${t.enabled ? "" : "opacity-60"}`}
         style={{ fontSize: "11.5px" }}
         data-testid="trigger-row"
+        // #911: one row addressable by id, the way `data-run-row` is for Runs.
+        data-trigger-row={t.id}
       >
         <SelectControl
           selected={rowSelected}

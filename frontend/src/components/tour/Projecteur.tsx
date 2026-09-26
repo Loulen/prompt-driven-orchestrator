@@ -1,6 +1,7 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { TourRect } from "../../hooks/useTour";
 import { relayWheel } from "../../lib/tourScroll";
+import { blockerRects } from "../../lib/tourPlacement";
 
 /**
  * The **Projecteur** (#823, CONTEXT.md § « Tours guidés ») — the overlay that dims
@@ -37,6 +38,14 @@ interface Props {
    * step that lights a panel is the one with nothing to click.
    */
   wide?: boolean;
+  /**
+   * Read-only areas lit beside the hole (#911): the panel a gesture opened. They
+   * are left uncovered like the hole — the reader scrolls and switches tabs in
+   * them — and the tour's guard (`lib/tourReadOnly.ts`) keeps their values
+   * unchanged. With any of these the four blockers give way to a cut of the
+   * viewport around every opening.
+   */
+  lit?: TourRect[];
   /** Clicking the dim quits nothing; it is absorbed. The popover goes here. */
   children?: ReactNode;
 }
@@ -55,11 +64,29 @@ function blockerStyle(rect: TourRect | null, side: "top" | "bottom" | "left" | "
   }
 }
 
-export default function Projecteur({ hole, zone, wide, children }: Props) {
+const NO_LIT: TourRect[] = [];
+
+/** The window's size, kept current: the multi-opening cut is laid out in pixels. */
+function useViewport() {
+  const [size, setSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  useEffect(() => {
+    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return size;
+}
+
+export default function Projecteur({ hole, zone, wide, lit = NO_LIT, children }: Props) {
   // The cut-out the blockers leave open. A soft step opens the whole menu.
   const opening = zone ?? hole;
   const dim = wide ? "bg-tour-dim-soft" : "bg-tour-dim";
   const rootRef = useRef<HTMLDivElement>(null);
+  const viewport = useViewport();
+  const absorb = {
+    onClick: (e: MouseEvent) => e.preventDefault(),
+    onMouseDown: (e: MouseEvent) => e.preventDefault(),
+  };
 
   // The wheel goes through, the click does not (#837). A native, non-passive
   // listener: React registers `onWheel` passively, and a passive handler cannot
@@ -85,7 +112,19 @@ export default function Projecteur({ hole, zone, wide, children }: Props) {
   // grew to match would hand the page a scroll range that belongs to nothing.
   return (
     <div ref={rootRef} className="pointer-events-none fixed inset-0 z-[120] overflow-hidden" data-testid="projecteur">
-      {opening ? (
+      {lit.length > 0 ? (
+        // Several openings (#911): the viewport cut around each of them.
+        blockerRects(opening ? [opening, ...lit] : lit, viewport).map((rect) => (
+          <div
+            key={`${rect.left}:${rect.top}`}
+            data-testid="projecteur-blocker"
+            data-projecteur-blocker=""
+            className={`pointer-events-auto absolute ${dim}`}
+            style={{ top: rect.top, left: rect.left, width: rect.width, height: rect.height }}
+            {...absorb}
+          />
+        ))
+      ) : opening ? (
         (["top", "bottom", "left", "right"] as const).map((side) => (
           <div
             key={side}
@@ -95,8 +134,7 @@ export default function Projecteur({ hole, zone, wide, children }: Props) {
             style={blockerStyle(opening, side)}
             // Absorbed, not acted on: a stray click during a tour should do
             // nothing at all — not quit, not advance, not reach the app.
-            onClick={(e) => e.preventDefault()}
-            onMouseDown={(e) => e.preventDefault()}
+            {...absorb}
           />
         ))
       ) : (
@@ -104,10 +142,19 @@ export default function Projecteur({ hole, zone, wide, children }: Props) {
           data-testid="projecteur-blocker-all"
           data-projecteur-blocker=""
           className={`pointer-events-auto absolute inset-0 ${dim}`}
-          onClick={(e) => e.preventDefault()}
-          onMouseDown={(e) => e.preventDefault()}
+          {...absorb}
         />
       )}
+
+      {/* The read-only areas: lit, outlined so the eye finds them, never a wall. */}
+      {lit.map((rect) => (
+        <div
+          key={`lit:${rect.left}:${rect.top}`}
+          data-testid="projecteur-lit"
+          className="pointer-events-none absolute rounded-md border border-dashed border-acc-border"
+          style={{ top: rect.top, left: rect.left, width: rect.width, height: rect.height }}
+        />
+      ))}
 
       {/* The dashed zone of a portal menu — a hint, never a wall. */}
       {zone && (

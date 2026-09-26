@@ -73,6 +73,9 @@ const REAPED_STATUSES = new Set(["completed", "failed", "stopped", "stale"]);
 // its `overflow: hidden` div and the last 1–2 columns are clipped at the right
 // edge. Resetting both on the container, which exists before `term.open()`,
 // makes the two measures agree. Neither the grid size nor FitAddon is at fault.
+/** Left breathing room for the grid, in px (#911). */
+const TERMINAL_INSET_PX = 4;
+
 const TERMINAL_TYPOGRAPHY_RESET = {
   letterSpacing: "normal",
   fontFeatureSettings: "normal",
@@ -262,6 +265,11 @@ export default function TmuxTerminal({
     term.loadAddon(webLinksAddon);
 
     term.open(container);
+    // #911: the grid started flush against the panel's edge, and the first
+    // column read clipped (`mplementer:`). The inset goes on xterm's own element,
+    // whose padding FitAddon subtracts — padding the container instead would be
+    // counted as grid width and push the last column out.
+    if (term.element) term.element.style.paddingLeft = `${TERMINAL_INSET_PX}px`;
     fitAddon.fit();
 
     terminalRef.current = term;

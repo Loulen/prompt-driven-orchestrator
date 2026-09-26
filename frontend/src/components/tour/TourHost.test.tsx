@@ -11,7 +11,7 @@ import { useTour } from "../../hooks/useTour";
 import { loadTourOffered, loadToursDone } from "../../lib/tourMemory";
 import { registerTransientOverlay } from "../../lib/overlays";
 import { registerCanvasReveal } from "../../lib/canvasReveal";
-import { FIRST_PIPELINE_TOUR } from "../../lib/tours";
+import { FIRST_PIPELINE_TOUR, OVERVIEW_TOUR } from "../../lib/tours";
 import type { TourDef } from "../../lib/tour";
 
 /** Two steps, so the first can complete without ending the tour. */
@@ -214,6 +214,56 @@ describe("running a tour", () => {
     tick();
     await user().click(screen.getByTestId("tour-quit"));
     expect(screen.queryByTestId("projecteur")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * #911 FP: a straight vertical edge is an SVG path whose box is zero wide —
+ * a box ignores the stroke — yet it is on screen and clickable. The tour must
+ * see it; a zero-wide HTML element still reads as not laid out.
+ */
+describe("a zero-wide target", () => {
+  const LINE_TOUR: TourDef = {
+    ...TOUR,
+    steps: [{ ...TOUR.steps[0], target: () => ["#line"], waitingFor: "the edge", targetTimeoutMs: 1_000 }],
+  };
+
+  function stubZeroWide() {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const line = this.id === "line";
+      const rect = line
+        ? { width: 0, height: 73, top: 10, left: 700, bottom: 83, right: 700, x: 700, y: 10 }
+        : { width: 10, height: 10, top: 0, left: 0, bottom: 10, right: 10, x: 0, y: 0 };
+      return { ...rect, toJSON: () => rect } as DOMRect;
+    });
+  }
+
+  it("counts a vertical SVG edge as present", async () => {
+    stubZeroWide();
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.id = "line";
+    svg.appendChild(path);
+    document.body.appendChild(svg);
+    render(<Harness tour={LINE_TOUR} />);
+    await user().click(screen.getByTestId("start"));
+    tick(2_000);
+    expect(screen.queryByTestId("tour-failed-card")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "one");
+    svg.remove();
+  });
+
+  it("still counts a zero-wide HTML element as missing", async () => {
+    stubZeroWide();
+    const div = document.createElement("div");
+    div.id = "line";
+    document.body.appendChild(div);
+    render(<Harness tour={LINE_TOUR} />);
+    await user().click(screen.getByTestId("start"));
+    tick(1_200);
+    tick(200);
+    expect(screen.getByTestId("tour-failed-card")).toBeInTheDocument();
+    div.remove();
   });
 });
 
@@ -429,7 +479,142 @@ describe("a tour starts on a clear stage", () => {
   });
 });
 
+/**
+ * #911 — the teardown: what a tour installed only to be shown (the example
+ * Trigger of *Overview*) goes away at ANY exit, exactly once, and a failure is
+ * said on the card showing at that moment.
+ */
+describe("tidying up when a tour ends", () => {
+  function tidyTour(run: () => Promise<void>): TourDef {
+    return {
+      ...TOUR,
+      teardown: [{ id: "example", failureTitle: "The example could not be removed", run }],
+    };
+  }
+
+  async function flush() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  it("tidies up when the reader quits with Escape — and not before", async () => {
+    const run = vi.fn(async () => {});
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await flush();
+    expect(run, "never while the tour is under way").not.toHaveBeenCalled();
+
+    await user().keyboard("{Escape}");
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("tidies up when the reader quits from the popover's ✕", async () => {
+    const run = vi.fn(async () => {});
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("tour-quit"));
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("tidies up once at the end card, and Finish does not play it again", async () => {
+    const run = vi.fn(async () => {});
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    await flush();
+    expect(screen.getByTestId("tour-end-card")).toBeInTheDocument();
+    expect(run).toHaveBeenCalledTimes(1);
+
+    await user().click(screen.getByTestId("tour-finish"));
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("tour-tidyup-failure")).not.toBeInTheDocument();
+  });
+
+  it("tidies up once when a Full tour chains on to its next leg", async () => {
+    const run = vi.fn(async () => {});
+    render(<Harness tour={tidyTour(run)} chain={[NEXT_TOUR]} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    await user().click(screen.getByTestId("tour-finish"));
+    tick();
+    await flush();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
+    // Quitting the next leg does not tidy the previous one a second time.
+    await user().keyboard("{Escape}");
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("tidies up on a clean stop, and says a failure on the stop card", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("DELETE /triggers/t1 failed: 500");
+    });
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    tick(6_000);
+    await flush();
+
+    expect(screen.getByTestId("tour-failed-card")).toBeInTheDocument();
+    expect(run).toHaveBeenCalledTimes(1);
+    const failure = screen.getByTestId("tour-tidyup-failure");
+    expect(failure).toHaveTextContent("The example could not be removed");
+    expect(failure).toHaveTextContent("DELETE /triggers/t1 failed: 500");
+
+    await user().click(screen.getByTestId("tour-failed-close"));
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a failure on the end card", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("daemon unreachable");
+    });
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    await flush();
+    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("daemon unreachable");
+  });
+
+  it("does nothing for a tour without a teardown", async () => {
+    render(<Harness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().keyboard("{Escape}");
+    expect(screen.queryByTestId("projecteur")).not.toBeInTheDocument();
+  });
+});
+
 describe("the welcome modal", () => {
+  /** #911 — the tour préface leads, the way the catalog orders it. */
+  it("lists Overview first", () => {
+    render(<Harness showWelcome />);
+    const rows = screen
+      .getAllByTestId(/^tour-welcome-(?!full|later|backdrop)/)
+      .map((el) => el.getAttribute("data-testid"));
+    expect(rows).toEqual(["tour-welcome-overview", "tour-welcome-first-run", "tour-welcome-first-pipeline"]);
+  });
+
   it("offers the full tour, each tour, and Later", () => {
     render(<Harness showWelcome />);
     expect(screen.getByTestId("tour-welcome-full")).toBeInTheDocument();
@@ -459,15 +644,129 @@ describe("the welcome modal", () => {
   });
 
   /**
-   * The full tour now leads with *First run* (#824, design Q6), and that tour
-   * opens on its intro card rather than on a step — its first target does not
-   * exist until the card's preparations have answered.
+   * The full tour now leads with *Overview* (#911), and that tour opens on its
+   * intro card rather than on a step — its first target, the Run, does not exist
+   * until the card's preparations have answered.
    */
-  it("the full tour sets the key too", async () => {
+  it("the full tour sets the key too, and opens on Overview", async () => {
     render(<Harness showWelcome />);
     await user().click(screen.getByTestId("tour-welcome-full"));
     expect(loadTourOffered()).toBe(true);
     tick();
-    expect(screen.getByTestId("tour-intro-card")).toBeInTheDocument();
+    expect(screen.getByTestId("tour-intro-card")).toHaveTextContent(OVERVIEW_TOUR.title);
+  });
+});
+
+// ---- #911 — the panel a gesture opens: lit, explorable, read-only -----------
+
+const PANEL_TOUR: TourDef = {
+  id: "panel",
+  title: "Panel",
+  blurb: "",
+  minutes: 1,
+  recapIntro: "",
+  recap: [],
+  steps: [
+    {
+      id: "open-panel",
+      title: "Open the panel",
+      body: "Click Open.",
+      target: () => ["#open"],
+      waitingFor: "the Open button",
+      confirm: (o) => o.present("#panel"),
+      done: (o) => o.present("#panel"),
+      readOnly: (o) => (o.present("#panel") ? ["#panel"] : []),
+      asides: () => [
+        { target: "#prompt", text: "The input this Run was started with." },
+        // Not on screen: skipped, never waited for.
+        { target: "#nowhere", text: "Never shown." },
+      ],
+    },
+    { id: "after", title: "Read on", body: "Next.", target: () => ["#open"], waitingFor: "the Open button" },
+  ],
+};
+
+function PanelHarness() {
+  const controller = useTour([]);
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState("run");
+  const [saved, setSaved] = useState(false);
+  return (
+    <>
+      <button data-testid="start" onClick={() => controller.start(PANEL_TOUR)}>
+        start
+      </button>
+      <button id="open" data-testid="open" onClick={() => setOpen(true)}>
+        open
+      </button>
+      {open && (
+        <aside id="panel" data-testid="panel">
+          <button role="tab" data-testid="tab-edit" onClick={() => setTab("edit")}>
+            Edit
+          </button>
+          <span data-testid="tab-shown">{tab}</span>
+          <textarea id="prompt" data-testid="prompt" defaultValue="original" />
+          <button data-testid="save" onClick={() => setSaved(true)}>
+            Save
+          </button>
+          {saved && <span data-testid="saved" />}
+        </aside>
+      )}
+      <TourHost controller={controller} showWelcome={false} onWelcomeAnswered={() => {}} onOpenTutorials={() => {}} />
+    </>
+  );
+}
+
+describe("a panel the gesture opened", () => {
+  it("is lit, explorable and read-only while the step is current", async () => {
+    render(<PanelHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    expect(screen.queryByTestId("projecteur-lit"), "nothing lit before the gesture").not.toBeInTheDocument();
+
+    await user().click(screen.getByTestId("open"));
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "open-panel");
+    expect(screen.getByTestId("projecteur-lit")).toBeInTheDocument();
+
+    // Typing changes nothing…
+    const prompt = screen.getByTestId<HTMLTextAreaElement>("prompt");
+    await user().type(prompt, "edited");
+    expect(prompt.value).toBe("original");
+    // …a tab still switches…
+    await user().click(screen.getByTestId("tab-edit"));
+    expect(screen.getByTestId("tab-shown")).toHaveTextContent("edit");
+    // …and a button that could save does nothing.
+    await user().click(screen.getByTestId("save"));
+    expect(screen.queryByTestId("saved")).not.toBeInTheDocument();
+  });
+
+  it("gives the panel back once the tour has moved on", async () => {
+    render(<PanelHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("open"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "after");
+    expect(screen.queryByTestId("projecteur-lit")).not.toBeInTheDocument();
+    const prompt = screen.getByTestId<HTMLTextAreaElement>("prompt");
+    await user().type(prompt, "!");
+    expect(prompt.value).toBe("original!");
+  });
+
+  it("shows side bubbles only once the step holds, skipping a target not on screen", async () => {
+    render(<PanelHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    expect(screen.queryByTestId("tour-aside"), "not before the gesture").not.toBeInTheDocument();
+
+    await user().click(screen.getByTestId("open"));
+    tick();
+    const asides = screen.getAllByTestId("tour-aside");
+    expect(asides).toHaveLength(1);
+    expect(asides[0]).toHaveTextContent("The input this Run was started with.");
+    expect(screen.queryByText("Never shown.")).not.toBeInTheDocument();
   });
 });

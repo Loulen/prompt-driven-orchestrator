@@ -56,7 +56,7 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
   ];
 
   return (
-    <aside className="start-inspector flex h-full flex-col bg-bg-2">
+    <aside className="start-inspector flex h-full flex-col bg-bg-2" data-testid="start-inspector">
       <div className="border-b border-line px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="font-medium text-fg" style={{ fontSize: "12.5px" }}>
@@ -85,6 +85,7 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
           Input
         </div>
         <pre
+          data-testid="start-input-text"
           className="start-input-text overflow-auto rounded border border-line bg-bg-0 p-2 font-mono text-fg-2"
           style={{ fontSize: "10.5px", lineHeight: "1.5", whiteSpace: "pre-wrap" }}
         >

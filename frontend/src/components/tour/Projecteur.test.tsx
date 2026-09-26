@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Projecteur from "./Projecteur";
-import TourPopover from "./TourPopover";
+import TourPopover, { TourAside } from "./TourPopover";
 import type { TourDef, TourStep } from "../../lib/tour";
 
 const HOLE = { top: 100, left: 200, width: 80, height: 40 };
@@ -97,6 +97,31 @@ describe("the Projecteur dims and absorbs", () => {
     expect(screen.queryByTestId("projecteur-hole")).not.toBeInTheDocument();
     // The panel itself stays uncovered, so the terminal in it is still usable.
     expect(px(screen.getByTestId("projecteur-blocker-left"), "width")).toBe(HOLE.left);
+  });
+  // #911 — the panel a gesture opened stays bright beside the target.
+  it("leaves a read-only panel lit beside the hole, without lighting what lies between", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1000);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(600);
+    const panel = { top: 0, left: 700, width: 300, height: 600 };
+    render(<Projecteur hole={HOLE} lit={[panel]} />);
+    const blockers = screen.getAllByTestId("projecteur-blocker").map((el) => ({
+      top: px(el, "top")!,
+      left: px(el, "left")!,
+      width: px(el, "width")!,
+      height: px(el, "height")!,
+    }));
+    const dimmed = (x: number, y: number) =>
+      blockers.some((r) => x >= r.left && x < r.left + r.width && y >= r.top && y < r.top + r.height);
+    expect(dimmed(HOLE.left + 5, HOLE.top + 5), "the target").toBe(false);
+    expect(dimmed(800, 300), "the panel").toBe(false);
+    expect(dimmed(500, 120), "between them").toBe(true);
+    expect(dimmed(5, 5), "a corner").toBe(true);
+    for (const el of screen.getAllByTestId("projecteur-blocker")) expect(el).toHaveClass("pointer-events-auto");
+    // Outlined, never a wall: the outline takes no click.
+    expect(screen.getByTestId("projecteur-lit")).toHaveClass("pointer-events-none");
+    // The ring still marks the one thing to click.
+    expect(px(screen.getByTestId("projecteur-hole"), "left")).toBe(HOLE.left);
+    vi.restoreAllMocks();
   });
 });
 
@@ -295,5 +320,46 @@ describe("the popover", () => {
   it("renders no body paragraph at all when the step has nothing left to instruct", () => {
     renderPopover(step(), { body: "" });
     expect(screen.queryByTestId("tour-body")).not.toBeInTheDocument();
+  });
+
+  // ---- #911 --------------------------------------------------------------
+
+  it("draws a step's illustration: one mock row per status, in the app's dot colours", () => {
+    renderPopover(
+      step({
+        illustration: {
+          kind: "rows",
+          rows: [
+            { label: "a", detail: "waits for you", dotClass: "bg-st-await" },
+            { label: "b", detail: "running", dotClass: "bg-st-running", pulse: true },
+            { label: "c", detail: "finished", dotClass: "bg-st-done" },
+          ],
+        },
+      }),
+    );
+    const rows = screen.getAllByTestId("tour-illustration-row");
+    expect(rows.map((r) => r.textContent)).toEqual(["awaits for you", "brunning", "cfinished"]);
+    const dots = screen.getAllByTestId("tour-illustration-dot");
+    expect(dots[0]).toHaveClass("bg-st-await");
+    expect(dots[1]).toHaveClass("bg-st-running", "animate-pulse");
+    expect(dots[2]).toHaveClass("bg-st-done");
+  });
+
+  it("draws no illustration on a step without one", () => {
+    renderPopover(step());
+    expect(screen.queryByTestId("tour-illustration")).not.toBeInTheDocument();
+  });
+});
+
+describe("a side bubble", () => {
+  it("sits beside its target, says its sentence, and never takes the pointer", () => {
+    render(<TourAside rect={HOLE} text="The input this Run was started with." />);
+    const aside = screen.getByTestId("tour-aside");
+    expect(aside).toHaveTextContent("The input this Run was started with.");
+    expect(aside).toHaveClass("pointer-events-none");
+    // No Next, no Quit: not part of the flow.
+    expect(aside.querySelector("button")).toBeNull();
+    expect(aside).toHaveAttribute("data-side", "right");
+    expect(px(aside, "left")).toBeGreaterThan(HOLE.left + HOLE.width);
   });
 });

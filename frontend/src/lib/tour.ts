@@ -47,6 +47,20 @@ export function isNodeFinished(node: TourRunNode | null): boolean {
   return node != null && TERMINAL_NODE_STATUSES.has(node.status);
 }
 
+/**
+ * One row of the Run list, narrowed to what a tour reads (#911): the *Overview*
+ * tour follows the Run its preparation made, which is not necessarily the newest
+ * one, and watches it turn `archived` under the user's own gesture.
+ */
+export interface TourRunSummary {
+  id: string;
+  name: string;
+  /** The pipeline's display name, as the list shows it. */
+  pipeline: string;
+  /** `running` | `completed` | `archived` | … — the list's own status. */
+  status: string;
+}
+
 /** The Run a tour is following — its list entry, plus the detail the inspector
  *  loaded once the user selected it (`nodes` stays empty until then). */
 export interface TourRunView {
@@ -86,6 +100,9 @@ export interface TourAppState {
    * steps that read its nodes (#825).
    */
   latestRun: TourRunView | null;
+  /** Every Run the list holds, newest first (#911) — the same list the left panel
+   *  renders, read rather than fetched (ADR-0071 §3). */
+  runs: TourRunSummary[];
   /**
    * The Run whose tab is open on the canvas, or `null` on a pipeline tab (#825).
    * Read as « did the user open the Run we are talking about », which is one tab
@@ -249,6 +266,64 @@ export interface TourStep {
   refusalTitle?: string;
   /** One sentence under the quoted reason, in the user's terms. */
   refusalHint?: string;
+  /**
+   * A small picture inside the card, under the body — for the one step whose
+   * subject cannot be shown by lighting the app (#911, after the human test): the
+   * status dot has three colours and the tour's Run only ever wears one. Data,
+   * not markup, so the popover renders it without knowing which step asked.
+   */
+  illustration?: TourIllustration;
+  /**
+   * Secondary lit areas, **read-only** (#911, after the human test): the panel
+   * a gesture just opened stays bright and explorable — tabs, scroll, folds —
+   * but nothing in it can be changed while the step is current. The step's own
+   * target keeps every click. Resolved from the observation because most of these
+   * panels only exist once the gesture they follow has been made; a selector
+   * that resolves to nothing is simply not lit.
+   */
+  readOnly?: (o: TourObservation) => string[];
+  /**
+   * Controls inside a {@link readOnly} area that only *navigate* and stay
+   * clickable: an inspector's tab buttons, a « show the prompt » fold. The engine
+   * already lets `role="tab"`, `<summary>` and plain disclosures through; this is
+   * for the app's own buttons that carry none of those markers.
+   */
+  explore?: string[];
+  /**
+   * Side bubbles (#911): once the step's condition holds, short notes pinned to
+   * other parts of what the gesture opened — the Run's prompt in the Start
+   * inspector, the condition in the edge panel. Not part of the flow: no Next,
+   * no progress, and a target that is not on screen is skipped rather than
+   * waited for.
+   */
+  asides?: (o: TourObservation) => TourAside[];
+}
+
+/** One side bubble of a step (#911). */
+export interface TourAside {
+  /** CSS selector of what the bubble points at. */
+  target: string;
+  /** One sentence, two at most. */
+  text: string;
+}
+
+/**
+ * A card illustration (#911). One shape so far — a mock list whose rows lead
+ * with a status dot, drawn with the app's own colour classes so the picture and
+ * the real list cannot disagree.
+ */
+export interface TourIllustration {
+  kind: "rows";
+  rows: {
+    /** The row's name, e.g. a Run name. */
+    label: string;
+    /** What the dot means, in the reader's words — "waits for you". */
+    detail: string;
+    /** The dot's colour class, the app's own: `bg-st-await`, `bg-st-done`… */
+    dotClass: string;
+    /** Pulse the dot, as the real list does for a live row. */
+    pulse?: boolean;
+  }[];
 }
 
 export interface TourChecklistItem {
@@ -284,7 +359,30 @@ export interface TourPreparation {
   ready: string;
   /** Headline when THIS one refuses, e.g. "The training repository could not be created". */
   failureTitle: string;
-  /** Idempotent. Rejects with the daemon's own sentence, which is quoted verbatim. */
+  /**
+   * Idempotent. Rejects with the daemon's own sentence, which is quoted verbatim.
+   *
+   * `signal` aborts when the card goes away (quit, a new start) — the one
+   * preparation that *waits* (a Run until `completed`, #911) must not go on
+   * polling for a tour nobody is looking at any more.
+   */
+  run: (signal?: AbortSignal) => Promise<void>;
+}
+
+/**
+ * The mirror of a {@link TourPreparation} (#911, ADR-0071 §4): something the
+ * preparation installed **only to be shown** — the example Trigger — and that
+ * does not belong to the user once the tour is over. Played **once**, at any exit
+ * of the tour: its end (a Full tour chaining on included), a quit, a clean stop.
+ *
+ * Idempotent like a preparation: a tab closed mid-tour skips it, and the next
+ * pass picks the object up by its name before putting it away.
+ */
+export interface TourTidyUp {
+  id: string;
+  /** Headline when it fails, e.g. "The example Trigger could not be removed". */
+  failureTitle: string;
+  /** Rejects with the daemon's own sentence, quoted on the card showing. */
   run: () => Promise<void>;
 }
 
@@ -320,6 +418,12 @@ export interface TourDef {
   steps: TourStep[];
   /** The welcome card and its preparations. Absent → the tour starts on step 1. */
   intro?: TourIntro;
+  /**
+   * What the tour puts away at any exit (#911): end, quit, clean stop. Absent or
+   * empty → nothing to tidy. The pipeline and the Run a tour leaves behind are
+   * the user's; only what exists purely to be shown belongs here.
+   */
+  teardown?: TourTidyUp[];
   /** End card headline, e.g. "You built …". */
   recapIntro: string | ((app: TourAppState) => string);
   /** End card bullets: what the thing the user just built actually does. */
@@ -360,6 +464,23 @@ export function stepNote(step: TourStep, o: TourObservation): string | null {
 /** Is the step's lit area a zone to roam in **right now** (#825)? */
 export function stepSoft(step: TourStep, o: TourObservation): boolean {
   return typeof step.soft === "function" ? step.soft(o) : step.soft === true;
+}
+
+/** The step's read-only areas right now (#911), or none. */
+export function stepReadOnly(step: TourStep, o: TourObservation): string[] {
+  return step.readOnly?.(o) ?? [];
+}
+
+/**
+ * The step's side bubbles right now (#911): only once its condition holds.
+ * Before the gesture they would point into a panel that is not open yet — or,
+ * worse, into the one it replaces. An acknowledge step (no `done`) is satisfied
+ * from the start.
+ */
+export function stepAsides(step: TourStep, o: TourObservation): TourAside[] {
+  if (!step.asides) return [];
+  if (step.done && !step.done(o)) return [];
+  return step.asides(o);
 }
 
 /** Resolve the two end-card fields, which a tour may make depend on what it saw. */
@@ -413,6 +534,8 @@ export interface TourRun {
    * — so the recap reads this rather than a live observation.
    */
   observedApp: TourAppState;
+  /** The tour's {@link TourDef.teardown} has been played (#911). Once only. */
+  tidiedUp: boolean;
 }
 
 /** A missing target stops the tour after this long, unless the step says otherwise. */
@@ -458,6 +581,7 @@ function enterStep(tour: TourDef, index: number, o: TourObservation): TourRun {
     satisfiedOnEntry: step ? isStepDone(step, o) : false,
     failure: null,
     observedApp: o.app,
+    tidiedUp: false,
   };
 }
 
@@ -475,6 +599,7 @@ export function startTour(tour: TourDef, o: TourObservation): TourRun {
     satisfiedOnEntry: false,
     failure: null,
     observedApp: o.app,
+    tidiedUp: false,
   };
 }
 
@@ -585,4 +710,39 @@ export function observeTour(tour: TourDef, run: TourRun, o: TourObservation, now
     };
   }
   return run.missingSince === missingSince ? run : { ...run, missingSince };
+}
+
+/**
+ * How a tour is being left (#911). `finish` covers a Full tour chaining on to its
+ * next leg: the end card was reached either way. `stopped` is the clean stop — a
+ * target that never appeared, a refusal — and `quit` is ✕ or Escape, which may
+ * happen in any phase, the intro card included.
+ */
+export type TourExit = "finish" | "quit" | "stopped";
+
+/** The exit a run is at, or `null` while the tour is still going. */
+export function exitOf(run: TourRun): TourExit | null {
+  if (run.phase === "finished") return "finish";
+  if (run.phase === "failed") return "stopped";
+  return null;
+}
+
+/**
+ * Is it time to play the tour's teardown (#911)? Once per tour, and only at an
+ * exit: reaching the end card or the stop card (the teardown runs *while* that
+ * card is showing, so a failure can be said on it), or quitting from anywhere.
+ * Never while the tour is still under way — the example Trigger is precisely
+ * what step 14 points at.
+ *
+ * The machine decides *when*; the effect lives in the hook.
+ */
+export function shouldTidyUp(tour: TourDef, run: TourRun, exit: TourExit | null = exitOf(run)): boolean {
+  if (!tour.teardown || tour.teardown.length === 0) return false;
+  if (run.tidiedUp) return false;
+  return exit !== null;
+}
+
+/** Record that the teardown was played, so no second exit plays it again. */
+export function markTidiedUp(run: TourRun): TourRun {
+  return run.tidiedUp ? run : { ...run, tidiedUp: true };
 }

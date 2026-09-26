@@ -1,13 +1,15 @@
 ---
 id: HP-03
-covers: [tour, tour-step, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact]
+covers: [tour, tour-step, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up]
 ---
 
 # HP-03 — A newcomer takes the full tour
 
 ## Goal
 
-Somebody opens PDO for the first time and is offered the **full tour**. Taking it, they launch a real
+Somebody opens PDO for the first time and is offered the **full tour**. Taking it, they first walk
+around the screen on a real, finished **Run** of `script` nodes (*Overview*, the tour préface), then
+they launch a real
 **Run** on a **training repository**, talk to the agent in its own session, release the **completion
 guard**, watch the node finish and read its output — then chain straight into building a pipeline of
 their own. The journey is the product's front door: if it breaks, the first five minutes of every new
@@ -33,12 +35,20 @@ Features validated while crossing the tour:
   releases it, and the release is observable in the inspector.
 - **Artifact modal** on the node's `out` port — the markdown the agent wrote.
 - **Settings › Tutorials** (#823): a checkmark per finished tour, in this browser.
+- **Preparation and tidy-up** (#911, ADR-0071 §4): *Overview* prepares the `tutorial-overview`
+  pipeline (two `script` nodes), an example Trigger whose guard always refuses, and a Run it waits
+  for until `completed` — then removes the example Trigger when the tour ends.
+- **Archiving a Run** (#911): the tour's Run is archived by the real gesture; its dot turns grey and
+  its outputs stay readable.
+- **Read-only panels** (#911): the panel a gesture opens (node inspector, edge panel, Start
+  inspector) stays lit; its tabs switch, it scrolls and unfolds, but nothing in it can be edited
+  while the tour shows it.
 
 ## Preconditions
 
 - The app is running locally and reachable in a browser; the status bar shows the daemon
   **connected**.
-- A **harness is configured and on PATH** — the tour launches a real Run with a real agent. Without
+- A **harness is configured and on PATH** — *First run* launches a real Run with a real agent. Without
   one the tour stops on its refusal card, which is correct behaviour but not this journey.
 - **A browser with no tutorial memory** (a fresh profile, or the tour keys cleared) and an instance
   **with no Run**. Both halves matter: the welcome modal is the entry point being tested.
@@ -49,38 +59,55 @@ Features validated while crossing the tour:
 
 1. Open the app on a Run-less instance in a fresh browser → the **welcome modal** offers the full
    tour, each tour on its own, and « later ».
-2. Choose the **full tour** → the *First run* tour opens on its card, which names what it is about to
-   do and shows a line per **preparation** (training repository, training pipeline). `Start` stays
-   dead until both have answered.
-3. `Start` → the first step lights the **New Run** button and nothing else; a click anywhere else
+2. Choose the **full tour** → the *Overview* tour opens on its card, with a line per
+   **preparation**: training repository, `tutorial-overview` pipeline, example Trigger, and a Run.
+   `Start` stays dead until the Run is `completed` (a few seconds: its nodes are scripts, no harness
+   involved).
+3. Walk *Overview*'s eighteen cards: open the tour's Run from the list, read the canvas and both
+   panels, click **implementer** (a side bubble names its `task` input), click its **`code`** output
+   (the viewer opens and the card stops on it for `Next`), **close the viewer** (✕ or Escape — the
+   card advances on the close), then unfold its folded **Terminal** (frozen on the script's lines),
+   click the **reviewer → End** edge (a bubble points at `verdict eq pass`), click **Start** — the
+   card says first that it shows the prompt the Run was started with, and a bubble points at that
+   input once it is open — read the Runs tab (the card sends you back to it if you left it) and the
+   status dot (the card draws the three colours: orange, blue, green), **archive** the Run (the dot
+   turns grey), open **Triggers** (the example Trigger is listed) and **Pipelines**
+   (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but not opened.
+   The gestures advance on the observed state — and stop for `Next` when the card has something new
+   to say; the rest take `Next`.
+4. The **intermediate card** recaps *Overview* and offers *Continue · First run*. **Continue** → the
+   example Trigger is gone from the Triggers tab, and the *First run* tour opens on its card, which
+   names what it is about to do and shows a line per **preparation** (training repository, training
+   pipeline). `Start` stays dead until both have answered.
+5. `Start` → the first step lights the **New Run** button and nothing else; a click anywhere else
    does nothing at all.
-4. Walk the form, doing exactly what each card asks: name the Run, pick the training repository
+6. Walk the form, doing exactly what each card asks: name the Run, pick the training repository
    through the **magnifier** (the explorer opens on the folder the tour created), choose the tutorial
    pipeline in the **pipeline menu**, pick the `Default` agent profile, tick **both** PDO skills in
    the skills picker — which stays open across the two ticks, the card's checklist ticking as you go,
    and folds back to « 2 active skills » — paste the prompt → each step advances **on the gesture**,
    with no extra confirmation but the ones the card asks for.
-5. **Launch** → the Run appears in the list on the left and the tour points at its row. Launch also
+7. **Launch** → the Run appears in the list on the left and the tour points at its row. Launch also
    opens the Run's tab by itself, so the card says so and waits for a `Next` — the step is shown,
    never skipped past.
-6. Open the **node** on the canvas → the inspector shows its live terminal.
-7. **Talk to the agent**: the card hands over a line to copy; paste it into the terminal and press
+8. Open the **node** on the canvas → the inspector shows its live terminal.
+9. **Talk to the agent**: the card hands over a line to copy; paste it into the terminal and press
    Enter. **Escape inside the terminal belongs to the agent** — it must not end the tour.
-8. Click **Mark ready for completion** → the tour advances on the released guard, not on the click.
-9. The **wait** step lights the whole inspector as a soft zone — the terminal stays readable and
+10. Click **Mark ready for completion** → the tour advances on the released guard, not on the click.
+11. The **wait** step lights the whole inspector as a soft zone — the terminal stays readable and
    usable — shows a two-item checklist (released / finished) and says it has **no time limit**. It
    ends by itself when the node's status becomes terminal.
-10. Open the node's **`out`** output → the artifact modal shows the summary the agent wrote, lit as a
+12. Open the node's **`out`** output → the artifact modal shows the summary the agent wrote, lit as a
     soft zone with the card beside it. Read it, then `Next`.
-11. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
+13. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
     and offers *Finish here* or *Continue · First pipeline*.
-12. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
+14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
     Carry it to its end card and `Finish`. Every card the tour has you create must be **on screen**
     when it asks you to click it. Every edge is drawn from the **border** of the source card (there is
     no output dot), and the two edges out of the tester carry **`out`**, its first output — if one
     carries another port, the card sends you to the edge's **Outputs** section to tick `out`, and
     only then advances.
-13. Open **Settings › Tutorials** → both tours are ticked.
+15. Open **Settings › Tutorials** → all three tours are ticked, *Overview* first.
 
 ## Checks
 
@@ -91,13 +118,24 @@ Features validated while crossing the tour:
 - At every step: the target is lit, the rest of the window is dimmed, a click outside the target
   changes nothing, and the progress reads *n / N* with the way out in the card's corner.
 - No step advances on a timer: leaving the screen alone never moves the tour on.
+- Hovering the tour Run's row on the status-dot card does **not** make the card jump: the lit
+  area keeps its place while the dot turns into the select ring.
+- The panel a gesture opened is **not dimmed**: its tabs switch and it scrolls, yet typing into
+  one of its fields, ticking a box or pressing one of its buttons changes nothing. Once the tour
+  has moved past that step, the panel is editable again.
+- The tour never walks past an open output viewer: the card after *Open its output* asks for it to
+  be closed.
 - The launched Run is real — it is in the run list, on the training repository, with a live tmux
   session, and it completes.
 - `notes.txt` in the training repository carries the line the prompt asked for, and the node's `out`
   artifact holds the agent's summary.
 - The recap names **what happened**: the Run's own name, whether the completion was released, and
   where the node got to. A node still running is never described as finished.
-- Settings › Tutorials shows a checkmark on both tours, with the day each was finished.
+- Settings › Tutorials shows a checkmark on all three tours, with the day each was finished.
+- *Overview* reaches its end **without any harness** involved: its Run's two nodes are scripts, its
+  canvas takes `implement-review`'s layout, and the Run takes reviewer → End.
+- The example Trigger is **active** while the tour shows it, yet never creates a Run, and it is gone
+  from the Triggers tab once *Overview* ends. The `tutorial-overview` pipeline stays in the Library.
 - **The handover leaves nothing behind**: after *Continue*, no artifact modal is still up, and the
   first step of *First pipeline* takes a real click — an overlay that survived the chain would dim
   into the background and eat every click the next tour asks for.

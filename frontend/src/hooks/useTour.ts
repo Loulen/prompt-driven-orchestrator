@@ -152,10 +152,17 @@ function sameRect(a: TourRect | null, b: TourRect | null): boolean {
 }
 
 /** An element the user can actually aim at: in the document AND laid out. A zero-box
- *  element (a collapsed pane, a menu mid-animation) is "not there yet" for a tour. */
+ *  element (a collapsed pane, a menu mid-animation) is "not there yet" for a tour.
+ *
+ *  SVG graphics are the exception (#911): a straight vertical edge is a path whose
+ *  box is zero wide, since a box ignores the stroke, and yet it is on screen and
+ *  clickable. One non-zero side is enough there. */
 function visible(el: Element | null): el is Element {
   if (!el) return false;
   const r = el.getBoundingClientRect();
+  if (typeof SVGElement !== "undefined" && el instanceof SVGElement) {
+    return r.width > 0 || r.height > 0;
+  }
   return r.width > 0 && r.height > 0;
 }
 

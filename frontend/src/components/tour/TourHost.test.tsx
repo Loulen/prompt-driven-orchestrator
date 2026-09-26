@@ -218,6 +218,56 @@ describe("running a tour", () => {
 });
 
 /**
+ * #911 FP: a straight vertical edge is an SVG path whose box is zero wide —
+ * a box ignores the stroke — yet it is on screen and clickable. The tour must
+ * see it; a zero-wide HTML element still reads as not laid out.
+ */
+describe("a zero-wide target", () => {
+  const LINE_TOUR: TourDef = {
+    ...TOUR,
+    steps: [{ ...TOUR.steps[0], target: () => ["#line"], waitingFor: "the edge", targetTimeoutMs: 1_000 }],
+  };
+
+  function stubZeroWide() {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const line = this.id === "line";
+      const rect = line
+        ? { width: 0, height: 73, top: 10, left: 700, bottom: 83, right: 700, x: 700, y: 10 }
+        : { width: 10, height: 10, top: 0, left: 0, bottom: 10, right: 10, x: 0, y: 0 };
+      return { ...rect, toJSON: () => rect } as DOMRect;
+    });
+  }
+
+  it("counts a vertical SVG edge as present", async () => {
+    stubZeroWide();
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.id = "line";
+    svg.appendChild(path);
+    document.body.appendChild(svg);
+    render(<Harness tour={LINE_TOUR} />);
+    await user().click(screen.getByTestId("start"));
+    tick(2_000);
+    expect(screen.queryByTestId("tour-failed-card")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "one");
+    svg.remove();
+  });
+
+  it("still counts a zero-wide HTML element as missing", async () => {
+    stubZeroWide();
+    const div = document.createElement("div");
+    div.id = "line";
+    document.body.appendChild(div);
+    render(<Harness tour={LINE_TOUR} />);
+    await user().click(screen.getByTestId("start"));
+    tick(1_200);
+    tick(200);
+    expect(screen.getByTestId("tour-failed-card")).toBeInTheDocument();
+    div.remove();
+  });
+});
+
+/**
  * *First run* step 4 (#824): the explorer opens on `/tmp`, and the step rings the
  * dialog while its listing loads, then the `pdo-tutorial` row once that row is
  * there. Keyed on the step alone, the one scroll of the step was spent on the

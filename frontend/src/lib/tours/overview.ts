@@ -6,7 +6,9 @@
  *
  * Seventeen steps, seven of them gestures that advance only on the observed state
  * (open the Run, click implementer, the reviewer → End edge, Start, archive,
- * Triggers, Pipelines); the other ten are read and acknowledged with Next.
+ * Triggers, Pipelines); the other ten are read and acknowledged with Next. Two of
+ * those ask for a click first when what they show is not on screen: the folded
+ * terminal of a finished node, and the Runs tab a reader left.
  *
  * Its intro card prepares four things through verbs that know nothing about tours
  * (ADR-0071 §3–4): the training repository, the `tutorial-overview` pipeline, an
@@ -32,6 +34,7 @@ import {
   savePipeline,
   updateTrigger,
 } from "../../api";
+import { useEditStore } from "../../stores/editStore";
 import type { NodeDef } from "../../types";
 import type { TourAppState, TourDef, TourObservation, TourRunSummary, TourStep } from "../tour";
 import { prepareRepo, TUTORIAL_REPO_PATH } from "./firstRun";
@@ -182,8 +185,9 @@ export const IMPLEMENTER_SCRIPT = `#!/usr/bin/env bash
 # tutorial-overview · implementer — a script node, so the tour needs no agent.
 set -euo pipefail
 
-echo "implementer: reading the task from Start"
-echo "implementer: an agent would edit the repository here; this script only writes its output"
+echo "implementer: reading the task"
+echo "implementer: an agent would edit the repo;"
+echo "implementer: this script only writes output"
 sleep 1
 
 cat > "$PDO_OUTPUT_CODE" <<'OUT'
@@ -193,7 +197,7 @@ Nothing to the repository: this node is a script, so the tour costs nothing.
 An agent node would have made the change here and described it in this file.
 OUT
 
-echo "implementer: wrote the code output — done"
+echo "implementer: wrote code — done"
 # Hand the output over from inside the session, then wait to be reaped. The
 # daemon freezes a node's pane when it reaps the session; the wrapper's own
 # \`pdo complete\` only runs once this script has exited — and its session with
@@ -212,8 +216,9 @@ export const REVIEWER_SCRIPT = `#!/usr/bin/env bash
 # tutorial-overview · reviewer — a script node, so the tour needs no agent.
 set -euo pipefail
 
-echo "reviewer: reading the implementer's code output"
-echo "reviewer: verdict pass — the edge to End fires"
+echo "reviewer: reading the code output"
+echo "reviewer: verdict pass — the edge to End"
+echo "reviewer: fires, the Run ends"
 sleep 1
 
 cat > "$PDO_OUTPUT_REVIEW" <<'OUT'
@@ -232,7 +237,7 @@ flowchart LR
 \`\`\`
 OUT
 
-echo "reviewer: wrote the review output — done"
+echo "reviewer: wrote review — done"
 # Hand the output over from inside the session, then wait to be reaped. The
 # daemon freezes a node's pane when it reaps the session; the wrapper's own
 # \`pdo complete\` only runs once this script has exited — and its session with
@@ -308,8 +313,15 @@ async function prepareRepoStep(): Promise<void> {
   await repoReady();
 }
 
+/**
+ * The Library list is loaded once, at mount, and the daemon announces no
+ * creation — so a pipeline this preparation just saved would stay out of the
+ * Pipelines tab until a reload, and step 15 would point at nothing (FP #911).
+ * The store is asked to re-read it, the way the New/Import buttons do.
+ */
 async function preparePipelineStep(): Promise<void> {
   await pipelineReady();
+  await useEditStore.getState().loadPipelines();
 }
 
 /**
@@ -468,6 +480,10 @@ const NEW_PIPELINE_BUTTON = testId("new-pipeline-button");
 const PIPELINE_ROW = testId(`library-row-${TUTORIAL_OVERVIEW_PIPELINE_ID}`);
 const INSPECTOR_RUN = testId("inspector-pane-run");
 const TERMINAL = testId("tmux-terminal");
+/** A finished node's terminal opens folded to this bar, to leave room for its outputs. */
+const TERMINAL_RESTORE = testId("term-restore");
+/** The Runs tab, and it is the one showing. */
+const RUNS_TAB_OPEN = `${RUNS_TAB}[aria-selected="true"]`;
 const CODE_ROW = `${testId("port-row")}[data-kind="output"][data-port="code"]`;
 const START_INSPECTOR = testId("start-inspector");
 const EDGE_PANEL = testId("edge-detail-panel");
@@ -528,6 +544,19 @@ function endEdgeIndex(app: TourAppState): number {
   const end = marker(app, "end");
   if (!reviewer || !end || !app.pipeline) return -1;
   return app.pipeline.edges.findIndex((e) => e.source.node === reviewer.id && e.target.node === end.id);
+}
+
+function implementerOpen(o: TourObservation): boolean {
+  return selectedNode(o.app, worker(o.app, "implementer")) && o.present(INSPECTOR_RUN);
+}
+
+function endEdgeOpen(o: TourObservation): boolean {
+  const i = endEdgeIndex(o.app);
+  return i >= 0 && o.app.selection.kind === "edge" && o.app.selection.edgeIndex === i && o.present(EDGE_PANEL);
+}
+
+function startOpen(o: TourObservation): boolean {
+  return selectedNode(o.app, marker(o.app, "start")) && o.present(START_INSPECTOR);
 }
 
 function isArchived(app: TourAppState): boolean {
@@ -611,7 +640,10 @@ const STEPS: TourStep[] = [
     failureHint: "It sits right under Start; scroll or zoom the canvas to bring it into view.",
     targetTimeoutMs: READING_TIMEOUT_MS,
     advanceHint: "advances when the inspector shows the node",
-    done: (o) => selectedNode(o.app, worker(o.app, "implementer")) && o.present(INSPECTOR_RUN),
+    // Once clicked the card stops for a Next: the body just changed to say what
+    // a node is, and advancing at once would flash it past (FP #911).
+    confirm: (o) => implementerOpen(o),
+    done: (o) => implementerOpen(o),
   },
   readStep({
     id: "outputs",
@@ -621,14 +653,23 @@ const STEPS: TourStep[] = [
     waitingFor: "the outputs of implementer",
     failureHint: "They are in the node's inspector on the right, under Outputs.",
   }),
-  readStep({
+  {
     id: "terminal",
     title: "Its terminal",
-    body: "Every node runs in its own terminal; this one is frozen on the lines the script printed. While a node runs it is live and interactive — you talk to the harness there, and First run shows you how.",
-    target: () => [TERMINAL],
+    // A finished node opens with its terminal folded to a bar (#346), so the
+    // step is a gesture until it is unfolded — then a card to read, with Next.
+    body: (o) =>
+      o.present(TERMINAL)
+        ? "Every node runs in its own terminal; this one is frozen on the lines the script printed. While a node runs it is live and interactive — you talk to the harness there, and First run shows you how."
+        : "Click Terminal to unfold it. Every node runs in its own terminal; a finished node's is folded to leave room for its outputs.",
+    target: (o) => (!o.present(TERMINAL) && o.present(TERMINAL_RESTORE) ? [TERMINAL_RESTORE] : [TERMINAL]),
     waitingFor: "the node's terminal",
     failureHint: "The terminal is in the Run tab of the node's inspector.",
-  }),
+    targetTimeoutMs: READING_TIMEOUT_MS,
+    advanceHint: "advances when the terminal opens",
+    confirm: (o) => o.present(TERMINAL),
+    done: (o) => o.present(TERMINAL),
+  },
   {
     id: "open-end-edge",
     title: "Click the edge reviewer → End",
@@ -636,17 +677,20 @@ const STEPS: TourStep[] = [
       o.app.selection.kind === "edge" && o.app.selection.edgeIndex === endEdgeIndex(o.app)
         ? "An edge carries conditions on its source's outputs and fires when the source finishes. This one reads verdict eq pass; the loop back to implementer reads verdict eq fail."
         : "Click the edge from reviewer down to End. An edge carries conditions on its source's outputs, and fires when the source finishes.",
+    // The edge and its condition pill: a straight edge has a zero-wide box, and
+    // the pill — which selects the edge too — gives the hole something to hold.
     target: (o) => {
       const i = endEdgeIndex(o.app);
-      return i < 0 ? [] : [`.react-flow__edge[data-id="e-${i}"]`];
+      if (i < 0) return [];
+      const edge = `.react-flow__edge[data-id="e-${i}"]`;
+      const pill = testId(`edge-condition-label-e-${i}`);
+      return o.present(pill) ? [edge, pill] : [edge];
     },
     waitingFor: "the reviewer → End edge",
     targetTimeoutMs: READING_TIMEOUT_MS,
     advanceHint: "advances when the edge is selected",
-    done: (o) => {
-      const i = endEdgeIndex(o.app);
-      return i >= 0 && o.app.selection.kind === "edge" && o.app.selection.edgeIndex === i && o.present(EDGE_PANEL);
-    },
+    confirm: (o) => endEdgeOpen(o),
+    done: (o) => endEdgeOpen(o),
   },
   {
     id: "open-start",
@@ -659,15 +703,28 @@ const STEPS: TourStep[] = [
     waitingFor: "the Start node on the canvas",
     targetTimeoutMs: READING_TIMEOUT_MS,
     advanceHint: "advances when Start is selected",
-    done: (o) => selectedNode(o.app, marker(o.app, "start")) && o.present(START_INSPECTOR),
+    confirm: (o) => startOpen(o),
+    done: (o) => startOpen(o),
   },
-  readStep({
+  {
     id: "runs-tab",
     title: "The Runs tab",
-    body: "Sort and filter your Runs here, and start a new one with New Run. The First run tour fills that form with you.",
-    target: (o) => (o.present(NEW_RUN_BUTTON) ? [RUNS_TAB, NEW_RUN_BUTTON] : [RUNS_TAB]),
+    // The three steps after this one read the Runs list: a reader who left it
+    // for Triggers or Pipelines is sent back first (FP #911).
+    body: (o) =>
+      o.present(RUNS_TAB_OPEN)
+        ? "Sort and filter your Runs here, and start a new one with New Run. The First run tour fills that form with you."
+        : "Click Runs. Your Runs are sorted and filtered there, and New Run starts one — the First run tour fills that form with you.",
+    target: (o) => {
+      if (!o.present(RUNS_TAB_OPEN)) return [RUNS_TAB];
+      return o.present(NEW_RUN_BUTTON) ? [RUNS_TAB, NEW_RUN_BUTTON] : [RUNS_TAB];
+    },
     waitingFor: "the Runs tab",
-  }),
+    targetTimeoutMs: READING_TIMEOUT_MS,
+    advanceHint: "advances when the tab opens",
+    confirm: (o) => o.present(RUNS_TAB_OPEN),
+    done: (o) => o.present(RUNS_TAB_OPEN),
+  },
   readStep({
     id: "status-dots",
     title: "The status dot",

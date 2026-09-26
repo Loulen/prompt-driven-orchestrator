@@ -47,6 +47,7 @@ import {
   removeExampleTrigger,
 } from "./overview";
 import { TUTORIAL_REPO_PATH } from "./firstRun";
+import { useEditStore } from "../../stores/editStore";
 
 vi.mock("../../api", async () => {
   const actual = await vi.importActual<typeof import("../../api")>("../../api");
@@ -89,6 +90,8 @@ const NEW_PIPELINE = t("new-pipeline-button");
 const PIPELINE_ROW = t("library-row-tutorial-overview");
 const INSPECTOR_RUN = t("inspector-pane-run");
 const TERMINAL = t("tmux-terminal");
+const TERMINAL_RESTORE = t("term-restore");
+const RUNS_TAB_OPEN = `${RUNS_TAB}[aria-selected="true"]`;
 const CODE_ROW = `${t("port-row")}[data-kind="output"][data-port="code"]`;
 const START_INSPECTOR = t("start-inspector");
 const EDGE_PANEL = t("edge-detail-panel");
@@ -113,6 +116,7 @@ const RUN_PIPELINE: PipelineDef = {
 } as unknown as PipelineDef;
 /** reviewer → End is the 4th edge of the document: the canvas keys it `e-3`. */
 const END_EDGE = `.react-flow__edge[data-id="e-3"]`;
+const END_PILL = t("edge-condition-label-e-3");
 
 const EMPTY_APP: TourAppState = {
   pipelineId: null,
@@ -173,7 +177,7 @@ class FakeApp {
     latestRun: { id: "run-other", name: "other", nodes: [] },
   };
   readonly baseline: TourAppState = { ...this.app };
-  private dom = new Set<string>([CANVAS, LEFT, RIGHT, RUNS_TAB, TRIGGERS_TAB, PIPELINES_TAB, NEW_RUN, RUN_ROW, RUN_DOT, t("open-settings"), t("open-stats")]);
+  private dom = new Set<string>([CANVAS, LEFT, RIGHT, RUNS_TAB, RUNS_TAB_OPEN, TRIGGERS_TAB, PIPELINES_TAB, NEW_RUN, RUN_ROW, RUN_DOT, t("open-settings"), t("open-stats")]);
 
   obs(): TourObservation {
     return {
@@ -201,15 +205,20 @@ class FakeApp {
   // The gestures the steps ask for, the way the real UI answers them.
   openRun() {
     this.set({ activeRunId: RUN_ID, pipelineId: `run:${RUN_ID}`, pipeline: RUN_PIPELINE });
-    this.show(node("start"), node("implementer"), node("reviewer"), node("end"), END_EDGE);
+    this.show(node("start"), node("implementer"), node("reviewer"), node("end"), END_EDGE, END_PILL);
   }
+  /** A finished node opens with its terminal folded to a bar (#346). */
   clickImplementer() {
     this.select("node", "implementer");
-    this.show(INSPECTOR_RUN, CODE_ROW, TERMINAL);
+    this.show(INSPECTOR_RUN, CODE_ROW, TERMINAL_RESTORE);
+  }
+  unfoldTerminal() {
+    this.hide(TERMINAL_RESTORE);
+    this.show(TERMINAL);
   }
   clickEndEdge() {
     this.select("edge", null, 3);
-    this.hide(INSPECTOR_RUN, CODE_ROW, TERMINAL);
+    this.hide(INSPECTOR_RUN, CODE_ROW, TERMINAL, TERMINAL_RESTORE);
     this.show(EDGE_PANEL);
   }
   clickStart() {
@@ -224,8 +233,12 @@ class FakeApp {
     this.hide(CLEANUP_MODAL);
     this.set({ runs: this.app.runs.map((r) => (r.id === RUN_ID ? { ...r, status: "archived" } : r)) });
   }
+  openRunsTab() {
+    this.hide(TRIGGERS_LIST, TRIGGER_ROW, NEW_PIPELINE, PIPELINE_ROW);
+    this.show(RUNS_TAB_OPEN, NEW_RUN, RUN_ROW, RUN_DOT);
+  }
   openTriggers() {
-    this.hide(NEW_RUN, RUN_ROW, RUN_DOT);
+    this.hide(RUNS_TAB_OPEN, NEW_RUN, RUN_ROW, RUN_DOT);
     this.show(TRIGGERS_LIST, TRIGGER_ROW);
   }
   openPipelines() {
@@ -244,7 +257,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "right-panel": read,
     "open-implementer": () => fake.clickImplementer(),
     outputs: read,
-    terminal: read,
+    terminal: () => fake.unfoldTerminal(),
     "open-end-edge": () => fake.clickEndEdge(),
     "open-start": () => fake.clickStart(),
     "runs-tab": read,
@@ -322,14 +335,16 @@ describe("walking the whole tour", () => {
     ]);
   });
 
-  it("is seventeen steps, seven of them gestures that wait on the observed state", () => {
+  it("is seventeen steps: seven gestures, and two that ask for a click only when their subject is hidden", () => {
     expect(STEPS).toHaveLength(17);
     const gestures = STEPS.filter((s) => s.done).map((s) => s.id);
     expect(gestures).toEqual([
       "open-run",
       "open-implementer",
+      "terminal",
       "open-end-edge",
       "open-start",
+      "runs-tab",
       "archive-run",
       "triggers-tab",
       "pipelines-tab",
@@ -342,6 +357,14 @@ describe("walking the whole tour", () => {
 });
 
 describe("gestures advance only on the observed state", () => {
+  /** The gesture is done: the card stays, now asking for Next, and Next moves on. */
+  function expectStopsForNext(run: TourRun, fake: FakeApp, now: number) {
+    const after = observeTour(TOUR, run, fake.obs(), now);
+    expect(after.index, "stops on the satisfied body").toBe(run.index);
+    expect(needsConfirm(TOUR, after, fake.obs())).toBe(true);
+    expect(confirmStep(TOUR, after, fake.obs()).index).toBe(run.index + 1);
+  }
+
   function at(id: string, fake: FakeApp): TourRun {
     let run = beginSteps(TOUR, startTour(TOUR, fake.obs()), fake.obs());
     // Entered on the state as it is now — not on step 1's, which the Run
@@ -375,19 +398,27 @@ describe("gestures advance only on the observed state", () => {
     fake.show(INSPECTOR_RUN);
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.clickImplementer();
-    expect(observeTour(TOUR, run, fake.obs(), 200).index).toBe(run.index + 1);
+    expectStopsForNext(run, fake, 200);
   });
 
   it("points at reviewer → End, and the loop edge does not count", () => {
     const fake = new FakeApp();
     fake.openRun();
     const run = at("open-end-edge", fake);
-    expect(stepById("open-end-edge").target(fake.obs())).toEqual([END_EDGE]);
+    expect(stepById("open-end-edge").target(fake.obs())).toEqual([END_EDGE, END_PILL]);
     fake.select("edge", null, 2); // reviewer → implementer, verdict eq fail
     fake.show(EDGE_PANEL);
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.clickEndEdge();
-    expect(observeTour(TOUR, run, fake.obs(), 200).index).toBe(run.index + 1);
+    expectStopsForNext(run, fake, 200);
+    expect(stepBody(stepById("open-end-edge"), fake.obs())).toContain("verdict eq pass");
+  });
+
+  it("lights the edge alone while its condition pill is not rendered", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.hide(END_PILL);
+    expect(stepById("open-end-edge").target(fake.obs())).toEqual([END_EDGE]);
   });
 
   it("advances on Start only once its inspector shows the Run's prompt", () => {
@@ -397,7 +428,54 @@ describe("gestures advance only on the observed state", () => {
     fake.select("node", "start");
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.show(START_INSPECTOR);
-    expect(observeTour(TOUR, run, fake.obs(), 200).index).toBe(run.index + 1);
+    expectStopsForNext(run, fake, 200);
+    expect(stepBody(stepById("open-start"), fake.obs())).toContain("shown here");
+  });
+
+  it("asks for the folded terminal to be unfolded, then stops on it for Next", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.clickImplementer();
+    const step = stepById("terminal");
+    const run = at("terminal", fake);
+    expect(step.target(fake.obs())).toEqual([TERMINAL_RESTORE]);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click Terminal/);
+    expect(needsConfirm(TOUR, run, fake.obs()), "no Next before the click").toBe(false);
+    expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
+    fake.unfoldTerminal();
+    expect(step.target(fake.obs())).toEqual([TERMINAL]);
+    expectStopsForNext(run, fake, 200);
+    expect(stepBody(step, fake.obs())).toContain("frozen");
+  });
+
+  it("does not stop the tour while the terminal is folded, however long the reader takes", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.clickImplementer();
+    const run = at("terminal", fake);
+    expect(observeTour(TOUR, run, fake.obs(), 60_000).phase).toBe("running");
+  });
+
+  it("sends a reader who left the Runs tab back to it before the steps that read the list", () => {
+    const fake = new FakeApp();
+    fake.openTriggers();
+    const step = stepById("runs-tab");
+    const run = at("runs-tab", fake);
+    expect(step.target(fake.obs())).toEqual([RUNS_TAB]);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click Runs/);
+    expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
+    fake.openRunsTab();
+    expect(step.target(fake.obs())).toEqual([RUNS_TAB, NEW_RUN]);
+    expectStopsForNext(run, fake, 200);
+  });
+
+  it("only asks for Next on the Runs tab when it is already open", () => {
+    const fake = new FakeApp();
+    const run = beginSteps(TOUR, startTour(TOUR, fake.obs()), fake.obs());
+    const entered = confirmStep(TOUR, { ...run, index: STEPS.findIndex((s) => s.id === "runs-tab") - 1, satisfiedOnEntry: true }, fake.obs());
+    expect(currentStep(TOUR, entered)?.id).toBe("runs-tab");
+    expect(entered.satisfiedOnEntry).toBe(true);
+    expect(needsConfirm(TOUR, entered, fake.obs())).toBe(true);
   });
 
   it("re-aims the archive step onto the confirmation, then waits for Next on the grey dot", () => {
@@ -458,6 +536,7 @@ describe("gestures advance only on the observed state", () => {
   it("points to First run in one sentence, from the Runs tab and the terminal", () => {
     const fake = new FakeApp();
     expect(stepBody(stepById("runs-tab"), fake.obs())).toContain("First run");
+    fake.unfoldTerminal();
     expect(stepBody(stepById("terminal"), fake.obs())).toContain("First run");
   });
 });
@@ -546,6 +625,16 @@ describe("the tutorial-overview pipeline", () => {
     await prepareStep.run();
     expect(api.createPipeline).not.toHaveBeenCalled();
     expect(api.savePipeline).not.toHaveBeenCalled();
+  });
+
+  it("makes the Library the left panel shows re-read the list, so the Pipelines step finds it", async () => {
+    const prepareStep = TOUR.intro!.prepare.find((p) => p.id === "pipeline")!;
+    useEditStore.setState({ pipelines: [] });
+    vi.mocked(api.fetchPipelines)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: TUTORIAL_OVERVIEW_PIPELINE_ID } as never]);
+    await prepareStep.run();
+    expect(useEditStore.getState().pipelines.map((p) => p.id)).toEqual([TUTORIAL_OVERVIEW_PIPELINE_ID]);
   });
 });
 

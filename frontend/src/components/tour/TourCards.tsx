@@ -384,6 +384,21 @@ export function TourEndCard({
  * reason to lose the tour that would have taught something else entirely. The
  * stopped tour is **not** marked done either way.
  */
+/**
+ * The reassurance under a stopped tour's reason. « Nothing was created » is only
+ * true of a tour with no intro preparations: *First run* and *Overview* set
+ * things up before step 1, and *Overview* puts its example Trigger away on this
+ * very card (#911). The steps themselves still only ever watch.
+ */
+function stopFootnote(tour: TourDef): string {
+  const prepared = (tour.intro?.prepare.length ?? 0) > 0;
+  if (!prepared) return "Nothing was created, changed or deleted — a tour only ever watches.";
+  const tidied = (tour.teardown?.length ?? 0) > 0;
+  return tidied
+    ? "The steps changed nothing — a tour only ever watches. What its intro prepared stays yours, except what it set up only to show you, which is removed now."
+    : "The steps changed nothing — a tour only ever watches. What its intro prepared stays yours.";
+}
+
 export function TourFailedCard({
   tour,
   failure,
@@ -444,7 +459,7 @@ export function TourFailedCard({
             but it did not appear.{failure.hint ? ` ${failure.hint}` : ""}
           </p>
           <p className="mt-1.5 text-fg-4" style={{ fontSize: "10.5px", lineHeight: 1.55 }}>
-            Nothing was created, changed or deleted — a tour only ever watches.
+            {stopFootnote(tour)}
           </p>
         </>
       )}

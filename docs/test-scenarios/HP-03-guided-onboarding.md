@@ -61,11 +61,13 @@ Features validated while crossing the tour:
    `Start` stays dead until the Run is `completed` (a few seconds: its nodes are scripts, no harness
    involved).
 3. Walk *Overview*'s seventeen cards: open the tour's Run from the list, read the canvas and both
-   panels, click **implementer** (its outputs, its frozen terminal with the script's lines), click the
-   **reviewer → End** edge (`verdict eq pass`), click **Start** (the Run's prompt), read the Runs tab
-   and the green dot, **archive** the Run (the dot turns grey), open **Triggers** (the example Trigger
-   is listed) and **Pipelines** (`tutorial-overview` is listed), then Settings and Stats, lit but not
-   opened. Only the seven gestures advance on the observed state; the rest take `Next`.
+   panels, click **implementer** (its outputs, then unfold its folded **Terminal**: frozen on the
+   script's lines), click the **reviewer → End** edge (`verdict eq pass`), click **Start** (the Run's
+   prompt), read the Runs tab (the card sends you back to it if you left it) and the green dot,
+   **archive** the Run (the dot turns grey), open **Triggers** (the example Trigger is listed) and
+   **Pipelines** (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but
+   not opened. The gestures advance on the observed state — and stop for `Next` when the card has
+   something new to say; the rest take `Next`.
 4. The **intermediate card** recaps *Overview* and offers *Continue · First run*. **Continue** → the
    example Trigger is gone from the Triggers tab, and the *First run* tour opens on its card, which
    names what it is about to do and shows a line per **preparation** (training repository, training

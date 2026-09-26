@@ -14,7 +14,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "1.111.0"
+version = "1.111.1"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"

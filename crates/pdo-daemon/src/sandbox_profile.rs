@@ -65,6 +65,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
+use ts_rs::TS;
 
 /// The virtual default that carries the full replica of the host `~/.claude`.
 pub(crate) const FULL_PROFILE: &str = "full";
@@ -87,7 +88,8 @@ pub(crate) const MAX_PROFILE_NAME_LEN: usize = 32;
 pub(crate) const SENSITIVE_PREFIXES: &[&str] = &[".ssh", ".aws", ".gnupg"];
 
 /// What an entry points at, for the editor's right-hand column.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "SandboxEntryKind")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum EntryKind {
     Dir,
@@ -860,7 +862,7 @@ pub(crate) async fn upsert(
     env: &BTreeMap<String, String>,
     image: Option<&crate::sandbox_image::ProfileImage>,
 ) -> Result<ProfileDiff, sqlx::Error> {
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     let disabled_json = serde_json::to_string(disabled).unwrap_or_else(|_| "[]".to_string());
     let extras_json = serde_json::to_string(extras).unwrap_or_else(|_| "[]".to_string());
     let env_json = serde_json::to_string(env).unwrap_or_else(|_| "{}".to_string());

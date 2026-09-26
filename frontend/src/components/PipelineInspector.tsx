@@ -1,7 +1,8 @@
 import { useEditStore } from "../stores/editStore";
 import { useWiringStore } from "../stores/wiringStore";
 import { gridStep, resolveGridSize, isGridSize } from "../lib/wiringGrid";
-import type { VariableDef } from "../types";
+import type { VariableDef } from "../shared/generated/VariableDef";
+import type { VariableType } from "../shared/generated/VariableType";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import GridSizePicker from "./GridSizePicker";
 
@@ -173,7 +174,7 @@ function VariableRow({
       />
       <select
         value={def.type}
-        onChange={(e) => onUpdate(name, { type: e.target.value })}
+        onChange={(e) => onUpdate(name, { type: e.target.value as VariableType })}
         className="rounded border border-line-strong bg-bg-4 px-1 py-0.5 text-fg-3 outline-none"
         style={{ fontSize: "10px" }}
       >

@@ -22,16 +22,10 @@ import {
   upToDate,
 } from "../lib/updateStatus";
 import { useEditStore } from "../stores/editStore";
-import type {
-  AgentChoice,
-  BoolSettingField,
-  EnumSettingFieldWithReason,
-  InstanceSettings,
-  SettingField,
-  SkillRef,
-  StringSettingField,
-  UpdateSettingsRequest,
-} from "../types";
+import type { AgentChoice } from "../shared/generated/AgentChoice";
+import type { BoolSettingField, EnumSettingFieldWithReason, InstanceSettings, SettingField, StringSettingField } from "../settings/model/settings";
+import type { SkillRef } from "../shared/generated/SkillRef";
+import type { UpdateSettingsRequest } from "../shared/generated/UpdateSettingsRequest";
 import ModelPicker from "./ModelPicker";
 import SessionCounter from "./SessionCounter";
 import HarnessSelect from "./HarnessSelect";

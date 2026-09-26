@@ -1,4 +1,4 @@
-import type { UpdateStatus } from "../types";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 /**
  * Version-check helpers (#697). The daemon does the check and caches it; the frontend

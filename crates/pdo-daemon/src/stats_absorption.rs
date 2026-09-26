@@ -57,6 +57,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
+use ts_rs::TS;
 
 use crate::AppState;
 
@@ -166,7 +167,8 @@ pub(crate) struct AbsorptionRow {
 }
 
 /// A key and the name to show for it. The UI only ever shows the name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "StatsNamed")]
 pub(crate) struct Named {
     pub key: String,
     pub name: String,
@@ -253,7 +255,7 @@ async fn combine_in(
     members: &[Named],
     origin: &str,
 ) -> Result<(), sqlx::Error> {
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     let (dimension, scope_key) = (scope.dimension, scope.key);
     sqlx::query("DELETE FROM stats_absorptions WHERE dimension = ? AND scope = ? AND member = ?")
         .bind(dimension)
@@ -1365,20 +1367,25 @@ impl PipelineTallies {
 /// One absorbed member as a row lists it: its name, and what it did in the
 /// period (`runs` always; `executions` on Sessions rows only; `provenance` on
 /// model rows only — where its id was read from, ADR-0065 §1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "StatsAbsorbedMember")]
 pub(crate) struct AbsorbedMember {
     pub key: String,
     pub name: String,
     pub runs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub executions: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub last_run: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub provenance: Option<crate::stats::StatsProvenance>,
     /// The raw scopes whose absorption holds this member — on effort and
     /// couple rows only (#906): their ✕ takes it out of every one of them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub scopes: Vec<String>,
 }
 
@@ -1386,18 +1393,21 @@ pub(crate) struct AbsorbedMember {
 
 /// One absorption as `GET /stats/absorptions` lists it: the absorbent and its
 /// members, names beside keys (the UI shows the names only).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "StatsAbsorption")]
 pub(crate) struct AbsorptionView {
     pub dimension: String,
     pub scope: String,
     /// A Node absorption's Pipeline, by name (#892) — empty on the others.
     #[serde(skip_serializing_if = "String::is_empty")]
+    #[ts(optional = nullable)]
     pub scope_name: String,
     pub absorbent: Named,
     pub members: Vec<AbsorptionMemberView>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "StatsAbsorptionMember")]
 pub(crate) struct AbsorptionMemberView {
     pub key: String,
     pub name: String,
@@ -1405,7 +1415,8 @@ pub(crate) struct AbsorptionMemberView {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "StatsAbsorptionList")]
 pub(crate) struct AbsorptionList {
     pub absorptions: Vec<AbsorptionView>,
 }

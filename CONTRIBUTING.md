@@ -81,6 +81,7 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 | Purpose | Command |
 | --- | --- |
 | Check Rust | `cargo check --workspace --all-targets` |
+| Regenerate the TS types of the DTOs | `make types` |
 | Test Rust | `cargo test --workspace` |
 | Lint Rust | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Check Rust formatting | `cargo fmt --all --check` |
@@ -89,6 +90,17 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 | Lint frontend | `cd frontend && pnpm run lint` |
 | Build frontend | `cd frontend && pnpm run build` |
 | Test the README media tooling | `node --test 'scripts/readme-media/test/*.test.mjs'` |
+
+### TypeScript types of the daemon's DTOs
+
+Every Rust struct or enum the daemon sends over HTTP or `/ws` derives `ts_rs::TS` with
+`#[ts(export)]`, and its TypeScript lives in `frontend/src/shared/generated/`, one file per type.
+Never edit those files: run `make types` after changing a serialized Rust type, and commit the
+result. `make check` fails and shows the diff when they have drifted from the Rust side.
+
+A payload the daemon still builds with `json!` has no Rust type yet: its hand-written TypeScript
+sits in the `model/` folder of its context (`frontend/src/<context>/model/`) until the context's
+migration gives it a DTO.
 
 ### Harness support table
 

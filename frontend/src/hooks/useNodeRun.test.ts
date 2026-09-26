@@ -3,7 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { useNodeRun } from "./useNodeRun";
 import * as api from "../api";
 import type { NodeIO } from "../api";
-import type { NodeState } from "../types";
+import type { NodeState } from "../shared/generated/NodeState";
 
 vi.mock("../api", () => ({
   fetchPrompt: vi.fn(),
@@ -24,7 +24,7 @@ const IO: NodeIO = {
 };
 
 function makeNode(overrides?: Partial<NodeState>): NodeState {
-  return {
+  return { frontmatter_retries: 0,
     node_id: "n1",
     status: "running",
     iter: 1,

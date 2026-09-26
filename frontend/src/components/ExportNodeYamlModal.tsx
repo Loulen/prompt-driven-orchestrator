@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Copy, Download, Check } from "lucide-react";
-import type { NodeDef } from "../types";
 import { exportNodeAsYaml } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 /**
  * Export a single node's definition as YAML (#345). Pure front-end: the YAML is
@@ -18,7 +18,7 @@ export default function ExportNodeYamlModal({
   prompt,
   onClose,
 }: {
-  node: NodeDef;
+  node: EditorNodeDef;
   prompt: string;
   onClose: () => void;
 }) {

@@ -1,6 +1,9 @@
 import { useCallback, useRef, useState } from "react";
 import { fastForwardBranch, fetchRemotes, listBranches } from "../api";
-import type { BranchFetchError, BranchList, BranchRef, FastForwardOutcome } from "../types";
+import type { BranchFetchError } from "../shared/generated/BranchFetchError";
+import type { BranchList } from "../shared/generated/BranchList";
+import type { BranchRef } from "../shared/generated/BranchRef";
+import type { FastForwardOutcome } from "../workspace/model/branches";
 
 /**
  * One repo's branches and the freshness of the numbers on them (#802, ADR-0070).

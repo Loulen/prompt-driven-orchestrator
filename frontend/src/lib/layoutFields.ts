@@ -1,11 +1,8 @@
-import type {
-  PipelineDef,
-  NodeDef,
-  PortDef,
-  EdgeDef,
-  LoopRegion,
-  NoteDef,
-} from "../types";
+import type { PortDef } from "../shared/generated/PortDef";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { LoopRegion } from "../shared/generated/LoopRegion";
+import type { NoteDef } from "../shared/generated/NoteDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 /**
  * Single owner (#355) of the emit-surface taxonomy: for every scope
@@ -42,7 +39,7 @@ export type SerializerScope =
   | "note";
 
 export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
-  pipeline: ["name", "version", "prompt_required", "variables", "nodes", "edges", "loops"] satisfies (keyof PipelineDef)[],
+  pipeline: ["name", "version", "prompt_required", "variables", "nodes", "edges", "loops"] satisfies (keyof EditorPipelineDef)[],
   // #550/ADR-0046: the harness axis replaces the flat `model`/`effort` (#296/#424)
   // the serializer used to emit. `pin_harness` and the per-harness `harnesses` map
   // are SEMANTIC — they change what runs the node and how — so they belong in the
@@ -57,12 +54,15 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // #723/ADR-0064: `orchestrator` is SEMANTIC for the same reason the backend's
   // NodeProjection already says — it changes the node's completion contract,
   // its prompt at spawn and its skills.
-  node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "orchestrator", "inputs", "outputs"] satisfies (keyof NodeDef)[],
+  // #915: `auto_fail` (the node's override of the Run's auto-fail) and a port's
+  // `required` are SEMANTIC: they change how the node completes or fails. The
+  // generated types revealed the serializer used to drop both.
+  node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "orchestrator", "auto_fail", "inputs", "outputs"] satisfies (keyof EditorNodeDef)[],
   // `side` is SEMANTIC today (emitted, not stripped) — deliberate, see #355 D5:
   // the node-library star already treats port side as identity, so the pipeline
   // diff must agree or the two stars contradict each other on the same edit.
-  inputPort: ["name", "repeated", "side", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
-  outputPort: ["name", "repeated", "side", "port_type", "frontmatter", "when", "instructions"] satisfies (keyof PortDef)[],
+  inputPort: ["name", "repeated", "required", "side", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
+  outputPort: ["name", "repeated", "required", "side", "port_type", "frontmatter", "when", "instructions"] satisfies (keyof PortDef)[],
   edge: ["source", "target", "when", "else"] satisfies (keyof EdgeDef)[],
   loopRegion: ["id", "kind", "members", "max_iter", "over"] satisfies (keyof LoopRegion)[],
   note: [], // the whole `notes` block is layout — no semantic note field
@@ -71,8 +71,8 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
 export const LAYOUT_FIELDS: Record<SerializerScope, readonly string[]> = {
   // #877 / ADR-0076: the wiring-grid size is canvas presentation — two pipelines
   // that differ only in it compare equal behind the library star.
-  pipeline: ["notes", "grid_size"] satisfies (keyof PipelineDef)[],
-  node: ["view"] satisfies (keyof NodeDef)[],
+  pipeline: ["notes", "grid_size"] satisfies (keyof EditorPipelineDef)[],
+  node: ["view"] satisfies (keyof EditorNodeDef)[],
   inputPort: [],
   outputPort: [],
   // #844: `source_anchor`/`target_anchor` say WHERE on a card's border a wire

@@ -59,7 +59,7 @@ describe("UpdateWaitingOverlay (#699)", () => {
         flow={flow({
           phase: "failed",
           error: "The update command exited with code 3.",
-          attempt: {
+          attempt: { schema: "update-attempt-v1",
             attempt_id: "a1",
             status: "failed",
             started_at: "2026-09-05T12:00:00Z",

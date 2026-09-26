@@ -2,13 +2,14 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { ChevronDown, ChevronRight, Copy, History, SquareArrowOutUpRight } from "lucide-react";
 import { DiffView, DiffModeEnum, SplitSide } from "@git-diff-view/react";
 import { useTheme } from "../../hooks/useTheme";
-import type { DiffFile, ReviewSide } from "../../types";
+import type { DiffFile } from "../../shared/generated/DiffFile";
+import type { ReviewSide } from "../../shared/generated/ReviewSide";
 import { fetchRunFileAtRef } from "../../api";
 import { baseName, fileHunks, filePath, langOf, statusLetter } from "../../lib/runRefs";
 import type { RefPair, ViewMode } from "../../lib/runRefs";
 import type { Anchor, CommentState, ReviewEntry } from "../../lib/reviewComments";
 import { commentState, entryAt, plural, stateCounts, wipKey } from "../../lib/reviewComments";
-import type { ReviewComment } from "../../types";
+import type { ReviewComment } from "../../shared/generated/ReviewComment";
 import CommentEditor from "./CommentEditor";
 import CommentCard, { Badge, StateIcon } from "./CommentCard";
 

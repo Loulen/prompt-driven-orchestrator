@@ -9,9 +9,14 @@ import {
   markerReached,
   statusForNode,
 } from "./editNodeDerivation";
-import type { NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortSide } from "../shared/generated/PortSide";
+import type { RunState } from "../shared/generated/RunState";
+import type { RunStatus } from "../shared/generated/RunStatus";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
-function makePipeline(): PipelineDef {
+function makePipeline(): EditorPipelineDef {
   return {
     name: "p",
     version: null,
@@ -66,6 +71,12 @@ function makeRunState(
   runId = "run-1",
 ): RunState {
   return {
+    loop_states: {},
+    foreach_states: {},
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
     run_id: runId,
     pipeline_name: "p",
     status: "running",
@@ -83,14 +94,15 @@ function makeRunState(
           completed_at: null,
           failure_reason: null,
           iterations: [],
+          frontmatter_retries: 0,
         },
       ]),
     ),
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
+    merge_resolver: undefined,
   };
 }
 
@@ -191,7 +203,7 @@ describe("markerReached", () => {
 });
 
 describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inline run view)", () => {
-  function makeStartEndPipeline(): PipelineDef {
+  function makeStartEndPipeline(): EditorPipelineDef {
     return {
       name: "p",
       version: null,
@@ -281,7 +293,7 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
   it("wires the run's input images onto the start node data", () => {
     const run: RunState = {
       ...makeRunState({}),
-      start_node: {
+      start_node: { input_files: [],
         input_path: "_input/output.md",
         started_at: "2026-01-01T00:00:00.000Z",
         target_node_ids: ["work"],
@@ -294,7 +306,7 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
   it("leaves the start node with no input images when the run has none", () => {
     const run: RunState = {
       ...makeRunState({}),
-      start_node: {
+      start_node: { input_files: [],
         input_path: "_input/output.md",
         started_at: "2026-01-01T00:00:00.000Z",
         target_node_ids: ["work"],
@@ -330,7 +342,7 @@ describe("formatWhenPill — condition pill text (ADR-0011)", () => {
 });
 
 describe("deriveEditEdges — condition pills always visible at midpoint (issue #144)", () => {
-  function condPipeline(): PipelineDef {
+  function condPipeline(): EditorPipelineDef {
     return {
       name: "cond",
       version: null,
@@ -398,7 +410,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
   });
 
   it("gives unconditional edges no pill", () => {
-    const pipeline: PipelineDef = {
+    const pipeline: EditorPipelineDef = {
       name: "plain",
       version: null,
       variables: {},
@@ -436,7 +448,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
 });
 
 describe("deriveEditEdges — incoming edge anchor side (issue #168)", () => {
-  function emergentPipeline(targetSide?: PortSide): PipelineDef {
+  function emergentPipeline(targetSide?: PortSide): EditorPipelineDef {
     return {
       name: "anchor",
       version: null,
@@ -489,7 +501,7 @@ describe("deriveEditEdges — incoming edge anchor side (issue #168)", () => {
 });
 
 describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () => {
-  function regionPipeline(maxIter: number | string | null = 3): PipelineDef {
+  function regionPipeline(maxIter: number | string | null = 3): EditorPipelineDef {
     return {
       name: "loop-region-review-loop",
       version: "1.0",
@@ -602,7 +614,7 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
 });
 
 describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () => {
-  function regionPipeline(): PipelineDef {
+  function regionPipeline(): EditorPipelineDef {
     return {
       name: "loop-region-review-loop",
       version: "1.0",
@@ -716,7 +728,7 @@ describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () =
 });
 
 describe("buildNoteNodes — inert canvas notes (#307 / ADR-0018)", () => {
-  function notePipeline(): PipelineDef {
+  function notePipeline(): EditorPipelineDef {
     return {
       name: "with-notes",
       version: "1.0",
@@ -756,7 +768,7 @@ describe("buildNoteNodes — inert canvas notes (#307 / ADR-0018)", () => {
   });
 
   it("falls back to a default position when a note has no view", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       version: "1.0",
       variables: {},
@@ -770,7 +782,7 @@ describe("buildNoteNodes — inert canvas notes (#307 / ADR-0018)", () => {
   });
 
   it("produces no note nodes when the pipeline has none", () => {
-    const p: PipelineDef = { name: "p", version: "1.0", variables: {}, nodes: [], edges: [] };
+    const p: EditorPipelineDef = { name: "p", version: "1.0", variables: {}, nodes: [], edges: [] };
     expect(buildNoteNodes(p)).toHaveLength(0);
   });
 });

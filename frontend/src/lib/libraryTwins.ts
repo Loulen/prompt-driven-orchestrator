@@ -14,7 +14,7 @@
  * staying in step.
  */
 import type { LibraryPipelineEntry } from "../api";
-import type { PipelineListEntry } from "../types";
+import type { PipelineScope } from "../pipeline/model/pipeline";
 
 /**
  * The one join key: same display name. Never `id` — see the module note. Every
@@ -48,7 +48,7 @@ export function libraryTwins(
  *     destroy is exactly the mistake a cascade must never make.
  */
 export function cascadableTwin(
-  target: Pick<PipelineListEntry, "name" | "scope"> | null,
+  target: { name: string; scope: PipelineScope } | null,
   library: LibraryPipelineEntry[],
 ): LibraryPipelineEntry | null {
   if (target == null) return null;

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Star } from "lucide-react";
-import type { PipelineDef } from "../types";
 import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";
 import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { serializePipeline } from "../lib/serializePipeline";
 import type { PipelineLibrarySyncState } from "../hooks/useLibraryPipelines";
-import { Tooltip } from "./ui/tooltip";
+import { Tooltip } from "../shared/ui/tooltip";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 const TOOLTIPS: Record<PipelineLibrarySyncState, string> = {
   outline: "Save pipeline to library",
@@ -16,7 +16,7 @@ const TOOLTIPS: Record<PipelineLibrarySyncState, string> = {
 
 interface Props {
   tabId: string;
-  pipeline: PipelineDef;
+  pipeline: EditorPipelineDef;
   syncState: PipelineLibrarySyncState;
   libraryEntry: LibraryPipelineEntry | null;
   onLibraryChanged: () => void;

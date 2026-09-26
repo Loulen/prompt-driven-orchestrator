@@ -2,9 +2,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import NoteInspector from "./NoteInspector";
 import { useEditStore } from "../stores/editStore";
-import type { PipelineDef, NoteDef } from "../types";
+import type { NoteDef } from "../shared/generated/NoteDef";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
-function makePipeline(notes: NoteDef[]): PipelineDef {
+function makePipeline(notes: NoteDef[]): EditorPipelineDef {
   return {
     name: "test-pipeline",
     variables: {},

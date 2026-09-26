@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 import { Check, Copy, Download, SlidersHorizontal, TriangleAlert, WifiOff } from "lucide-react";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import { fetchUpdateChangelog } from "../api";
-import type { UpdateChangelog, UpdateStatus } from "../types";
+import type { UpdateChangelog } from "../shared/generated/UpdateChangelog";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 /**
  * « What's new » (#698): the changelog of the versions missed since the installed one,

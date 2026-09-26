@@ -4,31 +4,35 @@ import userEvent from "@testing-library/user-event";
 import NewRunModal from "./NewRunModal";
 import { mergeAttachments, overLimitIndices } from "../lib/attachments";
 import { useEditStore } from "../stores/editStore";
-import type {
-  BranchList,
-  BranchRef,
-  InstanceSettings,
-  PipelineListEntry,
-  Trigger,
-} from "../types";
+import type { BranchList } from "../shared/generated/BranchList";
+import type { BranchRef } from "../shared/generated/BranchRef";
+import type { InstanceSettings } from "../settings/model/settings";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { Trigger } from "../shared/generated/Trigger";
+import { legacyScope } from "../test/legacy";
 
 // #571: a branch is `{name, kind}`. Terse constructors for fixtures.
-const local = (name: string): BranchRef => ({ name, kind: "local" });
-const remote = (name: string): BranchRef => ({ name, kind: "remote" });
+const local = (name: string): BranchRef => ({ upstream: null, ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false, name, kind: "local" });
+const remote = (name: string): BranchRef => ({ upstream: null, ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false, name, kind: "remote" });
 
 /** #802: both branch verbs answer the list PLUS the date it is good as of. */
 function branchList(branches: BranchRef[], over: Partial<BranchList> = {}): BranchList {
   return { branches, last_fetch_at: null, fetch_error: null, ...over };
 }
 
-const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListEntry => ({
+// `drifted` is a legacy field an older daemon sent; the drift tests pin that
+// the modal ignores it.
+const makePipeline = (
+  overrides: Partial<PipelineListEntry> & { drifted?: boolean } = {},
+): PipelineListEntry => ({
   id: "test-pipe",
   name: "Test Pipeline",
-  scope: "repo",
+  scope: legacyScope("repo"),
   path: "/repo/.pdo/pipelines/test-pipe.yaml",
   node_count: 3,
   modified: null,
   variables: {},
+  prompt_required: true,
   ...overrides,
 });
 
@@ -229,7 +233,7 @@ describe("NewRunModal — pipeline picker", () => {
 
   it("does not group legacy-scoped responses", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: "library" }),
+      makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: legacyScope("library") }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -243,8 +247,8 @@ describe("NewRunModal — pipeline picker", () => {
 
   it("shows one flat instance pipeline list", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: "library" }),
-      makePipeline({ id: "repo-pipe", name: "Repo Pipeline", scope: "repo" }),
+      makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: legacyScope("library") }),
+      makePipeline({ id: "repo-pipe", name: "Repo Pipeline", scope: legacyScope("repo") }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -271,8 +275,8 @@ describe("NewRunModal — pipeline picker", () => {
 
   it("pre-selects the first repo pipeline when available", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "first-repo", name: "First Repo", scope: "repo" }),
-      makePipeline({ id: "lib-pipe", name: "Lib", scope: "library" }),
+      makePipeline({ id: "first-repo", name: "First Repo", scope: legacyScope("repo") }),
+      makePipeline({ id: "lib-pipe", name: "Lib", scope: legacyScope("library") }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -289,7 +293,7 @@ describe("NewRunModal — pipeline filter", () => {
   const threePipelines = [
     makePipeline({ id: "implement-loop", name: "implement-loop", scope: "instance" }),
     makePipeline({ id: "review-loop", name: "review-loop", scope: "instance" }),
-    makePipeline({ id: "grill-and-spec", name: "grill-and-spec", scope: "repo" }),
+    makePipeline({ id: "grill-and-spec", name: "grill-and-spec", scope: legacyScope("repo") }),
   ];
 
   it("opens on the full list with the filter focused", async () => {
@@ -517,7 +521,7 @@ describe("NewRunModal — pipeline filter", () => {
 describe("NewRunModal — drift indicator", () => {
   it("does not show legacy drift decorations", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "drifted", name: "Drifted Pipe", scope: "library", drifted: true }),
+      makePipeline({ id: "drifted", name: "Drifted Pipe", scope: legacyScope("library"), drifted: true }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -530,7 +534,7 @@ describe("NewRunModal — drift indicator", () => {
 
   it("does not show a library star", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "synced", name: "Synced Pipe", scope: "library", drifted: false }),
+      makePipeline({ id: "synced", name: "Synced Pipe", scope: legacyScope("library"), drifted: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -543,7 +547,7 @@ describe("NewRunModal — drift indicator", () => {
 
   it("does not prefix a pipeline name with a legacy drift warning", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "drifted", name: "Drifted Pipe", scope: "library", drifted: true }),
+      makePipeline({ id: "drifted", name: "Drifted Pipe", scope: legacyScope("library"), drifted: true }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -643,7 +647,7 @@ describe("NewRunModal — multi-repo form flow", () => {
   // as `source_branch` VERBATIM — prefix and all — never stripped to a bare name.
   it("launches a remote branch verbatim, prefix and all (#571)", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
     ]);
     listBranchesReturns([
       local("main"),
@@ -686,7 +690,7 @@ describe("NewRunModal — multi-repo form flow", () => {
      */
     it("launches against the re-selected branch, not the stale one", async () => {
       vi.mocked(fetchPipelines).mockResolvedValue([
-        makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+        makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
       ]);
       listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
       renderModal();
@@ -722,7 +726,7 @@ describe("NewRunModal — multi-repo form flow", () => {
      */
     it("keeps the user's branch when the new repo still has it", async () => {
       vi.mocked(fetchPipelines).mockResolvedValue([
-        makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+        makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
       ]);
       listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
       renderModal();
@@ -753,7 +757,7 @@ describe("NewRunModal — multi-repo form flow", () => {
   it("passes target_repo and source_branch to createRun on launch", async () => {
     const onCreated = vi.fn();
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Test Pipeline", scope: "repo" }),
+      makePipeline({ id: "p1", name: "Test Pipeline", scope: legacyScope("repo") }),
     ]);
 
     render(
@@ -793,7 +797,7 @@ describe("NewRunModal — multi-repo form flow", () => {
 
   it("keeps Launch disabled with an empty prompt for a prompt-required pipeline", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Required Pipeline", scope: "repo", prompt_required: true }),
+      makePipeline({ id: "p1", name: "Required Pipeline", scope: legacyScope("repo"), prompt_required: true }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -804,7 +808,7 @@ describe("NewRunModal — multi-repo form flow", () => {
 
   it("enables Launch with an empty prompt for a prompt-optional pipeline", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -817,7 +821,7 @@ describe("NewRunModal — multi-repo form flow", () => {
 
   it("launches a prompt-optional pipeline with empty input", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -1230,7 +1234,7 @@ describe("NewRunModal — form persistence across close/reopen", () => {
 
   it("preserves target repo and pipeline selection across close/reopen", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "My Pipeline", scope: "repo" }),
+      makePipeline({ id: "p1", name: "My Pipeline", scope: legacyScope("repo") }),
     ]);
 
     const { rerender } = render(
@@ -1272,7 +1276,7 @@ describe("NewRunModal — form persistence across close/reopen", () => {
   it("resets form fields after successful launch", async () => {
     const onCreated = vi.fn();
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Test Pipeline", scope: "repo" }),
+      makePipeline({ id: "p1", name: "Test Pipeline", scope: legacyScope("repo") }),
     ]);
 
     const { rerender } = render(
@@ -1361,7 +1365,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
 
   it("seeds the checkbox OFF (and enables the name input) when the instance default is off", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(false));
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
     renderModal();
 
     const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
@@ -1373,7 +1377,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
 
   it("keeps the checkbox ON when the instance default is on", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
     renderModal();
     const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
     await waitFor(() => expect(checkbox.checked).toBe(true));
@@ -1382,7 +1386,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
   it("launches with auto_name:true by default", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Optional", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Optional", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -1398,7 +1402,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
   it("unchecking sends auto_name:false with the typed name", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Optional", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Optional", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -1421,7 +1425,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
   it("carries the auto_name choice into a created Trigger", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -1449,7 +1453,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
 describe("NewRunModal — Trigger mode (#160)", () => {
   async function selectPipelineAndRepo() {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -1539,7 +1543,7 @@ describe("NewRunModal — Trigger mode (#160)", () => {
     // A pipeline that requires a prompt; with no guard and no input template,
     // the modal must disable Create and explain why, mirroring the server reject.
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Needs Prompt", scope: "repo", prompt_required: true }),
+      makePipeline({ id: "p1", name: "Needs Prompt", scope: legacyScope("repo"), prompt_required: true }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -1651,7 +1655,7 @@ describe("NewRunModal — Trigger mode (#160)", () => {
 describe("NewRunModal — Test guard dry-run (#350)", () => {
   async function enterTriggerMode(promptRequired = false) {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: promptRequired }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: promptRequired }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -1799,7 +1803,7 @@ describe("NewRunModal — Test guard dry-run (#350)", () => {
 });
 
 describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
-  const sampleTrigger = {
+  const sampleTrigger: Trigger = {
     id: "trg-9",
     name: "Nightly audit",
     pipeline_id: "p1",
@@ -1809,19 +1813,19 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
     input_template: "audit the codebase",
     variables: {},
     cron: "*/15 * * * *",
-    guard_command: null,
+    guard_command: undefined,
     overlap_policy: "allow",
     auto_name: true,
     enabled: true,
-    next_fire_at: null,
-    last_fired_at: null,
-    last_outcome: null,
+    next_fire_at: undefined,
+    last_fired_at: undefined,
+    last_outcome: undefined,
   };
 
   beforeEach(() => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
-      makePipeline({ id: "p2", name: "Bugfixer", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+      makePipeline({ id: "p2", name: "Bugfixer", scope: legacyScope("repo"), prompt_required: false }),
     ]);
   });
 
@@ -1954,7 +1958,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
 });
 
 describe("NewRunModal — open-intent reset (#386)", () => {
-  const trigger = {
+  const trigger: Trigger = {
     id: "trg-9",
     name: "Nightly audit",
     pipeline_id: "p1",
@@ -1964,13 +1968,13 @@ describe("NewRunModal — open-intent reset (#386)", () => {
     input_template: "audit the codebase",
     variables: {},
     cron: "*/15 * * * *",
-    guard_command: null,
+    guard_command: undefined,
     overlap_policy: "allow",
     auto_name: true,
     enabled: true,
-    next_fire_at: null,
-    last_fired_at: null,
-    last_outcome: null,
+    next_fire_at: undefined,
+    last_fired_at: undefined,
+    last_outcome: undefined,
   };
 
   it("edit → close → open(run) reopens as a clean New Run (kills the stale Edit-Trigger)", async () => {
@@ -2047,8 +2051,8 @@ describe("NewRunModal — open-intent reset (#386)", () => {
 
   it("edit → close → open(run) clears the shared draft carried from the trigger (#386 Part 2)", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
-      makePipeline({ id: "p2", name: "Bugfixer", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+      makePipeline({ id: "p2", name: "Bugfixer", scope: legacyScope("repo"), prompt_required: false }),
     ]);
 
     const { rerender } = render(
@@ -2123,7 +2127,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
         default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off", reason: null },
       }),
     );
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
     renderModal();
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
     await waitFor(() => {
@@ -2144,7 +2148,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       }),
     );
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "P", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "P", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -2179,7 +2183,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       }),
     );
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -2201,10 +2205,10 @@ describe("NewRunModal — sandbox selector (#410)", () => {
 
   it("offers a 'use instance default' option in trigger mode and sends null when picked", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     // A trigger whose sandbox is set to `minimal` — prefills the select to `minimal`.
-    const trigger = {
+    const trigger: Trigger = {
       id: "trg-sbx",
       name: "Nightly",
       pipeline_id: "p1",
@@ -2214,14 +2218,14 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       input_template: "audit",
       variables: {},
       cron: "0 9 * * *",
-      guard_command: null,
+      guard_command: undefined,
       overlap_policy: "skip",
       sandbox: "minimal",
       auto_name: true,
       enabled: true,
-      next_fire_at: null,
-      last_fired_at: null,
-      last_outcome: null,
+      next_fire_at: undefined,
+      last_fired_at: undefined,
+      last_outcome: undefined,
     };
     render(
       <NewRunModal open={true} onClose={noop} onCreated={noop}
@@ -2261,7 +2265,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
         ],
       }),
     );
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
     renderModal();
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
     await waitFor(() =>
@@ -2288,9 +2292,9 @@ describe("NewRunModal — sandbox selector (#410)", () => {
   it("tombstones a trigger's vanished profile and blocks the save", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
     ]);
-    const trigger = {
+    const trigger: Trigger = {
       id: "trg-gone",
       name: "Nightly",
       pipeline_id: "p1",
@@ -2300,15 +2304,15 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       input_template: "audit",
       variables: {},
       cron: "0 9 * * *",
-      guard_command: null,
+      guard_command: undefined,
       overlap_policy: "skip",
       // Materialised once, deleted since — the only way to get a dangling reference.
       sandbox: "full-no-mcp",
       auto_name: true,
       enabled: true,
-      next_fire_at: null,
-      last_fired_at: null,
-      last_outcome: null,
+      next_fire_at: undefined,
+      last_fired_at: undefined,
+      last_outcome: undefined,
     };
     render(
       <NewRunModal open={true} onClose={noop} onCreated={noop}
@@ -2332,7 +2336,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
 
   it("does not tombstone `off`, which is never a profile", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
     renderModal();
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
     await waitFor(() => expect(Array.from(select.options).length).toBeGreaterThan(1));
@@ -2343,7 +2347,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
 
   it("does not tombstone the inherit sentinel either", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
     renderModal();
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
     await waitFor(() => expect(Array.from(select.options).length).toBeGreaterThan(1));
@@ -2353,7 +2357,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
 
   describe("Manage staging profiles opens Settings on the section (#691)", () => {
     it("renders the link on the Sandbox label row only when a host wires it, and calls it", async () => {
-      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
       const onManage = vi.fn();
       const { unmount } = render(
         <NewRunModal open onClose={noop} onCreated={noop} onManageStagingProfiles={onManage} />,
@@ -2376,7 +2380,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
 
     it("refetches settings on pdo:settings-changed so a profile created in Settings is offered without reload", async () => {
       vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
-      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
       render(<NewRunModal open onClose={noop} onCreated={noop} onManageStagingProfiles={noop} />);
       const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
       await waitFor(() =>
@@ -2477,7 +2481,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
 
   beforeEach(() => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
     ]);
   });
 
@@ -2671,23 +2675,23 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
     pipeline_id: "p1",
     pipeline_name: "Auditor",
     // A pre-#470 Trigger: nobody ever named a repo for it (ADR-0033).
-    target_repo: null,
-    source_branch: null,
+    target_repo: undefined,
+    source_branch: undefined,
     input_template: "audit the codebase",
     variables: {},
     cron: "*/15 * * * *",
-    guard_command: null,
+    guard_command: undefined,
     overlap_policy: "skip",
     auto_name: true,
     enabled: true,
-    next_fire_at: null,
-    last_fired_at: null,
-    last_outcome: null,
+    next_fire_at: undefined,
+    last_fired_at: undefined,
+    last_outcome: undefined,
   };
 
   it("resets the repo verdict when editing a Trigger with no target repo", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
     ]);
 
     // 1. Open New Run and validate a real repo, so `repoValid === true`.
@@ -2727,7 +2731,7 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
 
   it("surfaces the daemon's refusal inline when createRun rejects", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     vi.mocked(createRun).mockRejectedValueOnce(
       new Error(
@@ -2760,7 +2764,7 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
 describe("NewRunModal — multi-repo (#465)", () => {
   it("sends target_repos of length 2 with [0]=primary when a secondary is added", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
     ]);
     renderModal();
     await enterValidRepo("/home/user/primary");
@@ -2812,7 +2816,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
 
   it("marks a secondary read_only when its checkbox is ticked (ADR-0047)", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
     ]);
     renderModal();
     await enterValidRepo("/home/user/primary");
@@ -2850,7 +2854,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
   // primary's.
   it("sends a secondary's remote base_branch verbatim (#571)", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
     ]);
     listBranchesReturns([
       local("main"),
@@ -2894,7 +2898,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
   // primary's.
   it("sends a secondary's remote base_branch verbatim (#571)", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
     ]);
     listBranchesReturns([
       local("main"),
@@ -2935,7 +2939,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
 
   it("omits target_repos for a mono-repo launch (no secondary rows)", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
     ]);
     renderModal();
     await enterValidRepo("/home/user/only");
@@ -2958,7 +2962,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
 
   it("keeps Launch disabled while a secondary row is invalid", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
     ]);
     renderModal();
     await enterValidRepo("/home/user/primary");
@@ -3022,7 +3026,7 @@ describe("NewRunModal — harness selector (#551)", () => {
         default_harness: { effective: "opencode", source: "stored", stored: "opencode", env: null, default: null },
       }),
     );
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderModal();
     // The closed trigger shows the inherit label — never the copied default value.
@@ -3040,7 +3044,7 @@ describe("NewRunModal — harness selector (#551)", () => {
 
   it("names the claude floor when the instance sets no default", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
-    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderModal();
     await user.click(await screen.findByTestId("harness-select"));
@@ -3052,7 +3056,7 @@ describe("NewRunModal — harness selector (#551)", () => {
   it("passes the chosen harness to createRun", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -3075,7 +3079,7 @@ describe("NewRunModal — harness selector (#551)", () => {
   it("omits the harness key when left on the inherit default", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     renderModal();
     await enterValidRepo();
@@ -3094,7 +3098,7 @@ describe("NewRunModal — harness selector (#551)", () => {
   it("round-trips a Trigger's harness and clears it to null on reset", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     const trigger: Trigger = {
       id: "trg-hns",
@@ -3106,14 +3110,14 @@ describe("NewRunModal — harness selector (#551)", () => {
       input_template: "audit",
       variables: {},
       cron: "0 9 * * *",
-      guard_command: null,
+      guard_command: undefined,
       overlap_policy: "skip",
       harness: "opencode",
       auto_name: true,
       enabled: true,
-      next_fire_at: null,
-      last_fired_at: null,
-      last_outcome: null,
+      next_fire_at: undefined,
+      last_fired_at: undefined,
+      last_outcome: undefined,
     };
     render(
       <NewRunModal open={true} onClose={noop} onCreated={noop}
@@ -3154,7 +3158,7 @@ describe("NewRunModal — harness selector (#551)", () => {
  * cannot move it.
  */
 describe("NewRunModal — a Trigger's source branch warns on a local one (#804)", () => {
-  const tracked = (name: string): BranchRef => ({
+  const tracked = (name: string): BranchRef => ({ ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false,
     name,
     kind: "local",
     upstream: `origin/${name}`,
@@ -3162,7 +3166,7 @@ describe("NewRunModal — a Trigger's source branch warns on a local one (#804)"
 
   async function openWithBranches() {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
     ]);
     listBranchesReturns([tracked("main"), remote("origin/feature-remote-only")]);
     renderModal();

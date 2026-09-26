@@ -45,24 +45,36 @@ Frontend: `frontend/src/<context>/{api,model,store,components}/`, plus `shared/`
 
 ## Rules checked by the test suite
 
-- **Architecture test.** A `domain/` module imports nothing technical and no `adapters::`.
-- **File size.** A production file has **at most 400 lines**. Tests are not counted. Files that
-  are still too big are listed in a baseline that may only shrink.
+- **Architecture test.** A `domain/` module imports nothing technical and no `adapters::`: no
+  sqlx, no axum, no `tokio::process` (`crates/pdo/tests/architecture.rs`, proven on the fixtures
+  of `crates/pdo/tests/fixtures/architecture/`).
+- **File size.** A production file has **at most 400 lines**, Rust and TypeScript. Tests are not
+  counted (`tests/`, a `#[cfg(test)]` module, `*.test.ts(x)`), nor is `shared/generated/`. Files
+  that are still too big are listed with their size in `crates/pdo/tests/file_size_baseline.txt`,
+  a list that may only shrink: remove a line once its file is back within the limit, never add
+  one (`crates/pdo/tests/file_size.rs`).
+- **Typed contract.** Every DTO sent over HTTP or `/ws` derives `ts_rs::TS` with
+  `#[ts(export)]`; `make types` writes `frontend/src/shared/generated/`, and `make check` fails
+  when it drifts from the Rust types.
 - **Route coverage.** Every route of the assembled router has at least one HTTP-level test,
-  method by method (`crates/pdo-daemon/tests/route_coverage.rs`). It reads the router's
+  method by method (`crates/pdo/tests/route_coverage.rs`). It reads the router's
   `.route(…)` calls and the URL literals of `tests/`. Write the call so the method is readable
   (`client.post(format!("{}/runs", …))`). When the router moves, point the test's
   `ROUTER_SOURCES` at its new home.
 
 ## During the migration
 
-The legacy `crates/pdo-daemon` crate is strangled one context at a time. It only shrinks: new
+The legacy crate (`crates/pdo-daemon`, package `pdo-legacy`, library still `pdo_daemon`) is
+strangled one context at a time. It only shrinks: new
 behaviour goes into the context crate once that crate exists. While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
-legacy crate.
+legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package
+`pdo-daemon`: dist names the installer after it), which exposes `serve(config, extensions)` and
+delegates to the legacy crate. The daemon's integration tests (stage 4) live there too, in
+`crates/pdo/tests/`, and every test daemon goes through the same `identify` head as `pdo daemon`.
 
 The HTTP and WebSocket contract stays frozen for the whole migration. A temporary suite,
-`crates/pdo-daemon/tests/snapshots_temporary/`, plays eight business scenarios against the real
+`crates/pdo/tests/snapshots_temporary/`, plays eight business scenarios against the real
 daemon and freezes every response and every `/ws` message as a masked `insta` snapshot. A move
 that changes one field turns it red. It is deleted with the legacy crate (#932). Refresh it only
 for a deliberate contract change: `INSTA_UPDATE=always cargo nextest run -E

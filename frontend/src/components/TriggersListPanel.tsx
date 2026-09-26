@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { AlertCircle, PauseCircle, Pencil, Play, Plus, Power, Trash2, Zap } from "lucide-react";
-import type { Trigger, Project } from "../types";
+import type { Trigger } from "../shared/generated/Trigger";
+import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
+import type { Project } from "../shared/generated/Project";
 import { deleteTrigger, updateTrigger } from "../api";
 import { humanizeCron } from "../cronPresets";
 import { groupByProject, repoGroupLabel, type ProjectRef } from "../lib/groupByRepo";
@@ -14,7 +16,7 @@ import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
 
 interface Props {
-  triggers: Trigger[];
+  triggers: TriggerListEntry[];
   selectedTriggerId: string | null;
   onSelectTrigger: (triggerId: string) => void;
   onNewTrigger: () => void;
@@ -303,7 +305,7 @@ export default function TriggersListPanel({
   };
 
   // The group-header "select all in this repo" control (#577).
-  function renderGroupSelectAll(group: { items: Trigger[]; label: string }) {
+  function renderGroupSelectAll(group: { items: TriggerListEntry[]; label: string }) {
     const groupIds = group.items.map((t) => t.id);
     const groupSelected = groupIds.length > 0 && groupIds.every((id) => selSet.has(id));
     return (

@@ -1,0 +1,72 @@
+[package]
+# The composition root (ADR-0079): the one place that knows every context. It
+# wires adapters onto ports, assembles the router, registers the extensions and
+# carries the CLI.
+#
+# The package keeps the historical name `pdo-daemon` on purpose: dist derives the
+# installer's name from it (`pdo-daemon-installer.sh`), and every installed daemon
+# updates itself from that URL (update_check.rs). Renaming it would strand them.
+name = "pdo-daemon"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# App, not a published library: never `cargo publish` (crates.io hygiene). A
+# third-party binary depends on it by git tag (ADR-0081, D8).
+publish = false
+# One integration-test binary instead of one per file in `tests/`: each binary
+# relinks the whole daemon (~254 MB), so 50 files meant 50 serial links and
+# ~12.6 GB in target/debug/deps, paid again in every PDO worktree. `tests/it.rs`
+# declares the files as modules (see its header).
+autotests = false
+
+# `publish = false` hides the package from dist (it only packages what is
+# publishable by default) -> "nothing to Release". `dist = true` brings it back
+# explicitly: we distribute it (Homebrew + installer) WITHOUT publishing it on
+# crates.io. The two flags are complementary, not contradictory.
+[package.metadata.dist]
+dist = true
+
+[lib]
+name = "pdo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pdo"
+path = "src/main.rs"
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+[dependencies]
+pdo-extension-api.workspace = true
+pdo-kernel.workspace = true
+pdo-legacy.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+reqwest.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
+base64 = "0.22"
+futures-util = "0.3"
+tokio-tungstenite = "0.26"
+tower = { version = "0.5", features = ["util"] }
+pretty_assertions.workspace = true
+insta.workspace = true
+tempfile.workspace = true
+filetime = "0.2"
+chrono-tz = "0.10"

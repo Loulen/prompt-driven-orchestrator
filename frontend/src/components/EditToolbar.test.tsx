@@ -3,10 +3,10 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import EditToolbar from "./EditToolbar";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 import { useEditStore } from "../stores/editStore";
-import type { PipelineDef } from "../types";
 import type { TabHistory } from "../stores/editStore";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 describe("EditToolbar", () => {
   const onAddNode = vi.fn();
@@ -270,7 +270,7 @@ describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
   const onAddNode = vi.fn();
   const onLibraryDelete = vi.fn();
 
-  function pipe(): PipelineDef {
+  function pipe(): EditorPipelineDef {
     return { name: "p", version: "1.0", variables: {}, nodes: [], edges: [] };
   }
 

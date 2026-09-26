@@ -1,7 +1,9 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import RepositoriesSection from "./RepositoriesSection";
-import type { RunState, RunStatus, RepoPin } from "../types";
+import type { RunState } from "../shared/generated/RunState";
+import type { RunStatus } from "../shared/generated/RunStatus";
+import type { RepoPin } from "../shared/generated/RepoPin";
 import { editRunRepos, validateRepo, listBranches, fetchSourceDrift } from "../api";
 
 vi.mock("../api", () => ({
@@ -207,7 +209,7 @@ describe("the primary repo's cut point (#804)", () => {
   });
 
   it("falls back to HEAD when the Run named no source branch", () => {
-    render(<RepositoriesSection run={makeCutRun({ source_branch: null })} />);
+    render(<RepositoriesSection run={makeCutRun({ source_branch: undefined })} />);
     expect(screen.getByTestId("primary-repo-cut")).toHaveTextContent("HEAD");
   });
 

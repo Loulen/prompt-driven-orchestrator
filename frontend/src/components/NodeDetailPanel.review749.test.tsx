@@ -30,7 +30,7 @@ vi.mock("./TmuxTerminal", () => ({
   default: () => <div data-testid="tmux-terminal" />,
 }));
 
-vi.mock("./ui/resizable", () => ({
+vi.mock("../shared/ui/resizable", () => ({
   ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   ResizablePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   ResizableHandle: () => <div />,
@@ -39,10 +39,10 @@ vi.mock("./ui/resizable", () => ({
 vi.mock("./MarkdownArtifactModal", () => ({ default: () => null }));
 
 import NodeDetailPanel from "./NodeDetailPanel";
-import type { NodeState } from "../types";
+import type { NodeState } from "../shared/generated/NodeState";
 
 function makeNode(overrides?: Partial<NodeState>): NodeState {
-  return {
+  return { frontmatter_retries: 0,
     node_id: "impl",
     status: "completed",
     iter: 1,

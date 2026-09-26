@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { isLiveRun } from "../types";
-import type { RunStatus } from "../types";
+import { isLiveRun } from "../run/model/runStatus";
+import type { RunStatus } from "../shared/generated/RunStatus";
 
 /**
  * Format an elapsed-milliseconds duration as a compact ladder (`1h 23m` /

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Combine } from "lucide-react";
 import { fetchStatsAbsorptions, uncombineStatsMember } from "../api";
-import type { StatsAbsorption } from "../types";
+import type { StatsAbsorption } from "../shared/generated/StatsAbsorption";
 import { day, MONO_DIMENSIONS } from "../lib/statsAbsorption";
 import { UncombineButton } from "./StatsAbsorption";
 

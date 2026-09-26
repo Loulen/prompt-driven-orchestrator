@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
-import type { NodeDef } from "../types";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
-function node(overrides: Partial<NodeDef> = {}): NodeDef {
+function node(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
   return {
     id: "n1abc",
     name: "Writer",

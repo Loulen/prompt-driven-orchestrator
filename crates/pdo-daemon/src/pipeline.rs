@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Severity {
@@ -25,7 +26,8 @@ pub(crate) struct Diagnostic {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum NodeType {
     /// The one agentic node type (#653 / ADR-0060). It replaces the retired pair
@@ -85,7 +87,8 @@ impl NodeType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct FrontmatterFieldDecl {
     #[serde(rename = "type")]
     pub field_type: String,
@@ -93,7 +96,8 @@ pub(crate) struct FrontmatterFieldDecl {
     pub allowed: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PortType {
     #[default]
@@ -113,7 +117,8 @@ pub(crate) fn is_image_file(path: &std::path::Path) -> bool {
         .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum PortSide {
     Left,
@@ -133,7 +138,8 @@ impl std::fmt::Display for PortSide {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export, optional_fields = nullable, rename = "PortDef")]
 pub(crate) struct Port {
     pub name: String,
     #[serde(default)]
@@ -141,10 +147,13 @@ pub(crate) struct Port {
     #[serde(default)]
     pub side: Option<PortSide>,
     #[serde(default)]
+    // Always sent, but a port the editor creates omits it (markdown by default).
+    #[ts(optional = nullable)]
     pub port_type: PortType,
     #[serde(default)]
     pub frontmatter: Option<HashMap<String, FrontmatterFieldDecl>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "Record<string, unknown> | null")]
     pub when: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -160,16 +169,19 @@ pub(crate) struct Port {
     /// can never come. Absent leaves the node subject only to the whole-node
     /// deadness rule. Semantic, not layout.
     #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
     pub required: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct ViewPosition {
     pub x: f64,
     pub y: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable, rename = "ParsedNodeDef")]
 pub(crate) struct NodeDef {
     pub id: String,
     pub name: String,
@@ -183,6 +195,7 @@ pub(crate) struct NodeDef {
     pub interactive: bool,
     pub view: Option<ViewPosition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "number | string | null")]
     pub max_iter: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub over: Option<String>,
@@ -202,6 +215,7 @@ pub(crate) struct NodeDef {
     /// `BTreeMap` for deterministic serialization. Semantic, not layout — included
     /// in the pipeline diff and the library content hash.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[ts(optional = nullable)]
     pub harnesses: BTreeMap<String, crate::harness_resolver::HarnessEntry>,
     /// The node's tier of the agentic-profile union (ADR-0057). `Some(Profile |
     /// Custom)` supplies harness, model and effort atomically, and
@@ -218,6 +232,7 @@ pub(crate) struct NodeDef {
     /// on a `script` node at parse ([`normalize_node_value`]): a script launches
     /// no agent, so a skill there would be a setting that silently does nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub skills: Vec<crate::skill_selection::SkillRef>,
     /// The **finest** tier of [`crate::auto_fail::resolve_auto_fail`] (`node → Run
     /// → Projet → instance`): `Some(_)` overrides every coarser tier for this
@@ -242,6 +257,7 @@ pub(crate) struct NodeDef {
     /// the binding contract (plus the #723 prompt amendment and skill reference).
     /// Semantic, not layout — in the diff and the library content hash.
     #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
     pub orchestrator: bool,
 }
 
@@ -267,7 +283,8 @@ impl NodeDef {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct EdgeEndpoint {
     pub node: String,
     pub port: String,
@@ -289,7 +306,8 @@ pub(crate) struct EdgeEndpoint {
 /// `ports` is ALWAYS non-empty after a parse: an edge that carries nothing has
 /// no meaning, so [`deserialize`](EdgeSource::deserialize) rejects both an empty
 /// `ports:` list and a source that names neither key.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, TS)]
+#[ts(as = "EdgeSourceWire")]
 pub(crate) struct EdgeSource {
     pub node: String,
     /// Carried output ports, in authored order. Order is presentation only — the
@@ -324,6 +342,32 @@ impl EdgeSource {
     pub(crate) fn label(&self) -> String {
         format!("{}.{}", self.node, self.ports.join("+"))
     }
+}
+
+/// The TypeScript shape of a pipeline node over HTTP: the parsed [`NodeDef`] plus
+/// the node's `provisioning` rules, which the YAML carries and `GET
+/// /pipelines/{id}` copies into the JSON (`pipeline_json_with_node_provisioning`).
+#[derive(TS)]
+#[ts(export, rename = "NodeDef")]
+#[allow(dead_code)]
+struct NodeDefWire {
+    #[ts(flatten)]
+    def: NodeDef,
+    #[ts(optional)]
+    provisioning: Option<crate::provisioning::ProvisioningRules>,
+}
+
+/// The TypeScript shape of [`EdgeSource`], whose `Serialize` is hand-written:
+/// exactly one of `port` (one carried port) and `ports` (several) is set.
+#[derive(TS)]
+#[ts(export, rename = "EdgeSource")]
+#[allow(dead_code)]
+struct EdgeSourceWire {
+    node: String,
+    #[ts(optional)]
+    port: Option<String>,
+    #[ts(optional)]
+    ports: Option<Vec<String>>,
 }
 
 impl Serialize for EdgeSource {
@@ -391,7 +435,8 @@ impl<'de> Deserialize<'de> for EdgeSource {
 /// `Manual` edges pin the route to persisted `waypoints`. Routing is *layout*,
 /// not semantics: it persists in the pipeline file (so a shared workflow keeps
 /// its arrows) but is excluded from the semantic pipeline-diff.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum EdgeRouteMode {
     Auto,
@@ -399,7 +444,8 @@ pub(crate) enum EdgeRouteMode {
 }
 
 /// A pinned waypoint on a manually-routed edge — absolute canvas coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct EdgeWaypoint {
     pub x: f64,
     pub y: f64,
@@ -411,13 +457,15 @@ pub(crate) struct EdgeWaypoint {
 /// which is the pre-#844 geometry — so an untouched pipeline round-trips byte for
 /// byte. Layout, like `mode`/`waypoints`/`target_side`: it persists in the file
 /// and is excluded from the semantic pipeline-diff.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct EdgeAnchor {
     pub side: PortSide,
     pub offset: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct EdgeDef {
     pub source: EdgeSource,
     pub target: EdgeEndpoint,
@@ -428,16 +476,19 @@ pub(crate) struct EdgeDef {
     /// variables. When present, the edge fires only if the clause is satisfied.
     /// Conditional routing lives on the edge (ADR-0011).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "Record<string, unknown> | null")]
     pub when: Option<serde_yaml::Value>,
     /// `else: true` marks a fallback edge that fires iff no sibling edge on the
     /// same source port matched (ADR-0011). Mutually exclusive with `when:`.
     #[serde(default, rename = "else", skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
     pub is_else: bool,
     /// `repeated: true` marks an edge whose source artifact accumulates across
     /// iterations: the resolver globs `iter-*` and pools every match into the
     /// emergent input. Loop accumulation ("read all laps") lives on the edge,
     /// not on a declared input port (ADR-0011 / #149).
     #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
     pub repeated: bool,
     /// Routing mode (#154). Absent ⇒ auto (recomputed, never persisted).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,6 +526,7 @@ pub(crate) struct EdgeDef {
     /// Draw order (#845): edges draw ABOVE the node cards by default, `true`
     /// drops this one below. Absent/false ⇒ above, and never written.
     #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
     pub below_nodes: bool,
 }
 
@@ -504,7 +556,8 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
 pub(crate) enum VariableType {
@@ -515,10 +568,12 @@ pub(crate) enum VariableType {
     List,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct VariableDef {
     #[serde(rename = "type")]
     pub var_type: VariableType,
+    #[ts(type = "unknown")]
     pub default: serde_yaml::Value,
 }
 
@@ -528,7 +583,8 @@ pub(crate) struct VariableDef {
 /// (ex-ForEach) carry an `over: <field>` driver naming a list in the entering
 /// artifact's frontmatter; they fan the member(s) out in parallel (one lap per
 /// item) and their outgoing edges fire once on the barrier (all items finished).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LoopKind {
     Bounded,
@@ -543,12 +599,14 @@ pub(crate) enum LoopKind {
 /// "exhausted — unrouted" (never a silent stall). A `collection` region (`over`)
 /// fans the member(s) out in parallel, one lap per item of the named list, and
 /// barriers — its outgoing edges fire once when all items finish.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct LoopRegion {
     pub id: String,
     pub kind: LoopKind,
     pub members: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "number | string | null")]
     pub max_iter: Option<serde_yaml::Value>,
     /// The frontmatter field naming the list a `collection` region fans out over
     /// (ADR-0011 / #151). `None` for a `bounded` region.
@@ -563,7 +621,8 @@ pub(crate) struct LoopRegion {
 /// The Rust field is MANDATORY: the frontend rehydrates from the daemon-parsed
 /// `PipelineDef`, never the raw YAML, so without it serde drops the note silently
 /// and it vanishes on reload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable, rename = "NoteDef")]
 pub(crate) struct Note {
     pub id: String,
     pub content: String,
@@ -573,24 +632,28 @@ pub(crate) struct Note {
     pub view: Option<ViewPosition>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct PipelineDef {
     pub name: String,
     pub version: Option<String>,
     #[serde(default, deserialize_with = "deserialize_variables")]
     pub variables: HashMap<String, VariableDef>,
     #[serde(default)]
+    #[ts(as = "Vec<NodeDefWire>")]
     pub nodes: Vec<NodeDef>,
     #[serde(default)]
     pub edges: Vec<EdgeDef>,
     /// Named bounded loop regions (ADR-0011 / #148). Absent on pipelines with no
     /// loops; round-trips when present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub loops: Vec<LoopRegion>,
     /// Inert canvas notes (#307 / ADR-0018). Absent on pipelines with no notes;
     /// round-trips when present. Layout, not semantics — excluded from the
     /// pipeline-diff on the frontend but persisted verbatim here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub notes: Vec<Note>,
     /// Whether a manual Run must be launched with a non-empty user prompt (#158).
     /// Defaults to `true` (the prompt is mandatory) and is omitted from YAML in
@@ -598,6 +661,7 @@ pub(crate) struct PipelineDef {
     /// may start with empty input and a provided prompt is treated as additional
     /// info rather than the sole source of work.
     #[serde(default = "default_prompt_required", skip_serializing_if = "is_true")]
+    #[ts(optional = nullable)]
     pub prompt_required: bool,
     /// The pipeline's own wiring-grid size (#877 / ADR-0076). Absent ⇒ the
     /// pipeline follows the reader's global default, and it is omitted from YAML
@@ -611,7 +675,8 @@ pub(crate) struct PipelineDef {
 /// `L` = 40px. The daemon never uses the step itself — only the canvas does —
 /// but it must parse the field, or serde drops it and the choice vanishes on
 /// reload (the frontend rehydrates from the daemon-parsed `PipelineDef`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) enum GridSize {
     S,
     M,

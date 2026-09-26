@@ -1,9 +1,10 @@
 import { useState } from "react";
-import type { NodeDef, NodeType } from "../types";
+import type { NodeType } from "../shared/generated/NodeType";
 import { parseNodeYaml, libraryPortToPortDef } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { foldHarnessOntoNode } from "../lib/harness";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 /**
  * Add a node to the canvas from YAML (#345): paste a node definition OR upload a
@@ -57,7 +58,7 @@ export default function AddNodeFromYamlModal({
       // the resolved harness's entry onto the flat model/effort view — so an
       // imported node keeps its pin and every harness's settings instead of
       // re-homing them onto `claude`.
-      const node: NodeDef = foldHarnessOntoNode({
+      const node: EditorNodeDef = foldHarnessOntoNode({
         id: newId,
         name: result.spec.name,
         type: result.spec.type as NodeType,

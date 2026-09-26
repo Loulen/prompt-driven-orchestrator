@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 import PortRow from "./PortRow";
 
 function Wrapper({ children }: { children: React.ReactNode }) {

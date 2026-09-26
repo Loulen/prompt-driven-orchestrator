@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Combine, X } from "lucide-react";
-import type { StatsAbsorbedMember } from "../types";
+import type { StatsAbsorbedMember } from "../shared/generated/StatsAbsorbedMember";
 import {
   activity,
   defaultAbsorbent,

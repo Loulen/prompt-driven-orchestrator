@@ -4,8 +4,8 @@ import PipelineStar from "./PipelineStar";
 import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
 import type { LibraryPipelineEntry } from "../api";
 import { useEditStore } from "../stores/editStore";
-import type { PipelineDef } from "../types";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 vi.mock("../api", () => ({
   fetchLibrary: vi.fn().mockResolvedValue([]),
@@ -23,7 +23,7 @@ vi.mock("../api", () => ({
 const mockSaveLib = vi.mocked(saveLibraryPipeline);
 const mockDeleteLib = vi.mocked(deleteLibraryPipeline);
 
-const PIPELINE: PipelineDef = {
+const PIPELINE: EditorPipelineDef = {
   name: "My Pipeline",
   version: "1.0",
   variables: {},
@@ -69,7 +69,7 @@ function libEntry(yaml = ""): LibraryPipelineEntry {
 function renderStar(props: {
   syncState: "outline" | "synced" | "diverged";
   libraryEntry: LibraryPipelineEntry | null;
-  pipeline?: PipelineDef;
+  pipeline?: EditorPipelineDef;
 }) {
   return render(
     <TooltipProvider>

@@ -5,7 +5,8 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { LoopRegionNode, type LoopRegionNodeData } from "./LoopRegionNode";
 import { useEditStore } from "../stores/editStore";
 import { endRegion, bumpRegion } from "../api";
-import type { PipelineDef, LoopRegion, NodeDef } from "../types";
+import type { LoopRegion } from "../shared/generated/LoopRegion";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 vi.mock("../api", () => ({
   endRegion: vi.fn().mockResolvedValue(undefined),
@@ -19,7 +20,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
   return <ReactFlowProvider>{children}</ReactFlowProvider>;
 }
 
-function makeNode(id: string): NodeDef {
+function makeNode(id: string): EditorNodeDef {
   return {
     id,
     name: id,
@@ -31,7 +32,7 @@ function makeNode(id: string): NodeDef {
 }
 
 function seedStore(loops: LoopRegion[]) {
-  const pipeline: PipelineDef = {
+  const pipeline: EditorPipelineDef = {
     name: "p",
     variables: {},
     nodes: [makeNode("impl"), makeNode("rev")],

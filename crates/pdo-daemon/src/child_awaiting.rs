@@ -117,7 +117,7 @@ fn effective_awaiting(
                         node.awaiting = Some(AwaitingInfo {
                             cause: AWAITING_CAUSE_CHILD_AWAITING.to_string(),
                             message: Some(child_awaiting_reason(&child_name)),
-                            since: since.unwrap_or_else(crate::event_log::now_iso),
+                            since: since.unwrap_or_else(pdo_kernel::clock::now_iso),
                             child_run_id: Some(child_id),
                         });
                     }

@@ -1,4 +1,4 @@
-import type { RunListEntry } from "../types";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
 
 /* #336 — the client-side filter model for the Runs list. Option sets are
    derived from the runs themselves (never from the live library/trigger

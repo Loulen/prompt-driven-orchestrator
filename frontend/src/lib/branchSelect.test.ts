@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { BranchRef, FastForwardRefusal } from "../types";
+import type { BranchRef } from "../shared/generated/BranchRef";
+import type { FastForwardRefusal } from "../shared/generated/FastForwardRefusal";
 import {
   branchGap,
   canFastForward,
@@ -22,11 +23,23 @@ import {
 const local = (name: string, over: Partial<BranchRef> = {}): BranchRef => ({
   name,
   kind: "local",
+  upstream: null,
+  ahead: null,
+  behind: null,
+  head: false,
+  last_commit_at: null,
+  last_commit_subject: null,
   ...over,
 });
 const remote = (name: string, over: Partial<BranchRef> = {}): BranchRef => ({
   name,
   kind: "remote",
+  upstream: null,
+  ahead: null,
+  behind: null,
+  head: false,
+  last_commit_at: null,
+  last_commit_subject: null,
   ...over,
 });
 
@@ -250,7 +263,7 @@ describe("syncState (#802)", () => {
    * outranks a `0↑ 0↓` that only means "nothing has been refreshed since".
    */
   it("lets a failed fetch outrank a stale zero gap", () => {
-    const error = { kind: "network", message: "ssh: Could not resolve hostname" };
+    const error = { kind: "network" as const, message: "ssh: Could not resolve hostname" };
     const state = syncState({
       ...base,
       fetchError: error,
@@ -325,7 +338,9 @@ describe("fastForwardTouchesCheckout (#803)", () => {
   });
 
   it("promises neither when the list does not say", () => {
-    expect(fastForwardTouchesCheckout(tracking("main", 0, 3))).toBeUndefined();
+    // An older daemon sent no `head` at all; the current one always does.
+    const silent = { ...tracking("main", 0, 3), head: undefined } as unknown as BranchRef;
+    expect(fastForwardTouchesCheckout(silent)).toBeUndefined();
     expect(fastForwardTouchesCheckout(undefined)).toBeUndefined();
   });
 });

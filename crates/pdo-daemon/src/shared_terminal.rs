@@ -29,6 +29,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::sync::{mpsc, watch};
 use tracing::warn;
+use ts_rs::TS;
 
 /// A connection's handle in the registry.
 pub(crate) type ConnId = u64;
@@ -42,7 +43,8 @@ pub(crate) enum Role {
 }
 
 /// Columns × rows of a PTY.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "SharedTerminalSize")]
 pub(crate) struct TermSize {
     pub cols: u16,
     pub rows: u16,
@@ -52,7 +54,8 @@ pub(crate) struct TermSize {
 pub(crate) const INITIAL_SIZE: TermSize = TermSize { cols: 80, rows: 24 };
 
 /// The server → client `role` frame on the terminal socket's Text channel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "SharedTerminalRole")]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub(crate) enum RoleMsg {
     Solo,

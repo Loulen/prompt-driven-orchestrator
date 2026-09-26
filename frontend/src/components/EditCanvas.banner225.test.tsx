@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import { useEditStore, type OpenPipeline } from "../stores/editStore";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 
 // jsdom has no ResizeObserver; ReactFlow's container measurement needs it
 // (mirrors LintBannerDuplication.test.tsx).

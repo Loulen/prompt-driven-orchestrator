@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use ts_rs::TS;
 
 /// The on-disk root of the bank, relative to the daemon's repo root — the same
 /// `.pdo/` the SQLite index lives in, so content and index travel together.
@@ -54,7 +55,8 @@ pub(crate) const SEEDED_FOLDER_NAME: &str = "PDO";
 /// content was read at, and the skill's folder path inside the source. Carried
 /// by the skill itself — a skill moved out of its Source folder keeps it — and,
 /// with a few counters, by the folder the import created.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillProvenance")]
 pub(crate) struct Provenance {
     pub url: String,
     #[serde(default, rename = "ref")]
@@ -68,7 +70,8 @@ pub(crate) struct Provenance {
 
 /// A Source folder's provenance: the scan root (`path` is the sub-folder the
 /// scan was pointed at), plus what the last import / update saw there.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct FolderProvenance {
     pub url: String,
     #[serde(default, rename = "ref")]
@@ -86,7 +89,8 @@ pub(crate) struct FolderProvenance {
 }
 
 /// One row of the bank's index. `folder_id` is `None` at the root.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct Skill {
     pub id: String,
     pub name: String,
@@ -99,13 +103,15 @@ pub(crate) struct Skill {
     pub locked: bool,
     /// Provenance of an import. `None` for a pasted skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub source: Option<Provenance>,
     pub created_at: String,
     pub updated_at: String,
 }
 
 /// A folder of the bank's free hierarchy. `parent_id` is `None` at the root.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct SkillFolder {
     pub id: String,
     pub name: String,
@@ -113,13 +119,15 @@ pub(crate) struct SkillFolder {
     pub parent_id: Option<String>,
     /// Set on a folder created by an import (a **Source folder**).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub source: Option<FolderProvenance>,
     pub created_at: String,
     pub updated_at: String,
 }
 
 /// A reference file of a skill (anything under its folder except `SKILL.md`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct SkillFile {
     /// Path relative to the skill's folder, `/`-separated.
     pub path: String,
@@ -788,7 +796,7 @@ pub(crate) async fn update_skill_md(
     let dir = skill_dir(repo_root, id);
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join(SKILL_MD), content)?;
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query("UPDATE skills SET description = ?, updated_at = ? WHERE id = ?")
         .bind(&parsed.description)
         .bind(&now)
@@ -886,7 +894,7 @@ pub(crate) async fn create_with_id(
         None => None,
     };
     let id = id.map(str::to_string).unwrap_or_else(generate_skill_id);
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query(
         "INSERT INTO skills (id, name, description, folder_id, source, source_commit, created_at, updated_at) \
          VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
@@ -974,7 +982,7 @@ pub(crate) async fn create_from_dir(
         None => None,
     };
     let id = generate_skill_id();
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query(
         "INSERT INTO skills (id, name, description, folder_id, source, source_ref, source_commit, source_path, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1050,7 +1058,7 @@ pub(crate) async fn replace_content_from_dir(
         )));
     }
     let _ = std::fs::remove_dir_all(&backup);
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query(
         "UPDATE skills SET description = ?, source = ?, source_ref = ?, source_commit = ?, source_path = ?, updated_at = ? WHERE id = ?",
     )
@@ -1116,7 +1124,7 @@ pub(crate) async fn update(
             }
         }
     };
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query("UPDATE skills SET name = ?, folder_id = ?, updated_at = ? WHERE id = ?")
         .bind(&name)
         .bind(&folder_id)
@@ -1424,7 +1432,7 @@ pub(crate) async fn seed_with(
     // Our own content passes the same gate a pasted SKILL.md would: the seed
     // never writes a skill the harness would ignore.
     let parsed = validate_skill_md(content)?;
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
 
     // The « PDO » folder: a fixed id, or an existing root folder already
     // carrying the name (an operator's folder named PDO is adopted, not
@@ -1578,7 +1586,7 @@ pub(crate) async fn create_folder(
     }
     let parent_id = normalise_parent(db, parent_id).await?;
     let id = generate_folder_id();
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query(
         "INSERT INTO skill_folders (id, name, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
     )
@@ -1609,7 +1617,7 @@ pub(crate) async fn set_folder_provenance(
     get_folder(db, id)
         .await?
         .ok_or(SkillError::FolderNotFound)?;
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query(
         "UPDATE skill_folders SET source = ?, source_ref = ?, source_commit = ?, source_path = ?, \
          source_imported_at = ?, source_found = ?, source_invalid = ?, updated_at = ? WHERE id = ?",
@@ -1642,7 +1650,7 @@ pub(crate) async fn remember_source(
     .bind(url)
     .bind(git_ref.unwrap_or(""))
     .bind(path)
-    .bind(crate::event_log::now_iso())
+    .bind(pdo_kernel::clock::now_iso())
     .execute(db)
     .await?;
     Ok(())
@@ -1650,7 +1658,8 @@ pub(crate) async fn remember_source(
 
 /// A remembered source, most recent first, with the Source folder that holds
 /// it in the bank (if any).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "RecentSkillSource")]
 pub(crate) struct RecentSource {
     pub url: String,
     #[serde(rename = "ref")]
@@ -1658,8 +1667,10 @@ pub(crate) struct RecentSource {
     pub path: String,
     pub last_used_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub folder_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub folder_name: Option<String>,
 }
 
@@ -1756,7 +1767,7 @@ pub(crate) async fn update_folder(
             parent
         }
     };
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query("UPDATE skill_folders SET name = ?, parent_id = ?, updated_at = ? WHERE id = ?")
         .bind(&name)
         .bind(&parent_id)
@@ -1773,7 +1784,7 @@ pub(crate) async fn delete_folder(db: &SqlitePool, id: &str) -> Result<bool, Ski
     let Some(folder) = get_folder(db, id).await? else {
         return Ok(false);
     };
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query("UPDATE skills SET folder_id = ?, updated_at = ? WHERE folder_id = ?")
         .bind(&folder.parent_id)
         .bind(&now)
@@ -2134,7 +2145,7 @@ mod tests {
     async fn deleting_a_folder_moves_its_content_to_the_parent() {
         let db = mem_db().await;
         let root = tempfile::tempdir().unwrap();
-        let parent = create_folder(&db, "ippon", None).await.unwrap();
+        let parent = create_folder(&db, "acme", None).await.unwrap();
         let child = create_folder(&db, "java", Some(&parent.id)).await.unwrap();
         let grandchild = create_folder(&db, "spring", Some(&child.id)).await.unwrap();
         let skill = create(&db, root.path(), VALID, None, Some(&child.id))

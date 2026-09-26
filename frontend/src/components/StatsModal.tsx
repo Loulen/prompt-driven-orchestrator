@@ -3,7 +3,9 @@ import { RotateCw } from "lucide-react";
 import FullWindowShell from "./FullWindowShell";
 import { fetchStatsAbsorptions, syncCostPrices } from "../api";
 import { useStats } from "../hooks/useStats";
-import type { PriceRow, StatsCost, SyncCostPricesReport } from "../types";
+import type { PriceRow } from "../shared/generated/PriceRow";
+import type { StatsCost } from "../shared/generated/StatsCost";
+import type { SyncCostPricesReport } from "../settings/model/settings";
 import type { StatsTab } from "./StatsCharts";
 import {
   DEFAULT_PERFORMANCE_BAND,

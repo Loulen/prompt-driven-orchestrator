@@ -1,10 +1,19 @@
 [workspace]
 resolver = "2"
-members = ["crates/pdo-daemon"]
+# Modular monolith (ADR-0079): `pdo-extension-api` is the public contract,
+# `pdo-kernel` the shared kernel, `pdo` the composition root (the distributed
+# `pdo` binary), and `pdo-daemon` the legacy crate every bounded context is
+# strangled out of, one crate at a time.
+members = [
+  "crates/pdo-extension-api",
+  "crates/pdo-kernel",
+  "crates/pdo-daemon",
+  "crates/pdo",
+]
 
 [workspace.package]
 edition = "2021"
-version = "1.109.1"
+version = "1.111.0"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -44,6 +53,18 @@ insta = { version = "1", features = ["yaml", "json"] }
 tempfile = "3"
 sha2 = "0.10"
 ignore = "0.4"
+# Generated TypeScript for every DTO the daemon sends over HTTP/WS (#915). The
+# bindings land in frontend/src/shared/generated/ (`make types`); `make check`
+# fails when they drift from the Rust structs.
+ts-rs = { version = "12", features = ["no-serde-warnings"] }
+reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
+pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.1.0" }
+pdo-kernel = { path = "crates/pdo-kernel" }
+# The legacy crate keeps its library name `pdo_daemon` (so `RUST_LOG=pdo_daemon::…`
+# targets and every `use pdo_daemon::` stay valid) under the package name
+# `pdo-legacy`: the package name `pdo-daemon` belongs to the composition root,
+# because dist derives the installer name from it (see crates/pdo/Cargo.toml).
+pdo-legacy = { path = "crates/pdo-daemon" }
 
 # --- Release packaging (dist / ex-cargo-dist) -------------------------------
 # `dist` génère .github/workflows/release.yml à partir de cette config (voir

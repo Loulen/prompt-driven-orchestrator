@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import UpdateConfirmModal from "./UpdateConfirmModal";
-import type { UpdateStatus } from "../types";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 // #699 — the confirm before an in-app update: the command, the restart, the active
 // Runs count (a warning, never a block), tmux survival.

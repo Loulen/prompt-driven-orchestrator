@@ -16,7 +16,7 @@ import {
 } from "@xyflow/react";
 import { pathToSvg } from "../lib/edgePath";
 import type { Point } from "../lib/orthogonalRouter";
-import type { PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
 import { sideFromRimHandle } from "../lib/anchorSide";
 import { useWiringGridStep } from "../hooks/useWiringGrid";
 import {

@@ -1,4 +1,4 @@
-import type { PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
 
 const SIDES: PortSide[] = ["left", "top", "right", "bottom"];
 

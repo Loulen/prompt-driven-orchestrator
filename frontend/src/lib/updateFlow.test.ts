@@ -7,12 +7,13 @@ import {
   updateFlowMessage,
   type UpdateFlowState,
 } from "./updateFlow";
-import type { UpdateAttempt, UpdateStatus } from "../types";
+import type { UpdateAttempt } from "../shared/generated/UpdateAttempt";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 // #699 — the waiting / reconnection / reload state machine behind the Update button.
 
 function attempt(overrides: Partial<UpdateAttempt> = {}): UpdateAttempt {
-  return {
+  return { schema: "update-attempt-v1",
     attempt_id: "a1",
     status: "running",
     started_at: "2026-09-05T12:00:00Z",

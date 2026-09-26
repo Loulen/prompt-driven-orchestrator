@@ -5,9 +5,9 @@ import {
   shouldPromptLibraryUpdate,
 } from "./useLibraryPipelines";
 import type { LibraryPipelineEntry } from "../api";
-import type { NodeDef, PipelineDef } from "../types";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
-function node(id: string, over: Partial<NodeDef> = {}): NodeDef {
+function node(id: string, over: Partial<EditorNodeDef> = {}): EditorNodeDef {
   return {
     id,
     name: id,
@@ -19,7 +19,7 @@ function node(id: string, over: Partial<NodeDef> = {}): NodeDef {
   };
 }
 
-function def(over: Partial<PipelineDef> = {}): PipelineDef {
+function def(over: Partial<EditorPipelineDef> = {}): EditorPipelineDef {
   return {
     name: "My Pipeline",
     variables: {},
@@ -30,7 +30,7 @@ function def(over: Partial<PipelineDef> = {}): PipelineDef {
 }
 
 function entry(
-  pipeline: PipelineDef,
+  pipeline: EditorPipelineDef,
   opts: {
     id?: string;
     name?: string;
@@ -68,7 +68,7 @@ describe("pipelinesEquivalent", () => {
   // pipelines differing only in how their arrows are drawn must compare equal,
   // so nudging a waypoint or pinning a route never marks the pipeline dirty.
   it("ignores edge mode and waypoints so manual routing doesn't count as divergence", () => {
-    const e = (over: Partial<PipelineDef["edges"][number]> = {}) => ({
+    const e = (over: Partial<EditorPipelineDef["edges"][number]> = {}) => ({
       source: { node: "a", port: "out" },
       target: { node: "b", port: "in" },
       ...over,
@@ -95,7 +95,7 @@ describe("pipelinesEquivalent", () => {
   // #168: the incoming-edge anchor side is LAYOUT (like mode/waypoints), so
   // re-anchoring an arrow on a different side must not count as divergence.
   it("ignores edge target_side so re-anchoring an arrow doesn't count as divergence", () => {
-    const e = (over: Partial<PipelineDef["edges"][number]> = {}) => ({
+    const e = (over: Partial<EditorPipelineDef["edges"][number]> = {}) => ({
       source: { node: "a", port: "out" },
       target: { node: "b", port: "in" },
       ...over,
@@ -113,7 +113,7 @@ describe("pipelinesEquivalent", () => {
   // differ only in those four fields must compare equal, or decorating an edge
   // flips the library star to "diverged".
   it("ignores the output-label toggle, both label positions and the draw order", () => {
-    const e = (over: Partial<PipelineDef["edges"][number]> = {}) => ({
+    const e = (over: Partial<EditorPipelineDef["edges"][number]> = {}) => ({
       source: { node: "a", port: "out" },
       target: { node: "b", port: "in" },
       ...over,
@@ -502,7 +502,7 @@ describe("shouldPromptLibraryUpdate", () => {
   }
 
   function libEntry(
-    opts: Parameters<typeof entry>[1] & { pipeline?: PipelineDef } = {},
+    opts: Parameters<typeof entry>[1] & { pipeline?: EditorPipelineDef } = {},
   ): LibraryPipelineEntry {
     return entry(opts.pipeline ?? def({ nodes: [node("planner"), node("fixer")] }), {
       yaml: "name: My Pipeline\n",

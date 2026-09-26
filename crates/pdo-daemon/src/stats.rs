@@ -25,6 +25,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::AppState;
 
@@ -80,13 +81,15 @@ fn strftime_fmt(bucket: &str) -> Option<&'static str> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export, rename = "StatsBucketCount")]
 pub(crate) struct BucketCount {
     pub bucket: String,
     pub count: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export, rename = "StatsPipelineFireCount")]
 pub(crate) struct PipelineFireCount {
     /// The trigger's `pipeline_id`, or `"(deleted trigger)"` for an orphan fire
     /// (the trigger row was deleted; there is no cascade, so the fire survives
@@ -98,7 +101,8 @@ pub(crate) struct PipelineFireCount {
     pub count: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export, rename = "StatsTriggersCreatedRuns")]
 pub(crate) struct TriggersCreatedRuns {
     /// Fires whose `outcome = 'fired'` (⟺ a run was created) in the window.
     pub fired: i64,
@@ -108,7 +112,8 @@ pub(crate) struct TriggersCreatedRuns {
     pub enabled_triggers: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsOverview {
     /// Sorted union of period labels across runs/errors/sessions — the ordered
     /// x-axis the client renders against.
@@ -129,19 +134,22 @@ struct HarnessCount {
     pub by_harness: BTreeMap<String, u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsSessionHarness {
     pub harness: String,
     pub executions: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsSessionPeriod {
     pub bucket: String,
     pub harnesses: Vec<StatsSessionHarness>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsSessionEntity {
     pub id: String,
     pub name: String,
@@ -152,10 +160,13 @@ pub(crate) struct StatsSessionEntity {
     /// Pipeline and Node rows (#890, #892): the Runs counted, the most recent
     /// one's start, and — on an absorbent — its absorbed members.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub runs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub last_run: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub absorbed: Vec<crate::stats_absorption::AbsorbedMember>,
 }
 
@@ -630,7 +641,8 @@ pub(crate) async fn stats_overview(
 /// One resolved price row (#528): a family key, the tier that decides it, and the
 /// `$/MTok` actually in force. `tier` serializes as `"manual" | "fetched" |
 /// "embedded"` (the `PriceTier` `rename_all = "lowercase"`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export, rename = "PriceRow")]
 pub(crate) struct ResolvedPriceRow {
     pub key: String,
     pub tier: crate::price_table::PriceTier,
@@ -640,7 +652,8 @@ pub(crate) struct ResolvedPriceRow {
     pub output: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsHarnessCost {
     pub harness: String,
     pub usd: Option<f64>,
@@ -661,17 +674,21 @@ pub(crate) struct StatsHarnessCost {
     /// (#736: the tooltip says, harness by harness, where the value came from);
     /// omitted on the rows that carry no slices (totals, other axes).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub provenance: Option<StatsProvenance>,
     /// Same, for the effort half of the row; absent on model-only rows.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub effort_provenance: Option<StatsProvenance>,
     /// The provider the harness's source named for this model (`pi` via
     /// openrouter) — tooltip only, never part of the identity (ADR-0065 §2).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub provider: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsCostAggregate {
     pub usd: Option<f64>,
     pub average_usd: Option<f64>,
@@ -689,14 +706,16 @@ pub(crate) struct StatsCostAggregate {
     pub harnesses: Vec<StatsHarnessCost>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsCostPeriod {
     pub bucket: String,
     #[serde(flatten)]
     pub aggregate: StatsCostAggregate,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsCostEntity {
     pub id: String,
     pub name: String,
@@ -708,22 +727,27 @@ pub(crate) struct StatsCostEntity {
     /// only, so the drill-down ends there; omitted (never an empty array) on the
     /// other levels.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub models: Vec<StatsModelEffortPair>,
     /// Pipeline, Node and « By model » model rows (#890, #892): the Runs
     /// counted, the most recent one's start, and — on an absorbent — its
     /// absorbed members. Omitted on the other levels.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub runs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub last_run: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub absorbed: Vec<crate::stats_absorption::AbsorbedMember>,
 }
 
 /// Where a model/effort value was read from (ADR-0065 §1): the harness's source
 /// (observed — the norm, never marked) or the startup event (requested — marked
 /// « ? »), or both across the bucket's executions (mixed).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum StatsProvenance {
     Observed,
@@ -744,7 +768,8 @@ pub(crate) fn provenance(observed: i64, requested: i64) -> StatsProvenance {
 /// One model × effort pair of a Node leaf (ADR-0065): the same aggregate shape
 /// as any cost row, plus the pair identity and where each half was read from.
 /// `effort = None` is the "not set" bucket — never merged with a real effort.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsModelEffortPair {
     #[serde(flatten)]
     pub aggregate: StatsCostAggregate,
@@ -757,20 +782,24 @@ pub(crate) struct StatsModelEffortPair {
     pub key: String,
     pub runs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub last_run: Option<String>,
     /// The couples this one absorbs locally, in this Node row (#906).
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub absorbed: Vec<crate::stats_absorption::AbsorbedMember>,
     /// The raw couples a global absorption (models, efforts) counts here —
     /// the grey, read-only « Global absorption » mark (#906).
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub global_absorbed: Vec<crate::stats_absorption::AbsorbedMember>,
 }
 
 /// One effort level under a model, in the « By model » tree: the entity's `id`
 /// is the effort string ("" for not set) and its `name` the effort or
 /// "not set".
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsEffortCostEntity {
     #[serde(flatten)]
     pub entity: StatsCostEntity,
@@ -781,7 +810,8 @@ pub(crate) struct StatsEffortCostEntity {
 
 /// One model (verbatim id) of the « By model » axis, with its effort tree:
 /// Model → Effort → Pipeline → Node.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsModelCostEntity {
     #[serde(flatten)]
     pub entity: StatsCostEntity,
@@ -789,14 +819,16 @@ pub(crate) struct StatsModelCostEntity {
     pub efforts: Vec<StatsEffortCostEntity>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsProjectCostEntity {
     #[serde(flatten)]
     pub entity: StatsCostEntity,
     pub pipelines: Vec<StatsCostEntity>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsCost {
     pub harnesses: Vec<String>,
     pub total: StatsCostAggregate,

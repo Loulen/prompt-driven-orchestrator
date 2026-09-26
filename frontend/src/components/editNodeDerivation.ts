@@ -1,12 +1,19 @@
 import type { Edge, Node } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
-import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
+import type { EdgeWaypoint } from "../shared/generated/EdgeWaypoint";
+import type { LoopRegion } from "../shared/generated/LoopRegion";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortSide } from "../shared/generated/PortSide";
+import type { RunState } from "../shared/generated/RunState";
+import type { RunStatus } from "../shared/generated/RunStatus";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
 import { anchorHandleId, landsByDrop, rimHandleId } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
 import { carriedPorts, declaredOutputs, primaryPort } from "../lib/edgePorts";
 import { outputLabelSlots, resolveOutputLabels } from "../lib/edgeLabels";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -41,7 +48,7 @@ export function markerReached(
 }
 
 export function deriveEditNodes(
-  pipeline: PipelineDef,
+  pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
   agentProfileIds: ReadonlySet<string> = new Set(),
 ): Node[] {
@@ -178,7 +185,7 @@ function regionMaxIterText(maxIter: LoopRegion["max_iter"]): string {
  * Regions whose members are all missing (e.g. mid-edit deletion) are dropped.
  */
 export function deriveLoopRegions(
-  pipeline: PipelineDef,
+  pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
 ): LoopRegionLayout[] {
   const regions = pipeline.loops ?? [];
@@ -313,7 +320,7 @@ const REGION_CHROME_Z = 1001;
  * chrome for free instead of needing a parallel set of guards for a 5th type.
  */
 export function buildLoopRegionNodes(
-  pipeline: PipelineDef,
+  pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
 ): Node[] {
   return deriveLoopRegions(pipeline, runState)
@@ -365,7 +372,7 @@ export function buildLoopRegionNodes(
  * a node with no persisted position. Notes are a canvas concept, never part of
  * `pipeline.nodes`; they carry no run status and never colour.
  */
-export function buildNoteNodes(pipeline: PipelineDef): Node[] {
+export function buildNoteNodes(pipeline: EditorPipelineDef): Node[] {
   return (pipeline.notes ?? []).map((note, i) => ({
     id: note.id,
     type: "note",
@@ -479,7 +486,7 @@ export function edgeIndexFromId(edgeId: string): number | null {
  *   instead forced every such node's arrows to the left (#175).
  */
 function resolveTargetHandle(
-  target: PipelineDef["nodes"][number],
+  target: EditorPipelineDef["nodes"][number],
   declaredPort: string,
   targetSide: PortSide | null | undefined,
 ): string | null {
@@ -505,7 +512,7 @@ function resolveTargetHandle(
  * the perpendicular landing leg on a border the wire does not touch.
  */
 export function resolveTargetGeometrySide(
-  target: PipelineDef["nodes"][number],
+  target: EditorPipelineDef["nodes"][number],
   targetSide: PortSide,
 ): PortSide {
   if (landsByDrop(target.type)) return targetSide;
@@ -523,8 +530,8 @@ export function resolveTargetGeometrySide(
  * (the fallback trap of a rim/anchor rework, cf. `resolveSourceSide`).
  */
 export function resolveTargetSide(
-  target: PipelineDef["nodes"][number] | undefined,
-  edge: PipelineDef["edges"][number],
+  target: EditorPipelineDef["nodes"][number] | undefined,
+  edge: EditorPipelineDef["edges"][number],
 ): PortSide {
   const persisted = edge.target_anchor?.side ?? edge.target_side;
   if (persisted) return persisted;
@@ -542,8 +549,8 @@ export function resolveTargetSide(
  * iter-2, blocking).
  */
 export function resolveSourceSide(
-  source: PipelineDef["nodes"][number] | undefined,
-  edge: PipelineDef["edges"][number],
+  source: EditorPipelineDef["nodes"][number] | undefined,
+  edge: EditorPipelineDef["edges"][number],
 ): PortSide {
   if (edge.source_anchor) return edge.source_anchor.side;
   const port = primaryPort(edge.source);
@@ -551,7 +558,7 @@ export function resolveSourceSide(
   return declared?.side ?? "right";
 }
 
-export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
+export function deriveEditEdges(pipeline: EditorPipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 
   // Output-label slots (#845): fan-out edges drawn from one departure point

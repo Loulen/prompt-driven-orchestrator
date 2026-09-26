@@ -12,22 +12,20 @@ vi.mock("../api", () => ({
 
 import StatsCharts from "./StatsCharts";
 import { defaultAbsorbent } from "../lib/statsAbsorption";
-import type {
-  StatsAbsorbedMember,
-  StatsCost,
-  StatsCostAggregate,
-  StatsCostEntity,
-  StatsDistribution,
-  StatsEffortCostEntity,
-  StatsModelCostEntity,
-  StatsModelEffortPair,
-  PerformanceModelEffortPair,
-  StatsHarnessPerformance,
-  StatsOverview,
-  StatsPerformance,
-  StatsPerformanceEntity,
-  StatsSessionEntity,
-} from "../types";
+import type { StatsAbsorbedMember } from "../shared/generated/StatsAbsorbedMember";
+import type { StatsCost } from "../shared/generated/StatsCost";
+import type { StatsCostAggregate } from "../shared/generated/StatsCostAggregate";
+import type { StatsCostEntity } from "../shared/generated/StatsCostEntity";
+import type { StatsDistribution } from "../shared/generated/StatsDistribution";
+import type { StatsEffortCostEntity } from "../shared/generated/StatsEffortCostEntity";
+import type { StatsModelCostEntity } from "../shared/generated/StatsModelCostEntity";
+import type { StatsModelEffortPair } from "../shared/generated/StatsModelEffortPair";
+import type { PerformanceModelEffortPair } from "../shared/generated/PerformanceModelEffortPair";
+import type { StatsHarnessPerformance } from "../shared/generated/StatsHarnessPerformance";
+import type { StatsOverview } from "../shared/generated/StatsOverview";
+import type { StatsPerformance } from "../shared/generated/StatsPerformance";
+import type { StatsPerformanceEntity } from "../shared/generated/StatsPerformanceEntity";
+import type { StatsSessionEntity } from "../shared/generated/StatsSessionEntity";
 
 function pipeline(
   id: string,

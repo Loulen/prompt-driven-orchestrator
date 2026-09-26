@@ -9,15 +9,13 @@ import {
   TAB_COHORT_DEFAULTS,
   type PerformanceBand,
 } from "../lib/statsFilters";
-import type {
-  PerformanceModelEffortPair,
-  StatsCost,
-  StatsDistribution,
-  StatsHarnessCost,
-  StatsModelEffortPair,
-  StatsOverview,
-  StatsPerformance,
-} from "../types";
+import type { PerformanceModelEffortPair } from "../shared/generated/PerformanceModelEffortPair";
+import type { StatsCost } from "../shared/generated/StatsCost";
+import type { StatsDistribution } from "../shared/generated/StatsDistribution";
+import type { StatsHarnessCost } from "../shared/generated/StatsHarnessCost";
+import type { StatsModelEffortPair } from "../shared/generated/StatsModelEffortPair";
+import type { StatsOverview } from "../shared/generated/StatsOverview";
+import type { StatsPerformance } from "../shared/generated/StatsPerformance";
 
 /** The reading the suites written before the duration mode (#819) were built
  *  against: the wall-clock, one shared axis. Passed explicitly so their
@@ -285,6 +283,7 @@ COST.by_project[0].pipelines = [COST.by_pipeline[0]];
 // "not set" bucket — and the Node leaves of by_pipeline carrying pairs.
 const MODEL_PAIR: StatsModelEffortPair = {
   key: "claude-opus-4-8|high",
+  runs: 0,
   model: "claude-opus-4-8",
   model_provenance: "observed",
   effort: "high",
@@ -542,6 +541,7 @@ const steering = (mean: number, steered = 1, readable = 2, expected = readable) 
 const DESIGN_MODELS: PerformanceModelEffortPair[] = [
   {
     key: "claude-opus-4-8|",
+    runs: 0,
     model: "claude-opus-4-8",
     model_provenance: "observed",
     effort: null,
@@ -557,6 +557,7 @@ const DESIGN_MODELS: PerformanceModelEffortPair[] = [
   },
   {
     key: "sonnet|high",
+    runs: 0,
     model: "sonnet",
     model_provenance: "requested",
     effort: "high",
@@ -1165,6 +1166,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
             models: [
               {
                 key: "claude-opus-4-8|high",
+                runs: 0,
                 model: "claude-opus-4-8",
                 model_provenance: "observed",
                 effort: "high",

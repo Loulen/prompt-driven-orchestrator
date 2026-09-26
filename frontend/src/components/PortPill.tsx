@@ -1,5 +1,5 @@
 import { Handle, Position } from "@xyflow/react";
-import type { PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
 import { chevronPoints } from "./chevronPoints";
 
 const SIDE_TO_POSITION: Record<PortSide, Position> = {

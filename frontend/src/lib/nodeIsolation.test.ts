@@ -8,9 +8,10 @@ import {
   workspaceLabel,
   worktreePathFor,
 } from "./nodeIsolation";
-import type { NodeDef, NodeType } from "../types";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
-function node(type: NodeType, isolated?: boolean): NodeDef {
+function node(type: NodeType, isolated?: boolean): EditorNodeDef {
   return {
     id: "n1",
     name: "n1",

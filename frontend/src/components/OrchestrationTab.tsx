@@ -1,8 +1,8 @@
 // #723 — Orchestration tab of the NodeRun detail panel + the shared count pastilles.
 import { useEffect, useState } from "react";
 import { ExternalLink, GitFork } from "lucide-react";
-import type { RunStatus } from "../types";
-import { isLiveRun } from "../types";
+import type { RunStatus } from "../shared/generated/RunStatus";
+import { isLiveRun } from "../run/model/runStatus";
 import { formatDuration } from "../lib/runDuration";
 import { formatCostAmount } from "../lib/costLabel";
 import {

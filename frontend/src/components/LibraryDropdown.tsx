@@ -6,8 +6,9 @@ import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { resolveIsolation, workspaceLabel } from "../lib/nodeIsolation";
 import { NodeTypeIcon } from "./NodeTypeIcon";
-import type { NodeDef, NodeType } from "../types";
-import { Tooltip } from "./ui/tooltip";
+import type { NodeType } from "../shared/generated/NodeType";
+import { Tooltip } from "../shared/ui/tooltip";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 
 export default function LibraryDropdown({
@@ -50,7 +51,7 @@ export default function LibraryDropdown({
       const result = await instantiateFromLibrary(name);
       const newId = generateNodeId();
       const view = getDropPosition?.() ?? { x: 200, y: 200 };
-      const node: NodeDef = {
+      const node: EditorNodeDef = {
         id: newId,
         name: result.spec.name,
         type: result.spec.type as NodeType,

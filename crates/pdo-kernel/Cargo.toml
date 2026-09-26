@@ -1,0 +1,16 @@
+[package]
+name = "pdo-kernel"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's shared kernel: clock, Actor, Operation, authorization, event bus, extension host"
+publish = false
+
+[dependencies]
+pdo-extension-api.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true

@@ -7,7 +7,8 @@
 // The vocabulary lives here ONCE so the per-run row and the charts stay
 // byte-identical.
 
-import type { HarnessCost, NodeCost } from "../types";
+import type { HarnessCost } from "../shared/generated/HarnessCost";
+import type { NodeCost } from "../shared/generated/NodeCost";
 
 /** Adaptive precision: sub-dollar estimates show 4 decimals, else 2 (#272). */
 export function costPrecision(usd: number): number {

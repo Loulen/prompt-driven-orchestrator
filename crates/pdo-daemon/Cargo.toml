@@ -1,39 +1,30 @@
 [package]
-name = "pdo-daemon"
+# The legacy crate (ADR-0079): every bounded context is strangled out of it, one
+# crate at a time, and it only shrinks. Deleted by #932.
+#
+# The package is `pdo-legacy`, but the library keeps its historical name
+# `pdo_daemon`: `RUST_LOG=pdo_daemon::…` targets and every `use pdo_daemon::`
+# stay valid until each context moves out. The package name `pdo-daemon` now
+# belongs to the composition root (crates/pdo), which carries the `pdo` binary.
+name = "pdo-legacy"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
-# App, pas une lib : jamais de cargo publish (hygiène crates.io).
 publish = false
-# Un seul binaire de test au lieu d'un par fichier de `tests/` : chaque binaire
-# relinke tout le crate (~254 Mo), donc 50 fichiers = 50 links en série et
-# ~12,6 Go dans target/debug/deps, repayés dans chaque worktree PDO.
-# `tests/it.rs` déclare les 50 fichiers en modules (voir son en-tête).
+# The daemon's integration tests live with the composition root
+# (crates/pdo/tests): they drive the `pdo` binary, which lives there.
 autotests = false
-
-# `publish = false` masque le package aux yeux de dist (il n'empaquette que le
-# publiable par défaut) -> « nothing to Release ». `dist = true` le réintègre
-# explicitement : on veut le distribuer (Homebrew + installeur) SANS le publier
-# sur crates.io. Les deux flags sont complémentaires, pas contradictoires.
-[package.metadata.dist]
-dist = true
 
 [lib]
 name = "pdo_daemon"
 path = "src/lib.rs"
 
-[[bin]]
-name = "pdo"
-path = "src/main.rs"
-
-[[test]]
-name = "it"
-path = "tests/it.rs"
-
 [dependencies]
+pdo-kernel.workspace = true
+ts-rs.workspace = true
 tokio.workspace = true
 axum.workspace = true
 tower-http.workspace = true
@@ -64,7 +55,7 @@ ignore.workspace = true
 # TLS via rustls (pure-Rust, `ring`) instead of the default native-tls/OpenSSL:
 # openssl-sys can't cross-compile to aarch64-unknown-linux-gnu in the release
 # build (no target OpenSSL). rustls removes the C dependency entirely.
-reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
+reqwest.workspace = true
 # Skills sidecar of the portable pipeline document (#673 / ADR-0062): a zip of
 # `<pipeline>.skills/<id>/…` the browser can download and hand back, base64 in
 # the import request. Deflate only — no bzip2/zstd/lzma, nothing to read there.

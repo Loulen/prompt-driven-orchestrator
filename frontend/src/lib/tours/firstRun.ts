@@ -20,7 +20,8 @@
  * a user who edited the training repo keeps their edit.
  */
 
-import { ApiError, createPipeline, createRepo, fetchPipelines, savePipeline } from "../../api";
+import { ApiError } from "../../shared/http/client";
+import { createPipeline, createRepo, fetchPipelines, savePipeline } from "../../api";
 import {
   isNodeFinished,
   type TourAppState,

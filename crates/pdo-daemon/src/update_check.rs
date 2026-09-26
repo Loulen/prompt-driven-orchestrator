@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use ts_rs::TS;
 
 /// The default release source: the GitHub Releases API, latest non-prerelease.
 pub(crate) const RELEASE_SOURCE_URL_DEFAULT: &str =
@@ -76,7 +77,8 @@ pub fn update_check_with(stored: Option<i64>) -> bool {
 // ------------------------------------------------------------------------------------
 
 /// How this binary got here — what a future Update delegates to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum InstallMethod {
     Homebrew,
@@ -236,7 +238,8 @@ pub(crate) fn invoked_exe_path() -> Option<PathBuf> {
 // ------------------------------------------------------------------------------------
 
 /// Who restarts the daemon after an update — or nobody.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum Supervision {
     Systemd,
@@ -360,7 +363,8 @@ pub struct Release {
 }
 
 /// Where the changelog lives, or why it could not come from the releases.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum ChangelogSource {
     /// Assembled from the release notes strictly newer than the installed version.
@@ -370,7 +374,8 @@ pub enum ChangelogSource {
 }
 
 /// The assembled « What's new » payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "UpdateChangelog")]
 pub struct Changelog {
     pub installed_version: String,
     pub latest_version: Option<String>,

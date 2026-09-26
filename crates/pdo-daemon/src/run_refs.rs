@@ -21,6 +21,7 @@
 //! comment anchored on it keeps a stable object to re-map from (#752).
 
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::event_log::{Event, EventKind, NodeStatus, RunState};
 
@@ -29,7 +30,8 @@ pub(crate) const TIP_ID: &str = "tip";
 /// The Run's shared working tree — commits plus uncommitted edits (#835).
 pub(crate) const WORKTREE_ID: &str = "worktree";
 
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[ts(export, rename = "RunRefKind")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RefKind {
     Fork,
@@ -42,7 +44,8 @@ pub(crate) enum RefKind {
 }
 
 /// One Run ref, as the UI and the CLI see it.
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, TS)]
+#[ts(export)]
 pub(crate) struct RunRef {
     /// Stable id, the only thing a URL should carry.
     pub id: String,
@@ -56,14 +59,18 @@ pub(crate) struct RunRef {
     /// more (an archived Run, a live branch already merged back).
     pub sha: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub node_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub node_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub iter: Option<i64>,
 }
 
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[ts(export, rename = "RunDeliveryStatus")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DeliveryStatus {
     Delivered,
@@ -72,7 +79,8 @@ pub(crate) enum DeliveryStatus {
 
 /// One node delivery (or one running node's live branch), as a ready-made pair
 /// the Review page can select in one click.
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, TS)]
+#[ts(export, rename = "RunDelivery")]
 pub(crate) struct Delivery {
     pub node_id: String,
     pub node_name: String,
@@ -82,16 +90,20 @@ pub(crate) struct Delivery {
     pub before: String,
     /// Ref id of the pair's destination when delivered.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub after: Option<String>,
     /// Ref id of the live sub-worktree branch when running.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub live: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub delivered_at: Option<String>,
 }
 
 /// The answer of `GET /runs/<id>/refs`.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone, TS)]
+#[ts(export)]
 pub(crate) struct RunRefs {
     /// Order: fork, deliveries in delivery order, live branches, tip, worktree
     /// (when the Run's worktree exists).
@@ -423,7 +435,8 @@ pub(crate) fn is_default_pair(from: Option<&str>, to: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::{now_iso, project};
+    use crate::event_log::project;
+    use pdo_kernel::clock::now_iso;
 
     fn run_started(run_id: &str, node_defs: serde_json::Value) -> Event {
         Event {

@@ -3,9 +3,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import EdgeDetailPanel from "./EdgeDetailPanel";
 import { useEditStore } from "../stores/editStore";
 import { pipelineToYamlObject } from "../lib/serializePipeline";
-import type { PipelineDef, NodeDef, EdgeDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
-function reviewer(): NodeDef {
+function reviewer(): EditorNodeDef {
   return {
     id: "reviewer",
     name: "reviewer",
@@ -27,7 +28,7 @@ function reviewer(): NodeDef {
   };
 }
 
-function impl(): NodeDef {
+function impl(): EditorNodeDef {
   return {
     id: "impl",
     name: "implementer",
@@ -39,7 +40,7 @@ function impl(): NodeDef {
   };
 }
 
-function makePipeline(edges: EdgeDef[]): PipelineDef {
+function makePipeline(edges: EdgeDef[]): EditorPipelineDef {
   return {
     name: "edge-test",
     version: "1.0",

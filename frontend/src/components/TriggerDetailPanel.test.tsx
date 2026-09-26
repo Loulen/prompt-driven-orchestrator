@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import TriggerDetailPanel from "./TriggerDetailPanel";
-import type { Trigger, TriggerFire } from "../types";
+import type { Trigger } from "../shared/generated/Trigger";
+import type { TriggerFire } from "../shared/generated/TriggerFire";
 
 const fetchTriggerFires = vi.fn();
 const testGuard = vi.fn();
@@ -24,13 +25,13 @@ function trigger(overrides: Partial<Trigger> = {}): Trigger {
     input_template: "audit the codebase",
     variables: {},
     cron: "0 9 * * *",
-    guard_command: null,
+    guard_command: undefined,
     overlap_policy: "skip",
     auto_name: true,
     enabled: true,
     next_fire_at: "2026-06-07T09:00:00.000Z",
-    last_fired_at: null,
-    last_outcome: null,
+    last_fired_at: undefined,
+    last_outcome: undefined,
     ...overrides,
   };
 }
@@ -41,11 +42,11 @@ function fire(overrides: Partial<TriggerFire> = {}): TriggerFire {
     trigger_id: "trg-1",
     ts: "2026-06-06T09:00:00.000Z",
     outcome: "fired",
-    reason: null,
+    reason: undefined,
     run_id: "20260606-090000-abc1234",
-    guard_stdout: null,
-    guard_stderr: null,
-    guard_exit_code: null,
+    guard_stdout: undefined,
+    guard_stderr: undefined,
+    guard_exit_code: undefined,
     ...overrides,
   };
 }
@@ -103,7 +104,7 @@ describe("TriggerDetailPanel", () => {
         id: 2,
         outcome: "skipped-overlap",
         reason: "previous run still active",
-        run_id: null,
+        run_id: undefined,
       }),
     ]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
@@ -115,8 +116,8 @@ describe("TriggerDetailPanel", () => {
 
   it("renders guard-failed and guard-error entries", async () => {
     fetchTriggerFires.mockResolvedValue([
-      fire({ id: 3, outcome: "guard-error", reason: "guard timed out", run_id: null }),
-      fire({ id: 2, outcome: "guard-exit-nonzero", reason: "no work to do", run_id: null }),
+      fire({ id: 3, outcome: "guard-error", reason: "guard timed out", run_id: undefined }),
+      fire({ id: 2, outcome: "guard-exit-nonzero", reason: "no work to do", run_id: undefined }),
     ]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
 
@@ -145,7 +146,7 @@ describe("TriggerDetailPanel", () => {
   it("shows unlimited for an allow trigger without a cap (#239)", () => {
     render(
       <TriggerDetailPanel
-        trigger={trigger({ overlap_policy: "allow", max_concurrent: null })}
+        trigger={trigger({ overlap_policy: "allow", max_concurrent: undefined })}
         onSelectRun={noop}
       />,
     );
@@ -172,7 +173,7 @@ describe("TriggerDetailPanel", () => {
   it("shows no guard-output toggle on a guard-error row (D2)", async () => {
     // guard-error already surfaces its detail via `reason`; no captured streams.
     fetchTriggerFires.mockResolvedValue([
-      fire({ id: 5, outcome: "guard-error", reason: "guard timed out", run_id: null }),
+      fire({ id: 5, outcome: "guard-error", reason: "guard timed out", run_id: undefined }),
     ]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
     expect(await screen.findByText(/guard-error/i)).toBeInTheDocument();
@@ -185,7 +186,7 @@ describe("TriggerDetailPanel", () => {
         id: 6,
         outcome: "guard-exit-nonzero",
         reason: "guard exited non-zero",
-        run_id: null,
+        run_id: undefined,
         guard_stdout: "checked 0 issues",
         guard_stderr: "gh: no work to do",
         guard_exit_code: 7,
@@ -211,7 +212,7 @@ describe("TriggerDetailPanel", () => {
         id: 7,
         outcome: "guard-exit-nonzero",
         reason: "guard exited non-zero",
-        run_id: null,
+        run_id: undefined,
         guard_stdout: "",
         guard_stderr: "gh: no work to do",
         guard_exit_code: 1,
@@ -234,7 +235,7 @@ describe("TriggerDetailPanel", () => {
         id: 8,
         outcome: "guard-exit-nonzero",
         reason: "guard exited non-zero",
-        run_id: null,
+        run_id: undefined,
         guard_stdout: "",
         guard_stderr: "",
         guard_exit_code: 3,

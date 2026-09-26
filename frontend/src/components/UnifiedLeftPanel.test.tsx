@@ -3,12 +3,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
-import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
+import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { LibraryPipelineEntry } from "../api";
-import { ApiError, cleanupRun, createPipeline, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
+import { ApiError } from "../shared/http/client";
+import { cleanupRun, createPipeline, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
+import { legacyScope } from "../test/legacy";
 
 const mockRenameRun = vi.mocked(renameRun);
 const mockCreatePipeline = vi.mocked(createPipeline);
@@ -313,7 +317,7 @@ function renderPanel({
   runs?: RunListEntry[];
   libraryPipelines?: LibraryPipelineEntry[];
   selectedRunId?: string | null;
-  triggers?: Trigger[];
+  triggers?: TriggerListEntry[];
 } = {}) {
   return render(
     <UnifiedLeftPanel
@@ -331,7 +335,7 @@ function renderPanel({
 describe("UnifiedLeftPanel run display labels", () => {
   it("shows display label when run has a name", () => {
     const runs: RunListEntry[] = [
-      { run_id: "run-abc-123", pipeline_name: "review-loop", status: "running", started_at: null, name: "Fix auth bug" },
+      { stalled: false, effective_repo: "", run_id: "run-abc-123", pipeline_name: "review-loop", status: "running", started_at: null, name: "Fix auth bug" },
     ];
     renderPanel({ runs });
 
@@ -341,7 +345,7 @@ describe("UnifiedLeftPanel run display labels", () => {
 
   it("falls back to run-id when no name exists", () => {
     const runs: RunListEntry[] = [
-      { run_id: "20260514-143000-abc1234", pipeline_name: "deploy-pipe", status: "completed", started_at: null },
+      { stalled: false, effective_repo: "", run_id: "20260514-143000-abc1234", pipeline_name: "deploy-pipe", status: "completed", started_at: null },
     ];
     renderPanel({ runs });
 
@@ -351,7 +355,7 @@ describe("UnifiedLeftPanel run display labels", () => {
 
   it("falls back to run-id when name is null", () => {
     const runs: RunListEntry[] = [
-      { run_id: "20260514-150000-def5678", pipeline_name: "my-pipe", status: "running", started_at: null, name: null },
+      { run_id: "20260514-150000-def5678", pipeline_name: "my-pipe", status: "running", started_at: null, name: undefined, stalled: false, effective_repo: "" },
     ];
     renderPanel({ runs });
 
@@ -360,7 +364,7 @@ describe("UnifiedLeftPanel run display labels", () => {
 
   it("shows two-line entries: label on top, pipeline name below", () => {
     const runs: RunListEntry[] = [
-      { run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, name: "Feature X" },
+      { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, name: "Feature X" },
     ];
     renderPanel({ runs });
 
@@ -374,7 +378,7 @@ describe("UnifiedLeftPanel run display labels", () => {
 
   it("renders edit icon for renaming", () => {
     const runs: RunListEntry[] = [
-      { run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, name: "My Run" },
+      { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, name: "My Run" },
     ];
     renderPanel({ runs });
 
@@ -388,7 +392,7 @@ describe("UnifiedLeftPanel run display labels", () => {
 
   it("shows rename input when edit icon is clicked", () => {
     const runs: RunListEntry[] = [
-      { run_id: "run-1", pipeline_name: "pipe", status: "running", started_at: null, name: "Old Name" },
+      { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "pipe", status: "running", started_at: null, name: "Old Name" },
     ];
     renderPanel({ runs });
 
@@ -401,7 +405,7 @@ describe("UnifiedLeftPanel run display labels", () => {
 
   it("calls renameRun on Enter", () => {
     const runs: RunListEntry[] = [
-      { run_id: "run-enter", pipeline_name: "pipe", status: "completed", started_at: null, name: "Before" },
+      { stalled: false, effective_repo: "", run_id: "run-enter", pipeline_name: "pipe", status: "completed", started_at: null, name: "Before" },
     ];
     renderPanel({ runs });
 
@@ -415,7 +419,7 @@ describe("UnifiedLeftPanel run display labels", () => {
 
   it("cancels rename on Escape without calling API", () => {
     const runs: RunListEntry[] = [
-      { run_id: "run-esc", pipeline_name: "pipe", status: "running", started_at: null, name: "Keep" },
+      { stalled: false, effective_repo: "", run_id: "run-esc", pipeline_name: "pipe", status: "running", started_at: null, name: "Keep" },
     ];
     renderPanel({ runs });
 
@@ -433,7 +437,7 @@ describe("UnifiedLeftPanel run display labels", () => {
 // app never mounted. Deleted with it (#503); the live surface is this panel.
 describe("UnifiedLeftPanel run status dot", () => {
   const run = (over: Partial<RunListEntry>): RunListEntry[] => [
-    { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, ...over },
+    { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, stalled: false, effective_repo: "", ...over },
   ];
 
   it("maps every status to its own dot colour", () => {
@@ -544,7 +548,7 @@ describe("UnifiedLeftPanel three-tab strip", () => {
 
   it("shows a provenance badge on a triggered run row", () => {
     const runs: RunListEntry[] = [
-      { run_id: "run-trig", pipeline_name: "auditor", status: "running", started_at: null, triggered_by: "trg-1" },
+      { stalled: false, effective_repo: "", run_id: "run-trig", pipeline_name: "auditor", status: "running", started_at: null, triggered_by: "trg-1" },
     ];
     renderPanel({ runs });
     expect(screen.getByTestId("run-trigger-badge")).toBeInTheDocument();
@@ -552,7 +556,7 @@ describe("UnifiedLeftPanel three-tab strip", () => {
 
   it("does not show a provenance badge on a manual run row", () => {
     const runs: RunListEntry[] = [
-      { run_id: "run-manual", pipeline_name: "auditor", status: "running", started_at: null },
+      { stalled: false, effective_repo: "", run_id: "run-manual", pipeline_name: "auditor", status: "running", started_at: null },
     ];
     renderPanel({ runs });
     expect(screen.queryByTestId("run-trigger-badge")).not.toBeInTheDocument();
@@ -568,7 +572,7 @@ describe("UnifiedLeftPanel three-tab strip", () => {
         libraryPipelines={[]}
         onLibraryPipelinesChanged={noop}
         triggers={[
-          {
+          { effective_repo: "",
             id: "trg-1",
             name: "Nightly audit",
             pipeline_id: "auditor",
@@ -594,8 +598,8 @@ describe("UnifiedLeftPanel three-tab strip", () => {
 describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
   it("stays flat (no repo-group header) when all runs share one repo", () => {
     const runs: RunListEntry[] = [
-      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
-      { run_id: "r2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/foo" },
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/foo" },
     ];
     renderPanel({ runs });
     expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
@@ -604,7 +608,7 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
 
   it("opens project onboarding from a flat single-repository list", () => {
     const runs: RunListEntry[] = [
-      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
     ];
     renderPanel({ runs });
 
@@ -625,9 +629,9 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
 
   it("renders one repo-group header per distinct repo, alphabetical, when ≥ 2 repos", () => {
     const runs: RunListEntry[] = [
-      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/zebra" },
-      { run_id: "r2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/alpha" },
-      { run_id: "r3", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/zebra" },
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/zebra" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/alpha" },
+      { stalled: false, run_id: "r3", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/zebra" },
     ];
     renderPanel({ runs });
     expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
@@ -643,8 +647,8 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
 
   it("excludes archived rows from the repo-group threshold and lists them in the Archived section", () => {
     const runs: RunListEntry[] = [
-      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
-      { run_id: "r2", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/bar" },
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/bar" },
     ];
     renderPanel({ runs });
     // Only one *active* repo ⇒ active list stays flat (no repo-group header).
@@ -656,8 +660,8 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
 
   it("groups a null-target run (effective_repo resolved server-side) with no catch-all bucket", () => {
     const runs: RunListEntry[] = [
-      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/alpha" },
-      { run_id: "r2", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/root" },
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/alpha" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/root" },
     ];
     renderPanel({ runs });
     const labels = screen.getAllByTestId("run-repo-label").map((el) => el.textContent);
@@ -672,14 +676,14 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
 // collapsible "Archived" section below it. Collapsed by default; auto-opens when
 // the currently-selected run is (or becomes) archived, but stays collapsible.
 describe("UnifiedLeftPanel archived section (#136)", () => {
-  const active: RunListEntry = {
+  const active: RunListEntry = { stalled: false, effective_repo: "",
     run_id: "run-active",
     pipeline_name: "p",
     status: "running",
     started_at: null,
     name: "Active One",
   };
-  const archived: RunListEntry = {
+  const archived: RunListEntry = { stalled: false, effective_repo: "",
     run_id: "run-archived",
     pipeline_name: "p",
     status: "archived",
@@ -756,9 +760,9 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
 
   it("groups the active list by repo while excluding archived runs from the threshold", () => {
     const runs: RunListEntry[] = [
-      { run_id: "a1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/alpha" },
-      { run_id: "a2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/zebra" },
-      { run_id: "a3", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/gamma" },
+      { stalled: false, run_id: "a1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/alpha" },
+      { stalled: false, run_id: "a2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/zebra" },
+      { stalled: false, run_id: "a3", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/gamma" },
     ];
     renderPanel({ runs });
     // Two active repos ⇒ two groups; the archived third repo adds no phantom group.
@@ -868,11 +872,11 @@ describe("UnifiedLeftPanel pipeline delete", () => {
   const libEntry: PipelineListEntry = {
     id: "simple-bugfix",
     name: "simple-bugfix",
-    scope: "library",
+    scope: legacyScope("library"),
     path: "/home/u/.pdo/library/pipelines/simple-bugfix.yaml",
     node_count: 3,
     modified: null,
-    variables: {},
+    variables: {}, prompt_required: true,
   };
 
   it("deletes the selected instance pipeline by id", async () => {
@@ -896,7 +900,7 @@ describe("UnifiedLeftPanel pipeline delete", () => {
 // #774 — a hover pencil on Pipelines-tab rows flips the name into an inline
 // input; Enter commits through the store's renamePipeline action.
 describe("UnifiedLeftPanel pipeline rename", () => {
-  const entry: PipelineListEntry = {
+  const entry: PipelineListEntry = { prompt_required: true,
     id: "simple-bugfix",
     name: "simple-bugfix",
     scope: "instance",
@@ -1019,11 +1023,11 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
       {
         id: "fixture",
         name: "fixture",
-        scope: "repo",
+        scope: legacyScope("repo"),
         path: "/repo/.pdo/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {},
+        variables: {}, prompt_required: true,
       },
     ]);
 
@@ -1056,11 +1060,11 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
       {
         id: "fixture",
         name: "fixture", // == libOnly.name
-        scope: "library", // the regression's scope
+        scope: legacyScope("library"), // the regression's scope
         path: "/home/u/.pdo/library/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {},
+        variables: {}, prompt_required: true,
       } satisfies PipelineListEntry,
     ]);
     renderWithLib(); // libraryPipelines={[libOnly]}, opens Library tab
@@ -1077,11 +1081,11 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
       {
         id: "fixture",
         name: "fixture",
-        scope: "library",
+        scope: legacyScope("library"),
         path: "/home/u/.pdo/library/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {},
+        variables: {}, prompt_required: true,
       } satisfies PipelineListEntry,
     ]);
     renderWithLib(onChanged);
@@ -1111,11 +1115,11 @@ describe.skip("UnifiedLeftPanel duplicate is usable without reload (#371, supers
   const original: PipelineListEntry = {
     id: "planner",
     name: "planner",
-    scope: "library",
+    scope: legacyScope("library"),
     path: "/home/u/.pdo/library/pipelines/planner.yaml",
     node_count: 3,
     modified: null,
-    variables: {},
+    variables: {}, prompt_required: true,
   };
   // /pipelines shape of the copy: the daemon scans the library dir and tags it
   // scope:"library", so it belongs in block 1 (proper button, "library" badge).
@@ -1189,11 +1193,11 @@ describe.skip("UnifiedLeftPanel duplicate is usable without reload (#371, supers
     const solo: PipelineListEntry = {
       id: "solo",
       name: "solo",
-      scope: "library",
+      scope: legacyScope("library"),
       path: "/home/u/.pdo/library/pipelines/solo.yaml",
       node_count: 2,
       modified: null,
-      variables: {},
+      variables: {}, prompt_required: true,
     };
     const soloCopy: PipelineListEntry = {
       ...solo,
@@ -1267,11 +1271,11 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
   const workingRow: PipelineListEntry = {
     id: "fixture-repo-id",
     name: "fixture",
-    scope: "repo",
+    scope: legacyScope("repo"),
     path: "/repo/.pdo/pipelines/fixture.yaml",
     node_count: 3,
     modified: null,
-    variables: {},
+    variables: {}, prompt_required: true,
   };
 
   function renderStarredRow(libraryPipelines: LibraryPipelineEntry[]) {
@@ -1435,7 +1439,7 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
     "renders the open-session button for a %s run",
     (status) => {
       const runs: RunListEntry[] = [
-        { run_id: "run-term-1", pipeline_name: "p", status, started_at: null, name: "R" },
+        { stalled: false, effective_repo: "", run_id: "run-term-1", pipeline_name: "p", status, started_at: null, name: "R" },
       ];
       renderPanel({ runs });
       expect(screen.getByTestId("open-session-button")).toBeInTheDocument();
@@ -1444,7 +1448,7 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
 
   it.each(HIDDEN)("hides the open-session button for a %s run", (status) => {
     const runs: RunListEntry[] = [
-      { run_id: "run-x", pipeline_name: "p", status, started_at: null, name: "R" },
+      { stalled: false, effective_repo: "", run_id: "run-x", pipeline_name: "p", status, started_at: null, name: "R" },
     ];
     renderPanel({ runs });
     expect(screen.queryByTestId("open-session-button")).not.toBeInTheDocument();
@@ -1453,7 +1457,7 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
   it("clicking open-session calls openRunShell and mounts the shell modal", async () => {
     mockOpenRunShell.mockResolvedValueOnce({ session: "pdo-shell-run-term-1", created: true });
     const runs: RunListEntry[] = [
-      { run_id: "run-term-1", pipeline_name: "p", status: "failed", started_at: null, name: "R" },
+      { stalled: false, effective_repo: "", run_id: "run-term-1", pipeline_name: "p", status: "failed", started_at: null, name: "R" },
     ];
     renderPanel({ runs });
 
@@ -1468,7 +1472,7 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
   it("does not mount the shell modal when openRunShell rejects (silent, like cleanup)", async () => {
     mockOpenRunShell.mockRejectedValueOnce(new Error("409"));
     const runs: RunListEntry[] = [
-      { run_id: "run-term-2", pipeline_name: "p", status: "completed", started_at: null, name: "R" },
+      { stalled: false, effective_repo: "", run_id: "run-term-2", pipeline_name: "p", status: "completed", started_at: null, name: "R" },
     ];
     renderPanel({ runs });
 
@@ -1485,7 +1489,7 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
 // section, so their row body is absent → queryByTestId is null (hidden), same as
 // the #316 archived assertion.
 describe("UnifiedLeftPanel — run-level controls (#110)", () => {
-  const runRow = (status: RunListEntry["status"]): RunListEntry => ({
+  const runRow = (status: RunListEntry["status"]): RunListEntry => ({ stalled: false, effective_repo: "",
     run_id: "run-1",
     pipeline_name: "p",
     status,
@@ -1627,7 +1631,8 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
 // applies BEFORE the active/archived split so grouping and the Archived count
 // both reflect it.
 describe("UnifiedLeftPanel run filters (#336)", () => {
-  const trig: Trigger = {
+  const trig: TriggerListEntry = {
+    effective_repo: "",
     id: "trg-1",
     name: "Nightly audit",
     pipeline_id: "auditor",
@@ -1641,10 +1646,10 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
   };
 
   const runs: RunListEntry[] = [
-    { run_id: "r1", pipeline_name: "auditor", status: "running", started_at: null, name: "Alpha auditor", effective_repo: "/repos/alpha", triggered_by: "trg-1" },
-    { run_id: "r2", pipeline_name: "deploy", status: "completed", started_at: null, name: "Alpha deploy", effective_repo: "/repos/alpha" },
-    { run_id: "r3", pipeline_name: "auditor", status: "running", started_at: null, name: "Zebra auditor", effective_repo: "/repos/zebra", triggered_by: "trg-gone" },
-    { run_id: "r4", pipeline_name: "deploy", status: "archived", started_at: null, name: "Zebra archived", effective_repo: "/repos/zebra" },
+    { stalled: false, run_id: "r1", pipeline_name: "auditor", status: "running", started_at: null, name: "Alpha auditor", effective_repo: "/repos/alpha", triggered_by: "trg-1" },
+    { stalled: false, run_id: "r2", pipeline_name: "deploy", status: "completed", started_at: null, name: "Alpha deploy", effective_repo: "/repos/alpha" },
+    { stalled: false, run_id: "r3", pipeline_name: "auditor", status: "running", started_at: null, name: "Zebra auditor", effective_repo: "/repos/zebra", triggered_by: "trg-gone" },
+    { stalled: false, run_id: "r4", pipeline_name: "deploy", status: "archived", started_at: null, name: "Zebra archived", effective_repo: "/repos/zebra" },
   ];
 
   it("hides the filter row entirely when there are no runs", () => {
@@ -1787,8 +1792,8 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
   it("buckets an empty pipeline_name without crashing", async () => {
     const user = userEvent.setup();
     const weird: RunListEntry[] = [
-      { run_id: "w1", pipeline_name: "", status: "running", started_at: null, name: "Nameless", effective_repo: "/repos/a" },
-      { run_id: "w2", pipeline_name: "real", status: "running", started_at: null, name: "Named", effective_repo: "/repos/a" },
+      { stalled: false, run_id: "w1", pipeline_name: "", status: "running", started_at: null, name: "Nameless", effective_repo: "/repos/a" },
+      { stalled: false, run_id: "w2", pipeline_name: "real", status: "running", started_at: null, name: "Named", effective_repo: "/repos/a" },
     ];
     renderPanel({ runs: weird });
 
@@ -1806,7 +1811,8 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
 // collapse all, and Settings › Interface seeds the default. The tree logic is
 // unit-tested in `lib/runTree.test.ts`; this block checks the rendering seams.
 describe("UnifiedLeftPanel run tree (#783)", () => {
-  const trig: Trigger = {
+  const trig: TriggerListEntry = {
+    effective_repo: "",
     id: "trg-1",
     name: "Nightly audit",
     pipeline_id: "auditor",
@@ -1820,12 +1826,12 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
   };
 
   const runs: RunListEntry[] = [
-    { run_id: "epic", pipeline_name: "orchestrate-epic", status: "running", started_at: null, name: "Refonte auth — orchestrateur", effective_repo: "/repos/a" },
-    { run_id: "kid", pipeline_name: "implement-loop", status: "running", started_at: null, name: "#731 login form", parent_run_id: "epic", effective_repo: "/repos/a" },
-    { run_id: "kid-trig", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#733 logout — nightly", parent_run_id: "epic", triggered_by: "trg-1", effective_repo: "/repos/b" },
-    { run_id: "grandkid", pipeline_name: "code-review", status: "completed", started_at: null, name: "review 731", parent_run_id: "kid", effective_repo: "/repos/a" },
-    { run_id: "orphan", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#700 spike", parent_run_id: "forgotten", effective_repo: "/repos/a" },
-    { run_id: "solo", pipeline_name: "triage", status: "completed", started_at: null, name: "triage nightly", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "epic", pipeline_name: "orchestrate-epic", status: "running", started_at: null, name: "Refonte auth — orchestrateur", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "kid", pipeline_name: "implement-loop", status: "running", started_at: null, name: "#731 login form", parent_run_id: "epic", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "kid-trig", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#733 logout — nightly", parent_run_id: "epic", triggered_by: "trg-1", effective_repo: "/repos/b" },
+    { stalled: false, run_id: "grandkid", pipeline_name: "code-review", status: "completed", started_at: null, name: "review 731", parent_run_id: "kid", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "orphan", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#700 spike", parent_run_id: "forgotten", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "solo", pipeline_name: "triage", status: "completed", started_at: null, name: "triage nightly", effective_repo: "/repos/a" },
   ];
 
   beforeEach(() => {
@@ -1857,7 +1863,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
   it("a child follows its parent's Project group, whatever its own repo", () => {
     const twoRepos: RunListEntry[] = [
       ...runs,
-      { run_id: "other", pipeline_name: "deploy", status: "completed", started_at: null, name: "deploy preview", effective_repo: "/repos/b" },
+      { stalled: false, run_id: "other", pipeline_name: "deploy", status: "completed", started_at: null, name: "deploy preview", effective_repo: "/repos/b" },
     ];
     renderPanel({ runs: twoRepos });
     const groups = screen.getAllByTestId("run-repo-group");
@@ -2095,8 +2101,8 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
 
 describe("UnifiedLeftPanel run multi-select (#577)", () => {
   const twoRuns: RunListEntry[] = [
-    { run_id: "r1", pipeline_name: "p", status: "completed", started_at: null, name: "Run One", effective_repo: "/repo/a" },
-    { run_id: "r2", pipeline_name: "p", status: "running", started_at: null, name: "Run Two", effective_repo: "/repo/a" },
+    { stalled: false, run_id: "r1", pipeline_name: "p", status: "completed", started_at: null, name: "Run One", effective_repo: "/repo/a" },
+    { stalled: false, run_id: "r2", pipeline_name: "p", status: "running", started_at: null, name: "Run Two", effective_repo: "/repo/a" },
   ];
 
   beforeEach(() => {
@@ -2213,10 +2219,10 @@ describe("UnifiedLeftPanel run multi-select (#577)", () => {
 
   it("the cleanup confirm counts the finished child runs the daemon archives with the parent (#815)", () => {
     const family: RunListEntry[] = [
-      { run_id: "p1", pipeline_name: "p", status: "completed", started_at: null, name: "Parent", effective_repo: "/repo/a" },
-      { run_id: "c1", pipeline_name: "p", status: "completed", started_at: null, name: "Kid One", effective_repo: "/repo/a", parent_run_id: "p1" },
-      { run_id: "c2", pipeline_name: "p", status: "failed", started_at: null, name: "Kid Two", effective_repo: "/repo/a", parent_run_id: "p1" },
-      { run_id: "c3", pipeline_name: "p", status: "running", started_at: null, name: "Kid Live", effective_repo: "/repo/a", parent_run_id: "p1" },
+      { stalled: false, run_id: "p1", pipeline_name: "p", status: "completed", started_at: null, name: "Parent", effective_repo: "/repo/a" },
+      { stalled: false, run_id: "c1", pipeline_name: "p", status: "completed", started_at: null, name: "Kid One", effective_repo: "/repo/a", parent_run_id: "p1" },
+      { stalled: false, run_id: "c2", pipeline_name: "p", status: "failed", started_at: null, name: "Kid Two", effective_repo: "/repo/a", parent_run_id: "p1" },
+      { stalled: false, run_id: "c3", pipeline_name: "p", status: "running", started_at: null, name: "Kid Live", effective_repo: "/repo/a", parent_run_id: "p1" },
     ];
     renderPanel({ runs: family });
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Parent" }));
@@ -2229,9 +2235,9 @@ describe("UnifiedLeftPanel run multi-select (#577)", () => {
 
   it("group-header select-all toggles the whole repo group", () => {
     const runs: RunListEntry[] = [
-      { run_id: "a1", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha One", effective_repo: "/repo/alpha" },
-      { run_id: "a2", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha Two", effective_repo: "/repo/alpha" },
-      { run_id: "b1", pipeline_name: "p", status: "completed", started_at: null, name: "Beta One", effective_repo: "/repo/beta" },
+      { stalled: false, run_id: "a1", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha One", effective_repo: "/repo/alpha" },
+      { stalled: false, run_id: "a2", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha Two", effective_repo: "/repo/alpha" },
+      { stalled: false, run_id: "b1", pipeline_name: "p", status: "completed", started_at: null, name: "Beta One", effective_repo: "/repo/beta" },
     ];
     renderPanel({ runs });
     const groupControls = screen.getAllByTestId("run-group-select-all");
@@ -2246,11 +2252,11 @@ describe.skip("UnifiedLeftPanel library multi-select (#577, scope fixtures super
   const repoPipe: PipelineListEntry = {
     id: "pipe1",
     name: "Pipe One",
-    scope: "repo",
+    scope: legacyScope("repo"),
     path: "/x/pipe1.yaml",
     node_count: 1,
     modified: null,
-    variables: {},
+    variables: {}, prompt_required: true,
   };
   const libOnly: LibraryPipelineEntry = {
     id: "fixture",

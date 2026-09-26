@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import TriggersListPanel from "./TriggersListPanel";
-import type { Trigger } from "../types";
+import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 
 const updateTrigger = vi.fn();
 const deleteTrigger = vi.fn();
@@ -13,8 +13,9 @@ vi.mock("../api", () => ({
 
 const noop = () => {};
 
-function trigger(overrides: Partial<Trigger> = {}): Trigger {
+function trigger(overrides: Partial<TriggerListEntry> = {}): TriggerListEntry {
   return {
+    effective_repo: "",
     id: "trg-1",
     name: "Nightly audit",
     pipeline_id: "auditor",
@@ -24,19 +25,19 @@ function trigger(overrides: Partial<Trigger> = {}): Trigger {
     input_template: "audit",
     variables: {},
     cron: "0 9 * * *",
-    guard_command: null,
+    guard_command: undefined,
     overlap_policy: "skip",
     auto_name: true,
     enabled: true,
     next_fire_at: "2026-06-07T09:00:00.000Z",
-    last_fired_at: null,
-    last_outcome: null,
+    last_fired_at: undefined,
+    last_outcome: undefined,
     ...overrides,
   };
 }
 
 function renderPanel(
-  triggers: Trigger[] = [],
+  triggers: TriggerListEntry[] = [],
   overrides: Partial<React.ComponentProps<typeof TriggersListPanel>> = {},
 ) {
   return render(
@@ -161,7 +162,7 @@ describe("TriggersListPanel grouping by repo (#258)", () => {
   it("groups a null-target trigger under its resolved repo, with no per-row badge", () => {
     renderPanel([
       trigger({ id: "t1", name: "A", target_repo: "/repos/alpha", effective_repo: "/repos/alpha" }),
-      trigger({ id: "tn", name: "N", target_repo: null, effective_repo: "/repos/root" }),
+      trigger({ id: "tn", name: "N", target_repo: undefined, effective_repo: "/repos/root" }),
     ]);
     const labels = screen
       .getAllByTestId("trigger-repo-label")

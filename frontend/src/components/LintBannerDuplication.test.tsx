@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import PipelineInspector from "./PipelineInspector";
 import { useEditStore } from "../stores/editStore";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 
 // jsdom has no ResizeObserver; ReactFlow's container measurement needs it
 // (mirrors NodeDetailPanel.test.tsx).

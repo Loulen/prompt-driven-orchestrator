@@ -3,13 +3,14 @@ import { describe, it, expect, beforeEach } from "vitest";
 import EdgeDetailPanel from "./EdgeDetailPanel";
 import { useEditStore } from "../stores/editStore";
 import { pipelineToYamlObject } from "../lib/serializePipeline";
-import type { PipelineDef, NodeDef, EdgeDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 // #845 — the Display section: whether the carried outputs are NAMED on the
 // canvas, and whether the edge passes over or under the node cards. Both are
 // layout, and the section says so.
 
-function source(outputs: string[]): NodeDef {
+function source(outputs: string[]): EditorNodeDef {
   return {
     id: "design",
     name: "design",
@@ -21,7 +22,7 @@ function source(outputs: string[]): NodeDef {
   };
 }
 
-function target(): NodeDef {
+function target(): EditorNodeDef {
   return {
     id: "orch",
     name: "orchestrator",
@@ -34,7 +35,7 @@ function target(): NodeDef {
 }
 
 function seedEdge(edge: EdgeDef, declared: string[] = ["out", "spec"]) {
-  const pipeline: PipelineDef = {
+  const pipeline: EditorPipelineDef = {
     name: "edge-845",
     version: "1.0",
     variables: {},

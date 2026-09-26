@@ -191,7 +191,7 @@ pub(crate) async fn declare_wait(
     let event = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeAwaitingUser,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
@@ -358,7 +358,7 @@ pub(crate) async fn lift_wait(
     let event = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeResumed,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),

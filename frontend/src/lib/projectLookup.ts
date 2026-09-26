@@ -1,4 +1,4 @@
-import type { Project } from "../types";
+import type { Project } from "../shared/generated/Project";
 import type { ProjectRef } from "./groupByRepo";
 
 /**

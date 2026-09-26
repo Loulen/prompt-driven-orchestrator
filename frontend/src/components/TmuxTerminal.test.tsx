@@ -174,7 +174,7 @@ vi.mock("../api", () => ({
 }));
 
 // Exposes the tooltip text on a wrapper, unless the tooltip is disabled.
-vi.mock("./ui/tooltip", () => ({
+vi.mock("../shared/ui/tooltip", () => ({
   Tooltip: ({
     children,
     content,

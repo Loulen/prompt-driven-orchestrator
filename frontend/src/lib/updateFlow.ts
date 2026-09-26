@@ -1,4 +1,5 @@
-import type { UpdateAttempt, UpdateStatus } from "../types";
+import type { UpdateAttempt } from "../shared/generated/UpdateAttempt";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 /**
  * The in-app update flow (#699), as a pure state machine so the UI's waiting /

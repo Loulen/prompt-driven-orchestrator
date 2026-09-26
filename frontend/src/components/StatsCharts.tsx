@@ -10,34 +10,32 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type {
-  PerformanceEffortEntity,
-  StatsCost,
-  StatsCostAggregate,
-  StatsCostEntity,
-  StatsCostPeriod,
-  StatsEffortCostEntity,
-  StatsHarnessCost,
-  StatsHarnessPerformance,
-  StatsModelEffortPair,
-  StatsOverview,
-  StatsProvenance,
-  StatsDistribution,
-  StatsPerformance,
-  StatsPerformanceAggregate,
-  StatsPerformanceEntity,
-  StatsProjectCostEntity,
-  StatsAbsorbedMember,
-  StatsSessionEntity,
-  StatsSessionHarness,
-  StatsSessionPeriod,
-  StatsSteeredRate,
-} from "../types";
+import type { PerformanceEffortEntity } from "../shared/generated/PerformanceEffortEntity";
+import type { StatsCost } from "../shared/generated/StatsCost";
+import type { StatsCostAggregate } from "../shared/generated/StatsCostAggregate";
+import type { StatsCostEntity } from "../shared/generated/StatsCostEntity";
+import type { StatsCostPeriod } from "../shared/generated/StatsCostPeriod";
+import type { StatsEffortCostEntity } from "../shared/generated/StatsEffortCostEntity";
+import type { StatsHarnessCost } from "../shared/generated/StatsHarnessCost";
+import type { StatsHarnessPerformance } from "../shared/generated/StatsHarnessPerformance";
+import type { StatsModelEffortPair } from "../shared/generated/StatsModelEffortPair";
+import type { StatsOverview } from "../shared/generated/StatsOverview";
+import type { StatsProvenance } from "../shared/generated/StatsProvenance";
+import type { StatsDistribution } from "../shared/generated/StatsDistribution";
+import type { StatsPerformance } from "../shared/generated/StatsPerformance";
+import type { StatsPerformanceAggregate } from "../shared/generated/StatsPerformanceAggregate";
+import type { StatsPerformanceEntity } from "../shared/generated/StatsPerformanceEntity";
+import type { StatsProjectCostEntity } from "../shared/generated/StatsProjectCostEntity";
+import type { StatsAbsorbedMember } from "../shared/generated/StatsAbsorbedMember";
+import type { StatsSessionEntity } from "../shared/generated/StatsSessionEntity";
+import type { StatsSessionHarness } from "../shared/generated/StatsSessionHarness";
+import type { StatsSessionPeriod } from "../shared/generated/StatsSessionPeriod";
+import type { StatsSteeredRate } from "../shared/generated/StatsSteeredRate";
 import { formatCostAmount } from "../lib/costLabel";
 import { harnessColor } from "../lib/harness";
 import { cssColor } from "../lib/cssColor";
 import { useTheme } from "../hooks/useTheme";
-import { Tooltip, TooltipProvider } from "./ui/tooltip";
+import { Tooltip, TooltipProvider } from "../shared/ui/tooltip";
 import SelectControl from "./SelectControl";
 import { CombinedIcon, GlobalAbsorptionIcon } from "./StatsAbsorption";
 import {

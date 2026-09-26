@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Skill, SkillFolder } from "../types";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
 import {
   buildRows,
   descendantFolderIds,
@@ -16,7 +17,7 @@ const folder = (id: string, name: string, parent_id: string | null = null): Skil
   created_at: t,
   updated_at: t,
 });
-const skill = (id: string, name: string, folder_id: string | null = null, description = ""): Skill => ({
+const skill = (id: string, name: string, folder_id: string | null = null, description = ""): Skill => ({ locked: false,
   id,
   name,
   description,
@@ -25,7 +26,7 @@ const skill = (id: string, name: string, folder_id: string | null = null, descri
   updated_at: t,
 });
 
-const folders = [folder("f-m", "méthode"), folder("f-i", "ippon"), folder("f-j", "java", "f-i")];
+const folders = [folder("f-m", "méthode"), folder("f-i", "acme"), folder("f-j", "java", "f-i")];
 const skills = [
   skill("s-tdd", "tdd", "f-m", "Test-driven development"),
   skill("s-gr", "grilling", "f-m"),
@@ -35,7 +36,7 @@ const skills = [
 
 describe("skillTree", () => {
   it("labels a folder with its path", () => {
-    expect(folderPathLabel("f-j", folders)).toBe("ippon / java");
+    expect(folderPathLabel("f-j", folders)).toBe("acme / java");
     expect(folderPathLabel("f-m", folders)).toBe("méthode");
   });
 

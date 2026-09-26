@@ -470,7 +470,8 @@ fn validate_stale(state: &RunState, event: &Event) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::{now_iso, project};
+    use crate::event_log::project;
+    use pdo_kernel::clock::now_iso;
 
     fn ev(kind: EventKind, node_id: Option<&str>, iter: Option<i64>) -> Event {
         let payload = if kind == EventKind::RunStarted {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, deleteSkillFile, fetchSkillFile, uploadSkillFileFromPath, uploadSkillFiles, writeSkillFile } from "../api";
-import type { SkillDetail, SkillFileContent } from "../types";
+import { ApiError } from "../shared/http/client";
+import { deleteSkillFile, fetchSkillFile, uploadSkillFileFromPath, uploadSkillFiles, writeSkillFile } from "../api";
+import type { SkillDetail, SkillFileContent } from "../skill/model/skill";
 import { validateSkillMd } from "../lib/skillMd";
 import { SKILL_MD, sortDroppedFiles, sortHostPicks, type RefusedItem } from "../lib/skillFiles";
 

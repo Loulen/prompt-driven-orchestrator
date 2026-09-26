@@ -8,7 +8,7 @@
 // grid (xyflow `Background`, drawn at the same pitch) which is pure chrome.
 
 import type { Point } from "./orthogonalRouter";
-import type { GridSize } from "../types";
+import type { GridSize } from "../shared/generated/GridSize";
 
 export type { GridSize };
 

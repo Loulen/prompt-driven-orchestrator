@@ -14,8 +14,10 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use ts_rs::TS;
 
-#[derive(Serialize, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Serialize, Debug, PartialEq, Eq, Clone, Copy, TS)]
+#[ts(export, rename = "DiffFileStatus")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FileStatus {
     Added,
@@ -25,7 +27,8 @@ pub(crate) enum FileStatus {
     Copied,
 }
 
-#[derive(Serialize, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Serialize, Debug, PartialEq, Eq, Clone, Copy, TS)]
+#[ts(export, rename = "DiffLineKind")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LineKind {
     Context,
@@ -36,7 +39,8 @@ pub(crate) enum LineKind {
 /// One line of a hunk. `old_no`/`new_no` are the 1-based line numbers on each
 /// side — `None` on the side the line does not exist on (`Add` has no `old_no`,
 /// `Del` has no `new_no`).
-#[derive(Serialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Debug, PartialEq, Eq, Clone, TS)]
+#[ts(export)]
 pub(crate) struct DiffLine {
     pub kind: LineKind,
     /// The line text WITHOUT its leading `+`/`-`/space marker.
@@ -45,7 +49,8 @@ pub(crate) struct DiffLine {
     pub new_no: Option<u32>,
 }
 
-#[derive(Serialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Debug, PartialEq, Eq, Clone, TS)]
+#[ts(export, rename = "DiffHunk")]
 pub(crate) struct Hunk {
     pub old_start: u32,
     pub old_lines: u32,
@@ -56,7 +61,8 @@ pub(crate) struct Hunk {
     pub lines: Vec<DiffLine>,
 }
 
-#[derive(Serialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Debug, PartialEq, Eq, Clone, TS)]
+#[ts(export, rename = "DiffFile")]
 pub(crate) struct FileDiff {
     /// Source path, `None` for a pure addition.
     pub old_path: Option<String>,
@@ -70,7 +76,8 @@ pub(crate) struct FileDiff {
 }
 
 /// The whole answer of `GET /runs/<id>/diff/structured`.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone, TS)]
+#[ts(export)]
 pub(crate) struct StructuredDiff {
     /// The source ref as asked (or defaulted), verbatim.
     pub from_ref: String,

@@ -30,6 +30,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::harness_resolver::HarnessEntry;
 
@@ -50,7 +51,8 @@ pub(crate) struct ResolvedCombo {
 /// exclusive"). Tagged on the wire by `mode`, so a stored/transmitted value is
 /// self-describing and a missing/legacy value simply deserializes absent
 /// (`Option<AgentChoice>` at the call site) rather than as some 4th variant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub(crate) enum AgentChoice {
     /// Continue the precedence chain at the next coarser tier.
@@ -62,9 +64,13 @@ pub(crate) enum AgentChoice {
     /// optional like a stored profile's.
     Custom {
         harness: String,
+        // Never sent as `null`, but accepted as one: a client clearing the
+        // field sends `null` (the union travels both ways).
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = nullable)]
         model: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = nullable)]
         effort: Option<String>,
     },
 }

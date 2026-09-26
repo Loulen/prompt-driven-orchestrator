@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { NodeCard } from "./NodeCard";
-import type { NodeStatus } from "../types";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
 
 describe("NodeCard", () => {
   it("renders with 4-side border (no border-l-[3px])", () => {

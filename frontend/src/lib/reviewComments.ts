@@ -1,4 +1,9 @@
-import type { ReviewAnchorMapping, ReviewComment, ReviewSide, RunRefs, RunState, SendReviewCommentInput } from "../types";
+import type { ReviewAnchorMapping } from "../shared/generated/ReviewAnchorMapping";
+import type { ReviewComment } from "../shared/generated/ReviewComment";
+import type { ReviewSide } from "../shared/generated/ReviewSide";
+import type { RunRefs } from "../shared/generated/RunRefs";
+import type { RunState } from "../shared/generated/RunState";
+import type { SendReviewCommentInput } from "../shared/generated/SendReviewCommentInput";
 import type { RefPair } from "./runRefs";
 
 // Review comments of the Review page (#750, ADR-0067 §2; CONTEXT.md

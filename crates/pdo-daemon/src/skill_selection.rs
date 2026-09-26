@@ -23,10 +23,12 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// One selected skill as a tier stores it: the stable id, and the label the
 /// selector showed when the choice was made. `name` is informative only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct SkillRef {
     pub id: String,
     #[serde(default)]
@@ -35,7 +37,8 @@ pub(crate) struct SkillRef {
 
 /// Which tier selected a skill. Ordered coarsest → finest, the order the
 /// selectors list inherited skills in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SkillTier {
     Instance,
@@ -56,7 +59,8 @@ pub(crate) struct SkillTiers<'a> {
 /// One active skill: the id, its **current** bank name, and every tier that
 /// selected it (a skill checked at two tiers is delivered once, attributed to
 /// both).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct ActiveSkill {
     pub id: String,
     pub name: String,
@@ -65,7 +69,8 @@ pub(crate) struct ActiveSkill {
 
 /// A selected id the bank no longer knows. The label is the stored one, so the
 /// warning can still name what was meant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct MissingSkill {
     pub id: String,
     pub name: String,

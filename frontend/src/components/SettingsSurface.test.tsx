@@ -117,7 +117,8 @@ import SettingsSurface from "./SettingsSurface";
 import { relativiseToHome } from "./StagingProfilesPanel";
 import { useEditStore } from "../stores/editStore";
 import { useWiringStore } from "../stores/wiringStore";
-import type { InstanceSettings, SandboxProfile } from "../types";
+import type { InstanceSettings } from "../settings/model/settings";
+import type { SandboxProfile } from "../sandbox/model/sandbox";
 
 function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
   return {
@@ -2991,7 +2992,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     const { fetchSkillBank } = await import("../api");
     vi.mocked(fetchSkillBank).mockResolvedValue({
       skills: [
-        {
+        { locked: false,
           id: "sk-1",
           name: "tdd",
           description: "test first",

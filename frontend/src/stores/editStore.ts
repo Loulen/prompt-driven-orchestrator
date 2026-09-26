@@ -1,22 +1,12 @@
 import { create } from "zustand";
-import type {
-  PipelineListEntry,
-  PipelineScope,
-  PipelineDef,
-  NodeDef,
-  EdgeDef,
-} from "../types";
-import type { LoopRegion, NoteDef } from "../types";
-import {
-  ApiError,
-  fetchPipeline,
-  fetchPipelines,
-  savePipeline,
-  fetchRunPipeline,
-  saveRunPipeline,
-  deletePipeline as apiDeletePipeline,
-  renamePipeline as apiRenamePipeline,
-} from "../api";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { PipelineScope } from "../pipeline/model/pipeline";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { LoopRegion } from "../shared/generated/LoopRegion";
+import type { NoteDef } from "../shared/generated/NoteDef";
+import { ApiError } from "../shared/http/client";
+import { fetchPipeline, fetchPipelines, savePipeline, fetchRunPipeline, saveRunPipeline, deletePipeline as apiDeletePipeline, renamePipeline as apiRenamePipeline } from "../api";
 import { generateNodeId } from "../lib/nanoid";
 import { carriedPorts, withCarriedPorts } from "../lib/edgePorts";
 import { requalifyWhen, renameWhenPorts } from "../lib/whenClause";
@@ -61,7 +51,7 @@ export interface Selection {
 }
 
 export interface ConflictData {
-  pipeline: PipelineDef;
+  pipeline: EditorPipelineDef;
   prompts: Record<string, string>;
   diagnostics: string[];
 }
@@ -74,7 +64,7 @@ export interface SaveErrorData {
 export interface OpenPipeline {
   id: string;
   scope: string;
-  pipeline: PipelineDef;
+  pipeline: EditorPipelineDef;
   prompts: Record<string, string>;
   diagnostics: string[];
   dirty: boolean;
@@ -117,7 +107,7 @@ export interface PendingSingleTab {
 }
 
 /**
- * Per-tab undo/redo history (ADR-0014 / #226). Entries are whole `PipelineDef`
+ * Per-tab undo/redo history (ADR-0014 / #226). Entries are whole `EditorPipelineDef`
  * object references captured *before* a structural mutation — NOT deep clones.
  * This is safe only because every store mutation is copy-on-write (it rebuilds
  * whole arrays, never mutating a node/edge/port in place), so a captured
@@ -127,9 +117,9 @@ export interface PendingSingleTab {
  */
 export interface TabHistory {
   /** Pre-mutation snapshots, oldest→newest. The top is the most recent restore point. */
-  past: PipelineDef[];
+  past: EditorPipelineDef[];
   /** States undone, available for redo (newest at the end). */
-  future: PipelineDef[];
+  future: EditorPipelineDef[];
   /** Coalescing key of the most recent push (null = never coalesce). */
   lastKey: string | null;
   /** `Date.now()` of the most recent push, for the time-window coalescer. */
@@ -178,8 +168,8 @@ interface EditState {
   setSelection: (sel: Selection) => void;
   setScrollToPort: (port: string | null) => void;
 
-  addNode: (node: NodeDef) => void;
-  updateNode: (nodeId: string, updates: Partial<NodeDef>) => void;
+  addNode: (node: EditorNodeDef) => void;
+  updateNode: (nodeId: string, updates: Partial<EditorNodeDef>) => void;
   // Batched position write for a group drag (#232): xyflow's onNodeDragStop
   // hands us every dragged node at once; persist all their `view` coords in one
   // store mutation (one re-derivation, one dirty/save unit).
@@ -205,7 +195,7 @@ interface EditState {
   createCollectionRegion: (members: string[], over: string) => void;
 
   // Note mutations (#307 / ADR-0018) — inert canvas notes. All are COW and
-  // history-tracked (ADR-0014): they live on `PipelineDef.notes`, so a
+  // history-tracked (ADR-0014): they live on `EditorPipelineDef.notes`, so a
   // reference snapshot covers them for free as long as each reducer reassigns
   // the array rather than mutating in place.
   addNote: (note: NoteDef) => void;
@@ -217,7 +207,7 @@ interface EditState {
 
   /** `grid_size: null` clears the pipeline's own size (it follows the global
    *  default again) — the key is then dropped from the document, not nulled. */
-  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required" | "grid_size">>) => void;
+  updatePipelineMeta: (updates: Partial<Pick<EditorPipelineDef, "name" | "version" | "variables" | "prompt_required" | "grid_size">>) => void;
 
   updatePrompt: (nodeId: string, content: string) => void;
 
@@ -286,7 +276,7 @@ function emptyHistory(): TabHistory {
 function recordHistory(
   history: Record<string, TabHistory>,
   tabId: string,
-  before: PipelineDef,
+  before: EditorPipelineDef,
   coalesceKey: string | null,
 ): Record<string, TabHistory> {
   const h = history[tabId] ?? emptyHistory();
@@ -643,13 +633,13 @@ export const useEditStore = create<EditState>((set, get) => ({
     set({ scrollToPort: port });
   },
 
-  addNode: (node: NodeDef) => {
+  addNode: (node: EditorNodeDef) => {
     set((s) => mutateActiveTabWithHistory(s, (tab) => {
       tab.pipeline.nodes = [...tab.pipeline.nodes, node];
     }));
   },
 
-  updateNode: (nodeId: string, updates: Partial<NodeDef>) => {
+  updateNode: (nodeId: string, updates: Partial<EditorNodeDef>) => {
     set((s) => mutateActiveTabWithHistory(s, (tab) => {
       const oldNode = tab.pipeline.nodes.find((n) => n.id === nodeId);
       tab.pipeline.nodes = tab.pipeline.nodes.map((n) =>
@@ -723,7 +713,7 @@ export const useEditStore = create<EditState>((set, get) => ({
       if (!src) return;
       const newId = generateNodeId();
       const srcName = src.name ?? src.id;
-      const copy: NodeDef = {
+      const copy: EditorNodeDef = {
         ...src,
         id: newId,
         name: `${srcName} copy`,

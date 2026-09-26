@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, X, Zap } from "lucide-react";
-import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type Trigger, type Project } from "../types";
+import { isLiveRun, isTerminalRun } from "../run/model/runStatus";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
+import type { RunStatus } from "../shared/generated/RunStatus";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { Trigger } from "../shared/generated/Trigger";
+import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
+import type { Project } from "../shared/generated/Project";
 import type { LibraryPipelineEntry } from "../api";
-import { ApiError, cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { ApiError } from "../shared/http/client";
+import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { announceSkillsChanged } from "../hooks/useSkillBank";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -63,7 +70,7 @@ interface Props {
   /** @deprecated Instance pipelines refresh through loadPipelines. */
   onLibraryPipelinesChanged?: () => void;
   /** Triggers (#160). Optional so existing callers/tests keep working. */
-  triggers?: Trigger[];
+  triggers?: TriggerListEntry[];
   selectedTriggerId?: string | null;
   onSelectTrigger?: (triggerId: string) => void;
   onNewTrigger?: () => void;

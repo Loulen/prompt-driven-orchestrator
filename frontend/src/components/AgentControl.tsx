@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bookmark, Check, ChevronDown, ChevronLeft, GitFork, SlidersHorizontal, TriangleAlert } from "lucide-react";
-import type { AgentChoice, AgentCombination, AgentProfile } from "../types";
+import type { AgentChoice } from "../shared/generated/AgentChoice";
+import type { AgentCombination } from "../settings/model/settings";
+import type { AgentProfile } from "../shared/generated/AgentProfile";
 import type { HarnessCatalog } from "../lib/harness";
 import { findHarnessOption, effortOffer } from "../lib/harness";
 import HarnessSelect from "./HarnessSelect";

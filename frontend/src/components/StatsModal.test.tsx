@@ -94,7 +94,9 @@ vi.mock("./StatsCharts", async (importOriginal) => {
 
 import StatsModal from "./StatsModal";
 import type { PerformanceBand } from "../lib/statsFilters";
-import type { StatsCost, StatsOverview, SyncCostPricesReport } from "../types";
+import type { StatsCost } from "../shared/generated/StatsCost";
+import type { StatsOverview } from "../shared/generated/StatsOverview";
+import type { SyncCostPricesReport } from "../settings/model/settings";
 
 const OVERVIEW: StatsOverview = {
   buckets: ["2026-07-30"],

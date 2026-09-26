@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import type { NodeType, PortSide } from "../types";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortSide } from "../shared/generated/PortSide";
 import { getPortDescription } from "../portDescriptions";
-import { Tooltip } from "./ui/tooltip";
+import { Tooltip } from "../shared/ui/tooltip";
 import PortPill from "./PortPill";
 
 interface PortRowProps {

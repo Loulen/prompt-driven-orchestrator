@@ -1,4 +1,4 @@
-import type { EndNodeInfo } from "../types";
+import type { EndNodeInfo } from "../shared/generated/EndNodeInfo";
 
 interface Props {
   endNode: EndNodeInfo;

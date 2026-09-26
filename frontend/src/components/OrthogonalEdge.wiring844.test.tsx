@@ -6,7 +6,8 @@ import NodeRimHandles from "./NodeRimHandles";
 import { anchorHandleId } from "../lib/anchorSide";
 import { useEditStore } from "../stores/editStore";
 import { useWiringStore } from "../stores/wiringStore";
-import type { PipelineDef, PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 // xyflow MEASURES before it draws: a node with no measured size and no handle
 // bounds yields no edge position, and `react-flow__edges` comes out empty — the
@@ -87,7 +88,7 @@ const nodes: Node[] = [
 
 // The fixtures below were drawn on the 40px lattice: the pipeline pins its own
 // size to L (#877), which also proves a pipeline's choice drives the edge.
-function pipeline(edge: Partial<PipelineDef["edges"][number]> = {}): PipelineDef {
+function pipeline(edge: Partial<EditorPipelineDef["edges"][number]> = {}): EditorPipelineDef {
   return {
     name: "p",
     grid_size: "L",

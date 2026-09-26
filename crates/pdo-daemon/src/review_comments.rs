@@ -15,13 +15,15 @@
 //! as a re-opening.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::event_log::{Event, EventKind};
 
 /// The side of the diff a comment is anchored on. `old` = the source ref's
 /// content (a deleted or context line numbered on the left), `new` = the
 /// destination ref's (an added or context line numbered on the right).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ReviewSide {
     Old,
@@ -56,7 +58,8 @@ impl ReviewSide {
 
 /// Lifecycle after `sent`. `Resolved` and the reopen path are folded here so
 /// #751 only adds emitters; nothing in #750 produces them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ReviewCommentStatus {
     Sent,
@@ -67,7 +70,8 @@ pub(crate) enum ReviewCommentStatus {
 /// sent comment — `review_comment_replied`. Folded for #751's `pdo review reply`;
 /// the shape is fixed here so the message the manager receives can already name
 /// the contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct ReviewReply {
     pub author: String,
     pub text: String,
@@ -79,7 +83,8 @@ pub(crate) struct ReviewReply {
 }
 
 /// A sent comment as projected into `RunState::review_comments`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct ReviewComment {
     /// `rc-001`, `rc-002`, … — sequential per Run, the id the manager echoes in
     /// `pdo review reply`.
@@ -94,8 +99,10 @@ pub(crate) struct ReviewComment {
     /// The SHAs those ids resolved to at send time — what makes the anchor
     /// meaningful once the Run tip moved (#752's outdated logic reads these).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub from_sha: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub to_sha: Option<String>,
     pub text: String,
     /// The hunk excerpt around the anchored line at send time, `>` marking it.
@@ -107,6 +114,7 @@ pub(crate) struct ReviewComment {
     /// The send batch this comment travelled in — one message to the manager
     /// per batch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub batch_id: Option<String>,
     #[serde(default = "default_status")]
     pub status: ReviewCommentStatus,
@@ -120,13 +128,17 @@ pub(crate) struct ReviewComment {
     /// Who resolved (`user`, `manager`, or a node id) and when — `None` while
     /// `sent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub resolved_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub resolved_at: Option<String>,
     /// The last reopen, kept so the footer can read "Reopened by you · time".
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub reopened_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub reopened_at: Option<String>,
     /// The last reopen landed on a comment that was still `sent`: it declined a
     /// pending proposal rather than reopening a resolved comment. Cleared by the
@@ -382,13 +394,16 @@ pub(crate) fn map_line(files: &[crate::structured_diff::FileDiff], line: i64) ->
 /// comment still has one. `None` when the mapping cannot be computed (no SHA
 /// recorded at send time, a ref that no longer resolves): the caller shows the
 /// comment where it was written, without pretending.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "ReviewAnchorMapping")]
 pub(crate) struct AnchorMapping {
     pub outdated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub mapped_line: Option<i64>,
     /// The reported line differs from the written one.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional = nullable)]
     pub moved: bool,
 }
 

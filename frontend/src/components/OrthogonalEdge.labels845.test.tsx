@@ -3,7 +3,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { Position, ReactFlowProvider } from "@xyflow/react";
 import OrthogonalEdge, { type OrthogonalEdgeData } from "./OrthogonalEdge";
 import { useEditStore } from "../stores/editStore";
-import type { EdgeDef, PipelineDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 // #845 — the two kinds of canvas label: the output tags at the arrow's base and
 // the condition pill at its midpoint. Both are draggable, neither may block a
@@ -26,7 +27,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 
 /** A one-edge pipeline in the store: the labels write back through `updateEdge`. */
 function seedEdge(edge: Partial<EdgeDef> = {}) {
-  const pipeline: PipelineDef = {
+  const pipeline: EditorPipelineDef = {
     name: "labels-845",
     variables: {},
     nodes: [

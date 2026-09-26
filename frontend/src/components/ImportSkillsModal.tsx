@@ -1,20 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Download, Folder, FolderOpen, GitBranch, HardDrive, Pencil, Search, X } from "lucide-react";
-import {
-  ApiError,
-  cancelSkillScan,
-  fetchRecentSkillSources,
-  importSkills,
-  scanSkillSource,
-} from "../api";
-import type {
-  RecentSkillSource,
-  SkillCandidate,
-  SkillFolder,
-  SkillImportItem,
-  SkillImportReport,
-  SkillScanResult,
-} from "../types";
+import { ApiError } from "../shared/http/client";
+import { cancelSkillScan, fetchRecentSkillSources, importSkills, scanSkillSource } from "../api";
+import type { RecentSkillSource } from "../shared/generated/RecentSkillSource";
+import type { SkillCandidate } from "../shared/generated/SkillCandidate";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
+import type { SkillImportItem } from "../shared/generated/SkillImportItem";
+import type { SkillImportReport } from "../shared/generated/SkillImportReport";
+import type { SkillScanResult } from "../skill/model/skill";
 import { timeAgo } from "../lib/skillMd";
 import { displaySourceUrl, parseSkillSource, shortCommit } from "../lib/skillSource";
 import { folderPathLabel } from "../lib/skillTree";

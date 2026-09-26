@@ -15,13 +15,15 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// A node's settings for one harness (`harnesses.<name>` in the YAML). Model and
 /// effort are free-text pass-through — don't close them into an enum, it would
 /// perish at every model release (ADR-0001). Keyed by harness name so a node stays
 /// executable on either harness rather than carrying one slug the other rejects
 /// (ADR-0046).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable, rename = "HarnessSettings")]
 pub(crate) struct HarnessEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,

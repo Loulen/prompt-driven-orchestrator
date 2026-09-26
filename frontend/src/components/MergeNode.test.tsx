@@ -1,11 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 import { MergeEditNode, MergeRunNode } from "./MergeNode";
 import { useEditStore } from "../stores/editStore";
 import type { NodeProps, Node } from "@xyflow/react";
-import type { NodeStatus } from "../types";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (

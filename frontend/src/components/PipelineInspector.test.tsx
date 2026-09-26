@@ -4,7 +4,7 @@ import PipelineInspector from "./PipelineInspector";
 import { useEditStore } from "../stores/editStore";
 import { useWiringStore } from "../stores/wiringStore";
 import { serializePipeline } from "../lib/serializePipeline";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 
 vi.mock("../api", () => ({
   fetchLibrary: vi.fn().mockResolvedValue([]),

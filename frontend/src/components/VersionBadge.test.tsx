@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import VersionBadge from "./VersionBadge";
-import type { UpdateStatus } from "../types";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {

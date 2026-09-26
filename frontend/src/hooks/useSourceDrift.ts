@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchRemotes, fetchSourceDrift } from "../api";
-import type { BranchFetchError, RunState, SourceDrift } from "../types";
+import type { BranchFetchError } from "../shared/generated/BranchFetchError";
+import type { RunState } from "../shared/generated/RunState";
+import type { SourceDrift } from "../shared/generated/SourceDrift";
 
 /**
  * A Run's **dérive de la source**, and the one gesture that refreshes its remote

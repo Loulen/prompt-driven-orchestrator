@@ -42,6 +42,9 @@ jobs:
       # nextest ne lance pas les doctests : la ligne `--doc` est obligatoire.
       - run: cargo nextest run --workspace
       - run: cargo test --workspace --doc
+      # The TS generated from the daemon's DTOs (ts-rs, #915) must match the Rust
+      # types: fails and shows the diff when `make types` was not run.
+      - run: make types-check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all --check
 

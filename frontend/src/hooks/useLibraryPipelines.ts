@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { fetchLibraryPipelines } from "../api";
 import type { LibraryPipelineEntry } from "../api";
-import type { PipelineDef } from "../types";
 import type { OpenPipeline } from "../stores/editStore";
 import { pipelineToYamlObject } from "../lib/serializePipeline";
 import { deepEqual } from "../lib/deepEqual";
 import { stripLayout } from "../lib/layoutFields";
 import { canonicalizeCarriedPorts } from "../lib/edgePorts";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 
@@ -25,7 +25,7 @@ export type PipelineLibrarySyncState = "outline" | "synced" | "diverged";
 // `lib/layoutFields.ts` (`stripLayout`) — the single source of truth, guarded by
 // `layoutFields.test.ts`. Layout travels in the file (so a shared workflow keeps
 // its positions and arrows) but is never a semantic difference.
-export function pipelinesEquivalent(a: PipelineDef, b: PipelineDef): boolean {
+export function pipelinesEquivalent(a: EditorPipelineDef, b: EditorPipelineDef): boolean {
   return deepEqual(comparablePipelineObject(a), comparablePipelineObject(b));
 }
 
@@ -35,7 +35,7 @@ export function pipelinesEquivalent(a: PipelineDef, b: PipelineDef): boolean {
 // `pipeline_semantics::SourceProjection` sorts the same list for the library
 // content hash; the two must agree or the star and the diff contradict each
 // other on the same edit.
-function comparablePipelineObject(p: PipelineDef): Record<string, unknown> {
+function comparablePipelineObject(p: EditorPipelineDef): Record<string, unknown> {
   return canonicalizeCarriedPorts(stripLayout(pipelineToYamlObject(p)));
 }
 
@@ -61,7 +61,7 @@ function promptsEqual(
 /// twin. Callers should lock-in the resolved id on the tab so future renames
 /// don't fall back to the (now-mismatching) name path.
 export function computePipelineSyncState(
-  pipeline: PipelineDef,
+  pipeline: EditorPipelineDef,
   entries: LibraryPipelineEntry[],
   libraryId?: string | null,
   canvasPrompts?: Record<string, string>,
@@ -103,7 +103,7 @@ export function shouldPromptLibraryUpdate(
 }
 
 export function usePipelineLibraryState(
-  pipeline: PipelineDef | null,
+  pipeline: EditorPipelineDef | null,
   entries: LibraryPipelineEntry[],
   libraryId?: string | null,
   prompts?: Record<string, string>,

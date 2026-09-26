@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchSkillBank } from "../api";
-import type { SkillBank } from "../types";
+import type { SkillBank } from "../skill/model/skill";
 
 /**
  * Window bus fired after every write to the Banque de skills (#668), on the

@@ -1,7 +1,7 @@
-import type { NodeDef } from "../types";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 interface Props {
-  node: NodeDef;
+  node: EditorNodeDef;
 }
 
 /**

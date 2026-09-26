@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useEditStore } from "../stores/editStore";
 import { edgeIndexFromId } from "./editNodeDerivation";
-import type { PipelineDef, NodeDef, EdgeDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn().mockResolvedValue([]),
@@ -19,11 +20,11 @@ vi.mock("../api", () => ({
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
 }));
 
-function makePipeline(nodes: NodeDef[] = [], edges: EdgeDef[] = []): PipelineDef {
+function makePipeline(nodes: EditorNodeDef[] = [], edges: EdgeDef[] = []): EditorPipelineDef {
   return { name: "test", version: "1.0", variables: {}, nodes, edges };
 }
 
-function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
+function makeNode(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
   return {
     id: "default",
     name: "Default",
@@ -36,7 +37,7 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
   };
 }
 
-function seedTabWithPipeline(pipeline: PipelineDef) {
+function seedTabWithPipeline(pipeline: EditorPipelineDef) {
   useEditStore.setState({
     openTabs: [
       {

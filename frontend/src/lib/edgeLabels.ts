@@ -10,7 +10,7 @@
  * implemented on the same integration branch without fighting over one file.
  */
 
-import type { PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
 import type { Point } from "./orthogonalRouter";
 
 export type LabelAxis = "horizontal" | "vertical";

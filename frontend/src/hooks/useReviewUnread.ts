@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import type { RunState } from "../types";
+import type { RunState } from "../shared/generated/RunState";
 import { readSeen, seenKey, unreadCommentCount } from "../lib/reviewComments";
 import type { SeenMap } from "../lib/reviewComments";
 

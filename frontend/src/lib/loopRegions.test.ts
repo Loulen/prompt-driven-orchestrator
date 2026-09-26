@@ -8,12 +8,13 @@ import {
   reconcileLoopRegions,
   regionsDestroyedByEdgeRemoval,
 } from "./loopRegions";
-import type { EdgeDef, NodeDef, PipelineDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 // A bare review loop: start -> impl -> rev, with rev -> impl closing the cycle.
 // Edge order: 0 start->impl, 1 impl->rev, 2 rev->impl (the back-edge).
-function reviewLoop(): PipelineDef {
-  const nodes: NodeDef[] = [
+function reviewLoop(): EditorPipelineDef {
+  const nodes: EditorNodeDef[] = [
     { id: "start", name: "start", type: "start", inputs: [], outputs: [{ name: "user_prompt", repeated: false, side: "right" }], interactive: false },
     { id: "impl", name: "impl", type: "agent", inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }], interactive: false },
     { id: "rev", name: "rev", type: "agent", inputs: [], outputs: [{ name: "review", repeated: false, side: "right" }], interactive: false },
@@ -47,7 +48,7 @@ describe("regionsDestroyedByEdgeRemoval (#150)", () => {
 
   it("deleting a non-last cycle edge keeps a region with two cycles", () => {
     // impl <-> rev AND impl -> rev -> mid -> impl: two cycles close the region.
-    const nodes: NodeDef[] = [
+    const nodes: EditorNodeDef[] = [
       { id: "impl", name: "impl", type: "agent", inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }], interactive: false },
       { id: "rev", name: "rev", type: "agent", inputs: [], outputs: [{ name: "review", repeated: false, side: "right" }, { name: "extra", repeated: false, side: "right" }], interactive: false },
       { id: "mid", name: "mid", type: "agent", inputs: [], outputs: [{ name: "more", repeated: false, side: "right" }], interactive: false },
@@ -58,7 +59,7 @@ describe("regionsDestroyedByEdgeRemoval (#150)", () => {
       { source: { node: "rev", port: "extra" }, target: { node: "mid", port: "extra" } }, // 2
       { source: { node: "mid", port: "more" }, target: { node: "impl", port: "more" } }, // 3 back-edge B
     ];
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "rl2",
       variables: {},
       nodes,
@@ -70,7 +71,7 @@ describe("regionsDestroyedByEdgeRemoval (#150)", () => {
   });
 
   it("never destroys a collection region (no topological cycle to lose)", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [listNode("triage", "issues"), plainNode("fixer")],
@@ -91,7 +92,7 @@ describe("reconcileLoopRegions — node deletion repairs the loops: block (#173)
     // rev->impl) are gone, leaving only start->impl. The region no longer closes
     // a cycle and names a node that no longer exists — it is destroyed, not left
     // as an orphan with a dangling member id.
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "rl",
       variables: {},
       nodes: [plainNode("start"), plainNode("impl")],
@@ -104,7 +105,7 @@ describe("reconcileLoopRegions — node deletion repairs the loops: block (#173)
   it("prunes the ghost id but keeps the region when the survivors still close a cycle", () => {
     // [a, b, c] closed by a<->b AND a<->c. Deleting c removes a->c / c->a, but
     // a<->b still cycles, so the region survives with c pruned from members.
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [plainNode("a"), plainNode("b")],
@@ -120,7 +121,7 @@ describe("reconcileLoopRegions — node deletion repairs the loops: block (#173)
   it("keeps a single-member bounded region when the survivor self-loops, pruned to it", () => {
     // The other member is deleted but the survivor carries a self-edge — still a
     // valid (one-member) bounded loop. Kept, with the ghost member pruned.
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [plainNode("worker")],
@@ -133,7 +134,7 @@ describe("reconcileLoopRegions — node deletion repairs the loops: block (#173)
   });
 
   it("drops a bounded region left with no present members", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [plainNode("a")],
@@ -144,7 +145,7 @@ describe("reconcileLoopRegions — node deletion repairs the loops: block (#173)
   });
 
   it("prunes a collection region's ghost member but keeps it (born by gesture, not a cycle)", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [plainNode("fixer")],
@@ -157,7 +158,7 @@ describe("reconcileLoopRegions — node deletion repairs the loops: block (#173)
   });
 
   it("drops a collection region emptied of present members", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [],
@@ -173,7 +174,7 @@ describe("reconcileLoopRegions — node deletion repairs the loops: block (#173)
   });
 });
 
-function listNode(id: string, port: string): NodeDef {
+function listNode(id: string, port: string): EditorNodeDef {
   return {
     id,
     name: id,
@@ -191,7 +192,7 @@ function listNode(id: string, port: string): NodeDef {
   };
 }
 
-function plainNode(id: string, type: NodeDef["type"] = "agent"): NodeDef {
+function plainNode(id: string, type: EditorNodeDef["type"] = "agent"): EditorNodeDef {
   return {
     id,
     name: id,
@@ -204,7 +205,7 @@ function plainNode(id: string, type: NodeDef["type"] = "agent"): NodeDef {
 
 describe("collectionFanoutNudges (#151)", () => {
   it("nudges when a list-typed output feeds a node not in a collection region", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [listNode("triage", "issues"), plainNode("fixer")],
@@ -217,7 +218,7 @@ describe("collectionFanoutNudges (#151)", () => {
   });
 
   it("does not nudge once the target is a member of a collection region (never auto-wraps, but respects an existing one)", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [listNode("triage", "issues"), plainNode("fixer")],
@@ -228,7 +229,7 @@ describe("collectionFanoutNudges (#151)", () => {
   });
 
   it("does not nudge for a non-list output", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [plainNode("a", "agent"), plainNode("b")],
@@ -245,7 +246,7 @@ describe("collectionFanoutFields (#269)", () => {
   });
 
   it("returns the list field flowing into the member set", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [listNode("triage", "issues"), plainNode("fixer")],
@@ -257,7 +258,7 @@ describe("collectionFanoutFields (#269)", () => {
   it("ignores edges among the members themselves", () => {
     // triage emits a list into fixer, but BOTH are candidate members: the
     // intra-member edge contributes no fan-out field.
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [listNode("triage", "issues"), plainNode("fixer")],
@@ -267,7 +268,7 @@ describe("collectionFanoutFields (#269)", () => {
   });
 
   it("ignores non-list outputs", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [plainNode("a", "agent"), plainNode("b")],
@@ -277,7 +278,7 @@ describe("collectionFanoutFields (#269)", () => {
   });
 
   it("deduplicates a field fed to several members", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [listNode("triage", "issues"), plainNode("fixer"), plainNode("tester")],
@@ -287,7 +288,7 @@ describe("collectionFanoutFields (#269)", () => {
   });
 
   it("is pure field discovery: still returns fields when a member is already in a region (guard lives at the gesture/store level)", () => {
-    const p: PipelineDef = {
+    const p: EditorPipelineDef = {
       name: "p",
       variables: {},
       nodes: [listNode("triage", "issues"), plainNode("fixer")],
@@ -316,7 +317,7 @@ describe("generatedRegionId — the daemon mirror (#396)", () => {
 
 describe("materializeMissingRegions (#396)", () => {
   // a -> b -> a: the two-node cycle the review loop is made of.
-  function twoNodeCycle(): { nodes: NodeDef[]; edges: EdgeDef[] } {
+  function twoNodeCycle(): { nodes: EditorNodeDef[]; edges: EdgeDef[] } {
     return {
       nodes: [plainNode("a"), plainNode("b")],
       edges: [edge("a", "out", "b", "in"), edge("b", "out", "a", "in")],
@@ -347,7 +348,7 @@ describe("materializeMissingRegions (#396)", () => {
     // same carve-out, so both mirrors agree).
     // `loop` is not in the FE `NodeType` union (the canvas has no editor for it)
     // but the daemon still parses and serves such YAML, so the value does arrive.
-    const legacyLoop = { ...plainNode("lp"), type: "loop" as unknown as NodeDef["type"] };
+    const legacyLoop = { ...plainNode("lp"), type: "loop" as unknown as EditorNodeDef["type"] };
     const nodes = [plainNode("a"), plainNode("b"), legacyLoop];
     const edges = [
       edge("a", "out", "b", "in"),

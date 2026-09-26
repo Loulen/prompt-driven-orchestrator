@@ -1,4 +1,6 @@
-import type { AgentChoice, AgentCombination, AgentProfile } from "../types";
+import type { AgentChoice } from "../shared/generated/AgentChoice";
+import type { AgentCombination } from "../settings/model/settings";
+import type { AgentProfile } from "../shared/generated/AgentProfile";
 
 export function combinationLabel(value: AgentCombination): string {
   return [value.harness, value.model || "—", value.effort || "—"].join(" · ");

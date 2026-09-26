@@ -25,7 +25,10 @@ import {
   sendReviewComments,
 } from "../api";
 import { useDaemonSocket } from "../hooks/useDaemonSocket";
-import type { ReviewComment, RunRefs, RunState, StructuredDiff } from "../types";
+import type { ReviewComment } from "../shared/generated/ReviewComment";
+import type { RunRefs } from "../shared/generated/RunRefs";
+import type { RunState } from "../shared/generated/RunState";
+import type { StructuredDiff } from "../shared/generated/StructuredDiff";
 import RefPicker from "../components/review/RefPicker";
 import ReviewFileList from "../components/review/ReviewFileList";
 import ReviewFileCard from "../components/review/ReviewFileCard";

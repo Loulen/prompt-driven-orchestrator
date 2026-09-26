@@ -2,7 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
-import type { ProvisioningPlan, ProvisioningRules } from "../types";
+import type { ProvisioningPlan } from "../shared/generated/ProvisioningPlan";
+import type { ProvisioningRules } from "../shared/generated/ProvisioningRules";
 import { previewProvisioning } from "../api";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 

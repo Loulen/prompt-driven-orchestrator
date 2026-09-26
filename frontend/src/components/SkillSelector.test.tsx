@@ -1,9 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import SkillSelector from "./SkillSelector";
-import type { Skill, SkillBank, SkillFolder } from "../types";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillBank } from "../skill/model/skill";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
 
-const skill = (id: string, name: string, folder_id: string | null = null): Skill => ({
+const skill = (id: string, name: string, folder_id: string | null = null): Skill => ({ locked: false,
   id,
   name,
   description: `${name} description`,

@@ -6,7 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-} from "./ui/dropdown-menu";
+} from "../shared/ui/dropdown-menu";
 
 /* Model (#296/#324, #616): free-text pass-through to `<harness> --model <x>`.
 

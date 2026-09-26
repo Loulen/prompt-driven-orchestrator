@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { InstanceSettings, UpdateStatus } from "../types";
+import type { InstanceSettings } from "../settings/model/settings";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 // #697 — Settings › General › Version & update. Every api function the surface (and the
 // panels it mounts) imports must exist in this factory: Vitest 4 wraps the module
@@ -187,7 +188,7 @@ describe("Settings › General › Version & update — Update (#699)", () => {
   it("shows the last attempt — a failure with its exit code — and its log on demand", async () => {
     fetchUpdateStatusMock.mockResolvedValue(
       status({
-        last_attempt: {
+        last_attempt: { schema: "update-attempt-v1",
           attempt_id: "20260905-120000-abc123",
           status: "failed",
           started_at: new Date(Date.now() - 10 * 60_000).toISOString(),
@@ -222,7 +223,7 @@ describe("Settings › General › Version & update — Update (#699)", () => {
       status({
         can_apply: false,
         apply_blocked_reason: "An update attempt (20260905-1) is already running.",
-        last_attempt: {
+        last_attempt: { schema: "update-attempt-v1",
           attempt_id: "20260905-1",
           status: "running",
           started_at: new Date().toISOString(),

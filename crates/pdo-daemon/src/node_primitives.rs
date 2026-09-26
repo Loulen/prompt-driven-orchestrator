@@ -461,7 +461,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     };
     // A missing harness binary is a spawn that cannot happen: reject, never a 2xx.
     if let Some(d) = &harness_descriptor {
-        if params.tmux_cmd_override.is_none() && !tmux_session_manager::binary_available(&d.binary)
+        if params.tmux_cmd_override.is_none() && !crate::harness_binary::binary_available(&d.binary)
         {
             return StartNodeResult {
                 outcome: PrimitiveOutcome::Rejected {
@@ -473,7 +473,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
                         params.node_id,
                         d.name,
                         d.binary,
-                        tmux_session_manager::harness_probe_path()
+                        crate::harness_binary::harness_probe_path()
                     ),
                 },
                 events: vec![],
@@ -544,7 +544,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     let node_started = event_log::Event {
         id: None,
         run_id: params.run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: EventKind::NodeStarted,
         node_id: Some(params.node_id.to_string()),
         iter: Some(params.iter),
@@ -732,7 +732,7 @@ pub(crate) fn stop_node(params: &StopNodeParams<'_>) -> StopNodeResult {
     let stopped_event = event_log::Event {
         id: None,
         run_id: params.run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: EventKind::NodeStopped,
         node_id: Some(params.node_id.to_string()),
         iter: Some(params.iter),
@@ -776,7 +776,7 @@ pub(crate) fn invalidate_nodes(params: &InvalidateNodesParams<'_>) -> Invalidate
         events.push(event_log::Event {
             id: None,
             run_id: params.run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeInvalidated,
             node_id: Some(node_id.clone()),
             iter: None,

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { deriveEdgeTrigger } from "./edgeTrigger";
-import type { EdgeDef, RunState, EdgeInfo } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { RunState } from "../shared/generated/RunState";
+import type { EdgeInfo } from "../shared/generated/EdgeInfo";
 
 const edge: EdgeDef = {
   source: { node: "reviewer", port: "verdict" },
@@ -10,6 +12,12 @@ const edge: EdgeDef = {
 
 function runState(overrides: Partial<RunState> = {}): RunState {
   const base: RunState = {
+    loop_states: {},
+    foreach_states: {},
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
     run_id: "r1",
     status: "running",
     pipeline_name: "p",
@@ -19,9 +27,9 @@ function runState(overrides: Partial<RunState> = {}): RunState {
     nodes: {},
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
+    merge_resolver: undefined,
   };
   return { ...base, ...overrides };
 }
@@ -90,5 +98,6 @@ function nodeState(id: string, status: string, iter = 0) {
     completed_at: null,
     failure_reason: null,
     iterations: [],
+    frontmatter_retries: 0,
   };
 }

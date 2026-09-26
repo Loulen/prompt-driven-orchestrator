@@ -4,7 +4,10 @@ import { useState } from "react";
 import DiffTab from "./DiffTab";
 import { LARGE_DIFF_FILES, TRUNCATE_LINES } from "../lib/diffTab";
 import type { CollapsedFiles } from "../lib/diffTab";
-import type { RunState, NodeState, StructuredDiff, DiffFile } from "../types";
+import type { RunState } from "../shared/generated/RunState";
+import type { NodeState } from "../shared/generated/NodeState";
+import type { StructuredDiff } from "../shared/generated/StructuredDiff";
+import type { DiffFile } from "../shared/generated/DiffFile";
 
 // Migrated from DiffSection.test.tsx (#748): archived / no changes / per-file
 // +/- / collapse-expand / binary, plus the tab's own additions (ledger, word
@@ -20,6 +23,10 @@ const mockedFetch = vi.mocked(fetchRunStructuredDiff);
 
 function makeRun(overrides: Partial<RunState> = {}): RunState {
   return {
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
     run_id: "test-run-1",
     status: "running",
     pipeline_name: "test-pipe",
@@ -29,9 +36,9 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
     nodes: {},
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
+    merge_resolver: undefined,
     loop_states: {},
     foreach_states: {},
     ...overrides,
@@ -39,7 +46,7 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
 }
 
 function makeNodeState(overrides: Partial<NodeState> = {}): NodeState {
-  return {
+  return { frontmatter_retries: 0,
     node_id: "impl-1",
     status: "completed",
     iter: 1,

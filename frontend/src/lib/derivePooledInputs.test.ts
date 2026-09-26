@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { derivePooledInputs } from "./derivePooledInputs";
-import type { NodeDef, PipelineDef } from "../types";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
-function node(id: string, extra: Partial<NodeDef> = {}): NodeDef {
+function node(id: string, extra: Partial<EditorNodeDef> = {}): EditorNodeDef {
   return {
     id,
     name: id,
@@ -14,7 +14,7 @@ function node(id: string, extra: Partial<NodeDef> = {}): NodeDef {
   };
 }
 
-function pipeline(nodes: NodeDef[], edges: PipelineDef["edges"]): PipelineDef {
+function pipeline(nodes: EditorNodeDef[], edges: EditorPipelineDef["edges"]): EditorPipelineDef {
   return { name: "p", version: "1.0", variables: {}, nodes, edges };
 }
 

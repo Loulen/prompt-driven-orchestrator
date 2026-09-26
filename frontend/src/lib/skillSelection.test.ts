@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Skill, SkillBank, SkillFolder } from "../types";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillBank } from "../skill/model/skill";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
 import {
   addRefs,
   allSelected,
@@ -11,7 +13,7 @@ import {
   toRefs,
 } from "./skillSelection";
 
-const skill = (id: string, name: string, folder_id: string | null = null): Skill => ({
+const skill = (id: string, name: string, folder_id: string | null = null): Skill => ({ locked: false,
   id,
   name,
   description: `${name} description`,

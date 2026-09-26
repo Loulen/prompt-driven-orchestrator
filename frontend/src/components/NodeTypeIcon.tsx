@@ -1,5 +1,5 @@
 import { User, GitMerge, Play, Square, GitBranch, SquareTerminal } from "lucide-react";
-import type { NodeType } from "../types";
+import type { NodeType } from "../shared/generated/NodeType";
 
 interface IconProps {
   type: NodeType;

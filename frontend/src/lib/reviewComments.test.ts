@@ -38,12 +38,13 @@ import {
   reviewQuickAccessTitle,
   sentEntriesForPair,
 } from "./reviewComments";
-import type { ReviewComment, RunRefs } from "../types";
+import type { ReviewComment } from "../shared/generated/ReviewComment";
+import type { RunRefs } from "../shared/generated/RunRefs";
 
 const PAIR = { from: "fork", to: "tip" };
 
 function sent(overrides: Partial<ReviewComment> = {}): ReviewComment {
-  return {
+  return { excerpt: "",
     id: "rc-001",
     path: "b.ts",
     side: "new",

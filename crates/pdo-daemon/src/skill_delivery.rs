@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::skill_selection::ActiveSkill;
 
@@ -56,7 +57,8 @@ pub(crate) fn snapshot_root(run_repo_root: &Path, run_id: &str) -> PathBuf {
 
 /// A skill the node was promised but that could not be written into the worktree.
 /// Never a failure: the node runs without it and the Run view says so.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct SkippedSkill {
     pub id: String,
     pub name: String,

@@ -614,7 +614,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -632,7 +632,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -713,7 +713,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: Some(node_id.clone()),
                 iter: None,
@@ -737,7 +737,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 let resume_event = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::CommandIssued,
                     node_id: None,
                     iter: None,
@@ -802,7 +802,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: None,
                 iter: None,
@@ -829,7 +829,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 let resume_event = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::CommandIssued,
                     node_id: None,
                     iter: None,
@@ -880,7 +880,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: None,
                 iter: None,
@@ -905,7 +905,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 let resume_event = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::CommandIssued,
                     node_id: None,
                     iter: None,
@@ -964,7 +964,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: None,
                 iter: None,
@@ -987,7 +987,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 let resume_event = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::CommandIssued,
                     node_id: None,
                     iter: None,
@@ -1109,7 +1109,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let node_completed = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -1127,7 +1127,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -1181,7 +1181,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let pause_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunPaused,
                 node_id: None,
                 iter: None,
@@ -1209,7 +1209,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     let resume_event = event_log::Event {
                         id: None,
                         run_id: run_id.clone(),
-                        ts: event_log::now_iso(),
+                        ts: pdo_kernel::clock::now_iso(),
                         kind: event_log::EventKind::RunResumed,
                         node_id: None,
                         iter: None,
@@ -1227,7 +1227,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     let cmd_event = event_log::Event {
                         id: None,
                         run_id: run_id.clone(),
-                        ts: event_log::now_iso(),
+                        ts: pdo_kernel::clock::now_iso(),
                         kind: event_log::EventKind::CommandIssued,
                         node_id: None,
                         iter: None,
@@ -1328,7 +1328,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: None,
                 iter: None,
@@ -1400,7 +1400,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let fail_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeFailed,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -1428,7 +1428,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -1505,7 +1505,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let restart_probe = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -1660,7 +1660,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -1795,7 +1795,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -1880,7 +1880,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: Some(node_id.clone()),
                 iter: None,
@@ -1937,7 +1937,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: None,
                 iter: None,
@@ -1983,7 +1983,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let rename_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunRenamed,
                 node_id: None,
                 iter: None,

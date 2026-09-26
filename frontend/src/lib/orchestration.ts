@@ -1,8 +1,9 @@
 // #723 — Orchestration read model shared by the Orchestration tab, the tab-header
 // pastilles and the canvas pastilles, so the three surfaces can never disagree.
 import { useEffect, useState } from "react";
-import type { HarnessCost, RunStatus } from "../types";
-import { isLiveRun } from "../types";
+import type { HarnessCost } from "../shared/generated/HarnessCost";
+import type { RunStatus } from "../shared/generated/RunStatus";
+import { isLiveRun } from "../run/model/runStatus";
 import { formatEstCost } from "./costLabel";
 
 /** One child of `GET /runs/{id}/children` (daemon `RunChildEntry`). */

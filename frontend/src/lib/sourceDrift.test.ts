@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { SourceDrift } from "../types";
+import type { SourceDrift } from "../shared/generated/SourceDrift";
 import { driftAxes, driftChip, driftTooltip } from "./sourceDrift";
 
 /**
@@ -26,7 +26,7 @@ const available = (over: Partial<Extract<SourceDrift, { state: "available" }>> =
     ...over,
   }) satisfies SourceDrift;
 
-const failed = { kind: "network", message: "could not resolve host" };
+const failed = { kind: "network" as const, message: "could not resolve host" };
 
 describe("driftChip", () => {
   it("shows both axes when the numbers are good", () => {
@@ -79,9 +79,9 @@ describe("driftTooltip", () => {
     const lines = driftTooltip(
       available({
         source_branch: "origin/main",
-        local_behind: null,
-        upstream: null,
-        upstream_behind: null,
+        local_behind: undefined,
+        upstream: undefined,
+        upstream_behind: undefined,
         behind: 2,
       }),
       "x",
@@ -99,7 +99,7 @@ describe("driftTooltip", () => {
   });
 
   it("admits when no fetch is on record", () => {
-    const lines = driftTooltip(available({ last_fetch_at: null }), "x", null, NOW);
+    const lines = driftTooltip(available({ last_fetch_at: undefined }), "x", null, NOW);
     expect(lines.some((l) => l.includes("no fetch on record"))).toBe(true);
   });
 

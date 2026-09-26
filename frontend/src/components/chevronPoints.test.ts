@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { chevronPoints } from "./chevronPoints";
-import type { PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
 
 const SIDES: PortSide[] = ["left", "right", "top", "bottom"];
 const KINDS = ["input", "output"] as const;

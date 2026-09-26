@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AgentProfilesPanel from "./AgentProfilesPanel";
 import { createAgentProfile, updateAgentProfile } from "../api";
-import type { AgentProfile } from "../types";
+import type { AgentProfile } from "../shared/generated/AgentProfile";
 
 // #798: the panel derives the effort offer from the SERVED catalogue via
 // `useHarnessCatalog` (→ `fetchSettings`). Two harnesses: `union` — the reported
@@ -197,8 +197,8 @@ const DEFAULT: AgentProfile = {
   id: "default",
   name: "Default",
   harness: "claude",
-  model: null,
-  effort: null,
+  model: undefined,
+  effort: undefined,
   created_at: "",
   updated_at: "",
 };

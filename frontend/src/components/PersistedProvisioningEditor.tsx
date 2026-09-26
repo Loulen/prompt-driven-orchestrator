@@ -6,7 +6,7 @@ import {
   saveProjectProvisioning,
 } from "../api";
 import { EMPTY_PROVISIONING_RULES } from "../lib/provisioning";
-import type { ProvisioningRules } from "../types";
+import type { ProvisioningRules } from "../shared/generated/ProvisioningRules";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 
 export default function PersistedProvisioningEditor({

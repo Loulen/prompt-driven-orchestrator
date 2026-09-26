@@ -1,9 +1,7 @@
-import type {
-  StatsAbsorbedMember,
-  StatsAbsorption,
-  StatsPipelineRowMeta,
-  StatsProvenance,
-} from "../types";
+import type { StatsAbsorbedMember } from "../shared/generated/StatsAbsorbedMember";
+import type { StatsAbsorption } from "../shared/generated/StatsAbsorption";
+import type { StatsPipelineRowMeta } from "../stats/model/stats";
+import type { StatsProvenance } from "../shared/generated/StatsProvenance";
 
 // The pure half of the Stats absorption pattern (#890, #892, #906, ADR-0077,
 // ADR-0078): what a selectable row is, how a tab counts it, and which row the

@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import { useEditStore, type OpenPipeline } from "../stores/editStore";
-import type { RunState, RunStatus } from "../types";
-import { TooltipProvider } from "./ui/tooltip";
+import type { RunState } from "../shared/generated/RunState";
+import type { RunStatus } from "../shared/generated/RunStatus";
+import { TooltipProvider } from "../shared/ui/tooltip";
 
 // jsdom has no ResizeObserver; ReactFlow's container measurement needs it
 // (mirrors EditCanvas.banner225.test.tsx).
@@ -115,6 +116,12 @@ function runTab(): OpenPipeline {
 // Minimal RunState matching the tab's runId, with a controllable status.
 function runState(status: RunStatus): RunState {
   return {
+    loop_states: {},
+    foreach_states: {},
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
     run_id: "r1",
     status,
     pipeline_name: "My Pipeline",
@@ -124,9 +131,9 @@ function runState(status: RunStatus): RunState {
     nodes: {},
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
+    merge_resolver: undefined,
   };
 }
 

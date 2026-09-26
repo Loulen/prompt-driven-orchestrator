@@ -13,7 +13,7 @@
 //! This module is **pure**: raw help text in, a [`Catalogue`] out — no `$PATH`, no
 //! subprocess, no clock (the discipline `run_cost`/`harness_registry` keep). The
 //! act of *running* the binary (and reading its version) lives beside
-//! [`crate::tmux_session_manager::binary_available`], the one place that reads the
+//! [`crate::harness_binary::binary_available`], the one place that reads the
 //! environment. The two responsibilities meet in [`crate::lib`]'s settings view and
 //! the boot probe.
 //!

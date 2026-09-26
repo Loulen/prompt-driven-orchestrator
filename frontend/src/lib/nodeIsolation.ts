@@ -1,4 +1,5 @@
-import type { NodeDef, NodeType } from "../types";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 /**
  * #653 / ADR-0060 — the one owner of "where does this node work?" on the client.
@@ -21,6 +22,9 @@ const DEFAULT_ISOLATION: Record<NodeType, boolean | null> = {
   agent: true,
   script: false,
   merge: null,
+  // Legacy structural types, soft-warned by the daemon: no worktree either.
+  switch: null,
+  loop: null,
   start: null,
   end: null,
 };
@@ -78,7 +82,7 @@ export function resolveIsolation(
  * A node's isolation as the document states it, falling back to its type's
  * default.
  */
-export function nodeIsolation(node: NodeDef): boolean | null {
+export function nodeIsolation(node: EditorNodeDef): boolean | null {
   return resolveIsolation(node.type, node.isolated_worktree);
 }
 
@@ -88,7 +92,7 @@ export function nodeIsolation(node: NodeDef): boolean | null {
  * isolated without a line to read: the marker has to say so, or a Merge would
  * look *less* isolated than the Agent feeding it.
  */
-export function isNodeIsolated(node: NodeDef): boolean {
+export function isNodeIsolated(node: EditorNodeDef): boolean {
   if (node.type === "merge") return true;
   return nodeIsolation(node) === true;
 }

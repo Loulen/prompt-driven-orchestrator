@@ -16,13 +16,15 @@ import {
   sandboxState,
   triggerInputRejectReason,
 } from "./newRunForm";
-import type { InstanceSettings, PipelineListEntry } from "../types";
+import type { InstanceSettings } from "../settings/model/settings";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import { legacyScope } from "../test/legacy";
 
 function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
-  return {
+  return { prompt_required: true,
     id: "p1",
     name: "Auditor",
-    scope: "repo",
+    scope: legacyScope("repo"),
     path: "/repo/.pdo/pipelines/auditor.yaml",
     node_count: 3,
     modified: null,

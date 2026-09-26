@@ -1,13 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
-import type { NodeState, NodeStatus, RunState } from "./types";
+import type { NodeState } from "./shared/generated/NodeState";
+import type { NodeStatus } from "./shared/generated/NodeStatus";
+import type { RunState } from "./shared/generated/RunState";
 
 function makeNode(
   id: string,
   status: NodeStatus,
   started_at: string | null,
 ): NodeState {
-  return {
+  return { frontmatter_retries: 0,
     node_id: id,
     status,
     iter: 1,
@@ -20,6 +22,12 @@ function makeNode(
 
 function makeRun(nodes: NodeState[]): RunState {
   return {
+    loop_states: {},
+    foreach_states: {},
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
     run_id: "r",
     status: "running",
     pipeline_name: "p",
@@ -29,9 +37,9 @@ function makeRun(nodes: NodeState[]): RunState {
     nodes: Object.fromEntries(nodes.map((n) => [n.node_id, n])),
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
+    merge_resolver: undefined,
   };
 }
 

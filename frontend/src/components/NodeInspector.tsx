@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { GitFork, Lock, Star, TriangleAlert } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
-import type { NodeDef, NodeState, NodeType, PortDef, SkillRef } from "../types";
+import type { NodeState } from "../shared/generated/NodeState";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortDef } from "../shared/generated/PortDef";
+import type { SkillRef } from "../shared/generated/SkillRef";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import OutputPortCard from "./OutputPortCard";
 import { NodeTypeIcon } from "./NodeTypeIcon";
@@ -29,13 +32,14 @@ import type { PooledInputSource } from "../lib/derivePooledInputs";
 import { carriedPorts, withCarriedPorts } from "../lib/edgePorts";
 import { requalifyWhen } from "../lib/whenClause";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
-import { Tooltip } from "./ui/tooltip";
+import { Tooltip } from "../shared/ui/tooltip";
 import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useLibraryState } from "../hooks/useLibrary";
 import type { LibrarySyncState } from "../hooks/useLibrary";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 import { EMPTY_PROVISIONING_RULES } from "../lib/provisioning";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 
 /**
@@ -56,7 +60,7 @@ export default function NodeInspector({
   libraryEntries: LibraryEntry[];
   onLibraryChanged: () => void;
   /** #669: the Run tier's frozen skills, on a run canvas — shown as inherited. */
-  runSkills?: import("../types").SkillRef[];
+  runSkills?: import("../shared/generated/SkillRef").SkillRef[];
   /** #653: the live NodeRun's projected state, on a run canvas. Its frozen
    *  `isolated_worktree` is what the Workspace section reads in run mode —
    *  where the iteration ACTUALLY works, which an edit no longer moves. */
@@ -67,7 +71,7 @@ export default function NodeInspector({
   readOnly?: boolean;
   provisioningRepository?: string;
   provisioningFrozenAt?: string;
-  inheritedProvisioning?: import("../types").ScopedProvisioningRules[];
+  inheritedProvisioning?: import("../shared/generated/ScopedProvisioningRules").ScopedProvisioningRules[];
   provisioningGitRef?: string;
 }) {
   const openTabs = useEditStore((s) => s.openTabs);
@@ -223,8 +227,8 @@ export default function NodeInspector({
     }
   }
 
-  function handleField(field: keyof NodeDef, value: unknown) {
-    updateNode(node!.id, { [field]: value } as Partial<NodeDef>);
+  function handleField(field: keyof EditorNodeDef, value: unknown) {
+    updateNode(node!.id, { [field]: value } as Partial<EditorNodeDef>);
   }
 
   function handleAddOutput() {
@@ -773,10 +777,10 @@ function StarButton({
   updatePromptFn,
 }: {
   syncState: LibrarySyncState;
-  node: NodeDef;
+  node: EditorNodeDef;
   prompt: string;
   onLibraryChanged: () => void;
-  updateNodeFn: (updates: Partial<NodeDef>) => void;
+  updateNodeFn: (updates: Partial<EditorNodeDef>) => void;
   updatePromptFn: (content: string) => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);

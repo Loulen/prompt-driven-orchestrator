@@ -7,12 +7,8 @@ import {
   fetchSandboxProfiles,
   saveSandboxProfile,
 } from "../api";
-import type {
-  SandboxProfile,
-  SandboxProfileEntry,
-  SandboxProfileImage,
-  SandboxProfileReferents,
-} from "../types";
+import type { SandboxProfile, SandboxProfileEntry, SandboxProfileReferents } from "../sandbox/model/sandbox";
+import type { SandboxProfileImage } from "../shared/generated/SandboxProfileImage";
 
 
 /** Open-at directory for the Dockerfile picker (#431/#467): the PARENT of the current

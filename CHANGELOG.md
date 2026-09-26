@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.0 — Contrat typé et squelette hexagonal (#915, spec #913)
+
+Deuxième ticket de la spec #913 (ADR-0079..0081). Le contrat HTTP/WS ne change pas (snapshots
+identiques) ; seuls ajouts : les en-têtes de session envoyés par la CLI d'agent.
+
+- Workspace Cargo : `pdo-extension-api` 0.1 (trait `Extension`, hooks neutres, réexporte axum),
+  `pdo-kernel` (horloge, Acteur, Opération, autorisation neutre, bus d'événements, hôte
+  d'extensions), `pdo` devient la composition root (`serve(config, extensions)`). Le crate legacy
+  s'appelle désormais `pdo-legacy` ; sa lib reste `pdo_daemon` (les cibles `RUST_LOG` ne changent pas).
+- Middleware `identify` en tête du routeur : Opérateur local par défaut, Agent pour
+  `pdo complete` / `fail` / `skip` / `wait-user`.
+- Types TS générés par ts-rs dans `frontend/src/shared/generated/` (`make types`) ;
+  `frontend/src/types.ts` disparaît et `make check` échoue si les types dérivent.
+- Écarts révélés par les types générés, corrigés : un Node `waiting` (en attente d'un slot de
+  session) s'affiche enfin (« Waiting ») sans polling en boucle, et l'éditeur conserve
+  `required` / `auto_fail` à l'enregistrement.
+- Tests de structure : test d'architecture sur fixture, plafond de 400 lignes par fichier de prod
+  avec une baseline qui ne peut que baisser.
+
 ## 1.109.1 — Filet de refactor : routes couvertes et snapshots temporaires (#914, spec #913)
 
 Aucun code de prod touché. Premier ticket de la spec #913 (ADR-0079..0081) : il pose le filet

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Clock, FolderGit2, GitBranch, Paperclip, Plus, Save, Search, Sparkles, X } from "lucide-react";
-import type { InstanceSettings, PipelineListEntry, Trigger } from "../types";
+import type { InstanceSettings } from "../settings/model/settings";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { Trigger } from "../shared/generated/Trigger";
 import type { TestGuardResponse } from "../api";
 import { createRun, createTrigger, updateTrigger, fetchSettings, testGuard } from "../api";
 import { useEditStore } from "../stores/editStore";
@@ -20,13 +22,14 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
-} from "./ui/dropdown-menu";
+} from "../shared/ui/dropdown-menu";
 import { highlightSegments } from "../lib/branchSelect";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import { SETTINGS_CHANGED } from "../hooks/useSettings";
 import { useSkillBank } from "../hooks/useSkillBank";
 import { useSkillTiers } from "../hooks/useSkillTiers";
-import type { AgentChoice, SkillRef } from "../types";
+import type { AgentChoice } from "../shared/generated/AgentChoice";
+import type { SkillRef } from "../shared/generated/SkillRef";
 import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
 import { useLaunchTargets } from "../hooks/useLaunchTargets";
 import { useRepoValidation } from "../hooks/useRepoValidation";
@@ -40,7 +43,7 @@ import {
 } from "../lib/attachments";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../lib/provisioning";
-import type { ProvisioningRules } from "../types";
+import type { ProvisioningRules } from "../shared/generated/ProvisioningRules";
 
 
 /**

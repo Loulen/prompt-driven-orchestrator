@@ -4,21 +4,8 @@
 // message must include each rejection reason.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  ApiError,
-  browseFs,
-  createRun,
-  deletePipeline,
-  duplicateLibraryPipeline,
-  editRunRepos,
-  fetchPipeline,
-  markNodeDone,
-  releaseNodeCompletion,
-  request,
-  savePipeline,
-  saveRunPipeline,
-  uploadTimeoutMs,
-} from "./api";
+import { ApiError, request, uploadTimeoutMs } from "./shared/http/client";
+import { browseFs, createRun, deletePipeline, duplicateLibraryPipeline, editRunRepos, fetchPipeline, markNodeDone, releaseNodeCompletion, savePipeline, saveRunPipeline } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();

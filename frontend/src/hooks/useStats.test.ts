@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { useStats } from "./useStats";
 import * as api from "../api";
-import type { StatsOverview, StatsCost } from "../types";
+import type { StatsOverview } from "../shared/generated/StatsOverview";
+import type { StatsCost } from "../shared/generated/StatsCost";
 
 vi.mock("../api", () => ({
   fetchStatsOverview: vi.fn(),

@@ -29,6 +29,7 @@ use std::path::Path;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
+use ts_rs::TS;
 
 use crate::pipeline::PipelineDef;
 use crate::skill_bank::{self, SkillError, SKILL_MD};
@@ -208,7 +209,8 @@ pub(crate) fn read_zip(bytes: &[u8]) -> Result<Vec<SidecarSkill>, String> {
 
 /// What the import did to the bank, per skill — the structured half of the
 /// answer; the human-readable half is the `warnings` list.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "SkillSidecarImportReport")]
 pub(crate) struct ImportReport {
     /// Ids created from the sidecar, with their final label.
     pub created: Vec<SkillRef>,
@@ -220,12 +222,14 @@ pub(crate) struct ImportReport {
     pub missing: Vec<SkillRef>,
     /// The folder the created skills were filed under, when any was.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub folder: Option<skill_bank::SkillFolder>,
     /// Non-fatal diagnostics, in the document's `skills.<id>: …` idiom.
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "SidecarRenamedSkill")]
 pub(crate) struct RenamedSkill {
     pub id: String,
     pub from: String,

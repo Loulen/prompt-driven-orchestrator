@@ -53,18 +53,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use pdo_kernel::env::DOCKER_CMD_OVERRIDE_ENV;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use ts_rs::TS;
 
 /// Dockerfile embarqué (source de vérité dans le binaire). Seedé sur disque au 1er usage.
 /// `.gitattributes` épingle `eol=lf` sur ce fichier : `include_str!` embarque les octets
 /// verbatim, donc un checkout CRLF changerait le hash (cf. D6 du plan #405).
 const EMBEDDED_DOCKERFILE: &str = include_str!("../assets/sandbox/Dockerfile");
-
-/// Env var pointant les invocations docker vers un exécutable fake (seam test/intégration).
-/// Miroir de [`crate::tmux_session_manager::TMUX_CMD_OVERRIDE_ENV`] : lue UNE fois au bord,
-/// jamais dans le cœur.
-pub(crate) const DOCKER_CMD_OVERRIDE_ENV: &str = "PDO_DOCKER_CMD_OVERRIDE";
 
 /// Message d'erreur unique quand le binaire `docker` est introuvable sur le PATH. Devient la
 /// `reason` d'un `RunFailed` (US-16) : jamais d'exécution silencieuse sur l'hôte.
@@ -642,7 +639,8 @@ impl DockerfileSource {
 /// `pub` and not `pub(crate)`, unlike everything else in this module, for exactly the reason
 /// [`crate::event_log::SandboxMode`] is: it is a field of `RunState`, which some public signature
 /// makes reachable — a `pub(crate)` type there is a `private_interfaces` warning.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SandboxProfileImage")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProfileImage {
     /// Un Dockerfile choisi PAR PROFIL : la même mécanique que #431, au tier

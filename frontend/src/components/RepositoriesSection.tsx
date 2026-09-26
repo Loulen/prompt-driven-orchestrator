@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { CloudOff, FolderGit2, GitBranch, X, Plus } from "lucide-react";
-import type { RunState } from "../types";
+import type { RunState } from "../shared/generated/RunState";
 import { editRunRepos } from "../api";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import SecondaryRepoRow, { type SecondaryRepo } from "./SecondaryRepoRow";

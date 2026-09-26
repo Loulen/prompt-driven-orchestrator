@@ -1,4 +1,5 @@
-import type { NodeDef, NodeType } from "../types";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 /**
  * `start` / `end` are structural markers, not nodes the user owns (#684): a
@@ -6,7 +7,7 @@ import type { NodeDef, NodeType } from "../types";
  * their ports are the pipeline's contract. Every gesture that deletes,
  * duplicates or edits a node must ask this first.
  */
-export function isStructuralMarker(node: Pick<NodeDef, "type"> | NodeType | null | undefined): boolean {
+export function isStructuralMarker(node: Pick<EditorNodeDef, "type"> | NodeType | null | undefined): boolean {
   const type = typeof node === "string" ? node : node?.type;
   return type === "start" || type === "end";
 }

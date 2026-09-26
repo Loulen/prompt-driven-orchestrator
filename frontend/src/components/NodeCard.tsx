@@ -1,4 +1,4 @@
-import type { NodeStatus } from "../types";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
 import { STATUS_BORDER, STATUS_BG, SELECTION_RING_STYLE } from "../nodeStyles";
 
 interface NodeCardProps {

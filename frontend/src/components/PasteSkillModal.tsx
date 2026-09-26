@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ClipboardPaste, FileText, Folder, X } from "lucide-react";
-import { ApiError, createSkill, uploadSkillFileFromPath, uploadSkillFiles } from "../api";
-import type { Skill, SkillFolder } from "../types";
+import { ApiError } from "../shared/http/client";
+import { createSkill, uploadSkillFileFromPath, uploadSkillFiles } from "../api";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
 import { validateSkillMd, type CheckId, type CheckState } from "../lib/skillMd";
 import { folderPathLabel } from "../lib/skillTree";
 import {

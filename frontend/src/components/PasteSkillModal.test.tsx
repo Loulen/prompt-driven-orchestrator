@@ -24,10 +24,10 @@ vi.mock("../api", () => ({
   },
 }));
 
-import { ApiError } from "../api";
+import { ApiError } from "../shared/http/client";
 
 import PasteSkillModal from "./PasteSkillModal";
-import type { SkillFolder } from "../types";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
 
 const VALID = `---
 name: tdd
@@ -43,7 +43,7 @@ Red, green, refactor.
 const t = "2026-09-03T10:00:00Z";
 const folders: SkillFolder[] = [
   { id: "f-m", name: "méthode", parent_id: null, created_at: t, updated_at: t },
-  { id: "f-i", name: "ippon", parent_id: null, created_at: t, updated_at: t },
+  { id: "f-i", name: "acme", parent_id: null, created_at: t, updated_at: t },
   { id: "f-j", name: "java", parent_id: "f-i", created_at: t, updated_at: t },
 ];
 
@@ -89,7 +89,7 @@ describe("PasteSkillModal (#668)", () => {
     expect(screen.queryByTestId("paste-skill-reason")).toBeNull();
     expect((screen.getByTestId("paste-skill-folder") as HTMLSelectElement).value).toBe("f-m");
     // Nested folders read as a path.
-    expect(screen.getByRole("option", { name: "ippon / java" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "acme / java" })).toBeInTheDocument();
   });
 
   it("FP step 2: a valid SKILL.md passes all five checks, previews the row, and Create posts it", async () => {

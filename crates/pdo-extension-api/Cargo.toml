@@ -1,0 +1,20 @@
+[package]
+name = "pdo-extension-api"
+# The public contract of PDO's extensions (ADR-0081). Versioned on its own, 0.x
+# until a real extension runs on the published API alone (D22). Every other crate
+# of the workspace follows the product version and promises nothing.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The extension API of PDO: the Extension trait and the public types its hooks exchange"
+# Consumed by git tag, never published to crates.io (D8).
+publish = false
+
+# Depends on nothing in the core: an extension compiles against this crate alone.
+# axum is part of the contract (re-exported, D21).
+[dependencies]
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true

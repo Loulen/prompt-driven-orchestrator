@@ -154,6 +154,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::distribution::r7_distribution;
 use crate::event_log::EventKind;
@@ -189,7 +190,8 @@ pub(crate) struct PerformanceQuery {
 /// an all-or-nothing `Option` would drop `expected`/`missing_reasons` for a
 /// fully absent metric, leaving the frontend unable to distinguish "never ran"
 /// from "no reliable bounds". Only `stats` goes `null`, when `measured == 0`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsDistribution {
     pub stats: Option<crate::distribution::SixStats>,
     pub measured: i64,
@@ -201,7 +203,8 @@ pub(crate) struct StatsDistribution {
 /// at least one steering message, over `readable` executions whose count could
 /// be read. The client renders « n % · steered/readable », or « — » when
 /// `readable == 0` — so the numbers travel, never a pre-computed percentage.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "StatsSteeredRate")]
 pub(crate) struct SteeredRate {
     pub steered: u32,
     pub readable: u32,
@@ -210,7 +213,8 @@ pub(crate) struct SteeredRate {
 /// Matches the frontend's `StatsHarnessPerformance` — `context`/`duration`/
 /// `active_duration`/`wait_duration`/`steering` are never `null` (see
 /// [`StatsDistribution`]).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsHarnessPerformance {
     pub harness: String,
     pub context: StatsDistribution,
@@ -234,7 +238,8 @@ pub(crate) struct StatsHarnessPerformance {
 }
 
 /// Matches the frontend's `StatsPerformanceAggregate`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
+#[ts(export, rename = "StatsPerformanceAggregate")]
 pub(crate) struct PerformanceAggregate {
     pub harnesses: Vec<StatsHarnessPerformance>,
 }
@@ -244,7 +249,8 @@ pub(crate) struct PerformanceAggregate {
 /// `StatsPerformanceEntity`. A Pipeline's `subagents` is always empty (they are
 /// declared on Nodes); a Node's / subagent-group's / infra role's `nodes` is
 /// always empty.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
+#[ts(export, rename = "StatsPerformanceEntity")]
 pub(crate) struct PerformanceEntity {
     pub id: String,
     pub name: String,
@@ -259,23 +265,29 @@ pub(crate) struct PerformanceEntity {
     /// freeze. Both flags travel: a node can be interactive AND orchestrator,
     /// and then matches either chip.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub interactive: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub orchestrator: Option<bool>,
     /// The Node's observations split into model × effort couples (ADR-0065) —
     /// Node leaves only, so the drill-down ends there; omitted (never an empty
     /// array) on the other levels, and on the `by_model` Node rows (the path is
     /// already the drill).
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub models: Vec<PerformanceModelEffortPair>,
     /// Pipeline, Node and « By model » model rows (#890, #892): the Runs
     /// counted, the most recent one's start, and — on an absorbent — its
     /// absorbed members. Omitted on the other levels.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub runs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub last_run: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub absorbed: Vec<AbsorbedMember>,
 }
 
@@ -283,7 +295,8 @@ pub(crate) struct PerformanceEntity {
 /// analogue of `stats::StatsModelEffortPair` — the same aggregate shape plus
 /// the pair identity and where each half was read from. `effort = None` is the
 /// "not set" bucket — never merged with a real effort.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct PerformanceModelEffortPair {
     #[serde(flatten)]
     pub aggregate: PerformanceAggregate,
@@ -297,17 +310,21 @@ pub(crate) struct PerformanceModelEffortPair {
     pub key: String,
     pub runs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub last_run: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub absorbed: Vec<AbsorbedMember>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub global_absorbed: Vec<AbsorbedMember>,
 }
 
 /// One effort level under a model, in the Performance « By model » tree: the
 /// entity's `id` is the effort string ("" for not set) and its `name` the
 /// effort or "not set".
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct PerformanceEffortEntity {
     #[serde(flatten)]
     pub entity: PerformanceEntity,
@@ -319,7 +336,8 @@ pub(crate) struct PerformanceEffortEntity {
 /// One model (verbatim id) of the Performance « By model » axis, with its
 /// effort tree: Model → Effort → Pipeline → Node. Both harnesses run on the
 /// same id are one row, the harness staying a column (ADR-0065 §2).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsModelPerformanceEntity {
     #[serde(flatten)]
     pub entity: PerformanceEntity,
@@ -327,7 +345,8 @@ pub(crate) struct StatsModelPerformanceEntity {
     pub efforts: Vec<PerformanceEffortEntity>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct StatsPerformance {
     /// Every harness with at least one successful observation in the cohort.
     pub harnesses: Vec<String>,

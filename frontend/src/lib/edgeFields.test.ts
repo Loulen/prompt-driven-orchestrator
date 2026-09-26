@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { edgeConditionFields, operatorsForField, clampOperator } from "./edgeFields";
 import { OPERATORS } from "./whenClause";
-import type { PipelineDef, EdgeDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
-function pipeline(): PipelineDef {
+function pipeline(): EditorPipelineDef {
   return {
     name: "t",
     version: "1.0",

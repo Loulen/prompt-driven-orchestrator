@@ -7,7 +7,7 @@ import {
   MembersModal,
 } from "../components/StatsAbsorption";
 import { combineStatsRows, uncombineStatsMember } from "../api";
-import type { StatsAbsorbedMember } from "../types";
+import type { StatsAbsorbedMember } from "../shared/generated/StatsAbsorbedMember";
 import {
   NOUN,
   type AbsorbableRow,

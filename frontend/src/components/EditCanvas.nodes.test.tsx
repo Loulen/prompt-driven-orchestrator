@@ -1,7 +1,7 @@
 import { render, screen, within, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 import { EditNode } from "./EditCanvas";
 import { useEditStore } from "../stores/editStore";
 import { deriveEditEdges } from "./editNodeDerivation";
@@ -11,7 +11,11 @@ import { gridStep } from "../lib/wiringGrid";
 
 // Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
 const GRID_STEP = gridStep("L");
-import type { EdgeAnchor, NodeDef, NodeStatus, NodeType, PipelineDef, PortSide } from "../types";
+import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortSide } from "../shared/generated/PortSide";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 // EditNode reads selection from the global edit store; reset it between tests so
 // a marker is never accidentally rendered "selected".
@@ -364,7 +368,7 @@ describe("EditNode rim drag-source (#844)", () => {
 
 const SIDES: PortSide[] = ["top", "right", "bottom", "left"];
 
-function endNode(declaredSide: PortSide = "left"): NodeDef {
+function endNode(declaredSide: PortSide = "left"): EditorNodeDef {
   return {
     id: "end",
     name: "End",
@@ -376,9 +380,9 @@ function endNode(declaredSide: PortSide = "left"): NodeDef {
 }
 
 function pipelineToEnd(
-  edge: Partial<PipelineDef["edges"][number]>,
+  edge: Partial<EditorPipelineDef["edges"][number]>,
   declaredSide: PortSide = "left",
-): PipelineDef {
+): EditorPipelineDef {
   return {
     name: "p",
     variables: {},

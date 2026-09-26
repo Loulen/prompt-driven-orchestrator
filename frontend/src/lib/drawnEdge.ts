@@ -5,7 +5,9 @@
 // without an xyflow drag. The canvas measures (press point, drop point, node
 // rects); this decides.
 
-import type { EdgeAnchor, EdgeDef, PortSide } from "../types";
+import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { PortSide } from "../shared/generated/PortSide";
 import type { Point } from "./orthogonalRouter";
 import { enforcePerpendicularEnds, landingLeg, storableWaypoints } from "./anchorSide";
 

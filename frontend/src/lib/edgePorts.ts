@@ -10,7 +10,9 @@
 // byte for byte. This module is the single place that knows about the pair; the
 // rest of the app talks in terms of "the ports this edge carries".
 
-import type { EdgeDef, EdgeSource, NodeDef, PipelineDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EdgeSource } from "../shared/generated/EdgeSource";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 /**
  * The ports this edge carries, in authored order. Never empty for a parsed
@@ -84,8 +86,8 @@ export function emergentInputs(edge: EdgeDef): { port: string; input: string }[]
 }
 
 /** The output ports the source node of `edge` declares, in declaration order. */
-export function declaredOutputs(pipeline: PipelineDef, edge: EdgeDef): string[] {
-  const source: NodeDef | undefined = pipeline.nodes.find((n) => n.id === edge.source.node);
+export function declaredOutputs(pipeline: EditorPipelineDef, edge: EdgeDef): string[] {
+  const source: EditorNodeDef | undefined = pipeline.nodes.find((n) => n.id === edge.source.node);
   return source?.outputs.map((p) => p.name) ?? [];
 }
 

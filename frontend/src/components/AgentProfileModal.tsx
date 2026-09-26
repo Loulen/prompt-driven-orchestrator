@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createAgentProfile, updateAgentProfile } from "../api";
-import type { AgentProfile } from "../types";
+import type { AgentProfile } from "../shared/generated/AgentProfile";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
 import HarnessSelect from "./HarnessSelect";

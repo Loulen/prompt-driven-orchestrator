@@ -12,29 +12,27 @@ import {
   LockOpen,
   LoaderCircle,
 } from "lucide-react";
-import type {
-  AwaitingInfo,
-  IterationInfo,
-  NodeState,
-  NodeStatus,
-  ScopedProvisioningRules,
-} from "../types";
+import type { AwaitingInfo } from "../shared/generated/AwaitingInfo";
+import type { IterationInfo } from "../shared/generated/IterationInfo";
+import type { NodeState } from "../shared/generated/NodeState";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
+import type { ScopedProvisioningRules } from "../shared/generated/ScopedProvisioningRules";
 import { artifactUrl } from "../api";
 import type { PortIO, FileInfo } from "../api";
-import type { PortType } from "../types";
+import type { PortType } from "../shared/generated/PortType";
 import { useNodeRun } from "../hooks/useNodeRun";
 import type { MarkVerdict, ReleaseVerdict } from "../hooks/useNodeRun";
 import {
   ResizablePanelGroup,
   ResizablePanel,
   ResizableHandle,
-} from "./ui/resizable";
+} from "../shared/ui/resizable";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
-} from "./ui/dropdown-menu";
+} from "../shared/ui/dropdown-menu";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { ArtifactSource } from "./MarkdownArtifactModal";
 import ImageLightbox from "./ImageLightbox";
@@ -56,6 +54,7 @@ import {
 
 const STATUS_LABELS: Record<NodeStatus, string> = {
   pending: "Pending",
+  waiting: "Waiting",
   running: "Running",
   awaiting_user: "Awaiting User",
   completed: "Completed",
@@ -1422,6 +1421,7 @@ function PromptSection({
 
 const STATUS_DOTS: Record<NodeStatus, string> = {
   pending: "bg-st-pending",
+  waiting: "bg-st-pending",
   running: "bg-st-running",
   awaiting_user: "bg-st-await",
   completed: "bg-st-done",
@@ -1850,6 +1850,9 @@ function terminalPlaceholder(node: NodeState): string {
   switch (node.status) {
     case "pending":
       return "en attente d’activation";
+    case "waiting":
+      // Admission-throttled: ready, but the session cap is reached.
+      return "Waiting for a free session slot";
     case "completed":
       return "Session ended.";
     case "skipped":

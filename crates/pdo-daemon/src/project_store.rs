@@ -17,24 +17,29 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use ts_rs::TS;
 
 /// A persisted Projet: a named group of member paths and the optional settings it
 /// carries. Each optional setting is `None` when the Projet states none — the
 /// tier is then transparent to resolution.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct Project {
     pub id: String,
     pub name: String,
     /// The harness this Projet carries (ADR-0046). An empty string is treated as
     /// "unset" by the resolver seam (the `Some("")` trap of #347).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub harness: Option<String>,
     /// The **project** tier of [`crate::auto_fail::resolve_auto_fail`] (ADR-0049).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub auto_fail: Option<bool>,
     /// The Projet tier of the agentic-profile union (#563, ADR-0057). When set it
     /// wins outright at this tier over [`Self::harness`] (never merges).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// The Projet tier of the **skills** selection (#669, ADR-0062): unioned with
     /// the instance, Run and Node tiers by `skill_selection::resolve` for every
@@ -178,7 +183,7 @@ async fn members_of(db: &SqlitePool, project_id: &str) -> Result<Vec<String>, sq
 /// row from a bare name.
 pub(crate) async fn create(db: &SqlitePool, name: &str) -> Result<Project, sqlx::Error> {
     let id = generate_project_id();
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query("INSERT INTO projects (id, name, harness, created_at) VALUES (?, ?, NULL, ?)")
         .bind(&id)
         .bind(name)
@@ -354,7 +359,7 @@ pub(crate) async fn add_member(
             owner_name: owner.name,
         });
     }
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query("INSERT INTO project_members (path, project_id, created_at) VALUES (?, ?, ?)")
         .bind(path)
         .bind(project_id)

@@ -4,7 +4,10 @@ import type {
   TargetRepoInput,
   UpdateTriggerRequest,
 } from "../api";
-import type { InstanceSettings, PipelineListEntry, SandboxProfileRef, SkillRef } from "../types";
+import type { InstanceSettings } from "../settings/model/settings";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { SandboxProfileRef } from "../sandbox/model/sandbox";
+import type { SkillRef } from "../shared/generated/SkillRef";
 import { presetToCron, type CronPresetId } from "../cronPresets";
 import { HARNESS_FLOOR, harnessCatalog, type HarnessCatalog } from "./harness";
 

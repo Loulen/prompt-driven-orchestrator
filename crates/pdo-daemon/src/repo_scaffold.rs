@@ -23,10 +23,12 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use ts_rs::TS;
 
 /// One file to write before the first commit. `path` is relative to the new repo
 /// and is rejected if it tries to leave it.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, TS)]
+#[ts(export, optional_fields = nullable, rename = "CreateRepoFile")]
 pub(crate) struct ScaffoldFile {
     pub path: String,
     pub content: String,

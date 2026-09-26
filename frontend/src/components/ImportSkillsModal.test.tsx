@@ -23,9 +23,10 @@ vi.mock("../api", () => ({
   },
 }));
 
-import { ApiError } from "../api";
+import { ApiError } from "../shared/http/client";
 import ImportSkillsModal from "./ImportSkillsModal";
-import type { SkillFolder, SkillScanResult } from "../types";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
+import type { SkillScanResult } from "../skill/model/skill";
 
 const t = "2026-09-03T10:00:00Z";
 const folders: SkillFolder[] = [
@@ -277,14 +278,14 @@ describe("ImportSkillsModal (#670)", () => {
         body: { code: "clone_failed" },
       }),
     );
-    fireEvent.change(screen.getByTestId("import-source-input"), { target: { value: "https://github.com/ippon/private-skills" } });
+    fireEvent.change(screen.getByTestId("import-source-input"), { target: { value: "https://github.com/acme/private-skills" } });
     fireEvent.click(screen.getByTestId("import-scan"));
     await waitFor(() => expect(screen.getByTestId("import-scan-error")).toBeInTheDocument());
     const error = screen.getByTestId("import-scan-error");
     expect(error).toHaveTextContent("Clone refused.");
     expect(error).toHaveTextContent("could not read Username");
     expect(error).toHaveTextContent("gh auth login");
-    expect(error).toHaveTextContent("git@github.com:ippon/private-skills.git");
+    expect(error).toHaveTextContent("git@github.com:acme/private-skills.git");
     expect(screen.getByTestId("import-source-input")).toHaveAttribute("aria-invalid", "true");
     scanMock.mockResolvedValueOnce(SCAN);
     fireEvent.click(screen.getByTestId("import-retry"));

@@ -9,7 +9,7 @@
 // The router is intentionally a deep module with a tiny surface: callers hand
 // it geometry and get back a polyline, never the internal grid/search details.
 
-import type { PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
 
 export interface Point {
   x: number;

@@ -6,8 +6,10 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct PageMount {
     pub name: String,
     pub directory: String,
@@ -54,7 +56,7 @@ pub(crate) async fn create(
         name: name.to_string(),
         directory: directory.to_string_lossy().into_owned(),
         run_id: run_id.map(str::to_string),
-        created_at: crate::event_log::now_iso(),
+        created_at: pdo_kernel::clock::now_iso(),
     };
 
     let result = sqlx::query(

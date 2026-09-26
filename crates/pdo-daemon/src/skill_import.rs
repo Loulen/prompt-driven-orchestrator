@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
+use ts_rs::TS;
 
 use crate::skill_bank::{self, FolderProvenance, Provenance, Skill, SkillError, SkillFolder};
 
@@ -122,7 +123,8 @@ pub(crate) fn error_code(error: &ImportError) -> &'static str {
 // Source parsing
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillSourceKind")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SourceKind {
     Git,
@@ -131,7 +133,8 @@ pub(crate) enum SourceKind {
 
 /// What the daemon understood of the typed source. Mirrored client-side for the
 /// live chips; the daemon's reading is the one that counts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "ParsedSkillSource")]
 pub(crate) struct ParsedSource {
     pub kind: SourceKind,
     /// The clone URL (git) or the absolute folder (local). This is the `url`
@@ -282,7 +285,8 @@ pub(crate) fn parse_source(input: &str, home: Option<&Path>) -> Result<ParsedSou
 // ---------------------------------------------------------------------------
 
 /// One folder holding a `SKILL.md` at the source.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillCandidateBase")]
 pub(crate) struct Candidate {
     /// `/`-separated path of the folder from the repository root.
     pub path: String,
@@ -291,8 +295,10 @@ pub(crate) struct Candidate {
     pub description: String,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub code: Option<String>,
     /// Reference files besides `SKILL.md`.
     pub file_count: usize,
@@ -642,7 +648,8 @@ fn scan_root(scan_id: &str) -> Option<(PathBuf, ParsedSource, Option<String>)> {
 // Collisions against the bank
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillCandidateStatus")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CandidateStatus {
     New,
@@ -653,7 +660,8 @@ pub(crate) enum CandidateStatus {
     Invalid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillExistingRef")]
 pub(crate) struct ExistingRef {
     pub id: String,
     pub name: String,
@@ -661,12 +669,14 @@ pub(crate) struct ExistingRef {
     pub folder_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillCandidate")]
 pub(crate) struct ScannedCandidate {
     #[serde(flatten)]
     pub candidate: Candidate,
     pub status: CandidateStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub existing: Option<ExistingRef>,
 }
 
@@ -731,7 +741,8 @@ pub(crate) async fn with_collisions(
 // Import
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[ts(export, rename = "SkillImportAction")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ImportAction {
     /// Take it as a new skill (status `new`).
@@ -743,7 +754,8 @@ pub(crate) enum ImportAction {
     Skip,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, optional_fields = nullable, rename = "SkillImportItem")]
 pub(crate) struct ImportItem {
     pub path: String,
     pub action: ImportAction,
@@ -752,21 +764,24 @@ pub(crate) struct ImportItem {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, rename = "SkillImportedRow")]
 pub(crate) struct ImportedRow {
     pub path: String,
     pub skill: Skill,
     pub action: &'static str,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, rename = "SkillImportFailedRow")]
 pub(crate) struct FailedRow {
     pub path: String,
     pub error: String,
     pub code: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, rename = "SkillImportReport")]
 pub(crate) struct ImportReport {
     pub folder: SkillFolder,
     pub imported: Vec<ImportedRow>,
@@ -793,7 +808,7 @@ fn folder_provenance_for(
         git_ref: source.git_ref.clone(),
         commit: commit.map(str::to_string),
         path: source.path.clone(),
-        imported_at: crate::event_log::now_iso(),
+        imported_at: pdo_kernel::clock::now_iso(),
         found: candidates.len() as i64,
         invalid: candidates.iter().filter(|c| !c.valid).count() as i64,
     }
@@ -1009,7 +1024,8 @@ pub(crate) async fn import(
 // Rescan + update of a Source folder
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillUpdateStatus")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum UpdateStatus {
     /// Content differs at the source; checked by default.
@@ -1026,15 +1042,18 @@ pub(crate) enum UpdateStatus {
     Invalid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillUpdateEntry")]
 pub(crate) struct UpdateEntry {
     pub path: String,
     pub name: String,
     pub description: String,
     pub status: UpdateStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub skill_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub reason: Option<String>,
     /// `updated` only.
     #[serde(default)]
@@ -1047,10 +1066,12 @@ pub(crate) struct UpdateEntry {
     pub files_changed: usize,
     /// `new` only: another skill already carries this name.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub name_taken_by: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, rename = "SkillRescanReport")]
 pub(crate) struct RescanReport {
     pub scan_id: String,
     pub source: ParsedSource,
@@ -1435,10 +1456,10 @@ mod tests {
 
     #[test]
     fn parses_ssh_file_and_local_sources() {
-        let ssh = parse_source("git@github.com:ippon/private-skills.git", None).unwrap();
+        let ssh = parse_source("git@github.com:acme/private-skills.git", None).unwrap();
         assert_eq!(ssh.kind, SourceKind::Git);
-        assert_eq!(ssh.url, "git@github.com:ippon/private-skills.git");
-        assert_eq!(ssh.repo, "ippon/private-skills");
+        assert_eq!(ssh.url, "git@github.com:acme/private-skills.git");
+        assert_eq!(ssh.repo, "acme/private-skills");
 
         let file = parse_source("file:///tmp/fixture.git", None).unwrap();
         assert_eq!(file.kind, SourceKind::Git);

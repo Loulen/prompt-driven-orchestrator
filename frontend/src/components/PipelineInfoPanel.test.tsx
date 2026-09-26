@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { RunState, PipelineDef } from "../types";
+import type { RunState } from "../shared/generated/RunState";
 
 // The badge/banner live in the InfoTab header. Mock the heavy
 // children (network-fetching diff, tmux terminal) so the test stays focused on the
@@ -54,22 +54,29 @@ vi.mock("../api", async (importOriginal) => {
 import PipelineInfoPanel from "./PipelineInfoPanel";
 import TmuxTerminal from "./TmuxTerminal";
 import type { TabId } from "./PipelineInfoPanel";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 function makeRun(overrides: Partial<RunState> = {}): RunState {
   return {
+    loop_states: {},
+    foreach_states: {},
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
     run_id: "run-abc1234567",
     status: "running",
     pipeline_name: "Test Pipeline",
-    name: null,
+    name: undefined,
     input: "do the thing",
     started_at: "2026-07-01T10:00:00.000Z",
     completed_at: null,
     nodes: {},
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
+    merge_resolver: undefined,
     ...overrides,
   };
 }
@@ -300,7 +307,7 @@ describe("PipelineInfoPanel — Manager tab (manager on demand)", () => {
 // #302 / ADR-0048: the Assistant tab is the mirror of the Manager tab — shown
 // only for a library *template* (no live Run) with a resolvable pipeline id.
 describe("PipelineInfoPanel — Assistant tab (#302)", () => {
-  function makePipeline(overrides: Partial<PipelineDef> = {}): PipelineDef {
+  function makePipeline(overrides: Partial<EditorPipelineDef> = {}): EditorPipelineDef {
     return {
       name: "feature-with-review",
       version: "1.0",
@@ -316,7 +323,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
       assistantId?: string | null;
       initialTab?: TabId;
       run?: RunState | null;
-      pipeline?: PipelineDef;
+      pipeline?: EditorPipelineDef;
     } = {},
   ) {
     // Honour an explicit `assistantId: null` (a template without a resolvable id)
@@ -426,7 +433,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
             // The same id twice across nodes counts once in the sidecar.
             skills: [{ id: "11111111-1111-1111-1111-111111111111", name: "tdd" }],
           },
-        ] as PipelineDef["nodes"],
+        ] as EditorPipelineDef["nodes"],
       }),
     });
     await userEvent.click(screen.getByTestId("info-tab-yaml"));
@@ -459,7 +466,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
             interactive: false,
             skills: [{ id: "11111111-1111-1111-1111-111111111111", name: "tdd" }],
           },
-        ] as PipelineDef["nodes"],
+        ] as EditorPipelineDef["nodes"],
       }),
     });
     await userEvent.click(screen.getByTestId("info-tab-yaml"));
@@ -589,6 +596,7 @@ describe("PipelineInfoPanel — Diff tab (#748)", () => {
       from_ref: "fork",
       to_ref: "tip",
       text: "t",
+      excerpt: "",
       author: "user",
       sent_at: "2026-07-01T10:00:00.000Z",
       status: "sent" as const,
@@ -603,6 +611,7 @@ describe("PipelineInfoPanel — Diff tab (#748)", () => {
         completed_at: "2026-07-01T10:01:00.000Z",
         failure_reason: null,
         iterations: [],
+        frontmatter_retries: 0,
         delivery: { before: "aaa", after: "bbb" },
       },
     };
@@ -637,7 +646,7 @@ describe("PipelineInfoPanel — Diff tab (#748)", () => {
       <PipelineInfoPanel
         run={makeRun({
           nodes: {
-            "impl-1": {
+            "impl-1": { frontmatter_retries: 0,
               node_id: "impl-1",
               status: "completed",
               iter: 1,

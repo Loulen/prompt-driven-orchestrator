@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { previewProvisioning } from "../api";
-import type {
-  ProvisioningMode,
-  ProvisioningPlan,
-  ProvisioningRules,
-  ProvisioningScope,
-  ScopedProvisioningRules,
-} from "../types";
+import type { ProvisioningMode } from "../shared/generated/ProvisioningMode";
+import type { ProvisioningPlan } from "../shared/generated/ProvisioningPlan";
+import type { ProvisioningRules } from "../shared/generated/ProvisioningRules";
+import type { ProvisioningScope } from "../shared/generated/ProvisioningScope";
+import type { ScopedProvisioningRules } from "../shared/generated/ScopedProvisioningRules";
 
 const LEVEL_LABELS: Record<ProvisioningScope, string> = {
   instance: "Instance",

@@ -1,11 +1,12 @@
 import { ChevronDown, ChevronsDownUp, ChevronsUpDown, X } from "lucide-react";
-import type { RunListEntry, Trigger } from "../types";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
+import type { Trigger } from "../shared/generated/Trigger";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
-} from "./ui/dropdown-menu";
+} from "../shared/ui/dropdown-menu";
 import {
   EMPTY_RUN_FILTER,
   MANUAL_TRIGGER,

@@ -1,13 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import SourceBranchField from "./SourceBranchField";
-import type {
-  BranchFetchError,
-  BranchRef,
-  FastForwardOutcome,
-  FastForwardRefusal,
-  FastForwardResult,
-} from "../types";
+import type { BranchFetchError } from "../shared/generated/BranchFetchError";
+import type { BranchRef } from "../shared/generated/BranchRef";
+import type { FastForwardOutcome } from "../workspace/model/branches";
+import type { FastForwardRefusal } from "../shared/generated/FastForwardRefusal";
+import type { FastForwardResult } from "../shared/generated/FastForwardResult";
 
 /**
  * #802/ADR-0070. What a person sees and does with the source-branch control:
@@ -24,6 +22,10 @@ const DAY = 86_400_000;
 const local = (name: string, over: Partial<BranchRef> = {}): BranchRef => ({
   name,
   kind: "local",
+  upstream: null,
+  ahead: null,
+  behind: null,
+  head: false,
   last_commit_at: ago(3 * DAY),
   last_commit_subject: `work on ${name}`,
   ...over,
@@ -31,6 +33,10 @@ const local = (name: string, over: Partial<BranchRef> = {}): BranchRef => ({
 const remote = (name: string, over: Partial<BranchRef> = {}): BranchRef => ({
   name,
   kind: "remote",
+  upstream: null,
+  ahead: null,
+  behind: null,
+  head: false,
   last_commit_at: ago(2 * HOUR),
   last_commit_subject: `work on ${name}`,
   ...over,
@@ -515,7 +521,7 @@ describe("the fast-forward", () => {
   });
 
   it("says no file changed when the branch was checked out nowhere", async () => {
-    ffSetup(done({ moved_checkout: null }));
+    ffSetup(done({ moved_checkout: undefined }));
     openSync();
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
     await waitFor(() =>

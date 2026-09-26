@@ -10,7 +10,8 @@ import {
   primaryPort,
   withCarriedPorts,
 } from "./edgePorts";
-import type { EdgeDef, NodeDef, PipelineDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 const single: EdgeDef = {
   source: { node: "design", port: "out" },
@@ -101,7 +102,7 @@ describe("emergentInputs", () => {
 });
 
 describe("declaredOutputs / inDeclarationOrder", () => {
-  const node: NodeDef = {
+  const node: EditorNodeDef = {
     id: "design",
     name: "design",
     type: "agent",
@@ -113,7 +114,7 @@ describe("declaredOutputs / inDeclarationOrder", () => {
     ],
     interactive: false,
   };
-  const pipeline: PipelineDef = {
+  const pipeline: EditorPipelineDef = {
     name: "p",
     version: "1.0",
     variables: {},

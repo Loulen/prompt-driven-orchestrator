@@ -2,16 +2,19 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::event_log::RunState;
 use crate::frontmatter_parser;
 use crate::pipeline::{self, PipelineDef, PortType};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct FileInfo {
     pub path: String,
     pub exists: bool,
     pub size: Option<u64>,
+    #[ts(type = "Record<string, unknown> | null")]
     pub frontmatter: Option<HashMap<String, serde_json::Value>>,
     /// #796: the file predates the execution whose output it is displayed as.
     /// An output file that was on disk BEFORE this node's iteration started
@@ -24,7 +27,8 @@ pub(crate) struct FileInfo {
     pub inherited: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct PortIO {
     pub port: String,
     pub repeated: bool,
@@ -32,7 +36,8 @@ pub(crate) struct PortIO {
     pub files: Vec<FileInfo>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct NodeIO {
     pub inputs: Vec<PortIO>,
     pub outputs: Vec<PortIO>,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchUpdateStatus } from "../api";
 import { UPDATE_STATUS_CHANGED, announceUpdateStatus } from "../lib/updateStatus";
-import type { UpdateStatus } from "../types";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 /**
  * The daemon's cached version-check state (#697), shared by the status-bar badge and

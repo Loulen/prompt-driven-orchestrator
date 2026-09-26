@@ -5,20 +5,15 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use crate::harness_binary::harness_probe_path;
 use anyhow::{Context, Result};
+use pdo_kernel::env::{
+    DEFAULT_HARNESS_ENV, DEFAULT_MODEL_ENV, LIBASSIST_IDLE_TTL_SECS_ENV, REAPER_INTERVAL_SECS_ENV,
+    REAPER_TTL_SECS_ENV,
+};
 use tracing::{info, warn};
-
-/// Env var that replaces the `claude …` tail in the tmux script.
-///
-/// Read **once at daemon boot** by [`crate::DaemonConfig::from_env`] and then
-/// carried as per-daemon config — never consulted in the spawn hot path. Tests
-/// must seed the override through [`crate::DaemonConfig`] / `TestDaemon`, not by
-/// mutating this process-global env (which races across cargo's parallel test
-/// threads and is `unsafe`/UB-prone under the 2024 edition).
-pub const TMUX_CMD_OVERRIDE_ENV: &str = "PDO_TMUX_CMD_OVERRIDE";
 
 /// Compute the per-daemon tmux socket name (`tmux -L <name>`) for a daemon
 /// listening on `daemon_port`.
@@ -113,21 +108,11 @@ pub enum SessionTail<'a> {
     Shell,
 }
 
-/// Env var that overrides the reaper TTL (seconds). Default: 3600 (1 h).
-pub const REAPER_TTL_SECS_ENV: &str = "PDO_REAPER_TTL_SECS";
-
-/// Env var that overrides the reaper sweep interval (seconds). Default: 60.
-pub const REAPER_INTERVAL_SECS_ENV: &str = "PDO_REAPER_INTERVAL_SECS";
-
 /// Default TTL after node completion before the session is reaped.
 pub const DEFAULT_REAPER_TTL: Duration = Duration::from_secs(3600);
 
 /// Default sweep interval for the reaper background task.
 pub const DEFAULT_REAPER_INTERVAL: Duration = Duration::from_secs(60);
-
-/// Env var that overrides the library assistant's idle TTL (seconds).
-/// Default: 120 (#594, ADR-0051).
-pub const LIBASSIST_IDLE_TTL_SECS_ENV: &str = "PDO_LIBASSIST_IDLE_TTL_SECS";
 
 /// How long the shared library assistant survives with no edit view open and no
 /// terminal attached, before the orphan sweep reaps it (#594, ADR-0051).
@@ -474,7 +459,7 @@ fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
 /// Construct the script tmux launches for a node run.
 ///
 /// `tmux_cmd_override` replaces the default `claude …` tail when `Some` — the
-/// per-daemon test seam (see [`TMUX_CMD_OVERRIDE_ENV`]). `None` → production
+/// per-daemon test seam (see [`pdo_kernel::env::TMUX_CMD_OVERRIDE_ENV`]). `None` → production
 /// claude invocation. **Ignored for a [`SessionTail::Script`]** node: a script
 /// *is* deterministic bash, so the override must not clobber it (a strictly
 /// stronger property — a script node is end-to-end testable in CI with zero
@@ -1436,11 +1421,6 @@ pub fn env_libassist_idle_ttl_secs() -> Option<u64> {
         .and_then(|v| v.parse::<u64>().ok())
 }
 
-/// Env var that supplies the instance-wide `default_model` at bootstrap (#347,
-/// ADR-0015). No baked-in default: `None` ⇒ the account default (no `--model`),
-/// byte-identical to the legacy launch.
-pub const DEFAULT_MODEL_ENV: &str = "PDO_DEFAULT_MODEL";
-
 /// The `default_model` contributed by [`DEFAULT_MODEL_ENV`] alone, or `None`
 /// when the var is unset or empty.
 ///
@@ -1467,10 +1447,6 @@ pub fn default_model_with(stored: Option<String>) -> Option<String> {
     stored.filter(|s| !s.is_empty()).or_else(env_default_model)
 }
 
-/// Env var supplying the instance-wide default **harness** (#550, ADR-0046).
-/// `None`/empty ⇒ fall through to the `claude` floor, byte-identical launch.
-pub const DEFAULT_HARNESS_ENV: &str = "PDO_DEFAULT_HARNESS";
-
 /// The default harness contributed by [`DEFAULT_HARNESS_ENV`] alone, or `None`
 /// when unset or empty. Exposed so `GET /settings` can disclose a shadowed env
 /// var and compute the winning tier identically to [`default_harness_with`].
@@ -1490,111 +1466,6 @@ pub fn default_harness_with(stored: Option<String>) -> Option<String> {
         .or_else(env_default_harness)
 }
 
-/// The `PATH` the daemon searches for harness binaries (ADR-0055).
-///
-/// A daemon launched as a service inherits the **unit's** `PATH`, which misses the
-/// entries a package manager (Homebrew, nvm, a user prefix) adds only to an
-/// **interactive** shell — so a harness the user installed and can run by hand is
-/// invisible to the service, and the spawn fails saying an installed binary does
-/// not exist. This resolves the binary in the `PATH` the user has *when they type
-/// the command*: the interactive shell's `PATH`, unioned with the process `PATH`
-/// so nothing the service already saw is lost. Measured (ADR-0055): a *login*
-/// shell does not suffice — package managers add their paths from the
-/// **interactive** rc files — so the probe sources an interactive shell (`-i`).
-///
-/// Resolved **once** and cached for the daemon's lifetime: the cost of sourcing
-/// the user's shell config is paid at the first probe, not per spawn, and a `PATH`
-/// the user changes afterwards is seen only on the next daemon start (ADR-0055
-/// limits, same freshness contract as the model catalogue, ADR-0053). The env
-/// override `PDO_HARNESS_PROBE_PATH` short-circuits the shell probe (ops / tests).
-pub fn harness_probe_path() -> String {
-    // Explicit overrides are a deterministic per-process seam. Read them before
-    // the production cache so the single integration-test binary can isolate
-    // tests that intentionally provide different fake harness directories.
-    if let Some(path) = std::env::var_os("PDO_HARNESS_PROBE_PATH") {
-        if !path.is_empty() {
-            return path.to_string_lossy().into_owned();
-        }
-    }
-    static PROBE_PATH: OnceLock<String> = OnceLock::new();
-    PROBE_PATH.get_or_init(resolve_harness_probe_path).clone()
-}
-
-/// Compute the probe `PATH` (uncached): the interactive shell's `PATH` unioned
-/// with the process `PATH`. See [`harness_probe_path`].
-fn resolve_harness_probe_path() -> String {
-    // An explicit override wins outright — the deterministic seam a test or an
-    // operator uses instead of the ambient shell.
-    if let Some(p) = std::env::var_os("PDO_HARNESS_PROBE_PATH") {
-        if !p.is_empty() {
-            return p.to_string_lossy().into_owned();
-        }
-    }
-    let process_path = std::env::var_os("PATH")
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    match interactive_path_via_shell() {
-        Some(interactive) => union_paths(&interactive, &process_path),
-        None => process_path,
-    }
-}
-
-/// The user's `PATH` as an **interactive** shell reports it, or `None` when the
-/// probe fails (no `$SHELL`, the shell errors, empty output). Runs `$SHELL -i -c`
-/// so the interactive rc files — where version and package managers add their
-/// paths — are sourced (a *login* shell, `-l`, is not enough; ADR-0055).
-fn interactive_path_via_shell() -> Option<String> {
-    let shell = std::env::var_os("SHELL").filter(|s| !s.is_empty())?;
-    // `printf` with no trailing newline, stdout only — job-control chatter an
-    // interactive shell may emit goes to stderr and is ignored.
-    let output = std::process::Command::new(&shell)
-        .arg("-i")
-        .arg("-c")
-        .arg(r#"printf '%s' "$PATH""#)
-        .output()
-        .ok()?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!path.is_empty()).then_some(path)
-}
-
-/// Union two `PATH` strings, `first` taking precedence, dropping duplicates and
-/// empty entries while preserving order. Pure — the testable core of the ADR-0055
-/// merge.
-fn union_paths(first: &str, second: &str) -> String {
-    let mut seen = std::collections::HashSet::new();
-    let joined: Vec<String> = std::env::split_paths(first)
-        .chain(std::env::split_paths(second))
-        .filter(|p| !p.as_os_str().is_empty())
-        .filter(|p| seen.insert(p.clone()))
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
-    joined.join(":")
-}
-
-/// Whether `binary` resolves in `path`. Pure — the testable core of the probe.
-fn path_contains_binary(path: &str, binary: &str) -> bool {
-    std::env::split_paths(path).any(|dir| dir.join(binary).is_file())
-}
-
-/// Whether `binary` resolves on the harness probe `PATH` — the fail-fast spawn
-/// check (#550, AC #10). A name with a `/` is checked directly; a bare name is
-/// searched across [`harness_probe_path`] (the user's interactive `PATH`, ADR-0055
-/// — **not** the service's inherited one). **Never executes** the binary (a probe
-/// run could hang a resident harness), and lives here (not in the pure
-/// `harness_registry`) because it reads the environment. A missing binary makes
-/// the spawn fail *before* any session or start event exists (ADR-0037); the
-/// caller's diagnostic names [`harness_probe_path`] so "not found" cannot read as
-/// "not installed".
-pub fn binary_available(binary: &str) -> bool {
-    if binary.is_empty() {
-        return false;
-    }
-    if binary.contains('/') {
-        return Path::new(binary).is_file();
-    }
-    path_contains_binary(&harness_probe_path(), binary)
-}
-
 /// How long a catalogue / version probe is allowed to run before it is killed and
 /// treated as "no answer" (#616). `--help` / `--version` exit immediately on every
 /// harness in play; the cap is a defence against a binary that blocks (a broken
@@ -1608,7 +1479,7 @@ const CATALOGUE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// cache: a changed version invalidates the cached catalogue and re-probes, so an
 /// auto-updating binary is followed without a daemon restart.
 ///
-/// UNLIKE [`binary_available`], this **executes** the binary — deliberately, and
+/// UNLIKE [`binary_available`](crate::harness_binary::binary_available), this **executes** the binary — deliberately, and
 /// only ever off the resident hot path: at daemon boot, and on a throttled version
 /// re-check behind the `/settings` fetch. `--version` is non-interactive and exits
 /// at once; the timeout is the backstop.
@@ -1620,7 +1491,7 @@ pub(crate) fn probe_version(binary: &str) -> Option<String> {
 /// ADR-0053 §1, ADR-0056). A binary that can't be run, times out, or enumerates
 /// nothing anywhere yields [`harness_catalogue::Catalogue::default`] — the free-text
 /// fallback. Executes the binary; see [`probe_version`] for why that is safe here and
-/// not in [`binary_available`].
+/// not in [`binary_available`](crate::harness_binary::binary_available).
 pub(crate) fn probe_catalogue(binary: &str) -> crate::harness_catalogue::Catalogue {
     probe_catalogue_on(binary, &harness_probe_path())
 }
@@ -3047,27 +2918,6 @@ mod tests {
         assert_eq!(decisions[2].verdict, SweepVerdict::Keep);
     }
 
-    /// #550/AC #10: the fail-fast PATH probe. A bare name absent from the probe
-    /// `PATH` is unavailable; an empty name is never available; a slash-path is
-    /// checked as a file directly. `sh` is on every CI box (and the process `PATH`
-    /// is unioned into the probe path, ADR-0055), so it stands in for "installed".
-    #[test]
-    fn binary_available_probes_path_without_executing() {
-        assert!(!binary_available(""), "empty name is never available");
-        assert!(
-            !binary_available("pdo-definitely-not-a-real-binary-xyz"),
-            "a name absent from PATH is unavailable"
-        );
-        assert!(
-            binary_available("sh"),
-            "a ubiquitous binary resolves on PATH"
-        );
-        assert!(
-            !binary_available("/no/such/absolute/path/binary"),
-            "a missing slash-path is unavailable"
-        );
-    }
-
     /// #616: write an executable fake binary into `dir` that echoes `stdout` on
     /// `--help` and `version` on `--version`. Returns the dir's `PATH` string.
     #[cfg(unix)]
@@ -3285,40 +3135,6 @@ mod tests {
             probe_catalogue_on("no-such-harness", &path),
             crate::harness_catalogue::Catalogue::default()
         );
-    }
-
-    /// ADR-0055: the pure core of the probe `PATH` search — a directory that holds
-    /// the binary makes it resolvable; one that does not, does not.
-    #[test]
-    fn path_contains_binary_searches_each_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("my-harness");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        let path = format!("/nonexistent-a:{}:/nonexistent-b", dir.path().display());
-        assert!(path_contains_binary(&path, "my-harness"));
-        assert!(!path_contains_binary(&path, "absent-harness"));
-        assert!(
-            !path_contains_binary("/nonexistent-a:/nonexistent-b", "my-harness"),
-            "no entry holds it"
-        );
-    }
-
-    /// ADR-0055: the user's interactive `PATH` is unioned with the process one,
-    /// first wins, duplicates and empty entries dropped, order preserved — so the
-    /// package-manager prefix the service never inherited becomes searchable
-    /// without losing any entry the service already had.
-    #[test]
-    fn union_paths_merges_first_precedence_dedup_order_preserved() {
-        assert_eq!(
-            union_paths("/opt/homebrew/bin:/usr/bin", "/usr/bin:/bin"),
-            "/opt/homebrew/bin:/usr/bin:/bin"
-        );
-        // Empty operands collapse cleanly.
-        assert_eq!(union_paths("", "/usr/bin:/bin"), "/usr/bin:/bin");
-        assert_eq!(union_paths("/usr/bin", ""), "/usr/bin");
-        assert_eq!(union_paths("", ""), "");
-        // A stray empty entry ("::") never becomes a "search the cwd" hole.
-        assert_eq!(union_paths("/a::/b", "/b"), "/a:/b");
     }
 
     #[test]

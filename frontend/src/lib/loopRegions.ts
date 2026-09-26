@@ -1,5 +1,7 @@
-import type { EdgeDef, LoopRegion, NodeDef, PipelineDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { LoopRegion } from "../shared/generated/LoopRegion";
 import { carriedPorts } from "./edgePorts";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 /**
  * Default iteration cap for an auto-materialized bounded region, so a drawn
@@ -15,7 +17,7 @@ export const DEFAULT_MAX_ITER = 5;
  * the widening cast rather than a union member. A node the editor cannot even
  * represent must not be wrapped in a region (see `materializeMissingRegions`).
  */
-function isLegacyLoopNode(node: NodeDef): boolean {
+function isLegacyLoopNode(node: EditorNodeDef): boolean {
   return (node.type as string) === "loop";
 }
 
@@ -27,7 +29,7 @@ function isLegacyLoopNode(node: NodeDef): boolean {
  * `graph_resolver::detect_cycles` so the editor and the engine agree on which
  * members a region covers.
  */
-export function detectCycles(nodes: NodeDef[], edges: EdgeDef[]): string[][] {
+export function detectCycles(nodes: EditorNodeDef[], edges: EdgeDef[]): string[][] {
   const order = new Map<string, number>();
   nodes.forEach((n, i) => order.set(n.id, i));
 
@@ -139,7 +141,7 @@ export function generatedRegionId(members: string[]): string {
  * pipelines belong to `pdo migrate` (the daemon emits the diagnostic saying so).
  */
 export function materializeMissingRegions(
-  nodes: NodeDef[],
+  nodes: EditorNodeDef[],
   edges: EdgeDef[],
   existing: LoopRegion[] = [],
 ): LoopRegion[] {
@@ -171,7 +173,7 @@ export function materializeMissingRegions(
  * the region was materialized from. Mirrors the daemon's
  * `loop_region::region_has_cycle`.
  */
-function regionHasCycle(region: LoopRegion, nodes: NodeDef[], edges: EdgeDef[]): boolean {
+function regionHasCycle(region: LoopRegion, nodes: EditorNodeDef[], edges: EdgeDef[]): boolean {
   const memberSet = new Set(region.members);
   return detectCycles(nodes, edges).some((cycle) => cycle.every((m) => memberSet.has(m)));
 }
@@ -192,7 +194,7 @@ function regionHasCycle(region: LoopRegion, nodes: NodeDef[], edges: EdgeDef[]):
  * and iteration state go with it). An empty list pops nothing.
  */
 export function regionsDestroyedByEdgeRemoval(
-  pipeline: PipelineDef,
+  pipeline: EditorPipelineDef,
   edgeIndex: number,
 ): string[] {
   const edges = pipeline.edges;
@@ -227,7 +229,7 @@ export function regionsDestroyedByEdgeRemoval(
  * `collection` region is born by gesture, not topology (#151), so it is kept on
  * its remaining members (only an emptied-out collection is dropped).
  */
-export function reconcileLoopRegions(pipeline: PipelineDef): LoopRegion[] {
+export function reconcileLoopRegions(pipeline: EditorPipelineDef): LoopRegion[] {
   const present = new Set(pipeline.nodes.map((n) => n.id));
   const out: LoopRegion[] = [];
   for (const region of pipeline.loops ?? []) {
@@ -272,7 +274,7 @@ export interface FanoutNudge {
  * (`createCollectionRegion` no-ops), where the region set is authoritative.
  */
 export function collectionFanoutFields(
-  pipeline: PipelineDef,
+  pipeline: EditorPipelineDef,
   nodeIds: string[],
 ): string[] {
   const members = new Set(nodeIds);
@@ -312,7 +314,7 @@ export function collectionFanoutFields(
  * dismiss it persistently (#268). The advice is target-scoped ("this target
  * should fan out"), so the target id is the correct dismiss granularity.
  */
-export function collectionFanoutNudges(pipeline: PipelineDef): FanoutNudge[] {
+export function collectionFanoutNudges(pipeline: EditorPipelineDef): FanoutNudge[] {
   const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
   const collectionMembers = new Set<string>();
   for (const region of pipeline.loops ?? []) {

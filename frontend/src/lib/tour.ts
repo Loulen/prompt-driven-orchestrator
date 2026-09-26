@@ -1,3 +1,4 @@
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 /**
  * The tour machine (#823, spec #821, ADR-0071) — pure, DOM-free.
  *
@@ -18,7 +19,6 @@
  *    moves on and leaves the form exactly as the user left it.
  */
 
-import type { PipelineDef } from "../types";
 
 /**
  * One node of the Run a tour is following (#825), narrowed to the two facts the
@@ -64,7 +64,7 @@ export interface TourAppState {
   /** The active edit tab's id (the pipeline's YAML file stem), or null. */
   pipelineId: string | null;
   /** The active edit tab's pipeline document. */
-  pipeline: PipelineDef | null;
+  pipeline: EditorPipelineDef | null;
   /** Node prompts, which the edit store keeps beside the document. */
   prompts: Record<string, string>;
   selection: { kind: string; id: string | null; edgeIndex: number | null };

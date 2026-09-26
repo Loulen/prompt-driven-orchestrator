@@ -20,7 +20,10 @@ import {
   deliverySignature,
 } from "../lib/diffTab";
 import type { CollapsedFiles } from "../lib/diffTab";
-import type { RunState, StructuredDiff, DiffFile, DiffLine } from "../types";
+import type { RunState } from "../shared/generated/RunState";
+import type { StructuredDiff } from "../shared/generated/StructuredDiff";
+import type { DiffFile } from "../shared/generated/DiffFile";
+import type { DiffLine } from "../shared/generated/DiffLine";
 
 /**
  * The Run-level **Diff tab** (#748, ADR-0067; CONTEXT.md § "Relecture de diff").

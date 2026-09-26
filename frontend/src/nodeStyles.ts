@@ -1,7 +1,9 @@
-import type { NodeStatus } from "./types";
+import type { NodeStatus } from "./shared/generated/NodeStatus";
 
 export const STATUS_BORDER: Record<NodeStatus, string> = {
   pending: "border-line-strong",
+  // Admission-throttled (session cap): not started yet, drawn like pending.
+  waiting: "border-line-strong",
   running: "border-st-running",
   awaiting_user: "border-st-await",
   completed: "border-st-done",
@@ -14,6 +16,7 @@ export const STATUS_BORDER: Record<NodeStatus, string> = {
 
 export const STATUS_BG: Record<NodeStatus, string> = {
   pending: "bg-bg-3",
+  waiting: "bg-bg-3",
   running: "bg-st-running-bg",
   awaiting_user: "bg-st-await-bg",
   completed: "bg-st-done-bg",
@@ -26,6 +29,7 @@ export const STATUS_BG: Record<NodeStatus, string> = {
 
 export const STATUS_DOT: Record<NodeStatus, string> = {
   pending: "bg-st-pending",
+  waiting: "bg-st-pending",
   running: "bg-st-running",
   awaiting_user: "bg-st-await",
   completed: "bg-st-done",

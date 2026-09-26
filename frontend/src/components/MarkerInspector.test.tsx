@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import MarkerInspector from "./MarkerInspector";
-import type { NodeDef } from "../types";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
-function marker(type: "start" | "end"): NodeDef {
+function marker(type: "start" | "end"): EditorNodeDef {
   return {
     id: type,
     name: type === "start" ? "Start" : "End",

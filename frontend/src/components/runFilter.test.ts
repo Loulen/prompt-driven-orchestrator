@@ -5,13 +5,15 @@ import {
   runMatchesFilter,
   type RunFilterValue,
 } from "./runFilter";
-import type { RunListEntry } from "../types";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
 
 /* #336 filter model; #783 removed the #725 `showOrchestrated` axis — a child run
    is a tree row under its parent (`lib/runTree.ts`), not a filterable population.
    The filter is a per-run predicate on three axes with AND semantics. */
 
 const run = (over: Partial<RunListEntry>): RunListEntry => ({
+  stalled: false,
+  effective_repo: "",
   run_id: "r",
   pipeline_name: "p",
   status: "running",

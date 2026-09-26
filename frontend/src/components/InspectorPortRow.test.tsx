@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import InspectorPortRow from "./InspectorPortRow";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return <TooltipProvider>{children}</TooltipProvider>;

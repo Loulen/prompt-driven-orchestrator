@@ -18,32 +18,44 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct EdgeInfo {
     pub source_node: String,
     pub source_port: String,
     pub target_node: String,
     pub target_port: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub halt_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Record<string, unknown>")]
     pub when_clause: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PortBrief {
     pub name: String,
+    /// The port's side, or its default side when the pipeline sets none.
+    #[ts(as = "crate::pipeline::PortSide")]
     pub side: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct NodeDefInfo {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub name: Option<String>,
+    /// A `NodeType` wire token (`NodeType::as_str`).
+    #[ts(as = "crate::pipeline::NodeType")]
     pub node_type: String,
     /// Where this node works (#653, ADR-0060), as the Run's pipeline snapshot
     /// froze it: `true` ⇒ its own sub-worktree, `false` ⇒ the Run worktree.
@@ -52,6 +64,7 @@ pub struct NodeDefInfo {
     /// pre-#653 snapshot. `skip_serializing_if` keeps the wire byte-identical
     /// when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub isolated_worktree: Option<bool>,
     /// The « Orchestrator » toggle (#723/#724, ADR-0064) as the Run's snapshot
     /// froze it at start: `true` ⇒ the strong orchestrator↔children binding
@@ -65,7 +78,8 @@ pub struct NodeDefInfo {
     pub outputs: Vec<PortBrief>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     RunStarted,
@@ -246,7 +260,8 @@ pub enum EventKind {
     CommandIssued,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, rename = "DaemonEvent")]
 pub struct Event {
     pub id: Option<i64>,
     pub run_id: String,
@@ -254,10 +269,12 @@ pub struct Event {
     pub kind: EventKind,
     pub node_id: Option<String>,
     pub iter: Option<i64>,
+    #[ts(type = "Record<string, unknown> | null")]
     pub payload: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     Running,
@@ -323,7 +340,10 @@ impl RunStatus {
 /// *unknown*. Whether a profile **exists** is a database question, answered at the
 /// edge (create-run, `PUT /settings`, trigger create/patch) and never here — this
 /// module is pure and its projection runs inside `append_event`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+/// On the wire it is a plain string (`off` or the profile name), hence the
+/// TypeScript override.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, TS)]
+#[ts(type = "string")]
 pub enum SandboxMode {
     #[default]
     Off,
@@ -461,7 +481,8 @@ pub(crate) fn effective_sandbox(
 /// [`RunState`]: `status` is untouched (stays `Running`), so no status consumer is
 /// affected. Absent for `off` Runs and for historical/host runs. Projected from the
 /// additive [`EventKind::SandboxPrepStarted`]/[`EventKind::SandboxPrepReady`] pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxPrepState {
     /// The image is being pulled/built and the container has not yet received a session.
@@ -470,7 +491,8 @@ pub enum SandboxPrepState {
     Ready,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     Pending,
@@ -563,7 +585,8 @@ impl NodeStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct IterationInfo {
     pub iter: i64,
     pub status: NodeStatus,
@@ -575,7 +598,20 @@ pub struct IterationInfo {
     pub completion_released: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The TypeScript shape of one entry of [`NodeState::frontmatter_violations`]: the
+/// payload is copied verbatim from the refusal event, built by the outputs
+/// validator as `{ port, field, reason }`.
+#[derive(TS)]
+#[ts(export, rename = "FrontmatterViolation")]
+#[allow(dead_code)]
+struct FrontmatterViolationWire {
+    port: String,
+    field: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, rename = "ProjectedNodeState")]
 pub struct NodeState {
     pub node_id: String,
     /// #616/ADR-0046: the harness this node's session was **frozen** on at spawn,
@@ -584,6 +620,7 @@ pub struct NodeState {
     /// for a node that never opened a `NodeStarted` (a pure skip) or a pre-#616
     /// snapshot; `skip_serializing_if` keeps the wire byte-identical when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub harness: Option<String>,
     /// #653/ADR-0060: the isolation this NodeRun was **frozen** on at spawn,
     /// read from the `NodeStarted` payload. This — not the current document — is
@@ -592,12 +629,14 @@ pub struct NodeState {
     /// never opened a `NodeStarted`, for a structural node, or for a pre-#653
     /// snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub isolated_worktree: Option<bool>,
     /// #669/ADR-0062: the **skills actifs** this NodeRun was frozen with at
     /// spawn (union of the four tiers, each with its origin), read from the
     /// `NodeStarted` payload. `None` for a node that never started, a `script`
     /// node (no agent) or a pre-#669 event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) skills: Option<Vec<crate::skill_selection::ActiveSkill>>,
     /// #669: selected ids the bank no longer knew at spawn — the node ran
     /// without them (a warning, never a failure). Absent when empty.
@@ -609,6 +648,7 @@ pub struct NodeState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) skipped_skills: Vec<crate::skill_delivery::SkippedSkill>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub cost: Option<NodeCost>,
     pub status: NodeStatus,
     pub iter: i64,
@@ -622,12 +662,14 @@ pub struct NodeState {
     /// Absent on every other status — `skip_serializing_if` keeps the wire shape
     /// byte-identical for a non-skipped node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub skip_reason: Option<String>,
     #[serde(default)]
     pub iterations: Vec<IterationInfo>,
     #[serde(default)]
     pub frontmatter_retries: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Vec<FrontmatterViolationWire>")]
     pub frontmatter_violations: Vec<serde_json::Value>,
     /// #490: declared output ports the validator found empty, from a `script`
     /// node's fail-fast branch (`ValidationError::MissingOutputs`). Mutually
@@ -652,17 +694,20 @@ pub struct NodeState {
     /// here rather than re-deriving it from a `pdo/sub-*` branch that a
     /// non-isolated NodeRun does not have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub delivery: Option<NodeDelivery>,
     /// #588 / ADR-0069: why this node is `AwaitingUser` — the declared wait's
     /// cause and message, or the derived « a child run is awaiting you » overlay
     /// ([`crate::child_awaiting`]). Present only while `status == AwaitingUser`;
     /// cleared by `NodeResumed`, `NodeCompletionReleased` and every re-spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub awaiting: Option<AwaitingInfo>,
 }
 
 /// The declared wait of a node (#588 / ADR-0069), as the surfaces read it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct AwaitingInfo {
     /// `declared` (`pdo wait-user`), `completion_not_released` (a refused
     /// `pdo complete` on an unreleased interactive node), `children_pending`
@@ -673,12 +718,14 @@ pub struct AwaitingInfo {
     /// [`crate::declared_wait::MESSAGE_MAX_CHARS`] by the CLI), the daemon's
     /// sentence on a refused completion, or « child run <name> is awaiting you ».
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub message: Option<String>,
     /// When the wait was declared (the event's timestamp) — the banner's
     /// « waiting N min ».
     pub since: String,
     /// The awaiting child run, for the `child_awaiting` overlay only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub child_run_id: Option<String>,
 }
 
@@ -688,7 +735,8 @@ pub(crate) const AWAITING_CAUSE_COMPLETION_NOT_RELEASED: &str = "completion_not_
 pub(crate) const AWAITING_CAUSE_CHILD_AWAITING: &str = "child_awaiting";
 
 /// The two Run-branch tips one delivery moved between (#654 / ADR-0060).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct NodeDelivery {
     /// The Run branch's tip before the delivery.
     pub before: String,
@@ -697,7 +745,8 @@ pub struct NodeDelivery {
     pub after: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct NodeCost {
     pub usd: Option<f64>,
     pub form: Option<CostForm>,
@@ -715,7 +764,8 @@ pub struct NodeCost {
     pub readable_executions: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct StartNodeInfo {
     pub input_path: String,
     pub started_at: String,
@@ -731,7 +781,8 @@ pub struct StartNodeInfo {
     pub input_files: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct EndPortStatus {
     pub port_name: String,
     pub status: String,
@@ -739,13 +790,15 @@ pub struct EndPortStatus {
     pub fired_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct EndNodeInfo {
     pub id: String,
     pub ports: Vec<EndPortStatus>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct MergeResolverInfo {
     pub status: NodeStatus,
     pub conflicting_node_id: String,
@@ -756,7 +809,8 @@ pub struct MergeResolverInfo {
     pub failure_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, rename = "LoopStateInfo")]
 pub struct LoopState {
     pub loop_node_id: String,
     pub current_iter: i64,
@@ -765,7 +819,8 @@ pub struct LoopState {
     pub done: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, rename = "ForEachStateInfo")]
 pub struct ForEachState {
     pub foreach_node_id: String,
     pub total_items: i64,
@@ -785,7 +840,8 @@ pub struct ForEachState {
 /// projection keeps `transition_guard` pure — no pipeline plumbing through every
 /// caller — and scopes the exemption to the region's own members while its
 /// barrier is open.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, rename = "CollectionStateInfo")]
 pub struct CollectionState {
     pub region_id: String,
     pub total_items: i64,
@@ -810,7 +866,8 @@ impl CollectionState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SwitchState {
     pub switch_node_id: String,
     pub chosen_branch: String,
@@ -821,7 +878,8 @@ pub struct SwitchState {
 /// run branch against its fork point (issue #100). Live-only: it is **not**
 /// snapshotted into the event log (J2), so once the run branch is cleaned up it
 /// becomes uncomputable and the field is dropped (`None` → UI shows "—").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct LocStat {
     pub insertions: u64,
     pub deletions: u64,
@@ -836,7 +894,8 @@ pub struct LocStat {
 /// `Some { usd: 0.0, .. }` when dirs exist but carry no priced tokens.
 ///
 /// `PartialEq` (not `Eq`) because `usd` is `f64` — compare with a tolerance.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CostStat {
     pub usd: f64,
     /// True when ≥1 session used a model absent from the price table: its tokens
@@ -876,7 +935,8 @@ pub struct CostStat {
 /// Which of the two legitimate cost forms a per-harness slice is (ADR-0052 §1) —
 /// so a surface can say *only under a derived figure* that it is an estimate from
 /// Claude Code transcripts, and never under a reported one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum CostForm {
     /// PDO re-derived it from tokens × the price table (`claude`). An estimate.
@@ -889,7 +949,8 @@ pub enum CostForm {
 /// One harness's slice of a Run's cost (#615, ADR-0052 §3). Additive with the
 /// others in dollars (`CostStat.usd` is their sum), but tagged with its `form` so
 /// the surface never mislabels a reported figure as a Claude-Code estimate.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct HarnessCost {
     /// The harness name (`claude`, `copilot`).
     pub harness: String,
@@ -928,7 +989,8 @@ pub struct HarnessCost {
 /// `base_branch`, no fetch → base is the LOCAL ref) and frozen in the
 /// `RunStarted` payload, exactly like the sandbox freeze siblings — so a Run's
 /// view of a secondary can never move under it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RepoPin {
     /// Absolute path of the secondary repository on the host.
     pub repo: String,
@@ -940,6 +1002,7 @@ pub struct RepoPin {
     /// The ref the SHA was resolved from (default: `HEAD`, the local ref). Kept
     /// for provenance / UI display; the SHA is what is authoritative.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub base_branch: Option<String>,
     /// Opt-in read-only flag (ADR-0047). `false` (the default) means the
     /// secondary is **writable**: the agent may modify/commit/deliver it and the
@@ -969,18 +1032,50 @@ fn is_false(b: &bool) -> bool {
 /// written by a newer binary that named a kind this one has never heard of must
 /// still read back — historical data stays readable, that is the one guarantee
 /// the project makes across versions. The surface renders `message` anyway.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SourceFetchError {
     pub kind: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The TypeScript shape of `GET /runs/{id}`: the projected [`RunState`] plus what
+/// `get_run` adds to the JSON on the way out (`has_manager`).
+#[derive(TS)]
+#[ts(export, rename = "RunState")]
+#[allow(dead_code)]
+struct RunStateView {
+    #[ts(flatten)]
+    state: RunState,
+    #[ts(optional)]
+    has_manager: Option<bool>,
+}
+
+/// The TypeScript shape of one node of `GET /runs/{id}`: the projected
+/// [`NodeState`] plus the provisioning `get_run` copies from the iteration's
+/// `NodeStarted` event.
+#[derive(TS)]
+#[ts(export, rename = "NodeState")]
+#[allow(dead_code)]
+struct NodeStateView {
+    #[ts(flatten)]
+    state: NodeState,
+    #[ts(optional)]
+    provisioning: Option<crate::provisioning::ProvisioningRules>,
+    #[ts(optional)]
+    provisioning_plan: Option<crate::provisioning::ProvisioningPlan>,
+    #[ts(optional)]
+    provisioning_frozen_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, rename = "ProjectedRunState")]
 pub struct RunState {
     pub run_id: String,
     pub status: RunStatus,
     pub pipeline_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub name: Option<String>,
     pub input: Option<String>,
     pub started_at: Option<String>,
@@ -992,6 +1087,7 @@ pub struct RunState {
     /// `NodeState::failure_reason`: a Run being driven again must not still show
     /// last time's cause.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub failure_reason: Option<String>,
     /// Why the Run is parked **`AwaitingUser` on an incident** (ADR-0049),
     /// distinct from the interactive `AwaitingUser` wait of a node that asked
@@ -1002,6 +1098,7 @@ pub struct RunState {
     /// interactive wait (that node's own reason lives on the node), so the two
     /// awaiting causes stay distinguishable from the run state alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub awaiting_reason: Option<String>,
     /// The **machine** slug companion of [`awaiting_reason`] (#601): a stable
     /// snake_case code (`session_died`, `run_stalled`, `unrouted`,
@@ -1014,7 +1111,9 @@ pub struct RunState {
     /// with [`awaiting_reason`] on resume / reopen. Every non-advancement thus
     /// carries a reason that is machine-branchable, not only prose to grep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub awaiting_reason_code: Option<String>,
+    #[ts(as = "HashMap<String, NodeStateView>")]
     pub nodes: HashMap<String, NodeState>,
     #[serde(default)]
     pub edges: Vec<EdgeInfo>,
@@ -1025,10 +1124,13 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) provisioning_rules: Vec<crate::provisioning::ScopedRules>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub start_node: Option<StartNodeInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub end_node: Option<EndNodeInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub merge_resolver: Option<MergeResolverInfo>,
     #[serde(default)]
     pub loop_states: HashMap<String, LoopState>,
@@ -1059,6 +1161,7 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub forced_routes: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub target_repo: Option<String>,
     /// Secondary repositories associated with this Run in **read-only** (#465,
     /// ADR-0042). Empty for a mono-repo Run (the overwhelming majority, incl. every
@@ -1088,6 +1191,7 @@ pub struct RunState {
     /// (that IS `minimal`), so a bare `Vec` would confuse "legacy payload, re-resolve"
     /// with "empty profile, stage the floor only".
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub sandbox_entries: Option<Vec<String>>,
     /// The raw `sandbox_entries` payload value when the key was **present but
     /// unreadable** (#432). Internal to the projection — `skip`ped on the wire — and
@@ -1107,6 +1211,7 @@ pub struct RunState {
     /// sandbox is not a security boundary and this is not a secret store (ADR-0031 §8). What
     /// is forbidden is the daemon **log** — see `sandbox_profile::env_names`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub sandbox_env: Option<std::collections::BTreeMap<String, String>>,
     /// The raw `sandbox_env` payload value when the key was **present but unreadable**
     /// (#468). Same role, and same `skip`, as [`RunState::sandbox_entries_raw_error`]: the
@@ -1132,6 +1237,7 @@ pub struct RunState {
     /// only because the key is new — no historical payload carries it as a bare string, so no
     /// reader has to accept `String | Object` for ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub sandbox_image: Option<crate::sandbox_image::ProfileImage>,
     /// The raw `sandbox_image` payload value when the key was **present but unreadable** (#467).
     /// Same role, and same `skip`, as its two twins: the sandbox prep fails LOUD with the
@@ -1145,8 +1251,10 @@ pub struct RunState {
     /// this drives a banner, not admission/overlap/liveness logic. Survives a daemon
     /// restart by event replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub sandbox_prep: Option<SandboxPrepState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub source_branch: Option<String>,
     /// Why the **pre-cut fetch** of the Trigger fire that created this Run failed
     /// (#804, ADR-0070 §1), frozen from the `RunStarted` payload.
@@ -1159,6 +1267,7 @@ pub struct RunState {
     /// to wonder why the fork point looks old. Nothing branches on it — it drives a
     /// sentence, never `status`, admission or liveness.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub source_fetch_error: Option<SourceFetchError>,
     /// The commit `pdo/run-<id>` was cut from at Run start — the run's fork point,
     /// FROZEN here from the `RunStarted` payload (#417), same immutability posture as
@@ -1168,6 +1277,7 @@ pub struct RunState {
     /// omits the key) → fall back to `source_branch`, then `HEAD`. NB: distinct from the
     /// per-node `NodeStarted.base_sha` (sub-worktree ← pipeline branch, ADR-0036).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub fork_sha: Option<String>,
     /// The harness chosen at Run creation (#551, ADR-0046), **frozen** here from the
     /// `RunStarted` payload — the middle tier of the precedence chain
@@ -1183,6 +1293,7 @@ pub struct RunState {
     /// (#347). Read at every spawn seam as the `run` tier of [`crate::harness_resolver`]
     /// and by the infra sessions (Pipeline Manager, merge resolver).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub harness: Option<String>,
     /// The Run tier of the agentic-profile union (#563, ADR-0057), **frozen**
     /// here from the `RunStarted` payload — same immutability as
@@ -1194,6 +1305,7 @@ pub struct RunState {
     /// model/effort to infra sessions (#563 AC18, amending ADR-0046's
     /// Run-only-harness rule for infra).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// The Run tier of the **skills** selection (#669, ADR-0062), **frozen** here
     /// from the `RunStarted` payload — set once at create (a fired Run copies its
@@ -1210,9 +1322,11 @@ pub struct RunState {
     /// key), so a node `pdo fail` resolves through the project/instance tiers.
     /// Immutable, like [`RunState::harness`]: set once at create, never mutated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub auto_fail: Option<bool>,
     /// Provenance: the id of the Trigger that created this Run, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub triggered_by: Option<String>,
     /// Provenance: the Run whose node session created this one (ADR-0064).
     /// **Mechanical**: posed by the daemon at create time from the caller's
@@ -1221,11 +1335,13 @@ pub struct RunState {
     /// Run, and any Run created outside a node session. Immutable, like
     /// [`RunState::triggered_by`]: frozen into `RunStarted`, never mutated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub parent_run_id: Option<String>,
     /// The parent Run's node whose session created this Run (ADR-0064) — the key
     /// `GET /runs/{id}/children` groups by. Frozen with
     /// [`RunState::parent_run_id`], same posture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub parent_node_id: Option<String>,
     /// The library pipeline id this Run was created from (#377). Written to the
     /// `RunStarted` payload going forward; consumers (aggregated "by pipeline"
@@ -1233,6 +1349,7 @@ pub struct RunState {
     /// bare-API/multipart creates, retries — so grouping survives a rename
     /// (#230). Additive and backward-compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub pipeline_id: Option<String>,
     /// Cumulative count of `NodeStarted` events for this Run — i.e. how many
     /// Claude Code NodeRun sessions it spawned (issue #100). A **raw** count,
@@ -1252,12 +1369,14 @@ pub struct RunState {
     /// run branch is gone (archived/cleaned) — the UI renders "—" vs "0".
     /// Derived on read, never persisted; see [`LocStat`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub loc: Option<LocStat>,
     /// Estimated USD cost for the Run (issue #272). `None` when no Claude Code
     /// transcript dir is found (UI renders "—"). Derived on read, never
     /// persisted; see [`CostStat`]. More durable than `loc`: archival leaves
     /// `~/.claude/projects/` intact, so an archived Run keeps its cost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub cost: Option<CostStat>,
 }
 
@@ -3253,10 +3372,6 @@ pub(crate) fn is_stalled(run: &RunState) -> bool {
     }
 
     run.nodes.values().any(|n| n.status == NodeStatus::Stale)
-}
-
-pub(crate) fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 pub(crate) fn generate_run_id() -> String {

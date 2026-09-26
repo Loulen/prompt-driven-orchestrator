@@ -1,5 +1,5 @@
 import type { PooledInput, PooledInputSource } from "../lib/derivePooledInputs";
-import { Tooltip } from "./ui/tooltip";
+import { Tooltip } from "../shared/ui/tooltip";
 
 /**
  * One derived (emergent) input in the node inspector. Inputs are NOT declared

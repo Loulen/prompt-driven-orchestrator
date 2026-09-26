@@ -1,4 +1,5 @@
-import type { Skill, SkillFolder } from "../types";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
 
 /**
  * Pure helpers behind the bank's tree (#668). Kept out of the component so the

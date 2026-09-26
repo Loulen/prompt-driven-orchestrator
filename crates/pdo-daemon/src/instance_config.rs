@@ -23,6 +23,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use ts_rs::TS;
 
 /// The persisted singleton config row. Each field is `None` when unset (the
 /// resolver then falls through to env → default).
@@ -47,7 +48,7 @@ pub(crate) struct InstanceConfig {
     pub guard_timeout_secs: Option<i64>,
     /// Stored instance-wide default Claude model, or `None` when unset (#347).
     /// A work node with no `model:` override launches with this model; `None`
-    /// falls through to the env seam ([`crate::tmux_session_manager::DEFAULT_MODEL_ENV`])
+    /// falls through to the env seam ([`pdo_kernel::env::DEFAULT_MODEL_ENV`])
     /// then the account default (no `--model`). Free-text pass-through, no enum
     /// (ADR-0001): an invalid id fails loud in `claude`.
     pub default_model: Option<String>,
@@ -85,7 +86,7 @@ pub(crate) struct InstanceConfig {
     pub default_auto_name: Option<i64>,
     /// Stored instance-wide default **harness** (`claude`, `opencode`), or `None`
     /// when unset (#550, ADR-0046 amending ADR-0015). `None` falls through to the
-    /// env seam ([`crate::tmux_session_manager::DEFAULT_HARNESS_ENV`]) then the
+    /// env seam ([`pdo_kernel::env::DEFAULT_HARNESS_ENV`]) then the
     /// `claude` floor. Free-text pass-through, no enum (ADR-0001). `Some("")` is
     /// the clear sentinel — [`update`] normalises it to SQL `NULL`.
     pub default_harness: Option<String>,
@@ -93,7 +94,7 @@ pub(crate) struct InstanceConfig {
     /// `harness → model`, e.g. `{"claude":"opus"}`. The single `default_model`
     /// became per-harness because a model slug means nothing outside its harness.
     /// Empty map ⇒ no per-harness default (for `claude` the legacy
-    /// [`crate::tmux_session_manager::DEFAULT_MODEL_ENV`] still contributes at the
+    /// [`pdo_kernel::env::DEFAULT_MODEL_ENV`] still contributes at the
     /// spawn seam). Persisted as a JSON object in the `default_harness_model`
     /// column (`trigger_store::variables` idiom).
     #[serde(default)]
@@ -186,7 +187,8 @@ pub(crate) struct InstanceConfig {
 /// must never persist, or it would win precedence and shadow env/account
 /// default). This keeps the double-`Option` still deferred while giving the UI
 /// a "Default" (unset) affordance.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
+#[ts(export, optional_fields = nullable, rename = "UpdateSettingsRequest")]
 pub(crate) struct UpdateInstanceConfig {
     pub session_cap: Option<i64>,
     pub reaper_ttl_secs: Option<i64>,
@@ -317,7 +319,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // Seed the singleton row with all-NULL knobs. `INSERT OR IGNORE` is a no-op
     // once the row exists, so this cannot clobber a stored config on a restart.
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     sqlx::query("INSERT OR IGNORE INTO instance_config (id, updated_at) VALUES (1, ?)")
         .bind(&now)
         .execute(db)
@@ -758,7 +760,7 @@ pub(crate) async fn update(
     if let Some(v) = edit.max_attachments_mb {
         query = query.bind(v);
     }
-    query = query.bind(crate::event_log::now_iso());
+    query = query.bind(pdo_kernel::clock::now_iso());
     query.execute(db).await?;
 
     get(db).await
@@ -789,7 +791,7 @@ pub(crate) async fn triggers_paused(db: &SqlitePool) -> Result<bool, sqlx::Error
 pub(crate) async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE instance_config SET triggers_paused = ?, updated_at = ? WHERE id = 1")
         .bind(if paused { Some(1_i64) } else { None })
-        .bind(crate::event_log::now_iso())
+        .bind(pdo_kernel::clock::now_iso())
         .execute(db)
         .await?;
     Ok(())
@@ -1417,7 +1419,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 13, ?)")
-            .bind(crate::event_log::now_iso())
+            .bind(pdo_kernel::clock::now_iso())
             .execute(&db)
             .await
             .unwrap();
@@ -1537,7 +1539,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 19, ?)")
-            .bind(crate::event_log::now_iso())
+            .bind(pdo_kernel::clock::now_iso())
             .execute(&db)
             .await
             .unwrap();
@@ -1622,7 +1624,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 19, ?)")
-            .bind(crate::event_log::now_iso())
+            .bind(pdo_kernel::clock::now_iso())
             .execute(&db)
             .await
             .unwrap();
@@ -1736,7 +1738,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 21, ?)")
-            .bind(crate::event_log::now_iso())
+            .bind(pdo_kernel::clock::now_iso())
             .execute(&db)
             .await
             .unwrap();
@@ -1873,7 +1875,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 7, ?)")
-            .bind(crate::event_log::now_iso())
+            .bind(pdo_kernel::clock::now_iso())
             .execute(&db)
             .await
             .unwrap();
@@ -1983,7 +1985,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 9, ?)")
-            .bind(crate::event_log::now_iso())
+            .bind(pdo_kernel::clock::now_iso())
             .execute(&db)
             .await
             .unwrap();

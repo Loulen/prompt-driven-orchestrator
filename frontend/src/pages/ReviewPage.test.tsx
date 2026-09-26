@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import ReviewPage from "./ReviewPage";
-import type { ReviewComment, RunRefs, RunState, StructuredDiff, DiffFile } from "../types";
+import type { ReviewComment } from "../shared/generated/ReviewComment";
+import type { RunRefs } from "../shared/generated/RunRefs";
+import type { RunState } from "../shared/generated/RunState";
+import type { StructuredDiff } from "../shared/generated/StructuredDiff";
+import type { DiffFile } from "../shared/generated/DiffFile";
 
 // The Review page (#749): pair from the URL, refs from the daemon, files from the
 // structured diff, the third-party body mocked to a marker (its own rendering is
@@ -106,6 +110,10 @@ const RUN_ID = "20260909-125942-c7e2c65";
 
 function makeRun(overrides: Partial<RunState> = {}): RunState {
   return {
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
     run_id: RUN_ID,
     status: "completed",
     pipeline_name: "implement-loop",
@@ -115,9 +123,9 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
     nodes: {},
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
+    merge_resolver: undefined,
     loop_states: {},
     foreach_states: {},
     ...overrides,
@@ -433,7 +441,7 @@ describe("ReviewPage (#749)", () => {
 // --- #750: review comments ---------------------------------------------------
 
 function sentComment(overrides: Partial<ReviewComment> = {}): ReviewComment {
-  return {
+  return { excerpt: "",
     id: "rc-001",
     path: "src/main.tsx",
     side: "new",

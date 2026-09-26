@@ -10,13 +10,14 @@ import { useSourceDrift } from "../hooks/useSourceDrift";
 import type { CollapsedFiles } from "../lib/diffTab";
 import type { LibraryPipelineEntry } from "../api";
 import { fetchPipelineDocument, fetchPipelineSkillsSidecar, fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar, openLibraryAssistant, startRunManager, stopRunManager } from "../api";
-import type { RunState, PipelineDef } from "../types";
-import { isLiveRun } from "../types";
+import type { RunState } from "../shared/generated/RunState";
+import { isLiveRun } from "../run/model/runStatus";
 import { shortAge } from "../lib/branchSelect";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { formatEstCost } from "../lib/costLabel";
 import { serializePipeline } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 export type TabId = "info" | "diff" | "repositories" | "manager" | "yaml" | "assistant";
 
@@ -43,7 +44,7 @@ function StatRow({
 
 interface Props {
   run: RunState | null;
-  pipeline: PipelineDef | null;
+  pipeline: EditorPipelineDef | null;
   /** @deprecated Instance pipelines no longer have a library scope. */
   libraryPipelines?: LibraryPipelineEntry[];
   /** @deprecated Instance pipelines refresh through the edit store. */
@@ -53,7 +54,7 @@ interface Props {
   scrollToLine?: number;
   /** Library pipeline id of the active edit tab (#302 / ADR-0048). Present only
    *  for a library template tab (not a live Run); `null`/absent hides the
-   *  Assistant tab. `PipelineDef` has no id, so it is threaded from the edit tab.
+   *  Assistant tab. `EditorPipelineDef` has no id, so it is threaded from the edit tab.
    *
    *  Since #594 it is a **visibility predicate only** — the panel no longer tells
    *  the assistant which template to work on (the daemon's focus does), and no
@@ -661,7 +662,7 @@ function InfoTab({
   onOpenDiff,
 }: {
   run: RunState | null;
-  pipeline: PipelineDef | null;
+  pipeline: EditorPipelineDef | null;
   pipelineName: string;
   variables: [string, { default: unknown }][];
   hasAssistant: boolean;
@@ -961,7 +962,7 @@ function YamlTab({
   runId,
   scrollToLine,
 }: {
-  pipeline: PipelineDef | null;
+  pipeline: EditorPipelineDef | null;
   pipelineId: string | null;
   runId: string | null;
   scrollToLine?: number;

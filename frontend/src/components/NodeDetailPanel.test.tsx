@@ -86,7 +86,7 @@ vi.mock("./TmuxTerminal", () => ({
   default: MockTmuxTerminal,
 }));
 
-vi.mock("./ui/resizable", () => ({
+vi.mock("../shared/ui/resizable", () => ({
   ResizablePanelGroup: ({
     children,
     ...rest
@@ -105,11 +105,11 @@ vi.mock("./MarkdownArtifactModal", () => ({
 }));
 
 import NodeDetailPanel from "./NodeDetailPanel";
-import { TooltipProvider } from "./ui/tooltip";
-import type { NodeState } from "../types";
+import { TooltipProvider } from "../shared/ui/tooltip";
+import type { NodeState } from "../shared/generated/NodeState";
 
 function makeNode(overrides?: Partial<NodeState>): NodeState {
-  return {
+  return { frontmatter_retries: 0,
     node_id: "test-node",
     status: "running",
     iter: 1,
@@ -167,7 +167,7 @@ describe("NodeDetailPanel", () => {
           node={makeNode({
             status: "completed",
             completed_at: "2026-01-01T00:01:00Z",
-            cost: {
+            cost: { reported_in_usd: false,
               usd,
               form,
               partial,

@@ -21,7 +21,8 @@ import {
   defaultPair,
   hasExplicitPair,
 } from "./runRefs";
-import type { DiffFile, RunRefs } from "../types";
+import type { DiffFile } from "../shared/generated/DiffFile";
+import type { RunRefs } from "../shared/generated/RunRefs";
 
 const REFS: RunRefs = {
   default_from: "fork",
@@ -169,7 +170,7 @@ describe("node panel shortcut (#749 AC7)", () => {
   it("offers nothing for a node with nothing to review", () => {
     expect(nodeReviewTarget({ node_id: "p", iter: 1, status: "pending" })).toBeNull();
     expect(nodeReviewTarget({ node_id: "p", iter: 1, status: "skipped" })).toBeNull();
-    expect(nodeReviewTarget({ node_id: "p", iter: 1, status: "failed", delivery: null })).toBeNull();
+    expect(nodeReviewTarget({ node_id: "p", iter: 1, status: "failed", delivery: undefined })).toBeNull();
     // Running but sharing the Run's worktree: no live branch of its own.
     expect(nodeReviewTarget({ node_id: "p", iter: 1, status: "running", isolated_worktree: false })).toBeNull();
     expect(nodeReviewTarget({ node_id: "p", iter: 1, status: "running" })).toBeNull();

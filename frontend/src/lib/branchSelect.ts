@@ -1,10 +1,8 @@
-import type {
-  BranchFetchError,
-  BranchRef,
-  FastForwardReason,
-  FastForwardRefusal,
-  FastForwardResult,
-} from "../types";
+import type { BranchFetchError } from "../shared/generated/BranchFetchError";
+import type { BranchRef } from "../shared/generated/BranchRef";
+import type { FastForwardReason } from "../shared/generated/FastForwardReason";
+import type { FastForwardRefusal } from "../shared/generated/FastForwardRefusal";
+import type { FastForwardResult } from "../shared/generated/FastForwardResult";
 
 /**
  * The branch a fresh repo seeds its source/base select with (#454, #571).

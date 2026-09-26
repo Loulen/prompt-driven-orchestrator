@@ -468,7 +468,7 @@ impl HarnessSource {
 /// One resolved harness as the picker needs it (#586): its name, its provenance,
 /// and the binary PDO probes at spawn. The binary is exposed — not an `installed`
 /// bool — because whether it resolves on `$PATH` is decided by the caller
-/// (`tmux_session_manager::binary_available`, which alone reads the environment);
+/// (`harness_binary::binary_available`, which alone reads the environment);
 /// this pure module never touches `$PATH`, the same discipline it keeps for
 /// `$HOME`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -701,7 +701,7 @@ impl HarnessRegistry {
     /// order (#586). `source` is `Builtin` for the embedded floor names
     /// (`claude`/`opencode`), `Descriptor` for a disk-declared harness — the split
     /// the picker renders as two sections. `installed` is NOT decided here: the
-    /// caller pairs each `binary` with `tmux_session_manager::binary_available`, so
+    /// caller pairs each `binary` with `harness_binary::binary_available`, so
     /// this module stays pure (no `$PATH`). Refused rows never enter
     /// `self.descriptors`, so they are already absent — a refused key resolves to
     /// the floor, which is what appears.

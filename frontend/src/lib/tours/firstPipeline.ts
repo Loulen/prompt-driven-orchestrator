@@ -14,10 +14,11 @@
  *   it will wait on your answers along the way.
  */
 
-import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
+import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { TourAppState, TourDef, TourObservation, TourStep } from "../tour";
 import { carriedPorts, carries } from "../edgePorts";
 import { splitFieldKey } from "../whenClause";
+import type { EditorNodeDef, EditorPipelineDef } from "../../pipeline/model/pipeline";
 
 /** The name the tour asks the user to paste for the pipeline itself. */
 export const TUTORIAL_PIPELINE_ID = "tutorial-implement-test";
@@ -38,20 +39,20 @@ const TESTER_SHOT = "Annotated screenshot of the feature";
 // born with generated ids.
 
 /** The agent nodes, in creation order: [0] is the implementer, [1] the tester. */
-function agents(app: TourAppState): NodeDef[] {
+function agents(app: TourAppState): EditorNodeDef[] {
   return (app.pipeline?.nodes ?? []).filter((n) => n.type === "agent");
 }
 
-function agent(app: TourAppState, i: number): NodeDef | null {
+function agent(app: TourAppState, i: number): EditorNodeDef | null {
   return agents(app)[i] ?? null;
 }
 
-function endNode(app: TourAppState): NodeDef | null {
+function endNode(app: TourAppState): EditorNodeDef | null {
   return (app.pipeline?.nodes ?? []).find((n) => n.type === "end") ?? null;
 }
 
 /** xyflow stamps `data-id` with the node id — the one canvas target that is stable. */
-function nodeSel(node: NodeDef | null): string[] {
+function nodeSel(node: EditorNodeDef | null): string[] {
   return node ? [`.react-flow__node[data-id="${cssEscape(node.id)}"]`] : [];
 }
 
@@ -67,9 +68,9 @@ function nodeSel(node: NodeDef | null): string[] {
  * as done, and sends the reader to the edge's Outputs section (#846).
  */
 function edgeIndex(
-  pipeline: PipelineDef | null,
-  from: NodeDef | null,
-  to: NodeDef | null,
+  pipeline: EditorPipelineDef | null,
+  from: EditorNodeDef | null,
+  to: EditorNodeDef | null,
   fromPort?: string,
 ): number {
   if (!pipeline || !from || !to) return -1;
@@ -86,8 +87,8 @@ const OUT_PORT = "out";
 
 function edgeSel(
   app: TourAppState,
-  from: NodeDef | null,
-  to: NodeDef | null,
+  from: EditorNodeDef | null,
+  to: EditorNodeDef | null,
   fromPort?: string,
 ): string[] {
   const i = edgeIndex(app.pipeline, from, to, fromPort);
@@ -102,14 +103,14 @@ function edgeSel(
  * carry the same port again. Only counted while no tester → `to` edge carries
  * `out`: once one does, a stray one next to it is not the step's business.
  */
-function strayEdge(app: TourAppState, to: NodeDef | null): number {
+function strayEdge(app: TourAppState, to: EditorNodeDef | null): number {
   const from = agent(app, 1);
   if (edgeIndex(app.pipeline, from, to, OUT_PORT) >= 0) return -1;
   return edgeIndex(app.pipeline, from, to);
 }
 
 /** The tester → `to` edge carrying `out` is the selected one. */
-function edgeSelected(app: TourAppState, to: NodeDef | null): boolean {
+function edgeSelected(app: TourAppState, to: EditorNodeDef | null): boolean {
   const i = edgeIndex(app.pipeline, agent(app, 1), to, OUT_PORT);
   return i >= 0 && app.selection.kind === "edge" && app.selection.edgeIndex === i;
 }
@@ -127,7 +128,7 @@ const OUTPUTS_SECTION = '[data-testid="outputs-section"]';
 function carryOutEdgeStep(def: {
   id: string;
   title: string;
-  to: (app: TourAppState) => NodeDef | null;
+  to: (app: TourAppState) => EditorNodeDef | null;
   body: string;
   note: string;
   waitingFor: string;
@@ -184,7 +185,7 @@ function pipelineCreated(o: TourObservation): boolean {
   return !o.present(NEW_PIPELINE_DIALOG) && o.app.pipeline != null;
 }
 
-function selected(app: TourAppState, node: NodeDef | null): boolean {
+function selected(app: TourAppState, node: EditorNodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
 }
 
@@ -220,7 +221,7 @@ function whenEquals(edge: EdgeDef | undefined, field: string, value: string): bo
 function conditionStep(def: {
   id: string;
   title: string;
-  to: (app: TourAppState) => NodeDef | null;
+  to: (app: TourAppState) => EditorNodeDef | null;
   value: string;
   /** Why the condition matters — the second sentence of both bodies. */
   why: string;

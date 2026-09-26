@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchPipelines } from "../api";
 import { pickDefaultBranch } from "../lib/branchSelect";
 import { useBranchList } from "./useBranchList";
-import type { PipelineListEntry } from "../types";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 
 /**
  * What a Run/Trigger can be launched AGAINST (#359): the target repo's branches and the

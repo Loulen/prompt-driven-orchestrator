@@ -12,12 +12,10 @@ import {
   Search,
   TriangleAlert,
 } from "lucide-react";
-import type {
-  BranchFetchError,
-  BranchRef,
-  FastForwardOutcome,
-  FastForwardRefusal,
-} from "../types";
+import type { BranchFetchError } from "../shared/generated/BranchFetchError";
+import type { BranchRef } from "../shared/generated/BranchRef";
+import type { FastForwardOutcome } from "../workspace/model/branches";
+import type { FastForwardRefusal } from "../shared/generated/FastForwardRefusal";
 import {
   branchGap,
   canFastForward,

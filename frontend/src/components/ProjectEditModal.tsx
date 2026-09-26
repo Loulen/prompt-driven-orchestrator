@@ -1,12 +1,9 @@
 import { useMemo, useState } from "react";
-import type { AgentChoice, Project, SkillRef } from "../types";
-import {
-  addProjectMember,
-  ApiError,
-  createProject,
-  removeProjectMember,
-  updateProject,
-} from "../api";
+import type { AgentChoice } from "../shared/generated/AgentChoice";
+import type { Project } from "../shared/generated/Project";
+import type { SkillRef } from "../shared/generated/SkillRef";
+import { addProjectMember, createProject, removeProjectMember, updateProject } from "../api";
+import { ApiError } from "../shared/http/client";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import AgentControl from "./AgentControl";

@@ -1,4 +1,5 @@
-import type { NodeState, RunState } from "../types";
+import type { NodeState } from "../shared/generated/NodeState";
+import type { RunState } from "../shared/generated/RunState";
 
 // Picks the node a user almost certainly came to watch on a live run: the most
 // recently-started `running` node, falling back to the most recently-started

@@ -41,6 +41,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tracing::warn;
+use ts_rs::TS;
 
 /// The prices PDO ships — the **floor** (see the module header), never written
 /// to disk and never replaced by a sync.
@@ -116,7 +117,8 @@ pub(crate) struct Price {
     pub output: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum PriceTier {
     Manual,

@@ -4,8 +4,11 @@ import { serializePipeline } from "../lib/serializePipeline";
 import type { OpenPipeline, Selection } from "./editStore";
 import { generatedRegionId } from "../lib/loopRegions";
 import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
-import { ApiError, savePipeline, fetchPipeline, fetchPipelines, saveRunPipeline, deletePipeline, renamePipeline } from "../api";
-import type { PipelineDef, NodeDef, EdgeDef } from "../types";
+import { ApiError } from "../shared/http/client";
+import { savePipeline, fetchPipeline, fetchPipelines, saveRunPipeline, deletePipeline, renamePipeline } from "../api";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
+import { legacyScope } from "../test/legacy";
 
 vi.mock("../api", async (importOriginal) => ({
   // Keep the real `ApiError` (a value the store reads via `instanceof`) while
@@ -50,13 +53,13 @@ const mockRenamePipeline = vi.mocked(renamePipeline);
 const mockFetchPipelines = vi.mocked(fetchPipelines);
 
 function makePipeline(
-  nodes: NodeDef[] = [],
+  nodes: EditorNodeDef[] = [],
   edges: EdgeDef[] = [],
-): PipelineDef {
+): EditorPipelineDef {
   return { name: "test", version: "1.0", variables: {}, nodes, edges };
 }
 
-function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
+function makeNode(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
   return {
     id: "default",
     name: "Default",
@@ -69,7 +72,7 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
   };
 }
 
-function seedTabWithPipeline(pipeline: PipelineDef) {
+function seedTabWithPipeline(pipeline: EditorPipelineDef) {
   useEditStore.setState({
     openTabs: [
       {
@@ -419,7 +422,7 @@ describe("addEdge auto-materializes a bounded loop region on a cycle (ADR-0011 /
       name: "loop",
       // Not in the FE NodeType union (no canvas editor for it), but the daemon
       // still serves such YAML.
-      type: "loop" as unknown as NodeDef["type"],
+      type: "loop" as unknown as EditorNodeDef["type"],
       max_iter: 3,
     });
     // impl -> rev -> loop, plus loop -> impl already closing the cycle.
@@ -739,7 +742,7 @@ describe("edge selection (ADR-0011 edge detail panel, #147)", () => {
 });
 
 describe("start/end markers are structural (#684)", () => {
-  function markerPipeline(): PipelineDef {
+  function markerPipeline(): EditorPipelineDef {
     const start = makeNode({ id: "start", name: "Start", type: "start", inputs: [],
       outputs: [{ name: "user_prompt", repeated: false, side: "right" }] });
     const worker = makeNode({ id: "work1234", name: "worker" });
@@ -1006,9 +1009,9 @@ describe("serializePipeline (via save) emits structural node fields", () => {
   // `type: "loop"` is a legacy value no longer in the `NodeType` union, hence the
   // cast; the fix keys off the presence of `max_iter`, not the type string.
   it("round-trips a legacy type:loop node's max_iter (#352)", async () => {
-    const loopNode: NodeDef = {
+    const loopNode: EditorNodeDef = {
       ...makeNode({ id: "qdtXejYS", name: "loop" }),
-      type: "loop" as unknown as NodeDef["type"],
+      type: "loop" as unknown as EditorNodeDef["type"],
       max_iter: 3,
       inputs: [
         { name: "in", repeated: false },
@@ -1028,11 +1031,11 @@ describe("serializePipeline (via save) emits structural node fields", () => {
   });
 
   // A `$var` bound must survive verbatim (max_iter can be a variable reference,
-  // like the region model — see NodeDef.max_iter: number | string).
+  // like the region model — see EditorNodeDef.max_iter: number | string).
   it("round-trips a legacy loop node's $var max_iter verbatim (#352)", async () => {
-    const loopNode: NodeDef = {
+    const loopNode: EditorNodeDef = {
       ...makeNode({ id: "spinner", name: "loop" }),
-      type: "loop" as unknown as NodeDef["type"],
+      type: "loop" as unknown as EditorNodeDef["type"],
       max_iter: "$rounds",
       inputs: [
         { name: "in", repeated: false },
@@ -1283,6 +1286,7 @@ describe("mutations set dirty without auto-saving", () => {
 
     useEditStore.getState().addNode({
       id: "new-node",
+      name: null,
       type: "agent",
       inputs: [],
       outputs: [],
@@ -1298,7 +1302,7 @@ describe("mutations set dirty without auto-saving", () => {
 
 const mockFetchPipeline = vi.mocked(fetchPipeline);
 
-const EXTERNAL_PIPELINE: PipelineDef = {
+const EXTERNAL_PIPELINE: EditorPipelineDef = {
   name: "externally-modified",
   version: "2.0",
   variables: {},
@@ -1721,11 +1725,12 @@ describe("scope-qualified pipeline ops", () => {
       node_count: 3,
       modified: null,
       variables: {},
+      prompt_required: true,
     };
     useEditStore.setState({
       pipelines: [
-        { ...base, scope: "repo" },
-        { ...base, scope: "library" },
+        { ...base, scope: legacyScope("repo") },
+        { ...base, scope: legacyScope("library") },
       ],
     });
 
@@ -2555,7 +2560,7 @@ describe("pipeline rename (#774)", () => {
       name: "Renamed Pipeline",
     });
     mockFetchPipelines.mockResolvedValueOnce([
-      {
+      { prompt_required: true,
         id: "renamed-pipeline",
         name: "Renamed Pipeline",
         scope: "instance",

@@ -10,7 +10,8 @@ import {
   Shield,
   Zap,
 } from "lucide-react";
-import type { Trigger, TriggerFire } from "../types";
+import type { Trigger } from "../shared/generated/Trigger";
+import type { TriggerFire } from "../shared/generated/TriggerFire";
 import { fetchSettings, fetchTriggerFires, testGuard } from "../api";
 import type { TestGuardResponse } from "../api";
 import { humanizeCron } from "../cronPresets";

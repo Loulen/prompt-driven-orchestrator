@@ -4,7 +4,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AuthorKind, CommentState, ReviewEntry } from "../../lib/reviewComments";
 import { anchorLabel, authorKind, authorLabel, commentState, firstWords, footerStatus, parseExcerpt, plural, relativeTime } from "../../lib/reviewComments";
-import type { ReviewComment } from "../../types";
+import type { ReviewComment } from "../../shared/generated/ReviewComment";
 
 /**
  * One review comment rendered under its diff line (#750): a **draft** card

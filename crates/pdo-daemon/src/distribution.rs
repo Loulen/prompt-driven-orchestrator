@@ -29,7 +29,8 @@
 /// The statistics one boxplot cell renders: the box (Q1–Q3), the median line,
 /// the mean (tooltip only since #811), the min/max whiskers of the « Full »
 /// zoom level and the Tukey fences of the « Fenced » one.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
 pub(crate) struct SixStats {
     pub mean: f64,
     pub median: f64,

@@ -1,4 +1,9 @@
-import type { DiffFile, DiffHunk, NodeState, RunDelivery, RunRef, RunRefs } from "../types";
+import type { DiffFile } from "../shared/generated/DiffFile";
+import type { DiffHunk } from "../shared/generated/DiffHunk";
+import type { NodeState } from "../shared/generated/NodeState";
+import type { RunDelivery } from "../shared/generated/RunDelivery";
+import type { RunRef } from "../shared/generated/RunRef";
+import type { RunRefs } from "../shared/generated/RunRefs";
 
 // Shared helpers of the Review page (#749, ADR-0067; CONTEXT.md § "Relecture de
 // diff"). Pure: no React, no fetch — so the URL contract, the pair semantics and

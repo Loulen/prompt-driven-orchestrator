@@ -78,7 +78,7 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                 let interrupted = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::NodeInterrupted,
                     node_id: Some(node_id.clone()),
                     iter: Some(*iter),
@@ -193,7 +193,7 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
             let interrupted = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeInterrupted,
                 node_id: Some(node_id.clone()),
                 iter: Some(*iter),

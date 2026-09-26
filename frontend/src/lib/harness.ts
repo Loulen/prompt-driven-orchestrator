@@ -6,7 +6,8 @@
 // the fold between the node's per-harness `harnesses` map and the single
 // `model`/`effort` view the existing pickers edit.
 
-import type { HarnessDescriptorsView, NodeDef } from "../types";
+import type { HarnessDescriptorsView } from "../harness/model/harness";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 import { currentTheme, type ResolvedTheme } from "./theme";
 
 /** The floor of the precedence chain — a node with no pin runs on `claude`. */
@@ -183,7 +184,7 @@ export function effortOffer(
  *  the node's pin, else the `claude` floor. (The instance default is a coarser
  *  tier the editor does not fetch per-node; the floor is the safe editor default,
  *  and the daemon re-resolves authoritatively at spawn.) An empty pin is "unset". */
-export function resolveEditorHarness(node: Pick<NodeDef, "pin_harness">): string {
+export function resolveEditorHarness(node: Pick<EditorNodeDef, "pin_harness">): string {
   const pin = node.pin_harness;
   return pin && pin !== "" ? pin : HARNESS_FLOOR;
 }
@@ -192,7 +193,7 @@ export function resolveEditorHarness(node: Pick<NodeDef, "pin_harness">): string
  *  `harnesses` map onto the flat `model`/`effort` the pickers edit. Returns a new
  *  node; the `harnesses` map is preserved so non-resolved entries survive a
  *  round-trip. Idempotent. */
-export function foldHarnessOntoNode(node: NodeDef): NodeDef {
+export function foldHarnessOntoNode(node: EditorNodeDef): EditorNodeDef {
   const resolved = resolveEditorHarness(node);
   const entry = node.harnesses?.[resolved];
   return {
@@ -206,7 +207,7 @@ export function foldHarnessOntoNode(node: NodeDef): NodeDef {
  *  preserving every other harness's entry, and dropping an entry that carries
  *  neither. Returns the harnesses map to emit (or `undefined` when empty). */
 export function foldNodeIntoHarnesses(
-  node: NodeDef,
+  node: EditorNodeDef,
 ): Record<string, { model?: string; effort?: string }> | undefined {
   const resolved = resolveEditorHarness(node);
   const out: Record<string, { model?: string; effort?: string }> = {};

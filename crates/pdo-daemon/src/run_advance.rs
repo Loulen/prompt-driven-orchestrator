@@ -191,7 +191,7 @@ async fn sweep_auto_skips(state: &AppState, run_id: &str) {
             let event = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some(node_id.clone()),
                 iter: Some(iter),
@@ -291,7 +291,7 @@ pub(crate) async fn maybe_complete_run(
     let run_completed = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::RunCompleted,
         node_id: None,
         iter: None,
@@ -630,7 +630,7 @@ pub(crate) async fn orchestrator_binding_refusal(
         let marker = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeAwaitingUser,
             node_id: Some(node_id.to_string()),
             iter: Some(iter),

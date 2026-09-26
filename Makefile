@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build test check lint fmt clean support-table readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
+.PHONY: help dev build test check lint fmt clean types types-check support-table readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -10,6 +10,15 @@ SUPPORT_TABLE := docs/reference/harnesses.md
 # The README media tool (#856, ADR-0074). `node:sqlite` is still flagged
 # experimental: its warning is noise here.
 README_MEDIA := node --disable-warning=ExperimentalWarning scripts/readme-media/readme-media.mjs
+# The TypeScript generated from the daemon's DTOs by ts-rs (#915). Never edit it
+# by hand: `make types` rewrites it, `make check` fails when it drifts.
+GENERATED_TS := frontend/src/shared/generated
+TS_CHECK_DIR := $(CURDIR)/target/ts-rs-check
+# Each `#[ts(export)]` type owns one `export_bindings_*` test that writes its file.
+# PDO_SKIP_FRONTEND_BUILD: the crate's build.rs typechecks the frontend, which
+# imports these very files — generating them must not depend on them. An empty
+# dist/ is enough for rust-embed in a test build.
+EXPORT_TS := mkdir -p frontend/dist && PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet -p pdo-legacy --lib export_bindings_ -- --test-threads=1
 
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git
@@ -22,7 +31,8 @@ help:
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build + pnpm run build (frontend embedded into daemon)"
 	@echo "  make test    cargo nextest + doctests + vitest"
-	@echo "  make check   cargo check + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
+	@echo "  make check   cargo check + generated TS types current + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
+	@echo "  make types   Regenerate the TS types of the daemon's DTOs into $(GENERATED_TS)"
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
 	@echo "  make clean   cargo clean + rm frontend/dist"
@@ -55,7 +65,7 @@ build:
 	cargo build
 
 # nextest : un process par test (isolation retrouvée depuis que les 50 binaires de
-# tests sont fusionnés en un seul, cf. crates/pdo-daemon/tests/it.rs) et un pool
+# tests sont fusionnés en un seul, cf. crates/pdo/tests/it.rs) et un pool
 # global au lieu d'un pool par binaire. nextest NE LANCE PAS les doctests, d'où la
 # ligne `--doc` séparée : la retirer ferait disparaître leur couverture en silence.
 test:
@@ -66,12 +76,29 @@ test:
 
 check:
 	cargo check --workspace
+	$(MAKE) --no-print-directory types-check
 	cd frontend && pnpm run typecheck
 	# The harness support table in docs/reference/harnesses.md is generated from the
 	# capability declaration in crates/pdo-daemon/src/harness_probes.rs (#617). A
 	# hand-edited table would be wrong at the next capability; this fails and names
 	# the drift instead. Fix it with `make support-table`, never by editing the block.
 	cargo run --quiet -p pdo-daemon -- docs support-table --check --file $(CURDIR)/$(SUPPORT_TABLE)
+
+# Regenerate the TS types of every DTO the daemon sends (ts-rs). Run it after
+# changing a serialized Rust struct or enum, and commit the result.
+types:
+	rm -rf $(GENERATED_TS)
+	mkdir -p $(GENERATED_TS)
+	export TS_RS_EXPORT_DIR=$(CURDIR)/$(GENERATED_TS) && $(EXPORT_TS) > /dev/null
+
+# Fails, and shows the diff, when a DTO changed without `make types`: the front
+# would otherwise compile against a contract the daemon no longer speaks.
+types-check:
+	rm -rf $(TS_CHECK_DIR)
+	export TS_RS_EXPORT_DIR=$(TS_CHECK_DIR) && $(EXPORT_TS) > /dev/null
+	@diff -r $(TS_CHECK_DIR) $(GENERATED_TS) || { \
+	  echo "FAIL: $(GENERATED_TS) is out of date with the Rust DTOs. Run 'make types' and commit the result." >&2; \
+	  exit 1; }
 
 # Rewrite the generated block of docs/reference/harnesses.md from the code. Run it
 # after adding a harness, adding a capability, or moving a "last validated version".

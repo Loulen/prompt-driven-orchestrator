@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchProjects, fetchSettings } from "../api";
-import type { Project, SkillRef } from "../types";
+import type { Project } from "../shared/generated/Project";
+import type { SkillRef } from "../shared/generated/SkillRef";
 import type { InheritedTier } from "../lib/skillSelection";
 import { SKILLS_CHANGED } from "./useSkillBank";
 

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileText } from "lucide-react";
-import type { PortDef, PortType, FrontmatterFieldDecl } from "../types";
+import type { PortDef } from "../shared/generated/PortDef";
+import type { PortType } from "../shared/generated/PortType";
+import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
 import InspectorPortRow from "./InspectorPortRow";
 import OutputSchemaEditor from "./OutputSchemaEditor";
 

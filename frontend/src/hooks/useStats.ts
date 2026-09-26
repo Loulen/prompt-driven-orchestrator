@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchStatsOverview, fetchStatsCost, fetchStatsPerformance } from "../api";
-import type { StatsOverview, StatsCost, StatsPerformance } from "../types";
+import type { StatsOverview } from "../shared/generated/StatsOverview";
+import type { StatsCost } from "../shared/generated/StatsCost";
+import type { StatsPerformance } from "../shared/generated/StatsPerformance";
 
 /**
  * State for the Stats modal (#377, ADR-0029). Two-endpoint split by cost class:

@@ -1,0 +1,11 @@
+# ts-rs (#915): how the DTOs of the daemon become TypeScript.
+#
+# `cargo test` runs one `export_bindings_*` test per `#[ts(export)]` type. By
+# default they write into target/ (never into the source tree, so a plain test
+# run cannot silently "fix" a drift). `make types` points them at
+# frontend/src/shared/generated/, and `make check` at a scratch dir it diffs
+# against the committed bindings. A value set in the environment wins.
+[env]
+TS_RS_EXPORT_DIR = { value = "target/ts-rs", relative = true }
+# `i64`/`u64` are JSON numbers on the wire, never BigInts.
+TS_RS_LARGE_INT = "number"

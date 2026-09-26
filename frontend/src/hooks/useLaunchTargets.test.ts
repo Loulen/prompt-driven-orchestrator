@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useLaunchTargets } from "./useLaunchTargets";
 import * as api from "../api";
-import type { BranchList, BranchRef, FastForwardOutcome, PipelineListEntry } from "../types";
+import type { BranchList } from "../shared/generated/BranchList";
+import type { BranchRef } from "../shared/generated/BranchRef";
+import type { FastForwardOutcome } from "../workspace/model/branches";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn(),
@@ -12,8 +15,8 @@ vi.mock("../api", () => ({
 }));
 
 // #571: a branch is `{name, kind}`. These keep the fixtures terse.
-const local = (name: string): BranchRef => ({ name, kind: "local" });
-const remote = (name: string): BranchRef => ({ name, kind: "remote" });
+const local = (name: string): BranchRef => ({ upstream: null, ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false, name, kind: "local" });
+const remote = (name: string): BranchRef => ({ upstream: null, ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false, name, kind: "remote" });
 
 /** #802: both branch verbs answer the list PLUS the date it is good as of. */
 function branchList(branches: BranchRef[], over: Partial<BranchList> = {}): BranchList {
@@ -32,7 +35,7 @@ function listBranchesReturns(branches: BranchRef[], over: Partial<BranchList> = 
 }
 
 function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
-  return {
+  return { prompt_required: true,
     id: "p1",
     name: "Auditor",
     scope: "instance",
@@ -623,12 +626,12 @@ describe("useLaunchTargets — the fast-forward (#803)", () => {
 
   it("refreshes the list from the 200, so the écart it erased disappears", async () => {
     const { result } = setup();
-    listBranchesReturns([{ name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 3 }]);
+    listBranchesReturns([{ last_commit_at: null, last_commit_subject: null, head: false, name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 3 }]);
     await load(result, "/a");
     await waitFor(() => expect(result.current.branches).toHaveLength(1));
 
     vi.mocked(api.fastForwardBranch).mockResolvedValue(
-      ffDone([{ name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 0 }]),
+      ffDone([{ last_commit_at: null, last_commit_subject: null, head: false, name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 0 }]),
     );
     await act(async () => {
       await result.current.fastForward("main");
@@ -642,14 +645,14 @@ describe("useLaunchTargets — the fast-forward (#803)", () => {
    */
   it("refreshes the list from a 409 too", async () => {
     const { result } = setup();
-    listBranchesReturns([{ name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 3 }]);
+    listBranchesReturns([{ last_commit_at: null, last_commit_subject: null, head: false, name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 3 }]);
     await load(result, "/a");
     await waitFor(() => expect(result.current.branches).toHaveLength(1));
 
     vi.mocked(api.fastForwardBranch).mockResolvedValue({
       kind: "refused",
       refusal: { reason: "up_to_date", message: "already up to date" },
-      list: branchList([{ name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 0 }]),
+      list: branchList([{ last_commit_at: null, last_commit_subject: null, head: false, name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 0 }]),
     });
     await act(async () => {
       await result.current.fastForward("main");

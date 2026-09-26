@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::pipeline;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub(crate) struct LibraryEntry {
     pub name: String,
     #[serde(rename = "type")]
@@ -19,14 +21,18 @@ pub(crate) struct LibraryEntry {
     /// account default must serialize byte-identically to an older entry that
     /// never knew the key, or it reads `diverged` forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub model: Option<String>,
     /// Per-node reasoning-effort override. Same `skip_serializing_if` invariant
     /// as `model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub max_iter: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub branches: Option<u32>,
     /// Defaulted: a structural node exported to YAML carries no prompt, and
     /// `POST /nodes/parse` must accept a prompt-less node map.
@@ -43,6 +49,7 @@ pub(crate) struct LibraryEntry {
     /// always `None` for the types that carry none. `skip_serializing_if` is
     /// what keeps a starred Merge/Start/End file free of a line nobody may edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub isolated_worktree: Option<bool>,
 }
 

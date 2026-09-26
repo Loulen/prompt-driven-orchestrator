@@ -53,10 +53,12 @@ vi.mock("../api", () => ({
   },
 }));
 
-import { ApiError } from "../api";
+import { ApiError } from "../shared/http/client";
 
 import SkillBankPanel from "./SkillBankPanel";
-import type { Skill, SkillBank, SkillDetail, SkillFolder } from "../types";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillBank, SkillDetail } from "../skill/model/skill";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
 
 const t = "2026-09-03T10:00:00Z";
 const folder = (id: string, name: string, parent_id: string | null = null): SkillFolder => ({
@@ -66,7 +68,7 @@ const folder = (id: string, name: string, parent_id: string | null = null): Skil
   created_at: t,
   updated_at: t,
 });
-const skill = (id: string, name: string, folder_id: string | null, description = "desc"): Skill => ({
+const skill = (id: string, name: string, folder_id: string | null, description = "desc"): Skill => ({ locked: false,
   id,
   name,
   description,

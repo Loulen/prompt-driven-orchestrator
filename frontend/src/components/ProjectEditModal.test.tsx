@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ProjectEditModal from "./ProjectEditModal";
-import { ApiError } from "../api";
-import type { Project } from "../types";
+import { ApiError } from "../shared/http/client";
+import type { Project } from "../shared/generated/Project";
 
 const createProject = vi.fn();
 const updateProject = vi.fn();
@@ -80,7 +80,7 @@ describe("ProjectEditModal", () => {
     const other: Project = {
       id: "p2",
       name: "Other",
-      harness: null,
+      harness: undefined,
       members: ["/repos/back"],
     };
     renderModal({ projects: [other] });

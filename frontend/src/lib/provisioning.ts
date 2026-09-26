@@ -1,4 +1,4 @@
-import type { ProvisioningRules } from "../types";
+import type { ProvisioningRules } from "../shared/generated/ProvisioningRules";
 
 export const EMPTY_PROVISIONING_RULES: ProvisioningRules = {
   copy: [],

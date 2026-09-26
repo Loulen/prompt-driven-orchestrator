@@ -26,10 +26,11 @@ import {
   type TourObservation,
   type TourStep,
 } from "../tour";
-import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
+import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
 import { carriedPorts, defaultConditionPort, withCarriedPorts } from "../edgePorts";
 import { requalifyWhen, rowsToWhen } from "../whenClause";
+import type { EditorNodeDef, EditorPipelineDef } from "../../pipeline/model/pipeline";
 
 const STEPS = FIRST_PIPELINE_TOUR.steps;
 
@@ -90,7 +91,7 @@ class FakeApp {
     this.values[selector] = value;
   }
 
-  agents(): NodeDef[] {
+  agents(): EditorNodeDef[] {
     return (this.app.pipeline?.nodes ?? []).filter((n) => n.type === "agent");
   }
 
@@ -138,7 +139,7 @@ class FakeApp {
     this.app = { ...this.app, selection: { kind: "edge", id: null, edgeIndex: index } };
   }
 
-  updateAgent(index: number, updates: Partial<NodeDef>) {
+  updateAgent(index: number, updates: Partial<EditorNodeDef>) {
     const target = this.agents()[index];
     this.patch((p) => {
       p.nodes = p.nodes.map((n) => (n.id === target.id ? { ...n, ...updates } : n));
@@ -212,7 +213,7 @@ class FakeApp {
     };
   }
 
-  private patch(fn: (p: PipelineDef) => void) {
+  private patch(fn: (p: EditorPipelineDef) => void) {
     const pipeline = { ...this.app.pipeline! };
     fn(pipeline);
     this.app = { ...this.app, pipeline, dirty: true };

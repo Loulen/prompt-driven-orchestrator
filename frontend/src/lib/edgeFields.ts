@@ -1,6 +1,8 @@
 import { OPERATORS, type Operator } from "./whenClause";
 import { primaryPort } from "./edgePorts";
-import type { PipelineDef, EdgeDef, FrontmatterFieldDecl } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 /**
  * A field that can appear in an edge's `when:` clause. Either a frontmatter
@@ -24,7 +26,7 @@ export interface EdgeConditionField {
  * the edge's primary port, which is the whole story for a single-port edge.
  */
 export function edgeConditionFields(
-  pipeline: PipelineDef,
+  pipeline: EditorPipelineDef,
   edge: EdgeDef,
   port?: string,
 ): EdgeConditionField[] {

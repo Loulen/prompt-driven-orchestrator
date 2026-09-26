@@ -2,9 +2,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import RegionInspector from "./RegionInspector";
 import { useEditStore } from "../stores/editStore";
-import type { PipelineDef, NodeDef, LoopRegion } from "../types";
+import type { LoopRegion } from "../shared/generated/LoopRegion";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
-function makeNode(id: string, name: string): NodeDef {
+function makeNode(id: string, name: string): EditorNodeDef {
   return {
     id,
     name,
@@ -15,7 +16,7 @@ function makeNode(id: string, name: string): NodeDef {
   };
 }
 
-function makePipeline(loops: LoopRegion[]): PipelineDef {
+function makePipeline(loops: LoopRegion[]): EditorPipelineDef {
   return {
     name: "test-pipeline",
     variables: {},

@@ -1566,8 +1566,8 @@ mod tests {
         );
         // Case is preserved; every non-alphanumeric char maps to '-'.
         assert_eq!(
-            cc_project_dirname(Path::new("/home/llenoir/Documents/perso/Maestro")),
-            "-home-llenoir-Documents-perso-Maestro"
+            cc_project_dirname(Path::new("/home/user/code/pdo")),
+            "-home-user-code-pdo"
         );
     }
 
@@ -1894,7 +1894,7 @@ mod tests {
         Event {
             id: None,
             run_id: "r".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some(node.into()),
             iter: Some(1),
@@ -1954,7 +1954,7 @@ mod tests {
         Event {
             id: None,
             run_id: "r".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some(node.into()),
             iter: Some(1),
@@ -2240,7 +2240,7 @@ mod tests {
         let started = |sid: &str| Event {
             id: None,
             run_id: "r".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -2300,7 +2300,7 @@ mod tests {
         let started = |node: &str, harness: &str, session_id: &str| Event {
             id: None,
             run_id: run_id.into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some(node.into()),
             iter: Some(1),
@@ -2340,7 +2340,7 @@ mod tests {
         let start = Event {
             id: None,
             run_id: "legacy-restarts".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -2398,7 +2398,7 @@ mod tests {
         let events = vec![Event {
             id: None,
             run_id: run_id.into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -2446,7 +2446,7 @@ mod tests {
         let started = |sid: &str| Event {
             id: None,
             run_id: run_id.into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -2514,7 +2514,7 @@ mod tests {
             Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: crate::event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -2523,7 +2523,7 @@ mod tests {
             Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: crate::event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: EventKind::MergeResolverStarted,
                 node_id: None,
                 iter: None,
@@ -2552,7 +2552,7 @@ mod tests {
         let event = |kind| Event {
             id: None,
             run_id: "copilot-infra".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind,
             node_id: None,
             iter: None,
@@ -2607,7 +2607,7 @@ mod tests {
         let event = |node: Option<&str>, node_type: Option<&str>| Event {
             id: None,
             run_id: run_id.into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: if node.is_some() {
                 EventKind::NodeStarted
             } else {
@@ -2698,7 +2698,7 @@ mod tests {
         let started = |node: &str, harness: &str, sid: &str, isolated: bool| Event {
             id: None,
             run_id: run_id.into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some(node.into()),
             iter: Some(1),
@@ -2751,7 +2751,7 @@ mod tests {
         let events = vec![Event {
             id: None,
             run_id: "memo-run".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -2804,7 +2804,7 @@ mod tests {
         Event {
             id: None,
             run_id: run_id.into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -2942,7 +2942,7 @@ mod tests {
         let events = vec![Event {
             id: None,
             run_id: "reported-fallback".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -3021,7 +3021,7 @@ mod tests {
         let events = vec![Event {
             id: None,
             run_id: run_id.into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -3114,7 +3114,7 @@ mod tests {
         let events = vec![Event {
             id: None,
             run_id: "copilot-observed".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -3165,7 +3165,7 @@ mod tests {
         let events = vec![Event {
             id: None,
             run_id: "no-source".into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -3213,7 +3213,7 @@ mod tests {
         let events = vec![Event {
             id: None,
             run_id: run_id.into(),
-            ts: crate::event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),

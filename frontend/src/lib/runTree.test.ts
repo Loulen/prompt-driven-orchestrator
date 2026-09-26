@@ -1,6 +1,6 @@
 // #783 — unit tests for the pure run-tree model behind the Runs list.
 import { describe, expect, it } from "vitest";
-import type { RunListEntry } from "../types";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
 import {
   ancestorIds,
   buildRunTree,
@@ -15,6 +15,8 @@ import {
 } from "./runTree";
 
 const run = (id: string, over: Partial<RunListEntry> = {}): RunListEntry => ({
+  stalled: false,
+  effective_repo: "",
   run_id: id,
   pipeline_name: "p",
   status: "running",

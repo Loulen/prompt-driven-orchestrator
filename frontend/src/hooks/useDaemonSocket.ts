@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { WsMessage } from "../types";
+import type { WsMessage } from "../platform/model/daemon";
 
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
 

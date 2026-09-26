@@ -22,17 +22,14 @@
  * The two per-port emitters are DELIBERATELY divergent — do not unify them, see
  * the comment on `portToYamlObject`.
  */
-import type {
-  PipelineDef,
-  NodeDef,
-  PortDef,
-  PortSide,
-  FrontmatterFieldDecl,
-} from "../types";
+import type { PortDef } from "../shared/generated/PortDef";
+import type { PortSide } from "../shared/generated/PortSide";
+import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
 import { foldNodeIntoHarnesses } from "./harness";
 import { nodeIsolation } from "./nodeIsolation";
 import { hasProvisioningRules } from "./provisioning";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 /**
  * Drops the null-valued keys of every frontmatter declaration (#457).
@@ -71,7 +68,7 @@ function frontmatterToYamlObject(
 // entries (see useLibraryPipelines): building both sides through this single
 // code path erases formatting noise (key order, quoting, parser defaults)
 // that a textual YAML comparison would misread as divergence.
-export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
+export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unknown> {
   const obj: Record<string, unknown> = {
     name: p.name,
   };
@@ -109,6 +106,9 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     // its pre-#723 shape. Must be mirrored in `exportNodeAsYaml` below and
     // classified in `layoutFields.ts` (SEMANTIC_FIELDS.node).
     if (n.orchestrator) node.orchestrator = true;
+    // The node's own auto-fail override (true or false), emitted only when set:
+    // absent means "inherit". Dropping it here lost it on every editor save.
+    if (n.auto_fail !== undefined && n.auto_fail !== null) node.auto_fail = n.auto_fail;
     // #550/ADR-0046: the harness axis replaces flat `model:`/`effort:`. The pin is
     // emitted when set; the flat model/effort view is folded back into the
     // resolved harness's entry in the per-harness `harnesses` map, emitted only
@@ -146,6 +146,9 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       node.inputs = n.inputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
         if (port.repeated) p.repeated = true;
+        // A port the completion refuses to leave empty. Emitted only when set,
+        // like `repeated`: dropping it here lost it on every editor save.
+        if (port.required) p.required = true;
         if (port.side) p.side = port.side;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
@@ -156,6 +159,9 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       node.outputs = n.outputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
         if (port.repeated) p.repeated = true;
+        // A port the completion refuses to leave empty. Emitted only when set,
+        // like `repeated`: dropping it here lost it on every editor save.
+        if (port.required) p.required = true;
         if (port.side) p.side = port.side;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
@@ -262,7 +268,7 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
   return obj;
 }
 
-export function serializePipeline(p: PipelineDef): string {
+export function serializePipeline(p: EditorPipelineDef): string {
   return yamlStringify(pipelineToYamlObject(p));
 }
 
@@ -281,6 +287,7 @@ export function serializePipeline(p: PipelineDef): string {
 function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, unknown> {
   const p: Record<string, unknown> = { name: port.name };
   if (port.repeated) p.repeated = true;
+  if (port.required) p.required = true;
   if (port.side && port.side !== defaultSide) p.side = port.side;
   if (port.port_type && port.port_type !== "markdown") p.port_type = port.port_type;
   if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
@@ -337,7 +344,7 @@ function promptToBlockScalar(prompt: string): string {
  * both. This emitter and `pipelineToYamlObject` must stay in lockstep (see the note
  * on that function): a harness field added there must be added here too.
  */
-export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
+export function exportNodeAsYaml(node: EditorNodeDef, prompt: string): string {
   const obj: Record<string, unknown> = {
     name: node.name ?? "",
     type: node.type,
@@ -350,6 +357,7 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   // #723/ADR-0064: same conditional emit as `pipelineToYamlObject` — the
   // « Orchestrator » toggle travels with an exported node.
   if (node.orchestrator) obj.orchestrator = true;
+  if (node.auto_fail !== undefined && node.auto_fail !== null) obj.auto_fail = node.auto_fail;
   if (node.pin_harness) obj.pin_harness = node.pin_harness;
   if (node.agent_choice && node.agent_choice.mode !== "inherit") {
     obj.agent_choice = node.agent_choice;

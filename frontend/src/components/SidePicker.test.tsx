@@ -2,9 +2,9 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import SidePicker from "./SidePicker";
 import NodeInspector from "./NodeInspector";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 import { useEditStore } from "../stores/editStore";
-import type { NodeDef, PipelineDef } from "../types";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
@@ -52,7 +52,7 @@ describe("SidePicker", () => {
 });
 
 describe("SidePicker retrofit in NodeInspector PortRow", () => {
-  function makeNode(): NodeDef {
+  function makeNode(): EditorNodeDef {
     return {
       id: "n1",
       name: "test-node",
@@ -63,7 +63,7 @@ describe("SidePicker retrofit in NodeInspector PortRow", () => {
     };
   }
 
-  function makePipeline(node: NodeDef): PipelineDef {
+  function makePipeline(node: EditorNodeDef): EditorPipelineDef {
     return { name: "test", variables: {}, nodes: [node], edges: [] };
   }
 

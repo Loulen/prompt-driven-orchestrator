@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import MergeInspector from "./MergeInspector";
 import { fetchSettings } from "../api";
 import { useEditStore } from "../stores/editStore";
-import type { PipelineDef, NodeDef } from "../types";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 // #616: the merge inspector now offers the SAME harness picker as any agent node
 // (correctif 9), so it fetches the served catalogue via `useHarnessCatalog`. Mock
@@ -47,7 +47,7 @@ vi.mock("../api", () => ({
   }),
 }));
 
-function makeMergeNode(overrides?: Partial<NodeDef>): NodeDef {
+function makeMergeNode(overrides?: Partial<EditorNodeDef>): EditorNodeDef {
   return {
     id: "mg1",
     name: "merge-point",
@@ -59,7 +59,7 @@ function makeMergeNode(overrides?: Partial<NodeDef>): NodeDef {
   };
 }
 
-function makePipeline(node: NodeDef): PipelineDef {
+function makePipeline(node: EditorNodeDef): EditorPipelineDef {
   return {
     name: "test-pipeline",
     variables: {},
@@ -68,7 +68,7 @@ function makePipeline(node: NodeDef): PipelineDef {
   };
 }
 
-function setStoreState(node: NodeDef) {
+function setStoreState(node: EditorNodeDef) {
   const pipeline = makePipeline(node);
   useEditStore.setState({
     openTabs: [
@@ -160,7 +160,7 @@ describe("MergeInspector", () => {
     expect(await screen.findByTestId("merge-model-trigger")).toHaveTextContent("sonnet");
   });
 
-  // #424: a merge node IS a NodeDef routed through `spawn_node`, so it carries an
+  // #424: a merge node IS a EditorNodeDef routed through `spawn_node`, so it carries an
   // effort — unguarded, unlike a script node. (The `__merge_resolver__` infra
   // session is a different thing with a confusingly similar name and never has
   // one.)

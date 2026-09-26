@@ -17,8 +17,13 @@ import {
   ViewportPortal,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { LoopKind, NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
-import { isTerminalRun } from "../types";
+import type { LoopKind } from "../shared/generated/LoopKind";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortBrief } from "../shared/generated/PortBrief";
+import type { PortSide } from "../shared/generated/PortSide";
+import type { RunState } from "../shared/generated/RunState";
+import { isTerminalRun } from "../run/model/runStatus";
 import { pendingCount, pendingTone, reviewQuickAccessTitle } from "../lib/reviewComments";
 import { reviewUrl } from "../lib/runRefs";
 import { useReviewSeen } from "../hooks/useReviewUnread";
@@ -70,6 +75,7 @@ import { Bookmark, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import { ChildCountPills } from "./OrchestrationTab";
 import { childrenOfNode, countChildren, totalChildren, useRunChildren } from "../lib/orchestration";
 import type { ChildCounts } from "../lib/orchestration";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 // The four emergent body anchor handles (#168), each pinned to its side-centre
 // with the matching xyflow `Position` so a bound incoming edge arrives from that
@@ -907,7 +913,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     const name = DEFAULT_NODE_NAMES[type] ?? "node";
 
     const view = computeDropPosition();
-    let newNode: NodeDef;
+    let newNode: EditorNodeDef;
     switch (type) {
       case "merge":
         newNode = {

@@ -16,7 +16,7 @@ vi.mock("react-markdown", () => ({
 vi.mock("remark-gfm", () => ({ default: () => null }));
 
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
-import type { IterationInfo } from "../types";
+import type { IterationInfo } from "../shared/generated/IterationInfo";
 import type { FileInfo } from "../api";
 import { dismissTransientOverlays } from "../lib/overlays";
 

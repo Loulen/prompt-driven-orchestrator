@@ -3,12 +3,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import EdgeDetailPanel from "./EdgeDetailPanel";
 import { useEditStore } from "../stores/editStore";
 import { pipelineToYamlObject } from "../lib/serializePipeline";
-import type { PipelineDef, NodeDef, EdgeDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 // #843 — the Outputs section: an edge carries one or more outputs of its source
 // node (ADR-0073), chosen here, and each condition row names the output it reads.
 
-function design(): NodeDef {
+function design(): EditorNodeDef {
   return {
     id: "design",
     name: "design",
@@ -34,7 +35,7 @@ function design(): NodeDef {
   };
 }
 
-function orchestrator(): NodeDef {
+function orchestrator(): EditorNodeDef {
   return {
     id: "orch",
     name: "orchestrator",
@@ -47,7 +48,7 @@ function orchestrator(): NodeDef {
 }
 
 function seedEdge(edge: EdgeDef) {
-  const pipeline: PipelineDef = {
+  const pipeline: EditorPipelineDef = {
     name: "edge-843",
     version: "1.0",
     variables: {},

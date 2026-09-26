@@ -8,7 +8,7 @@ import {
   COST_REPORTED_NOTE,
   COST_REPORTED_IN_USD_NOTE,
 } from "./costLabel";
-import type { NodeCost } from "../types";
+import type { NodeCost } from "../shared/generated/NodeCost";
 
 describe("costPrecision", () => {
   it("uses 4 decimals below $1 and 2 at or above", () => {
@@ -20,6 +20,7 @@ describe("costPrecision", () => {
 
   describe("nodeCostTitle (#647)", () => {
     const cost = (overrides: Partial<NodeCost> = {}): NodeCost => ({
+      reported_in_usd: false,
       usd: 1,
       form: "derived",
       partial: false,
@@ -126,8 +127,8 @@ describe("formatEstCost (single run, #272)", () => {
 
   it("ventilates a mixed Run by harness, summable but said per harness (#615)", () => {
     const c = formatEstCost(7.0, false, [], [], [
-      { harness: "claude", usd: 5.0, form: "derived", partial: false, unpriced_models: [] },
-      { harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "claude", usd: 5.0, form: "derived", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
     ]);
     // The total stays summable.
     expect(c.text).toBe("~$7.00");
@@ -146,7 +147,7 @@ describe("formatEstCost (single run, #272)", () => {
 
   it("does not label a pure-copilot Run as a Claude-Code estimate (#615)", () => {
     const c = formatEstCost(1.0, false, [], [], [
-      { harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
     ]);
     expect(c.text).toBe("~$1.00");
     // The AC: "estimate from Claude Code transcripts" shows ONLY under a derived
@@ -162,8 +163,8 @@ describe("formatEstCost (single run, #272)", () => {
     // and must be said (ADR-0052 §3). Suppressing the breakdown made the one Run
     // built to observe ventilation the one Run that could not show any.
     const c = formatEstCost(0, false, [], ["opencode"], [
-      { harness: "claude", usd: 0.342386, form: "derived", partial: false, unpriced_models: [] },
-      { harness: "copilot", usd: 0.1005058, form: "reported", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "claude", usd: 0.342386, form: "derived", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "copilot", usd: 0.1005058, form: "reported", partial: false, unpriced_models: [] },
     ]);
 
     // Still "—", still no dagger, still naming the reason.
@@ -188,7 +189,7 @@ describe("formatEstCost (single run, #272)", () => {
     // copilot + opencode: no total, and the only slice is a reported one. The
     // Claude-Code estimate wording must not appear — there is no derived cost here.
     const c = formatEstCost(0, false, [], ["opencode"], [
-      { harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
     ]);
     expect(c.text).toBe("—");
     expect(c.title).not.toContain(COST_ESTIMATE_NOTE);
@@ -207,7 +208,7 @@ describe("formatEstCost (single run, #272)", () => {
     // claude (derived estimate) + pi (reported, constant 1.0): the pi slice is an
     // exact figure and drops the `~`; the total still contains an estimate and keeps it.
     const c = formatEstCost(5.02, false, [], [], [
-      { harness: "claude", usd: 5.0, form: "derived", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "claude", usd: 5.0, form: "derived", partial: false, unpriced_models: [] },
       { harness: "pi", usd: 0.020682, form: "reported", partial: false, unpriced_models: [], reported_in_usd: true },
     ]);
     expect(c.text).toBe("~$5.02");
@@ -230,7 +231,7 @@ describe("formatEstCost (single run, #272)", () => {
     expect(pi.title).not.toContain(COST_ESTIMATE_NOTE);
     // A copilot slice is reported but CONVERTED (nano-AIU × a constant): still `~`.
     const copilot = formatEstCost(1.0, false, [], [], [
-      { harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
     ]);
     expect(copilot.text).toBe("~$1.00");
     // And a pi slice keeps its exact figure under an unavailable total (ADR-0052 §3).
@@ -243,8 +244,8 @@ describe("formatEstCost (single run, #272)", () => {
 
   it("daggers a mixed Run only when a DERIVED slice is a lower bound (#615)", () => {
     const c = formatEstCost(7.0, true, ["claude-opus-6"], [], [
-      { harness: "claude", usd: 5.0, form: "derived", partial: true, unpriced_models: ["claude-opus-6"] },
-      { harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
+      { reported_in_usd: false, harness: "claude", usd: 5.0, form: "derived", partial: true, unpriced_models: ["claude-opus-6"] },
+      { reported_in_usd: false, harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
     ]);
     expect(c.dagger).toBe(true);
     expect(c.title).toContain("claude-opus-6");

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
-import type { Skill, SkillFolder } from "../types";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
 import { buildRows, sameRef, type TreeNodeRef, type TreeRow } from "../lib/skillTree";
 
 export interface SkillTreeProps {

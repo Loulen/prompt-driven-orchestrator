@@ -1,4 +1,6 @@
-import type { EdgeAnchor, NodeType, PortSide } from "../types";
+import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortSide } from "../shared/generated/PortSide";
 import type { Point } from "./orthogonalRouter";
 import { dragSegmentOnGrid, snapToGrid } from "./wiringGrid";
 

@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { computeSyncState } from "./useLibrary";
 import type { LibraryEntry } from "../api";
-import type { NodeDef } from "../types";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
-function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
+function makeNode(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
   return {
     id: "n1",
     name: "Reviewer",

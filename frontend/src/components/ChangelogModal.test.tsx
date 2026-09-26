@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { UpdateChangelog, UpdateStatus } from "../types";
+import type { UpdateChangelog } from "../shared/generated/UpdateChangelog";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 const fetchUpdateChangelogMock = vi.fn();
 

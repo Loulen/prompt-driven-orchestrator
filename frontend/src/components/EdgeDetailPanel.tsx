@@ -10,7 +10,8 @@ import {
   Tags,
 } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
-import type { EdgeDef, EdgeTriggerStatus } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EdgeTriggerStatus } from "../pipeline/model/pipeline";
 import {
   whenToRows,
   rowsToWhen,

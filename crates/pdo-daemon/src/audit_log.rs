@@ -20,21 +20,27 @@
 
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
+use ts_rs::TS;
 
 /// Une ligne d'audit relue pour le feed `GET /audit` (décroissant, newest-first).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 pub(crate) struct AuditEntry {
     pub id: i64,
     pub ts: String,
     pub actor_hint: String,
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub target_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub target_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "unknown")]
     pub before: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "unknown")]
     pub after: Option<serde_json::Value>,
 }
 
@@ -83,7 +89,7 @@ pub(crate) async fn record(db: &SqlitePool, e: NewAuditEntry) -> Result<(), sqlx
         "INSERT INTO audit_log (ts, actor_hint, action, target_kind, target_id, before, after)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(crate::event_log::now_iso())
+    .bind(pdo_kernel::clock::now_iso())
     .bind(&e.actor_hint)
     .bind(&e.action)
     .bind(&e.target_kind)

@@ -320,7 +320,7 @@ pub(crate) async fn spawn_node(
     let started_probe = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeStarted,
         node_id: Some(node.id.clone()),
         iter: Some(iter),
@@ -477,7 +477,7 @@ pub(crate) async fn spawn_node(
         let waiting = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeWaiting,
             node_id: Some(node.id.clone()),
             iter: Some(iter),
@@ -793,7 +793,7 @@ pub(crate) async fn spawn_node(
                 }
             }
         } else if deps.tmux_cmd_override.is_none()
-            && !tmux_session_manager::binary_available(&d.binary)
+            && !crate::harness_binary::binary_available(&d.binary)
         {
             return SpawnOutcome::Failed {
                 reason: format!(
@@ -802,7 +802,7 @@ pub(crate) async fn spawn_node(
                     node.id,
                     d.name,
                     d.binary,
-                    tmux_session_manager::harness_probe_path()
+                    crate::harness_binary::harness_probe_path()
                 ),
             };
         }
@@ -1204,7 +1204,7 @@ pub(crate) async fn spawn_node(
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some(node.id.clone()),
             iter: Some(iter),
@@ -1516,7 +1516,7 @@ async fn interrupt_spawn_before_start_with_code(
     let interrupted = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeInterrupted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
@@ -1560,7 +1560,7 @@ async fn interrupt_spawn_after_start(
     let interrupted = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeInterrupted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),

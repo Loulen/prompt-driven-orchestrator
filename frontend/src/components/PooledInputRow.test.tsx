@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import PooledInputRow from "./PooledInputRow";
 import type { PooledInput } from "../lib/derivePooledInputs";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 
 const pooledReview: PooledInput = {
   name: "review",

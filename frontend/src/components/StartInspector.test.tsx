@@ -10,7 +10,7 @@ vi.mock("../api", () => ({
 }));
 
 import StartInspector from "./StartInspector";
-import type { StartNodeInfo } from "../types";
+import type { StartNodeInfo } from "../shared/generated/StartNodeInfo";
 
 function makeStart(input_images: string[] = [], input_files: string[] = []): StartNodeInfo {
   return {
@@ -49,7 +49,8 @@ describe("StartInspector — input files (#779)", () => {
   });
 
   it("renders no file section when the run has none (or the field is absent)", async () => {
-    render(<StartInspector startNode={{ ...makeStart([]), input_files: undefined }} runId="run-1" nodeId="start" />);
+    render(<StartInspector // An older daemon sent no `input_files` at all.
+        startNode={{ ...makeStart([]), input_files: undefined as unknown as string[] }} runId="run-1" nodeId="start" />);
     await screen.findByText("look at these");
     expect(screen.queryByTestId("start-inspector-files")).toBeNull();
   });

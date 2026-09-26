@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Download, TriangleAlert } from "lucide-react";
-import type { UpdateStatus } from "../types";
+import type { UpdateStatus } from "../platform/model/daemon";
 import { activeRunsWarning } from "../lib/updateFlow";
 
 /**

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { renderHook, act } from "@testing-library/react";
-import type { RunState } from "../types";
+import type { RunState } from "../shared/generated/RunState";
 
 // The Diff tab (a sibling tab of the panel) fetches on open, but mock the api
 // module anyway so the unit test never touches the network.
@@ -18,6 +18,9 @@ import { formatDuration, useRunDuration } from "../lib/runDuration";
 
 function makeRun(overrides: Partial<RunState> = {}): RunState {
   return {
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
     run_id: "test-run-stats",
     status: "completed",
     pipeline_name: "test-pipe",
@@ -27,14 +30,14 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
     nodes: {},
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
+    merge_resolver: undefined,
     loop_states: {},
     foreach_states: {},
     sessions_spawned: 1234,
     loc: { insertions: 10, deletions: 3, files_changed: 2 },
-    cost: { usd: 1.2345, partial: false, unpriced_models: [] },
+    cost: { uncosted_harnesses: [], by_harness: [], usd: 1.2345, partial: false, unpriced_models: [] },
     ...overrides,
   };
 }
@@ -138,7 +141,7 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
   });
 
   it("renders '—' for Lines changed when loc is null (cleaned run), not '0'", () => {
-    renderPanel(makeRun({ status: "archived", loc: null }));
+    renderPanel(makeRun({ status: "archived", loc: undefined }));
     const loc = screen.getByTestId("stat-loc");
     expect(loc).toHaveTextContent("—");
     expect(loc).not.toHaveTextContent("+0");
@@ -181,14 +184,14 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
   });
 
   it("uses 4 decimals for sub-dollar estimates", () => {
-    renderPanel(makeRun({ cost: { usd: 0.0525, partial: false, unpriced_models: [] } }));
+    renderPanel(makeRun({ cost: { uncosted_harnesses: [], by_harness: [], usd: 0.0525, partial: false, unpriced_models: [] } }));
     expect(screen.getByTestId("stat-cost")).toHaveTextContent("~$0.0525");
   });
 
   it("marks a partial estimate as a lower bound with a dagger, naming the model (#425)", () => {
     renderPanel(
       makeRun({
-        cost: { usd: 2.5, partial: true, unpriced_models: ["claude-sonnet-5"] },
+        cost: { uncosted_harnesses: [], by_harness: [], usd: 2.5, partial: true, unpriced_models: ["claude-sonnet-5"] },
       }),
     );
     const cost = screen.getByTestId("stat-cost");
@@ -201,7 +204,7 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
   });
 
   it("renders '—' for Est. cost when cost is null (no transcripts), not '$0'", () => {
-    renderPanel(makeRun({ status: "archived", cost: null }));
+    renderPanel(makeRun({ status: "archived", cost: undefined }));
     const cost = screen.getByTestId("stat-cost");
     expect(cost).toHaveTextContent("—");
     expect(cost).not.toHaveTextContent("$");
@@ -212,7 +215,7 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
     // the harness in the tooltip, never a misleading $0.
     renderPanel(
       makeRun({
-        cost: {
+        cost: { by_harness: [],
           usd: 0,
           partial: false,
           unpriced_models: [],
@@ -239,8 +242,8 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
           unpriced_models: [],
           uncosted_harnesses: ["opencode"],
           by_harness: [
-            { harness: "claude", usd: 0.342386, form: "derived", partial: false, unpriced_models: [] },
-            { harness: "copilot", usd: 0.1005058, form: "reported", partial: false, unpriced_models: [] },
+            { reported_in_usd: false, harness: "claude", usd: 0.342386, form: "derived", partial: false, unpriced_models: [] },
+            { reported_in_usd: false, harness: "copilot", usd: 0.1005058, form: "reported", partial: false, unpriced_models: [] },
           ],
         },
       }),
@@ -267,7 +270,7 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
           unpriced_models: [],
           uncosted_harnesses: ["opencode"],
           by_harness: [
-            { harness: "claude", usd: 1.5, form: "derived", partial: false, unpriced_models: [] },
+            { reported_in_usd: false, harness: "claude", usd: 1.5, form: "derived", partial: false, unpriced_models: [] },
           ],
         },
       }),

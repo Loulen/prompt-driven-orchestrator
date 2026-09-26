@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { fetchLibrary } from "../api";
 import type { LibraryEntry } from "../api";
-import type { NodeDef, PortDef } from "../types";
+import type { PortDef } from "../shared/generated/PortDef";
 import { deepEqual } from "../lib/deepEqual";
 import { nodeIsolation, resolveIsolation } from "../lib/nodeIsolation";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 export type LibrarySyncState = "outline" | "synced" | "diverged";
 
@@ -58,7 +59,7 @@ function portsMatch(
 }
 
 export function computeSyncState(
-  node: NodeDef,
+  node: EditorNodeDef,
   prompt: string,
   entries: LibraryEntry[],
 ): LibrarySyncState {
@@ -91,7 +92,7 @@ export function computeSyncState(
 }
 
 export function useLibraryState(
-  node: NodeDef | null,
+  node: EditorNodeDef | null,
   prompt: string,
   entries: LibraryEntry[],
 ): LibrarySyncState {

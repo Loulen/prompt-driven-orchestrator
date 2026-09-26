@@ -17,8 +17,8 @@
  * child follows its parent whatever its own status, and the caller splits on
  * the ROOT's status after `buildRunTree` and before `filterRunTree`.
  */
-import type { RunListEntry } from "../types";
-import { isLiveRun } from "../types";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
+import { isLiveRun } from "../run/model/runStatus";
 import type { ChildCounts } from "./orchestration";
 
 export interface RunTreeNode {

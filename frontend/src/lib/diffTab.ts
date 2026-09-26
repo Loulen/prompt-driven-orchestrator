@@ -1,4 +1,5 @@
-import type { RunState, DiffFile } from "../types";
+import type { RunState } from "../shared/generated/RunState";
+import type { DiffFile } from "../shared/generated/DiffFile";
 
 // Shared constants/helpers of the Diff tab (#748), kept out of the component
 // file so Fast Refresh keeps working and tests can import them.

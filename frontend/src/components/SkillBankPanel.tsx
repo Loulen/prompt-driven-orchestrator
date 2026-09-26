@@ -18,27 +18,13 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  ApiError,
-  createSkillFolder,
-  deleteSkill,
-  deleteSkillFolder,
-  fetchSkill,
-  fetchSkillReferents,
-  rescanSkillFolder,
-  updateSkill,
-  updateSkillFolder,
-  updateSkillFolderFromSource,
-} from "../api";
-import type {
-  Skill,
-  SkillBank,
-  SkillDetail,
-  SkillFolder,
-  SkillReferents,
-  SkillRescanReport,
-  SkillUpdateEntry,
-} from "../types";
+import { ApiError } from "../shared/http/client";
+import { createSkillFolder, deleteSkill, deleteSkillFolder, fetchSkill, fetchSkillReferents, rescanSkillFolder, updateSkill, updateSkillFolder, updateSkillFolderFromSource } from "../api";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillBank, SkillDetail, SkillReferents } from "../skill/model/skill";
+import type { SkillFolder } from "../shared/generated/SkillFolder";
+import type { SkillRescanReport } from "../shared/generated/SkillRescanReport";
+import type { SkillUpdateEntry } from "../shared/generated/SkillUpdateEntry";
 import { timeAgo } from "../lib/skillMd";
 import { displaySourceUrl, shortCommit } from "../lib/skillSource";
 import {

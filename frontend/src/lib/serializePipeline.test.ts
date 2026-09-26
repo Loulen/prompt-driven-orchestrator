@@ -1,15 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { serializePipeline, exportNodeAsYaml } from "./serializePipeline";
-import type { PipelineDef, NodeDef, EdgeDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 describe("serializePipeline round-trip: YAML structural correctness", () => {
-  function makeFullPipeline(extraNodes: NodeDef[], edges: EdgeDef[] = []): PipelineDef {
-    const start: NodeDef = {
+  function makeFullPipeline(extraNodes: EditorNodeDef[], edges: EdgeDef[] = []): EditorPipelineDef {
+    const start: EditorNodeDef = {
       id: "start", name: "Start", type: "start",
       inputs: [], outputs: [{ name: "user_prompt", repeated: false, side: "right" }],
       interactive: false, view: { x: 0, y: 0 },
     };
-    const end: NodeDef = {
+    const end: EditorNodeDef = {
       id: "end", name: "End", type: "end",
       inputs: [{ name: "result", repeated: false, side: "left" }], outputs: [],
       interactive: false, view: { x: 400, y: 0 },
@@ -29,12 +30,12 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes a bounded loops: region block (ADR-0011 / #148)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
     };
-    const rev: NodeDef = {
+    const rev: EditorNodeDef = {
       id: "rev", name: "reviewer", type: "agent",
       inputs: [], outputs: [{ name: "review", repeated: false, side: "right" }],
       interactive: false, view: { x: 300, y: 0 },
@@ -53,7 +54,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes a collection loops: region with its over: field (#269)", () => {
-    const worker: NodeDef = {
+    const worker: EditorNodeDef = {
       id: "worker", name: "worker", type: "agent",
       inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -101,7 +102,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("emits a per-node model override when set (#296)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 }, model: "opus",
@@ -111,7 +112,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("omits model when unset — the byte-identical / no-diverge default (#296)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -123,7 +124,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     // THE angle-blind spot the plan called out: the field lives happily in the
     // store and renders in the inspector even when the serializer forgets it —
     // only reading the emitted YAML proves it persists.
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 }, model: "opus", effort: "low",
@@ -134,7 +135,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("emits an unknown effort level verbatim (#424, free-text wire)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 }, effort: "turbo",
@@ -146,7 +147,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   // — the substring assertions above pass by coincidence (the block CONTAINS
   // "model: opus"); these pin the STRUCTURE and the pin.
   it("folds model/effort under harnesses.claude for an unpinned node (#550)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 }, model: "opus", effort: "low",
@@ -160,7 +161,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("emits pin_harness and folds model under the PINNED harness (#550)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -173,7 +174,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
 
   it("preserves a non-resolved harness's entry across a round-trip (#550)", () => {
     // Editing on the resolved harness (claude) must not clobber opencode's entry.
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -186,7 +187,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("omits harnesses entirely for a plain node (#550, no-diverge default)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -201,7 +202,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     // `effort: ""` in the file would reach the tail as an empty `--effort`, which
     // `claude` answers with a stderr warning and a silent fall back to the default.
     for (const effort of [undefined, null, ""]) {
-      const impl: NodeDef = {
+      const impl: EditorNodeDef = {
         id: "impl", name: "implementer", type: "agent",
         inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
         interactive: false, view: { x: 200, y: 0 }, effort,
@@ -211,7 +212,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes output port with frontmatter at correct indentation", () => {
-    const reviewer: NodeDef = {
+    const reviewer: EditorNodeDef = {
       id: "reviewer", name: "reviewer", type: "agent",
       inputs: [{ name: "code", repeated: false, side: "left" }],
       outputs: [{
@@ -238,7 +239,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes the orchestrator toggle only when on (#723)", () => {
-    const plain: NodeDef = {
+    const plain: EditorNodeDef = {
       id: "plain", name: "plain", type: "agent",
       inputs: [],
       outputs: [{ name: "out", repeated: false, side: "right" }],
@@ -248,7 +249,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     // shape — the key is absent, like `interactive`.
     expect(serializePipeline(makeFullPipeline([plain]))).not.toContain("orchestrator:");
 
-    const orchestrator: NodeDef = {
+    const orchestrator: EditorNodeDef = {
       ...plain,
       id: "orch", name: "orch",
       orchestrator: true,
@@ -259,7 +260,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("round-trips multiline output instructions and omits blank values", () => {
-    const reviewer: NodeDef = {
+    const reviewer: EditorNodeDef = {
       id: "reviewer", name: "reviewer", type: "agent",
       inputs: [],
       outputs: [{
@@ -278,7 +279,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes an edge when clause at correct indentation", () => {
-    const gate: NodeDef = {
+    const gate: EditorNodeDef = {
       id: "gate", name: "gate", type: "agent",
       inputs: [{ name: "in", repeated: false, side: "left" }],
       outputs: [{ name: "out", repeated: false, side: "right" }],
@@ -307,7 +308,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes a manual edge's mode and waypoints (shareable routing, #154)", () => {
-    const gate: NodeDef = {
+    const gate: EditorNodeDef = {
       id: "gate", name: "gate", type: "agent",
       inputs: [{ name: "in", repeated: false, side: "left" }],
       outputs: [{ name: "out", repeated: false, side: "right" }],
@@ -335,7 +336,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("omits routing fields for an auto edge (no waypoints stored, #154)", () => {
-    const gate: NodeDef = {
+    const gate: EditorNodeDef = {
       id: "gate", name: "gate", type: "agent",
       inputs: [{ name: "in", repeated: false, side: "left" }],
       outputs: [{ name: "out", repeated: false, side: "right" }],
@@ -356,7 +357,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes an edge's target_side so the drop-position anchor survives reload (#168)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "impl", type: "agent",
       inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -374,7 +375,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("omits target_side for a left-anchored (legacy) edge (#168)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "impl", type: "agent",
       inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -391,7 +392,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes both per-edge anchors, rounded, so the wiring survives reload (#844)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "impl", type: "agent",
       inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -416,7 +417,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("omits the anchors on an edge that was never wired by hand (#844)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "impl", type: "agent",
       inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -436,7 +437,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes an edge's label layout and draw order (#845)", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "impl", type: "agent",
       inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -463,7 +464,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("omits every #845 label field an edge never set", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "impl", type: "agent",
       inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -492,7 +493,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes show_output_labels: true — the toggle has no constant default to fall back on", () => {
-    const impl: NodeDef = {
+    const impl: EditorNodeDef = {
       id: "impl", name: "impl", type: "agent",
       inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false, view: { x: 200, y: 0 },
@@ -513,7 +514,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes multi-field frontmatter with all fields at same depth", () => {
-    const node: NodeDef = {
+    const node: EditorNodeDef = {
       id: "multi", name: "multi", type: "agent",
       inputs: [{ name: "in", repeated: false }],
       outputs: [{
@@ -543,7 +544,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes a deeply nested edge when clause with in-predicate correctly", () => {
-    const gate: NodeDef = {
+    const gate: EditorNodeDef = {
       id: "gate", name: "gate", type: "agent",
       inputs: [{ name: "in", repeated: false, side: "left" }],
       outputs: [{ name: "out", repeated: false, side: "right" }],
@@ -569,7 +570,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   });
 
   it("serializes pipeline with variables correctly", () => {
-    const pipeline: PipelineDef = {
+    const pipeline: EditorPipelineDef = {
       name: "vars-test", version: "1.0",
       variables: {
         max_iter: { type: "int", default: 5 },
@@ -597,7 +598,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
 });
 
 describe("serializePipeline persists edge when/else (ADR-0011)", () => {
-  function makeEdgePipeline(edges: EdgeDef[]): PipelineDef {
+  function makeEdgePipeline(edges: EdgeDef[]): EditorPipelineDef {
     return {
       name: "edge-when-test",
       version: "1.0",
@@ -724,8 +725,8 @@ describe("serializePipeline persists edge when/else (ADR-0011)", () => {
 });
 
 describe("serializePipeline persists port_type", () => {
-  function makePipelineWithTypedPorts(): PipelineDef {
-    const tester: NodeDef = {
+  function makePipelineWithTypedPorts(): EditorPipelineDef {
+    const tester: EditorNodeDef = {
       id: "9NOnrpKY",
       name: "Tester",
       type: "agent",
@@ -765,7 +766,7 @@ describe("serializePipeline persists port_type", () => {
   // #333: an `html` output port round-trips as `port_type: html` (emitted only
   // because it is non-default), so a saved pipeline preserves it.
   it("emits port_type: html for an html output port", () => {
-    const designer: NodeDef = {
+    const designer: EditorNodeDef = {
       id: "designer0",
       name: "Designer",
       type: "agent",
@@ -792,7 +793,7 @@ describe("serializePipeline persists port_type", () => {
 });
 
 describe("exportNodeAsYaml (#345)", () => {
-  function node(overrides: Partial<NodeDef> = {}): NodeDef {
+  function node(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
     return {
       id: "abc12345",
       name: "Reviewer",
@@ -945,7 +946,7 @@ describe("exportNodeAsYaml (#345)", () => {
  * reads as twin drift.
  */
 describe("serializePipeline strips null frontmatter keys (#457)", () => {
-  function withFrontmatter(frontmatter: NodeDef["outputs"][number]["frontmatter"]): PipelineDef {
+  function withFrontmatter(frontmatter: EditorNodeDef["outputs"][number]["frontmatter"]): EditorPipelineDef {
     return {
       name: "fm-test", version: "1.0", variables: {},
       nodes: [{
@@ -996,10 +997,10 @@ describe("serializePipeline strips null frontmatter keys (#457)", () => {
  * makes the reader recall a default; one that states it does not.
  */
 describe("isolated_worktree emission (#653)", () => {
-  function pipelineWith(node: NodeDef): PipelineDef {
+  function pipelineWith(node: EditorNodeDef): EditorPipelineDef {
     return { name: "iso", version: "1.0", variables: {}, nodes: [node], edges: [] };
   }
-  function agent(overrides: Partial<NodeDef> = {}): NodeDef {
+  function agent(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
     return {
       id: "impl", name: "implementer", type: "agent",
       inputs: [], outputs: [], interactive: false, view: { x: 0, y: 0 },
@@ -1045,7 +1046,7 @@ describe("isolated_worktree emission (#653)", () => {
 
 describe("provisioning pattern emission", () => {
   it("quotes YAML-significant gitignore patterns", () => {
-    const pipeline: PipelineDef = {
+    const pipeline: EditorPipelineDef = {
       name: "provisioning",
       version: "1.0",
       variables: {},

@@ -1,4 +1,4 @@
-import type { NodeType } from "./types";
+import type { NodeType } from "./shared/generated/NodeType";
 
 const FIRST_CLASS_DESCRIPTIONS: Partial<
   Record<NodeType, Record<string, string>>

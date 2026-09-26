@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
-import type { PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
 import { rimHandleId } from "../lib/anchorSide";
 import { WIRE_BG } from "../lib/wiringColors";
 

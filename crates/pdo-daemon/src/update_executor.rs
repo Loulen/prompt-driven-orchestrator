@@ -27,6 +27,7 @@
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use ts_rs::TS;
 
 use crate::update_check::{InstallMethod, Supervision};
 
@@ -43,7 +44,8 @@ pub const INSTALL_METHOD_OVERRIDE_ENV: &str = "PDO_INSTALL_METHOD";
 pub(crate) const ATTEMPT_SCHEMA: &str = "update-attempt-v1";
 
 /// Outcome of an attempt, as the record on disk reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "UpdateAttemptStatus")]
 #[serde(rename_all = "lowercase")]
 pub enum AttemptStatus {
     /// Spawned; the daemon (or the script) has not recorded an end yet.
@@ -54,7 +56,8 @@ pub enum AttemptStatus {
 
 /// The last update attempt — what Settings › Version & update shows afterwards,
 /// including in failure.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct UpdateAttempt {
     #[serde(default)]
     pub schema: String,

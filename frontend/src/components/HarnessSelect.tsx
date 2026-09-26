@@ -7,8 +7,8 @@ import {
   DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuItem,
-} from "./ui/dropdown-menu";
-import { cn } from "@/lib/utils";
+} from "../shared/ui/dropdown-menu";
+import { cn } from "@/shared/lib/utils";
 import type { HarnessCatalog, HarnessOption } from "../lib/harness";
 
 /** The resolved row's marker: an accent bar flush left and a check, both in the

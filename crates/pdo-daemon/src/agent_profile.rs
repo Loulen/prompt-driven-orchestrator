@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use std::collections::BTreeMap;
 use std::fmt;
+use ts_rs::TS;
 
 use crate::agent_choice::ResolvedCombo;
 
@@ -45,14 +46,17 @@ pub(crate) const DEFAULT_PROFILE_NAME: &str = "Default";
 /// a required `harness`, and an optional `model` / `effort` — the same shape a
 /// node's `Custom` choice carries inline (ADR-0057 ¶1: "Custom porte la même
 /// forme qu'un profil").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct AgentProfile {
     pub id: String,
     pub name: String,
     pub harness: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub effort: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -137,7 +141,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
         .await?
         .is_some();
     if !exists {
-        let now = crate::event_log::now_iso();
+        let now = pdo_kernel::clock::now_iso();
         sqlx::query(
             "INSERT INTO agent_profiles (id, name, harness, model, effort, created_at, updated_at) \
              VALUES (?, ?, ?, NULL, NULL, ?, ?)",
@@ -281,7 +285,7 @@ pub(crate) async fn create(
 ) -> Result<AgentProfile, AgentProfileError> {
     let (name, harness) = validate_name_and_harness(db, name, harness, None).await?;
     let id = generate_profile_id();
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     let model = model.map(str::trim).filter(|s| !s.is_empty());
     let effort = effort.map(str::trim).filter(|s| !s.is_empty());
     sqlx::query(
@@ -330,7 +334,7 @@ pub(crate) async fn update(
         return Err(AgentProfileError::NotFound);
     }
     let (name, harness) = validate_name_and_harness(db, name, harness, Some(id)).await?;
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     let model = model.map(str::trim).filter(|s| !s.is_empty());
     let effort = effort.map(str::trim).filter(|s| !s.is_empty());
     sqlx::query(

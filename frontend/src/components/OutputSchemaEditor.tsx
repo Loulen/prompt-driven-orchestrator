@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
-import type { FrontmatterFieldDecl } from "../types";
+import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
 
 const FIELD_TYPES = ["enum", "int", "string", "bool", "list"] as const;
 type FieldType = (typeof FIELD_TYPES)[number];

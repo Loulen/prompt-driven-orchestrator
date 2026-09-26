@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand } from "lucide-react";
-import { Tooltip } from "./ui/tooltip";
+import { Tooltip } from "../shared/ui/tooltip";
 import { attachSession, fetchPane } from "../api";
 import {
   clipboardKeyAction,

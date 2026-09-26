@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
-import type { RunRefs } from "../../types";
+import type { RunRefs } from "../../shared/generated/RunRefs";
 import { pairOfDelivery, refById, shortSha } from "../../lib/runRefs";
 import type { RefPair } from "../../lib/runRefs";
 

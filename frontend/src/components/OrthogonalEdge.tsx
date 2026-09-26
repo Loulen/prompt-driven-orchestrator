@@ -31,7 +31,10 @@ import { mergeAlignedSegments, snapPolyline } from "../lib/wiringGrid";
 import { useWiringGridStep } from "../hooks/useWiringGrid";
 import { useWiringStore } from "../stores/wiringStore";
 import { useEditStore } from "../stores/editStore";
-import type { EdgeAnchor, EdgeDef, EdgeWaypoint, PortSide } from "../types";
+import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EdgeWaypoint } from "../shared/generated/EdgeWaypoint";
+import type { PortSide } from "../shared/generated/PortSide";
 import { EDGE_LABELS_ABOVE_NODES, EDGE_LABELS_UNDER_NODES } from "./editNodeDerivation";
 
 /**

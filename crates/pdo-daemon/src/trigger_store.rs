@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use ts_rs::TS;
 
 /// serde default for [`Trigger::auto_name`]: a Trigger deserialised from a
 /// payload predating the field keeps auto-naming, matching the column default.
@@ -19,7 +20,8 @@ fn default_true() -> bool {
 }
 
 /// A persisted Trigger row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct Trigger {
     pub id: String,
     pub name: String,
@@ -29,35 +31,42 @@ pub(crate) struct Trigger {
     #[serde(default)]
     pub pipeline_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub target_repo: Option<String>,
     /// Read-only secondary repos to associate with fired Runs (ADR-0042), stored
     /// as raw JSON TEXT (`[{repo, base_branch?}]`) so `trigger_store` stays
     /// decoupled from lib's request types. `None`/blank → mono-repo fire. The
     /// create chokepoint re-freezes each secondary's SHA at fire time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub target_repos: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub source_branch: Option<String>,
     #[serde(default)]
     pub input_template: String,
     /// Variable overrides as a JSON object (stored as a JSON string).
     #[serde(default)]
+    #[ts(type = "Record<string, unknown>")]
     pub variables: serde_json::Value,
     /// 5-field cron expression.
     pub cron: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub guard_command: Option<String>,
     /// `"skip"` (default) or `"allow"`.
     pub overlap_policy: String,
     /// Bounded-`allow` ceiling: max simultaneous live Runs of this Trigger.
     /// `None` = unbounded (also the effective value under the `skip` policy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub max_concurrent: Option<i64>,
     /// Per-Trigger sandbox mode (`"off"` | `"full"` | `"minimal"`), or `None` to
     /// inherit the instance default. Read at fire time and folded into the create
     /// request's explicit tier; the create chokepoint resolves the precedence
     /// (run → trigger → instance default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub sandbox: Option<String>,
     /// The agentic harness fired Runs launch on (ADR-0046), or `None` to inherit
     /// the instance default. There is NO separate Trigger tier in the precedence
@@ -67,11 +76,13 @@ pub(crate) struct Trigger {
     /// through `fire_one_trigger`, so they freeze the SAME harness. Free text, no
     /// validation (ADR-0045): an unknown name fails fast at the first node spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub harness: Option<String>,
     /// The Run tier of the agentic-profile union (ADR-0057). Read at fire time
     /// and folded into the create request's `run` choice, exactly like
     /// [`Self::harness`]. `None` ⇒ `harness` (and the tiers below it) decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// The skills a fired Run carries at its **Run** tier (#669, ADR-0062). Read
     /// at fire time and folded into the create request's `skills`, exactly like
@@ -90,10 +101,13 @@ pub(crate) struct Trigger {
     /// The due query ([`due_triggers`]) is nonetheless tz-normalised so a legacy
     /// or stray-offset row can never silently go dormant (#222).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub next_fire_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub last_fired_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub last_outcome: Option<String>,
 }
 
@@ -129,7 +143,8 @@ pub(crate) struct NewTrigger {
 }
 
 /// One audit row in `trigger_fires`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct TriggerFire {
     pub id: i64,
     pub trigger_id: String,
@@ -137,20 +152,26 @@ pub(crate) struct TriggerFire {
     /// `fired` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error` / `error`.
     pub outcome: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub run_id: Option<String>,
     /// Guard diagnostics on a `guard-exit-nonzero` row. NULL on every other
     /// outcome and on legacy rows; tail-capped to 16 KB each (`guard_runner`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub guard_stdout: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub guard_stderr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub guard_exit_code: Option<i32>,
     /// `"manual"` for a Run-now click, `"cron"` for a scheduler tick. NULL on
     /// legacy rows ≈ cron.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub source: Option<String>,
 }
 
@@ -359,7 +380,7 @@ pub(crate) fn generate_trigger_id() -> String {
 /// Insert a new Trigger, returning the stored row.
 pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::Error> {
     let id = generate_trigger_id();
-    let now = crate::event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     let variables_str = serde_json::to_string(&new.variables).unwrap_or_else(|_| "{}".to_string());
 
     sqlx::query(
@@ -495,7 +516,7 @@ pub(crate) async fn record_fire(
     trigger_id: &str,
     record: &FireRecord,
 ) -> Result<(), sqlx::Error> {
-    let ts = crate::event_log::now_iso();
+    let ts = pdo_kernel::clock::now_iso();
     sqlx::query(
         "INSERT INTO trigger_fires
             (trigger_id, ts, outcome, reason, run_id,

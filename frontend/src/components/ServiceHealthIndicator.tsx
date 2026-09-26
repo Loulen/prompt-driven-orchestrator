@@ -1,4 +1,4 @@
-import type { ServiceHealth } from "../types";
+import type { ServiceHealth } from "../shared/generated/ServiceHealth";
 
 interface Props {
   /** The daemon's cached service health, or undefined until it responds. */

@@ -7,15 +7,12 @@ import {
   EDGE_ABOVE_NODES,
   EDGE_UNDER_NODES,
 } from "./editNodeDerivation";
-import type {
-  LoopRegion,
-  NodeDef,
-  NodeType,
-  PipelineDef,
-  PortSide,
-  RunState,
-  RunStatus,
-} from "../types";
+import type { LoopRegion } from "../shared/generated/LoopRegion";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortSide } from "../shared/generated/PortSide";
+import type { RunState } from "../shared/generated/RunState";
+import type { RunStatus } from "../shared/generated/RunStatus";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 describe("runReachedEnd", () => {
   it("is true only when the run completed successfully", () => {
@@ -38,7 +35,7 @@ describe("runReachedEnd", () => {
 });
 
 describe("deriveEditEdges targetHandle anchoring (#149)", () => {
-  function node(id: string, type: NodeType, inputs: string[], outputs: string[]): NodeDef {
+  function node(id: string, type: NodeType, inputs: string[], outputs: string[]): EditorNodeDef {
     return {
       id,
       name: id,
@@ -49,7 +46,7 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     };
   }
 
-  function pipeline(nodes: NodeDef[], edges: PipelineDef["edges"]): PipelineDef {
+  function pipeline(nodes: EditorNodeDef[], edges: EditorPipelineDef["edges"]): EditorPipelineDef {
     return { name: "p", variables: {}, nodes, edges };
   }
 
@@ -98,7 +95,7 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
       // the output dot, which sat on the port's declared side. Defaulting them
       // to the right rim sent every one out the wrong border, back across its
       // own card and into the target from the opposite side.
-      const src: NodeDef = {
+      const src: EditorNodeDef = {
         ...node("src", "agent", [], []),
         outputs: [
           { name: "other", repeated: false, side: "right" },
@@ -117,7 +114,7 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
   );
 
   it("lets a drawn anchor win over the output's declared side", () => {
-    const src: NodeDef = {
+    const src: EditorNodeDef = {
       ...node("src", "agent", [], []),
       outputs: [{ name: "plan", repeated: false, side: "bottom" }],
     };
@@ -229,7 +226,7 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
   // mistook that for a fixed-side declared port and forced every incoming edge
   // to the left handle. Anchoring is keyed on node TYPE now, so a 1-input work
   // node anchors by drop on any side, exactly like a migrated 0-input one.
-  function workNode(id: string, type: NodeType, outputs: string[]): NodeDef {
+  function workNode(id: string, type: NodeType, outputs: string[]): EditorNodeDef {
     return {
       id,
       name: id,
@@ -241,7 +238,7 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
     };
   }
 
-  function pipelineWith(targetSide: PortSide | undefined): PipelineDef {
+  function pipelineWith(targetSide: PortSide | undefined): EditorPipelineDef {
     return {
       name: "p",
       variables: {},
@@ -284,7 +281,7 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
 });
 
 describe("deriveLoopRegions — collection regions (#151)", () => {
-  function node(id: string, type: NodeType, outputs: string[]): NodeDef {
+  function node(id: string, type: NodeType, outputs: string[]): EditorNodeDef {
     return {
       id,
       name: id,
@@ -296,7 +293,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     };
   }
 
-  function pipelineWith(nodes: NodeDef[], loops: LoopRegion[]): PipelineDef {
+  function pipelineWith(nodes: EditorNodeDef[], loops: LoopRegion[]): EditorPipelineDef {
     return { name: "p", variables: {}, nodes, edges: [], loops };
   }
 
@@ -371,6 +368,11 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
   /// region resolved to `totalItems` (omit for a run with no projected region).
   function liveRun(lapsReached: number, totalItems?: number): RunState {
     return {
+      loop_states: {},
+      foreach_states: {},
+      switch_states: {},
+      sandbox: "off",
+      sessions_spawned: 0,
       run_id: "run-1",
       pipeline_name: "p",
       status: "running",
@@ -378,7 +380,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
       started_at: null,
       completed_at: null,
       nodes: {
-        fixer: {
+        fixer: { frontmatter_retries: 0,
           node_id: "fixer",
           status: "completed",
           iter: lapsReached,
@@ -390,17 +392,19 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
       },
       edges: [],
       node_defs: [],
-      start_node: null,
-      end_node: null,
-      merge_resolver: null,
+      start_node: undefined,
+      end_node: undefined,
+      merge_resolver: undefined,
       ...(totalItems == null
-        ? {}
+        ? { collection_states: {} }
         : {
             collection_states: {
               "per-issue": {
                 region_id: "per-issue",
                 total_items: totalItems,
                 done: false,
+                entry: "",
+                members: [],
               },
             },
           }),
@@ -454,7 +458,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
 // and its condition pill names the output each predicate reads as soon as there
 // is more than one to choose from.
 describe("deriveEditEdges — multi-output edges (#843)", () => {
-  function node(id: string, outputs: string[]): NodeDef {
+  function node(id: string, outputs: string[]): EditorNodeDef {
     return {
       id,
       name: id,
@@ -465,7 +469,7 @@ describe("deriveEditEdges — multi-output edges (#843)", () => {
     };
   }
 
-  function pipeline(edges: PipelineDef["edges"]): PipelineDef {
+  function pipeline(edges: EditorPipelineDef["edges"]): EditorPipelineDef {
     return {
       name: "p",
       variables: {},
@@ -516,7 +520,7 @@ describe("deriveEditEdges — multi-output edges (#843)", () => {
 // layout fields — the toggle's DEFAULT from how many outputs the source node
 // declares, never from how many this edge happens to carry.
 describe("deriveEditEdges — labels and draw order (#845)", () => {
-  function node(id: string, outputs: string[]): NodeDef {
+  function node(id: string, outputs: string[]): EditorNodeDef {
     return {
       id,
       name: id,
@@ -527,7 +531,7 @@ describe("deriveEditEdges — labels and draw order (#845)", () => {
     };
   }
 
-  function pipeline(sourceOutputs: string[], edges: PipelineDef["edges"]): PipelineDef {
+  function pipeline(sourceOutputs: string[], edges: EditorPipelineDef["edges"]): EditorPipelineDef {
     return {
       name: "p",
       variables: {},

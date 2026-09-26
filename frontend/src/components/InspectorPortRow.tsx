@@ -1,6 +1,6 @@
-import type { PortDef } from "../types";
+import type { PortDef } from "../shared/generated/PortDef";
 import SidePicker from "./SidePicker";
-import { Tooltip } from "./ui/tooltip";
+import { Tooltip } from "../shared/ui/tooltip";
 
 interface InspectorPortRowProps {
   port: PortDef;

@@ -16,7 +16,8 @@ import type {
   MarkNodeDoneOutcome,
   ReleaseNodeCompletionOutcome,
 } from "../api";
-import type { NodeState, NodeStatus } from "../types";
+import type { NodeState } from "../shared/generated/NodeState";
+import type { NodeStatus } from "../shared/generated/NodeStatus";
 
 function pollInterval(status: NodeStatus): number | null {
   switch (status) {
@@ -33,7 +34,9 @@ function pollInterval(status: NodeStatus): number | null {
     case "stopped":
     case "interrupted":
       return 5000;
+    // Not started yet: `waiting` is admission-throttled (session cap).
     case "pending":
+    case "waiting":
       return null;
   }
 }
@@ -161,7 +164,7 @@ export function useNodeRun(
   }, [runId, node.node_id, selectedIter, shouldFetchPrompt]);
 
   useEffect(() => {
-    const oneShot = isStaleIter || (interval === null && node.status === "pending");
+    const oneShot = isStaleIter || (interval === null && (node.status === "pending" || node.status === "waiting"));
 
     if (oneShot) {
       let cancelled = false;

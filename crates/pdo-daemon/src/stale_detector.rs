@@ -527,7 +527,7 @@ pub fn detection_events(
     vec![event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
@@ -632,7 +632,7 @@ fn informational_event(
     event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
@@ -961,7 +961,7 @@ mod tests {
         // The two encoders are unified on one implementation (#373): they must
         // never drift again.
         for dir in [
-            "/home/llenoir/Documents/perso/Maestro/.pdo/runs/2026-abc/nodes/n1/iter-1",
+            "/home/user/code/pdo/.pdo/runs/2026-abc/nodes/n1/iter-1",
             "/home/u/.claude",
             "/tmp/x.y.z",
         ] {
@@ -1423,7 +1423,7 @@ SwapFree:         204800 kB
             Event {
                 id: None,
                 run_id: "test-run".to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind,
                 node_id: node_id.map(String::from),
                 iter,
@@ -1509,11 +1509,11 @@ SwapFree:         204800 kB
         let projects = tmp.path().join(".claude").join("projects");
 
         let node_dir =
-            Path::new("/home/llenoir/Documents/perso/Maestro/.pdo/runs/20260623-100032-9b8331b/nodes/gzpYZA2m/iter-1");
+            Path::new("/home/user/code/pdo/.pdo/runs/20260623-100032-9b8331b/nodes/gzpYZA2m/iter-1");
 
         // The transcript dir CC writes: leading `-`, `.pdo` → `--pdo`.
         let cc_name = projects
-            .join("-home-llenoir-Documents-perso-Maestro--pdo-runs-20260623-100032-9b8331b-nodes-gzpYZA2m-iter-1");
+            .join("-home-user-code-pdo--pdo-runs-20260623-100032-9b8331b-nodes-gzpYZA2m-iter-1");
         std::fs::create_dir_all(&cc_name).unwrap();
         std::fs::write(cc_name.join("session.jsonl"), "{}").unwrap();
 
@@ -1996,7 +1996,7 @@ SwapFree:         204800 kB
         let prior = vec![event_log::Event {
             id: None,
             run_id: "run1".to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: EventKind::NodeBlockedOnLimit,
             node_id: Some("worker".to_string()),
             iter: Some(1),

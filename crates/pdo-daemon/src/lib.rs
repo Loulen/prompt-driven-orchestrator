@@ -28,6 +28,7 @@ mod frontmatter_parser;
 mod graph_resolver;
 mod guard_runner;
 mod harness_argv;
+mod harness_binary;
 mod harness_catalogue;
 mod harness_probes;
 pub mod harness_registry;
@@ -127,6 +128,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{error, info, warn};
+use ts_rs::TS;
 
 use crate::node_spawn::SpawnContext;
 #[cfg(test)]
@@ -838,12 +840,14 @@ fn reject_unknown_create_run_fields(
 /// `base_branch` defaults to `HEAD`, the LOCAL ref — there is no fetch. Index
 /// `[0]` is the primary; `[1..]` become secondary snapshots. Shared by create,
 /// `PATCH /runs/{id}/repos` (`add`) and the trigger `target_repos` blob.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, optional_fields = nullable)]
 struct TargetRepoInput {
     repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base_branch: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
     read_only: bool,
 }
 
@@ -867,12 +871,14 @@ struct PatchRunReposRequest {
     remove: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct CreateRunResponse {
     run_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct RunListEntry {
     run_id: String,
     pipeline_name: String,
@@ -885,25 +891,32 @@ struct RunListEntry {
     /// Why the Run ended non-green. Carried on the *list* entry so the red dot has
     /// something to say.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     failure_reason: Option<String>,
     /// Why the Run is parked `AwaitingUser` on an **incident** (ADR-0049), and its
     /// machine slug. On the list entry for the same reason as `failure_reason`.
     /// `None` for an interactive wait, which carries no incident reason.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     awaiting_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     awaiting_reason_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     name: Option<String>,
     /// Provenance: the Trigger that created this Run, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     triggered_by: Option<String>,
     /// Provenance: the parent Run + node whose session created this Run
     /// (ADR-0064) — the key the "orchestrated" badge and the "root runs only"
     /// filter read. `None` on a root run. Mechanical: never caller-declared.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     parent_run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     parent_node_id: Option<String>,
     /// Resolved target repo for "group by project": the run's `target_repo`, or
     /// the daemon's `repo_root` when unset. Only runs predating the hardened
@@ -917,7 +930,8 @@ struct RunListEntry {
 /// `trigger.target_repo`: the raw value drives the row badge, the detail panel and
 /// the Run-now pre-fill, while this one exists purely so the client can group by a
 /// concrete path.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct TriggerListEntry {
     #[serde(flatten)]
     trigger: trigger_store::Trigger,
@@ -965,9 +979,11 @@ struct ProjectMemberRequest {
     path: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct PipelineVariableInfo {
     var_type: pipeline::VariableType,
+    #[ts(type = "unknown")]
     default: serde_json::Value,
 }
 
@@ -1069,8 +1085,11 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
 
     let endpoint = format!("{url}/runs/{rid}/nodes/{nid}/done");
     let client = reqwest::blocking::Client::new();
+    // The session headers identify the caller as this node's Agent (#915).
     let resp = match client
         .post(&endpoint)
+        .header(SESSION_RUN_HEADER, &rid)
+        .header(SESSION_NODE_HEADER, &nid)
         .json(&serde_json::json!({ "iter": iter, "auto": auto }))
         .send()
     {
@@ -1182,6 +1201,8 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
         .filter(|m| !m.is_empty());
     let resp = match reqwest::blocking::Client::new()
         .post(format!("{url}/runs/{rid}/nodes/{nid}/wait-user"))
+        .header(SESSION_RUN_HEADER, &rid)
+        .header(SESSION_NODE_HEADER, &nid)
         .json(&serde_json::json!({ "iter": iter, "message": message }))
         .send()
     {
@@ -1448,6 +1469,8 @@ pub fn run_fail(reason: String) -> Result<()> {
     let client = reqwest::blocking::Client::new();
     let resp = client
         .post(&endpoint)
+        .header(SESSION_RUN_HEADER, &rid)
+        .header(SESSION_NODE_HEADER, &nid)
         .json(&serde_json::json!({ "reason": reason, "iter": iter }))
         .send()
         .context("failed to reach daemon")?;
@@ -1475,6 +1498,8 @@ pub fn run_skip(reason: String) -> Result<()> {
     let client = reqwest::blocking::Client::new();
     let resp = client
         .post(&endpoint)
+        .header(SESSION_RUN_HEADER, &rid)
+        .header(SESSION_NODE_HEADER, &nid)
         .json(&serde_json::json!({ "reason": reason, "iter": iter }))
         .send()
         .context("failed to reach daemon")?;
@@ -2257,7 +2282,7 @@ pub fn run_reap(
 
 /// What the port-conflict pre-flight probe found on `127.0.0.1:<port>`.
 ///
-/// Two daemons can never share a port (`run_daemon` binds with no `SO_REUSEADDR`
+/// Two daemons can never share a port (`pdo daemon` binds with no `SO_REUSEADDR`
 /// / retry — an `EADDRINUSE` propagates and the process exits), so an enabled unit
 /// colliding with an already-bound port would crash-loop under
 /// `Restart=on-failure`. Classify the port so `install` refuses loudly or degrades
@@ -2967,7 +2992,7 @@ impl DaemonHandle {
             &event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -2990,7 +3015,8 @@ impl DaemonHandle {
 /// **Accepted staleness:** install happens out-of-process, so a daemon already
 /// running when the service is installed keeps a stale value until it restarts.
 /// The normal flow is install-then-run (ADR-0019).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 struct ServiceHealth {
     /// How THIS process was launched, best-effort from env markers:
     /// `"systemd"` | `"launchd"` | `"none"`. A diagnostic hint, not a guarantee
@@ -3129,7 +3155,7 @@ pub struct DaemonConfig {
     pub service_health_override: Option<ServiceHealthOverride>,
     /// Per-daemon override for the `docker` binary invoked by the sandbox wiring,
     /// so no test needs a real docker daemon. Read once at boot from
-    /// [`sandbox_image::DOCKER_CMD_OVERRIDE_ENV`].
+    /// [`pdo_kernel::env::DOCKER_CMD_OVERRIDE_ENV`].
     pub docker_cmd_override: Option<String>,
     /// Per-daemon override for the sandbox **home root**. `None` → the real
     /// `$HOME` (staging under `$HOME/.pdo/sandbox`, `.claude` copied from
@@ -3163,7 +3189,7 @@ pub struct DaemonConfig {
     /// `XPC_SERVICE_NAME`. No env seam: a test sets those variables on a real binary.
     pub supervision_override: Option<update_check::Supervision>,
     /// The daemon's own command line for an unsupervised relaunch (#699), argv form.
-    /// `run_daemon` fills it; `None` → `<stable exe> daemon --port <bound port>`.
+    /// `daemon_cli_config` fills it; `None` → `<stable exe> daemon --port <bound port>`.
     pub relaunch_command: Option<Vec<String>>,
     /// Run the ~30 s background Trigger-scheduler loop. `true` in production;
     /// `false` in the layer-3 test literals, because `tokio::time::interval` fires
@@ -3208,6 +3234,31 @@ pub struct DaemonConfig {
     /// would let any page on that port attach a PTY in production. It is fixed on
     /// the frontend with `rewriteWsOrigin` in `vite.config.ts`.
     pub allowed_ws_origins: Vec<String>,
+    /// Wraps the assembled router before it is served. The composition root
+    /// (`pdo::serve`) puts the `identify` middleware there, at the head of every
+    /// request; `None` serves the router as built.
+    pub router_layer: Option<RouterLayer>,
+}
+
+/// A transformation of the daemon's router, applied once at boot (see
+/// [`DaemonConfig::router_layer`]).
+#[derive(Clone)]
+pub struct RouterLayer(Arc<dyn Fn(Router) -> Router + Send + Sync>);
+
+impl RouterLayer {
+    pub fn new(layer: impl Fn(Router) -> Router + Send + Sync + 'static) -> Self {
+        Self(Arc::new(layer))
+    }
+
+    pub fn apply(&self, router: Router) -> Router {
+        (self.0)(router)
+    }
+}
+
+impl std::fmt::Debug for RouterLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RouterLayer(..)")
+    }
 }
 
 /// Resolve the daemon's cleanup posture from the two env signals production
@@ -3230,7 +3281,7 @@ impl DaemonConfig {
     /// of the hot paths.
     pub fn from_env() -> Self {
         Self {
-            tmux_cmd_override: std::env::var(tmux_session_manager::TMUX_CMD_OVERRIDE_ENV).ok(),
+            tmux_cmd_override: std::env::var(pdo_kernel::env::TMUX_CMD_OVERRIDE_ENV).ok(),
             panic_on_trigger_name: std::env::var("PDO_DEBUG_PANIC_TRIGGER").ok(),
             panic_on_stale_sweep: std::env::var("PDO_DEBUG_PANIC_STALE")
                 .map(|v| !v.is_empty() && v != "0")
@@ -3242,7 +3293,7 @@ impl DaemonConfig {
             service_health_override: std::env::var("PDO_SERVICE_HEALTH")
                 .ok()
                 .and_then(|v| ServiceHealthOverride::parse(&v)),
-            docker_cmd_override: std::env::var(sandbox_image::DOCKER_CMD_OVERRIDE_ENV).ok(),
+            docker_cmd_override: std::env::var(pdo_kernel::env::DOCKER_CMD_OVERRIDE_ENV).ok(),
             sandbox_home_override: std::env::var("PDO_SANDBOX_HOME_OVERRIDE")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -3290,6 +3341,8 @@ impl DaemonConfig {
             allowed_ws_origins: std::env::var(pty_bridge::ALLOWED_WS_ORIGINS_ENV)
                 .map(|v| pty_bridge::parse_allowed_origins(&v))
                 .unwrap_or_default(),
+
+            router_layer: None,
         }
     }
 }
@@ -3421,6 +3474,7 @@ pub async fn serve_with_config(
     let run_trigger_scheduler_loop = config.run_trigger_scheduler_loop;
     let run_update_check_loop = config.run_update_check_loop;
     let nested_daemon = config.nested_daemon;
+    let router_layer = config.router_layer.clone();
 
     let state = Arc::new(AppState {
         db,
@@ -3492,6 +3546,10 @@ pub async fn serve_with_config(
     }
 
     let app = build_router(state.clone());
+    let app = match &router_layer {
+        Some(layer) => layer.apply(app),
+        None => app,
+    };
 
     // #541: the bind address (`0.0.0.0`) is deliberate (#260) but is NOT a URL a
     // browser can use — the WS Origin guard (#564) only knows `localhost` and
@@ -3679,17 +3737,22 @@ fn daemon_relaunch_command(exe: &Path, bind: Option<IpAddr>, port: u16) -> Vec<S
     command
 }
 
-pub async fn run_daemon(bind: Option<IpAddr>, port: u16) -> Result<()> {
-    let addr = SocketAddr::new(bind.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), port);
-    let repo_root = std::env::current_dir().context("failed to determine current directory")?;
+/// The address `pdo daemon` listens on: `--bind` (every interface by default)
+/// and `--port`.
+pub fn daemon_bind_addr(bind: Option<IpAddr>, port: u16) -> SocketAddr {
+    SocketAddr::new(bind.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), port)
+}
+
+/// The configuration of `pdo daemon`: the environment, read once, plus the
+/// command line an unsupervised update relaunches.
+pub fn daemon_cli_config(bind: Option<IpAddr>, port: u16) -> DaemonConfig {
     let mut config = DaemonConfig::from_env();
     // #699: the command line an unsupervised update relaunches — the STABLE binary
     // path (Homebrew's `bin/pdo`, not the Cellar target `brew upgrade` deletes) and
     // the same port, whether it came from `--port` or `PDO_PORT`.
     config.relaunch_command =
         update_check::invoked_exe_path().map(|exe| daemon_relaunch_command(&exe, bind, port));
-    let handle = serve_with_config(addr, repo_root, config).await?;
-    handle.task.await.context("daemon task join error")?
+    config
 }
 
 #[derive(Deserialize)]
@@ -3933,7 +3996,8 @@ struct BrowseQuery {
     hidden: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct BrowseEntry {
     name: String,
     /// `canonical_dir.join(name)` — NOT re-canonicalized, so a symlinked child keeps
@@ -4286,7 +4350,8 @@ struct GuardTestRequest {
 /// Response of `POST /triggers/guard/test`: a 1:1 projection of
 /// [`fire_decision::GuardResult`]. The would-fire / would-skip verdict is composed
 /// client-side from `outcome`. `exit_code` is `None` on error (spawn failure/timeout).
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, TS)]
+#[ts(export, rename = "TestGuardResponse")]
 struct GuardTestResponse {
     outcome: &'static str,
     stdout: String,
@@ -5673,7 +5738,7 @@ async fn record_page_mount_mutation(
             &event_log::Event {
                 id: None,
                 run_id: claim.run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::CommandIssued,
                 node_id: Some(claim.node_id.clone()),
                 iter: None,
@@ -6410,7 +6475,7 @@ async fn emit_run_event(
     let event = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind,
         node_id: None,
         iter: None,
@@ -6809,7 +6874,7 @@ fn detach_terminal_tail<F>(
             let run_failed = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunFailed,
                 node_id: None,
                 iter: None,
@@ -7132,10 +7197,13 @@ impl EventRow {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct PipelineListEntry {
     id: String,
     name: String,
+    // Always "instance": the list only ever serves instance pipelines.
+    #[ts(type = "\"instance\"")]
     scope: String,
     path: String,
     node_count: usize,
@@ -9188,7 +9256,7 @@ async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
     let run_interrupted = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::RunInterrupted,
         node_id: None,
         iter: None,
@@ -9965,8 +10033,7 @@ struct SessionClaim {
     node_id: String,
 }
 
-const SESSION_RUN_HEADER: &str = "X-PDO-Session-Run-Id";
-const SESSION_NODE_HEADER: &str = "X-PDO-Session-Node-Id";
+use pdo_kernel::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
 
 /// Read the session claim from the request headers. Only a pair of non-empty
 /// values is a claim — a lone header is not (the caller is out of session).
@@ -10730,7 +10797,7 @@ async fn create_run_inner(
     let mut run_started = event_log::Event {
         id: None,
         run_id: run_id.clone(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::RunStarted,
         node_id: None,
         iter: None,
@@ -11075,7 +11142,7 @@ pub(crate) async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason
     let run_failed = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::RunFailed,
         node_id: None,
         iter: None,
@@ -11543,7 +11610,7 @@ async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
         None => harness_registry::HarnessRegistry::builtin(),
     };
     for listing in registry.listing() {
-        if tmux_session_manager::binary_available(&listing.binary) {
+        if harness_binary::binary_available(&listing.binary) {
             let _ = catalogue_for(state, &listing.name, &listing.binary).await;
         }
     }
@@ -11870,7 +11937,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     };
     let mut harness_list = Vec::new();
     for h in registry.listing() {
-        let installed = tmux_session_manager::binary_available(&h.binary);
+        let installed = harness_binary::binary_available(&h.binary);
         let cached = if installed {
             catalogue_for(state, &h.name, &h.binary).await
         } else {
@@ -11953,7 +12020,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "sandbox_docker": {
             "available": docker_probe.available,
             "reason": docker_probe.reason,
-            "checked_at": event_log::now_iso(),
+            "checked_at": pdo_kernel::clock::now_iso(),
         },
         "autocomplete_turn_end": settings_field_bool(
             ate_effective,
@@ -12180,7 +12247,7 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
         .into_response();
     }
 
-    let fetched_at = event_log::now_iso();
+    let fetched_at = pdo_kernel::clock::now_iso();
     if let Err(e) = price_table::write_fetched(&fetched_path, &url, &fetched_at, &fresh) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -12275,7 +12342,7 @@ async fn refresh_prices_at_boot(state: &Arc<AppState>) {
     if fresh == *table.fetched_prices() {
         return; // nothing moved: leave the file, and the memo, alone
     }
-    match price_table::write_fetched(&fetched_path, &url, &event_log::now_iso(), &fresh) {
+    match price_table::write_fetched(&fetched_path, &url, &pdo_kernel::clock::now_iso(), &fresh) {
         Ok(()) => info!("price refresh at boot: {} row(s) from {url}", fresh.len()),
         Err(e) => warn!(
             "price refresh at boot: cannot write {}: {e}",
@@ -12355,7 +12422,7 @@ async fn perform_update_check(state: &Arc<AppState>) -> Result<update_check::Upd
     let mut cache = memo.clone().unwrap_or_default();
     cache.schema = update_check::CACHE_SCHEMA.to_string();
     cache.source = url.clone();
-    cache.checked_at = Some(event_log::now_iso());
+    cache.checked_at = Some(pdo_kernel::clock::now_iso());
     match &outcome {
         Ok(latest) => {
             cache.latest_version = Some(latest.clone());
@@ -12602,7 +12669,7 @@ async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
         schema: update_executor::ATTEMPT_SCHEMA.to_string(),
         attempt_id: attempt_id.clone(),
         status: update_executor::AttemptStatus::Running,
-        started_at: event_log::now_iso(),
+        started_at: pdo_kernel::clock::now_iso(),
         finished_at: None,
         exit_code: None,
         method,
@@ -12648,7 +12715,7 @@ async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
                         return; // a newer attempt owns the record
                     }
                     a.exit_code = Some(code);
-                    a.finished_at.get_or_insert_with(event_log::now_iso);
+                    a.finished_at.get_or_insert_with(pdo_kernel::clock::now_iso);
                     a.status = if code == 0 {
                         update_executor::AttemptStatus::Succeeded
                     } else {
@@ -12677,7 +12744,7 @@ async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
         Err(e) => {
             error!("update {attempt_id}: {e}");
             attempt.status = update_executor::AttemptStatus::Failed;
-            attempt.finished_at = Some(event_log::now_iso());
+            attempt.finished_at = Some(pdo_kernel::clock::now_iso());
             let _ = update_executor::write_attempt(&plan.attempt_path, &attempt);
             let _ = std::fs::OpenOptions::new()
                 .create(true)
@@ -13073,7 +13140,8 @@ async fn put_settings(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
+#[ts(export, optional_fields = nullable, rename = "AgentProfileInput")]
 struct WriteAgentProfileRequest {
     name: String,
     harness: String,
@@ -14715,7 +14783,8 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
 /// One entry of `GET /runs/reapable`: a terminal, non-archived run whose on-disk
 /// worktree(s) still exist and can be reclaimed via the explicit `cleanup_run`
 /// command.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct ReapableEntry {
     run_id: String,
     pipeline_name: String,
@@ -14725,10 +14794,12 @@ struct ReapableEntry {
     /// ISO timestamp of the terminal transition — the age a janitor TTL policy
     /// compares against.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     completed_at: Option<String>,
     /// Seconds since `completed_at` (`None` when it is absent/unparseable), so a
     /// consumer can apply an age threshold without re-parsing timestamps.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     age_secs: Option<i64>,
     /// Always `true` on an emitted entry (the endpoint only lists worktree-present
     /// runs); carried explicitly so the payload is self-describing.
@@ -14739,6 +14810,7 @@ struct ReapableEntry {
     /// caller passes `?size=true` (the default omits it to stay fast). `None`
     /// when not requested or when sizing failed.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     approx_disk_bytes: Option<u64>,
 }
 
@@ -15024,11 +15096,13 @@ fn inject_frozen_node_provisioning(response: &mut serde_json::Value, events: &[e
 /// Orchestration view consumes. Ordinary projection fields, plus a cost
 /// **derived on read** through the cost cache, never persisted (ADR-0052):
 /// `None` means unavailable and the surface renders "—", never `$0`.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct RunChildEntry {
     run_id: String,
     pipeline_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     name: Option<String>,
     status: event_log::RunStatus,
     /// Display-only "no forward progress" overlay (#180, #783): true when the
@@ -15038,13 +15112,16 @@ struct RunChildEntry {
     /// amber dot can never disagree about the same child.
     stalled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     completed_at: Option<String>,
     /// Derived on read via the cost cache (ADR-0052) — never persisted. Absent
     /// (JSON `null`/omitted) when the cost is unavailable: the surface renders
     /// "—", never `$0`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     cost: Option<event_log::CostStat>,
 }
 
@@ -15052,13 +15129,15 @@ struct RunChildEntry {
 /// node's sessions of the parent Run. `node_id: None` groups the (theoretically
 /// impossible but tolerated) children whose `RunStarted` carried no node id —
 /// grouped last, never dropped.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct RunChildrenGroup {
     node_id: Option<String>,
     children: Vec<RunChildEntry>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct RunChildrenResponse {
     run_id: String,
     nodes: Vec<RunChildrenGroup>,
@@ -15075,13 +15154,16 @@ struct ChildrenWaitQuery {
 }
 
 /// One settled child as `pdo run wait` prints it.
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Clone, Debug, PartialEq, TS)]
+#[ts(export)]
 struct SettledChild {
     run_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     name: Option<String>,
     status: event_log::RunStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     reason: Option<String>,
     /// The child's own live children — a settled child may leave grandchildren
     /// running (they are ordinary runs, ADR-0064).
@@ -15176,7 +15258,7 @@ async fn node_children_wait(
             .into_response();
     }
     let all = query.all.unwrap_or(false);
-    let since = query.since.unwrap_or_else(event_log::now_iso);
+    let since = query.since.unwrap_or_else(pdo_kernel::clock::now_iso);
     let budget = query
         .timeout_secs
         .unwrap_or(CHILDREN_WAIT_SERVER_MAX_SECS)
@@ -15900,7 +15982,7 @@ async fn append_review_event(
     let event = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind,
         node_id: None,
         iter: None,
@@ -16129,7 +16211,8 @@ async fn review_decision(
 
 /// One draft the browser hands over for sending (#750). `from`/`to` are stable
 /// Run ref ids (default `fork` → `tip`), never SHAs.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 struct SendReviewCommentInput {
     path: String,
     side: String,
@@ -16236,7 +16319,7 @@ async fn send_review_comments(
         )
             .into_response()
     };
-    let now = event_log::now_iso();
+    let now = pdo_kernel::clock::now_iso();
     let batch_id = uuid::Uuid::new_v4().to_string();
     let mut prepared: Vec<review_comments::ReviewComment> = Vec::with_capacity(req.comments.len());
     for (i, c) in req.comments.iter().enumerate() {
@@ -16448,7 +16531,7 @@ async fn handle_run_pipeline_modifications(
         let event = event_log::Event {
             id: None,
             run_id: modified.run_id.clone(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::PipelineModified,
             node_id: None,
             iter: None,
@@ -17315,7 +17398,8 @@ fn reaper_info_for(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct PaneResponse {
     content: String,
     session_name: String,
@@ -17447,7 +17531,7 @@ pub(crate) async fn reattach_node_session(
     let resurrection_started = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeStarted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
@@ -18025,7 +18109,7 @@ async fn spawn_merge_resolver(
     let resolver_started = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::MergeResolverStarted,
         node_id: None,
         iter: None,
@@ -18104,7 +18188,7 @@ async fn spawn_merge_resolver(
         let fail_event = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::MergeResolverFailed,
             node_id: None,
             iter: None,
@@ -18117,7 +18201,7 @@ async fn spawn_merge_resolver(
         let run_interrupted = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunInterrupted,
             node_id: None,
             iter: None,
@@ -18158,7 +18242,7 @@ async fn handle_merge_resolver_done(
         let fail_event = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::MergeResolverFailed,
             node_id: None,
             iter: None,
@@ -18170,7 +18254,7 @@ async fn handle_merge_resolver_done(
         let run_interrupted = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunInterrupted,
             node_id: None,
             iter: None,
@@ -18191,7 +18275,7 @@ async fn handle_merge_resolver_done(
     let completed_event = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::MergeResolverCompleted,
         node_id: None,
         iter: None,
@@ -18208,7 +18292,7 @@ async fn handle_merge_resolver_done(
         let node_completed = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeCompleted,
             node_id: Some(original_node_id.clone()),
             iter: Some(original_iter),
@@ -18686,7 +18770,7 @@ pub(crate) async fn deliver_node_run(
             let interrupt_event = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeInterrupted,
                 node_id: Some(node_id.to_string()),
                 iter: Some(iter),
@@ -18721,7 +18805,7 @@ pub(crate) async fn deliver_node_run(
                 let event = event_log::Event {
                     id: None,
                     run_id: run_id.to_string(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::NodeDelivered,
                     node_id: Some(node_id.to_string()),
                     iter: Some(iter),
@@ -18744,7 +18828,7 @@ pub(crate) async fn deliver_node_run(
             let resolved = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::MergeResolvedInNodeFavour,
                 node_id: Some(node_id.to_string()),
                 iter: Some(iter),
@@ -18773,7 +18857,7 @@ pub(crate) async fn deliver_node_run(
             let delivered = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeDelivered,
                 node_id: Some(node_id.to_string()),
                 iter: Some(iter),
@@ -18797,7 +18881,7 @@ pub(crate) async fn deliver_node_run(
             let conflict_event = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::MergeConflictDetected,
                 node_id: Some(node_id.to_string()),
                 iter: Some(iter),
@@ -18824,7 +18908,7 @@ pub(crate) async fn deliver_node_run(
             let node_interrupted = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeInterrupted,
                 node_id: Some(node_id.to_string()),
                 iter: Some(iter),
@@ -18854,7 +18938,7 @@ pub(crate) async fn deliver_node_run(
             let conflict_event = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::MergeConflictDetected,
                 node_id: Some(node_id.to_string()),
                 iter: Some(iter),
@@ -19026,7 +19110,7 @@ pub(crate) async fn complete_node_iteration(
     let event = event_log::Event {
         id: None,
         run_id: run_id.clone(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         // `NodeAutoCompleted` on the sweep path — same projection, same guard, but
         // the log must say the completion was automatic. Deliberately the event KIND
         // and not a `source` field in the payload. The binding's own verdict
@@ -19178,7 +19262,7 @@ pub(crate) async fn release_node_completion(
     let event = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeCompletionReleased,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
@@ -19300,7 +19384,7 @@ pub(crate) async fn embed_reopen_for_targeted_command(
     let cmd_event = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::CommandIssued,
         node_id: None,
         iter: None,
@@ -19331,7 +19415,7 @@ async fn node_fail(
     let event = event_log::Event {
         id: None,
         run_id: run_id.clone(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeFailed,
         node_id: Some(node_id.clone()),
         iter: Some(iter),
@@ -19375,7 +19459,7 @@ async fn node_fail(
             event_log::Event {
                 id: None,
                 run_id: tail_run.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunFailed,
                 node_id: None,
                 iter: None,
@@ -19385,7 +19469,7 @@ async fn node_fail(
             event_log::Event {
                 id: None,
                 run_id: tail_run.clone(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunInterrupted,
                 node_id: None,
                 iter: None,
@@ -19445,7 +19529,7 @@ async fn node_skip(
     let node_completed = event_log::Event {
         id: None,
         run_id: run_id.clone(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeCompleted,
         node_id: Some(node_id.clone()),
         iter: Some(iter),
@@ -19478,7 +19562,7 @@ async fn node_skip(
         let run_skipped = event_log::Event {
             id: None,
             run_id: tail_run.clone(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunSkipped,
             node_id: None,
             iter: None,
@@ -19625,7 +19709,7 @@ async fn force_spawn_node(
     let started_probe = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::NodeStarted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
@@ -20213,7 +20297,8 @@ async fn node_retry_preview(
         .into_response()
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct AttachResponse {
     ok: bool,
     session: String,
@@ -20248,7 +20333,8 @@ async fn session_attach(
 }
 
 /// Response of `POST /runs/{run_id}/manager/start` (manager on demand).
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct ManagerStartResponse {
     ok: bool,
     session: String,
@@ -20442,7 +20528,8 @@ async fn manager_attach(
 /// `created` distinguishes a freshly-spawned shell from a re-attach. The client
 /// attaches via the `WS /sessions/<session>/pty` bridge — this endpoint never spawns
 /// an OS terminal (ADR-0005: inline xterm.js is primary).
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct ShellResponse {
     ok: bool,
     session: String,
@@ -20575,7 +20662,8 @@ async fn open_run_shell(
 }
 
 /// Response of `POST /sessions/libassist`. Same shape as [`ShellResponse`].
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct LibassistResponse {
     ok: bool,
     session: String,
@@ -21413,7 +21501,7 @@ async fn archive_single_run(
     let archived_event = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::RunArchived,
         node_id: None,
         iter: None,
@@ -21457,7 +21545,7 @@ async fn forget_run(
         let mut tx = state.db.begin().await?;
         sqlx::query("INSERT OR IGNORE INTO forgotten_runs (run_id, forgotten_at) VALUES (?, ?)")
             .bind(&run_id)
-            .bind(event_log::now_iso())
+            .bind(pdo_kernel::clock::now_iso())
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM events WHERE run_id = ?")
@@ -21966,7 +22054,7 @@ async fn patch_run_repos(
     let event = event_log::Event {
         id: None,
         run_id: run_id.clone(),
-        ts: event_log::now_iso(),
+        ts: pdo_kernel::clock::now_iso(),
         kind: event_log::EventKind::RunReposEdited,
         node_id: None,
         iter: None,
@@ -21998,7 +22086,8 @@ async fn patch_run_repos(
 /// and the tip commit's date and subject. Every extra field is optional on purpose:
 /// a branch with no upstream has no écart (not a zero one), and a repo git cannot
 /// read a date from is not an error.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "BranchRef")]
 struct BranchEntry {
     name: String,
     kind: BranchKind,
@@ -22020,7 +22109,8 @@ struct BranchEntry {
     head: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 enum BranchKind {
     Local,
@@ -22033,7 +22123,8 @@ enum BranchKind {
 /// teaching the client a second format. `last_fetch_at` is **derived from the repo
 /// itself** (the mtime of `FETCH_HEAD`), never stored by PDO: a fetch anyone ran —
 /// from a terminal, from an IDE — dates the numbers just as well as ours.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 struct BranchList {
     branches: Vec<BranchEntry>,
     /// RFC-3339 timestamp of the last successful fetch, or `None` when the repo has
@@ -22047,7 +22138,8 @@ struct BranchList {
 
 /// Why a fetch did not happen, named rather than raw (#802). The client picks its
 /// wording from `kind`; `message` carries git's own stderr for the detail line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 enum FetchErrorKind {
     /// The repo has no remote at all — a legitimate, purely local repo.
@@ -22063,7 +22155,8 @@ enum FetchErrorKind {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "BranchFetchError")]
 struct FetchError {
     kind: FetchErrorKind,
     message: String,
@@ -22658,7 +22751,8 @@ async fn run_git_fetch(repo: &Path) -> Option<FetchError> {
 /// they are answered here only for the RACE between the list and the click. The other
 /// two need the checkout inspected at click time, which is precisely why they cannot
 /// be pre-computed: a tree can get dirty between a render and a click.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "FastForwardReason")]
 #[serde(rename_all = "snake_case")]
 enum FastForwardRefusal {
     /// The branch is checked out HERE and tracked files are modified.
@@ -22674,20 +22768,24 @@ enum FastForwardRefusal {
 }
 
 /// A refused fast-forward, with everything the popover needs to name it (#803).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "FastForwardRefusal")]
 struct FastForwardRefused {
     reason: FastForwardRefusal,
     message: String,
     /// The checkout the branch sits in — ours for `dirty_tree`, someone else's for
     /// `checked_out_elsewhere`. `None` for the three list-knowable reasons.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     checkout: Option<String>,
     /// `M path` lines of the modified TRACKED files, capped (`dirty_tree` only).
     /// Untracked files never appear: they do not block a fast-forward.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     dirty_files: Vec<String>,
     /// How many tracked files are modified, uncapped — `dirty_files` may be shorter.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     dirty_count: Option<u32>,
 }
 
@@ -22696,7 +22794,8 @@ struct FastForwardRefused {
 const DIRTY_FILES_SHOWN: usize = 8;
 
 /// What a successful fast-forward moved (#803) — the S3 card's sentence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "FastForwardResult")]
 struct FastForwardDone {
     branch: String,
     upstream: String,
@@ -22708,18 +22807,21 @@ struct FastForwardDone {
     commits: u32,
     /// The new tip's commit subject, for the `from → to · subject` line.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     subject: Option<String>,
     /// The checkout whose FILES moved with the ref, when the branch was checked
     /// out in the repo we launch from. `None` = a pure ref move, nothing on disk
     /// changed — a distinction the popover states out loud before and after.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     moved_checkout: Option<String>,
 }
 
 /// The 200 of `POST /repos/fast-forward`: what moved, plus the list refreshed from
 /// the same repo, so the client replaces its branches in place instead of asking
 /// again (and reading a list from between the two calls).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 struct FastForwardOk {
     fast_forward: FastForwardDone,
     #[serde(flatten)]
@@ -22731,7 +22833,8 @@ struct FastForwardOk {
 /// races the client recovers from by simply re-reading the truth (`up_to_date`,
 /// `no_upstream`): it flips to the corresponding #802 state instead of painting an
 /// error for something benign.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 struct FastForwardRefusedBody {
     refusal: FastForwardRefused,
     #[serde(flatten)]
@@ -23039,7 +23142,8 @@ fn same_checkout(a: &Path, b: &Path) -> bool {
 /// Nothing here fetches — ADR-0070 §1 is explicit that displaying a Run must not put
 /// traffic on someone's repo; the Run view's fetch button is the only refresh, and it
 /// is the #802 verb.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 #[serde(tag = "state", rename_all = "snake_case")]
 enum SourceDrift {
     Available {
@@ -23056,16 +23160,20 @@ enum SourceDrift {
         /// What the LOCAL source branch gained. `None` when the source is itself a
         /// remote-tracking ref (there is no local side to count).
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         local_behind: Option<u32>,
         /// The source's tracking branch and what IT gained. `None` when the source
         /// tracks nothing (or already IS a tracking ref).
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         upstream: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         upstream_behind: Option<u32>,
         /// When the repo last fetched successfully — the date the `behind` side of
         /// the remote is good as of. Same derivation as the form's (`FETCH_HEAD`).
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         last_fetch_at: Option<String>,
     },
     /// The measurement cannot be made — an archived Run whose branch was cleaned
@@ -23836,7 +23944,7 @@ pub(crate) async fn check_output_validation_with_retry(
         let interrupt_event = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeInterrupted,
             node_id: Some(node_id.to_string()),
             iter: Some(iter),
@@ -23883,7 +23991,7 @@ pub(crate) async fn check_output_validation_with_retry(
                 let interrupt_event = event_log::Event {
                     id: None,
                     run_id: run_id.to_string(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::NodeInterrupted,
                     node_id: Some(node_id.to_string()),
                     iter: Some(iter),
@@ -23912,7 +24020,7 @@ pub(crate) async fn check_output_validation_with_retry(
                 let retry_event = event_log::Event {
                     id: None,
                     run_id: run_id.to_string(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::FrontmatterRetryPending,
                     node_id: Some(node_id.to_string()),
                     iter: Some(iter),
@@ -24064,7 +24172,8 @@ fn load_merge_resolver_prompt(repo_root: &std::path::Path) -> String {
 }
 
 pub use guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV;
-pub use tmux_session_manager::{build_tmux_script, TMUX_CMD_OVERRIDE_ENV};
+pub use pdo_kernel::env::TMUX_CMD_OVERRIDE_ENV;
+pub use tmux_session_manager::build_tmux_script;
 
 // --- Static file serving ---
 
@@ -24535,7 +24644,7 @@ mod tests {
         let ev = |node: &str, iter: i64, payload: Option<serde_json::Value>| event_log::Event {
             id: None,
             run_id: "r1".to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some(node.to_string()),
             iter: Some(iter),
@@ -30217,7 +30326,7 @@ mod tests {
         let mut events = vec![event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -30227,7 +30336,7 @@ mod tests {
             events.push(event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: kind.clone(),
                 node_id: None,
                 iter: None,
@@ -30583,7 +30692,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -30597,7 +30706,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -30750,7 +30859,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -30759,7 +30868,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -30768,7 +30877,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunFailed,
                 node_id: None,
                 iter: None,
@@ -30941,7 +31050,7 @@ mod tests {
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -30952,7 +31061,7 @@ mod tests {
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -30992,7 +31101,7 @@ mod tests {
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -31003,7 +31112,7 @@ mod tests {
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -31050,7 +31159,7 @@ mod tests {
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -31060,7 +31169,7 @@ mod tests {
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
@@ -31122,7 +31231,7 @@ mod tests {
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -31133,7 +31242,7 @@ mod tests {
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some("selector".into()),
             iter: Some(1),
@@ -31208,7 +31317,7 @@ mod tests {
                 &event_log::Event {
                     id: None,
                     run_id: run_id.into(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: ev.0,
                     node_id: ev.1.map(String::from),
                     iter: ev.2,
@@ -31267,7 +31376,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -31281,7 +31390,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("selector".into()),
                 iter: Some(1),
@@ -31334,7 +31443,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -31343,7 +31452,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -31352,7 +31461,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -31361,7 +31470,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunCompleted,
                 node_id: None,
                 iter: None,
@@ -31607,7 +31716,7 @@ mod tests {
             text: "Name this `fn delta`.".into(),
             excerpt: String::new(),
             author: "user".into(),
-            sent_at: event_log::now_iso(),
+            sent_at: pdo_kernel::clock::now_iso(),
             batch_id: Some("b1".into()),
             status: review_comments::ReviewCommentStatus::Sent,
             replies: vec![],
@@ -31623,7 +31732,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::ReviewCommentSent,
                 node_id: None,
                 iter: None,
@@ -31967,7 +32076,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -31976,7 +32085,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -32090,7 +32199,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -32103,7 +32212,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -32114,7 +32223,7 @@ mod tests {
             events.push(event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -32123,7 +32232,7 @@ mod tests {
             events.push(event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunCompleted,
                 node_id: None,
                 iter: None,
@@ -32362,7 +32471,7 @@ mod tests {
         let late = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStopped,
             node_id: Some("n1".into()),
             iter: Some(1),
@@ -32698,7 +32807,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: failed.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -32712,7 +32821,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: failed.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunFailed,
                 node_id: None,
                 iter: None,
@@ -32755,7 +32864,7 @@ mod tests {
         let event = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -32921,7 +33030,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some("impl-1".into()),
                 iter: Some(1),
@@ -32930,7 +33039,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunCompleted,
                 node_id: None,
                 iter: None,
@@ -33114,7 +33223,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -33324,7 +33433,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -33333,7 +33442,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("griller".into()),
                 iter: Some(1),
@@ -33342,7 +33451,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeAwaitingUser,
                 node_id: Some("griller".into()),
                 iter: Some(1),
@@ -33400,7 +33509,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -33409,7 +33518,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("griller".into()),
                 iter: Some(1),
@@ -33418,7 +33527,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeAwaitingUser,
                 node_id: Some("griller".into()),
                 iter: Some(1),
@@ -33470,7 +33579,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -33479,7 +33588,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("griller".into()),
                 iter: Some(1),
@@ -33488,7 +33597,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: status,
                 node_id: Some("griller".into()),
                 iter: Some(1),
@@ -33517,7 +33626,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -33533,7 +33642,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("griller".into()),
                 iter: Some(1),
@@ -33542,7 +33651,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("runner".into()),
                 iter: Some(1),
@@ -33978,7 +34087,7 @@ mod tests {
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeAwaitingUser,
                 node_id: Some("griller".into()),
                 iter: Some(1),
@@ -34172,7 +34281,7 @@ mod tests {
                 event_log::Event {
                     id: None,
                     run_id: run_id.into(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::RunStarted,
                     node_id: None,
                     iter: None,
@@ -34181,7 +34290,7 @@ mod tests {
                 event_log::Event {
                     id: None,
                     run_id: run_id.into(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::NodeStarted,
                     node_id: Some("worker".into()),
                     iter: Some(1),
@@ -34196,7 +34305,7 @@ mod tests {
                     &event_log::Event {
                         id: None,
                         run_id: run_id.into(),
-                        ts: event_log::now_iso(),
+                        ts: pdo_kernel::clock::now_iso(),
                         kind: event_log::EventKind::NodeCompleted,
                         node_id: Some("worker".into()),
                         iter: Some(1),
@@ -34212,7 +34321,7 @@ mod tests {
                     &event_log::Event {
                         id: None,
                         run_id: run_id.into(),
-                        ts: event_log::now_iso(),
+                        ts: pdo_kernel::clock::now_iso(),
                         kind: event_log::EventKind::RunCompleted,
                         node_id: None,
                         iter: None,
@@ -34683,7 +34792,7 @@ mod tests {
         let event = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -34715,7 +34824,7 @@ mod tests {
         let event = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -34763,7 +34872,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -34772,7 +34881,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("reviewer".into()),
                 iter: Some(3),
@@ -34781,7 +34890,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some("reviewer".into()),
                 iter: Some(3),
@@ -34790,7 +34899,7 @@ mod tests {
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunHalted,
                 node_id: None,
                 iter: None,
@@ -34847,7 +34956,7 @@ mod tests {
         let event = event_log::Event {
             id: None,
             run_id: "ws-test".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -36018,7 +36127,7 @@ mod tests {
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -36036,7 +36145,7 @@ mod tests {
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some("impl-1".into()),
             iter: Some(1),
@@ -37573,7 +37682,7 @@ edges:
         let run_started = event_log::Event {
             id: None,
             run_id: "run-774".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -37612,7 +37721,7 @@ edges:
         let run_started = event_log::Event {
             id: None,
             run_id: "run-done-774".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -37622,7 +37731,7 @@ edges:
         let run_completed = event_log::Event {
             id: None,
             run_id: "run-done-774".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunCompleted,
             node_id: None,
             iter: None,
@@ -37768,7 +37877,7 @@ edges:
         let run_started = event_log::Event {
             id: None,
             run_id: "run-886".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -38585,7 +38694,7 @@ edges:
         let run_started = event_log::Event {
             id: None,
             run_id: "run-001".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -38625,7 +38734,7 @@ edges:
         let run_started = event_log::Event {
             id: None,
             run_id: "run-done".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -38636,7 +38745,7 @@ edges:
         let run_completed = event_log::Event {
             id: None,
             run_id: "run-done".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunCompleted,
             node_id: None,
             iter: None,
@@ -39527,7 +39636,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -39536,7 +39645,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some(node_id.into()),
                 iter: Some(1),
@@ -39644,7 +39753,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -39653,7 +39762,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("reviewer".into()),
                 iter: Some(3),
@@ -39728,7 +39837,7 @@ edges:
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -39752,7 +39861,7 @@ edges:
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some(node_id.into()),
             iter: Some(1),
@@ -39986,7 +40095,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -40005,7 +40114,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("planner".into()),
                 iter: Some(1),
@@ -40014,7 +40123,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some("planner".into()),
                 iter: Some(1),
@@ -40023,7 +40132,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("implementer".into()),
                 iter: Some(1),
@@ -40297,7 +40406,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -40306,7 +40415,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -40315,7 +40424,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeAwaitingUser,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -40331,7 +40440,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -40340,7 +40449,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -40349,7 +40458,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeFailed,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -40358,7 +40467,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunFailed,
                 node_id: None,
                 iter: None,
@@ -40603,7 +40712,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -40612,7 +40721,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -40621,7 +40730,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunFailed,
                 node_id: None,
                 iter: None,
@@ -40708,7 +40817,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -40717,7 +40826,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -40726,7 +40835,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -40735,7 +40844,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("consumer".into()),
                 iter: Some(1),
@@ -40795,7 +40904,7 @@ edges:
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -40846,7 +40955,7 @@ edges:
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -40857,7 +40966,7 @@ edges:
             let started = event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some(format!("hog-{i}")),
                 iter: Some(1),
@@ -40877,7 +40986,7 @@ edges:
         event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind,
             node_id: node_id.map(String::from),
             iter,
@@ -41456,7 +41565,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -41465,7 +41574,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -41474,7 +41583,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -41483,7 +41592,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("consumer".into()),
                 iter: Some(1),
@@ -41532,7 +41641,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -41541,7 +41650,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -41654,7 +41763,7 @@ edges:
         let run_event = event_log::Event {
             id: None,
             run_id: "region-end".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -41719,7 +41828,7 @@ edges:
         let run_event = event_log::Event {
             id: None,
             run_id: "region-bump".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -41768,7 +41877,7 @@ edges:
         let run_event = event_log::Event {
             id: None,
             run_id: "region-unstick".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -41779,7 +41888,7 @@ edges:
         let halt_event = event_log::Event {
             id: None,
             run_id: "region-unstick".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunHalted,
             node_id: None,
             iter: None,
@@ -41950,7 +42059,7 @@ edges:
         let run_event = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -42004,7 +42113,7 @@ edges:
         let run_event = event_log::Event {
             id: None,
             run_id: "resume-test".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -42015,7 +42124,7 @@ edges:
         let halt_event = event_log::Event {
             id: None,
             run_id: "resume-test".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunHalted,
             node_id: None,
             iter: None,
@@ -44912,7 +45021,7 @@ edges: []
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -45146,7 +45255,7 @@ edges: []
         let run_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -45165,7 +45274,7 @@ edges: []
         let node_started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some("impl-1".into()),
             iter: Some(1),
@@ -45435,7 +45544,7 @@ edges: []
                 &event_log::Event {
                     id: None,
                     run_id: run_id.into(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind: event_log::EventKind::NodeDelivered,
                     node_id: Some(node.into()),
                     iter: Some(1),
@@ -46137,7 +46246,7 @@ edges: []
         let run_event = event_log::Event {
             id: None,
             run_id: "pause-test".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -46173,7 +46282,7 @@ edges: []
         let run_event = event_log::Event {
             id: None,
             run_id: "pause-completed".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -46184,7 +46293,7 @@ edges: []
         let completed_event = event_log::Event {
             id: None,
             run_id: "pause-completed".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunCompleted,
             node_id: None,
             iter: None,
@@ -46216,7 +46325,7 @@ edges: []
         let run_event = event_log::Event {
             id: None,
             run_id: "resume-paused".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -46227,7 +46336,7 @@ edges: []
         let pause_event = event_log::Event {
             id: None,
             run_id: "resume-paused".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunPaused,
             node_id: None,
             iter: None,
@@ -46277,7 +46386,7 @@ edges: []
         let run_event = event_log::Event {
             id: None,
             run_id: "retry-test".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -46293,7 +46402,7 @@ edges: []
         let fail_event = event_log::Event {
             id: None,
             run_id: "retry-test".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunFailed,
             node_id: None,
             iter: None,
@@ -46370,7 +46479,7 @@ edges: []
                 &event_log::Event {
                     id: None,
                     run_id: "legacy-null-target".into(),
-                    ts: event_log::now_iso(),
+                    ts: pdo_kernel::clock::now_iso(),
                     kind,
                     node_id: None,
                     iter: None,
@@ -46425,7 +46534,7 @@ edges: []
         let run_event = event_log::Event {
             id: None,
             run_id: "retry-running".into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -46454,7 +46563,7 @@ edges: []
         let ev = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -46467,7 +46576,7 @@ edges: []
         let ev = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeStarted,
             node_id: Some(node_id.into()),
             iter: Some(iter),
@@ -46480,7 +46589,7 @@ edges: []
         let ev = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::NodeCompleted,
             node_id: Some(node_id.into()),
             iter: Some(iter),
@@ -46664,7 +46773,7 @@ edges: []
         let ev = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind,
             node_id: None,
             iter: None,
@@ -47446,7 +47555,7 @@ edges: []
         let started = event_log::Event {
             id: None,
             run_id: run_id.into(),
-            ts: event_log::now_iso(),
+            ts: pdo_kernel::clock::now_iso(),
             kind: event_log::EventKind::RunStarted,
             node_id: None,
             iter: None,
@@ -47665,7 +47774,7 @@ edges: []
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeCompleted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -50495,7 +50604,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -50510,7 +50619,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -50612,7 +50721,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -50627,7 +50736,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("worker".into()),
                 iter: Some(1),
@@ -50704,7 +50813,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -50720,7 +50829,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("impl_a".into()),
                 iter: Some(1),
@@ -50729,7 +50838,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("impl_b".into()),
                 iter: Some(1),
@@ -50906,7 +51015,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::RunStarted,
                 node_id: None,
                 iter: None,
@@ -50921,7 +51030,7 @@ edges:
             event_log::Event {
                 id: None,
                 run_id: run_id.into(),
-                ts: event_log::now_iso(),
+                ts: pdo_kernel::clock::now_iso(),
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("ship".into()),
                 iter: Some(1),

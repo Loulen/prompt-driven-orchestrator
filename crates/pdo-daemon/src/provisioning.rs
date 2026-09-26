@@ -6,8 +6,10 @@ use anyhow::{Context, Result};
 use ignore::gitignore::GitignoreBuilder;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProvisioningScope {
     Instance,
@@ -16,7 +18,8 @@ pub(crate) enum ProvisioningScope {
     IsolatedNode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ProvisioningMode {
     Copy,
@@ -34,7 +37,8 @@ impl std::fmt::Display for ProvisioningMode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct ProvisioningRules {
     #[serde(default)]
     pub copy: Vec<String>,
@@ -66,14 +70,16 @@ impl ProvisioningRules {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "ScopedProvisioningRules")]
 pub(crate) struct ScopedRules {
     pub scope: ProvisioningScope,
     #[serde(default)]
     pub rules: ProvisioningRules,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub(crate) struct ProvisioningEntry {
     pub relative_path: String,
     pub mode: ProvisioningMode,
@@ -82,13 +88,15 @@ pub(crate) struct ProvisioningEntry {
     pub provided_by_git: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct ExcludedPathPreview {
     pub relative_path: String,
     pub excluded_by_scope: ProvisioningScope,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "ProvisioningRulePreview")]
 pub(crate) struct RulePreview {
     pub scope: ProvisioningScope,
     pub mode: ProvisioningMode,
@@ -98,14 +106,16 @@ pub(crate) struct RulePreview {
     pub unmatched: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct ModeConflict {
     pub scope: ProvisioningScope,
     pub relative_path: String,
     pub modes: Vec<ProvisioningMode>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub(crate) struct ProvisioningPlan {
     pub entries: Vec<ProvisioningEntry>,
     pub rules: Vec<RulePreview>,
@@ -656,7 +666,7 @@ pub(crate) async fn save(
     .bind(format!("{scope:?}").to_ascii_lowercase())
     .bind(scope_id)
     .bind(json)
-    .bind(crate::event_log::now_iso())
+    .bind(pdo_kernel::clock::now_iso())
     .execute(db)
     .await?;
     Ok(())

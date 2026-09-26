@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { newerAvailable, relativeTime, upToDate } from "./updateStatus";
-import type { UpdateStatus } from "../types";
+import type { UpdateStatus } from "../platform/model/daemon";
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {

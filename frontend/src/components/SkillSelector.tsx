@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Sparkles, TriangleAlert } from "lucide-react";
-import type { SkillBank, SkillRef, SkillTier } from "../types";
+import type { SkillBank } from "../skill/model/skill";
+import type { SkillRef } from "../shared/generated/SkillRef";
+import type { SkillTier } from "../shared/generated/SkillTier";
 import { buildRows } from "../lib/skillTree";
 import {
   activeCountLabel,

@@ -10,7 +10,7 @@ import {
   instantiateFromLibrary,
 } from "../api";
 import { useEditStore } from "../stores/editStore";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "../shared/ui/tooltip";
 
 function renderInspector(props: Parameters<typeof NodeInspector>[0]) {
   return render(
@@ -1017,7 +1017,7 @@ describe("NodeInspector — Workspace (#653)", () => {
     renderInspector({
       libraryEntries: [],
       onLibraryChanged: () => {},
-      runNode: {
+      runNode: { frontmatter_retries: 0,
         node_id: "rv1",
         status: "running",
         iter: 1,
@@ -1046,7 +1046,7 @@ describe("NodeInspector — Workspace (#653)", () => {
     renderInspector({
       libraryEntries: [],
       onLibraryChanged: () => {},
-      runNode: {
+      runNode: { frontmatter_retries: 0,
         node_id: "rv1",
         status: "running",
         iter: 1,
@@ -1120,7 +1120,7 @@ describe("NodeInspector — Workspace (#653)", () => {
     renderInspector({
       libraryEntries: [],
       onLibraryChanged: () => {},
-      runNode: {
+      runNode: { frontmatter_retries: 0,
         node_id: "rv1",
         status: "running",
         iter: 1,

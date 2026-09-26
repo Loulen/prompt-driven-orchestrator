@@ -20,7 +20,7 @@ Two levels:
 
 > **Resilience / adversity is not a Happy Path.** It is edge-case robustness, expensive to drive,
 > and covered **permanently by the layer-3 automated tests** (`tests/process_lifecycle.rs`,
-> `crates/pdo-daemon/tests/`, `frontend/e2e/`). It does not earn an HP slot.
+> `crates/pdo/tests/`, `frontend/e2e/`). It does not earn an HP slot.
 
 ## Inventory
 

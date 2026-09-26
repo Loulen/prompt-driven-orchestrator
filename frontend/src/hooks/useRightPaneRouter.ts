@@ -4,13 +4,11 @@ import type { RightPaneOwner } from "../lib/rightPaneOwner";
 import { shouldClearTriggerOnCanvasFocus } from "../lib/triggerCanvasReconcile";
 import { shouldCloseInfoOnTabChange } from "../lib/infoPanelReconcile";
 import type { Selection } from "../stores/editStore";
-import type {
-  Trigger,
-  PipelineListEntry,
-  RunState,
-  NodeState,
-} from "../types";
-import { isLiveRun } from "../types";
+import type { Trigger } from "../shared/generated/Trigger";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { RunState } from "../shared/generated/RunState";
+import type { NodeState } from "../shared/generated/NodeState";
+import { isLiveRun } from "../run/model/runStatus";
 
 export interface RightPaneRouterArgs {
   /** The current canvas selection (`editStore.selection`). */
@@ -195,6 +193,7 @@ export function useRightPaneRouter(
       started_at: null,
       completed_at: null,
       failure_reason: null,
+      frontmatter_retries: 0,
       iterations: [],
     };
   })();

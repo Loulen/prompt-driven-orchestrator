@@ -1,8 +1,8 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import OutputPortCard from "./OutputPortCard";
-import { TooltipProvider } from "./ui/tooltip";
-import type { PortDef } from "../types";
+import { TooltipProvider } from "../shared/ui/tooltip";
+import type { PortDef } from "../shared/generated/PortDef";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return <TooltipProvider>{children}</TooltipProvider>;

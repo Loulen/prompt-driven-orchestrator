@@ -1,4 +1,7 @@
-import type { Skill, SkillBank, SkillRef, SkillTier } from "../types";
+import type { Skill } from "../shared/generated/Skill";
+import type { SkillBank } from "../skill/model/skill";
+import type { SkillRef } from "../shared/generated/SkillRef";
+import type { SkillTier } from "../shared/generated/SkillTier";
 import { descendantFolderIds } from "./skillTree";
 
 /**

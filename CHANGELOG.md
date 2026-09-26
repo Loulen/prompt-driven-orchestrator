@@ -20,9 +20,14 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   page d'`implement-review`, nodes `script`), un Trigger d'exemple dont le guard refuse
   toujours, et un Run attendu jusqu'à `completed` ; *Start* reste inactif jusque-là. Rejouer
   reprend le dernier Run terminé non archivé.
-- Visite en 17 étapes, dont 7 gestes qui n'avancent que sur l'état observé : Run, implementer
-  (outputs, terminal figé), edge reviewer → End, Start, archivage (skippable), Triggers,
-  Pipelines. Settings et Stats sont éclairés, pas ouverts.
+- Visite en 18 étapes, dont 9 gestes qui n'avancent que sur l'état observé : Run, implementer,
+  ouvrir puis fermer un output, terminal figé, edge reviewer → End, Start, archivage
+  (skippable), Triggers, Pipelines. Settings et Stats sont éclairés, pas ouverts.
+- Un panneau ouvert par un geste reste éclairé et explorable (onglets, scroll) mais en lecture
+  seule : aucune valeur ne se modifie pendant le tour. Des bulles annexes, sans Next, montrent
+  le prompt du Run, l'input `task` d'implementer et la condition de l'edge.
+- L'étape de la pastille de statut vise une cible stable au survol (plus de clignotement) et
+  illustre les trois statuts : orange, bleu, vert.
 - Le Trigger d'exemple est supprimé à toute sortie du tour ; la pipeline et le Run restent.
 
 ## 1.109.0 — Stats : absorption des Pipelines, Nodes, Modèles, efforts et couples (story #888)

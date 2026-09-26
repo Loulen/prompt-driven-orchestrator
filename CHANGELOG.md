@@ -10,56 +10,10 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.108.0
-**Sélecteur de skills compact, « active skills » partout** (#849, story #847).
+## 1.109.0 — Stats : absorption des Pipelines, Nodes, Modèles, efforts et couples (story #888)
 
-- Replié, le sélecteur tient sur une ligne : icône, « Skills », sous-ligne « No skill » /
-  « n active skills ». La liste de noms sous le bouton et le paragraphe d'avertissement rouge
-  disparaissent ; un skill sélectionné qui n'existe plus dans la banque se signale par une icône
-  d'alerte (message en tooltip) et n'est pas compté.
-- Déplié : skills hérités cochés, grisés, tier d'origine à droite ; skills disparus listés barrés
-  en tête, décochables ; le popover reste ouvert après chaque coche et s'ouvre aussi en lecture
-  seule, cases figées.
-- Le tour *First run* (étape « Add the two PDO skills ») lit l'état coché dans le popover.
-- Vocabulaire : « effective » devient « active » côté skills (types du résolveur front, type du
-  skill gelé côté daemon, identifiants de test, scénarios HP, documentation). Format des
-  pipelines stockés inchangé.
+Les tickets #890, #891, #892 et #906 de la story #888 (ADR-0077, ADR-0078), livrés ensemble.
 
-## 1.107.1 — README vitrine : les médias publiés sont ceux des pipelines cibles (#852)
-
-Le README montre enfin les scènes rejouées sur les pipelines cibles dessinés par le mainteneur
-(ADR-0074 §6). Les 1.104.0 à 1.107.0 les avaient enregistrées sans les publier : les GIF hero,
-Visual pipelines, Routing & loops, Triggers, Agent profiles, Skill bank et Stats dataient
-encore de la v1.
-
-- **`docs/assets/readme/` republié** : le hero tourne `implement-review` avec sa boucle, le
-  trigger lance `prod-check`, les chemins affichés sont `~/code/...`. La ligne Routing & loops
-  décrit `verdict = fail` / `verdict = pass`, comme la cible.
-- **Le hero passe le screen guard** : le `~/.claude/CLAUDE.md` de l'instance de démo interdit à
-  l'agent live de taper un chemin absolu, qui montrait la racine jetable
-  `/tmp/pdo-readme-media-*` dans son terminal.
-- **Scène Agent profiles** : elle ouvre le profil par son crayon `Edit`, dans la modale de la
-  1.103.2 (#899).
-
-## 1.97.4 — README vitrine, référence dans `docs/reference/` (#855)
-
-Le README devient une vitrine (traduction française : `docs/readme/README.fr.md`). La
-référence qu'il portait déménage sans perte : commandes CLI, installation et mise à jour dans
-`docs/reference/cli.md`, reverse proxy et pièces jointes dans `docs/reference/reverse-proxy.md`,
-copier-coller dans `docs/reference/terminal.md`, développement dans `CONTRIBUTING.md`.
-
-- **Le tableau de support des harnais vit dans `docs/reference/harnesses.md`**, avec les
-  prérequis. `make check` et `make support-table` visent ce fichier, et c'est désormais le
-  `--file` par défaut de `pdo docs support-table` (avant : `README.md`, qui ne porte plus de
-  bloc généré).
-
-## Licence — MIT, explicitement
-
-Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les métadonnées Cargo
-déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
-contribution sont dans `CONTRIBUTING.md`.
-
-## Non publié
 **Stats : absorber les efforts d'un modèle et les couples d'un Node** (#906, story #888,
 ADR-0078).
 
@@ -109,6 +63,56 @@ story #888, ADR-0077).
   et Triggers. La pastille `[⧉ N]` ouvre la liste des membres, d'où l'on retire un absorbé.
 - L'absorption est stockée dans `pdo.db` et appliquée à la lecture : le log d'événements
   n'est jamais réécrit, et `uncombined=true` sur les routes Stats rend les chiffres bruts.
+
+
+## 1.108.0
+**Sélecteur de skills compact, « active skills » partout** (#849, story #847).
+
+- Replié, le sélecteur tient sur une ligne : icône, « Skills », sous-ligne « No skill » /
+  « n active skills ». La liste de noms sous le bouton et le paragraphe d'avertissement rouge
+  disparaissent ; un skill sélectionné qui n'existe plus dans la banque se signale par une icône
+  d'alerte (message en tooltip) et n'est pas compté.
+- Déplié : skills hérités cochés, grisés, tier d'origine à droite ; skills disparus listés barrés
+  en tête, décochables ; le popover reste ouvert après chaque coche et s'ouvre aussi en lecture
+  seule, cases figées.
+- Le tour *First run* (étape « Add the two PDO skills ») lit l'état coché dans le popover.
+- Vocabulaire : « effective » devient « active » côté skills (types du résolveur front, type du
+  skill gelé côté daemon, identifiants de test, scénarios HP, documentation). Format des
+  pipelines stockés inchangé.
+
+## 1.107.1 — README vitrine : les médias publiés sont ceux des pipelines cibles (#852)
+
+Le README montre enfin les scènes rejouées sur les pipelines cibles dessinés par le mainteneur
+(ADR-0074 §6). Les 1.104.0 à 1.107.0 les avaient enregistrées sans les publier : les GIF hero,
+Visual pipelines, Routing & loops, Triggers, Agent profiles, Skill bank et Stats dataient
+encore de la v1.
+
+- **`docs/assets/readme/` republié** : le hero tourne `implement-review` avec sa boucle, le
+  trigger lance `prod-check`, les chemins affichés sont `~/code/...`. La ligne Routing & loops
+  décrit `verdict = fail` / `verdict = pass`, comme la cible.
+- **Le hero passe le screen guard** : le `~/.claude/CLAUDE.md` de l'instance de démo interdit à
+  l'agent live de taper un chemin absolu, qui montrait la racine jetable
+  `/tmp/pdo-readme-media-*` dans son terminal.
+- **Scène Agent profiles** : elle ouvre le profil par son crayon `Edit`, dans la modale de la
+  1.103.2 (#899).
+
+## 1.97.4 — README vitrine, référence dans `docs/reference/` (#855)
+
+Le README devient une vitrine (traduction française : `docs/readme/README.fr.md`). La
+référence qu'il portait déménage sans perte : commandes CLI, installation et mise à jour dans
+`docs/reference/cli.md`, reverse proxy et pièces jointes dans `docs/reference/reverse-proxy.md`,
+copier-coller dans `docs/reference/terminal.md`, développement dans `CONTRIBUTING.md`.
+
+- **Le tableau de support des harnais vit dans `docs/reference/harnesses.md`**, avec les
+  prérequis. `make check` et `make support-table` visent ce fichier, et c'est désormais le
+  `--file` par défaut de `pdo docs support-table` (avant : `README.md`, qui ne porte plus de
+  bloc généré).
+
+## Licence — MIT, explicitement
+
+Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les métadonnées Cargo
+déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
+contribution sont dans `CONTRIBUTING.md`.
 
 ## 1.103.2
 **Profils agents : seul le bouton Edit ouvre l'éditeur, dans une modale partagée avec New

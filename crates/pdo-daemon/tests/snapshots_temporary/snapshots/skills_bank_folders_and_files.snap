@@ -1,0 +1,253 @@
+---
+source: crates/pdo-daemon/tests/snapshots_temporary/recorder.rs
+description: "TEMPORARY — refactor net of spec #913 (issue #914), deleted by #932."
+---
+{
+  "http": [
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/skills",
+      "response": {
+        "folders": [
+          {
+            "created_at": "[ts]",
+            "id": "skf-pdo",
+            "name": "PDO",
+            "parent_id": null,
+            "updated_at": "[ts]"
+          }
+        ],
+        "root_path": "[repo]/.pdo/skills",
+        "skills": [
+          {
+            "created_at": "[ts]",
+            "description": "Talk with a human inside a PDO node — declare when you wait for them (`pdo wait-user`), keep the conversation open, complete once released.",
+            "folder_id": "skf-pdo",
+            "id": "pdo-interactive",
+            "locked": true,
+            "name": "pdo-interactive",
+            "updated_at": "[ts]"
+          },
+          {
+            "created_at": "[ts]",
+            "description": "Orchestrate child runs with PDO — create runs from this node session, wait for them with `pdo run wait`, and complete truthfully.",
+            "folder_id": "skf-pdo",
+            "id": "pdo-orchestrate",
+            "locked": true,
+            "name": "pdo-orchestrate",
+            "updated_at": "[ts]"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "name": "Craft"
+      },
+      "content_type": "application/json",
+      "request": "POST /settings/skill-folders",
+      "response": {
+        "created_at": "[ts]",
+        "id": "[folder-1]",
+        "name": "Craft",
+        "parent_id": null,
+        "updated_at": "[ts]"
+      },
+      "status": 201
+    },
+    {
+      "body": {
+        "content": "---\nname: tdd\ndescription: Test-driven development. Red-green-refactor at pre-agreed seams.\n---\n\n# Test-driven development\n\nRed, green, refactor.\n",
+        "folder_id": "[folder-1]"
+      },
+      "content_type": "application/json",
+      "request": "POST /settings/skills",
+      "response": {
+        "created_at": "[ts]",
+        "description": "Test-driven development. Red-green-refactor at pre-agreed seams.",
+        "folder_id": "[folder-1]",
+        "id": "[skill-1]",
+        "locked": false,
+        "name": "tdd",
+        "updated_at": "[ts]"
+      },
+      "status": 201
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/skills/[skill-1]",
+      "response": {
+        "body": "# Test-driven development\n\nRed, green, refactor.",
+        "content": "---\nname: tdd\ndescription: Test-driven development. Red-green-refactor at pre-agreed seams.\n---\n\n# Test-driven development\n\nRed, green, refactor.\n",
+        "created_at": "[ts]",
+        "description": "Test-driven development. Red-green-refactor at pre-agreed seams.",
+        "files": [],
+        "folder_id": "[folder-1]",
+        "frontmatter": {
+          "description": "Test-driven development. Red-green-refactor at pre-agreed seams.",
+          "name": "tdd"
+        },
+        "frontmatter_keys": [
+          "name",
+          "description"
+        ],
+        "id": "[skill-1]",
+        "locked": false,
+        "name": "tdd",
+        "path": "[repo]/.pdo/skills/[skill-1]",
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "from_path": "[repo]/notes.md"
+      },
+      "content_type": "application/json",
+      "request": "POST /settings/skills/[skill-1]/files",
+      "response": {
+        "files": [
+          {
+            "path": "notes.md",
+            "size": 18
+          }
+        ],
+        "uploaded": [
+          {
+            "path": "notes.md",
+            "size": 18
+          }
+        ]
+      },
+      "status": 201
+    },
+    {
+      "body": "An edited reference note.\n",
+      "content_type": "application/json",
+      "request": "PUT /settings/skills/[skill-1]/files/notes.md",
+      "response": {
+        "path": "notes.md",
+        "size": 26
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/skills/[skill-1]/files/notes.md",
+      "response": {
+        "binary": false,
+        "path": "notes.md",
+        "size": 26,
+        "text": "An edited reference note.\n"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "name": "tdd craft"
+      },
+      "content_type": "application/json",
+      "request": "PUT /settings/skills/[skill-1]",
+      "response": {
+        "created_at": "[ts]",
+        "description": "Test-driven development. Red-green-refactor at pre-agreed seams.",
+        "folder_id": "[folder-1]",
+        "id": "[skill-1]",
+        "locked": false,
+        "name": "tdd craft",
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/skills/[skill-1]/referents",
+      "response": {
+        "instance": false,
+        "pipelines": [],
+        "projects": [],
+        "runs": [],
+        "skill_id": "[skill-1]",
+        "triggers": []
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/skill-folders",
+      "response": {
+        "folders": [
+          {
+            "created_at": "[ts]",
+            "id": "[folder-1]",
+            "name": "Craft",
+            "parent_id": null,
+            "updated_at": "[ts]"
+          },
+          {
+            "created_at": "[ts]",
+            "id": "skf-pdo",
+            "name": "PDO",
+            "parent_id": null,
+            "updated_at": "[ts]"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "request": "DELETE /settings/skills/[skill-1]/files/notes.md",
+      "response": null,
+      "status": 204
+    },
+    {
+      "request": "DELETE /settings/skills/[skill-1]",
+      "response": null,
+      "status": 204
+    },
+    {
+      "request": "DELETE /settings/skill-folders/[folder-1]",
+      "response": null,
+      "status": 204
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/skills",
+      "response": {
+        "folders": [
+          {
+            "created_at": "[ts]",
+            "id": "skf-pdo",
+            "name": "PDO",
+            "parent_id": null,
+            "updated_at": "[ts]"
+          }
+        ],
+        "root_path": "[repo]/.pdo/skills",
+        "skills": [
+          {
+            "created_at": "[ts]",
+            "description": "Talk with a human inside a PDO node — declare when you wait for them (`pdo wait-user`), keep the conversation open, complete once released.",
+            "folder_id": "skf-pdo",
+            "id": "pdo-interactive",
+            "locked": true,
+            "name": "pdo-interactive",
+            "updated_at": "[ts]"
+          },
+          {
+            "created_at": "[ts]",
+            "description": "Orchestrate child runs with PDO — create runs from this node session, wait for them with `pdo run wait`, and complete truthfully.",
+            "folder_id": "skf-pdo",
+            "id": "pdo-orchestrate",
+            "locked": true,
+            "name": "pdo-orchestrate",
+            "updated_at": "[ts]"
+          }
+        ]
+      },
+      "status": 200
+    }
+  ],
+  "ws": []
+}

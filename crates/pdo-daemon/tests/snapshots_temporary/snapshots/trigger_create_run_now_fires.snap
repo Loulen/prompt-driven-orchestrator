@@ -1,0 +1,301 @@
+---
+source: crates/pdo-daemon/tests/snapshots_temporary/recorder.rs
+description: "TEMPORARY — refactor net of spec #913 (issue #914), deleted by #932."
+---
+{
+  "http": [
+    {
+      "body": {
+        "cron": "0 3 * * *",
+        "input_template": "audit",
+        "name": "nightly",
+        "pipeline_id": "solo",
+        "target_repo": "[repo]"
+      },
+      "content_type": "application/json",
+      "request": "POST /triggers",
+      "response": {
+        "auto_name": true,
+        "cron": "0 3 * * *",
+        "enabled": true,
+        "id": "[trigger-1]",
+        "input_template": "audit",
+        "name": "nightly",
+        "next_fire_at": "[ts]",
+        "overlap_policy": "skip",
+        "pipeline_id": "solo",
+        "pipeline_name": "solo",
+        "target_repo": "[repo]",
+        "variables": {}
+      },
+      "status": 201
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /triggers",
+      "response": [
+        {
+          "auto_name": true,
+          "cron": "0 3 * * *",
+          "effective_repo": "[repo]",
+          "enabled": true,
+          "id": "[trigger-1]",
+          "input_template": "audit",
+          "name": "nightly",
+          "next_fire_at": "[ts]",
+          "overlap_policy": "skip",
+          "pipeline_id": "solo",
+          "pipeline_name": "solo",
+          "target_repo": "[repo]",
+          "variables": {}
+        }
+      ],
+      "status": 200
+    },
+    {
+      "body": {
+        "name": "nightly audit"
+      },
+      "content_type": "application/json",
+      "request": "PATCH /triggers/[trigger-1]",
+      "response": {
+        "auto_name": true,
+        "cron": "0 3 * * *",
+        "enabled": true,
+        "id": "[trigger-1]",
+        "input_template": "audit",
+        "name": "nightly audit",
+        "next_fire_at": "[ts]",
+        "overlap_policy": "skip",
+        "pipeline_id": "solo",
+        "pipeline_name": "solo",
+        "target_repo": "[repo]",
+        "variables": {}
+      },
+      "status": 200
+    },
+    {
+      "body": {},
+      "content_type": "application/json",
+      "request": "POST /triggers/[trigger-1]/fire",
+      "response": {
+        "fired": true,
+        "ok": true,
+        "run_id": "[run-1]"
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /triggers/[trigger-1]/fires",
+      "response": [
+        {
+          "id": 1,
+          "outcome": "fired",
+          "run_id": "[run-1]",
+          "source": "manual",
+          "trigger_id": "[trigger-1]",
+          "ts": "[ts]"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /triggers/[trigger-1]",
+      "response": {
+        "auto_name": true,
+        "cron": "0 3 * * *",
+        "enabled": true,
+        "id": "[trigger-1]",
+        "input_template": "audit",
+        "last_fired_at": "[ts]",
+        "last_outcome": "fired",
+        "name": "nightly audit",
+        "next_fire_at": "[ts]",
+        "overlap_policy": "skip",
+        "pipeline_id": "solo",
+        "pipeline_name": "solo",
+        "target_repo": "[repo]",
+        "variables": {}
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /triggers/health",
+      "response": {
+        "last_tick_at": null,
+        "paused": false,
+        "tick_interval_secs": 30
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "paused": true
+      },
+      "content_type": "application/json",
+      "request": "POST /triggers/pause",
+      "response": {
+        "ok": true,
+        "paused": true
+      },
+      "status": 200
+    },
+    {
+      "request": "DELETE /triggers/[trigger-1]",
+      "response": null,
+      "status": 204
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /triggers",
+      "response": [],
+      "status": 200
+    }
+  ],
+  "ws": [
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_started",
+        "node_id": "worker",
+        "payload": {
+          "base_sha": null,
+          "effort": null,
+          "harness": "claude",
+          "interactive": false,
+          "isolated_worktree": false,
+          "missing_skills": [],
+          "model": null,
+          "node_type": "agent",
+          "orchestrator": false,
+          "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `solo`, iteration 1.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-1]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-1]/worktree/.pdo/artifacts/worker/iter-1/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-1]/worktree` is the **run's shared worktree**: other nodes of this run m",
+          "provisioning": {
+            "copy": [],
+            "hardlink": [],
+            "symlink": []
+          },
+          "provisioning_plan": null,
+          "session_id": "[uuid-1]",
+          "skills": [],
+          "skipped_skills": []
+        },
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_started",
+        "node_id": null,
+        "payload": {
+          "edges": [
+            {
+              "source_node": "start",
+              "source_port": "user_prompt",
+              "target_node": "worker",
+              "target_port": "task"
+            },
+            {
+              "source_node": "worker",
+              "source_port": "out",
+              "target_node": "end",
+              "target_port": "result"
+            }
+          ],
+          "fork_sha": "[sha-1]",
+          "input": "audit",
+          "node_defs": [
+            {
+              "id": "start",
+              "inputs": [],
+              "name": "Start",
+              "node_type": "start",
+              "outputs": [
+                {
+                  "name": "user_prompt",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "worker",
+              "inputs": [
+                {
+                  "name": "task",
+                  "side": "left"
+                }
+              ],
+              "isolated_worktree": false,
+              "name": "Worker",
+              "node_type": "agent",
+              "outputs": [
+                {
+                  "name": "out",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "end",
+              "inputs": [
+                {
+                  "name": "result",
+                  "side": "left"
+                }
+              ],
+              "name": "End",
+              "node_type": "end",
+              "outputs": [],
+              "view_x": null,
+              "view_y": null
+            }
+          ],
+          "pipeline_id": "solo",
+          "pipeline_name": "solo",
+          "source_fetch_error": {
+            "kind": "no_remote",
+            "message": "this repository has no remote"
+          },
+          "target_repo": "[repo]",
+          "triggered_by": "[trigger-1]"
+        },
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "outcome": "fired",
+      "run_id": "[run-1]",
+      "trigger_id": "[trigger-1]",
+      "type": "trigger_fired"
+    },
+    {
+      "paused": true,
+      "type": "triggers_paused"
+    },
+    {
+      "trigger_id": "[trigger-1]",
+      "type": "trigger_created"
+    },
+    {
+      "trigger_id": "[trigger-1]",
+      "type": "trigger_deleted"
+    },
+    {
+      "trigger_id": "[trigger-1]",
+      "type": "trigger_updated"
+    }
+  ]
+}

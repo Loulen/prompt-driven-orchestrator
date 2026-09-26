@@ -1,0 +1,3 @@
+# insta leftovers of a failed comparison — review with `cargo insta review`, never commit.
+*.snap.new
+*.pending-snap

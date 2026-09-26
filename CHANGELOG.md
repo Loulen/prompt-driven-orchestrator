@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.109.1 — Filet de refactor : routes couvertes et snapshots temporaires (#914, spec #913)
+
+Aucun code de prod touché. Premier ticket de la spec #913 (ADR-0079..0081) : il pose le filet
+avant la migration en monolithe modulaire.
+
+- Tests d'intégration des 23 routes jusque-là non couvertes (`crates/pdo-daemon/tests/routes_*`).
+- `route_coverage` : chaque route du routeur doit être appelée par au moins un test.
+- Snapshots temporaires (`tests/snapshots_temporary/`, insta) des parcours HTTP et WS,
+  masqués des valeurs volatiles ; ils figent le contrat pendant la migration et partiront avec
+  #932.
+
 ## 1.109.0 — Stats : absorption des Pipelines, Nodes, Modèles, efforts et couples (story #888)
 
 Les tickets #890, #891, #892 et #906 de la story #888 (ADR-0077, ADR-0078), livrés ensemble.

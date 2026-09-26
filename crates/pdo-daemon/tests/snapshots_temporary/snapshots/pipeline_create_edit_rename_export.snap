@@ -1,0 +1,342 @@
+---
+source: crates/pdo-daemon/tests/snapshots_temporary/recorder.rs
+description: "TEMPORARY — refactor net of spec #913 (issue #914), deleted by #932."
+---
+{
+  "http": [
+    {
+      "body": {
+        "name": "Snap Flow"
+      },
+      "content_type": "application/json",
+      "request": "POST /pipelines",
+      "response": {
+        "id": "snap-flow",
+        "path": "[repo]/.pdo/pipelines/snap-flow.yaml",
+        "scope": "instance"
+      },
+      "status": 201
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /pipelines/snap-flow",
+      "response": {
+        "diagnostics": [],
+        "id": "snap-flow",
+        "path": "[repo]/.pdo/pipelines/snap-flow.yaml",
+        "pipeline": {
+          "edges": [],
+          "name": "Snap Flow",
+          "nodes": [
+            {
+              "id": "start",
+              "inputs": [],
+              "interactive": false,
+              "name": "Start",
+              "outputs": [
+                {
+                  "frontmatter": null,
+                  "name": "user_prompt",
+                  "port_type": "markdown",
+                  "repeated": false,
+                  "side": "right"
+                }
+              ],
+              "type": "start",
+              "view": null
+            },
+            {
+              "id": "end",
+              "inputs": [
+                {
+                  "frontmatter": null,
+                  "name": "result",
+                  "port_type": "markdown",
+                  "repeated": false,
+                  "side": "left"
+                }
+              ],
+              "interactive": false,
+              "name": "End",
+              "outputs": [],
+              "type": "end",
+              "view": null
+            }
+          ],
+          "variables": {},
+          "version": "1.0"
+        },
+        "prompts": {},
+        "scope": "instance",
+        "yaml": "name: Snap Flow\nversion: \"1.0\"\n\nvariables: {}\n\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n\nedges: []\n"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "prompts": {
+          "worker": "Edited prompt.\n"
+        },
+        "yaml": "name: Snap Flow\nversion: \"1.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: agent\n    interactive: false\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n  - source: { node: worker, port: out }\n    target: { node: end, port: result }\n"
+      },
+      "content_type": "application/json",
+      "request": "PUT /pipelines/snap-flow",
+      "response": {
+        "id": "snap-flow",
+        "ok": true,
+        "renamed": false
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /pipelines/snap-flow",
+      "response": {
+        "diagnostics": [],
+        "id": "snap-flow",
+        "path": "[repo]/.pdo/pipelines/snap-flow.yaml",
+        "pipeline": {
+          "edges": [
+            {
+              "source": {
+                "node": "start",
+                "port": "user_prompt"
+              },
+              "target": {
+                "node": "worker",
+                "port": "task"
+              }
+            },
+            {
+              "source": {
+                "node": "worker",
+                "port": "out"
+              },
+              "target": {
+                "node": "end",
+                "port": "result"
+              }
+            }
+          ],
+          "name": "Snap Flow",
+          "nodes": [
+            {
+              "id": "start",
+              "inputs": [],
+              "interactive": false,
+              "name": "Start",
+              "outputs": [
+                {
+                  "frontmatter": null,
+                  "name": "user_prompt",
+                  "port_type": "markdown",
+                  "repeated": false,
+                  "side": "right"
+                }
+              ],
+              "type": "start",
+              "view": null
+            },
+            {
+              "id": "worker",
+              "inputs": [
+                {
+                  "frontmatter": null,
+                  "name": "task",
+                  "port_type": "markdown",
+                  "repeated": false,
+                  "side": "left"
+                }
+              ],
+              "interactive": false,
+              "isolated_worktree": false,
+              "name": "Worker",
+              "outputs": [
+                {
+                  "frontmatter": null,
+                  "name": "out",
+                  "port_type": "markdown",
+                  "repeated": false,
+                  "side": "right"
+                }
+              ],
+              "type": "agent",
+              "view": null
+            },
+            {
+              "id": "end",
+              "inputs": [
+                {
+                  "frontmatter": null,
+                  "name": "result",
+                  "port_type": "markdown",
+                  "repeated": false,
+                  "side": "left"
+                }
+              ],
+              "interactive": false,
+              "name": "End",
+              "outputs": [],
+              "type": "end",
+              "view": null
+            }
+          ],
+          "variables": {},
+          "version": "1.0"
+        },
+        "prompts": {
+          "worker": "Edited prompt.\n"
+        },
+        "scope": "instance",
+        "yaml": "name: Snap Flow\nversion: \"1.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: agent\n    interactive: false\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n  - source: { node: worker, port: out }\n    target: { node: end, port: result }\n"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "name": "Snap Flow Renamed"
+      },
+      "content_type": "application/json",
+      "request": "PUT /pipelines/snap-flow/rename",
+      "response": {
+        "id": "snap-flow-renamed",
+        "name": "Snap Flow Renamed",
+        "ok": true,
+        "path": "[repo]/.pdo/pipelines/snap-flow-renamed.yaml",
+        "renamed": true
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /pipelines",
+      "response": [
+        {
+          "id": "gated",
+          "modified": "[ts]",
+          "name": "gated",
+          "node_count": 3,
+          "path": "[repo]/.pdo/pipelines/gated.yaml",
+          "prompt_required": true,
+          "scope": "instance",
+          "variables": {}
+        },
+        {
+          "id": "sibling",
+          "modified": "[ts]",
+          "name": "sibling",
+          "node_count": 3,
+          "path": "[repo]/.pdo/pipelines/sibling.yaml",
+          "prompt_required": true,
+          "scope": "instance",
+          "variables": {}
+        },
+        {
+          "id": "snap-flow-renamed",
+          "modified": "[ts]",
+          "name": "Snap Flow Renamed",
+          "node_count": 3,
+          "path": "[repo]/.pdo/pipelines/snap-flow-renamed.yaml",
+          "prompt_required": true,
+          "scope": "instance",
+          "variables": {}
+        },
+        {
+          "id": "solo",
+          "modified": "[ts]",
+          "name": "solo",
+          "node_count": 3,
+          "path": "[repo]/.pdo/pipelines/solo.yaml",
+          "prompt_required": true,
+          "scope": "instance",
+          "variables": {}
+        }
+      ],
+      "status": 200
+    },
+    {
+      "content_type": "application/yaml; charset=utf-8",
+      "request": "GET /pipelines/snap-flow-renamed/document",
+      "response": "pdo_pipeline: 1\npipeline:\n  edges:\n  - source:\n      node: start\n      port: user_prompt\n    target:\n      node: worker\n      port: task\n  - source:\n      node: worker\n      port: out\n    target:\n      node: end\n      port: result\n  name: Snap Flow Renamed\n  nodes:\n  - id: start\n    inputs: []\n    interactive: false\n    name: Start\n    outputs:\n    - frontmatter: null\n      name: user_prompt\n      port_type: markdown\n      repeated: false\n      side: right\n    type: start\n    view: null\n  - id: worker\n    inputs:\n    - frontmatter: null\n      name: task\n      port_type: markdown\n      repeated: false\n      side: left\n    interactive: false\n    isolated_worktree: false\n    name: Worker\n    outputs:\n    - frontmatter: null\n      name: out\n      port_type: markdown\n      repeated: false\n      side: right\n    type: agent\n    view: null\n  - id: end\n    inputs:\n    - frontmatter: null\n      name: result\n      port_type: markdown\n      repeated: false\n      side: left\n    interactive: false\n    name: End\n    outputs: []\n    type: end\n    view: null\n  variables: {}\n  version: '1.0'\nprompts:\n  worker: |\n    Edited prompt.\n",
+      "status": 200
+    },
+    {
+      "request": "GET /pipelines/snap-flow-renamed/document/skills",
+      "response": null,
+      "status": 204
+    },
+    {
+      "body": {},
+      "content_type": "application/json",
+      "request": "POST /pipelines/snap-flow-renamed/duplicate",
+      "response": {
+        "id": "snap-flow-renamed-copy",
+        "path": "[repo]/.pdo/pipelines/snap-flow-renamed-copy.yaml",
+        "scope": "instance"
+      },
+      "status": 201
+    },
+    {
+      "content_type": "application/json",
+      "request": "DELETE /pipelines/snap-flow-renamed",
+      "response": {
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /pipelines",
+      "response": [
+        {
+          "id": "gated",
+          "modified": "[ts]",
+          "name": "gated",
+          "node_count": 3,
+          "path": "[repo]/.pdo/pipelines/gated.yaml",
+          "prompt_required": true,
+          "scope": "instance",
+          "variables": {}
+        },
+        {
+          "id": "sibling",
+          "modified": "[ts]",
+          "name": "sibling",
+          "node_count": 3,
+          "path": "[repo]/.pdo/pipelines/sibling.yaml",
+          "prompt_required": true,
+          "scope": "instance",
+          "variables": {}
+        },
+        {
+          "id": "snap-flow-renamed-copy",
+          "modified": "[ts]",
+          "name": "Snap Flow Renamed (copy)",
+          "node_count": 3,
+          "path": "[repo]/.pdo/pipelines/snap-flow-renamed-copy.yaml",
+          "prompt_required": true,
+          "scope": "instance",
+          "variables": {}
+        },
+        {
+          "id": "solo",
+          "modified": "[ts]",
+          "name": "solo",
+          "node_count": 3,
+          "path": "[repo]/.pdo/pipelines/solo.yaml",
+          "prompt_required": true,
+          "scope": "instance",
+          "variables": {}
+        }
+      ],
+      "status": 200
+    }
+  ],
+  "ws": [
+    {
+      "path": "[repo]/.pdo/pipelines/snap-flow-renamed.yaml",
+      "pipeline_id": "snap-flow-renamed",
+      "type": "pipeline_changed"
+    }
+  ]
+}

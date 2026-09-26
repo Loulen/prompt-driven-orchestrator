@@ -5,6 +5,8 @@
 
 #![allow(dead_code)]
 
+pub mod flow;
+
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -145,6 +147,39 @@ impl TestDaemon {
                 // the suite was launched with; `spawn_nested` is the only opt-out.
                 nested_daemon,
             },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
+    /// Spawn a daemon from the default [`DaemonConfig`] (harmless `exec sleep 600`
+    /// tail, no Trigger heartbeat, sweeps armed), handing `configure` the tempdir
+    /// and the config to adjust before boot. For the combinations the dedicated
+    /// constructors above don't cover — e.g. a nested (sweep-free) daemon whose
+    /// home is the tempdir, which the temporary snapshot suite needs to stay
+    /// deterministic.
+    pub async fn spawn_configured<F, C>(setup: F, configure: C) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+        C: FnOnce(&Path, &mut DaemonConfig),
+    {
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+        let mut config = DaemonConfig {
+            tmux_cmd_override: Some("exec sleep 600".to_string()),
+            ..DaemonConfig::default()
+        };
+        configure(tempdir.path(), &mut config);
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            config,
         )
         .await?;
 
@@ -925,6 +960,17 @@ impl Drop for EnvVarGuard {
             None => std::env::remove_var(self.key),
         }
     }
+}
+
+/// Serialises `PDO_TERMINAL`, the terminal the two `…/attach` routes pop out.
+/// Tests point it at a recording stub so no real terminal ever opens.
+static TERMINAL_LOCK: Mutex<()> = Mutex::new(());
+
+/// Set `PDO_TERMINAL` for the lifetime of the returned guard, excluding any other
+/// test that also wants it.
+#[must_use = "the terminal override is restored as soon as the guard is dropped"]
+pub fn lock_terminal(value: impl AsRef<str>) -> EnvVarGuard {
+    EnvVarGuard::acquire(&TERMINAL_LOCK, "PDO_TERMINAL", value.as_ref())
 }
 
 /// Set `PDO_SESSION_CAP` for the lifetime of the returned guard, excluding any

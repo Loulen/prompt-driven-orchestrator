@@ -165,7 +165,7 @@ describe("demo instance: Stats API over the mocked history", { skip }, () => {
     assert.ok(overview.runs.reduce((s, b) => s + b.count, 0) > 150);
     assert.ok(overview.errors.reduce((s, b) => s + b.count, 0) > 0);
     assert.deepEqual(overview.session_harnesses.sort(), ["claude", "copilot", "pi"]);
-    assert.deepEqual(overview.fires_by_pipeline, [{ pipeline_id: "prod-check", count: 100 }]);
+    assert.deepEqual(overview.fires_by_pipeline, [{ pipeline_id: "prod-check", name: "prod-check", count: 100 }]);
   });
 
   test("teardown leaves no auth file, tmux server or daemon", () => {

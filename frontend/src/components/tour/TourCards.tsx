@@ -34,6 +34,34 @@ function withCode(text: string): ReactNode {
   );
 }
 
+/**
+ * A teardown that failed (#911), said on the card showing at that moment. The
+ * daemon's sentence is quoted: « could not be removed » alone would leave the
+ * reader nothing to act on.
+ */
+function TidyUpFailure({ failure }: { failure: { title: string; reason: string } | null | undefined }) {
+  if (!failure) return null;
+  return (
+    <div
+      data-testid="tour-tidyup-failure"
+      className="mt-3 rounded border border-st-await/40 bg-st-await/10 p-2 text-fg-2"
+      style={{ fontSize: "11px", lineHeight: 1.5 }}
+    >
+      <div className="flex items-center gap-1.5 font-medium text-st-await">
+        <TriangleAlert size={12} className="shrink-0" />
+        {failure.title}
+      </div>
+      <pre
+        className="mt-1 whitespace-pre-wrap break-words font-mono text-fg-3"
+        style={{ fontSize: "10.5px" }}
+        data-testid="tour-tidyup-reason"
+      >
+        {failure.reason}
+      </pre>
+    </div>
+  );
+}
+
 function CardShell({ testId, children }: { testId: string; children: ReactNode }) {
   return (
     <div className="pointer-events-auto absolute inset-0 flex items-center justify-center">
@@ -201,6 +229,7 @@ export function TourEndCard({
   nextTour,
   /** How many legs of the Full tour are done / in total. Absent outside a chain. */
   chainProgress,
+  tidyUpFailure,
   onFinish,
   onFinishHere,
   onStartTour,
@@ -211,6 +240,8 @@ export function TourEndCard({
   /** The next leg of a Full tour: the primary then chains instead of closing. */
   nextTour?: TourDef | null;
   chainProgress?: { done: number; total: number } | null;
+  /** The tour's teardown failed while this card was up (#911). */
+  tidyUpFailure?: { title: string; reason: string } | null;
   onFinish: () => void;
   onFinishHere: () => void;
   onStartTour: (tourId: string) => void;
@@ -278,6 +309,8 @@ export function TourEndCard({
           </p>
         )
       )}
+
+      <TidyUpFailure failure={tidyUpFailure} />
 
       {others.length > 0 && (
         <>
@@ -355,12 +388,15 @@ export function TourFailedCard({
   tour,
   failure,
   nextTour,
+  tidyUpFailure,
   onClose,
   onBackToTours,
   onContinue,
 }: {
   tour: TourDef;
   failure: TourFailure;
+  /** The tour's teardown failed while this card was up (#911). */
+  tidyUpFailure?: { title: string; reason: string } | null;
   /** The pending leg of a Full tour, or `null` — the last leg stopping offers no
    *  Continue, because there is nothing to continue into. */
   nextTour?: TourDef | null;
@@ -424,6 +460,7 @@ export function TourFailedCard({
           {nextTour.chainNote}
         </p>
       )}
+      <TidyUpFailure failure={tidyUpFailure} />
       <div className="mt-4 flex justify-end gap-2">
         <button
           type="button"

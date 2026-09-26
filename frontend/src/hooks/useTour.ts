@@ -21,8 +21,10 @@ import {
   canAdvance,
   confirmStep,
   currentStep,
+  markTidiedUp,
   needsConfirm,
   observeTour,
+  shouldTidyUp,
   skipStep,
   startTour,
   stepBody,
@@ -74,6 +76,11 @@ export interface TourView {
   checklist: TourChecklistItem[];
   /** The intro card's state, while `run.phase === "intro"` (#824). */
   prep: TourPrepView | null;
+  /**
+   * The tour's teardown failed (#911): said on the card showing — the end card
+   * or the stop card — never swallowed. `null` while nothing went wrong.
+   */
+  tidyUpFailure: { title: string; reason: string } | null;
   /**
    * The next leg of a **Full tour**, or `null` for a tour started on its own
    * (#824). The end card's primary chains to it instead of closing — that is the
@@ -156,15 +163,19 @@ function visible(el: Element | null): el is Element {
  * The slice of app state the step predicates read. Built fresh on every tick from
  * what the UI has already loaded — the tour issues no request of its own.
  */
+/** One entry of the Run list, narrowed to what a tour reads. */
+export interface TourRunEntry {
+  run_id: string;
+  name?: string | null;
+  pipeline_name?: string;
+  status?: string;
+}
+
 /**
  * The Runs the tour is allowed to see — the same list the left panel renders.
- * Only a count and the newest entry are read; the shape is narrowed here so the
- * hook never depends on the full `RunListEntry`.
+ * The shape is narrowed here so the hook never depends on the full `RunListEntry`.
  */
-export interface TourRunsInput {
-  length: number;
-  0?: { run_id: string; name?: string | null; pipeline_name?: string };
-}
+export type TourRunsInput = ArrayLike<TourRunEntry>;
 
 /**
  * The selected Run's detail, narrowed to what the reading steps read (#825) —
@@ -233,6 +244,12 @@ export function readTourAppState(
     dirty: tab?.dirty ?? false,
     libraryPipelineIds: s.pipelines.map((p) => p.id),
     runCount: runs.length,
+    runs: Array.from(runs, (r) => ({
+      id: r.run_id,
+      name: r.name?.trim() || r.run_id,
+      pipeline: r.pipeline_name ?? "",
+      status: r.status ?? "",
+    })),
     latestRun: newest
       ? {
           id: newest.run_id,
@@ -343,6 +360,7 @@ export function useTour(
   // (`react-hooks/refs`) — and declared BEFORE the pump effect below so a commit
   // refreshes them first.
   const runRef = useRef<TourRun | null>(null);
+  const tourRef = useRef<TourDef | null>(null);
   const runsRef = useRef<TourRunsInput>(runs);
   const runDetailRef = useRef<TourRunDetailInput | null>(runDetail);
   /** The last aim scrolled to — step and selectors both (see the pump's scroll block). */
@@ -350,9 +368,21 @@ export function useTour(
   // What the app looked like when this tour started — every observation carries
   // it, so a step can ask "did THIS tour cause that?" (#824).
   const baselineRef = useRef<TourAppState | null>(null);
+  // The preparations in flight (#911), so a teardown played while they still
+  // run waits for them: a Trigger created a beat AFTER it was deleted would be
+  // left behind by the very quit that meant to put it away.
+  const prepFlight = useRef<Promise<unknown> | null>(null);
+  const prepAbort = useRef<AbortController | null>(null);
+  // Bumped by every start and quit: a teardown that fails after the user has
+  // moved on has no card left to say it on.
+  const generation = useRef(0);
+  const [tidyUpFailure, setTidyUpFailure] = useState<TourView["tidyUpFailure"]>(null);
   useEffect(() => {
     runRef.current = run;
   }, [run]);
+  useEffect(() => {
+    tourRef.current = tour;
+  }, [tour]);
   useEffect(() => {
     runsRef.current = runs;
   }, [runs]);
@@ -370,7 +400,66 @@ export function useTour(
     [],
   );
 
+  /**
+   * Play a tour's teardown (#911). Every item runs, even after one failed; the
+   * first failure is reported when `report` holds and the card it belongs to is
+   * still the one on screen. A quit reports nothing: there is no card, and the
+   * next pass of the tour picks the object up again.
+   */
+  const tidyUp = useCallback((def: TourDef, report: boolean) => {
+    const items = def.teardown ?? [];
+    if (items.length === 0) return;
+    const pending = prepFlight.current;
+    const gen = generation.current;
+    void (async () => {
+      await pending;
+      const results = await Promise.allSettled(items.map((item) => item.run()));
+      const index = results.findIndex((r) => r.status === "rejected");
+      if (!report || index < 0 || generation.current !== gen) return;
+      const failed = results[index] as PromiseRejectedResult;
+      const e = failed.reason as unknown;
+      setTidyUpFailure({
+        title: items[index].failureTitle,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    })();
+  }, []);
+
+  /**
+   * Every transition of the machine goes through here, so the teardown is
+   * played the moment a tour reaches its end card or its stop card — once
+   * (`shouldTidyUp` says when, `markTidiedUp` makes it once).
+   */
+  const commit = useCallback(
+    (def: TourDef, nextRun: TourRun) => {
+      let committed = nextRun;
+      if (shouldTidyUp(def, committed)) {
+        committed = markTidiedUp(committed);
+        tidyUp(def, true);
+      }
+      runRef.current = committed;
+      setRun(committed);
+    },
+    [tidyUp],
+  );
+
+  /** Leaving a tour that is not over yet: tidy it up without a card to report on. */
+  const leave = useCallback(() => {
+    const def = tourRef.current;
+    const current = runRef.current;
+    if (def && current && shouldTidyUp(def, current, "quit")) {
+      runRef.current = markTidiedUp(current);
+      tidyUp(def, false);
+    }
+    prepAbort.current?.abort();
+    prepAbort.current = null;
+    generation.current += 1;
+    setTidyUpFailure(null);
+  }, [tidyUp]);
+
   const start = useCallback((next: TourDef, rest: TourDef[] = []) => {
+    // Starting over a tour that is still up (Settings › Tutorials) is leaving it.
+    leave();
     // A tour starts on a clear stage (#825). It points at the app from above
     // every modal, so a transient overlay left open — the `out` artifact the
     // previous leg of a Full tour just told the reader to open — would dim into
@@ -382,6 +471,8 @@ export function useTour(
     baselineRef.current = baseline;
     const first = startTour(next, observation(runsRef.current, runDetailRef.current, baseline));
     scrolledFor.current = null;
+    tourRef.current = next;
+    runRef.current = first;
     setTour(next);
     setRun(first);
     setHole(null);
@@ -397,9 +488,12 @@ export function useTour(
     setPrepAttempt((n) => n + 1);
     setPrep(next.intro ? null : NO_PREP);
     setChain(rest);
-  }, []);
+  }, [leave]);
 
   const quit = useCallback(() => {
+    leave();
+    tourRef.current = null;
+    runRef.current = null;
     setTour(null);
     setRun(null);
     setHole(null);
@@ -411,7 +505,7 @@ export function useTour(
     setPrep(null);
     setChain([]);
     baselineRef.current = null;
-  }, []);
+  }, [leave]);
 
   /**
    * The end card's primary. Marks this tour done, then either chains into the next
@@ -441,19 +535,19 @@ export function useTour(
 
   const next = useCallback(() => {
     if (!tour || !run) return;
-    setRun(confirmStep(tour, run, observe()));
-  }, [tour, run, observe]);
+    commit(tour, confirmStep(tour, run, observe()));
+  }, [tour, run, observe, commit]);
 
   const skip = useCallback(() => {
     if (!tour || !run) return;
-    setRun(skipStep(tour, run, observe()));
-  }, [tour, run, observe]);
+    commit(tour, skipStep(tour, run, observe()));
+  }, [tour, run, observe, commit]);
 
   const begin = useCallback(() => {
     if (!tour || !run) return;
     scrolledFor.current = null;
-    setRun(beginSteps(tour, run, observe()));
-  }, [tour, run, observe]);
+    commit(tour, beginSteps(tour, run, observe()));
+  }, [tour, run, observe, commit]);
 
   const retryPrep = useCallback(() => {
     setPrep(null);
@@ -467,6 +561,8 @@ export function useTour(
   useEffect(() => {
     if (!intro) return;
     let cancelled = false;
+    const abort = new AbortController();
+    prepAbort.current = abort;
     const done = new Set<string>();
     const render = (failure: TourPrepView["failure"]) => {
       if (cancelled) return;
@@ -481,10 +577,10 @@ export function useTour(
       });
     };
     render(null);
-    void Promise.all(
+    const flight = Promise.allSettled(
       intro.prepare.map((item) =>
         item
-          .run()
+          .run(abort.signal)
           .then(() => {
             done.add(item.id);
             render(null);
@@ -508,8 +604,10 @@ export function useTour(
           }),
       ),
     );
+    prepFlight.current = flight;
     return () => {
       cancelled = true;
+      abort.abort();
     };
   }, [intro, prepAttempt]);
 
@@ -521,12 +619,9 @@ export function useTour(
       const current = runRef.current;
       if (!current || current.phase !== "running") return;
       const obs = observe();
-      const advanced = observeTour(tour, current, obs, Date.now());
-      if (advanced !== current) {
-        runRef.current = advanced;
-        setRun(advanced);
-      }
-      const active = advanced;
+      const observed = observeTour(tour, current, obs, Date.now());
+      if (observed !== current) commit(tour, observed);
+      const active = runRef.current ?? observed;
       const step = currentStep(tour, active);
       if (!step || active.phase !== "running") {
         setHole(null);
@@ -631,7 +726,7 @@ export function useTour(
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("scroll", onViewportChange, true);
     };
-  }, [tour, observe]);
+  }, [tour, observe, commit]);
 
   const view = useMemo<TourView | null>(() => {
     if (!tour || !run) return null;
@@ -651,8 +746,9 @@ export function useTour(
       checklist,
       prep: run.phase === "intro" ? (prep ?? { items: [], ready: false, failure: null }) : null,
       nextTour: chain[0] ?? null,
+      tidyUpFailure,
     };
-  }, [tour, run, hole, zone, wideZone, ready, awaitingConfirm, body, note, checklist, prep, chain]);
+  }, [tour, run, hole, zone, wideZone, ready, awaitingConfirm, body, note, checklist, prep, chain, tidyUpFailure]);
 
   return { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep };
 }

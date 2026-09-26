@@ -11,7 +11,7 @@ import { useTour } from "../../hooks/useTour";
 import { loadTourOffered, loadToursDone } from "../../lib/tourMemory";
 import { registerTransientOverlay } from "../../lib/overlays";
 import { registerCanvasReveal } from "../../lib/canvasReveal";
-import { FIRST_PIPELINE_TOUR } from "../../lib/tours";
+import { FIRST_PIPELINE_TOUR, OVERVIEW_TOUR } from "../../lib/tours";
 import type { TourDef } from "../../lib/tour";
 
 /** Two steps, so the first can complete without ending the tour. */
@@ -429,7 +429,142 @@ describe("a tour starts on a clear stage", () => {
   });
 });
 
+/**
+ * #911 — the teardown: what a tour installed only to be shown (the example
+ * Trigger of *Overview*) goes away at ANY exit, exactly once, and a failure is
+ * said on the card showing at that moment.
+ */
+describe("tidying up when a tour ends", () => {
+  function tidyTour(run: () => Promise<void>): TourDef {
+    return {
+      ...TOUR,
+      teardown: [{ id: "example", failureTitle: "The example could not be removed", run }],
+    };
+  }
+
+  async function flush() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  it("tidies up when the reader quits with Escape — and not before", async () => {
+    const run = vi.fn(async () => {});
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await flush();
+    expect(run, "never while the tour is under way").not.toHaveBeenCalled();
+
+    await user().keyboard("{Escape}");
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("tidies up when the reader quits from the popover's ✕", async () => {
+    const run = vi.fn(async () => {});
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("tour-quit"));
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("tidies up once at the end card, and Finish does not play it again", async () => {
+    const run = vi.fn(async () => {});
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    await flush();
+    expect(screen.getByTestId("tour-end-card")).toBeInTheDocument();
+    expect(run).toHaveBeenCalledTimes(1);
+
+    await user().click(screen.getByTestId("tour-finish"));
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("tour-tidyup-failure")).not.toBeInTheDocument();
+  });
+
+  it("tidies up once when a Full tour chains on to its next leg", async () => {
+    const run = vi.fn(async () => {});
+    render(<Harness tour={tidyTour(run)} chain={[NEXT_TOUR]} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    await user().click(screen.getByTestId("tour-finish"));
+    tick();
+    await flush();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
+    // Quitting the next leg does not tidy the previous one a second time.
+    await user().keyboard("{Escape}");
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("tidies up on a clean stop, and says a failure on the stop card", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("DELETE /triggers/t1 failed: 500");
+    });
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    tick(6_000);
+    await flush();
+
+    expect(screen.getByTestId("tour-failed-card")).toBeInTheDocument();
+    expect(run).toHaveBeenCalledTimes(1);
+    const failure = screen.getByTestId("tour-tidyup-failure");
+    expect(failure).toHaveTextContent("The example could not be removed");
+    expect(failure).toHaveTextContent("DELETE /triggers/t1 failed: 500");
+
+    await user().click(screen.getByTestId("tour-failed-close"));
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a failure on the end card", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("daemon unreachable");
+    });
+    render(<Harness tour={tidyTour(run)} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    await flush();
+    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("daemon unreachable");
+  });
+
+  it("does nothing for a tour without a teardown", async () => {
+    render(<Harness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().keyboard("{Escape}");
+    expect(screen.queryByTestId("projecteur")).not.toBeInTheDocument();
+  });
+});
+
 describe("the welcome modal", () => {
+  /** #911 — the tour préface leads, the way the catalog orders it. */
+  it("lists Overview first", () => {
+    render(<Harness showWelcome />);
+    const rows = screen
+      .getAllByTestId(/^tour-welcome-(?!full|later|backdrop)/)
+      .map((el) => el.getAttribute("data-testid"));
+    expect(rows).toEqual(["tour-welcome-overview", "tour-welcome-first-run", "tour-welcome-first-pipeline"]);
+  });
+
   it("offers the full tour, each tour, and Later", () => {
     render(<Harness showWelcome />);
     expect(screen.getByTestId("tour-welcome-full")).toBeInTheDocument();
@@ -459,15 +594,15 @@ describe("the welcome modal", () => {
   });
 
   /**
-   * The full tour now leads with *First run* (#824, design Q6), and that tour
-   * opens on its intro card rather than on a step — its first target does not
-   * exist until the card's preparations have answered.
+   * The full tour now leads with *Overview* (#911), and that tour opens on its
+   * intro card rather than on a step — its first target, the Run, does not exist
+   * until the card's preparations have answered.
    */
-  it("the full tour sets the key too", async () => {
+  it("the full tour sets the key too, and opens on Overview", async () => {
     render(<Harness showWelcome />);
     await user().click(screen.getByTestId("tour-welcome-full"));
     expect(loadTourOffered()).toBe(true);
     tick();
-    expect(screen.getByTestId("tour-intro-card")).toBeInTheDocument();
+    expect(screen.getByTestId("tour-intro-card")).toHaveTextContent(OVERVIEW_TOUR.title);
   });
 });

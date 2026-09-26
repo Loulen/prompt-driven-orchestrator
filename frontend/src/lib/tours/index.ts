@@ -7,6 +7,12 @@
 import type { TourDef } from "../tour";
 import { FIRST_PIPELINE_TOUR } from "./firstPipeline";
 import { FIRST_RUN_TOUR } from "./firstRun";
+export {
+  EXAMPLE_TRIGGER_NAME,
+  OVERVIEW_TOUR,
+  TUTORIAL_OVERVIEW_PIPELINE_ID,
+} from "./overview";
+import { OVERVIEW_TOUR } from "./overview";
 
 export { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
 export {
@@ -34,8 +40,20 @@ export interface TourCatalogEntry {
  * training pipeline is prepared for you, so nothing depends on that order any
  * more, and *First run* is half as long and ends with something moving on screen.
  * A newcomer's first four minutes should produce a live Run, not a saved file.
+ *
+ * *Overview* goes before both (#911, design Q2): the **tour préface**. It gives a
+ * map of the screen before *First run* teaches a gesture in depth, and it needs
+ * no harness — so a newcomer who has not installed an agent CLI yet still gets
+ * somewhere. *First run* is still the one that needs a harness.
  */
 export const TOUR_CATALOG: TourCatalogEntry[] = [
+  {
+    id: OVERVIEW_TOUR.id,
+    title: OVERVIEW_TOUR.title,
+    blurb: OVERVIEW_TOUR.blurb,
+    minutes: OVERVIEW_TOUR.minutes,
+    def: OVERVIEW_TOUR,
+  },
   {
     id: FIRST_RUN_TOUR.id,
     title: FIRST_RUN_TOUR.title,
@@ -62,8 +80,8 @@ export function findTour(id: string): TourDef | null {
 }
 
 /**
- * What « Full tour » starts: every available tour, in catalog order — *First run*,
- * then *First pipeline* (#824). The end card of each offers the next.
+ * What « Full tour » starts: every available tour, in catalog order — *Overview*,
+ * *First run*, then *First pipeline* (#824, #911). The end card of each offers the next.
  */
 export function fullTourSequence(): TourDef[] {
   return availableTours();

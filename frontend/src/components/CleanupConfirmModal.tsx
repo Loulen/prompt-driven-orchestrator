@@ -65,7 +65,12 @@ export default function CleanupConfirmModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg">
+      <div
+        role="dialog"
+        aria-modal="true"
+        data-testid="cleanup-confirm-modal"
+        className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+      >
         {isLive ? (
           <>
             <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>

@@ -23,6 +23,7 @@ const APP: TourAppState = {
   dirty: false,
   libraryPipelineIds: [],
   runCount: 1,
+  runs: [],
   latestRun: { id: "r1", name: "my-first-run", nodes: [] },
   activeRunId: "r1",
 };

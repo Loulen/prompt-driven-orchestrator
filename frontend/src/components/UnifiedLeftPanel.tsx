@@ -562,6 +562,8 @@ export default function UnifiedLeftPanel({
                 ? "Stop and archive run"
                 : "Cleanup run"
             }
+            // #911: the Overview tour's archive step points at it.
+            data-testid="cleanup-run-button"
             className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
             onClick={(e) => {
               e.stopPropagation();

@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "1.111.0"
+version = "1.111.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1984,6 +1984,7 @@ dependencies = [
  "futures-util",
  "insta",
  "pdo-extension-api",
+ "pdo-harness",
  "pdo-kernel",
  "pdo-legacy",
  "pretty_assertions",
@@ -2012,8 +2013,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdo-harness"
+version = "1.111.1"
+dependencies = [
+ "filetime",
+ "pdo-kernel",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "ts-rs",
+]
+
+[[package]]
 name = "pdo-kernel"
-version = "1.111.0"
+version = "1.111.1"
 dependencies = [
  "chrono",
  "pdo-extension-api",
@@ -2024,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-legacy"
-version = "1.111.0"
+version = "1.111.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2044,6 +2061,7 @@ dependencies = [
  "oxc_ast",
  "oxc_parser",
  "oxc_span",
+ "pdo-harness",
  "pdo-kernel",
  "portable-pty",
  "pretty_assertions",

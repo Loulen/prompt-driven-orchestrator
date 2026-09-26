@@ -485,8 +485,8 @@ impl Importer {
         let mut harnesses = std::collections::BTreeMap::new();
         if model.is_some() || effort.is_some() {
             harnesses.insert(
-                crate::harness_registry::CLAUDE.to_string(),
-                crate::harness_resolver::HarnessEntry { model, effort },
+                pdo_harness::registry::CLAUDE.to_string(),
+                pdo_harness::resolver::HarnessEntry { model, effort },
             );
         }
 

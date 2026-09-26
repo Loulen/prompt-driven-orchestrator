@@ -18,7 +18,7 @@ TS_CHECK_DIR := $(CURDIR)/target/ts-rs-check
 # PDO_SKIP_FRONTEND_BUILD: the crate's build.rs typechecks the frontend, which
 # imports these very files — generating them must not depend on them. An empty
 # dist/ is enough for rust-embed in a test build.
-EXPORT_TS := mkdir -p frontend/dist && PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet -p pdo-legacy --lib export_bindings_ -- --test-threads=1
+EXPORT_TS := mkdir -p frontend/dist && PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet --workspace --lib export_bindings_ -- --test-threads=1
 
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git
@@ -79,7 +79,7 @@ check:
 	$(MAKE) --no-print-directory types-check
 	cd frontend && pnpm run typecheck
 	# The harness support table in docs/reference/harnesses.md is generated from the
-	# capability declaration in crates/pdo-daemon/src/harness_probes.rs (#617). A
+	# capability declaration in crates/pdo-harness/src/domain/probes/ (#617). A
 	# hand-edited table would be wrong at the next capability; this fails and names
 	# the drift instead. Fix it with `make support-table`, never by editing the block.
 	cargo run --quiet -p pdo-daemon -- docs support-table --check --file $(CURDIR)/$(SUPPORT_TABLE)

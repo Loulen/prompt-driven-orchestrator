@@ -5,10 +5,10 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::harness_binary::harness_probe_path;
 use anyhow::{Context, Result};
+use pdo_harness::adapters::binary_path::harness_probe_path;
 use pdo_kernel::env::{
     DEFAULT_HARNESS_ENV, DEFAULT_MODEL_ENV, LIBASSIST_IDLE_TTL_SECS_ENV, REAPER_INTERVAL_SECS_ENV,
     REAPER_TTL_SECS_ENV,
@@ -67,12 +67,12 @@ pub enum SessionTail<'a> {
     /// override (#296); `None` ⇒ account default (byte-identical legacy launch).
     Agent {
         /// The resolved harness descriptor (#550, ADR-0045). Its `launch`
-        /// template renders the tail via [`crate::harness_argv`]; its `env` block
+        /// template renders the tail via [`pdo_harness::argv`]; its `env` block
         /// is exported before the tail (that is where `claude`'s CCR suppression
         /// now comes from — AC #4). For infra sessions and the byte-identity gate
         /// this is the `claude` descriptor, whose template reproduces the legacy
         /// tail exactly once its holes are empty.
-        harness: &'a crate::harness_registry::HarnessDescriptor,
+        harness: &'a pdo_harness::registry::HarnessDescriptor,
         model: Option<&'a str>,
         /// Per-node reasoning-effort override (#424). `None` *or* an empty string
         /// ⇒ no `--effort`, byte-identical tail. A `Script` tail carries no such
@@ -330,18 +330,6 @@ fn wrap_with_env(
     format!("exec bash -c {}", sh_single_quote(&inner))
 }
 
-/// The settings injected via `claude --settings` to arm a turn-end `Stop` hook
-/// (#433, ADR-0043). On every turn end the hook runs `pdo complete --auto` and
-/// then `exit 0` **unconditionally**: a `Stop` hook only forces the turn to
-/// continue on `exit 2` / `{"decision":"block"}`, so the `; exit 0` swallows the
-/// recoverable `exit 3` of a still-missing output (ADR-0035 — nothing recorded)
-/// and the hook can never loop or complete prematurely. `--settings` MERGES
-/// additively over `~/.claude` (confirmed against the pinned CLI: "load
-/// additional settings"), so this clobbers no user hook. `pdo` is on the session
-/// PATH (host and container) and the hook inherits the `PDO_*`/`PDO_DAEMON_URL`
-/// exports `wrap_with_env` set, so no env has to be threaded into the JSON.
-pub(crate) const STOP_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"pdo complete --auto; exit 0"}]}]}}"#;
-
 /// The settings injected via `--settings` to arm the library assistant's
 /// `UserPromptSubmit` hook (#594, ADR-0051 §3).
 ///
@@ -369,14 +357,14 @@ pub(crate) const STOP_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher"
 /// **This only applies on a harness whose launch template has a `{settings}`
 /// hole that takes the claude-format file** — the registry's `claude` does;
 /// `opencode` has no hole and `pi`'s hole takes an extension, not this JSON
-/// (`harness_probes::settings_hole_takes_claude_file`), and there the token is
+/// (`pdo_harness::probes::settings_hole_takes_claude_file`), and there the token is
 /// dropped silently. On those the primer's equivalent instruction
 /// (fetch the focus before acting) is the only mechanism: degraded, deliberately,
 /// rather than absent (ADR-0051 §3).
 pub(crate) const LIBASSIST_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"curl -sf \"$PDO_DAEMON_URL/sessions/libassist/focus?format=text\" || true; exit 0","timeout":10}]}]}}"#;
 
 /// Build the agent tail by rendering the harness descriptor's launch template
-/// through [`crate::harness_argv`] (#550, ADR-0045). The caller shell-quotes each
+/// through [`pdo_harness::argv`] (#550, ADR-0045). The caller shell-quotes each
 /// hole value here — where the shell semantics live — and the renderer only
 /// substitutes and drops empty-hole tokens. For the `claude` descriptor with all
 /// holes empty this reproduces the legacy `build_agent_tail` **byte for byte**
@@ -387,7 +375,7 @@ pub(crate) const LIBASSIST_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"UserPromptSu
 /// string on any of them drops its token (the `Some("")` last-resort guard of
 /// #347: a stray `""` never reaches the tail as `--model ''`).
 fn build_agent_tail(
-    descriptor: &crate::harness_registry::HarnessDescriptor,
+    descriptor: &pdo_harness::registry::HarnessDescriptor,
     prompt_path: &Path,
     model: Option<&str>,
     effort: Option<&str>,
@@ -399,7 +387,7 @@ fn build_agent_tail(
             .map(sh_single_quote)
             .unwrap_or_default()
     };
-    let holes = crate::harness_argv::Holes {
+    let holes = pdo_harness::argv::Holes {
         prompt: format!(
             "\"$(cat {})\"",
             sh_single_quote(&prompt_path.to_string_lossy())
@@ -413,7 +401,7 @@ fn build_agent_tail(
         // The launch template carries no `{resume}` hole.
         resume: String::new(),
     };
-    crate::harness_argv::render(&descriptor.launch, &holes)
+    pdo_harness::argv::render(&descriptor.launch, &holes)
 }
 
 /// The `claude` CCR suppression, forced by the wrapper for `script` / `shell`
@@ -614,7 +602,7 @@ fn build_resume_script(
     iter: i64,
     daemon_port: u16,
     session_path: &str,
-    descriptor: &crate::harness_registry::HarnessDescriptor,
+    descriptor: &pdo_harness::registry::HarnessDescriptor,
     effort: Option<&str>,
     session_id: Option<&str>,
     tmux_cmd_override: Option<&str>,
@@ -641,7 +629,7 @@ fn build_resume_script(
             .map(sh_single_quote)
             .unwrap_or_default()
     };
-    let holes = crate::harness_argv::Holes {
+    let holes = pdo_harness::argv::Holes {
         resume: resume_selector,
         // #424: a resume restores the model but loses the effort, so re-pose it.
         effort: quote_opt(effort),
@@ -653,7 +641,7 @@ fn build_resume_script(
     };
     let tail_cmd = match tmux_cmd_override {
         Some(cmd) => cmd.to_string(),
-        None => crate::harness_argv::render(&descriptor.resume, &holes),
+        None => pdo_harness::argv::render(&descriptor.resume, &holes),
     };
 
     // #407: the resume tail is wrapped identically — a resumed sandboxed session
@@ -772,14 +760,14 @@ pub fn spawn(
     // `-e <extension>`: handed the claude-format hook JSON it would load a JSON file
     // as an extension and refuse to start. So the file written is the one the
     // harness's declared end-of-turn substrate takes
-    // (`harness_probes::turn_end_injection`): the `Stop`-hook JSON for `claude` (and
+    // (`pdo_harness::probes::turn_end_injection`): the `Stop`-hook JSON for `claude` (and
     // any data-declared harness), the `agent_settled` extension for `pi`, nothing for
     // a harness without a substrate. One switch (`inject_hook`, i.e.
     // `autocomplete_turn_end`) governs all of them; off ⇒ no file, and the token
     // (`--settings` / `-e`) drops at render.
     let settings_path = match &tail {
         SessionTail::Agent { harness, .. } if inject_hook && harness.has_settings_hole() => {
-            match crate::harness_probes::turn_end_injection(&harness.name) {
+            match pdo_harness::probes::turn_end_injection(&harness.name) {
                 Some(injection) => {
                     let p = prompt_dir.join(format!("{node_id}-iter-{iter}{}", injection.suffix));
                     std::fs::write(&p, injection.body)?;
@@ -914,7 +902,7 @@ pub fn spawn_libassist(
     working_dir: &Path,
     prompt_path: &Path,
     daemon_port: u16,
-    harness: &crate::harness_registry::HarnessDescriptor,
+    harness: &pdo_harness::registry::HarnessDescriptor,
     tmux_cmd_override: Option<&str>,
 ) -> Result<()> {
     if let Some(parent) = prompt_path.parent() {
@@ -930,7 +918,7 @@ pub fn spawn_libassist(
     // loaded as an extension and break the launch. `None` ⇒ the `{settings}` token
     // drops at render and the primer's fetch-the-focus instruction is the mechanism
     // (the caller has already said so once, ADR-0051 §3).
-    let settings_path = crate::harness_probes::settings_hole_takes_claude_file(&harness.name)
+    let settings_path = pdo_harness::probes::settings_hole_takes_claude_file(&harness.name)
         .then(|| prompt_path.with_file_name("settings.json"));
     if let Some(p) = &settings_path {
         std::fs::write(p, LIBASSIST_HOOK_SETTINGS_JSON)?;
@@ -995,7 +983,7 @@ pub fn resume(
     node_id: &str,
     iter: i64,
     daemon_port: u16,
-    descriptor: &crate::harness_registry::HarnessDescriptor,
+    descriptor: &pdo_harness::registry::HarnessDescriptor,
     effort: Option<&str>,
     session_id: Option<&str>,
     tmux_cmd_override: Option<&str>,
@@ -1010,11 +998,11 @@ pub fn resume(
     //
     // #613/ADR-0051 (correctif 8): as at spawn, only a harness with a `{settings}`
     // hole gets a file — a resumed `opencode` node writes none. #705/#707: and the
-    // file is the one its substrate takes (`harness_probes::turn_end_injection`) —
+    // file is the one its substrate takes (`pdo_harness::probes::turn_end_injection`) —
     // a resumed `pi` node re-arms its `agent_settled` extension (ADR-0043 D7: the
     // primary substrate must survive a resume), never the claude JSON.
     let settings_path = if inject_hook && descriptor.has_settings_hole() {
-        match crate::harness_probes::turn_end_injection(&descriptor.name) {
+        match pdo_harness::probes::turn_end_injection(&descriptor.name) {
             Some(injection) => {
                 let prompt_dir = working_dir.join(".pdo").join("prompts");
                 std::fs::create_dir_all(&prompt_dir)?;
@@ -1093,7 +1081,7 @@ pub fn send_keys(socket: &str, session_name: &str, text: &str) {
 }
 
 /// Type a **one-line message** from the daemon into a harness session and
-/// submit it (#792): the text is prefixed with [`crate::steering::RUNTIME_PREFIX`]
+/// submit it (#792): the text is prefixed with [`pdo_harness::steering::RUNTIME_PREFIX`]
 /// here, at the bottleneck, so no caller (the frontmatter retry of ADR-0035,
 /// …) knows the marker and none can forget it. The prefix is what lets the
 /// Steering counter tell PDO's turns from a human's, and what tells the agent
@@ -1102,19 +1090,19 @@ pub fn send_message(socket: &str, session_name: &str, text: &str) {
     send_keys(
         socket,
         session_name,
-        &crate::steering::runtime_message(text),
+        &pdo_harness::steering::runtime_message(text),
     );
 }
 
 /// Paste a **multi-line message** from the daemon into a harness session as
 /// one bracketed paste and submit it (#750, the review batch to the manager) —
-/// prefixed with [`crate::steering::RUNTIME_PREFIX`] at the head of its first
+/// prefixed with [`pdo_harness::steering::RUNTIME_PREFIX`] at the head of its first
 /// line, same rule as [`send_message`] (#792).
 pub fn paste_message(socket: &str, session_name: &str, text: &str) {
     paste_text(
         socket,
         session_name,
-        &crate::steering::runtime_message(text),
+        &pdo_harness::steering::runtime_message(text),
     );
 }
 
@@ -1464,394 +1452,6 @@ pub fn default_harness_with(stored: Option<String>) -> Option<String> {
     stored
         .filter(|s| !s.is_empty())
         .or_else(env_default_harness)
-}
-
-/// How long a catalogue / version probe is allowed to run before it is killed and
-/// treated as "no answer" (#616). `--help` / `--version` exit immediately on every
-/// harness in play; the cap is a defence against a binary that blocks (a broken
-/// install, a prompt on stdin), so a probe can never wedge the boot task or the
-/// `/settings` response.
-const CATALOGUE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The version string of `binary`, read by running `<binary> --version` on the
-/// harness probe `PATH` (#616, ADR-0053 §3). `None` when the binary can't be run,
-/// times out, or prints nothing. This is the **freshness key** of the catalogue
-/// cache: a changed version invalidates the cached catalogue and re-probes, so an
-/// auto-updating binary is followed without a daemon restart.
-///
-/// UNLIKE [`binary_available`](crate::harness_binary::binary_available), this **executes** the binary — deliberately, and
-/// only ever off the resident hot path: at daemon boot, and on a throttled version
-/// re-check behind the `/settings` fetch. `--version` is non-interactive and exits
-/// at once; the timeout is the backstop.
-pub(crate) fn probe_version(binary: &str) -> Option<String> {
-    probe_version_on(binary, &harness_probe_path())
-}
-
-/// The offered catalogue of `binary`, read from the harness probe `PATH` (#616/#629,
-/// ADR-0053 §1, ADR-0056). A binary that can't be run, times out, or enumerates
-/// nothing anywhere yields [`harness_catalogue::Catalogue::default`] — the free-text
-/// fallback. Executes the binary; see [`probe_version`] for why that is safe here and
-/// not in [`binary_available`](crate::harness_binary::binary_available).
-pub(crate) fn probe_catalogue(binary: &str) -> crate::harness_catalogue::Catalogue {
-    probe_catalogue_on(binary, &harness_probe_path())
-}
-
-/// [`probe_version`] with an explicit `PATH` — the testable core (a test points it
-/// at a tempdir holding a fake binary, no ambient shell).
-pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
-    let out = run_probe(binary, &["--version"], path)?;
-    out.lines()
-        .next()
-        .map(|l| l.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-/// [`probe_catalogue`] with an explicit `PATH` — the testable core, and where #629's,
-/// #705's and #798's five sources (ADR-0056) are actually run.
-///
-/// `--help` is run **first, always**: it is universal, it is one of the three sources,
-/// and — the reason it leads — it is where a CLI **declares its subcommands**. Only the
-/// richer sources a binary advertises are then run. That gate is not politeness, it is
-/// the correctness of the whole ladder. Measured: `claude` has no `completion` and no
-/// `help` subcommand, and treats either as a *prompt* — `claude completion bash` opens
-/// a session and idles until the probe's timeout kills it. Walking the ladder blind
-/// would spend two five-second timeouts on every claude re-probe, one of them inside a
-/// `/settings` response.
-///
-/// The **preference** order of ADR-0056 is independent of the run order: an answer from
-/// the generated completion script outranks one from the settings prose, which outranks
-/// `--help`'s own — per axis, so copilot's models can come from one source and its
-/// effort stops from another. `--help` folds in last precisely because it is the
-/// lowest-preference source, not because it ran first.
-///
-/// Cost, measured on the first-party harnesses: `claude` one subprocess (as before
-/// #629), `copilot` two, `opencode` two, `pi` two (`--help` then `--list-models`)
-/// plus — only for a binary that declares the RPC mode — one bounded interactive
-/// session (#798, [`probe_rpc_model_efforts`]) that answers the per-model effort
-/// axis. Never a hang, never an error: every exchange is deadline-bounded and a
-/// failure is an empty axis, not an error. A binary
-/// that answers no `--help` at all yields the free-text fallback without any subcommand
-/// being guessed at.
-pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_catalogue::Catalogue {
-    use crate::harness_catalogue as cat;
-    let Some(help) = run_probe(binary, &["--help"], path) else {
-        return cat::Catalogue::default();
-    };
-    let mut catalogue = cat::Catalogue::default();
-
-    // Preference 1: the generated completion script.
-    if cat::advertises_subcommand(&help, "completion") {
-        if let Some(script) = run_probe(binary, &["completion", "bash"], path) {
-            catalogue.fill_missing_from(cat::parse_completion_script(&script));
-        }
-    }
-    // Preference 2 (#705, ADR-0056 §1 as amended by #702): the generated model table,
-    // if the binary declares `--list-models` and the model axis is still unanswered.
-    // Gated on the declaration like the subcommands: `claude` has no such flag, and an
-    // unknown flag must never be guessed at inside a `/settings` response.
-    if !catalogue.is_complete() && cat::advertises_flag(&help, "--list-models") {
-        if let Some(table) = run_probe(binary, &["--list-models"], path) {
-            catalogue.fill_missing_from(cat::parse_list_models(&table));
-        }
-    }
-    // Preference 3: the settings help topic, if an axis is still unanswered.
-    if !catalogue.is_complete() && cat::advertises_subcommand(&help, "help") {
-        if let Some(topic) = run_probe(binary, &["help", "config"], path) {
-            catalogue.fill_missing_from(cat::parse_settings_prose(&topic));
-        }
-    }
-    // Preference 4: what `--help` itself enumerates.
-    catalogue.fill_missing_from(cat::parse_help(&help));
-    // Preference 5 (#798): the per-model effort table, read by driving the binary's
-    // RPC mode. Its own axis — no other source answers it, so `is_complete` does
-    // not gate it: models and global efforts can both be answered while the
-    // per-model table is still worth one bounded session. The gate is the same
-    // load-bearing discipline as the subcommand/flag ones: only a binary whose
-    // `--help` declares `--mode rpc` AND every flag the session passes is ever
-    // driven — `claude` would read the argv as a prompt, and the session would
-    // idle to the deadline inside a `/settings` response.
-    if catalogue.model_efforts.is_empty() && cat::rpc_probe_allowed(&help) {
-        catalogue.model_efforts = probe_rpc_model_efforts(binary, path);
-    }
-    catalogue
-}
-
-/// Overall wall-clock budget for one RPC model-effort probe (#798): the spawn, the
-/// model list, and one `set_model` + `get_available_thinking_levels` round trip per
-/// model. The version cache makes this a once-per-binary-version cost; the bound
-/// makes it never more than that. Generous against a slow machine (the measured
-/// exchange over 366 models completes in well under a second), small enough that a
-/// wedged binary cannot outlive a settings fetch for long.
-const RPC_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Hard cap on how many models one RPC probe interrogates (#798). The measured
-/// catalogue (pi 0.85.1 on this host) is 366 rows; the cap keeps a pathological
-/// provider list from stretching the session — models past the cap simply stay
-/// unknown, and an absent key is the global fallback, so the cost of the cap is a
-/// coarser offer, never a wrong one.
-const RPC_MODEL_CAP: usize = 512;
-
-/// The per-model effort table of `binary`, read by driving its RPC mode (#798):
-/// one session lists the binary's models (`get_available_models`), then a
-/// `set_model` + `get_available_thinking_levels` round trip per model — the levels
-/// the binary itself reports, never a model-name rule nor a `reasoning` boolean
-/// (measured on pi 0.85.1: `openrouter/stealth/union-alpha` reports `[off]` where
-/// `openrouter/openai/gpt-5.4` reports five stops). Keys are the `provider/id`
-/// composite, the same rendering `--list-models` offers, so they meet the
-/// catalogue's model ids without translation.
-///
-/// The caller gates on [`crate::harness_catalogue::rpc_probe_allowed`]; this
-/// function assumes the gate passed. Any failure — spawn, protocol, deadline —
-/// yields the table read so far, usually empty: absent keys are *unknown*, and
-/// unknown is the global fallback, the path that cannot break (ADR-0053).
-/// Executes the binary interactively (stdin/stdout); same safety stance as
-/// [`probe_version`] — only ever off the resident hot path, and bounded.
-pub(crate) fn probe_rpc_model_efforts(
-    binary: &str,
-    path: &str,
-) -> std::collections::BTreeMap<String, Vec<String>> {
-    probe_rpc_model_efforts_with(binary, path, RPC_PROBE_TIMEOUT, RPC_MODEL_CAP)
-}
-
-/// [`probe_rpc_model_efforts`] with explicit bounds — the testable core, so a test
-/// can shrink the deadline and the cap without process-global env (the discipline
-/// `catalogue_version_ttl` had to grow an env var to get).
-pub(crate) fn probe_rpc_model_efforts_with(
-    binary: &str,
-    path: &str,
-    timeout: Duration,
-    max_models: usize,
-) -> std::collections::BTreeMap<String, Vec<String>> {
-    use crate::harness_catalogue as cat;
-    use std::sync::mpsc;
-
-    let mut out = std::collections::BTreeMap::new();
-    if binary.is_empty() || max_models == 0 {
-        return out;
-    }
-    // The inert-session argv: every token the gate declared, then the mode. stdin
-    // is PIPED (the protocol is driven over it — unlike `run_probe`, whose probes
-    // get EOF) and stderr is discarded (a chatty binary cannot fill a pipe we
-    // never drain and wedge itself).
-    let mut child = match std::process::Command::new(binary)
-        .args(cat::RPC_HYGIENE_FLAGS)
-        .args(["--mode", "rpc"])
-        .env("PATH", path)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return out,
-    };
-    let deadline = Instant::now() + timeout;
-
-    // One reader thread owns stdout and feeds lines to a channel, so the exchange
-    // loop can time out on a child that stops answering instead of blocking in
-    // `read` forever (the live-session sibling of `run_probe`'s drain threads).
-    let (tx, rx) = mpsc::sync_channel::<String>(64);
-    let stdout = child.stdout.take();
-    // Detached on purpose (see the cleanup comment at the bottom).
-    std::thread::spawn(move || {
-        let Some(pipe) = stdout else { return };
-        let mut buf = String::new();
-        // Bound total output as well as wall time, including unterminated lines.
-        let bounded = std::io::Read::take(pipe, 16 * 1024 * 1024);
-        let mut reader = std::io::BufReader::new(bounded);
-        loop {
-            buf.clear();
-            match std::io::BufRead::read_line(&mut reader, &mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let line = buf.trim_end_matches(['\n', '\r']).to_string();
-                    if tx.send(line).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    let mut stdin = child.stdin.take();
-    // The model list. All requests are correlated by COMMAND, not by id: the
-    // protocol is strictly sequential (each request is sent only after the
-    // previous answer was read), so the next response of `command` is
-    // unambiguous — and a binary that drops correlation ids still works. Events
-    // and unrelated responses are skipped, bounded by the deadline.
-    let models_line = rpc_exchange(
-        &mut stdin,
-        &rx,
-        "get_available_models",
-        serde_json::json!({ "id": "models", "type": "get_available_models" }),
-        deadline,
-    );
-    let models = models_line
-        .as_deref()
-        .map(cat::parse_rpc_models)
-        .unwrap_or_default();
-    for (i, (provider, id)) in models.into_iter().take(max_models).enumerate() {
-        if Instant::now() >= deadline {
-            break;
-        }
-        // The catalogue key: `provider/id`, the `--list-models` rendering.
-        let key = format!("{provider}/{id}");
-        let set = serde_json::json!({
-            "id": format!("m{i}"),
-            "type": "set_model",
-            "provider": provider,
-            "modelId": id,
-        });
-        let Some(line) = rpc_exchange(&mut stdin, &rx, "set_model", set, deadline) else {
-            break;
-        };
-        let accepted = serde_json::from_str::<serde_json::Value>(&line)
-            .map(|v| v["success"].as_bool() == Some(true))
-            .unwrap_or(false);
-        if !accepted {
-            // The binary refused the model: the key stays ABSENT = unknown, the
-            // global fallback — never guessed, never known-empty.
-            continue;
-        }
-        let levels = serde_json::json!({
-            "id": format!("t{i}"),
-            "type": "get_available_thinking_levels",
-        });
-        let Some(line) = rpc_exchange(
-            &mut stdin,
-            &rx,
-            "get_available_thinking_levels",
-            levels,
-            deadline,
-        ) else {
-            break;
-        };
-        if let Some(levels) = cat::parse_rpc_thinking_levels(&line) {
-            out.insert(key, levels);
-        }
-    }
-
-    // Close stdin, then kill and reap: the child's stdout EOFs and the reader
-    // thread ends on its own — DETACHED, like `run_probe`'s drain threads: a killed
-    // child whose grandchild still holds the pipe (its own spawned `sleep`, say)
-    // would never EOF, and a probe must not be able to block the caller on that.
-    // A partially-read table is still a table — per-model keys are independent, so
-    // what was learned stands.
-    drop(stdin);
-    let _ = child.kill();
-    let _ = child.wait();
-    out
-}
-
-/// One request/response exchange of the RPC probe: write `request` (a JSONL line),
-/// then read lines until one is a response of `command` — skipping events,
-/// unrelated responses, and non-JSON noise — or the deadline arrives. `None` on
-/// timeout, a closed pipe, or a dead child; the caller degrades per exchange.
-fn rpc_exchange(
-    stdin: &mut Option<std::process::ChildStdin>,
-    rx: &std::sync::mpsc::Receiver<String>,
-    command: &str,
-    request: serde_json::Value,
-    deadline: Instant,
-) -> Option<String> {
-    use std::io::Write;
-    let stdin = stdin.as_mut()?;
-    let line = serde_json::to_string(&request).ok()?;
-    writeln!(stdin, "{line}").ok()?;
-    stdin.flush().ok()?;
-    loop {
-        let now = Instant::now();
-        if now >= deadline {
-            return None;
-        }
-        let line = rx.recv_timeout(deadline - now).ok()?;
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-            // A banner, a warning, a partial line: skip and keep waiting.
-            continue;
-        };
-        if v["type"].as_str() == Some("response") && v["command"].as_str() == Some(command) {
-            return Some(line);
-        }
-    }
-}
-
-/// Run `<binary> <args>` with `PATH=path`, capturing stdout+stderr (a CLI may print
-/// its help to either), bounded by [`CATALOGUE_PROBE_TIMEOUT`]. Returns `None` when
-/// the binary can't be spawned, times out, or exits without output. Pure w.r.t. the
-/// daemon's environment — the `PATH` is injected, so this is unit-testable against a
-/// fake binary.
-///
-/// The timeout is a poll-and-kill loop rather than a blocking `output()` so a
-/// wedged child (blocked on stdin, a broken install) is reaped instead of hanging
-/// the caller's `spawn_blocking` worker forever.
-///
-/// Both pipes are **drained on their own threads while the child runs** (#629). The
-/// obvious shape — wait for exit, then read — deadlocks on any source that outprints
-/// the OS pipe buffer: the child blocks in `write`, never exits, and the probe reports
-/// a timeout for a binary that answered perfectly. Measured: copilot's completion
-/// script is 71 KB against a 64 KB Linux pipe buffer, so the source ADR-0056 prefers
-/// is exactly the one that hit it.
-fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
-    use std::io::Read;
-    if binary.is_empty() {
-        return None;
-    }
-    let mut child = std::process::Command::new(binary)
-        .args(args)
-        .env("PATH", path)
-        // A probe must never inherit an interactive stdin; if a binary asks, it
-        // gets EOF and exits rather than blocking.
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .ok()?;
-
-    fn drain<R: Read + Send + 'static>(
-        pipe: Option<R>,
-    ) -> Option<std::thread::JoinHandle<Vec<u8>>> {
-        pipe.map(|mut p| {
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                let _ = p.read_to_end(&mut buf);
-                buf
-            })
-        })
-    }
-    let out_reader = drain(child.stdout.take());
-    let err_reader = drain(child.stderr.take());
-
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if start.elapsed() > CATALOGUE_PROBE_TIMEOUT {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // Leave the readers detached rather than joining them: a killed
-                    // child whose grandchild still holds the pipe would never EOF, and
-                    // a probe must not be able to block on that. Partial output is not
-                    // a catalogue anyway — a timeout is "no answer".
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(_) => return None,
-        }
-    }
-    // The child exited, so both pipes are at EOF and the readers join immediately.
-    let joined = |r: Option<std::thread::JoinHandle<Vec<u8>>>| {
-        r.and_then(|h| h.join().ok()).unwrap_or_default()
-    };
-    let (stdout, stderr) = (joined(out_reader), joined(err_reader));
-
-    let mut text = String::from_utf8_lossy(&stdout).into_owned();
-    if !stderr.is_empty() {
-        text.push('\n');
-        text.push_str(&String::from_utf8_lossy(&stderr));
-    }
-    (!text.trim().is_empty()).then_some(text)
 }
 
 /// Resolve the model a work node launches with: the node's own `model:`
@@ -2918,225 +2518,6 @@ mod tests {
         assert_eq!(decisions[2].verdict, SweepVerdict::Keep);
     }
 
-    /// #616: write an executable fake binary into `dir` that echoes `stdout` on
-    /// `--help` and `version` on `--version`. Returns the dir's `PATH` string.
-    #[cfg(unix)]
-    fn fake_harness_binary(dir: &std::path::Path, name: &str, help: &str, version: &str) -> String {
-        fake_harness_binary_with(dir, name, version, &[("--help", help)])
-    }
-
-    /// #629: write an executable fake binary that answers `--version` and any set of
-    /// `(argv-head, stdout)` pairs — one per catalogue source under test. Returns the
-    /// dir's `PATH` string. An argv the fixture does not declare falls through to a
-    /// usage error on stderr, exactly as a real CLI answers a subcommand it lacks.
-    ///
-    /// Self-contained: `printf` is a `/bin/sh` builtin, so the script runs even though
-    /// `run_probe` sets `PATH` to just this dir (no `cat`/`echo` binary). That
-    /// restricted PATH mirrors nothing in production — there the probe PATH is a full
-    /// union (ADR-0055) — it only keeps the fixture honest.
-    #[cfg(unix)]
-    fn fake_harness_binary_with(
-        dir: &std::path::Path,
-        name: &str,
-        version: &str,
-        sources: &[(&str, &str)],
-    ) -> String {
-        use std::os::unix::fs::PermissionsExt;
-        // Match on the whole argv (`"$*"`), so a two-word source (`completion bash`,
-        // `help config`) is as expressible as a flag.
-        let arms: String = sources
-            .iter()
-            .map(|(argv, out)| format!("  '{argv}') printf '%s' '{out}';;\n"))
-            .collect();
-        let script = format!(
-            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf '%s\\n' '{version}';;\n{arms}  *) printf 'error: unknown command\\n' >&2; exit 1;;\nesac\n"
-        );
-        let bin = dir.join(name);
-        std::fs::write(&bin, script).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        dir.to_string_lossy().into_owned()
-    }
-
-    /// #616, ADR-0053 §1/§3: running the resolved binary reads its version and parses
-    /// its offered catalogue. Executed against a fake binary on an injected `PATH`,
-    /// so the test is deterministic and touches no real harness.
-    #[cfg(unix)]
-    #[test]
-    fn probe_reads_version_and_catalogue_from_the_binary() {
-        let dir = tempfile::tempdir().unwrap();
-        let help =
-            "  --model <m>  [gpt-5|gpt-5-codex|o4-mini]\n  --effort <e>  One of: low, medium, high";
-        let path = fake_harness_binary(dir.path(), "fake-harness", help, "fake-harness 1.402");
-
-        assert_eq!(
-            probe_version_on("fake-harness", &path).as_deref(),
-            Some("fake-harness 1.402")
-        );
-        let cat = probe_catalogue_on("fake-harness", &path);
-        assert_eq!(cat.models, vec!["gpt-5", "gpt-5-codex", "o4-mini"]);
-        assert_eq!(cat.efforts, vec!["low", "medium", "high"]);
-    }
-
-    /// The `Commands:` block a fake binary prints so the probe is allowed to ask it
-    /// for the richer sources (#629, ADR-0056). Without it, the gate — correctly —
-    /// never runs `completion` / `help`.
-    const DECLARES_BOTH_SUBCOMMANDS: &str =
-        "Commands:\n  completion <shell>  Generate a shell completion script\n  help [topic]  Display help information\n";
-
-    /// #629, ADR-0056: the completion script is preferred over the settings topic and
-    /// over `--help`. The fixture makes the three sources disagree on purpose — only
-    /// the completion script's answer may survive.
-    #[cfg(unix)]
-    #[test]
-    fn the_generated_completion_script_outranks_the_prose_sources() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = fake_harness_binary_with(
-            dir.path(),
-            "ladder-harness",
-            "ladder-harness 2.0",
-            &[
-                (
-                    "completion bash",
-                    "        --model)\n            COMPREPLY=( $(compgen -W \"auto from-completion\" -- \"$cur\") )\n            ;;\n        --effort|--reasoning-effort)\n            COMPREPLY=( $(compgen -W \"low max\" -- \"$cur\") )\n            ;;\n",
-                ),
-                ("help config", "  `model`: the model.\n    - \"from-settings\"\n"),
-                (
-                    "--help",
-                    &format!(
-                        "  --model <m> [from-help|other]\n  --effort <e> One of: a, b\n{DECLARES_BOTH_SUBCOMMANDS}"
-                    ),
-                ),
-            ],
-        );
-        let cat = probe_catalogue_on("ladder-harness", &path);
-        assert_eq!(cat.models, vec!["auto", "from-completion"]);
-        assert_eq!(cat.efforts, vec!["low", "max"]);
-    }
-
-    /// #629: a source larger than the OS pipe buffer is read in full, not timed out.
-    /// Measured on the real binary, `copilot completion bash` prints 71 KB against a
-    /// 64 KB pipe: a probe that waits for exit before reading blocks the child in
-    /// `write` and reports a timeout for the source ADR-0056 prefers.
-    #[cfg(unix)]
-    #[test]
-    fn a_source_bigger_than_the_pipe_buffer_is_read_whole() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("chatty-harness");
-        // ~200 KB of padding, then the enumeration — so the list only parses if the
-        // whole stream was drained. `yes`-style loops need an external binary, and the
-        // probe's PATH holds only this dir; a `while` over a doubling string is a
-        // builtin-only way to print a lot.
-        std::fs::write(
-            &bin,
-            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf 'chatty 1.0\\n';;\n  '--help')\n    pad=0123456789abcdef\n    i=0\n    while [ $i -lt 14 ]; do pad=\"$pad$pad\"; i=$((i+1)); done\n    printf '%s\\n' \"$pad\"\n    printf '  --model <m> [big|list]\\n  --effort <e> One of: low, high\\n'\n    ;;\nesac\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = dir.path().to_string_lossy().into_owned();
-
-        let raw =
-            run_probe("chatty-harness", &["--help"], &path).expect("a big answer is an answer");
-        assert!(raw.len() > 200_000, "the fixture must exceed a pipe buffer");
-        let cat = probe_catalogue_on("chatty-harness", &path);
-        assert_eq!(cat.models, vec!["big", "list"]);
-        assert_eq!(cat.efforts, vec!["low", "high"]);
-    }
-
-    /// #629, ADR-0056: a binary that declares neither subcommand is never asked for
-    /// them. The fixture makes both **hang** — the measured `claude` hazard, where
-    /// `claude completion bash` is read as a prompt and idles to the probe timeout.
-    /// The probe must come back with `--help`'s own answer, promptly.
-    #[cfg(unix)]
-    #[test]
-    fn an_unadvertised_subcommand_is_never_run() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        // Its own script rather than `fake_harness_binary_with`: the point of the
-        // fixture is the catch-all, which must **hang** instead of erroring out. Its
-        // `--help` declares no `Commands:` block, so nothing is advertised.
-        let bin = dir.path().join("prompt-harness");
-        std::fs::write(
-            &bin,
-            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf 'prompt-harness 3.0\\n';;\n  '--help') printf '%s' 'Usage: prompt-harness [prompt]\n  --model <m> [only|from-help]\n  --effort <e> One of: low, high\n';;\n  *) sleep 30;;\nesac\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = dir.path().to_string_lossy().into_owned();
-
-        let started = Instant::now();
-        let cat = probe_catalogue_on("prompt-harness", &path);
-        assert!(
-            started.elapsed() < CATALOGUE_PROBE_TIMEOUT,
-            "an unadvertised subcommand must not be run at all, let alone timed out"
-        );
-        assert_eq!(cat.models, vec!["only", "from-help"]);
-        assert_eq!(cat.efforts, vec!["low", "high"]);
-    }
-
-    /// #629: the copilot shape as measured on 1.0.80 minus its completion script (an
-    /// older release, or a generator that stops emitting choices) — models from
-    /// `help config`, efforts from `--help`, each axis owned by the first source that
-    /// answers for it.
-    #[cfg(unix)]
-    #[test]
-    fn each_axis_falls_through_to_the_next_source_independently() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = fake_harness_binary_with(
-            dir.path(),
-            "split-harness",
-            "split-harness 1.0.80",
-            &[
-                (
-                    "help config",
-                    "  `model`: AI model to use.\n    - \"claude-opus-5\"\n    - \"gpt-5.5\"\n\n  `contextTier`: tier.\n",
-                ),
-                (
-                    "--help",
-                    &format!(
-                        "  --model <model>  Set the AI model to use (use 'auto')\n  --effort <level> Set the effort (choices: \"none\", \"max\")\n{DECLARES_BOTH_SUBCOMMANDS}"
-                    ),
-                ),
-            ],
-        );
-        let cat = probe_catalogue_on("split-harness", &path);
-        assert_eq!(cat.models, vec!["claude-opus-5", "gpt-5.5"]);
-        assert_eq!(cat.efforts, vec!["none", "max"]);
-    }
-
-    /// #629: a binary that enumerates nothing on any of the three sources still yields
-    /// an empty catalogue — the free-text fallback — and never an error. This is the
-    /// measured `opencode` shape: a bare `provider/model` placeholder, no completion
-    /// choices, no settings topic.
-    #[cfg(unix)]
-    #[test]
-    fn a_binary_that_enumerates_nowhere_is_still_the_free_text_fallback() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = fake_harness_binary_with(
-            dir.path(),
-            "bare-harness",
-            "bare-harness 0.1",
-            &[("--help", "  --model <provider/model>  Model to use\n")],
-        );
-        assert_eq!(
-            probe_catalogue_on("bare-harness", &path),
-            crate::harness_catalogue::Catalogue::default()
-        );
-    }
-
-    /// #616: a binary that can't be resolved on the injected `PATH` yields no
-    /// version and an empty catalogue — the free-text fallback, never a panic.
-    #[test]
-    fn probe_of_an_absent_binary_is_empty_not_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().to_string_lossy().into_owned();
-        assert_eq!(probe_version_on("no-such-harness", &path), None);
-        assert_eq!(
-            probe_catalogue_on("no-such-harness", &path),
-            crate::harness_catalogue::Catalogue::default()
-        );
-    }
-
     #[test]
     fn build_script_default_and_override() {
         let prompt_path = Path::new("/tmp/test-prompt.md");
@@ -3151,7 +2532,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -3175,7 +2556,7 @@ mod tests {
             prompt_path,
             Some("exec sleep 60"),
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -3206,7 +2587,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -3250,7 +2631,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -3279,7 +2660,7 @@ mod tests {
             1,
             6172,
             "/home/u/.local/bin:/usr/bin:/bin",
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             None,
             Some("11111111-2222-3333-4444-555555555555"),
             None,
@@ -3322,7 +2703,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -3360,7 +2741,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: Some("opus"),
                 effort: None,
                 session_id: None,
@@ -3402,7 +2783,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: Some(""),
                 effort: None,
                 session_id: None,
@@ -3433,7 +2814,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model,
                 effort,
                 session_id: None,
@@ -3523,7 +2904,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -3548,7 +2929,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model,
                 effort,
                 session_id,
@@ -3559,96 +2940,11 @@ mod tests {
     }
 
     #[test]
-    fn stop_hook_settings_json_is_valid_and_wraps_with_exit_zero() {
-        // #433 / ADR-0043: the injected settings must be valid JSON that arms a
-        // `Stop` hook whose command swallows any non-zero exit with `; exit 0`
-        // (so the recoverable `exit 3` of a missing output can never force-loop
-        // the turn or complete prematurely).
-        let v: serde_json::Value =
-            serde_json::from_str(STOP_HOOK_SETTINGS_JSON).expect("settings JSON must parse");
-        let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"]
-            .as_str()
-            .expect("the Stop hook must carry a command");
-        assert_eq!(cmd, "pdo complete --auto; exit 0");
-        assert_eq!(
-            v["hooks"]["Stop"][0]["hooks"][0]["type"].as_str(),
-            Some("command")
-        );
-    }
-
-    /// Drive the real `spawn` with a benign tail and report whether it dropped the
-    /// claude turn-end settings file beside the prompt. Kills the ephemeral tmux
-    /// server on its own socket afterwards. `port` isolates the socket from sibling
-    /// tests.
-    fn spawn_and_check_settings_file(
-        port: u16,
-        harness: &crate::harness_registry::HarnessDescriptor,
-    ) -> bool {
-        spawn_turn_end_files(port, harness, true).0
-    }
-
-    /// The general form (#707): drive the real `spawn` with `inject_hook` and report
-    /// which turn-end file landed beside the prompt — `(claude settings JSON, pi
-    /// extension)`. Exactly one may be true for an instrumented harness, none for a
-    /// harness without a hole or with the setting off.
-    fn spawn_turn_end_files(
-        port: u16,
-        harness: &crate::harness_registry::HarnessDescriptor,
-        inject_hook: bool,
-    ) -> (bool, bool) {
-        let wd = tempfile::tempdir().unwrap();
-        let session = node_session_name("run-c8", "n", 1);
-        // The tail runs `true` (exits at once); we only assert on the file the write
-        // gate controls, which is written before tmux is ever touched.
-        let _ = spawn(
-            &session,
-            "prompt body",
-            wd.path(),
-            "run-c8",
-            "n",
-            1,
-            port,
-            Some("true"),
-            SessionTail::Agent {
-                harness,
-                model: None,
-                effort: None,
-                session_id: None,
-            },
-            None,
-            inject_hook,
-        );
-        let prompts = wd.path().join(".pdo").join("prompts");
-        let settings_json = prompts.join("n-iter-1.settings.json");
-        let turn_end_ts = prompts.join("n-iter-1.turn-end.ts");
-        let found = (settings_json.is_file(), turn_end_ts.is_file());
-        if found.1 {
-            // The extension body is pi's, byte for byte.
-            assert_eq!(
-                std::fs::read_to_string(&turn_end_ts).unwrap(),
-                crate::pi_session::TURN_END_EXTENSION_TS
-            );
-        }
-        if found.0 {
-            assert_eq!(
-                std::fs::read_to_string(&settings_json).unwrap(),
-                STOP_HOOK_SETTINGS_JSON
-            );
-        }
-        // Tear down the ephemeral server (ignore errors — the `true` tail may have
-        // already ended the only session, leaving no server to kill).
-        let _ = std::process::Command::new("tmux")
-            .args(["-L", &tmux_socket_name(port), "kill-server"])
-            .output();
-        found
-    }
-
-    #[test]
     fn spawn_writes_the_settings_file_for_a_harness_with_a_settings_hole() {
         // #613 (correctif 8) control: `claude` HAS a `{settings}` hole, so with the
         // setting on PDO writes the Stop-hook file beside the prompt, as always.
         assert!(
-            spawn_and_check_settings_file(58231, &crate::harness_registry::claude()),
+            spawn_and_check_settings_file(58231, &pdo_harness::registry::claude()),
             "claude must still get its turn-end settings file"
         );
     }
@@ -3660,13 +2956,13 @@ mod tests {
         // extension) beside the prompt — and never the claude Stop-hook JSON, which
         // pi would try to load as an extension.
         assert_eq!(
-            spawn_turn_end_files(58233, &crate::harness_registry::pi(), true),
+            spawn_turn_end_files(58233, &pdo_harness::registry::pi(), true),
             (false, true),
             "pi gets its extension and never the claude JSON"
         );
         // The control: claude gets its JSON and never pi's extension.
         assert_eq!(
-            spawn_turn_end_files(58234, &crate::harness_registry::claude(), true),
+            spawn_turn_end_files(58234, &pdo_harness::registry::claude(), true),
             (true, false)
         );
     }
@@ -3676,7 +2972,7 @@ mod tests {
         // #707 AC: unchecked ⇒ no file at all, so the `-e` token drops from the argv
         // (the `harness_argv` golden pins the argv side).
         assert_eq!(
-            spawn_turn_end_files(58235, &crate::harness_registry::pi(), false),
+            spawn_turn_end_files(58235, &pdo_harness::registry::pi(), false),
             (false, false),
             "setting off ⇒ nothing written"
         );
@@ -3689,7 +2985,7 @@ mod tests {
         // file — the absence is honoured, not supplied. This was the one place the
         // discipline was broken.
         assert!(
-            !spawn_and_check_settings_file(58232, &crate::harness_registry::opencode()),
+            !spawn_and_check_settings_file(58232, &pdo_harness::registry::opencode()),
             "opencode must get no settings file — it has no settings hole"
         );
     }
@@ -3723,7 +3019,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: Some("opus"),
                 effort: Some("low"),
                 session_id: None,
@@ -3827,7 +3123,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -3883,7 +3179,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             None,
             None,
             None,
@@ -3907,7 +3203,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             Some("low"),
             None,
             None,
@@ -4395,7 +3691,7 @@ mod tests {
     /// the exec argv byte-identical (claude).
     #[test]
     fn sandbox_wrap_forwards_the_staging_set_env_on_the_exec() {
-        let harness = crate::harness_registry::pi();
+        let harness = pdo_harness::registry::pi();
         let set_env = vec![
             ("PI_SKIP_VERSION_CHECK".to_string(), "1".to_string()),
             ("PI_TELEMETRY".to_string(), "0".to_string()),
@@ -4477,7 +3773,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -4611,7 +3907,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
-                harness: &crate::harness_registry::claude(),
+                harness: &pdo_harness::registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -4642,7 +3938,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             None,
             None,
             None,
@@ -4662,7 +3958,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             None,
             None,
             None,
@@ -4690,7 +3986,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             None,
             Some(sid),
             None,
@@ -4717,7 +4013,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             Some("low"),
             Some(sid),
             None,
@@ -4747,7 +4043,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::copilot(),
+            &pdo_harness::registry::copilot(),
             None,
             Some(sid),
             None,
@@ -4769,7 +4065,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::copilot(),
+            &pdo_harness::registry::copilot(),
             None,
             None,
             None,
@@ -4796,7 +4092,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::pi(),
+            &pdo_harness::registry::pi(),
             Some("high"),
             Some(sid),
             None,
@@ -4823,7 +4119,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::pi(),
+            &pdo_harness::registry::pi(),
             None,
             Some(sid),
             None,
@@ -4847,7 +4143,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             None,
             Some(""),
             None,
@@ -4873,7 +4169,7 @@ mod tests {
                 1,
                 6172,
                 TEST_SESSION_PATH,
-                &crate::harness_registry::claude(),
+                &pdo_harness::registry::claude(),
                 effort,
                 None,
                 None,
@@ -4907,7 +4203,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             Some("low"),
             None,
             None,
@@ -4936,7 +4232,7 @@ mod tests {
             1,
             6172,
             TEST_SESSION_PATH,
-            &crate::harness_registry::claude(),
+            &pdo_harness::registry::claude(),
             Some("low"),
             Some("11111111-2222-3333-4444-555555555555"),
             Some("exec sleep 60"),
@@ -5009,252 +4305,70 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // #798: the RPC model-effort probe. Fake binaries speak the tiny slice of
-    // the pi RPC protocol the probe drives; every failure shape is exercised
-    // against an injected deadline so no test can hang or race the clock.
-    // -----------------------------------------------------------------------
+    /// Drive the real `spawn` with a benign tail and report whether it dropped the
+    /// claude turn-end settings file beside the prompt. Kills the ephemeral tmux
+    /// server on its own socket afterwards. `port` isolates the socket from sibling
+    /// tests.
+    fn spawn_and_check_settings_file(
+        port: u16,
+        harness: &pdo_harness::registry::HarnessDescriptor,
+    ) -> bool {
+        spawn_turn_end_files(port, harness, true).0
+    }
 
-    /// A fake `pi`-shaped harness: `--help` passes the RPC gate, `--mode rpc`
-    /// speaks JSONL. Three models on purpose — one full level set (`gpt-5.4`),
-    /// one that reports only `off` (`union-alpha`), one spare (`third/model`) for
-    /// the cap test. `refuse` is a substring; a `set_model` naming it is answered
-    /// with `success:false` and the session keeps serving.
-    #[cfg(unix)]
-    fn fake_rpc_harness(dir: &std::path::Path, name: &str, refuse: &str) -> String {
-        use std::os::unix::fs::PermissionsExt;
-        let refuse_arm = if refuse.is_empty() {
-            String::new()
-        } else {
-            // Built by pushes, not format!: the arm carries literal braces, and
-            // doubling every one for the macro is how a fixture rots.
-            let mut arm = String::from("            *");
-            arm.push_str(refuse);
-            arm.push_str("*)\n");
-            arm.push_str(
-                "                printf '%s\\n' '{\"id\":\"s\",\"type\":\"response\",\"command\":\"set_model\",\"success\":false,\"error\":\"refused\"}'\n",
+    /// The general form (#707): drive the real `spawn` with `inject_hook` and report
+    /// which turn-end file landed beside the prompt — `(claude settings JSON, pi
+    /// extension)`. Exactly one may be true for an instrumented harness, none for a
+    /// harness without a hole or with the setting off.
+    fn spawn_turn_end_files(
+        port: u16,
+        harness: &pdo_harness::registry::HarnessDescriptor,
+        inject_hook: bool,
+    ) -> (bool, bool) {
+        let wd = tempfile::tempdir().unwrap();
+        let session = node_session_name("run-c8", "n", 1);
+        // The tail runs `true` (exits at once); we only assert on the file the write
+        // gate controls, which is written before tmux is ever touched.
+        let _ = spawn(
+            &session,
+            "prompt body",
+            wd.path(),
+            "run-c8",
+            "n",
+            1,
+            port,
+            Some("true"),
+            SessionTail::Agent {
+                harness,
+                model: None,
+                effort: None,
+                session_id: None,
+            },
+            None,
+            inject_hook,
+        );
+        let prompts = wd.path().join(".pdo").join("prompts");
+        let settings_json = prompts.join("n-iter-1.settings.json");
+        let turn_end_ts = prompts.join("n-iter-1.turn-end.ts");
+        let found = (settings_json.is_file(), turn_end_ts.is_file());
+        if found.1 {
+            // The extension body is pi's, byte for byte.
+            assert_eq!(
+                std::fs::read_to_string(&turn_end_ts).unwrap(),
+                pdo_harness::pi_session::TURN_END_EXTENSION_TS
             );
-            arm.push_str("                ;;\n");
-            arm
-        };
-        let script = r#"#!/bin/sh
-case "$*" in
-  '--version') printf '%s\n' 'rpc-harness 1.0';;
-  '--help')
-    printf '%s\n' \
-      'Options:' \
-      '  --mode <mode>                  Output mode: text (default), json, or rpc' \
-      '  --no-session                   ephemeral session' \
-      '  --no-extensions, -ne           no extension discovery' \
-      '  --no-skills, -ns               no skills discovery' \
-      '  --no-prompt-templates, -np     no prompt templates' \
-      '  --no-themes                    no themes' \
-      '  --no-context-files, -nc        no context files' \
-      '  --offline                      no network operations' \
-      '  --no-approve, -na              no project-local trust'
-    ;;
-  *'--mode rpc'*)
-    MODEL=other
-    while IFS= read -r line; do
-      case "$line" in
-        *get_available_models*)
-          printf '%s\n' '{"id":"models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"openai/gpt-5.4","name":"GPT 5.4","provider":"openrouter","reasoning":true},{"id":"stealth/union-alpha","name":"Union","provider":"openrouter","reasoning":false},{"id":"third/model","name":"Third","provider":"openrouter","reasoning":true}]}}'
-          ;;
-        *set_model*)
-          case "$line" in
-__REFUSE_ARM__            *union-alpha*)
-              MODEL=union-alpha
-              printf '%s\n' '{"id":"s","type":"response","command":"set_model","success":true,"data":{}}'
-              ;;
-            *)
-              MODEL=other
-              printf '%s\n' '{"id":"s","type":"response","command":"set_model","success":true,"data":{}}'
-              ;;
-          esac
-          ;;
-        *get_available_thinking_levels*)
-          if [ "$MODEL" = union-alpha ]; then
-            printf '%s\n' '{"id":"t","type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off"]}}'
-          else
-            printf '%s\n' '{"id":"t","type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off","low","medium","high","xhigh"]}}'
-          fi
-          ;;
-      esac
-    done
-    ;;
-  *)
-    printf 'error: unknown command\n' >&2
-    exit 1
-    ;;
-esac
-"#
-        .replace("__REFUSE_ARM__", &refuse_arm);
-        let bin = dir.join(name);
-        std::fs::write(&bin, script).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        dir.to_string_lossy().into_owned()
-    }
-
-    /// #798, the issue's repro end to end: a binary that declares the RPC mode
-    /// yields a per-model effort table keyed `provider/id` — the exact levels the
-    /// fake reports, nothing inferred. `union-alpha`'s `[off]` is a KNOWN offer of
-    /// one level; it must not collapse into the unknown bucket.
-    #[cfg(unix)]
-    #[test]
-    fn the_rpc_session_yields_each_models_verbatim_levels() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = fake_rpc_harness(dir.path(), "rpc-harness", "");
-        let cat = probe_catalogue_on("rpc-harness", &path);
-        let gpt54 = cat
-            .model_efforts
-            .get("openrouter/openai/gpt-5.4")
-            .expect("gpt-5.4 in the table");
-        assert_eq!(
-            gpt54.iter().map(String::as_str).collect::<Vec<_>>(),
-            vec!["off", "low", "medium", "high", "xhigh"],
-        );
-        let union = cat
-            .model_efforts
-            .get("openrouter/stealth/union-alpha")
-            .expect("union-alpha in the table");
-        assert_eq!(
-            union.iter().map(String::as_str).collect::<Vec<_>>(),
-            vec!["off"],
-            "[off] is a known per-model offer, not an unknown"
-        );
-        assert_eq!(cat.model_efforts.len(), 3);
-        // The keys meet the `--list-models` rendering without translation; and the
-        // session answers ONLY the per-model axis — the global axes keep their
-        // sources' answers (here: none, the declared absence).
-        assert!(cat.models.is_empty());
-        assert!(cat.efforts.is_empty());
-    }
-
-    /// #798: a model the binary REFUSES at `set_model` stays absent = unknown (the
-    /// global fallback), while the models it accepted keep their verbatim levels.
-    /// Never guessed, never known-empty.
-    #[cfg(unix)]
-    #[test]
-    fn a_refused_model_stays_unknown_the_others_keep_their_levels() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = fake_rpc_harness(dir.path(), "refusing-harness", "union-alpha");
-        let cat = probe_catalogue_on("refusing-harness", &path);
-        assert!(
-            !cat.model_efforts
-                .contains_key("openrouter/stealth/union-alpha"),
-            "the refused model is unknown: {:?}",
-            cat.model_efforts
-        );
-        assert_eq!(
-            cat.model_efforts
-                .get("openrouter/openai/gpt-5.4")
-                .map(|v| v.iter().map(String::as_str).collect::<Vec<_>>()),
-            Some(vec!["off", "low", "medium", "high", "xhigh"]),
-        );
-        assert_eq!(
-            cat.model_efforts
-                .get("openrouter/third/model")
-                .map(|v| v.iter().map(String::as_str).collect::<Vec<_>>()),
-            Some(vec!["off", "low", "medium", "high", "xhigh"]),
-            "the probe keeps going after a refusal"
-        );
-    }
-
-    /// #798: the cap. Only the first `max_models` models are interrogated; the
-    /// rest stay unknown — a coarser offer, never a wrong one.
-    #[cfg(unix)]
-    #[test]
-    fn the_rpc_probe_is_capped_to_max_models() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = fake_rpc_harness(dir.path(), "capped-harness", "");
-        let map = probe_rpc_model_efforts_with("capped-harness", &path, Duration::from_secs(5), 2);
-        assert_eq!(map.len(), 2, "exactly the first two offers");
-        assert!(map.contains_key("openrouter/openai/gpt-5.4"));
-        assert!(map.contains_key("openrouter/stealth/union-alpha"));
-        assert!(!map.contains_key("openrouter/third/model"));
-    }
-
-    /// #798: a binary that accepts the session and never answers is bounded by the
-    /// injected deadline and yields an empty table — the global fallback, not a
-    /// hung `/settings`. The fixture blocks on stdin for ever (builtin-only, see
-    /// its comment); the probe must not wait for it.
-    #[cfg(unix)]
-    #[test]
-    fn an_rpc_session_that_never_answers_is_bounded_and_empty() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("stuck-harness");
-        // The hang is a builtin-only stdin read (an external `sleep` would not
-        // resolve on the probe's restricted PATH, and the fixture would exit at
-        // once instead of exercising the deadline).
-        std::fs::write(
-            &bin,
-            "#!/bin/sh\ncase \"$*\" in\n  *'--mode rpc'*) while IFS= read -r x; do :; done;;\nesac\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = dir.path().to_string_lossy().into_owned();
-
-        let started = Instant::now();
-        let map =
-            probe_rpc_model_efforts_with("stuck-harness", &path, Duration::from_millis(400), 10);
-        assert!(map.is_empty());
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "bounded by the injected deadline, not the fixture's endless read"
-        );
-    }
-
-    /// #798: malformed output — banners, non-JSON noise, an early exit — is an
-    /// empty table, never an error and never a half-parsed model.
-    #[cfg(unix)]
-    #[test]
-    fn garbage_from_an_rpc_session_is_an_empty_table() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("garbage-harness");
-        std::fs::write(
-            &bin,
-            "#!/bin/sh\ncase \"$*\" in\n  *'--mode rpc'*) printf 'hello\\nnot json\\n{}\\n'; exit 0;;\nesac\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = dir.path().to_string_lossy().into_owned();
-        let map =
-            probe_rpc_model_efforts_with("garbage-harness", &path, Duration::from_secs(2), 10);
-        assert!(map.is_empty());
-    }
-
-    /// #798, the gate end to end: a binary whose `--help` does NOT declare the RPC
-    /// mode is never driven, even though its rpc mode would hang — the catalogue
-    /// comes back promptly from `--help` alone, the per-model axis empty (unknown,
-    /// the pre-#798 behaviour). The measured `claude` hazard, mirrored.
-    #[cfg(unix)]
-    #[test]
-    fn the_rpc_probe_only_runs_for_a_binary_that_declares_it() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("unannounced-harness");
-        // The catch-all hangs on a builtin-only stdin read — the measured `claude`
-        // hazard (an unannounced argv is read as a prompt). An external `sleep`
-        // would not resolve on the probe's restricted PATH, so the fixture must not
-        // rely on one to hang.
-        std::fs::write(
-            &bin,
-            "#!/bin/sh\ncase \"$*\" in\n  '--help') printf '%s\\n' '  --model <m>  [from-help|other]' '  --effort <e> One of: low, high';;\n  *) while IFS= read -r x; do :; done;;\nesac\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = dir.path().to_string_lossy().into_owned();
-
-        let started = Instant::now();
-        let cat = probe_catalogue_on("unannounced-harness", &path);
-        assert!(
-            started.elapsed() < CATALOGUE_PROBE_TIMEOUT,
-            "the gate refused the session: nothing hung"
-        );
-        assert_eq!(cat.models, vec!["from-help", "other"]);
-        assert_eq!(cat.efforts, vec!["low", "high"]);
-        assert!(cat.model_efforts.is_empty());
+        }
+        if found.0 {
+            assert_eq!(
+                std::fs::read_to_string(&settings_json).unwrap(),
+                pdo_harness::probes::STOP_HOOK_SETTINGS_JSON
+            );
+        }
+        // Tear down the ephemeral server (ignore errors — the `true` tail may have
+        // already ended the only session, leaving no server to kill).
+        let _ = std::process::Command::new("tmux")
+            .args(["-L", &tmux_socket_name(port), "kill-server"])
+            .output();
+        found
     }
 }

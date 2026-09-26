@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::agent_choice::AgentChoice;
 use crate::pipeline::{self, PipelineDef};
+use pdo_harness::agent_choice::AgentChoice;
 
 pub(crate) const VERSION: u32 = 1;
 
@@ -196,8 +196,8 @@ pub(crate) fn interpret(source: &str) -> Result<InterpretedDocument, String> {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::agent_choice::AgentChoice;
     use crate::pipeline::{NodeDef, NodeType, PipelineDef, Port};
+    use pdo_harness::agent_choice::AgentChoice;
 
     fn node(id: &str, name: &str, node_type: NodeType) -> NodeDef {
         NodeDef {

@@ -25,14 +25,14 @@ fn read(relative: &str) -> String {
 
 /// The one file carrying the generated block.
 fn harnesses() -> String {
-    read(pdo_daemon::harness_support::DOCUMENT)
+    read(pdo_harness::support::DOCUMENT)
 }
 
 #[test]
 fn the_committed_support_table_matches_the_capability_declaration() {
     let document = harnesses();
-    if let Err(why) = pdo_daemon::harness_support::check(&document) {
-        panic!("{}: {why}", pdo_daemon::harness_support::DOCUMENT);
+    if let Err(why) = pdo_harness::support::check(&document) {
+        panic!("{}: {why}", pdo_harness::support::DOCUMENT);
     }
 }
 
@@ -43,8 +43,8 @@ fn the_readme_carries_no_generated_block() {
     for readme in ["README.md", "docs/readme/README.fr.md"] {
         let document = read(readme);
         assert!(
-            !document.contains(pdo_daemon::harness_support::BEGIN_MARKER)
-                && !document.contains(pdo_daemon::harness_support::END_MARKER),
+            !document.contains(pdo_harness::support::BEGIN_MARKER)
+                && !document.contains(pdo_harness::support::END_MARKER),
             "{readme} still carries a generated support-table block"
         );
     }

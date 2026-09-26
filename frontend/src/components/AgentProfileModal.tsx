@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { createAgentProfile, updateAgentProfile } from "../api";
 import type { AgentProfile } from "../shared/generated/AgentProfile";
-import ModelPicker from "./ModelPicker";
-import EffortPicker from "./EffortPicker";
-import HarnessSelect from "./HarnessSelect";
-import { findHarnessOption, effortOffer } from "../lib/harness";
-import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
+import ModelPicker from "../harness/components/ModelPicker";
+import EffortPicker from "../harness/components/EffortPicker";
+import HarnessSelect from "../harness/components/HarnessSelect";
+import { findHarnessOption, effortOffer } from "../harness/model/catalog";
+import { useHarnessCatalog } from "../harness/store/useHarnessCatalog";
 
 /**
  * The agent profile editor (#899): one modal for both a row's **Edit** pencil

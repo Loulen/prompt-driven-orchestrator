@@ -40,7 +40,7 @@ pub(crate) struct Project {
     /// wins outright at this tier over [`Self::harness`] (never merges).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    pub agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
     /// The Projet tier of the **skills** selection (#669, ADR-0062): unioned with
     /// the instance, Run and Node tiers by `skill_selection::resolve` for every
     /// Run whose primary repo this Projet owns. Empty ⇒ transparent.
@@ -283,7 +283,7 @@ pub(crate) async fn auto_fail_for_path(
 pub(crate) async fn set_agent_choice(
     db: &SqlitePool,
     id: &str,
-    agent_choice: Option<crate::agent_choice::AgentChoice>,
+    agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
 ) -> Result<bool, sqlx::Error> {
     let stored = agent_choice.map(|c| serde_json::to_string(&c).unwrap_or_default());
     let res = sqlx::query("UPDATE projects SET agent_choice = ? WHERE id = ?")
@@ -322,12 +322,12 @@ pub(crate) async fn skills_for_path(
         .unwrap_or_default())
 }
 
-/// The Projet tier of [`crate::agent_choice::resolve`]. `None` ⇒ transparent —
+/// The Projet tier of [`pdo_harness::agent_choice::resolve`]. `None` ⇒ transparent —
 /// the legacy `harness` signal ([`harness_for_path`]) then applies.
 pub(crate) async fn agent_choice_for_path(
     db: &SqlitePool,
     path: &str,
-) -> Result<Option<crate::agent_choice::AgentChoice>, sqlx::Error> {
+) -> Result<Option<pdo_harness::agent_choice::AgentChoice>, sqlx::Error> {
     Ok(owner_of(db, path).await?.and_then(|p| p.agent_choice))
 }
 
@@ -392,7 +392,7 @@ pub(crate) async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Erro
     Ok(res.rows_affected() > 0)
 }
 
-/// The `project` tier of [`crate::harness_resolver`]. An empty stored harness is
+/// The `project` tier of [`pdo_harness::resolver`]. An empty stored harness is
 /// already normalised to `None` by [`owner_of`] → [`get`].
 pub(crate) async fn harness_for_path(
     db: &SqlitePool,
@@ -541,7 +541,7 @@ mod tests {
             .unwrap()
             .is_none());
 
-        let choice = crate::agent_choice::AgentChoice::Profile {
+        let choice = pdo_harness::agent_choice::AgentChoice::Profile {
             profile_id: "reviewer".to_string(),
         };
         assert!(set_agent_choice(&db, &a.id, Some(choice.clone()))
@@ -568,7 +568,7 @@ mod tests {
     }
 
     /// Setting one never disturbs the other; resolution order between them is
-    /// `agent_choice.rs`'s concern, not this store's.
+    /// `pdo_harness::agent_choice`'s concern, not this store's.
     #[tokio::test]
     async fn agent_choice_and_legacy_harness_coexist_on_the_same_project() {
         let db = mem_db().await;
@@ -576,7 +576,7 @@ mod tests {
         add_member(&db, &a.id, "/repos/front").await.unwrap();
         assert!(set_harness(&db, &a.id, Some("claude")).await.unwrap());
 
-        let choice = crate::agent_choice::AgentChoice::Custom {
+        let choice = pdo_harness::agent_choice::AgentChoice::Custom {
             harness: "opencode".to_string(),
             model: Some("gpt-5".to_string()),
             effort: None,
@@ -623,7 +623,7 @@ mod tests {
         );
         assert_eq!(p.agent_choice, None, "new column defaults to NULL");
 
-        let choice = crate::agent_choice::AgentChoice::Profile {
+        let choice = pdo_harness::agent_choice::AgentChoice::Profile {
             profile_id: "reviewer".to_string(),
         };
         assert!(set_agent_choice(&db, "prj-1", Some(choice.clone()))

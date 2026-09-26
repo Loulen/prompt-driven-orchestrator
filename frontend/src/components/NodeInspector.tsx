@@ -9,17 +9,17 @@ import { SectionHead, Field } from "./InspectorPrimitives";
 import OutputPortCard from "./OutputPortCard";
 import { NodeTypeIcon } from "./NodeTypeIcon";
 import PooledInputRow from "./PooledInputRow";
-import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
+import { useHarnessCatalog } from "../harness/store/useHarnessCatalog";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import AgentControl from "./AgentControl";
 import SkillSelector from "./SkillSelector";
 import { useSkillBank } from "../hooks/useSkillBank";
 import { useSkillTiers } from "../hooks/useSkillTiers";
 import type { InheritedTier } from "../lib/skillSelection";
-import HarnessSelect from "./HarnessSelect";
-import ModelPicker from "./ModelPicker";
-import EffortPicker from "./EffortPicker";
-import { findHarnessOption, effortOffer, resolveEditorHarness } from "../lib/harness";
+import HarnessSelect from "../harness/components/HarnessSelect";
+import ModelPicker from "../harness/components/ModelPicker";
+import EffortPicker from "../harness/components/EffortPicker";
+import { findHarnessOption, effortOffer, resolveEditorHarness } from "../harness/model/catalog";
 import {
   WORKSPACE_CHOICES,
   carriesIsolation,

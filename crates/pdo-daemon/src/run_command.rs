@@ -1768,7 +1768,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 .unwrap_or_default();
             let descriptor = match crate::find_launch_harness(&events, &node_id, iter).as_deref() {
                 Some(name) => {
-                    match crate::harness_registry::HarnessRegistry::load(&harness_home_root)
+                    match pdo_harness::adapters::descriptor_file::load(&harness_home_root)
                         .resolve(name)
                     {
                         Some(d) => d,
@@ -1786,7 +1786,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                         }
                     }
                 }
-                None => crate::harness_registry::claude(),
+                None => pdo_harness::registry::claude(),
             };
             let mechanism = crate::recovery::choose_recovery(descriptor.can_resume());
 

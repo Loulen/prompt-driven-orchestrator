@@ -83,7 +83,7 @@ pub(crate) struct Trigger {
     /// [`Self::harness`]. `None` ⇒ `harness` (and the tiers below it) decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    pub agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
     /// The skills a fired Run carries at its **Run** tier (#669, ADR-0062). Read
     /// at fire time and folded into the create request's `skills`, exactly like
     /// [`Self::harness`] — no separate Trigger tier. Empty ⇒ nothing added.
@@ -133,7 +133,7 @@ pub(crate) struct NewTrigger {
     /// `None` inherits the instance default at fire time.
     pub harness: Option<String>,
     /// `None` inherits the legacy `harness` tier (and below) at fire time.
-    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    pub agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
     /// The Run-tier skills every fired Run carries (#669). Empty ⇒ none.
     pub skills: Vec<crate::skill_selection::SkillRef>,
     /// Seeded from the instance default in the create modal and frozen here.
@@ -626,7 +626,7 @@ pub(crate) struct UpdateTrigger {
     /// `Some(None)` clears to NULL = "inherit the instance default".
     pub harness: Option<Option<String>>,
     /// `Some(None)` clears to NULL = the legacy `harness` tier decides again.
-    pub agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    pub agent_choice: Option<Option<pdo_harness::agent_choice::AgentChoice>>,
     /// Replace the Run-tier skills wholesale (#669). A flat `Option<Vec>`: an
     /// empty list IS the clear (stored as NULL), there is no third state.
     pub skills: Option<Vec<crate::skill_selection::SkillRef>>,
@@ -1655,7 +1655,7 @@ mod tests {
     /// leaves it. Mirror of `harness_round_trips_and_clears` above.
     #[tokio::test]
     async fn agent_choice_round_trips_and_clears() {
-        use crate::agent_choice::AgentChoice;
+        use pdo_harness::agent_choice::AgentChoice;
 
         let db = test_db().await;
         let mut new = sample("t", "0 9 * * *");
@@ -1731,10 +1731,10 @@ mod tests {
     /// #563: a Trigger can carry both a legacy `harness` string AND an
     /// `agent_choice`, independently — the two fields coexist on the row exactly
     /// like `instance_config`'s and `project_store`'s equivalent tests, since
-    /// `agent_choice::resolve` (not this store) decides which one wins.
+    /// `pdo_harness::agent_choice::resolve` (not this store) decides which one wins.
     #[tokio::test]
     async fn agent_choice_and_legacy_harness_coexist() {
-        use crate::agent_choice::AgentChoice;
+        use pdo_harness::agent_choice::AgentChoice;
 
         let db = test_db().await;
         let mut new = sample("t", "0 9 * * *");

@@ -191,7 +191,7 @@ fork_sha?: string,
  * created without an explicit choice — the payload omits the key, keeping it
  * byte-identical to the pre-#551 shape). A blank/empty stored value collapses to
  * `None` at the freeze (`Some("")` never persists), so it can never win a tier
- * (#347). Read at every spawn seam as the `run` tier of [`crate::harness_resolver`]
+ * (#347). Read at every spawn seam as the `run` tier of [`pdo_harness::resolver`]
  * and by the infra sessions (Pipeline Manager, merge resolver).
  */
 harness?: string, 

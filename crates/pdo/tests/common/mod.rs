@@ -1033,7 +1033,10 @@ pub fn fake_harness_bindir() -> std::path::PathBuf {
             "PDO_HARNESS_PROBE_PATH",
             format!("{}:{process_path}", dir.display()),
         );
-        std::env::set_var(pdo_daemon::CATALOGUE_VERSION_TTL_MS_ENV, "1");
+        std::env::set_var(
+            pdo_harness::adapters::binary_probe::CATALOGUE_VERSION_TTL_MS_ENV,
+            "1",
+        );
         dir
     })
     .clone()

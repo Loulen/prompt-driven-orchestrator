@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.110.0
+**Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
+
+- Nouveau tour préface, premier dans la Modale de bienvenue et dans Settings › Tutorials ; le
+  full tour enchaîne *Overview* → *First run* → *First pipeline*. Il marche sans harnais
+  configuré.
+- La carte d'intro prépare un dépôt d'entraînement, la pipeline `tutorial-overview` (mise en
+  page d'`implement-review`, nodes `script`), un Trigger d'exemple dont le guard refuse
+  toujours, et un Run attendu jusqu'à `completed` ; *Start* reste inactif jusque-là. Rejouer
+  reprend le dernier Run terminé non archivé.
+- Visite en 17 étapes, dont 7 gestes qui n'avancent que sur l'état observé : Run, implementer
+  (outputs, terminal figé), edge reviewer → End, Start, archivage (skippable), Triggers,
+  Pipelines. Settings et Stats sont éclairés, pas ouverts.
+- Le Trigger d'exemple est supprimé à toute sortie du tour ; la pipeline et le Run restent.
+
 ## 1.109.0 — Stats : absorption des Pipelines, Nodes, Modèles, efforts et couples (story #888)
 
 Les tickets #890, #891, #892 et #906 de la story #888 (ADR-0077, ADR-0078), livrés ensemble.

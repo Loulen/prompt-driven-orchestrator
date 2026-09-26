@@ -23,6 +23,7 @@ const APP: TourAppState = {
   dirty: false,
   libraryPipelineIds: [],
   runCount: 1,
+  runs: [],
   latestRun: { id: "r1", name: "my-first-run", nodes: [] },
   activeRunId: "r1",
 };
@@ -78,6 +79,32 @@ describe("the failure card", () => {
     expect(screen.getByTestId("tour-failed-card")).toHaveTextContent("the Prompt field");
     expect(screen.getByTestId("tour-failed-card")).toHaveTextContent("a tour only ever watches");
     expect(screen.queryByTestId("tour-failed-reason")).not.toBeInTheDocument();
+  });
+
+  /**
+   * A tour whose intro prepared things did create them (#911 FP): the card no
+   * longer claims « nothing was created », and says what the teardown removes.
+   */
+  it("does not claim nothing was created when the intro prepared things", () => {
+    const prep = { id: "p", pending: "", ready: "", failureTitle: "", run: async () => {} };
+    const intro = { title: "", body: "", footnote: "", prepare: [prep] };
+    const prepared: TourDef = { ...BASE, intro };
+    const tidied: TourDef = { ...prepared, teardown: [{ id: "t", failureTitle: "", run: async () => {} }] };
+
+    const { unmount } = render(
+      <TourFailedCard tour={prepared} failure={MISSING} onClose={vi.fn()} onBackToTours={vi.fn()} onContinue={vi.fn()} />,
+    );
+    let card = screen.getByTestId("tour-failed-card");
+    expect(card).not.toHaveTextContent("Nothing was created");
+    expect(card).toHaveTextContent("What its intro prepared stays yours.");
+    unmount();
+
+    render(
+      <TourFailedCard tour={tidied} failure={MISSING} onClose={vi.fn()} onBackToTours={vi.fn()} onContinue={vi.fn()} />,
+    );
+    card = screen.getByTestId("tour-failed-card");
+    expect(card).not.toHaveTextContent("Nothing was created");
+    expect(card).toHaveTextContent("which is removed now");
   });
 
   /**

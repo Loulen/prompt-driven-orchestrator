@@ -170,6 +170,7 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
             app={view.run.observedApp}
             nextTour={view.nextTour}
             chainProgress={chainProgress(view.tour.id, view.nextTour?.id ?? null)}
+            tidyUpFailure={view.tidyUpFailure}
             onFinish={finish}
             onFinishHere={finishHere}
             onStartTour={(tourId) => {
@@ -191,6 +192,7 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
             tour={view.tour}
             failure={view.run.failure}
             nextTour={view.nextTour}
+            tidyUpFailure={view.tidyUpFailure}
             onClose={quit}
             onBackToTours={() => {
               quit();

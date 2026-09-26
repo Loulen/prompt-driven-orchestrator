@@ -117,7 +117,8 @@ Then write a short summary of what you changed into your output file.`;
 
 // ---- preparation ----------------------------------------------------------
 
-async function prepareRepo(): Promise<void> {
+/** Also the first preparation of *Overview* (#911): both tours share the repository. */
+export async function prepareRepo(): Promise<void> {
   await createRepo(TUTORIAL_REPO_PARENT, TUTORIAL_REPO_NAME, [
     { path: "README.md", content: README },
     { path: "notes.txt", content: NOTES },

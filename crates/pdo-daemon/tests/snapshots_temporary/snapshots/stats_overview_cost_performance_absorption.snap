@@ -1,0 +1,2869 @@
+---
+source: crates/pdo-daemon/tests/snapshots_temporary/recorder.rs
+description: "TEMPORARY — refactor net of spec #913 (issue #914), deleted by #932."
+---
+{
+  "http": [
+    {
+      "body": {
+        "input": "go",
+        "name": "solo run",
+        "pipeline": "solo",
+        "target_repo": "[repo]"
+      },
+      "content_type": "application/json",
+      "request": "POST /runs",
+      "response": {
+        "run_id": "[run-1]"
+      },
+      "status": 201
+    },
+    {
+      "body": {
+        "iter": 1
+      },
+      "content_type": "text/plain; charset=utf-8",
+      "request": "POST /runs/[run-1]/nodes/worker/done",
+      "response": "ok",
+      "status": 200
+    },
+    {
+      "body": {
+        "input": "go",
+        "name": "sibling run",
+        "pipeline": "sibling",
+        "target_repo": "[repo]"
+      },
+      "content_type": "application/json",
+      "request": "POST /runs",
+      "response": {
+        "run_id": "[run-2]"
+      },
+      "status": 201
+    },
+    {
+      "body": {
+        "iter": 1
+      },
+      "content_type": "text/plain; charset=utf-8",
+      "request": "POST /runs/[run-2]/nodes/worker/done",
+      "response": "ok",
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /stats/overview?from=[ts]&to=[ts]&bucket=day",
+      "response": {
+        "buckets": [
+          "[date]"
+        ],
+        "errors": [],
+        "fires_by_pipeline": [],
+        "runs": [
+          {
+            "bucket": "[date]",
+            "count": 2
+          }
+        ],
+        "session_harnesses": [
+          "claude"
+        ],
+        "sessions": [
+          {
+            "bucket": "[date]",
+            "count": 2
+          }
+        ],
+        "sessions_by_period": [
+          {
+            "bucket": "[date]",
+            "harnesses": [
+              {
+                "executions": 2,
+                "harness": "claude"
+              }
+            ]
+          }
+        ],
+        "sessions_by_pipeline": [
+          {
+            "by_period": [
+              {
+                "bucket": "[date]",
+                "harnesses": [
+                  {
+                    "executions": 1,
+                    "harness": "claude"
+                  }
+                ]
+              }
+            ],
+            "executions": 1,
+            "harnesses": [
+              {
+                "executions": 1,
+                "harness": "claude"
+              }
+            ],
+            "id": "sibling",
+            "last_run": "[ts]",
+            "name": "sibling",
+            "nodes": [
+              {
+                "by_period": [
+                  {
+                    "bucket": "[date]",
+                    "harnesses": [
+                      {
+                        "executions": 1,
+                        "harness": "claude"
+                      }
+                    ]
+                  }
+                ],
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "executions": 1,
+                    "harness": "claude"
+                  }
+                ],
+                "id": "worker",
+                "last_run": "[ts]",
+                "name": "Worker",
+                "nodes": [],
+                "runs": 1
+              }
+            ],
+            "runs": 1
+          },
+          {
+            "by_period": [
+              {
+                "bucket": "[date]",
+                "harnesses": [
+                  {
+                    "executions": 1,
+                    "harness": "claude"
+                  }
+                ]
+              }
+            ],
+            "executions": 1,
+            "harnesses": [
+              {
+                "executions": 1,
+                "harness": "claude"
+              }
+            ],
+            "id": "solo",
+            "last_run": "[ts]",
+            "name": "solo",
+            "nodes": [
+              {
+                "by_period": [
+                  {
+                    "bucket": "[date]",
+                    "harnesses": [
+                      {
+                        "executions": 1,
+                        "harness": "claude"
+                      }
+                    ]
+                  }
+                ],
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "executions": 1,
+                    "harness": "claude"
+                  }
+                ],
+                "id": "worker",
+                "last_run": "[ts]",
+                "name": "Worker",
+                "nodes": [],
+                "runs": 1
+              }
+            ],
+            "runs": 1
+          }
+        ],
+        "triggers_created_runs": {
+          "distinct_triggers": 0,
+          "enabled_triggers": 0,
+          "fired": 0
+        }
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /stats/cost?from=[ts]&to=[ts]&bucket=day",
+      "response": {
+        "by_model": [],
+        "by_period": [
+          {
+            "average_usd": null,
+            "bucket": "[date]",
+            "estimated": false,
+            "executions": 2,
+            "harnesses": [
+              {
+                "average_usd": null,
+                "estimated": false,
+                "executions": 2,
+                "harness": "claude",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript",
+                  "no attributable infrastructure cost"
+                ],
+                "partial": false,
+                "readable": 0,
+                "unknown": 2,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "median_usd": null,
+            "missing_reasons": [
+              "no attributable Claude transcript",
+              "no attributable infrastructure cost"
+            ],
+            "partial": false,
+            "readable": 0,
+            "unknown": 2,
+            "unpriced_models": [],
+            "usd": null
+          }
+        ],
+        "by_pipeline": [
+          {
+            "average_usd": null,
+            "by_period": [
+              {
+                "average_usd": null,
+                "bucket": "[date]",
+                "estimated": false,
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 1,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "partial": false,
+                "readable": 0,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "estimated": false,
+            "executions": 1,
+            "harnesses": [
+              {
+                "average_usd": null,
+                "estimated": false,
+                "executions": 1,
+                "harness": "claude",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "partial": false,
+                "readable": 0,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "id": "sibling",
+            "last_run": "[ts]",
+            "median_usd": null,
+            "missing_reasons": [
+              "no attributable Claude transcript"
+            ],
+            "name": "sibling",
+            "nodes": [
+              {
+                "average_usd": null,
+                "by_period": [
+                  {
+                    "average_usd": null,
+                    "bucket": "[date]",
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable infrastructure cost"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable infrastructure cost"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "estimated": false,
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 1,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable infrastructure cost"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "id": "sibling:infrastructure",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable infrastructure cost"
+                ],
+                "name": "Infrastructure",
+                "nodes": [],
+                "partial": false,
+                "readable": 0,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              },
+              {
+                "average_usd": null,
+                "by_period": [
+                  {
+                    "average_usd": null,
+                    "bucket": "[date]",
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable Claude transcript"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "estimated": false,
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 1,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "id": "worker",
+                "last_run": "[ts]",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "name": "Worker",
+                "nodes": [],
+                "partial": false,
+                "readable": 0,
+                "runs": 1,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "partial": false,
+            "readable": 0,
+            "runs": 1,
+            "unknown": 1,
+            "unpriced_models": [],
+            "usd": null
+          },
+          {
+            "average_usd": null,
+            "by_period": [
+              {
+                "average_usd": null,
+                "bucket": "[date]",
+                "estimated": false,
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 1,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "partial": false,
+                "readable": 0,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "estimated": false,
+            "executions": 1,
+            "harnesses": [
+              {
+                "average_usd": null,
+                "estimated": false,
+                "executions": 1,
+                "harness": "claude",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "partial": false,
+                "readable": 0,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "id": "solo",
+            "last_run": "[ts]",
+            "median_usd": null,
+            "missing_reasons": [
+              "no attributable Claude transcript"
+            ],
+            "name": "solo",
+            "nodes": [
+              {
+                "average_usd": null,
+                "by_period": [
+                  {
+                    "average_usd": null,
+                    "bucket": "[date]",
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable infrastructure cost"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable infrastructure cost"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "estimated": false,
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 1,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable infrastructure cost"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "id": "solo:infrastructure",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable infrastructure cost"
+                ],
+                "name": "Infrastructure",
+                "nodes": [],
+                "partial": false,
+                "readable": 0,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              },
+              {
+                "average_usd": null,
+                "by_period": [
+                  {
+                    "average_usd": null,
+                    "bucket": "[date]",
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable Claude transcript"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "estimated": false,
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 1,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "id": "worker",
+                "last_run": "[ts]",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "name": "Worker",
+                "nodes": [],
+                "partial": false,
+                "readable": 0,
+                "runs": 1,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "partial": false,
+            "readable": 0,
+            "runs": 1,
+            "unknown": 1,
+            "unpriced_models": [],
+            "usd": null
+          }
+        ],
+        "by_project": [
+          {
+            "average_usd": null,
+            "by_period": [
+              {
+                "average_usd": null,
+                "bucket": "[date]",
+                "estimated": false,
+                "executions": 2,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 2,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 2,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "partial": false,
+                "readable": 0,
+                "unknown": 2,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "estimated": false,
+            "executions": 2,
+            "harnesses": [
+              {
+                "average_usd": null,
+                "estimated": false,
+                "executions": 2,
+                "harness": "claude",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "partial": false,
+                "readable": 0,
+                "unknown": 2,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "id": "[repo]",
+            "median_usd": null,
+            "missing_reasons": [
+              "no attributable Claude transcript"
+            ],
+            "name": "[tmp-1]",
+            "nodes": [],
+            "partial": false,
+            "pipelines": [
+              {
+                "average_usd": null,
+                "by_period": [
+                  {
+                    "average_usd": null,
+                    "bucket": "[date]",
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable Claude transcript"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "estimated": false,
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 1,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "id": "sibling",
+                "last_run": "[ts]",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "name": "sibling",
+                "nodes": [
+                  {
+                    "average_usd": null,
+                    "by_period": [
+                      {
+                        "average_usd": null,
+                        "bucket": "[date]",
+                        "estimated": false,
+                        "executions": 1,
+                        "harnesses": [
+                          {
+                            "average_usd": null,
+                            "estimated": false,
+                            "executions": 1,
+                            "harness": "claude",
+                            "median_usd": null,
+                            "missing_reasons": [
+                              "no attributable infrastructure cost"
+                            ],
+                            "partial": false,
+                            "readable": 0,
+                            "unknown": 1,
+                            "unpriced_models": [],
+                            "usd": null
+                          }
+                        ],
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable infrastructure cost"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable infrastructure cost"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "id": "sibling:infrastructure",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable infrastructure cost"
+                    ],
+                    "name": "Infrastructure",
+                    "nodes": [],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  },
+                  {
+                    "average_usd": null,
+                    "by_period": [
+                      {
+                        "average_usd": null,
+                        "bucket": "[date]",
+                        "estimated": false,
+                        "executions": 1,
+                        "harnesses": [
+                          {
+                            "average_usd": null,
+                            "estimated": false,
+                            "executions": 1,
+                            "harness": "claude",
+                            "median_usd": null,
+                            "missing_reasons": [
+                              "no attributable Claude transcript"
+                            ],
+                            "partial": false,
+                            "readable": 0,
+                            "unknown": 1,
+                            "unpriced_models": [],
+                            "usd": null
+                          }
+                        ],
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable Claude transcript"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable Claude transcript"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "id": "worker",
+                    "last_run": "[ts]",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "name": "Worker",
+                    "nodes": [],
+                    "partial": false,
+                    "readable": 0,
+                    "runs": 1,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "partial": false,
+                "readable": 0,
+                "runs": 1,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              },
+              {
+                "average_usd": null,
+                "by_period": [
+                  {
+                    "average_usd": null,
+                    "bucket": "[date]",
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable Claude transcript"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "estimated": false,
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "average_usd": null,
+                    "estimated": false,
+                    "executions": 1,
+                    "harness": "claude",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "id": "solo",
+                "last_run": "[ts]",
+                "median_usd": null,
+                "missing_reasons": [
+                  "no attributable Claude transcript"
+                ],
+                "name": "solo",
+                "nodes": [
+                  {
+                    "average_usd": null,
+                    "by_period": [
+                      {
+                        "average_usd": null,
+                        "bucket": "[date]",
+                        "estimated": false,
+                        "executions": 1,
+                        "harnesses": [
+                          {
+                            "average_usd": null,
+                            "estimated": false,
+                            "executions": 1,
+                            "harness": "claude",
+                            "median_usd": null,
+                            "missing_reasons": [
+                              "no attributable infrastructure cost"
+                            ],
+                            "partial": false,
+                            "readable": 0,
+                            "unknown": 1,
+                            "unpriced_models": [],
+                            "usd": null
+                          }
+                        ],
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable infrastructure cost"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable infrastructure cost"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "id": "solo:infrastructure",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable infrastructure cost"
+                    ],
+                    "name": "Infrastructure",
+                    "nodes": [],
+                    "partial": false,
+                    "readable": 0,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  },
+                  {
+                    "average_usd": null,
+                    "by_period": [
+                      {
+                        "average_usd": null,
+                        "bucket": "[date]",
+                        "estimated": false,
+                        "executions": 1,
+                        "harnesses": [
+                          {
+                            "average_usd": null,
+                            "estimated": false,
+                            "executions": 1,
+                            "harness": "claude",
+                            "median_usd": null,
+                            "missing_reasons": [
+                              "no attributable Claude transcript"
+                            ],
+                            "partial": false,
+                            "readable": 0,
+                            "unknown": 1,
+                            "unpriced_models": [],
+                            "usd": null
+                          }
+                        ],
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable Claude transcript"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "estimated": false,
+                    "executions": 1,
+                    "harnesses": [
+                      {
+                        "average_usd": null,
+                        "estimated": false,
+                        "executions": 1,
+                        "harness": "claude",
+                        "median_usd": null,
+                        "missing_reasons": [
+                          "no attributable Claude transcript"
+                        ],
+                        "partial": false,
+                        "readable": 0,
+                        "unknown": 1,
+                        "unpriced_models": [],
+                        "usd": null
+                      }
+                    ],
+                    "id": "worker",
+                    "last_run": "[ts]",
+                    "median_usd": null,
+                    "missing_reasons": [
+                      "no attributable Claude transcript"
+                    ],
+                    "name": "Worker",
+                    "nodes": [],
+                    "partial": false,
+                    "readable": 0,
+                    "runs": 1,
+                    "unknown": 1,
+                    "unpriced_models": [],
+                    "usd": null
+                  }
+                ],
+                "partial": false,
+                "readable": 0,
+                "runs": 1,
+                "unknown": 1,
+                "unpriced_models": [],
+                "usd": null
+              }
+            ],
+            "readable": 0,
+            "unknown": 2,
+            "unpriced_models": [],
+            "usd": null
+          }
+        ],
+        "harnesses": [
+          "claude"
+        ],
+        "resolved": [
+          {
+            "input": 0.8,
+            "key": "claude-3-5-haiku",
+            "output": 4.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 10.0,
+            "key": "claude-fable-5",
+            "output": 50.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 1.0,
+            "key": "claude-haiku-4-5",
+            "output": 5.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 15.0,
+            "key": "claude-opus-4-0",
+            "output": 75.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 15.0,
+            "key": "claude-opus-4-1",
+            "output": 75.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 5.0,
+            "key": "claude-opus-4-5",
+            "output": 25.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 5.0,
+            "key": "claude-opus-4-6",
+            "output": 25.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 5.0,
+            "key": "claude-opus-4-7",
+            "output": 25.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 5.0,
+            "key": "claude-opus-4-8",
+            "output": 25.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 5.0,
+            "key": "claude-opus-5",
+            "output": 25.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 3.0,
+            "key": "claude-sonnet-4-0",
+            "output": 15.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 3.0,
+            "key": "claude-sonnet-4-5",
+            "output": 15.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 3.0,
+            "key": "claude-sonnet-4-6",
+            "output": 15.0,
+            "tier": "embedded"
+          },
+          {
+            "input": 3.0,
+            "key": "claude-sonnet-5",
+            "output": 15.0,
+            "tier": "embedded"
+          }
+        ],
+        "total": {
+          "average_usd": null,
+          "estimated": false,
+          "executions": "[n]",
+          "harnesses": [
+            {
+              "average_usd": null,
+              "estimated": false,
+              "executions": "[n]",
+              "harness": "claude",
+              "median_usd": null,
+              "missing_reasons": [
+                "no attributable Claude transcript",
+                "no attributable infrastructure cost"
+              ],
+              "partial": false,
+              "readable": "[n]",
+              "unknown": "[n]",
+              "unpriced_models": [],
+              "usd": null
+            }
+          ],
+          "median_usd": null,
+          "missing_reasons": [
+            "no attributable Claude transcript",
+            "no attributable infrastructure cost"
+          ],
+          "partial": false,
+          "readable": "[n]",
+          "unknown": "[n]",
+          "unpriced_models": [],
+          "usd": null
+        }
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /stats/performance?from=[ts]&to=[ts]&refresh=true",
+      "response": {
+        "by_model": [],
+        "by_pipeline": [
+          {
+            "harnesses": [
+              {
+                "active_duration": {
+                  "expected": 1,
+                  "measured": 1,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "context": {
+                  "expected": 1,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "no attributable transcript"
+                  ],
+                  "stats": null
+                },
+                "duration": {
+                  "expected": 1,
+                  "measured": 1,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "harness": "claude",
+                "steered": {
+                  "readable": 0,
+                  "steered": 0
+                },
+                "steering": {
+                  "expected": 1,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "no attributable transcript"
+                  ],
+                  "stats": null
+                },
+                "wait_duration": {
+                  "expected": 1,
+                  "measured": 1,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                }
+              }
+            ],
+            "id": "sibling",
+            "last_run": "[ts]",
+            "name": "sibling",
+            "nodes": [
+              {
+                "harnesses": [
+                  {
+                    "active_duration": {
+                      "expected": 1,
+                      "measured": 1,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    },
+                    "context": {
+                      "expected": 1,
+                      "measured": 0,
+                      "missing_reasons": [
+                        "no attributable transcript"
+                      ],
+                      "stats": null
+                    },
+                    "duration": {
+                      "expected": 1,
+                      "measured": 1,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    },
+                    "harness": "claude",
+                    "steered": {
+                      "readable": 0,
+                      "steered": 0
+                    },
+                    "steering": {
+                      "expected": 1,
+                      "measured": 0,
+                      "missing_reasons": [
+                        "no attributable transcript"
+                      ],
+                      "stats": null
+                    },
+                    "wait_duration": {
+                      "expected": 1,
+                      "measured": 1,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    }
+                  }
+                ],
+                "id": "worker",
+                "interactive": false,
+                "last_run": "[ts]",
+                "name": "Worker",
+                "nodes": [],
+                "orchestrator": false,
+                "runs": 1,
+                "subagents": []
+              }
+            ],
+            "runs": 1,
+            "subagents": []
+          },
+          {
+            "harnesses": [
+              {
+                "active_duration": {
+                  "expected": 1,
+                  "measured": 1,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "context": {
+                  "expected": 1,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "no attributable transcript"
+                  ],
+                  "stats": null
+                },
+                "duration": {
+                  "expected": 1,
+                  "measured": 1,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "harness": "claude",
+                "steered": {
+                  "readable": 0,
+                  "steered": 0
+                },
+                "steering": {
+                  "expected": 1,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "no attributable transcript"
+                  ],
+                  "stats": null
+                },
+                "wait_duration": {
+                  "expected": 1,
+                  "measured": 1,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                }
+              }
+            ],
+            "id": "solo",
+            "last_run": "[ts]",
+            "name": "solo",
+            "nodes": [
+              {
+                "harnesses": [
+                  {
+                    "active_duration": {
+                      "expected": 1,
+                      "measured": 1,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    },
+                    "context": {
+                      "expected": 1,
+                      "measured": 0,
+                      "missing_reasons": [
+                        "no attributable transcript"
+                      ],
+                      "stats": null
+                    },
+                    "duration": {
+                      "expected": 1,
+                      "measured": 1,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    },
+                    "harness": "claude",
+                    "steered": {
+                      "readable": 0,
+                      "steered": 0
+                    },
+                    "steering": {
+                      "expected": 1,
+                      "measured": 0,
+                      "missing_reasons": [
+                        "no attributable transcript"
+                      ],
+                      "stats": null
+                    },
+                    "wait_duration": {
+                      "expected": 1,
+                      "measured": 1,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    }
+                  }
+                ],
+                "id": "worker",
+                "interactive": false,
+                "last_run": "[ts]",
+                "name": "Worker",
+                "nodes": [],
+                "orchestrator": false,
+                "runs": 1,
+                "subagents": []
+              }
+            ],
+            "runs": 1,
+            "subagents": []
+          }
+        ],
+        "executions": 2,
+        "harnesses": [
+          "claude"
+        ],
+        "infrastructure": [
+          {
+            "harnesses": [
+              {
+                "active_duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "context": {
+                  "expected": 2,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "no attributable session for this infrastructure role"
+                  ],
+                  "stats": null
+                },
+                "duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "harness": "claude",
+                "steered": {
+                  "readable": 0,
+                  "steered": 0
+                },
+                "steering": {
+                  "expected": 2,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "runtime messages only"
+                  ],
+                  "stats": null
+                },
+                "wait_duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                }
+              }
+            ],
+            "id": "pipeline-manager",
+            "name": "Pipeline Manager",
+            "nodes": [],
+            "subagents": []
+          }
+        ],
+        "infrastructure_total": {
+          "harnesses": [
+            {
+              "active_duration": {
+                "expected": 2,
+                "measured": 2,
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              },
+              "context": {
+                "expected": 2,
+                "measured": 0,
+                "missing_reasons": [
+                  "no attributable session for this infrastructure role"
+                ],
+                "stats": null
+              },
+              "duration": {
+                "expected": 2,
+                "measured": 2,
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              },
+              "harness": "claude",
+              "steered": {
+                "readable": 0,
+                "steered": 0
+              },
+              "steering": {
+                "expected": 2,
+                "measured": 0,
+                "missing_reasons": [
+                  "runtime messages only"
+                ],
+                "stats": null
+              },
+              "wait_duration": {
+                "expected": 2,
+                "measured": 2,
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              }
+            }
+          ]
+        },
+        "total": {
+          "harnesses": [
+            {
+              "active_duration": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              },
+              "context": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [
+                  "no attributable transcript"
+                ],
+                "stats": null
+              },
+              "duration": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              },
+              "harness": "claude",
+              "steered": {
+                "readable": "[n]",
+                "steered": "[n]"
+              },
+              "steering": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [
+                  "no attributable transcript"
+                ],
+                "stats": null
+              },
+              "wait_duration": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              }
+            }
+          ]
+        },
+        "waited_executions": 0
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "absorbent": {
+          "key": "solo",
+          "name": "solo"
+        },
+        "dimension": "pipeline",
+        "members": [
+          {
+            "key": "sibling",
+            "name": "sibling"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "request": "POST /stats/absorptions",
+      "response": {
+        "absorptions": [
+          {
+            "absorbent": {
+              "key": "solo",
+              "name": "solo"
+            },
+            "dimension": "pipeline",
+            "members": [
+              {
+                "created_at": "[ts]",
+                "key": "sibling",
+                "name": "sibling",
+                "origin": "manual"
+              }
+            ],
+            "scope": ""
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /stats/absorptions",
+      "response": {
+        "absorptions": [
+          {
+            "absorbent": {
+              "key": "solo",
+              "name": "solo"
+            },
+            "dimension": "pipeline",
+            "members": [
+              {
+                "created_at": "[ts]",
+                "key": "sibling",
+                "name": "sibling",
+                "origin": "manual"
+              }
+            ],
+            "scope": ""
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /stats/overview?from=[ts]&to=[ts]&bucket=day",
+      "response": {
+        "buckets": [
+          "[date]"
+        ],
+        "errors": [],
+        "fires_by_pipeline": [],
+        "runs": [
+          {
+            "bucket": "[date]",
+            "count": 2
+          }
+        ],
+        "session_harnesses": [
+          "claude"
+        ],
+        "sessions": [
+          {
+            "bucket": "[date]",
+            "count": 2
+          }
+        ],
+        "sessions_by_period": [
+          {
+            "bucket": "[date]",
+            "harnesses": [
+              {
+                "executions": 2,
+                "harness": "claude"
+              }
+            ]
+          }
+        ],
+        "sessions_by_pipeline": [
+          {
+            "absorbed": [
+              {
+                "executions": 1,
+                "key": "sibling",
+                "last_run": "[ts]",
+                "name": "sibling",
+                "runs": 1
+              }
+            ],
+            "by_period": [
+              {
+                "bucket": "[date]",
+                "harnesses": [
+                  {
+                    "executions": 2,
+                    "harness": "claude"
+                  }
+                ]
+              }
+            ],
+            "executions": 2,
+            "harnesses": [
+              {
+                "executions": 2,
+                "harness": "claude"
+              }
+            ],
+            "id": "solo",
+            "last_run": "[ts]",
+            "name": "solo",
+            "nodes": [
+              {
+                "by_period": [
+                  {
+                    "bucket": "[date]",
+                    "harnesses": [
+                      {
+                        "executions": 2,
+                        "harness": "claude"
+                      }
+                    ]
+                  }
+                ],
+                "executions": 2,
+                "harnesses": [
+                  {
+                    "executions": 2,
+                    "harness": "claude"
+                  }
+                ],
+                "id": "worker",
+                "last_run": "[ts]",
+                "name": "Worker",
+                "nodes": [],
+                "runs": 2
+              }
+            ],
+            "runs": 2
+          }
+        ],
+        "triggers_created_runs": {
+          "distinct_triggers": 0,
+          "enabled_triggers": 0,
+          "fired": 0
+        }
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /stats/performance?from=[ts]&to=[ts]&refresh=true",
+      "response": {
+        "by_model": [],
+        "by_pipeline": [
+          {
+            "absorbed": [
+              {
+                "key": "sibling",
+                "last_run": "[ts]",
+                "name": "sibling",
+                "runs": 1
+              }
+            ],
+            "harnesses": [
+              {
+                "active_duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "context": {
+                  "expected": 2,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "no attributable transcript"
+                  ],
+                  "stats": null
+                },
+                "duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "harness": "claude",
+                "steered": {
+                  "readable": 0,
+                  "steered": 0
+                },
+                "steering": {
+                  "expected": 2,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "no attributable transcript"
+                  ],
+                  "stats": null
+                },
+                "wait_duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                }
+              }
+            ],
+            "id": "solo",
+            "last_run": "[ts]",
+            "name": "solo",
+            "nodes": [
+              {
+                "harnesses": [
+                  {
+                    "active_duration": {
+                      "expected": 2,
+                      "measured": 2,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    },
+                    "context": {
+                      "expected": 2,
+                      "measured": 0,
+                      "missing_reasons": [
+                        "no attributable transcript"
+                      ],
+                      "stats": null
+                    },
+                    "duration": {
+                      "expected": 2,
+                      "measured": 2,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    },
+                    "harness": "claude",
+                    "steered": {
+                      "readable": 0,
+                      "steered": 0
+                    },
+                    "steering": {
+                      "expected": 2,
+                      "measured": 0,
+                      "missing_reasons": [
+                        "no attributable transcript"
+                      ],
+                      "stats": null
+                    },
+                    "wait_duration": {
+                      "expected": 2,
+                      "measured": 2,
+                      "missing_reasons": [],
+                      "stats": {
+                        "fence_high": "[n]",
+                        "fence_low": "[n]",
+                        "max": "[n]",
+                        "mean": "[n]",
+                        "median": "[n]",
+                        "min": "[n]",
+                        "q1": "[n]",
+                        "q3": "[n]"
+                      }
+                    }
+                  }
+                ],
+                "id": "worker",
+                "interactive": false,
+                "last_run": "[ts]",
+                "name": "Worker",
+                "nodes": [],
+                "orchestrator": false,
+                "runs": 2,
+                "subagents": []
+              }
+            ],
+            "runs": 2,
+            "subagents": []
+          }
+        ],
+        "executions": 2,
+        "harnesses": [
+          "claude"
+        ],
+        "infrastructure": [
+          {
+            "harnesses": [
+              {
+                "active_duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "context": {
+                  "expected": 2,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "no attributable session for this infrastructure role"
+                  ],
+                  "stats": null
+                },
+                "duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                },
+                "harness": "claude",
+                "steered": {
+                  "readable": 0,
+                  "steered": 0
+                },
+                "steering": {
+                  "expected": 2,
+                  "measured": 0,
+                  "missing_reasons": [
+                    "runtime messages only"
+                  ],
+                  "stats": null
+                },
+                "wait_duration": {
+                  "expected": 2,
+                  "measured": 2,
+                  "missing_reasons": [],
+                  "stats": {
+                    "fence_high": "[n]",
+                    "fence_low": "[n]",
+                    "max": "[n]",
+                    "mean": "[n]",
+                    "median": "[n]",
+                    "min": "[n]",
+                    "q1": "[n]",
+                    "q3": "[n]"
+                  }
+                }
+              }
+            ],
+            "id": "pipeline-manager",
+            "name": "Pipeline Manager",
+            "nodes": [],
+            "subagents": []
+          }
+        ],
+        "infrastructure_total": {
+          "harnesses": [
+            {
+              "active_duration": {
+                "expected": 2,
+                "measured": 2,
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              },
+              "context": {
+                "expected": 2,
+                "measured": 0,
+                "missing_reasons": [
+                  "no attributable session for this infrastructure role"
+                ],
+                "stats": null
+              },
+              "duration": {
+                "expected": 2,
+                "measured": 2,
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              },
+              "harness": "claude",
+              "steered": {
+                "readable": 0,
+                "steered": 0
+              },
+              "steering": {
+                "expected": 2,
+                "measured": 0,
+                "missing_reasons": [
+                  "runtime messages only"
+                ],
+                "stats": null
+              },
+              "wait_duration": {
+                "expected": 2,
+                "measured": 2,
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              }
+            }
+          ]
+        },
+        "total": {
+          "harnesses": [
+            {
+              "active_duration": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              },
+              "context": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [
+                  "no attributable transcript"
+                ],
+                "stats": null
+              },
+              "duration": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              },
+              "harness": "claude",
+              "steered": {
+                "readable": "[n]",
+                "steered": "[n]"
+              },
+              "steering": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [
+                  "no attributable transcript"
+                ],
+                "stats": null
+              },
+              "wait_duration": {
+                "expected": "[n]",
+                "measured": "[n]",
+                "missing_reasons": [],
+                "stats": {
+                  "fence_high": "[n]",
+                  "fence_low": "[n]",
+                  "max": "[n]",
+                  "mean": "[n]",
+                  "median": "[n]",
+                  "min": "[n]",
+                  "q1": "[n]",
+                  "q3": "[n]"
+                }
+              }
+            }
+          ]
+        },
+        "waited_executions": 0
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "DELETE /stats/absorptions/member?dimension=pipeline&member=sibling",
+      "response": {
+        "absorptions": []
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /stats/overview?from=[ts]&to=[ts]&bucket=day&completed_only=true",
+      "response": {
+        "buckets": [
+          "[date]"
+        ],
+        "errors": [],
+        "fires_by_pipeline": [],
+        "runs": [
+          {
+            "bucket": "[date]",
+            "count": 2
+          }
+        ],
+        "session_harnesses": [
+          "claude"
+        ],
+        "sessions": [
+          {
+            "bucket": "[date]",
+            "count": 2
+          }
+        ],
+        "sessions_by_period": [
+          {
+            "bucket": "[date]",
+            "harnesses": [
+              {
+                "executions": 2,
+                "harness": "claude"
+              }
+            ]
+          }
+        ],
+        "sessions_by_pipeline": [
+          {
+            "by_period": [
+              {
+                "bucket": "[date]",
+                "harnesses": [
+                  {
+                    "executions": 1,
+                    "harness": "claude"
+                  }
+                ]
+              }
+            ],
+            "executions": 1,
+            "harnesses": [
+              {
+                "executions": 1,
+                "harness": "claude"
+              }
+            ],
+            "id": "sibling",
+            "last_run": "[ts]",
+            "name": "sibling",
+            "nodes": [
+              {
+                "by_period": [
+                  {
+                    "bucket": "[date]",
+                    "harnesses": [
+                      {
+                        "executions": 1,
+                        "harness": "claude"
+                      }
+                    ]
+                  }
+                ],
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "executions": 1,
+                    "harness": "claude"
+                  }
+                ],
+                "id": "worker",
+                "last_run": "[ts]",
+                "name": "Worker",
+                "nodes": [],
+                "runs": 1
+              }
+            ],
+            "runs": 1
+          },
+          {
+            "by_period": [
+              {
+                "bucket": "[date]",
+                "harnesses": [
+                  {
+                    "executions": 1,
+                    "harness": "claude"
+                  }
+                ]
+              }
+            ],
+            "executions": 1,
+            "harnesses": [
+              {
+                "executions": 1,
+                "harness": "claude"
+              }
+            ],
+            "id": "solo",
+            "last_run": "[ts]",
+            "name": "solo",
+            "nodes": [
+              {
+                "by_period": [
+                  {
+                    "bucket": "[date]",
+                    "harnesses": [
+                      {
+                        "executions": 1,
+                        "harness": "claude"
+                      }
+                    ]
+                  }
+                ],
+                "executions": 1,
+                "harnesses": [
+                  {
+                    "executions": 1,
+                    "harness": "claude"
+                  }
+                ],
+                "id": "worker",
+                "last_run": "[ts]",
+                "name": "Worker",
+                "nodes": [],
+                "runs": 1
+              }
+            ],
+            "runs": 1
+          }
+        ],
+        "triggers_created_runs": {
+          "distinct_triggers": 0,
+          "enabled_triggers": 0,
+          "fired": 0
+        }
+      },
+      "status": 200
+    }
+  ],
+  "ws": [
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_completed",
+        "node_id": "worker",
+        "payload": null,
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_completed",
+        "node_id": "worker",
+        "payload": null,
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_delivered",
+        "node_id": "worker",
+        "payload": {
+          "after": "[sha-2]",
+          "before": "[sha-1]",
+          "isolated": false
+        },
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_delivered",
+        "node_id": "worker",
+        "payload": {
+          "after": "[sha-3]",
+          "before": "[sha-1]",
+          "isolated": false
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_started",
+        "node_id": "worker",
+        "payload": {
+          "base_sha": null,
+          "effort": null,
+          "harness": "claude",
+          "interactive": false,
+          "isolated_worktree": false,
+          "missing_skills": [],
+          "model": null,
+          "node_type": "agent",
+          "orchestrator": false,
+          "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `sibling`, iteration 1.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/worker/iter-1/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-2]/worktree` is the **run's shared worktree**: other nodes of this ru",
+          "provisioning": {
+            "copy": [],
+            "hardlink": [],
+            "symlink": []
+          },
+          "provisioning_plan": null,
+          "session_id": "[uuid-2]",
+          "skills": [],
+          "skipped_skills": []
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_started",
+        "node_id": "worker",
+        "payload": {
+          "base_sha": null,
+          "effort": null,
+          "harness": "claude",
+          "interactive": false,
+          "isolated_worktree": false,
+          "missing_skills": [],
+          "model": null,
+          "node_type": "agent",
+          "orchestrator": false,
+          "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `solo`, iteration 1.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-1]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-1]/worktree/.pdo/artifacts/worker/iter-1/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-1]/worktree` is the **run's shared worktree**: other nodes of this run m",
+          "provisioning": {
+            "copy": [],
+            "hardlink": [],
+            "symlink": []
+          },
+          "provisioning_plan": null,
+          "session_id": "[uuid-1]",
+          "skills": [],
+          "skipped_skills": []
+        },
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_completed",
+        "node_id": null,
+        "payload": null,
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_completed",
+        "node_id": null,
+        "payload": null,
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_started",
+        "node_id": null,
+        "payload": {
+          "edges": [
+            {
+              "source_node": "start",
+              "source_port": "user_prompt",
+              "target_node": "worker",
+              "target_port": "task"
+            },
+            {
+              "source_node": "worker",
+              "source_port": "out",
+              "target_node": "end",
+              "target_port": "result"
+            }
+          ],
+          "fork_sha": "[sha-1]",
+          "input": "go",
+          "name": "sibling run",
+          "node_defs": [
+            {
+              "id": "start",
+              "inputs": [],
+              "name": "Start",
+              "node_type": "start",
+              "outputs": [
+                {
+                  "name": "user_prompt",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "worker",
+              "inputs": [
+                {
+                  "name": "task",
+                  "side": "left"
+                }
+              ],
+              "isolated_worktree": false,
+              "name": "Worker",
+              "node_type": "agent",
+              "outputs": [
+                {
+                  "name": "out",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "end",
+              "inputs": [
+                {
+                  "name": "result",
+                  "side": "left"
+                }
+              ],
+              "name": "End",
+              "node_type": "end",
+              "outputs": [],
+              "view_x": null,
+              "view_y": null
+            }
+          ],
+          "pipeline_name": "sibling",
+          "target_repo": "[repo]"
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_started",
+        "node_id": null,
+        "payload": {
+          "edges": [
+            {
+              "source_node": "start",
+              "source_port": "user_prompt",
+              "target_node": "worker",
+              "target_port": "task"
+            },
+            {
+              "source_node": "worker",
+              "source_port": "out",
+              "target_node": "end",
+              "target_port": "result"
+            }
+          ],
+          "fork_sha": "[sha-1]",
+          "input": "go",
+          "name": "solo run",
+          "node_defs": [
+            {
+              "id": "start",
+              "inputs": [],
+              "name": "Start",
+              "node_type": "start",
+              "outputs": [
+                {
+                  "name": "user_prompt",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "worker",
+              "inputs": [
+                {
+                  "name": "task",
+                  "side": "left"
+                }
+              ],
+              "isolated_worktree": false,
+              "name": "Worker",
+              "node_type": "agent",
+              "outputs": [
+                {
+                  "name": "out",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "end",
+              "inputs": [
+                {
+                  "name": "result",
+                  "side": "left"
+                }
+              ],
+              "name": "End",
+              "node_type": "end",
+              "outputs": [],
+              "view_x": null,
+              "view_y": null
+            }
+          ],
+          "pipeline_name": "solo",
+          "target_repo": "[repo]"
+        },
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    }
+  ]
+}

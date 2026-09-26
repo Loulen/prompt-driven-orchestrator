@@ -35,6 +35,39 @@ mod declared_wait;
 #[path = "daemon_bind.rs"]
 mod daemon_bind;
 
+#[path = "route_coverage.rs"]
+mod route_coverage;
+
+// The refactor net (#914): one file per bounded context, for the routes no
+// other test called.
+#[path = "routes_pipeline.rs"]
+mod routes_pipeline;
+
+#[path = "routes_repos.rs"]
+mod routes_repos;
+
+#[path = "routes_review.rs"]
+mod routes_review;
+
+#[path = "routes_run.rs"]
+mod routes_run;
+
+#[path = "routes_settings.rs"]
+mod routes_settings;
+
+#[path = "routes_stats.rs"]
+mod routes_stats;
+
+#[path = "routes_trigger.rs"]
+mod routes_trigger;
+
+#[path = "routes_workspace.rs"]
+mod routes_workspace;
+
+// TEMPORARY (#914 → deleted by #932): the contract snapshots of spec #913.
+#[path = "snapshots_temporary/mod.rs"]
+mod snapshots_temporary;
+
 #[path = "run_create_upload_errors.rs"]
 mod run_create_upload_errors;
 

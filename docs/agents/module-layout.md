@@ -48,7 +48,11 @@ Frontend: `frontend/src/<context>/{api,model,store,components}/`, plus `shared/`
 - **Architecture test.** A `domain/` module imports nothing technical and no `adapters::`.
 - **File size.** A production file has **at most 400 lines**. Tests are not counted. Files that
   are still too big are listed in a baseline that may only shrink.
-- **Route coverage.** Every route of the assembled router has at least one HTTP-level test.
+- **Route coverage.** Every route of the assembled router has at least one HTTP-level test,
+  method by method (`crates/pdo-daemon/tests/route_coverage.rs`). It reads the router's
+  `.route(…)` calls and the URL literals of `tests/`. Write the call so the method is readable
+  (`client.post(format!("{}/runs", …))`). When the router moves, point the test's
+  `ROUTER_SOURCES` at its new home.
 
 ## During the migration
 
@@ -56,3 +60,10 @@ The legacy `crates/pdo-daemon` crate is strangled one context at a time. It only
 behaviour goes into the context crate once that crate exists. While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate.
+
+The HTTP and WebSocket contract stays frozen for the whole migration. A temporary suite,
+`crates/pdo-daemon/tests/snapshots_temporary/`, plays eight business scenarios against the real
+daemon and freezes every response and every `/ws` message as a masked `insta` snapshot. A move
+that changes one field turns it red. It is deleted with the legacy crate (#932). Refresh it only
+for a deliberate contract change: `INSTA_UPDATE=always cargo nextest run -E
+'test(/snapshots_temporary/)'`, then review the diff.

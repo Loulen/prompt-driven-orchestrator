@@ -1,0 +1,1990 @@
+---
+source: crates/pdo-daemon/tests/snapshots_temporary/recorder.rs
+description: "TEMPORARY — refactor net of spec #913 (issue #914), deleted by #932."
+---
+{
+  "http": [
+    {
+      "body": {
+        "input": "go",
+        "name": "solo run",
+        "pipeline": "solo",
+        "target_repo": "[repo]"
+      },
+      "content_type": "application/json",
+      "request": "POST /runs",
+      "response": {
+        "run_id": "[run-1]"
+      },
+      "status": 201
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-1]",
+      "response": {
+        "collection_states": {},
+        "completed_at": null,
+        "edges": [
+          {
+            "source_node": "start",
+            "source_port": "user_prompt",
+            "target_node": "worker",
+            "target_port": "task"
+          },
+          {
+            "source_node": "worker",
+            "source_port": "out",
+            "target_node": "end",
+            "target_port": "result"
+          }
+        ],
+        "end_node": {
+          "id": "end",
+          "ports": [
+            {
+              "fired_at": null,
+              "port_name": "result",
+              "reason": null,
+              "status": "pending"
+            }
+          ]
+        },
+        "foreach_states": {},
+        "fork_sha": "[sha-1]",
+        "has_manager": false,
+        "input": "go",
+        "loc": {
+          "deletions": 0,
+          "files_changed": 0,
+          "insertions": 0
+        },
+        "loop_states": {},
+        "name": "solo run",
+        "node_defs": [
+          {
+            "id": "start",
+            "inputs": [],
+            "name": "Start",
+            "node_type": "start",
+            "outputs": [
+              {
+                "name": "user_prompt",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "worker",
+            "inputs": [
+              {
+                "name": "task",
+                "side": "left"
+              }
+            ],
+            "isolated_worktree": false,
+            "name": "Worker",
+            "node_type": "agent",
+            "outputs": [
+              {
+                "name": "out",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "end",
+            "inputs": [
+              {
+                "name": "result",
+                "side": "left"
+              }
+            ],
+            "name": "End",
+            "node_type": "end",
+            "outputs": [],
+            "view_x": null,
+            "view_y": null
+          }
+        ],
+        "nodes": {
+          "worker": {
+            "completed_at": null,
+            "cost": {
+              "executions": 1,
+              "form": null,
+              "partial": false,
+              "readable_executions": 0,
+              "reported_in_usd": false,
+              "unavailable_reasons": [
+                "no attributable Claude transcript"
+              ],
+              "usd": null
+            },
+            "failure_reason": null,
+            "frontmatter_retries": 0,
+            "harness": "claude",
+            "isolated_worktree": false,
+            "iter": 1,
+            "iterations": [
+              {
+                "completed_at": null,
+                "iter": 1,
+                "started_at": "[ts]",
+                "status": "running"
+              }
+            ],
+            "node_id": "worker",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_frozen_at": "[ts]",
+            "provisioning_plan": null,
+            "skills": [],
+            "started_at": "[ts]",
+            "status": "running"
+          }
+        },
+        "pipeline_name": "solo",
+        "run_id": "[run-1]",
+        "sandbox": "off",
+        "sessions_spawned": 1,
+        "start_node": {
+          "input_files": [],
+          "input_images": [],
+          "input_path": "_input/output.md",
+          "started_at": "[ts]",
+          "target_node_ids": [
+            "worker"
+          ]
+        },
+        "started_at": "[ts]",
+        "status": "running",
+        "switch_states": {},
+        "target_repo": "[repo]"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "iter": 1
+      },
+      "content_type": "text/plain; charset=utf-8",
+      "request": "POST /runs/[run-1]/nodes/worker/done",
+      "response": "ok",
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-1]",
+      "response": {
+        "collection_states": {},
+        "completed_at": "[ts]",
+        "edges": [
+          {
+            "source_node": "start",
+            "source_port": "user_prompt",
+            "target_node": "worker",
+            "target_port": "task"
+          },
+          {
+            "source_node": "worker",
+            "source_port": "out",
+            "target_node": "end",
+            "target_port": "result"
+          }
+        ],
+        "end_node": {
+          "id": "end",
+          "ports": [
+            {
+              "fired_at": "[ts]",
+              "port_name": "result",
+              "reason": null,
+              "status": "received"
+            }
+          ]
+        },
+        "foreach_states": {},
+        "fork_sha": "[sha-1]",
+        "has_manager": false,
+        "input": "go",
+        "loc": {
+          "deletions": 0,
+          "files_changed": 0,
+          "insertions": 0
+        },
+        "loop_states": {},
+        "name": "solo run",
+        "node_defs": [
+          {
+            "id": "start",
+            "inputs": [],
+            "name": "Start",
+            "node_type": "start",
+            "outputs": [
+              {
+                "name": "user_prompt",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "worker",
+            "inputs": [
+              {
+                "name": "task",
+                "side": "left"
+              }
+            ],
+            "isolated_worktree": false,
+            "name": "Worker",
+            "node_type": "agent",
+            "outputs": [
+              {
+                "name": "out",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "end",
+            "inputs": [
+              {
+                "name": "result",
+                "side": "left"
+              }
+            ],
+            "name": "End",
+            "node_type": "end",
+            "outputs": [],
+            "view_x": null,
+            "view_y": null
+          }
+        ],
+        "nodes": {
+          "worker": {
+            "completed_at": "[ts]",
+            "cost": {
+              "executions": 1,
+              "form": null,
+              "partial": false,
+              "readable_executions": 0,
+              "reported_in_usd": false,
+              "unavailable_reasons": [
+                "no attributable Claude transcript"
+              ],
+              "usd": null
+            },
+            "delivery": {
+              "after": "[sha-2]",
+              "before": "[sha-1]"
+            },
+            "failure_reason": null,
+            "frontmatter_retries": 0,
+            "harness": "claude",
+            "isolated_worktree": false,
+            "iter": 1,
+            "iterations": [
+              {
+                "completed_at": "[ts]",
+                "iter": 1,
+                "started_at": "[ts]",
+                "status": "completed"
+              }
+            ],
+            "node_id": "worker",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_frozen_at": "[ts]",
+            "provisioning_plan": null,
+            "skills": [],
+            "started_at": "[ts]",
+            "status": "completed"
+          }
+        },
+        "pipeline_name": "solo",
+        "run_id": "[run-1]",
+        "sandbox": "off",
+        "sessions_spawned": 1,
+        "start_node": {
+          "input_files": [],
+          "input_images": [],
+          "input_path": "_input/output.md",
+          "started_at": "[ts]",
+          "target_node_ids": [
+            "worker"
+          ]
+        },
+        "started_at": "[ts]",
+        "status": "completed",
+        "switch_states": {},
+        "target_repo": "[repo]"
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-1]/events",
+      "response": [
+        {
+          "id": 1,
+          "iter": null,
+          "kind": "run_started",
+          "node_id": null,
+          "payload": {
+            "edges": [
+              {
+                "source_node": "start",
+                "source_port": "user_prompt",
+                "target_node": "worker",
+                "target_port": "task"
+              },
+              {
+                "source_node": "worker",
+                "source_port": "out",
+                "target_node": "end",
+                "target_port": "result"
+              }
+            ],
+            "fork_sha": "[sha-1]",
+            "input": "go",
+            "name": "solo run",
+            "node_defs": [
+              {
+                "id": "start",
+                "inputs": [],
+                "name": "Start",
+                "node_type": "start",
+                "outputs": [
+                  {
+                    "name": "user_prompt",
+                    "side": "right"
+                  }
+                ],
+                "view_x": null,
+                "view_y": null
+              },
+              {
+                "id": "worker",
+                "inputs": [
+                  {
+                    "name": "task",
+                    "side": "left"
+                  }
+                ],
+                "isolated_worktree": false,
+                "name": "Worker",
+                "node_type": "agent",
+                "outputs": [
+                  {
+                    "name": "out",
+                    "side": "right"
+                  }
+                ],
+                "view_x": null,
+                "view_y": null
+              },
+              {
+                "id": "end",
+                "inputs": [
+                  {
+                    "name": "result",
+                    "side": "left"
+                  }
+                ],
+                "name": "End",
+                "node_type": "end",
+                "outputs": [],
+                "view_x": null,
+                "view_y": null
+              }
+            ],
+            "pipeline_name": "solo",
+            "target_repo": "[repo]"
+          },
+          "run_id": "[run-1]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 2,
+          "iter": 1,
+          "kind": "node_started",
+          "node_id": "worker",
+          "payload": {
+            "base_sha": null,
+            "effort": null,
+            "harness": "claude",
+            "interactive": false,
+            "isolated_worktree": false,
+            "missing_skills": [],
+            "model": null,
+            "node_type": "agent",
+            "orchestrator": false,
+            "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `solo`, iteration 1.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-1]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-1]/worktree/.pdo/artifacts/worker/iter-1/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-1]/worktree` is the **run's shared worktree**: other nodes of this run m",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_plan": null,
+            "session_id": "[uuid-1]",
+            "skills": [],
+            "skipped_skills": []
+          },
+          "run_id": "[run-1]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 3,
+          "iter": 1,
+          "kind": "node_delivered",
+          "node_id": "worker",
+          "payload": {
+            "after": "[sha-2]",
+            "before": "[sha-1]",
+            "isolated": false
+          },
+          "run_id": "[run-1]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 4,
+          "iter": 1,
+          "kind": "node_completed",
+          "node_id": "worker",
+          "payload": null,
+          "run_id": "[run-1]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 5,
+          "iter": null,
+          "kind": "run_completed",
+          "node_id": null,
+          "payload": null,
+          "run_id": "[run-1]",
+          "ts": "[ts]"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-1]/nodes/worker/io",
+      "response": {
+        "inputs": [
+          {
+            "files": [
+              {
+                "exists": true,
+                "frontmatter": null,
+                "path": "_input/output.md",
+                "size": 2
+              }
+            ],
+            "port": "task",
+            "port_type": "markdown",
+            "repeated": false
+          }
+        ],
+        "outputs": [
+          {
+            "files": [
+              {
+                "exists": true,
+                "frontmatter": null,
+                "path": "worker/iter-1/out/output.md",
+                "size": 9
+              }
+            ],
+            "port": "out",
+            "port_type": "markdown",
+            "repeated": false
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "auto_fail": true
+      },
+      "content_type": "application/json",
+      "request": "PUT /settings",
+      "response": {
+        "agent_choice": null,
+        "auto_fail": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "autocomplete_turn_end": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_auto_name": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness_model": {
+          "effective": {},
+          "stored": {}
+        },
+        "default_model": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_sandbox": {
+          "default": "off",
+          "effective": "off",
+          "env": "[machine: environment]",
+          "reason": null,
+          "source": "default",
+          "stored": null
+        },
+        "guard_timeout_secs": {
+          "default": 60,
+          "effective": 60,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "harness_descriptors": "[machine: harness catalogue]",
+        "home": "[repo]",
+        "libassist_idle_ttl_secs": {
+          "default": 120,
+          "effective": 120,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "manager_enabled": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "manager_profile": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "max_attachments_mb": {
+          "default": 50,
+          "effective": 50,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "price_table": {
+          "fetched_at": null,
+          "fetched_path": "[repo]/.pdo/prices/fetched.json",
+          "fetched_rows": 0,
+          "manual_keys": [],
+          "manual_path": "[repo]/.pdo/prices/models.yaml",
+          "reason": null,
+          "source": null
+        },
+        "reaper_ttl_secs": {
+          "default": 3600,
+          "effective": 3600,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "review_agent_can_resolve": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "sandbox_docker": "[machine: docker probe]",
+        "sandbox_profiles": [
+          {
+            "name": "full",
+            "virtual": true
+          },
+          {
+            "name": "minimal",
+            "virtual": true
+          }
+        ],
+        "session_cap": {
+          "default": 20,
+          "effective": 20,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "skills": [],
+        "update_check": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "input": "go",
+        "name": "sibling run",
+        "pipeline": "sibling",
+        "target_repo": "[repo]"
+      },
+      "content_type": "application/json",
+      "request": "POST /runs",
+      "response": {
+        "run_id": "[run-2]"
+      },
+      "status": 201
+    },
+    {
+      "body": {
+        "iter": 1,
+        "reason": "driven terminal on purpose"
+      },
+      "content_type": "text/plain; charset=utf-8",
+      "request": "POST /runs/[run-2]/nodes/worker/fail",
+      "response": "ok",
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-2]",
+      "response": {
+        "collection_states": {},
+        "completed_at": "[ts]",
+        "edges": [
+          {
+            "source_node": "start",
+            "source_port": "user_prompt",
+            "target_node": "worker",
+            "target_port": "task"
+          },
+          {
+            "source_node": "worker",
+            "source_port": "out",
+            "target_node": "end",
+            "target_port": "result"
+          }
+        ],
+        "end_node": {
+          "id": "end",
+          "ports": [
+            {
+              "fired_at": null,
+              "port_name": "result",
+              "reason": null,
+              "status": "pending"
+            }
+          ]
+        },
+        "failure_reason": "driven terminal on purpose",
+        "foreach_states": {},
+        "fork_sha": "[sha-1]",
+        "has_manager": false,
+        "input": "go",
+        "loc": {
+          "deletions": 0,
+          "files_changed": 0,
+          "insertions": 0
+        },
+        "loop_states": {},
+        "name": "sibling run",
+        "node_defs": [
+          {
+            "id": "start",
+            "inputs": [],
+            "name": "Start",
+            "node_type": "start",
+            "outputs": [
+              {
+                "name": "user_prompt",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "worker",
+            "inputs": [
+              {
+                "name": "task",
+                "side": "left"
+              }
+            ],
+            "isolated_worktree": false,
+            "name": "Worker",
+            "node_type": "agent",
+            "outputs": [
+              {
+                "name": "out",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "end",
+            "inputs": [
+              {
+                "name": "result",
+                "side": "left"
+              }
+            ],
+            "name": "End",
+            "node_type": "end",
+            "outputs": [],
+            "view_x": null,
+            "view_y": null
+          }
+        ],
+        "nodes": {
+          "worker": {
+            "completed_at": "[ts]",
+            "cost": {
+              "executions": 1,
+              "form": null,
+              "partial": false,
+              "readable_executions": 0,
+              "reported_in_usd": false,
+              "unavailable_reasons": [
+                "no attributable Claude transcript"
+              ],
+              "usd": null
+            },
+            "failure_reason": "driven terminal on purpose",
+            "frontmatter_retries": 0,
+            "harness": "claude",
+            "isolated_worktree": false,
+            "iter": 1,
+            "iterations": [
+              {
+                "completed_at": "[ts]",
+                "iter": 1,
+                "started_at": "[ts]",
+                "status": "failed"
+              }
+            ],
+            "node_id": "worker",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_frozen_at": "[ts]",
+            "provisioning_plan": null,
+            "skills": [],
+            "started_at": "[ts]",
+            "status": "failed"
+          }
+        },
+        "pipeline_name": "sibling",
+        "run_id": "[run-2]",
+        "sandbox": "off",
+        "sessions_spawned": 1,
+        "start_node": {
+          "input_files": [],
+          "input_images": [],
+          "input_path": "_input/output.md",
+          "started_at": "[ts]",
+          "target_node_ids": [
+            "worker"
+          ]
+        },
+        "started_at": "[ts]",
+        "status": "failed",
+        "switch_states": {},
+        "target_repo": "[repo]"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "kind": "reopen_run"
+      },
+      "content_type": "application/json",
+      "request": "POST /runs/[run-2]/commands",
+      "response": {
+        "noop": true,
+        "ok": true,
+        "reason": "no eligible spawn"
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-2]",
+      "response": {
+        "collection_states": {},
+        "completed_at": null,
+        "edges": [
+          {
+            "source_node": "start",
+            "source_port": "user_prompt",
+            "target_node": "worker",
+            "target_port": "task"
+          },
+          {
+            "source_node": "worker",
+            "source_port": "out",
+            "target_node": "end",
+            "target_port": "result"
+          }
+        ],
+        "end_node": {
+          "id": "end",
+          "ports": [
+            {
+              "fired_at": null,
+              "port_name": "result",
+              "reason": null,
+              "status": "pending"
+            }
+          ]
+        },
+        "foreach_states": {},
+        "fork_sha": "[sha-1]",
+        "has_manager": false,
+        "input": "go",
+        "loc": {
+          "deletions": 0,
+          "files_changed": 0,
+          "insertions": 0
+        },
+        "loop_states": {},
+        "name": "sibling run",
+        "node_defs": [
+          {
+            "id": "start",
+            "inputs": [],
+            "name": "Start",
+            "node_type": "start",
+            "outputs": [
+              {
+                "name": "user_prompt",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "worker",
+            "inputs": [
+              {
+                "name": "task",
+                "side": "left"
+              }
+            ],
+            "isolated_worktree": false,
+            "name": "Worker",
+            "node_type": "agent",
+            "outputs": [
+              {
+                "name": "out",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "end",
+            "inputs": [
+              {
+                "name": "result",
+                "side": "left"
+              }
+            ],
+            "name": "End",
+            "node_type": "end",
+            "outputs": [],
+            "view_x": null,
+            "view_y": null
+          }
+        ],
+        "nodes": {
+          "worker": {
+            "completed_at": "[ts]",
+            "cost": {
+              "executions": 1,
+              "form": null,
+              "partial": false,
+              "readable_executions": 0,
+              "reported_in_usd": false,
+              "unavailable_reasons": [
+                "no attributable Claude transcript"
+              ],
+              "usd": null
+            },
+            "failure_reason": "driven terminal on purpose",
+            "frontmatter_retries": 0,
+            "harness": "claude",
+            "isolated_worktree": false,
+            "iter": 1,
+            "iterations": [
+              {
+                "completed_at": "[ts]",
+                "iter": 1,
+                "started_at": "[ts]",
+                "status": "failed"
+              }
+            ],
+            "node_id": "worker",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_frozen_at": "[ts]",
+            "provisioning_plan": null,
+            "skills": [],
+            "started_at": "[ts]",
+            "status": "failed"
+          }
+        },
+        "pipeline_name": "sibling",
+        "run_id": "[run-2]",
+        "sandbox": "off",
+        "sessions_spawned": 1,
+        "start_node": {
+          "input_files": [],
+          "input_images": [],
+          "input_path": "_input/output.md",
+          "started_at": "[ts]",
+          "target_node_ids": [
+            "worker"
+          ]
+        },
+        "started_at": "[ts]",
+        "status": "running",
+        "switch_states": {},
+        "target_repo": "[repo]"
+      },
+      "status": 200
+    },
+    {
+      "body": {},
+      "content_type": "application/json",
+      "request": "POST /runs/[run-2]/nodes/worker/retry",
+      "response": {
+        "base_sha": null,
+        "interrupted_git_ops": [],
+        "invalidated": [
+          "end"
+        ],
+        "iter": 2,
+        "ok": true,
+        "reused_sub_worktree": false,
+        "spawned": [
+          {
+            "iter": 2,
+            "node_id": "worker"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-2]",
+      "response": {
+        "collection_states": {},
+        "completed_at": null,
+        "edges": [
+          {
+            "source_node": "start",
+            "source_port": "user_prompt",
+            "target_node": "worker",
+            "target_port": "task"
+          },
+          {
+            "source_node": "worker",
+            "source_port": "out",
+            "target_node": "end",
+            "target_port": "result"
+          }
+        ],
+        "end_node": {
+          "id": "end",
+          "ports": [
+            {
+              "fired_at": null,
+              "port_name": "result",
+              "reason": null,
+              "status": "pending"
+            }
+          ]
+        },
+        "foreach_states": {},
+        "fork_sha": "[sha-1]",
+        "has_manager": false,
+        "input": "go",
+        "loc": {
+          "deletions": 0,
+          "files_changed": 0,
+          "insertions": 0
+        },
+        "loop_states": {},
+        "name": "sibling run",
+        "node_defs": [
+          {
+            "id": "start",
+            "inputs": [],
+            "name": "Start",
+            "node_type": "start",
+            "outputs": [
+              {
+                "name": "user_prompt",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "worker",
+            "inputs": [
+              {
+                "name": "task",
+                "side": "left"
+              }
+            ],
+            "isolated_worktree": false,
+            "name": "Worker",
+            "node_type": "agent",
+            "outputs": [
+              {
+                "name": "out",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "end",
+            "inputs": [
+              {
+                "name": "result",
+                "side": "left"
+              }
+            ],
+            "name": "End",
+            "node_type": "end",
+            "outputs": [],
+            "view_x": null,
+            "view_y": null
+          }
+        ],
+        "nodes": {
+          "worker": {
+            "completed_at": null,
+            "cost": {
+              "executions": 2,
+              "form": null,
+              "partial": false,
+              "readable_executions": 0,
+              "reported_in_usd": false,
+              "unavailable_reasons": [
+                "no attributable Claude transcript"
+              ],
+              "usd": null
+            },
+            "failure_reason": null,
+            "frontmatter_retries": 0,
+            "harness": "claude",
+            "isolated_worktree": false,
+            "iter": 2,
+            "iterations": [
+              {
+                "completed_at": null,
+                "iter": 2,
+                "started_at": "[ts]",
+                "status": "running"
+              }
+            ],
+            "node_id": "worker",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_frozen_at": "[ts]",
+            "provisioning_plan": null,
+            "skills": [],
+            "started_at": "[ts]",
+            "status": "running"
+          }
+        },
+        "pipeline_name": "sibling",
+        "run_id": "[run-2]",
+        "sandbox": "off",
+        "sessions_spawned": 2,
+        "start_node": {
+          "input_files": [],
+          "input_images": [],
+          "input_path": "_input/output.md",
+          "started_at": "[ts]",
+          "target_node_ids": [
+            "worker"
+          ]
+        },
+        "started_at": "[ts]",
+        "status": "running",
+        "switch_states": {},
+        "target_repo": "[repo]"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "iter": 2
+      },
+      "content_type": "text/plain; charset=utf-8",
+      "request": "POST /runs/[run-2]/nodes/worker/done",
+      "response": "ok",
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-2]",
+      "response": {
+        "collection_states": {},
+        "completed_at": "[ts]",
+        "edges": [
+          {
+            "source_node": "start",
+            "source_port": "user_prompt",
+            "target_node": "worker",
+            "target_port": "task"
+          },
+          {
+            "source_node": "worker",
+            "source_port": "out",
+            "target_node": "end",
+            "target_port": "result"
+          }
+        ],
+        "end_node": {
+          "id": "end",
+          "ports": [
+            {
+              "fired_at": "[ts]",
+              "port_name": "result",
+              "reason": null,
+              "status": "received"
+            }
+          ]
+        },
+        "foreach_states": {},
+        "fork_sha": "[sha-1]",
+        "has_manager": false,
+        "input": "go",
+        "loc": {
+          "deletions": 0,
+          "files_changed": 0,
+          "insertions": 0
+        },
+        "loop_states": {},
+        "name": "sibling run",
+        "node_defs": [
+          {
+            "id": "start",
+            "inputs": [],
+            "name": "Start",
+            "node_type": "start",
+            "outputs": [
+              {
+                "name": "user_prompt",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "worker",
+            "inputs": [
+              {
+                "name": "task",
+                "side": "left"
+              }
+            ],
+            "isolated_worktree": false,
+            "name": "Worker",
+            "node_type": "agent",
+            "outputs": [
+              {
+                "name": "out",
+                "side": "right"
+              }
+            ],
+            "view_x": null,
+            "view_y": null
+          },
+          {
+            "id": "end",
+            "inputs": [
+              {
+                "name": "result",
+                "side": "left"
+              }
+            ],
+            "name": "End",
+            "node_type": "end",
+            "outputs": [],
+            "view_x": null,
+            "view_y": null
+          }
+        ],
+        "nodes": {
+          "worker": {
+            "completed_at": "[ts]",
+            "cost": {
+              "executions": 2,
+              "form": null,
+              "partial": false,
+              "readable_executions": 0,
+              "reported_in_usd": false,
+              "unavailable_reasons": [
+                "no attributable Claude transcript"
+              ],
+              "usd": null
+            },
+            "delivery": {
+              "after": "[sha-3]",
+              "before": "[sha-1]"
+            },
+            "failure_reason": null,
+            "frontmatter_retries": 0,
+            "harness": "claude",
+            "isolated_worktree": false,
+            "iter": 2,
+            "iterations": [
+              {
+                "completed_at": "[ts]",
+                "iter": 2,
+                "started_at": "[ts]",
+                "status": "completed"
+              }
+            ],
+            "node_id": "worker",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_frozen_at": "[ts]",
+            "provisioning_plan": null,
+            "skills": [],
+            "started_at": "[ts]",
+            "status": "completed"
+          }
+        },
+        "pipeline_name": "sibling",
+        "run_id": "[run-2]",
+        "sandbox": "off",
+        "sessions_spawned": 2,
+        "start_node": {
+          "input_files": [],
+          "input_images": [],
+          "input_path": "_input/output.md",
+          "started_at": "[ts]",
+          "target_node_ids": [
+            "worker"
+          ]
+        },
+        "started_at": "[ts]",
+        "status": "completed",
+        "switch_states": {},
+        "target_repo": "[repo]"
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /runs/[run-2]/events",
+      "response": [
+        {
+          "id": 8,
+          "iter": null,
+          "kind": "run_started",
+          "node_id": null,
+          "payload": {
+            "edges": [
+              {
+                "source_node": "start",
+                "source_port": "user_prompt",
+                "target_node": "worker",
+                "target_port": "task"
+              },
+              {
+                "source_node": "worker",
+                "source_port": "out",
+                "target_node": "end",
+                "target_port": "result"
+              }
+            ],
+            "fork_sha": "[sha-1]",
+            "input": "go",
+            "name": "sibling run",
+            "node_defs": [
+              {
+                "id": "start",
+                "inputs": [],
+                "name": "Start",
+                "node_type": "start",
+                "outputs": [
+                  {
+                    "name": "user_prompt",
+                    "side": "right"
+                  }
+                ],
+                "view_x": null,
+                "view_y": null
+              },
+              {
+                "id": "worker",
+                "inputs": [
+                  {
+                    "name": "task",
+                    "side": "left"
+                  }
+                ],
+                "isolated_worktree": false,
+                "name": "Worker",
+                "node_type": "agent",
+                "outputs": [
+                  {
+                    "name": "out",
+                    "side": "right"
+                  }
+                ],
+                "view_x": null,
+                "view_y": null
+              },
+              {
+                "id": "end",
+                "inputs": [
+                  {
+                    "name": "result",
+                    "side": "left"
+                  }
+                ],
+                "name": "End",
+                "node_type": "end",
+                "outputs": [],
+                "view_x": null,
+                "view_y": null
+              }
+            ],
+            "pipeline_name": "sibling",
+            "target_repo": "[repo]"
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 9,
+          "iter": 1,
+          "kind": "node_started",
+          "node_id": "worker",
+          "payload": {
+            "base_sha": null,
+            "effort": null,
+            "harness": "claude",
+            "interactive": false,
+            "isolated_worktree": false,
+            "missing_skills": [],
+            "model": null,
+            "node_type": "agent",
+            "orchestrator": false,
+            "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `sibling`, iteration 1.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/worker/iter-1/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-2]/worktree` is the **run's shared worktree**: other nodes of this ru",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_plan": null,
+            "session_id": "[uuid-2]",
+            "skills": [],
+            "skipped_skills": []
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 10,
+          "iter": 1,
+          "kind": "node_failed",
+          "node_id": "worker",
+          "payload": {
+            "reason": "driven terminal on purpose"
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 11,
+          "iter": null,
+          "kind": "run_failed",
+          "node_id": null,
+          "payload": {
+            "reason": "driven terminal on purpose"
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 12,
+          "iter": null,
+          "kind": "command_issued",
+          "node_id": null,
+          "payload": {
+            "command": "reopen_run"
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 13,
+          "iter": null,
+          "kind": "node_invalidated",
+          "node_id": "end",
+          "payload": {
+            "reason": "invalidated"
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 14,
+          "iter": null,
+          "kind": "node_invalidated",
+          "node_id": "worker",
+          "payload": {
+            "reason": "invalidated"
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 15,
+          "iter": 2,
+          "kind": "node_started",
+          "node_id": "worker",
+          "payload": {
+            "base_sha": null,
+            "effort": null,
+            "harness": "claude",
+            "interactive": false,
+            "isolated_worktree": false,
+            "missing_skills": [],
+            "model": null,
+            "node_type": "agent",
+            "orchestrator": false,
+            "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `sibling`, iteration 2.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/worker/iter-2/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-2]/worktree` is the **run's shared worktree**: other nodes of this ru",
+            "provisioning": {
+              "copy": [],
+              "hardlink": [],
+              "symlink": []
+            },
+            "provisioning_plan": null,
+            "session_id": "[uuid-3]",
+            "skills": [],
+            "skipped_skills": []
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 16,
+          "iter": 2,
+          "kind": "node_delivered",
+          "node_id": "worker",
+          "payload": {
+            "after": "[sha-3]",
+            "before": "[sha-1]",
+            "isolated": false
+          },
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 17,
+          "iter": 2,
+          "kind": "node_completed",
+          "node_id": "worker",
+          "payload": null,
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        },
+        {
+          "id": 18,
+          "iter": null,
+          "kind": "run_completed",
+          "node_id": null,
+          "payload": null,
+          "run_id": "[run-2]",
+          "ts": "[ts]"
+        }
+      ],
+      "status": 200
+    }
+  ],
+  "ws": [
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_completed",
+        "node_id": "worker",
+        "payload": null,
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_delivered",
+        "node_id": "worker",
+        "payload": {
+          "after": "[sha-2]",
+          "before": "[sha-1]",
+          "isolated": false
+        },
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_failed",
+        "node_id": "worker",
+        "payload": {
+          "reason": "driven terminal on purpose"
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_started",
+        "node_id": "worker",
+        "payload": {
+          "base_sha": null,
+          "effort": null,
+          "harness": "claude",
+          "interactive": false,
+          "isolated_worktree": false,
+          "missing_skills": [],
+          "model": null,
+          "node_type": "agent",
+          "orchestrator": false,
+          "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `sibling`, iteration 1.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/worker/iter-1/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-2]/worktree` is the **run's shared worktree**: other nodes of this ru",
+          "provisioning": {
+            "copy": [],
+            "hardlink": [],
+            "symlink": []
+          },
+          "provisioning_plan": null,
+          "session_id": "[uuid-2]",
+          "skills": [],
+          "skipped_skills": []
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 1,
+        "kind": "node_started",
+        "node_id": "worker",
+        "payload": {
+          "base_sha": null,
+          "effort": null,
+          "harness": "claude",
+          "interactive": false,
+          "isolated_worktree": false,
+          "missing_skills": [],
+          "model": null,
+          "node_type": "agent",
+          "orchestrator": false,
+          "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `solo`, iteration 1.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-1]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-1]/worktree/.pdo/artifacts/worker/iter-1/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-1]/worktree` is the **run's shared worktree**: other nodes of this run m",
+          "provisioning": {
+            "copy": [],
+            "hardlink": [],
+            "symlink": []
+          },
+          "provisioning_plan": null,
+          "session_id": "[uuid-1]",
+          "skills": [],
+          "skipped_skills": []
+        },
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 2,
+        "kind": "node_completed",
+        "node_id": "worker",
+        "payload": null,
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 2,
+        "kind": "node_delivered",
+        "node_id": "worker",
+        "payload": {
+          "after": "[sha-3]",
+          "before": "[sha-1]",
+          "isolated": false
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": 2,
+        "kind": "node_started",
+        "node_id": "worker",
+        "payload": {
+          "base_sha": null,
+          "effort": null,
+          "harness": "claude",
+          "interactive": false,
+          "isolated_worktree": false,
+          "missing_skills": [],
+          "model": null,
+          "node_type": "agent",
+          "orchestrator": false,
+          "prompt_preview": "# PDO Runtime Preamble\n\nYou are node `worker` in pipeline `sibling`, iteration 2.\n\n## Inputs\n\n- `task`: read `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/_input/output.md`\n\n## Outputs\n\n- `out`: write to `[repo]/.pdo/runs/[run-2]/worktree/.pdo/artifacts/worker/iter-2/out/output.md`\n\n## Source code edits\n\nYour working directory `[repo]/.pdo/runs/[run-2]/worktree` is the **run's shared worktree**: other nodes of this ru",
+          "provisioning": {
+            "copy": [],
+            "hardlink": [],
+            "symlink": []
+          },
+          "provisioning_plan": null,
+          "session_id": "[uuid-3]",
+          "skills": [],
+          "skipped_skills": []
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "command_issued",
+        "node_id": null,
+        "payload": {
+          "command": "reopen_run"
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "node_invalidated",
+        "node_id": "end",
+        "payload": {
+          "reason": "invalidated"
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "node_invalidated",
+        "node_id": "worker",
+        "payload": {
+          "reason": "invalidated"
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_completed",
+        "node_id": null,
+        "payload": null,
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_completed",
+        "node_id": null,
+        "payload": null,
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_failed",
+        "node_id": null,
+        "payload": {
+          "reason": "driven terminal on purpose"
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_started",
+        "node_id": null,
+        "payload": {
+          "edges": [
+            {
+              "source_node": "start",
+              "source_port": "user_prompt",
+              "target_node": "worker",
+              "target_port": "task"
+            },
+            {
+              "source_node": "worker",
+              "source_port": "out",
+              "target_node": "end",
+              "target_port": "result"
+            }
+          ],
+          "fork_sha": "[sha-1]",
+          "input": "go",
+          "name": "sibling run",
+          "node_defs": [
+            {
+              "id": "start",
+              "inputs": [],
+              "name": "Start",
+              "node_type": "start",
+              "outputs": [
+                {
+                  "name": "user_prompt",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "worker",
+              "inputs": [
+                {
+                  "name": "task",
+                  "side": "left"
+                }
+              ],
+              "isolated_worktree": false,
+              "name": "Worker",
+              "node_type": "agent",
+              "outputs": [
+                {
+                  "name": "out",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "end",
+              "inputs": [
+                {
+                  "name": "result",
+                  "side": "left"
+                }
+              ],
+              "name": "End",
+              "node_type": "end",
+              "outputs": [],
+              "view_x": null,
+              "view_y": null
+            }
+          ],
+          "pipeline_name": "sibling",
+          "target_repo": "[repo]"
+        },
+        "run_id": "[run-2]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    },
+    {
+      "event": {
+        "id": null,
+        "iter": null,
+        "kind": "run_started",
+        "node_id": null,
+        "payload": {
+          "edges": [
+            {
+              "source_node": "start",
+              "source_port": "user_prompt",
+              "target_node": "worker",
+              "target_port": "task"
+            },
+            {
+              "source_node": "worker",
+              "source_port": "out",
+              "target_node": "end",
+              "target_port": "result"
+            }
+          ],
+          "fork_sha": "[sha-1]",
+          "input": "go",
+          "name": "solo run",
+          "node_defs": [
+            {
+              "id": "start",
+              "inputs": [],
+              "name": "Start",
+              "node_type": "start",
+              "outputs": [
+                {
+                  "name": "user_prompt",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "worker",
+              "inputs": [
+                {
+                  "name": "task",
+                  "side": "left"
+                }
+              ],
+              "isolated_worktree": false,
+              "name": "Worker",
+              "node_type": "agent",
+              "outputs": [
+                {
+                  "name": "out",
+                  "side": "right"
+                }
+              ],
+              "view_x": null,
+              "view_y": null
+            },
+            {
+              "id": "end",
+              "inputs": [
+                {
+                  "name": "result",
+                  "side": "left"
+                }
+              ],
+              "name": "End",
+              "node_type": "end",
+              "outputs": [],
+              "view_x": null,
+              "view_y": null
+            }
+          ],
+          "pipeline_name": "solo",
+          "target_repo": "[repo]"
+        },
+        "run_id": "[run-1]",
+        "ts": "[ts]"
+      },
+      "type": "event"
+    }
+  ]
+}

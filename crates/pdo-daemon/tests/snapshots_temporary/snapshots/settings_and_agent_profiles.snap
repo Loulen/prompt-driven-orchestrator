@@ -1,0 +1,1047 @@
+---
+source: crates/pdo-daemon/tests/snapshots_temporary/recorder.rs
+description: "TEMPORARY — refactor net of spec #913 (issue #914), deleted by #932."
+---
+{
+  "http": [
+    {
+      "content_type": "application/json",
+      "request": "GET /settings",
+      "response": {
+        "agent_choice": null,
+        "auto_fail": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "autocomplete_turn_end": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_auto_name": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness_model": {
+          "effective": {},
+          "stored": {}
+        },
+        "default_model": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_sandbox": {
+          "default": "off",
+          "effective": "off",
+          "env": "[machine: environment]",
+          "reason": null,
+          "source": "default",
+          "stored": null
+        },
+        "guard_timeout_secs": {
+          "default": 60,
+          "effective": 60,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "harness_descriptors": "[machine: harness catalogue]",
+        "home": "[repo]",
+        "libassist_idle_ttl_secs": {
+          "default": 120,
+          "effective": 120,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "manager_enabled": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "manager_profile": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "max_attachments_mb": {
+          "default": 50,
+          "effective": 50,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "price_table": {
+          "fetched_at": null,
+          "fetched_path": "[repo]/.pdo/prices/fetched.json",
+          "fetched_rows": 0,
+          "manual_keys": [],
+          "manual_path": "[repo]/.pdo/prices/models.yaml",
+          "reason": null,
+          "source": null
+        },
+        "reaper_ttl_secs": {
+          "default": 3600,
+          "effective": 3600,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "review_agent_can_resolve": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "sandbox_docker": "[machine: docker probe]",
+        "sandbox_profiles": [
+          {
+            "name": "full",
+            "virtual": true
+          },
+          {
+            "name": "minimal",
+            "virtual": true
+          }
+        ],
+        "session_cap": {
+          "default": 20,
+          "effective": 20,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "skills": [],
+        "update_check": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "manager_enabled": true,
+        "review_agent_can_resolve": true
+      },
+      "content_type": "application/json",
+      "request": "PUT /settings",
+      "response": {
+        "agent_choice": null,
+        "auto_fail": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "autocomplete_turn_end": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_auto_name": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness_model": {
+          "effective": {},
+          "stored": {}
+        },
+        "default_model": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_sandbox": {
+          "default": "off",
+          "effective": "off",
+          "env": "[machine: environment]",
+          "reason": null,
+          "source": "default",
+          "stored": null
+        },
+        "guard_timeout_secs": {
+          "default": 60,
+          "effective": 60,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "harness_descriptors": "[machine: harness catalogue]",
+        "home": "[repo]",
+        "libassist_idle_ttl_secs": {
+          "default": 120,
+          "effective": 120,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "manager_enabled": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "manager_profile": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "max_attachments_mb": {
+          "default": 50,
+          "effective": 50,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "price_table": {
+          "fetched_at": null,
+          "fetched_path": "[repo]/.pdo/prices/fetched.json",
+          "fetched_rows": 0,
+          "manual_keys": [],
+          "manual_path": "[repo]/.pdo/prices/models.yaml",
+          "reason": null,
+          "source": null
+        },
+        "reaper_ttl_secs": {
+          "default": 3600,
+          "effective": 3600,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "review_agent_can_resolve": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "sandbox_docker": "[machine: docker probe]",
+        "sandbox_profiles": [
+          {
+            "name": "full",
+            "virtual": true
+          },
+          {
+            "name": "minimal",
+            "virtual": true
+          }
+        ],
+        "session_cap": {
+          "default": 20,
+          "effective": 20,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "skills": [],
+        "update_check": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/agent-profiles",
+      "response": {
+        "profiles": [
+          {
+            "created_at": "[ts]",
+            "harness": "claude",
+            "id": "default",
+            "name": "Default",
+            "updated_at": "[ts]"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "effort": "high",
+        "harness": "claude",
+        "model": "opus",
+        "name": "Deep review"
+      },
+      "content_type": "application/json",
+      "request": "POST /settings/agent-profiles",
+      "response": {
+        "created_at": "[ts]",
+        "effort": "high",
+        "harness": "claude",
+        "id": "[profile-1]",
+        "model": "opus",
+        "name": "Deep review",
+        "updated_at": "[ts]"
+      },
+      "status": 201
+    },
+    {
+      "body": {
+        "effort": "low",
+        "harness": "claude",
+        "name": "Quick review"
+      },
+      "content_type": "application/json",
+      "request": "PUT /settings/agent-profiles/[profile-1]",
+      "response": {
+        "created_at": "[ts]",
+        "effort": "low",
+        "harness": "claude",
+        "id": "[profile-1]",
+        "name": "Quick review",
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/agent-profiles/[profile-1]",
+      "response": {
+        "created_at": "[ts]",
+        "effort": "low",
+        "harness": "claude",
+        "id": "[profile-1]",
+        "name": "Quick review",
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "agent_choice": {
+          "mode": "profile",
+          "profile_id": "[profile-1]"
+        }
+      },
+      "content_type": "application/json",
+      "request": "PUT /settings",
+      "response": {
+        "agent_choice": {
+          "mode": "profile",
+          "profile_id": "[profile-1]"
+        },
+        "auto_fail": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "autocomplete_turn_end": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_auto_name": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness_model": {
+          "effective": {},
+          "stored": {}
+        },
+        "default_model": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_sandbox": {
+          "default": "off",
+          "effective": "off",
+          "env": "[machine: environment]",
+          "reason": null,
+          "source": "default",
+          "stored": null
+        },
+        "guard_timeout_secs": {
+          "default": 60,
+          "effective": 60,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "harness_descriptors": "[machine: harness catalogue]",
+        "home": "[repo]",
+        "libassist_idle_ttl_secs": {
+          "default": 120,
+          "effective": 120,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "manager_enabled": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "manager_profile": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "max_attachments_mb": {
+          "default": 50,
+          "effective": 50,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "price_table": {
+          "fetched_at": null,
+          "fetched_path": "[repo]/.pdo/prices/fetched.json",
+          "fetched_rows": 0,
+          "manual_keys": [],
+          "manual_path": "[repo]/.pdo/prices/models.yaml",
+          "reason": null,
+          "source": null
+        },
+        "reaper_ttl_secs": {
+          "default": 3600,
+          "effective": 3600,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "review_agent_can_resolve": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "sandbox_docker": "[machine: docker probe]",
+        "sandbox_profiles": [
+          {
+            "name": "full",
+            "virtual": true
+          },
+          {
+            "name": "minimal",
+            "virtual": true
+          }
+        ],
+        "session_cap": {
+          "default": 20,
+          "effective": 20,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "skills": [],
+        "update_check": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/agent-profiles/[profile-1]/referents",
+      "response": {
+        "instance": true,
+        "pipelines": [],
+        "profile_id": "[profile-1]",
+        "projects": [],
+        "runs": [],
+        "triggers": []
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "DELETE /settings/agent-profiles/default",
+      "response": {
+        "error": "the `Default` profile is the instance's reserved floor and cannot be deleted — rename or edit it instead"
+      },
+      "status": 400
+    },
+    {
+      "body": {
+        "agent_choice": null
+      },
+      "content_type": "application/json",
+      "request": "PUT /settings",
+      "response": {
+        "agent_choice": {
+          "mode": "profile",
+          "profile_id": "[profile-1]"
+        },
+        "auto_fail": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "autocomplete_turn_end": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_auto_name": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness_model": {
+          "effective": {},
+          "stored": {}
+        },
+        "default_model": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_sandbox": {
+          "default": "off",
+          "effective": "off",
+          "env": "[machine: environment]",
+          "reason": null,
+          "source": "default",
+          "stored": null
+        },
+        "guard_timeout_secs": {
+          "default": 60,
+          "effective": 60,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "harness_descriptors": "[machine: harness catalogue]",
+        "home": "[repo]",
+        "libassist_idle_ttl_secs": {
+          "default": 120,
+          "effective": 120,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "manager_enabled": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "manager_profile": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "max_attachments_mb": {
+          "default": 50,
+          "effective": 50,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "price_table": {
+          "fetched_at": null,
+          "fetched_path": "[repo]/.pdo/prices/fetched.json",
+          "fetched_rows": 0,
+          "manual_keys": [],
+          "manual_path": "[repo]/.pdo/prices/models.yaml",
+          "reason": null,
+          "source": null
+        },
+        "reaper_ttl_secs": {
+          "default": 3600,
+          "effective": 3600,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "review_agent_can_resolve": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "sandbox_docker": "[machine: docker probe]",
+        "sandbox_profiles": [
+          {
+            "name": "full",
+            "virtual": true
+          },
+          {
+            "name": "minimal",
+            "virtual": true
+          }
+        ],
+        "session_cap": {
+          "default": 20,
+          "effective": 20,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "skills": [],
+        "update_check": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    },
+    {
+      "request": "DELETE /settings/agent-profiles/[profile-1]",
+      "response": null,
+      "status": 204
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings/sandbox-profiles",
+      "response": {
+        "home": "[repo]",
+        "profiles": [
+          {
+            "disabled": [],
+            "entries": [
+              {
+                "enabled": true,
+                "exists": false,
+                "from_default": true,
+                "kind": "file",
+                "note": "Unchecked, onboarding and folder trust are synthesised instead — your oauthAccount / emailAddress never leave the host.",
+                "path": ".claude.json",
+                "resynthesised": true,
+                "sensitive": false
+              },
+              {
+                "enabled": true,
+                "exists": null,
+                "from_default": true,
+                "kind": "glob",
+                "note": "CLAUDE.md and its top-level imports (RTK.md, …).",
+                "path": ".claude/*.md",
+                "resynthesised": false,
+                "sensitive": false
+              },
+              {
+                "enabled": true,
+                "exists": false,
+                "from_default": true,
+                "kind": "file",
+                "note": "Unchecked, a one-key settings.json is synthesised instead — not absent.",
+                "path": ".claude/settings.json",
+                "resynthesised": true,
+                "sensitive": false
+              },
+              {
+                "enabled": true,
+                "exists": false,
+                "from_default": true,
+                "kind": "file",
+                "note": null,
+                "path": ".claude/settings.local.json",
+                "resynthesised": false,
+                "sensitive": false
+              },
+              {
+                "enabled": true,
+                "exists": false,
+                "from_default": true,
+                "kind": "dir",
+                "note": null,
+                "path": ".claude/agents",
+                "resynthesised": false,
+                "sensitive": false
+              },
+              {
+                "enabled": true,
+                "exists": false,
+                "from_default": true,
+                "kind": "dir",
+                "note": null,
+                "path": ".claude/commands",
+                "resynthesised": false,
+                "sensitive": false
+              },
+              {
+                "enabled": true,
+                "exists": false,
+                "from_default": true,
+                "kind": "dir",
+                "note": null,
+                "path": ".claude/output-styles",
+                "resynthesised": false,
+                "sensitive": false
+              },
+              {
+                "enabled": true,
+                "exists": false,
+                "from_default": true,
+                "kind": "dir",
+                "note": "≈1 GB per run, dominated by plugins/*/node_modules.",
+                "path": ".claude/plugins",
+                "resynthesised": false,
+                "sensitive": false
+              },
+              {
+                "enabled": true,
+                "exists": false,
+                "from_default": true,
+                "kind": "dir",
+                "note": "May pull targets from outside ~/.claude (links into ~/.agents).",
+                "path": ".claude/skills",
+                "resynthesised": false,
+                "sensitive": false
+              }
+            ],
+            "env": "[machine: environment]",
+            "extras": [],
+            "floor": [
+              {
+                "id": "credentials",
+                "label": "Valid Claude credentials",
+                "path": ".claude/.credentials.json"
+              },
+              {
+                "id": "org-managed-settings",
+                "label": "Your organisation's managed settings, consented",
+                "path": ".claude/remote-settings.json"
+              },
+              {
+                "id": "bypass-permissions",
+                "label": "Permissions bypass accepted (no blocking dialog)",
+                "path": null
+              },
+              {
+                "id": "run-root-trust",
+                "label": "Trust pre-granted on the Run's repo root",
+                "path": null
+              },
+              {
+                "id": "empty-projects",
+                "label": "An empty projects/ transcript sink",
+                "path": ".claude/projects"
+              }
+            ],
+            "image": null,
+            "inactive_disabled": [],
+            "materialised": false,
+            "name": "full",
+            "redundant_extras": [],
+            "reserved_env_keys": [
+              "HOME",
+              "PDO_DAEMON_URL",
+              "PDO_RUN_ID"
+            ],
+            "resolved": [
+              ".claude.json",
+              ".claude/*.md",
+              ".claude/agents",
+              ".claude/commands",
+              ".claude/output-styles",
+              ".claude/plugins",
+              ".claude/settings.json",
+              ".claude/settings.local.json",
+              ".claude/skills"
+            ],
+            "sensitive_prefixes": [
+              ".ssh",
+              ".aws",
+              ".gnupg"
+            ],
+            "updated_at": null,
+            "virtual": true
+          },
+          {
+            "disabled": [],
+            "entries": [],
+            "env": "[machine: environment]",
+            "extras": [],
+            "floor": [
+              {
+                "id": "credentials",
+                "label": "Valid Claude credentials",
+                "path": ".claude/.credentials.json"
+              },
+              {
+                "id": "org-managed-settings",
+                "label": "Your organisation's managed settings, consented",
+                "path": ".claude/remote-settings.json"
+              },
+              {
+                "id": "bypass-permissions",
+                "label": "Permissions bypass accepted (no blocking dialog)",
+                "path": null
+              },
+              {
+                "id": "run-root-trust",
+                "label": "Trust pre-granted on the Run's repo root",
+                "path": null
+              },
+              {
+                "id": "empty-projects",
+                "label": "An empty projects/ transcript sink",
+                "path": ".claude/projects"
+              }
+            ],
+            "image": null,
+            "inactive_disabled": [],
+            "materialised": false,
+            "name": "minimal",
+            "redundant_extras": [],
+            "reserved_env_keys": [
+              "HOME",
+              "PDO_DAEMON_URL",
+              "PDO_RUN_ID"
+            ],
+            "resolved": [],
+            "sensitive_prefixes": [
+              ".ssh",
+              ".aws",
+              ".gnupg"
+            ],
+            "updated_at": null,
+            "virtual": true
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "content_type": "application/json",
+      "request": "GET /settings",
+      "response": {
+        "agent_choice": {
+          "mode": "profile",
+          "profile_id": "[profile-1]"
+        },
+        "auto_fail": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "autocomplete_turn_end": {
+          "default": false,
+          "effective": false,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_auto_name": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_harness_model": {
+          "effective": {},
+          "stored": {}
+        },
+        "default_model": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "default_sandbox": {
+          "default": "off",
+          "effective": "off",
+          "env": "[machine: environment]",
+          "reason": null,
+          "source": "default",
+          "stored": null
+        },
+        "guard_timeout_secs": {
+          "default": 60,
+          "effective": 60,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "harness_descriptors": "[machine: harness catalogue]",
+        "home": "[repo]",
+        "libassist_idle_ttl_secs": {
+          "default": 120,
+          "effective": 120,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "manager_enabled": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "manager_profile": {
+          "default": null,
+          "effective": null,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "max_attachments_mb": {
+          "default": 50,
+          "effective": 50,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "price_table": {
+          "fetched_at": null,
+          "fetched_path": "[repo]/.pdo/prices/fetched.json",
+          "fetched_rows": 0,
+          "manual_keys": [],
+          "manual_path": "[repo]/.pdo/prices/models.yaml",
+          "reason": null,
+          "source": null
+        },
+        "reaper_ttl_secs": {
+          "default": 3600,
+          "effective": 3600,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "review_agent_can_resolve": {
+          "default": false,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "stored",
+          "stored": true
+        },
+        "sandbox_docker": "[machine: docker probe]",
+        "sandbox_profiles": [
+          {
+            "name": "full",
+            "virtual": true
+          },
+          {
+            "name": "minimal",
+            "virtual": true
+          }
+        ],
+        "session_cap": {
+          "default": 20,
+          "effective": 20,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "skills": [],
+        "update_check": {
+          "default": true,
+          "effective": true,
+          "env": "[machine: environment]",
+          "source": "default",
+          "stored": null
+        },
+        "updated_at": "[ts]"
+      },
+      "status": 200
+    }
+  ],
+  "ws": []
+}

@@ -40,7 +40,7 @@ notify = { version = "7", features = ["macos_fsevent"] }
 notify-debouncer-mini = "0.5"
 portable-pty = "0.8"
 pretty_assertions = "1"
-insta = { version = "1", features = ["yaml"] }
+insta = { version = "1", features = ["yaml", "json"] }
 tempfile = "3"
 sha2 = "0.10"
 ignore = "0.4"

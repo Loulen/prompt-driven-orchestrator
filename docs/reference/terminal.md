@@ -33,3 +33,4 @@ A spectator **takes control** with the hand icon above the terminal (**Take cont
 When the pilot closes the terminal, the first browser to have arrived among the others takes over. If only one browser is left, it is solo again, with the normal size and font.
 
 A direct `tmux attach` (over SSH) and **Detach to OS terminal** open ordinary tmux clients outside these roles: they still weigh on the window size and can type.
+

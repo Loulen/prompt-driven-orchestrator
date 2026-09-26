@@ -1,5 +1,7 @@
 # ADR-0039 — Le daemon reste un crate unique, les modules restent frères, lib.rs est carvé par concern, jamais par répertoire
 
+> **Superseded by ADR-0079** : PDO devient un monolithe modulaire, un crate par bounded context, hexagonal à l'intérieur.
+
 Sans cet ADR, un agent « rangerait » la liste plate de `crates/pdo-daemon/src/` en répertoires
 (`sandbox/`, `triggers/`…) ou en sous-crates par couche d'ADR-0009 — ce qui casse en silence les
 cibles `tracing` et force des `pub` de fuite.

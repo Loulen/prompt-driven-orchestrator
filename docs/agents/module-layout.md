@@ -1,70 +1,58 @@
 # Module layout
 
-Where a new file goes, and why the tree stays flat on purpose. This is the operating rule; the
-decision that *refuses* the alternatives (sub-crates, sub-directories, name-prefix taxonomies) is
-[ADR-0039](../adr/0039-le-daemon-reste-un-crate-unique-les-modules-restent-freres.md). The rule is
-enforced by [`scripts/layout-ratchet.sh`](../../scripts/layout-ratchet.sh), run in CI.
+Where a new file goes. The decision (modular monolith, one crate per bounded context, hexagonal
+inside) is [ADR-0079](../adr/0079-pdo-est-un-monolithe-modulaire-un-crate-par-bounded-context-hexagonal-a-l-interieur.md);
+the test pyramid that goes with it is [ADR-0080](../adr/0080-pyramide-de-tests-en-six-etages-les-use-cases-se-testent-avec-des-adaptateurs-en-memoire.md).
 
-> "Module layout" here is the physical shape of the source tree — files and modules. It is **not**
-> the `layout`/`semantic` partitioning of pipeline nodes (that meaning of the word lives in
-> CONTEXT.md). Say "module layout", never bare "layout".
+> "Module layout" here is the physical shape of the source tree. It is **not** the
+> `layout`/`semantic` partitioning of pipeline nodes (CONTEXT.md). Say "module layout", never bare
+> "layout".
 
-## The rule
+## Two axes
 
-**One concern is one sibling file.** The daemon is a single crate whose modules are flat siblings
-under `crates/pdo-daemon/src/`; the frontend's components are flat siblings under
-`frontend/src/components/`. When you add behaviour, the default is to fold it into the existing
-sibling that owns the concern — not to open a new top-level file.
+- **Business axis = crate.** One crate per bounded context: `run`, `pipeline`, `review`,
+  `session`, `harness`, `sandbox`, `skill`, `trigger`, `stats`, `workspace`, `settings`,
+  `platform`. A context only sees what another context makes `pub`. Crates cannot form cycles.
+- **Technical axis = module inside the crate.** Every context crate has the same three modules:
+  - `domain/` holds the pure rules. No I/O, no tokio process, no sqlx, no axum, no `adapters::`.
+  - `application/` holds `ports.rs` (the traits the context needs) and one file per use case.
+    Every mutation is a use case that builds an Opération and goes through the Autorisation
+    d'opération.
+  - `adapters/` holds the driving side (`http/`: routes and DTOs exported to TypeScript) and the
+    driven side (SQLite, git, tmux, fs… implementations of the ports).
 
-A genuinely new concern *may* be a new sibling file. That is the exception, not the reflex, and it
-is justified in the PR description. "This function is long" or "this feels separate" is not a new
-concern; it is a function in the module that already owns its concern.
+Shared crates:
 
-There are no directories inside `crates/pdo-daemon/src/`. `lib.rs` is carved by concern into
-sibling modules, never by directory. The one directory under `frontend/src/components/` is `ui/`
-(generated shadcn primitives) — see below.
+- `pdo-kernel` is the shared kernel: Acteur, Opération, authorization, event bus, extension host,
+  entity attributes. Keep it small and stable.
+- `pdo-extension-api` is the public contract (semver, ADR-0081). It depends on nothing in core.
+- `pdo` (bin) is the composition root. It wires adapters onto ports, merges each context's
+  `router()`, and holds the CLI and the embedded SPA. It is the only place that knows every
+  context.
 
-## Watched directories and the ratchet
+Frontend: `frontend/src/<context>/{api,model,store,components}/`, plus `shared/` (`ui/` for shadcn,
+`http/`, `generated/` for ts-rs types that you never edit by hand, `extensions/`, `lib/`) and
+`app/`. No barrel files: import from the file that owns the symbol.
 
-The ratchet counts **direct tracked files** in each watched directory (files git tracks at the top
-level of that directory; files in sub-directories such as `ui/` are not counted). The count must
-never exceed its baseline.
+## Where does my change go?
 
-| Watched directory          | Baseline |
-| -------------------------- | -------- |
-| `frontend/src/components`  | 194      |
-| `crates/pdo-daemon/src`    | 90       |
+1. Which business subject is it about? That tells you the context crate (or frontend folder).
+2. Is it a rule, an orchestration, or a technical detail? That tells you `domain/`,
+   `application/` or `adapters/`.
+3. Does it need something from another context? Use its public API. If that API doesn't exist,
+   add it on the owning side. Never reach into another crate's internals, and never create a
+   cycle. A cycle means the concept belongs in the other context or in the kernel.
 
-The numbers above drift; `scripts/layout-ratchet.sh` is the source of truth, and its comments
-carry the reason each baseline moved.
+## Rules checked by the test suite
 
-Colocated Rust unit tests (`#[cfg(test)] mod tests` at the bottom of a module) are **counted with
-their module** — they are part of the same file, so a tidied module that absorbs a sibling drops the
-count by the full file, tests included. There is no `*.test.*` exclusion: introducing one would be a
-pattern that quietly drifts.
+- **Architecture test.** A `domain/` module imports nothing technical and no `adapters::`.
+- **File size.** A production file has **at most 400 lines**. Tests are not counted. Files that
+  are still too big are listed in a baseline that may only shrink.
+- **Route coverage.** Every route of the assembled router has at least one HTTP-level test.
 
-## Ratchet down
+## During the migration
 
-The ratchet is one-directional by intent. When you tidy a directory *below* its baseline (fold a
-file into a sibling, delete dead code), the script prints a `note:` and you **lower the baseline in
-the same commit**. The number only ever goes down without discussion; raising it requires the PR to
-say why a new direct file is the right shape.
-
-## What this rule is NOT
-
-- **Not a ban on growth.** A new concern can be a new file. The ratchet makes that a deliberate,
-  reviewed act instead of the path of least resistance.
-- **Not a fixed cap.** There is no "max 30 entries" target — only "never more than today, and less
-  when you tidy". The absolute number is not the point; the direction is.
-- **Not a directory scheme.** Do not answer a large flat list by sorting files into folders. For the
-  daemon that would move `module_path!()` and break `RUST_LOG` targets and runbook greps
-  (ADR-0039); for the frontend the taxonomy question is a separate, human-gated piece of work
-  (issues #338, #359). `ui/` is the sole directory under `components/`, and only because
-  `npx shadcn add` re-flattens anything else back out.
-- **Not barrel files.** No `index.ts` re-export hubs. Import from the file that owns the symbol.
-
-## Discovery
-
-There is no index of `docs/agents/*.md`. The channel that surfaces this rule at the moment it
-matters is the ratchet's own failure message — it names this file when a directory grows past its
-baseline.
+The legacy `crates/pdo-daemon` crate is strangled one context at a time. It only shrinks: new
+behaviour goes into the context crate once that crate exists. While it still exists,
+`scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
+legacy crate.

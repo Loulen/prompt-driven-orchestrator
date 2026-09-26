@@ -1,5 +1,7 @@
 # Trois couches de primitives runtime : resolver, mutations, commandes
 
+> **Amendé par ADR-0079** : les trois couches deviennent les couches hexagonales domain / application / adapters de chaque crate de contexte.
+
 > **Amendé par ADR-0049.** Une commande de reprise **humaine** (Couche 3) peut **ré-ouvrir un run terminal** via une re-projection sûre — un geste explicite, jamais une initiative du runtime. Le principe tient : un **bouton de nœud** ne réanime pas un run de lui-même, et le runtime ne flippe jamais le `RunStatus` seul.
 
 **L'API runtime se lit en trois couches, et les couches basses ne re-rentrent jamais dans le scheduler.** Sans cette séparation on retombe sur des commandes monolithiques qui mélangent requête sur le graphe, mutation d'état et décision de scheduling — le postmortem du run `20260513-094606-dcdf206` (#108) a montré `resume_run` spawnant des rogue iters et `kill_node` ré-entrant dans le scheduler.

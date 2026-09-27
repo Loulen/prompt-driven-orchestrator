@@ -6,7 +6,7 @@ import type { RunState } from "../../shared/generated/RunState";
 // The badge/banner live in the InfoTab header. Mock the heavy
 // children (network-fetching diff, tmux terminal) so the test stays focused on the
 // #410 sandbox surface and never touches the network.
-vi.mock("../../components/DiffTab", () => ({ default: () => null }));
+vi.mock("../../review/components/DiffTab", () => ({ default: () => null }));
 vi.mock("../../session/components/TmuxTerminal", () => ({ default: vi.fn(() => null) }));
 
 // #302 / ADR-0048: the Assistant tab drives create-if-absent / reap-on-leave

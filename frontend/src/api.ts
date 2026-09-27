@@ -12,9 +12,6 @@ import type { AgentChoice } from "./shared/generated/AgentChoice";
 import type { AgentProfile } from "./shared/generated/AgentProfile";
 import type { AgentProfileInput } from "./shared/generated/AgentProfileInput";
 import type { SkillRef } from "./shared/generated/SkillRef";
-import type { StructuredDiff } from "./shared/generated/StructuredDiff";
-import type { ReviewCommentsListResponse, ReviewDecisionResponse, SendReviewCommentsResponse } from "./review/model/review";
-import type { SendReviewCommentInput } from "./shared/generated/SendReviewCommentInput";
 import { ApiError, request } from "./shared/http/client";
 import type { TargetRepoInput } from "./run/api/createRun";
 
@@ -195,53 +192,6 @@ export function uncombineStatsMember(
   });
 }
 
-/**
- * #750: the Run's sent review comments, on their own endpoint. With a `pair`
- * (#752, ADR-0067 §5) the daemon re-maps every anchor onto it **on read**: each
- * comment carries `outdated` and, when the line still exists, `mapped_line` /
- * `moved`. Nothing is written to the event log.
- */
-export function fetchReviewComments(
-  runId: string,
-  pair?: { from: string; to: string },
-): Promise<ReviewCommentsListResponse> {
-  const qs = pair ? `?from=${encodeURIComponent(pair.from)}&to=${encodeURIComponent(pair.to)}` : "";
-  return request<ReviewCommentsListResponse>("GET", `/runs/${encodeURIComponent(runId)}/review/comments${qs}`);
-}
-
-/**
- * #750: send a batch of drafts to the manager — one message for the batch, the
- * manager started on demand. A `409 run_branch_gone` (branch deleted / archived
- * Run) surfaces as an `ApiError` whose message is the daemon's reason.
- */
-export function sendReviewComments(
-  runId: string,
-  comments: SendReviewCommentInput[],
-): Promise<SendReviewCommentsResponse> {
-  return request<SendReviewCommentsResponse>("POST", `/runs/${encodeURIComponent(runId)}/review/comments/send`, {
-    body: { comments },
-    label: "Send review comments",
-  });
-}
-
-/** #751: the human resolves a comment (accepts a proposal, or closes it outright). */
-export function resolveReviewComment(runId: string, commentId: string): Promise<ReviewDecisionResponse> {
-  return request<ReviewDecisionResponse>(
-    "POST",
-    `/runs/${encodeURIComponent(runId)}/review/comments/${encodeURIComponent(commentId)}/resolve`,
-    { body: {}, label: "Resolve review comment" },
-  );
-}
-
-/** #751: back to `sent` — reopen a resolved comment, or decline a pending proposal. */
-export function reopenReviewComment(runId: string, commentId: string): Promise<ReviewDecisionResponse> {
-  return request<ReviewDecisionResponse>(
-    "POST",
-    `/runs/${encodeURIComponent(runId)}/review/comments/${encodeURIComponent(commentId)}/reopen`,
-    { body: {}, label: "Reopen review comment" },
-  );
-}
-
 export interface CreateTriggerRequest {
   name: string;
   pipeline_id: string;
@@ -417,32 +367,3 @@ export function testGuard(
     { body: { guard_command, target_repo }, label: "POST /triggers/guard/test" },
   );
 }
-
-export function fetchRunDiff(runId: string): Promise<string> {
-  return request<string>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/diff`,
-    { responseMode: "text", label: `GET /runs/${runId}/diff` },
-  );
-}
-
-/**
- * Structured Run diff (#748): files → hunks → lines, computed by the daemon in
- * the Run's effective repository. No `from`/`to` = fork point → Run tip, the
- * exact bounds of `run.loc`. An explicit pair compares two Run refs.
- */
-export function fetchRunStructuredDiff(
-  runId: string,
-  refs?: { from?: string; to?: string },
-): Promise<StructuredDiff> {
-  const params = new URLSearchParams();
-  if (refs?.from) params.set("from", refs.from);
-  if (refs?.to) params.set("to", refs.to);
-  const qs = params.size > 0 ? `?${params.toString()}` : "";
-  return request<StructuredDiff>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/diff/structured${qs}`,
-    { label: `GET /runs/${runId}/diff/structured` },
-  );
-}
-

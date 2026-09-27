@@ -10,6 +10,39 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.11 — Contexte `run`, 3/3 : surfaces de Run et vues front des Runs (#925, spec #913)
+
+Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots
+HTTP et WS identiques ; `POST/GET /runs`, `DELETE /runs/{id}`, `reapable`, `children`,
+`artifact`, `file`, `refs`, `source-drift`, le pipeline run-scope, `PATCH repos` et le Pipeline
+Manager répondent comme avant, octet pour octet, sans extension).
+
+- Les surfaces du Run quittent `pdo-legacy` pour `pdo-run` : `lib.rs` ne contient plus aucun
+  handler de Run (la revue d'un Run, ses diffs et ses commentaires, attend #926). La création
+  est découpée par étape (dépôts, pipeline, provisioning et isolation figés, payload de
+  `RunStarted`, le Run sur disque, son démarrage).
+- Chaque mutation est un use case qui reçoit l'Acteur et consulte d'abord l'Autorisation
+  d'opération : création (`run` × `create`), oubli (`run` × `delete`), dépôts
+  (`run` × `edit_repos`), pipeline run-scope (`run` × `edit_pipeline`), Pipeline Manager
+  (`run` × `start_manager` / `stop_manager`). Un refus répond `403 operation_refused` avant
+  toute écriture. L'archivage et `retry_all` restent la conséquence d'une commande déjà
+  autorisée ; le port `RunSurfaces` disparaît.
+- Le coût d'un Run (`run_cost`), la table de prix (ses paliers et leur lecture) et les refs de
+  Run rejoignent le contexte ; la synchronisation des prix reste avec les réglages d'instance
+  (#928). Les lectures git communes aux refs et à la revue passent dans le contexte
+  `workspace` (`adapters/git/revisions.rs`).
+- `pdo run create` et `pdo reap` rejoignent la CLI du contexte.
+- Tests : les use cases des surfaces contre des ports en mémoire (étage 2), les tests internes
+  du crate legacy qui portaient sur ce code déplacés dans `crates/pdo-run/tests/lifecycle/surfaces/`
+  (étage 3), la couverture des refus d'extension étendue aux six nouvelles routes de mutation.
+- Les cibles `RUST_LOG` changent avec le code (`pdo_daemon` pour la création, l'archivage,
+  l'oubli, les dépôts, le pipeline run-scope et le manager devient
+  `pdo_run::application::{create_run, archive, forget_run, edit_repos, run_pipeline, manager}`,
+  `pdo_daemon::price_table` devient `pdo_run::domain::prices`).
+- Front : la liste des Runs, la modale de lancement, le détail d'un node, les artefacts, les Runs
+  enfants, les dépôts d'un Run et leur API passent dans `frontend/src/run/`, découpés sous 400
+  lignes par fichier.
+
 ## 1.111.10 — Contexte `run`, 2/3 : scheduler et cycle de vie des nodes, commandes d'agent (#924, spec #913)
 
 Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots

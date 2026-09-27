@@ -119,6 +119,24 @@ pub async fn is_forgotten(db: &sqlx::SqlitePool, run_id: &str) -> Result<bool> {
     Ok(row.is_some())
 }
 
+/// Forget `run_id` (ADR-0024): tombstone it and purge its events in ONE
+/// transaction, so a late writer never observes "events gone, no tombstone yet"
+/// and resurrects the Run.
+pub async fn forget(db: &sqlx::SqlitePool, run_id: &str) -> Result<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("INSERT OR IGNORE INTO forgotten_runs (run_id, forgotten_at) VALUES (?, ?)")
+        .bind(run_id)
+        .bind(pdo_kernel::clock::now_iso())
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM events WHERE run_id = ?")
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Whether a Run was started with `run_id` as its parent; `true` when the
 /// query fails.
 pub async fn has_children(db: &sqlx::SqlitePool, run_id: &str) -> bool {
@@ -196,6 +214,10 @@ impl EventStore for SqliteEventStore {
 
     fn has_children<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, bool> {
         Box::pin(has_children(&self.db, run_id))
+    }
+
+    fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<()>> {
+        Box::pin(forget(&self.db, run_id))
     }
 }
 
@@ -318,6 +340,29 @@ mod tests {
             store.events("r").await.unwrap()[0].kind,
             EventKind::RunStarted
         );
+    }
+
+    #[tokio::test]
+    async fn forgetting_a_run_purges_its_events_and_tombstones_it() {
+        let store = store().await;
+        store
+            .append(&event("gone", EventKind::RunStarted, None))
+            .await
+            .unwrap();
+        store
+            .append(&event("kept", EventKind::RunStarted, None))
+            .await
+            .unwrap();
+        store.forget("gone").await.unwrap();
+        assert!(store.events("gone").await.unwrap().is_empty());
+        assert!(store.is_forgotten("gone").await.unwrap());
+        assert_eq!(store.events("kept").await.unwrap().len(), 1);
+        assert!(store
+            .append(&event("gone", EventKind::NodeStarted, None))
+            .await
+            .is_err());
+        // Forgetting twice is harmless.
+        store.forget("gone").await.unwrap();
     }
 
     #[tokio::test]

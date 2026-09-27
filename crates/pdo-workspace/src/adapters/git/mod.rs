@@ -12,6 +12,7 @@ pub mod fast_forward;
 pub mod fetch;
 pub mod manifest;
 pub mod repository;
+pub mod revisions;
 pub mod scaffold;
 pub mod worktrees;
 

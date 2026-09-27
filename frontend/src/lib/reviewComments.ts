@@ -4,7 +4,7 @@ import type { ReviewSide } from "../shared/generated/ReviewSide";
 import type { RunRefs } from "../shared/generated/RunRefs";
 import type { RunState } from "../shared/generated/RunState";
 import type { SendReviewCommentInput } from "../shared/generated/SendReviewCommentInput";
-import type { RefPair } from "./runRefs";
+import type { RefPair } from "../run/model/runRefs";
 
 // Review comments of the Review page (#750, ADR-0067 §2; CONTEXT.md
 // § "Commentaire de review", "Envoi au manager"). Pure: no React, no fetch.

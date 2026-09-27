@@ -12,7 +12,7 @@ export type RunChildEntry = { run_id: string, pipeline_name: string, name?: stri
 /**
  * Display-only "no forward progress" overlay (#180, #783): true when the
  * child has no running/waiting node and a stale node, even though `status`
- * stays `running`. Derived per read by `event_log::is_stalled`, exactly as
+ * stays `running`. Derived per read by `is_stalled`, exactly as
  * on `GET /runs`, so the Orchestration tab's stale pill and the run list's
  * amber dot can never disagree about the same child.
  */

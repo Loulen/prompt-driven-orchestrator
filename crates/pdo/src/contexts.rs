@@ -21,6 +21,7 @@ use pdo_platform::adapters::sqlite_page_mounts::SqlitePageMounts;
 use pdo_platform::application::update_context::UpdateOptions;
 use pdo_platform::{Platform, PlatformPorts};
 use pdo_run::adapters::contexts::{ContextSkills, SessionWaits, WorkspaceProjects};
+use pdo_run::adapters::disk_live_facts::DiskLiveFacts;
 use pdo_run::adapters::manager_sessions::TmuxManagerSessions;
 use pdo_run::adapters::sqlite_event_store::SqliteEventStore;
 use pdo_run::{Runs, RunsOptions, RunsPorts};
@@ -46,25 +47,32 @@ pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) ->
 }
 
 /// The `run` context: the event log over SQLite, the kernel's bus the daemon
-/// opened, tmux and the declared wait of the session context, the Projets of
-/// the workspace, the skills, the staging profiles over SQLite, and what the
-/// legacy daemon still implements (a Run's detail read from disk, the instance
-/// settings, the Run's surfaces the Pipeline Manager reaches).
+/// opened, what a Run's detail reads from disk, tmux and the declared wait of
+/// the session context, the Projets of the workspace, the skills and their
+/// bank, the staging profiles over SQLite, the pipeline watcher and the
+/// daemon's own writes, and what the legacy daemon still implements (the
+/// instance settings, the page mounts an archive releases).
 fn run(r: &ContextResources, session: &Arc<Session>, host: Arc<dyn ExtensionHost>) -> Arc<Runs> {
     let legacy = r.run.clone();
     Runs::new(
         RunsPorts {
             store: Arc::new(SqliteEventStore::new(r.db.clone())),
             bus: legacy.bus,
-            live_facts: legacy.live_facts,
+            live_facts: Arc::new(DiskLiveFacts::new(
+                r.repo_root.clone(),
+                legacy.sandbox_home_override.clone(),
+            )),
             managers: Arc::new(TmuxManagerSessions(session.tmux().clone())),
             tmux: session.tmux().clone(),
             waits: Arc::new(SessionWaits(session.clone())),
             projects: Arc::new(WorkspaceProjects(legacy.workspace)),
-            skills: Arc::new(ContextSkills(legacy.skills)),
+            skills: Arc::new(ContextSkills(legacy.skills.clone())),
             sandbox_profiles: Arc::new(SqliteProfiles::new(r.db.clone())),
             settings: legacy.settings,
-            surfaces: legacy.surfaces,
+            bank: Arc::new(BankOfSkills(legacy.skills)),
+            pages: legacy.pages,
+            run_dirs: legacy.run_dirs,
+            self_writes: legacy.self_writes,
             extensions: host,
         },
         RunsOptions {

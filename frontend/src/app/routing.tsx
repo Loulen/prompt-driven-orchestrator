@@ -1,6 +1,6 @@
 import App from "./App";
 import ReviewPage from "../pages/ReviewPage";
-import { reviewRunIdFromPath } from "../lib/runRefs";
+import { reviewRunIdFromPath } from "../run/model/runRefs";
 
 /**
  * The app has no router: navigation is state (selected run, pane owner). The

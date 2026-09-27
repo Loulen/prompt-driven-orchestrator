@@ -159,9 +159,7 @@ Contexts already out of the legacy crate:
   instance defaults and the agentic profiles) and `RunSurfaces` (archive and `retry_all`,
   whose answers the commands forward verbatim), implemented in `run_ports.rs`. The node routes,
   `/runs/{run_id}/commands` and `/stale/health` are in its `router()`; the agent CLI (`pdo
-  complete`, `fail`, `skip`, `wait-user`, `run wait`) is `adapters/cli/`. The legacy crate keeps
-  thin wrappers of the same names over `AppState::run` for the Run's surfaces still there
-  (create, list, archive, review, the manager). Tests: the use cases against in-memory ports
+  complete`, `fail`, `skip`, `wait-user`, `run wait`) is `adapters/cli/`. Tests: the use cases against in-memory ports
   (`tests/use_cases/`, stage 2); the context over its real adapters — SQLite, git in a
   temporary repository, tmux on its own socket — driven through its router (`tests/lifecycle/`,
   the legacy crate's in-crate tests of this code, moved); the unit tests beside their code.
@@ -175,6 +173,50 @@ Contexts already out of the legacy crate:
   `pdo_run::application::sandbox`, and the node handlers of `pdo_daemon` become
   `pdo_run::application::{complete_node, fail_node, skip_node, start_node, stop_node,
   retry_node, release_completion, merge_resolver}`.
+- `run`, third slice (#925): the Run's surfaces join `crates/pdo-run`, and the legacy crate
+  holds no Run handler any more (the review of a Run, its diffs and its comments, waits for
+  #926). Every mutation is a use case on `Runs` that receives the Acteur and asks the
+  Autorisation d'opération before anything is written: `create_run` (`run` × `create`, in
+  `application/create_run/`: the repositories, the pipeline, the provisioning and the
+  isolation frozen, the `RunStarted` payload, the Run on disk, its start — one file per step),
+  `forget_run` (`run` × `delete`), `edit_repos` (`run` × `edit_repos`), `save_run_pipeline`
+  (`run` × `edit_pipeline`, `application/run_pipeline/`), `start_manager` / `stop_manager`
+  (`run` × `start_manager` / `stop_manager`, `application/manager/`). `start_run` is the
+  creation without the gate, for a caller that has passed its own: the `retry_all` command, a
+  Trigger fire (the trigger context gates it, #927). The archive (`application/archive/`) and
+  `retry_all` are what an authorized command triggers, so the `RunSurfaces` port is gone. The
+  reads are use cases too: the list, the reapable Runs and the children (`application/list/`),
+  an artifact, the refs, a file at a ref and the source drift (`application/refs/`). A Run's
+  cost moved with them: the contributions and a transcript's usage in `domain/run_cost/`, the
+  price table's tiers and their parsing in `domain/prices/`, the harnesses' files in
+  `adapters/run_cost/`, the price files in `adapters/price_files.rs`, and what a Run's detail
+  reads from disk (LOC, cost, the run-scoped graph) in `adapters/disk_live_facts.rs`, which now
+  implements `LiveFacts`. The price sync (the egress to models.dev) stays with the instance
+  settings for #928. The git reads a Run's refs and the review share (`rev_parse`, the
+  snapshot of a worktree, a file at a ref, the ref/path guards) live in the workspace's
+  `adapters/git/revisions.rs`. New narrow ports: `RunPages` (the platform's page mounts an
+  archive releases, implemented in `run_ports.rs` while the state owns the platform),
+  `RunDirWatch` (the pipeline watcher, `adapters/run_dir_watch.rs`), the pipeline context's
+  `SkillBank` (the skills sidecar of a Run's pipeline) and `SelfWrites`; `EventStore::forget`,
+  `NodeSkills::withdraw`, `Projects::provisioning_rules` and the instance defaults a create
+  reads (attachment budget, default sandbox, auto-naming, manager) extend the existing ones.
+  The routes are in the context's `router()`; `pdo run create` and `pdo reap` join the CLI in
+  `adapters/cli/` (with `RunAction`). What the downstream contexts consume is `pub` and stays
+  put: `Runs::start_run` and `CreateRunRequest` (trigger), `adapters::run_cost` and
+  `domain::prices` (stats), `application::refs`, `application::manager::ensure_run_manager`
+  and `adapters::disk_live_facts::{compute_run_loc, run_diff_base}` (review). Tests: the
+  surfaces' use cases against in-memory ports (`tests/use_cases/surfaces.rs`, stage 2), the
+  legacy crate's in-crate tests of this code moved to `tests/lifecycle/surfaces/` (stage 3,
+  with `Build { on_disk: true }` so a Run's detail reads the disk as the daemon does), the
+  unit tests beside their code. `RUST_LOG=pdo_daemon` (create, archive, forget, repos, the
+  run-scoped pipeline, the manager) becomes `RUST_LOG=pdo_run::application::{create_run,
+  archive, forget_run, edit_repos, run_pipeline, manager, retry_all}`, `pdo_daemon::price_table`
+  becomes `pdo_run::domain::prices`. Front: the Runs' API (`run/api/{runs, createRun,
+  artifacts, runPipeline, manager}`), the launch modal (`run/components/NewRunModal.tsx` and
+  `newRun/`), the run list (`run/components/runsList/`, rendered by the left panel's Runs tab),
+  a node's detail (`run/components/NodeDetailPanel.tsx` and `nodeDetail/`), the artifacts
+  (`run/components/MarkdownArtifactModal.tsx` and `artifacts/`), the children
+  (`OrchestrationTab`), a Run's repositories, and their models and stores.
 While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package

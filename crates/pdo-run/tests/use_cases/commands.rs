@@ -1,6 +1,6 @@
 //! `RunCommand`: the Pipeline Manager's commands — the forgotten-run gate, the
 //! parse, the Autorisation d'opération on what the command targets, then the
-//! command; the Run's legacy surfaces (archive, create) answered verbatim.
+//! command; the archive and `retry_all` it triggers.
 
 use axum::body::to_bytes;
 use axum::response::Response;
@@ -108,17 +108,27 @@ async fn pause_then_resume_moves_the_run() {
 }
 
 #[tokio::test]
-async fn archive_and_retry_all_are_the_legacy_surfaces_answer_verbatim() {
+async fn retry_all_refuses_a_live_run_and_cleanup_archives_a_finished_one() {
     let w = world();
     seed_relay(&w, "r1").await;
 
-    let (status, _) = command(&w, serde_json::json!({ "kind": "cleanup_run" })).await;
-    assert_eq!(status, 200);
-    let (status, _) = command(&w, serde_json::json!({ "kind": "retry_all" })).await;
-    assert_eq!(status, 201);
+    // `retry_all` needs a terminal Run: nothing is archived, nothing created.
+    let (status, body) = command(&w, serde_json::json!({ "kind": "retry_all" })).await;
+    assert_eq!(status, 409, "{body}");
+    assert!(!kinds(&w, "r1").contains(&EventKind::RunArchived));
 
-    assert_eq!(
-        *w.surfaces.0.lock().unwrap(),
-        vec!["cleanup r1".to_string(), "retry_all r1".to_string()]
-    );
+    w.runs
+        .append_event()
+        .execute(&event("r1", EventKind::RunCompleted, None))
+        .await
+        .unwrap();
+    let (status, body) = command(&w, serde_json::json!({ "kind": "cleanup_run" })).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["status"], "archived");
+    assert!(kinds(&w, "r1").contains(&EventKind::RunArchived));
+    // The archive released the Run's page mounts, and the command was the one
+    // Operation asked about: the archive itself is its consequence.
+    assert_eq!(*w.pages.0.lock().unwrap(), vec!["r1".to_string()]);
+    let (status, body) = command(&w, serde_json::json!({ "kind": "cleanup_run" })).await;
+    assert_eq!(status, 409, "archiving twice: {body}");
 }

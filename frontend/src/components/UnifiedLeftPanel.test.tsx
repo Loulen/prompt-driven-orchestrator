@@ -74,6 +74,11 @@ vi.mock("../api", () => ({
   fetchSettings: vi.fn().mockResolvedValue({}),
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
 }));
+// The run context's API answers with the mock of `../api`.
+vi.mock("../run/api/runs", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
 vi.mock("../run/api/commands", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
   pauseRun: vi.fn().mockResolvedValue(undefined),

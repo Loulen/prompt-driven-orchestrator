@@ -4,7 +4,7 @@
  * reopen, rename, archive, retry all), on a loop region (end, bump).
  */
 
-import type { CreateRunResponse } from "../../api";
+import type { CreateRunResponse } from "./createRun";
 import { request } from "../../shared/http/client";
 
 export function killNode(

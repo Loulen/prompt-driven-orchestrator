@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Check, Copy, Download, SlidersHorizontal, TriangleAlert, WifiOff } from "lucide-react";
-import MarkdownArtifactModal from "../../components/MarkdownArtifactModal";
+import MarkdownArtifactModal from "../../run/components/MarkdownArtifactModal";
 import { fetchUpdateChangelog } from "../api/update";
 import type { UpdateChangelog } from "../../shared/generated/UpdateChangelog";
 import type { UpdateStatus } from "../model/update";

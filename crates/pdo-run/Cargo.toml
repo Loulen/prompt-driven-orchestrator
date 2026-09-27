@@ -28,6 +28,7 @@ pdo-session.workspace = true
 pdo-skill.workspace = true
 pdo-workspace.workspace = true
 anyhow.workspace = true
+clap.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
 axum.workspace = true

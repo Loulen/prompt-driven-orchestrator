@@ -6,7 +6,7 @@ import { useCallback, useState } from "react";
 import type { RunState } from "../../shared/generated/RunState";
 import { isTerminalRun } from "../../run/model/runStatus";
 import { pendingCount, pendingTone, reviewQuickAccessTitle } from "../../lib/reviewComments";
-import { reviewUrl } from "../../lib/runRefs";
+import { reviewUrl } from "../../run/model/runRefs";
 import { useReviewSeen } from "../../hooks/useReviewUnread";
 import { reopenRun, retryAll } from "../../run/api/commands";
 import { useRunShell } from "../../session/store/useRunShell";

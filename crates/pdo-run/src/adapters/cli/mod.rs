@@ -1,8 +1,15 @@
-//! The agent CLI (`pdo complete`, `fail`, `skip`, `wait-user`, `run wait`): a
-//! node session's way to the daemon. Every call carries the session headers,
-//! so `identify` names the caller as the node's Agent (`Actor::Agent`).
+//! The run context's CLI. The agent's (`pdo complete`, `fail`, `skip`,
+//! `wait-user`, `run wait`) is a node session's way to the daemon: every call
+//! carries the session headers, so `identify` names the caller as the node's
+//! Agent (`Actor::Agent`). `pdo run create` creates a Run (a child of the
+//! node's Run when called from a session, ADR-0064), `pdo reap` reclaims the
+//! disk of old terminal Runs.
 
 mod complete;
+mod reap;
+mod run_action;
+mod run_create;
+mod upload;
 mod wait;
 
 use anyhow::{Context, Result};
@@ -10,6 +17,9 @@ use anyhow::{Context, Result};
 use pdo_kernel::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
 
 pub use complete::run_complete;
+pub use reap::run_reap;
+pub use run_action::RunAction;
+pub use run_create::run_run_create;
 pub use wait::{run_run_wait, run_wait_user, EXIT_WAIT_TIMEOUT};
 
 pub fn cli_daemon_url() -> String {

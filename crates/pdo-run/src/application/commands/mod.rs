@@ -182,10 +182,10 @@ async fn dispatch(state: Arc<Runs>, run_id: String, cmd: RunCommand) -> Response
         RunCommand::RenameRun { name: new_name } => {
             lifecycle::rename_run(state, run_id, new_name).await
         }
-        // Archiving and creating a Run are the Run's surfaces (the legacy crate
-        // still serves them): their answers are forwarded verbatim.
-        RunCommand::CleanupRun => state.surfaces.cleanup(&run_id).await,
-        RunCommand::RetryAll => state.surfaces.retry_all(&run_id).await,
+        // Archiving a Run and retrying it whole answer as the Run's surfaces
+        // do: their answers are forwarded verbatim.
+        RunCommand::CleanupRun => crate::application::archive::cleanup_run(&state, &run_id).await,
+        RunCommand::RetryAll => crate::application::retry_all::retry_all_run(&state, &run_id).await,
     }
 }
 

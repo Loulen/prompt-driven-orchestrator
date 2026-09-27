@@ -186,6 +186,38 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             format!("/projects/{project}/provisioning"),
             Some(json!({})),
         ),
+        // The Run's surfaces (#925): each asks before it touches anything.
+        call(
+            "POST",
+            "/runs",
+            "/runs".into(),
+            Some(json!({ "pipeline": "fixture-pipe", "input": "go", "target_repo": repo })),
+        ),
+        call("DELETE", "/runs/{run_id}", format!("/runs/{RUN}"), None),
+        call(
+            "PATCH",
+            "/runs/{run_id}/repos",
+            format!("/runs/{RUN}/repos"),
+            Some(json!({})),
+        ),
+        call(
+            "PUT",
+            "/runs/{run_id}/pipeline",
+            format!("/runs/{RUN}/pipeline"),
+            Some(json!({ "yaml": PIPELINE_EDIT })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/manager/start",
+            format!("/runs/{RUN}/manager/start"),
+            None,
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/manager/stop",
+            format!("/runs/{RUN}/manager/stop"),
+            None,
+        ),
         // The run context's gestures (#924) refuse before looking the Run up.
         call(
             "POST",
@@ -568,6 +600,11 @@ async fn an_extension_refusing_everything_refuses_every_mutation_route() {
     assert_eq!(not_refused, Vec::<String>::new());
 
     // Nothing moved.
+    assert_eq!(
+        daemon.get_json("/runs").await,
+        json!([]),
+        "no Run was created"
+    );
     let project = daemon
         .get_json(&format!("/projects/{}", fixtures.project))
         .await;

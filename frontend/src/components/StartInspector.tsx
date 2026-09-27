@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import type { StartNodeInfo } from "../shared/generated/StartNodeInfo";
-import { fetchArtifact, artifactUrl } from "../api";
+import { fetchArtifact, artifactUrl } from "../run/api/artifacts";
 import type { FileInfo } from "../run/api/nodes";
-import MarkdownArtifactModal from "./MarkdownArtifactModal";
+import MarkdownArtifactModal from "../run/components/MarkdownArtifactModal";
 import ImageLightbox from "./ImageLightbox";
 
 interface Props {

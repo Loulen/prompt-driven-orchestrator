@@ -46,6 +46,21 @@ vi.mock("../../api", async (importOriginal) => {
     stopRunManager,
     fetchSourceDrift,};
 });
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../../run/api/manager", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../../run/api/runPipeline", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../../run/api/runs", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../api/document", async (importOriginal) => ({
   ...(await importOriginal<object>()),

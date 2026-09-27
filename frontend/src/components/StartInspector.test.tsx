@@ -8,6 +8,11 @@ vi.mock("../api", () => ({
   artifactUrl: (runId: string, path: string) =>
     `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
+// The run context's API answers with the mock of `../api`.
+vi.mock("../run/api/artifacts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
 
 import StartInspector from "./StartInspector";
 import type { StartNodeInfo } from "../shared/generated/StartNodeInfo";

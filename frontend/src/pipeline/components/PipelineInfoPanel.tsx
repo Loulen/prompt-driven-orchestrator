@@ -6,7 +6,7 @@ import { useState, useCallback } from "react";
 import { Info, Terminal, X, FileText, Code, Bot, FileDiff, FolderGit2 } from "lucide-react";
 import AssistantPanel from "../../session/components/AssistantPanel";
 import DiffTab from "../../components/DiffTab";
-import RepositoriesSection from "../../components/RepositoriesSection";
+import RepositoriesSection from "../../run/components/RepositoriesSection";
 import { deliverySignature } from "../../lib/diffTab";
 import { useReviewUnread } from "../../hooks/useReviewUnread";
 import type { CollapsedFiles } from "../../lib/diffTab";

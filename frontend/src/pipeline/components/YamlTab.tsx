@@ -4,7 +4,7 @@
 
 import { useState, useMemo, useRef, useEffect } from "react";
 import { Copy, Download, ChevronDown, ChevronRight } from "lucide-react";
-import { fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar } from "../../api";
+import { fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar } from "../../run/api/runPipeline";
 import { fetchPipelineDocument, fetchPipelineSkillsSidecar } from "../api/document";
 import { serializePipeline } from "../../lib/serializePipeline";
 import { highlightYaml } from "../../components/yamlHighlight";

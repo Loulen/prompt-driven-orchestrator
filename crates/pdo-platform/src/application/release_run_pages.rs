@@ -25,6 +25,11 @@ impl ReleaseRunPages {
         self.lock.lock().await
     }
 
+    /// [`Self::hold`], with a guard that owns its share of the lock.
+    pub async fn hold_owned(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.lock.lock_owned().await
+    }
+
     /// Remove the mounts `run_id` made; how many went.
     pub async fn execute(&self, run_id: &str) -> Result<u64, StorageError> {
         self.pages.remove_for_run(run_id).await

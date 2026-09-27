@@ -6,14 +6,14 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
-use axum::response::Response;
 use pdo_harness::agent_choice::{AgentChoice, ResolvedCombo};
 use pdo_skill::domain::delivery::SkippedSkill;
 use pdo_skill::domain::selection::{ActiveSkill, SkillRef};
 use pdo_workspace::domain::project::Project;
+use pdo_workspace::domain::provisioning::{ProvisioningRules, ScopedRules};
 
 use crate::domain::event::Event;
-use crate::domain::state::RunState;
+use crate::domain::state::{CostStat, RunState};
 
 /// The future an async port method returns (the ports are `dyn`, D23).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -33,6 +33,9 @@ pub trait EventStore: Send + Sync {
     /// Whether a Run was started as a child of `run_id`. `true` when the log
     /// cannot tell: the caller then takes the slow, exact path.
     fn has_children<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, bool>;
+    /// Forget `run_id` for good (ADR-0024): tombstone it and purge its log in
+    /// one step, so no late writer resurrects it.
+    fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>>;
 }
 
 /// What a Run's detail reads live from disk on top of its projection: its
@@ -40,6 +43,13 @@ pub trait EventStore: Send + Sync {
 /// fails: an unreadable source leaves its field as the projection had it.
 pub trait LiveFacts: Send + Sync {
     fn fill<'a>(&'a self, run: &'a mut RunState, events: &'a [Event]) -> BoxFuture<'a, ()>;
+    /// The Run's cost alone, without the lines-of-code walk: what the children
+    /// list shows. `None` when it is unavailable (the surfaces' "—", never $0).
+    fn cost<'a>(
+        &'a self,
+        run: &'a RunState,
+        events: &'a [Event],
+    ) -> BoxFuture<'a, Option<CostStat>>;
 }
 
 /// The Pipeline Manager's sessions, as a Run's detail observes them.
@@ -70,6 +80,18 @@ pub struct InstanceDefaults {
     pub agent_choice: Option<AgentChoice>,
     /// The instance tier of the skills selection (ADR-0062).
     pub skills: Vec<SkillRef>,
+    /// The stored attachment budget of a `POST /runs`, in MB, before the
+    /// environment tier.
+    pub max_attachments_mb: Option<i64>,
+    /// The stored default isolation of a new Run, before the environment tier.
+    pub default_sandbox: Option<String>,
+    /// The stored default of the manager's auto-naming (`Some(0)` / `Some(1)`).
+    pub default_auto_name: Option<i64>,
+    /// Whether a new Run spawns its Pipeline Manager on its own, resolved
+    /// `stored → env → false` by the settings side.
+    pub manager_enabled: bool,
+    /// The stored agentic profile the manager is pinned to, if any.
+    pub manager_profile: Option<String>,
 }
 
 /// The instance settings and the agentic profiles, which the settings context
@@ -80,16 +102,28 @@ pub trait InstanceSettings: Send + Sync {
     /// The profiles, as one atomic snapshot (ADR-0057 ¶4); empty when they
     /// cannot be read.
     fn agent_profiles(&self) -> BoxFuture<'_, BTreeMap<String, ResolvedCombo>>;
+    /// The agentic profile named `name`, case-insensitively: its combo, `None`
+    /// when no profile has that name, `Err` when the profiles cannot be read.
+    fn profile_named<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ResolvedCombo>, String>>;
 }
 
-/// The Run's surfaces that still live in the legacy crate, which the Pipeline
-/// Manager's commands reach. Each answers the HTTP response the surface gives,
-/// verbatim (ADR-0009: the command surface forwards it unchanged).
-pub trait RunSurfaces: Send + Sync {
-    /// Archive a terminal Run (`cleanup_run`).
-    fn cleanup<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Response>;
-    /// Archive a terminal Run and start its twin (`retry_all`).
-    fn retry_all<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Response>;
+/// The page mounts a Run's agents published (the platform context), which an
+/// archive releases.
+pub trait RunPages: Send + Sync {
+    /// Hold every page-mount mutation off until the guard drops: an archive
+    /// holds it across the whole teardown of the Run and its descendants.
+    fn hold(&self) -> BoxFuture<'_, Box<dyn Send>>;
+    /// Release the page mounts of `run_id`.
+    fn release<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<(), String>>;
+}
+
+/// The pipeline watcher: a new Run's directory is registered with it, so an
+/// edit of the run-scoped pipeline on disk is announced (the pipeline context).
+pub trait RunDirWatch: Send + Sync {
+    fn watch(&self, run_dir: &Path);
 }
 
 /// The skill context, as a node's spawn reads and delivers it.
@@ -105,12 +139,22 @@ pub trait NodeSkills: Send + Sync {
         run_id: &str,
         skills: &[ActiveSkill],
     ) -> anyhow::Result<Vec<SkippedSkill>>;
+    /// Take back what a delivery wrote for `run_id` in `repo_root` (its
+    /// exclusions, its snapshot).
+    fn withdraw(&self, repo_root: &Path, run_id: &str) -> anyhow::Result<()>;
 }
 
 /// The Projets a Run's repositories belong to (the workspace context).
 pub trait Projects: Send + Sync {
     /// The Projet that owns `path`, compared verbatim (ADR-0033).
     fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>>;
+    /// The provisioning rules a Run in `repository` freezes: the instance's,
+    /// the Projet's, then `run`'s own (ADR-0063).
+    fn provisioning_rules<'a>(
+        &'a self,
+        repository: &'a str,
+        run: ProvisioningRules,
+    ) -> BoxFuture<'a, Result<Vec<ScopedRules>, String>>;
 }
 
 /// The declared wait of the session context, as a completion declares it for

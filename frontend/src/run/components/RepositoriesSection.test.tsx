@@ -1,0 +1,308 @@
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import RepositoriesSection from "./RepositoriesSection";
+import type { RunState } from "../../shared/generated/RunState";
+import type { RunStatus } from "../../shared/generated/RunStatus";
+import type { RepoPin } from "../../shared/generated/RepoPin";
+import { editRunRepos } from "../api/createRun";
+import { fetchSourceDrift } from "../api/runs";
+import { validateRepo, listBranches } from "../../workspace/api/repos";
+
+vi.mock("../../api", () => ({
+  editRunRepos: vi.fn(async () => ({ kind: "ok", run: {} as RunState })),
+  // #803: the primary row carries the Run's drift. Unreadable by default, so the
+  // tests that predate it see the row exactly as they did.
+  fetchSourceDrift: vi.fn(async () => {
+    throw new Error("no drift in this test");
+  }),
+}));
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../api/createRun", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../api/runs", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
+
+vi.mock("../../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/repos")>()),
+  // A draft `SecondaryRepoRow` self-validates via these; stub them so a draft can
+  // reach `valid === true` (which is what reveals the read-only checkbox).
+  validateRepo: vi.fn(async () => ({ valid: true })),
+  // #802: both branch verbs answer `{branches, last_fetch_at, fetch_error}` — the
+  // row fetches its own repo's remotes beside the list.
+  listBranches: vi.fn(async () => ({
+    branches: [{ name: "main", kind: "local" as const }],
+    last_fetch_at: null,
+    fetch_error: null,
+  })),
+  fetchRemotes: vi.fn(async () => ({
+    branches: [{ name: "main", kind: "local" as const }],
+    last_fetch_at: null,
+    fetch_error: null,
+  })),
+}));
+
+// The store is a zustand hook (selector in, slice out) — stub it to a stable empty
+// list so `SecondaryRepoRow`'s combobox has something to read.
+vi.mock("../../stores/recentReposStore", () => ({
+  useRecentReposStore: (sel: (s: { recentRepos: string[] }) => unknown) =>
+    sel({ recentRepos: [] }),
+}));
+
+const editRunReposMock = vi.mocked(editRunRepos);
+const validateRepoMock = vi.mocked(validateRepo);
+const listBranchesMock = vi.mocked(listBranches);
+const fetchSourceDriftMock = vi.mocked(fetchSourceDrift);
+
+beforeEach(() => {
+  editRunReposMock.mockClear();
+  validateRepoMock.mockClear();
+  listBranchesMock.mockClear();
+  fetchSourceDriftMock.mockClear();
+  fetchSourceDriftMock.mockRejectedValue(new Error("no drift in this test"));
+});
+
+function makeRun(status: RunStatus, failure_reason?: string): RunState {
+  return {
+    run_id: "20260704-000000-abc1234",
+    pipeline_name: "My Pipeline",
+    status,
+    failure_reason,
+    nodes: {},
+    node_defs: [],
+    edges: [],
+  } as unknown as RunState;
+}
+
+function makeMultiRepoRun(
+  status: RunStatus,
+  target_repos: RepoPin[],
+): RunState {
+  return {
+    ...makeRun(status),
+    target_repo: "/repos/primary",
+    target_repos,
+  } as unknown as RunState;
+}
+
+// #752: the Repositories section moved from the standalone `RunInfoSidebar`
+// (deleted) into the Run panel's Repositories tab. Same content, same test ids.
+describe("RepositoriesSection (Run panel · Repositories tab)", () => {
+  // #465 slice 2 — the Repositories section.
+  it("renders the primary locked and the secondaries with a remove button", () => {
+    const run = makeMultiRepoRun("running", [
+      { repo: "/repos/lib", alias: "lib", sha: "cafebabe1234", base_branch: "main" },
+    ]);
+    render(<RepositoriesSection run={run} onEdited={() => {}} />);
+
+    // Primary is locked: badge present, no remove button on its row.
+    const primary = screen.getByTestId("primary-repo-row");
+    expect(primary.textContent).toContain("/repos/primary");
+    expect(screen.getByTestId("primary-repo-badge").textContent).toBe("PRIMARY");
+
+    // Secondary shows its path, short sha and a remove button.
+    const secondary = screen.getByTestId("secondary-repo-lib");
+    expect(secondary.textContent).toContain("/repos/lib");
+    expect(secondary.textContent).toContain("cafebabe");
+    expect(screen.getByTestId("remove-secondary-repo-lib")).toBeInTheDocument();
+  });
+
+  // ADR-0047: the badge reflects the per-repo mode. A writable pin (the default,
+  // no `read_only`) reads WRITABLE; an opted-in read-only pin reads READ-ONLY.
+  it("badges each secondary by its writable/read-only mode", () => {
+    const run = makeMultiRepoRun("running", [
+      { repo: "/repos/rw", alias: "rw", sha: "aaaa1111" },
+      { repo: "/repos/ro", alias: "ro", sha: "bbbb2222", read_only: true },
+    ]);
+    render(<RepositoriesSection run={run} onEdited={() => {}} />);
+    expect(screen.getByTestId("secondary-repo-mode-rw").textContent).toBe("WRITABLE");
+    expect(screen.getByTestId("secondary-repo-mode-ro").textContent).toBe("READ-ONLY");
+  });
+
+  it("adds a read-only draft with read_only:true in the PATCH (ADR-0047)", async () => {
+    const run = makeMultiRepoRun("running", []);
+    render(<RepositoriesSection run={run} onEdited={() => {}} />);
+
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const draft = screen.getByTestId("secondary-repo-draft");
+    fireEvent.change(within(draft).getByTestId("target-repo-input"), {
+      target: { value: "/repos/newlib" },
+    });
+
+    // The row debounces then self-validates; the checkbox appears once valid.
+    const checkbox = await within(draft).findByTestId(
+      "secondary-readonly-0",
+      {},
+      { timeout: 2000 },
+    );
+    fireEvent.click(checkbox);
+
+    const confirm = screen.getByTestId("confirm-add-secondary-repo");
+    await waitFor(() => expect(confirm).toBeEnabled());
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(editRunReposMock).toHaveBeenCalled());
+    expect(editRunReposMock).toHaveBeenCalledWith(run.run_id, {
+      add: [expect.objectContaining({ repo: "/repos/newlib", read_only: true })],
+    });
+  });
+
+  it("clicking a secondary's X calls editRunRepos({ remove: [alias] })", async () => {
+    const onEdited = vi.fn();
+    const run = makeMultiRepoRun("running", [
+      { repo: "/repos/lib", alias: "lib", sha: "cafebabe1234" },
+    ]);
+    render(<RepositoriesSection run={run} onEdited={onEdited} />);
+
+    fireEvent.click(screen.getByTestId("remove-secondary-repo-lib"));
+
+    expect(editRunReposMock).toHaveBeenCalledWith(run.run_id, { remove: ["lib"] });
+    await waitFor(() => expect(onEdited).toHaveBeenCalled());
+  });
+
+  it("the + Add repository button reveals a self-validating draft row", () => {
+    const run = makeMultiRepoRun("running", []);
+    render(<RepositoriesSection run={run} onEdited={() => {}} />);
+
+    expect(screen.queryByTestId("secondary-repo-draft")).toBeNull();
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    expect(screen.getByTestId("secondary-repo-draft")).toBeInTheDocument();
+  });
+
+  it("carries the spawn-time visibility note on a live run", () => {
+    const run = makeMultiRepoRun("running", []);
+    render(<RepositoriesSection run={run} onEdited={() => {}} />);
+    expect(screen.getByTestId("spawn-visibility-note").textContent).toContain(
+      "launched after",
+    );
+  });
+
+  it("a terminal run's list is frozen: no remove, no add (#221)", () => {
+    const run = makeMultiRepoRun("completed", [
+      { repo: "/repos/lib", alias: "lib", sha: "cafebabe1234" },
+    ]);
+    render(<RepositoriesSection run={run} />);
+
+    // The section and the secondary still render (read-only)...
+    expect(screen.getByTestId("run-repositories")).toBeInTheDocument();
+    expect(screen.getByTestId("secondary-repo-lib")).toBeInTheDocument();
+    // ...but there is no way to mutate it.
+    expect(screen.queryByTestId("remove-secondary-repo-lib")).toBeNull();
+    expect(screen.queryByTestId("add-secondary-repo")).toBeNull();
+    expect(screen.queryByTestId("spawn-visibility-note")).toBeNull();
+  });
+});
+
+/**
+ * #804: the primary pin now states its cut point like the secondaries always did,
+ * and marks it when a Trigger's pre-cut fetch failed. A complement to the Info
+ * tab's sentence, not a replacement — nobody opens Repositories to find out why a
+ * Run looks odd, but once here the pin should not be the only one saying nothing.
+ */
+describe("the primary repo's cut point (#804)", () => {
+  const FETCH_ERROR = { kind: "network", message: "fatal: unable to access …: Could not resolve host" };
+
+  function makeCutRun(over: Partial<RunState> = {}): RunState {
+    return {
+      ...makeMultiRepoRun("running", []),
+      source_branch: "origin/main",
+      fork_sha: "0c051abf9911223344",
+      ...over,
+    } as RunState;
+  }
+
+  it("names the branch and the commit the Run was cut from", () => {
+    render(<RepositoriesSection run={makeCutRun()} />);
+    const cut = screen.getByTestId("primary-repo-cut");
+    expect(cut).toHaveTextContent("origin/main");
+    // The short sha, as the secondaries show theirs.
+    expect(cut).toHaveTextContent("0c051abf");
+    expect(cut).not.toHaveTextContent("0c051abf99");
+  });
+
+  it("falls back to HEAD when the Run named no source branch", () => {
+    render(<RepositoriesSection run={makeCutRun({ source_branch: undefined })} />);
+    expect(screen.getByTestId("primary-repo-cut")).toHaveTextContent("HEAD");
+  });
+
+  it("marks the pin when the pre-cut fetch failed, with git's reason on hover", () => {
+    render(<RepositoriesSection run={makeCutRun({ source_fetch_error: FETCH_ERROR })} />);
+    const mark = screen.getByTestId("primary-repo-fetch-failed");
+    expect(mark).toHaveAccessibleName(
+      `Fetch failed before the cut — cut from local state. ${FETCH_ERROR.message}`,
+    );
+    expect(mark).toHaveAttribute("title", expect.stringContaining("cut from local state"));
+  });
+
+  it("leaves the pin unmarked on every other Run", () => {
+    render(<RepositoriesSection run={makeCutRun()} />);
+    expect(screen.queryByTestId("primary-repo-fetch-failed")).toBeNull();
+  });
+});
+
+/**
+ * #803/ADR-0070 §4 — the primary row gains the second line the secondaries always
+ * had, plus the drift chip. Same measurement as the Info tab's Source block, from
+ * the same hook: two renderings of one number, never two computations of it.
+ */
+describe("RepositoriesSection — source drift on the primary (#803)", () => {
+  const DRIFT = {
+    state: "available" as const,
+    source_branch: "main",
+    fork: "a1b2c3d",
+    ahead: 1,
+    behind: 3,
+    local_behind: 1,
+    upstream: "origin/main",
+    upstream_behind: 3,
+    last_fetch_at: "2026-09-18T10:00:00.000Z",
+  };
+
+  it("shows branch · fork and the drift on the primary", async () => {
+    fetchSourceDriftMock.mockResolvedValue(DRIFT);
+    const run = {
+      ...makeMultiRepoRun("running", []),
+      source_branch: "main",
+      fork_sha: "a1b2c3d4e5f6",
+    } as RunState;
+    render(<RepositoriesSection run={run} onEdited={() => {}} />);
+
+    // The cut line comes from the Run itself (#804); the chip is the async measurement.
+    expect(screen.getByTestId("primary-repo-cut")).toHaveTextContent("main · a1b2c3d4");
+    const chip = await screen.findByTestId("primary-repo-drift");
+    expect(chip).toHaveTextContent("1↑");
+    expect(chip).toHaveTextContent("3↓");
+  });
+
+  /**
+   * A secondary is pinned to a SHA at add time: it does not move, and it has no
+   * « Run branch » to drift from. A chip there would be a zero dressed up as a
+   * measurement.
+   */
+  it("never chips a secondary", async () => {
+    fetchSourceDriftMock.mockResolvedValue(DRIFT);
+    const run = makeMultiRepoRun("running", [
+      { repo: "/repos/lib", alias: "lib", sha: "cafebabe1234", base_branch: "main" },
+    ]);
+    render(<RepositoriesSection run={run} onEdited={() => {}} />);
+
+    await screen.findByTestId("primary-repo-drift");
+    expect(
+      within(screen.getByTestId("secondary-repo-lib")).queryByTestId("source-drift-chip"),
+    ).toBeNull();
+  });
+
+  it("says unavailable on an archived Run whose branch is gone", async () => {
+    fetchSourceDriftMock.mockResolvedValue({ state: "unavailable", reason: "branch deleted" });
+    render(<RepositoriesSection run={makeMultiRepoRun("archived", [])} onEdited={() => {}} />);
+
+    expect(await screen.findByTestId("primary-repo-drift")).toHaveTextContent("unavailable");
+    // The cut line stays: the Run still knows where it was cut, even once the
+    // measurement is impossible.
+    expect(screen.getByTestId("primary-repo-cut")).toBeInTheDocument();
+  });
+});

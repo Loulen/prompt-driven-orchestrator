@@ -11,6 +11,11 @@ vi.mock("../../api", () => ({
   // Source block never renders and these stay tests about the Stats block.
   fetchSourceDrift: vi.fn().mockRejectedValue(new Error("no drift in this test")),
 }));
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../../run/api/runs", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
 
 vi.mock("../../workspace/api/repos", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../workspace/api/repos")>()),
@@ -18,7 +23,7 @@ vi.mock("../../workspace/api/repos", async (importOriginal) => ({
 }));
 
 import PipelineInfoPanel from "./PipelineInfoPanel";
-import { formatDuration, useRunDuration } from "../../lib/runDuration";
+import { formatDuration, useRunDuration } from "../../run/model/runDuration";
 
 function makeRun(overrides: Partial<RunState> = {}): RunState {
   return {

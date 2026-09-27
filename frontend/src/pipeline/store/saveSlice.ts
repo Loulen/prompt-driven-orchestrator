@@ -6,7 +6,7 @@ import type { StoreApi } from "zustand";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { PipelineScope } from "../model/pipeline";
 import { ApiError } from "../../shared/http/client";
-import { fetchRunPipeline, saveRunPipeline } from "../../api";
+import { fetchRunPipeline, saveRunPipeline } from "../../run/api/runPipeline";
 import { fetchPipeline, savePipeline, deletePipeline as apiDeletePipeline, renamePipeline as apiRenamePipeline } from "../api/pipelines";
 import { serializePipeline } from "../../lib/serializePipeline";
 import type { EditState } from "./editState";

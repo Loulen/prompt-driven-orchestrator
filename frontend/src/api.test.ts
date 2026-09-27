@@ -5,7 +5,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, request, uploadTimeoutMs } from "./shared/http/client";
-import { browseFs, createRun, deletePipeline, duplicateLibraryPipeline, editRunRepos, fetchPipeline, markNodeDone, releaseNodeCompletion, savePipeline, saveRunPipeline } from "./api";
+import { createRun, deletePipeline, duplicateLibraryPipeline, editRunRepos, fetchPipeline, markNodeDone, releaseNodeCompletion, savePipeline, saveRunPipeline } from "./api";
+import { browseFs } from "./workspace/api/browse";
 
 afterEach(() => {
   vi.unstubAllGlobals();

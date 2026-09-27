@@ -7,12 +7,12 @@ import type { TestGuardResponse } from "../api";
 import { createRun, createTrigger, updateTrigger, fetchSettings, testGuard } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
-import RepoCombobox from "./RepoCombobox";
+import RepoCombobox from "../workspace/components/RepoCombobox";
 import SecondaryRepoRow, {
   SecondaryRepoLabel,
   type SecondaryRepo,
 } from "./SecondaryRepoRow";
-import SourceBranchField from "./SourceBranchField";
+import SourceBranchField from "../workspace/components/SourceBranchField";
 import GuardTestResult from "./GuardTestResult";
 import AgentControl from "./AgentControl";
 import HarnessSelect, { SelectedMarker } from "../harness/components/HarnessSelect";
@@ -23,7 +23,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "../shared/ui/dropdown-menu";
-import { highlightSegments } from "../lib/branchSelect";
+import { highlightSegments } from "../workspace/model/branchSelect";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import { SETTINGS_CHANGED } from "../hooks/useSettings";
 import { useSkillBank } from "../hooks/useSkillBank";
@@ -32,7 +32,7 @@ import type { AgentChoice } from "../shared/generated/AgentChoice";
 import type { SkillRef } from "../shared/generated/SkillRef";
 import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
 import { useLaunchTargets } from "../hooks/useLaunchTargets";
-import { useRepoValidation } from "../hooks/useRepoValidation";
+import { useRepoValidation } from "../workspace/store/useRepoValidation";
 import * as newRunForm from "../lib/newRunForm";
 import {
   DEFAULT_MAX_ATTACHMENTS_MB,
@@ -41,8 +41,8 @@ import {
   mergeAttachments,
   overLimitIndices,
 } from "../lib/attachments";
-import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
-import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../lib/provisioning";
+import ProvisioningRulesEditor from "../workspace/components/ProvisioningRulesEditor";
+import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../workspace/model/provisioning";
 import type { ProvisioningRules } from "../shared/generated/ProvisioningRules";
 
 

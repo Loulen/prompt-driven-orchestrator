@@ -91,9 +91,15 @@ cd "$(git rev-parse --show-toplevel)"
 #   harness context moved out — HarnessSelect, ModelPicker, EffortPicker and their tests to
 #   frontend/src/harness/components/, the twelve harness modules to crates/pdo-harness.
 # frontend/src/components: 191 and crates/pdo-daemon/src: 79 — #916 and #919 combined.
+# frontend/src/components: 194 and crates/pdo-daemon/src: 89 (#917, spec #913) ratchet down:
+#   the workspace context moved out — project_store.rs, provisioning.rs, worktree_ops.rs and
+#   repo_scaffold.rs to crates/pdo-workspace; ProjectEditModal, SourceBranchField,
+#   ProvisioningRulesEditor, PersistedProvisioningEditor, FsExplorerModal, RepoCombobox and
+#   their tests to frontend/src/workspace/components.
+# frontend/src/components: 180 and crates/pdo-daemon/src: 73 — #917, #916 and #919 combined.
 BASELINES='
-frontend/src/components 191
-crates/pdo-daemon/src 79
+frontend/src/components 180
+crates/pdo-daemon/src 73
 '
 
 fail=0

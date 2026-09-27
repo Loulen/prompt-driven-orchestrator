@@ -19,7 +19,7 @@ use pdo_harness::adapters::binary_path::{binary_available, harness_probe_path};
 use pdo_harness::agent_choice;
 use tracing::{error, info, warn};
 
-use crate::worktree_ops::{
+use crate::worktrees::{
     ensure_sub_worktree, reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path,
 };
 use crate::{
@@ -521,7 +521,7 @@ pub(crate) async fn spawn_node(
             .and_then(|s| s.target_repo.clone())
             .unwrap_or_else(|| spawn_ctx.repo_root.to_string_lossy().into_owned());
         let project_harness =
-            match crate::project_store::harness_for_path(deps.db, &primary_repo).await {
+            match crate::workspace_db::harness_for_path(deps.db, &primary_repo).await {
                 Ok(h) => h,
                 Err(e) => {
                     warn!("project harness lookup failed for {primary_repo}: {e}");
@@ -532,7 +532,7 @@ pub(crate) async fn spawn_node(
         // `harness` above — same primary-repo key, same "a DB error degrades the
         // tier to transparent" posture.
         let project_choice =
-            match crate::project_store::agent_choice_for_path(deps.db, &primary_repo).await {
+            match crate::project_agent_choice_for_path(deps.db, &primary_repo).await {
                 Ok(c) => c,
                 Err(e) => {
                     warn!("project agent_choice lookup failed for {primary_repo}: {e}");
@@ -644,7 +644,7 @@ pub(crate) async fn spawn_node(
                     .and_then(|s| s.target_repo.clone())
                     .unwrap_or_else(|| spawn_ctx.repo_root.to_string_lossy().into_owned());
                 let project_skills =
-                    match crate::project_store::skills_for_path(deps.db, &primary_repo).await {
+                    match crate::project_skills_for_path(deps.db, &primary_repo).await {
                         Ok(skills) => skills,
                         Err(e) => {
                             warn!("project skills lookup failed for {primary_repo}: {e}");
@@ -830,13 +830,10 @@ pub(crate) async fn spawn_node(
     let node_provisioning = if has_sub_worktree {
         let frozen = loaded
             .as_ref()
-            .and_then(|(events, _)| crate::provisioning::frozen_node_rules(events, &node.id, iter));
+            .and_then(|(events, _)| crate::frozen_node_rules(events, &node.id, iter));
         match frozen {
             Some(rules) => rules,
-            None => match crate::provisioning::node_rules_from_pipeline(
-                spawn_ctx.pipeline_path,
-                &node.id,
-            ) {
+            None => match crate::node_rules_from_pipeline(spawn_ctx.pipeline_path, &node.id) {
                 Ok(rules) => rules,
                 Err(e) => {
                     return SpawnOutcome::Failed {
@@ -853,7 +850,7 @@ pub(crate) async fn spawn_node(
     };
     let mut node_provisioning_plan = loaded
         .as_ref()
-        .and_then(|(events, _)| crate::provisioning::frozen_node_plan(events, &node.id, iter));
+        .and_then(|(events, _)| crate::frozen_node_plan(events, &node.id, iter));
     let working_dir = if has_sub_worktree {
         let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
         let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
@@ -884,7 +881,7 @@ pub(crate) async fn spawn_node(
                     let inherited = projected
                         .map(|state| state.provisioning_rules.as_slice())
                         .unwrap_or_default();
-                    let provisioned = crate::provisioning::provision_node_worktree(
+                    let provisioned = crate::provisioner::provision_node_worktree(
                         spawn_ctx.repo_root,
                         &sub_wt_dir,
                         inherited,

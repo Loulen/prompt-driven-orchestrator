@@ -15,7 +15,7 @@ import {
   type RefusedItem,
   type StagedFile,
 } from "../lib/skillFiles";
-import FsExplorerModal from "./FsExplorerModal";
+import FsExplorerModal from "../workspace/components/FsExplorerModal";
 import SkillFileDropZone, { DropOverlay } from "./SkillFileDropZone";
 import { useFileDropTarget } from "../hooks/useFileDropTarget";
 

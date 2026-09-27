@@ -4,10 +4,20 @@ import RepositoriesSection from "./RepositoriesSection";
 import type { RunState } from "../shared/generated/RunState";
 import type { RunStatus } from "../shared/generated/RunStatus";
 import type { RepoPin } from "../shared/generated/RepoPin";
-import { editRunRepos, validateRepo, listBranches, fetchSourceDrift } from "../api";
+import { editRunRepos, fetchSourceDrift } from "../api";
+import { validateRepo, listBranches } from "../workspace/api/repos";
 
 vi.mock("../api", () => ({
   editRunRepos: vi.fn(async () => ({ kind: "ok", run: {} as RunState })),
+  // #803: the primary row carries the Run's drift. Unreadable by default, so the
+  // tests that predate it see the row exactly as they did.
+  fetchSourceDrift: vi.fn(async () => {
+    throw new Error("no drift in this test");
+  }),
+}));
+
+vi.mock("../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/repos")>()),
   // A draft `SecondaryRepoRow` self-validates via these; stub them so a draft can
   // reach `valid === true` (which is what reveals the read-only checkbox).
   validateRepo: vi.fn(async () => ({ valid: true })),
@@ -23,11 +33,6 @@ vi.mock("../api", () => ({
     last_fetch_at: null,
     fetch_error: null,
   })),
-  // #803: the primary row carries the Run's drift. Unreadable by default, so the
-  // tests that predate it see the row exactly as they did.
-  fetchSourceDrift: vi.fn(async () => {
-    throw new Error("no drift in this test");
-  }),
 }));
 
 // The store is a zustand hook (selector in, slice out) — stub it to a stable empty

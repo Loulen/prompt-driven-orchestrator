@@ -10,6 +10,10 @@ vi.mock("../api", () => ({
   // #803: the Info tab reads the Run's drift on mount. Unreadable here, so the
   // Source block never renders and these stay tests about the Stats block.
   fetchSourceDrift: vi.fn().mockRejectedValue(new Error("no drift in this test")),
+}));
+
+vi.mock("../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/repos")>()),
   fetchRemotes: vi.fn(),
 }));
 

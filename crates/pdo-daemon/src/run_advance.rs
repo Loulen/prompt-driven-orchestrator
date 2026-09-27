@@ -25,7 +25,7 @@ use crate::scheduler;
 use crate::scheduler_dispatcher;
 use crate::scheduler_interpreter::{self, SpawnDedup};
 use crate::transition_guard;
-use crate::worktree_ops::worktree_dir_for_run;
+use crate::worktrees::worktree_dir_for_run;
 use crate::{
     append_event, effective_repo_root, handle_node_completion, load_all_run_ids, load_events,
     reload_run_state_with, resolve_completed_frontmatter, resolve_run_pipeline_path,

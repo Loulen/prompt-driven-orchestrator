@@ -12,7 +12,7 @@ import type { LibraryPipelineEntry } from "../api";
 import { fetchPipelineDocument, fetchPipelineSkillsSidecar, fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar, openLibraryAssistant, startRunManager, stopRunManager } from "../api";
 import type { RunState } from "../shared/generated/RunState";
 import { isLiveRun } from "../run/model/runStatus";
-import { shortAge } from "../lib/branchSelect";
+import { shortAge } from "../workspace/model/branchSelect";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { formatEstCost } from "../lib/costLabel";
 import { serializePipeline } from "../lib/serializePipeline";

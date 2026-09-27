@@ -28,7 +28,7 @@ import GridSizePicker from "./GridSizePicker";
 import { harnessCatalog, findHarnessOption } from "../harness/model/catalog";
 import AgentControl from "./AgentControl";
 import { announceAgentProfilesChanged, useAgentProfiles } from "../hooks/useAgentProfiles";
-import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
+import PersistedProvisioningEditor from "../workspace/components/PersistedProvisioningEditor";
 import SkillBankPanel from "./SkillBankPanel";
 import { announceSkillsChanged, useSkillBank } from "../hooks/useSkillBank";
 import SkillSelector from "./SkillSelector";

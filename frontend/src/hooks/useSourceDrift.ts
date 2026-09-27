@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchRemotes, fetchSourceDrift } from "../api";
+import { fetchSourceDrift } from "../api";
+import { fetchRemotes } from "../workspace/api/repos";
 import type { BranchFetchError } from "../shared/generated/BranchFetchError";
 import type { RunState } from "../shared/generated/RunState";
 import type { SourceDrift } from "../shared/generated/SourceDrift";

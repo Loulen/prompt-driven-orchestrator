@@ -37,8 +37,8 @@ import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useLibraryState } from "../hooks/useLibrary";
 import type { LibrarySyncState } from "../hooks/useLibrary";
-import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
-import { EMPTY_PROVISIONING_RULES } from "../lib/provisioning";
+import ProvisioningRulesEditor from "../workspace/components/ProvisioningRulesEditor";
+import { EMPTY_PROVISIONING_RULES } from "../workspace/model/provisioning";
 import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 

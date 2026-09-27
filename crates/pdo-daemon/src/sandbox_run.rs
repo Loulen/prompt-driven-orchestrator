@@ -197,7 +197,7 @@ pub(crate) async fn context_from_state(
     run_state: &RunState,
 ) -> Result<SandboxContext> {
     let repo_root = crate::effective_repo_root(state, run_state);
-    let run_worktree = crate::worktree_ops::worktree_dir_for_run(&repo_root, &run_state.run_id);
+    let run_worktree = crate::worktrees::worktree_dir_for_run(&repo_root, &run_state.run_id);
     // Home root: the per-daemon override (layer-3 harness) wins; else the real
     // `$HOME`. `home_root == host_home` (both the same `$HOME`); the sandbox
     // staging root derives from it (`<home>/.pdo/sandbox`).

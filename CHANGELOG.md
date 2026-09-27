@@ -10,6 +10,43 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.10 — Contexte `run`, 2/3 : scheduler et cycle de vie des nodes, commandes d'agent (#924, spec #913)
+
+Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots
+HTTP et WS identiques ; les routes des nodes, `/runs/{id}/commands` et `/stale/health` répondent
+comme avant, octet pour octet, sans extension).
+
+- Le scheduler et le cycle de vie des nodes quittent `pdo-legacy` pour `pdo-run` : les
+  évaluateurs purs du scheduler (`domain/scheduler/`, avec le dispatcher, la détection d'un Run
+  bloqué, le choix de reprise et le verdict d'un Merge), l'interpréteur et ses pilotes
+  (`application/scheduler/`), le spawn, les primitives, le prompt, les entrées et sorties, le
+  reap et le reattach d'un node (`application/node/`), la reprise au démarrage, le balayage de
+  liveness et la préparation du sandbox d'un Run. Les fonctions de plus de 400 lignes
+  (`spawn_node`, le dispatch des commandes, la primitive de start, le préambule) sont découpées
+  par étape.
+- Chaque geste est un use case qui reçoit l'Acteur posé par `identify` (`Agent{run, node}` pour
+  la CLI d'agent) et consulte d'abord l'Autorisation d'opération : `CompleteNode`,
+  `ReleaseCompletion`, `FailNode`, `SkipNode`, `StartNode`, `StopNode`, `RetryNode` (Opération
+  `node` × action, cible `<run>/<node>`) et `RunCommand` (une commande de node vise son node,
+  les autres le Run, après le refus `410` d'un Run oublié et la validation). Un refus répond
+  `403 operation_refused` avant toute écriture. Les transitions du scheduler n'en construisent
+  jamais (D10) : une extension qui refuse tout ne bloque aucun Run.
+- Le contexte lit les autres par des ports étroits (tmux et l'attente déclarée, les Projets, la
+  banque de skills, les profils de staging) ; ce qui reste legacy (les réglages d'instance et
+  les profils agentiques, l'archivage et `retry_all`) est implémenté dans `run_ports.rs`.
+- Les routes des nodes, `/runs/{id}/commands` et `/stale/health` passent dans le `router()` du
+  contexte ; la CLI d'agent (`pdo complete`, `fail`, `skip`, `wait-user`, `run wait`) dans
+  `adapters/cli/`. Les constantes `DEFAULT_PORT` / `DEFAULT_DAEMON_URL` passent dans le noyau,
+  `DEFAULT_PROFILE_ID` dans le contexte `harness`.
+- Tests : les use cases contre des ports en mémoire (étage 2), le contexte sur ses vrais
+  adaptateurs piloté par son routeur (`tests/lifecycle/`, les tests internes du crate legacy
+  qui portaient sur ce code, déplacés), les tests unitaires à côté de leur code.
+- Les cibles `RUST_LOG` changent avec le code (`pdo_daemon::node_spawn` devient
+  `pdo_run::application::node::spawn`, etc. — la table est dans `docs/agents/module-layout.md`).
+- Front : l'API des nodes (prompt, entrées et sorties, Start / Stop / Retry), la complétion
+  (`markNodeDone`, `releaseNodeCompletion`), les commandes du Pipeline Manager et le store
+  `useNodeRun` passent dans `frontend/src/run/`.
+
 ## 1.111.9 — Contexte `run`, 1/3 : domaine et event store (#923, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots HTTP et WS

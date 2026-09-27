@@ -18,10 +18,10 @@ import type { NodeState } from "../shared/generated/NodeState";
 import type { NodeStatus } from "../shared/generated/NodeStatus";
 import type { ScopedProvisioningRules } from "../shared/generated/ScopedProvisioningRules";
 import { artifactUrl } from "../api";
-import type { PortIO, FileInfo } from "../api";
+import type { PortIO, FileInfo } from "../run/api/nodes";
 import type { PortType } from "../shared/generated/PortType";
-import { useNodeRun } from "../hooks/useNodeRun";
-import type { MarkVerdict, ReleaseVerdict } from "../hooks/useNodeRun";
+import { useNodeRun } from "../run/store/useNodeRun";
+import type { MarkVerdict, ReleaseVerdict } from "../run/store/useNodeRun";
 import {
   ResizablePanelGroup,
   ResizablePanel,

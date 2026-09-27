@@ -1,13 +1,27 @@
 //! In-memory adapters of every port of the run context.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use pdo_extension_api::{Authorization, RequestParts};
+use pdo_harness::agent_choice::ResolvedCombo;
 use pdo_kernel::event_bus::EventBus;
+use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::{Actor, Operation};
 use pdo_run::application::ports::*;
 use pdo_run::domain::event::{Event, EventKind};
 use pdo_run::domain::state::RunState;
 use pdo_run::{Runs, RunsOptions, RunsPorts};
+use pdo_sandbox::application::ports::{SandboxProfileRepository, StoreError};
+use pdo_sandbox::domain::profile::draft::ProfileDraft;
+use pdo_sandbox::domain::profile::ProfileDiff;
+use pdo_session::application::ports::Tmux;
+use pdo_skill::domain::delivery::SkippedSkill;
+use pdo_skill::domain::selection::ActiveSkill;
+use pdo_workspace::domain::project::Project;
 use tokio::sync::broadcast;
 
 /// The event log, as a list. A Run listed in `forgotten` refuses every append;
@@ -63,6 +77,10 @@ impl EventStore for Store {
             ids.reverse();
             Ok(ids)
         })
+    }
+
+    fn is_forgotten<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {
+        Box::pin(async move { Ok(self.forgotten.lock().unwrap().contains(run_id)) })
     }
 
     fn has_children<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, bool> {
@@ -137,6 +155,239 @@ impl ManagerSessions for Managers {
     }
 }
 
+/// tmux, as a set of live sessions: every session the context opens is
+/// recorded, every kill is recorded, and a session "exists" while it is live.
+#[derive(Default)]
+pub struct FakeTmux {
+    pub live: Mutex<HashSet<String>>,
+    pub opened: Mutex<Vec<(String, PathBuf, String)>>,
+    pub killed: Mutex<Vec<String>>,
+    pub typed: Mutex<Vec<(String, String)>>,
+}
+
+impl Tmux for FakeTmux {
+    fn socket(&self) -> &str {
+        "pdo-test-fake"
+    }
+    fn session_path(&self) -> String {
+        String::new()
+    }
+    fn new_session(
+        &self,
+        name: &str,
+        working_dir: &Path,
+        script: &str,
+        _what: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.live.lock().unwrap().insert(name.to_string());
+        self.opened.lock().unwrap().push((
+            name.to_string(),
+            working_dir.to_path_buf(),
+            script.to_string(),
+        ));
+        Ok(())
+    }
+    fn kill(&self, name: &str) {
+        self.live.lock().unwrap().remove(name);
+        self.killed.lock().unwrap().push(name.to_string());
+    }
+    fn session_exists(&self, name: &str) -> bool {
+        self.live.lock().unwrap().contains(name)
+    }
+    fn server_alive(&self) -> Option<bool> {
+        Some(true)
+    }
+    fn list_pdo_sessions(&self) -> HashSet<String> {
+        self.live.lock().unwrap().clone()
+    }
+    fn is_attached(&self, _name: &str) -> bool {
+        false
+    }
+    fn capture(&self, _name: &str) -> Option<String> {
+        None
+    }
+    fn send_keys(&self, name: &str, text: &str) {
+        self.typed
+            .lock()
+            .unwrap()
+            .push((name.to_string(), text.to_string()));
+    }
+    fn paste(&self, name: &str, text: &str) {
+        self.send_keys(name, text);
+    }
+    fn attach_argv(&self, _name: &str, _ignore_size: bool) -> Vec<String> {
+        Vec::new()
+    }
+    fn attach_command(&self, _name: &str) -> String {
+        String::new()
+    }
+    fn set_client_ignore_size(&self, _client_pid: u32, _ignore_size: bool) -> bool {
+        false
+    }
+}
+
+/// The declared waits the context asked for.
+#[derive(Default)]
+pub struct Waits(pub Mutex<Vec<(String, String, i64)>>);
+
+impl DeclaredWaits for Waits {
+    fn on_completion_not_released<'a>(
+        &'a self,
+        run_id: &'a str,
+        node_id: &'a str,
+        iter: i64,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .unwrap()
+                .push((run_id.to_string(), node_id.to_string(), iter));
+        })
+    }
+}
+
+/// The Projets, as a list; `broken` makes every read fail.
+#[derive(Default)]
+pub struct FakeProjects(pub Mutex<Vec<Project>>, pub Mutex<bool>);
+
+impl Projects for FakeProjects {
+    fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
+        Box::pin(async move {
+            if *self.1.lock().unwrap() {
+                return Err("the workspace store is unreadable".to_string());
+            }
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|p| p.members.iter().any(|m| m == path))
+                .cloned())
+        })
+    }
+}
+
+/// The skill bank, and the deliveries asked of it.
+#[derive(Default)]
+pub struct FakeSkills {
+    pub bank: Mutex<BTreeMap<String, String>>,
+    pub delivered: Mutex<Vec<(PathBuf, Vec<String>)>>,
+}
+
+impl NodeSkills for FakeSkills {
+    fn bank_names(&self) -> BoxFuture<'_, BTreeMap<String, String>> {
+        Box::pin(async move { self.bank.lock().unwrap().clone() })
+    }
+    fn deliver(
+        &self,
+        worktree: &Path,
+        _run_repo_root: &Path,
+        _run_id: &str,
+        skills: &[ActiveSkill],
+    ) -> anyhow::Result<Vec<SkippedSkill>> {
+        self.delivered.lock().unwrap().push((
+            worktree.to_path_buf(),
+            skills.iter().map(|s| s.id.clone()).collect(),
+        ));
+        Ok(Vec::new())
+    }
+}
+
+/// No staging profile was ever edited.
+#[derive(Default)]
+pub struct NoProfiles;
+
+impl SandboxProfileRepository for NoProfiles {
+    fn get<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> pdo_sandbox::application::ports::BoxFuture<'a, Result<Option<ProfileDiff>, StoreError>>
+    {
+        Box::pin(async { Ok(None) })
+    }
+    fn list(
+        &self,
+    ) -> pdo_sandbox::application::ports::BoxFuture<'_, Result<Vec<ProfileDiff>, StoreError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn upsert<'a>(
+        &'a self,
+        _name: &'a str,
+        _profile: &'a ProfileDraft,
+    ) -> pdo_sandbox::application::ports::BoxFuture<'a, Result<ProfileDiff, StoreError>> {
+        Box::pin(async { Err(StoreError("read-only in the tests".into())) })
+    }
+    fn delete<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> pdo_sandbox::application::ports::BoxFuture<'a, Result<bool, StoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+}
+
+/// The instance settings; `None` reads as an unreadable store.
+#[derive(Default)]
+pub struct Settings {
+    pub defaults: Mutex<Option<InstanceDefaults>>,
+    pub profiles: Mutex<BTreeMap<String, ResolvedCombo>>,
+}
+
+impl InstanceSettings for Settings {
+    fn defaults(&self) -> BoxFuture<'_, Option<InstanceDefaults>> {
+        Box::pin(async move { self.defaults.lock().unwrap().clone() })
+    }
+    fn agent_profiles(&self) -> BoxFuture<'_, BTreeMap<String, ResolvedCombo>> {
+        Box::pin(async move { self.profiles.lock().unwrap().clone() })
+    }
+}
+
+/// The Run's legacy surfaces: every call recorded, answered `200`.
+#[derive(Default)]
+pub struct Surfaces(pub Mutex<Vec<String>>);
+
+impl RunSurfaces for Surfaces {
+    fn cleanup<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Response> {
+        Box::pin(async move {
+            self.0.lock().unwrap().push(format!("cleanup {run_id}"));
+            (StatusCode::OK, "archived").into_response()
+        })
+    }
+    fn retry_all<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Response> {
+        Box::pin(async move {
+            self.0.lock().unwrap().push(format!("retry_all {run_id}"));
+            (StatusCode::CREATED, "created").into_response()
+        })
+    }
+}
+
+/// An extension host that records every Operation it is asked about, and
+/// refuses them all once told to.
+#[derive(Default)]
+pub struct Host {
+    pub refuse: Mutex<bool>,
+    pub asked: Mutex<Vec<(Actor, Operation)>>,
+}
+
+impl ExtensionHost for Host {
+    fn identify(&self, _request: &RequestParts) -> Actor {
+        Actor::LocalOperator
+    }
+    fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
+        self.asked
+            .lock()
+            .unwrap()
+            .push((actor.clone(), operation.clone()));
+        if *self.refuse.lock().unwrap() {
+            Authorization::Deny {
+                reason: "the test host refuses everything".into(),
+            }
+        } else {
+            Authorization::Allow
+        }
+    }
+    fn publish(&self, _event: &serde_json::Value) {}
+}
+
 /// The context over fresh fakes, and the fakes.
 pub struct World {
     pub runs: Arc<Runs>,
@@ -144,6 +395,15 @@ pub struct World {
     pub bus: Arc<Bus>,
     pub disk: Arc<Disk>,
     pub managers: Arc<Managers>,
+    pub tmux: Arc<FakeTmux>,
+    pub waits: Arc<Waits>,
+    pub projects: Arc<FakeProjects>,
+    pub skills: Arc<FakeSkills>,
+    pub settings: Arc<Settings>,
+    pub surfaces: Arc<Surfaces>,
+    pub host: Arc<Host>,
+    /// The daemon's repo root, a fresh directory.
+    pub repo: tempfile::TempDir,
 }
 
 pub fn world() -> World {
@@ -155,16 +415,36 @@ pub fn world_over(store: Store) -> World {
     let bus = Arc::new(Bus::default());
     let disk = Arc::new(Disk::default());
     let managers = Arc::new(Managers::default());
+    let tmux = Arc::new(FakeTmux::default());
+    let waits = Arc::new(Waits::default());
+    let projects = Arc::new(FakeProjects::default());
+    let skills = Arc::new(FakeSkills::default());
+    let settings = Arc::new(Settings::default());
+    let surfaces = Arc::new(Surfaces::default());
+    let host = Arc::new(Host::default());
+    let repo = tempfile::tempdir().unwrap();
     let runs = Runs::new(
         RunsPorts {
             store: store.clone(),
             bus: bus.clone(),
             live_facts: disk.clone(),
             managers: managers.clone(),
+            tmux: tmux.clone(),
+            waits: waits.clone(),
+            projects: projects.clone(),
+            skills: skills.clone(),
+            sandbox_profiles: Arc::new(NoProfiles),
+            settings: settings.clone(),
+            surfaces: surfaces.clone(),
+            extensions: host.clone(),
         },
         RunsOptions {
             daemon_port: 6172,
             allowed_ws_origins: Vec::new(),
+            repo_root: repo.path().to_path_buf(),
+            tmux_cmd_override: Some("exec true".into()),
+            sandbox_home_override: Some(repo.path().join("home")),
+            ..RunsOptions::default()
         },
     );
     World {
@@ -173,6 +453,14 @@ pub fn world_over(store: Store) -> World {
         bus,
         disk,
         managers,
+        tmux,
+        waits,
+        projects,
+        skills,
+        settings,
+        surfaces,
+        host,
+        repo,
     }
 }
 
@@ -200,4 +488,111 @@ pub fn run_started(run_id: &str) -> Event {
         "edges": [],
     }));
     started
+}
+
+/// `start → worker → second → end`: two agent nodes in a row, both working in
+/// the Run's shared worktree.
+pub const RELAY: &str = r#"name: relay
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: Worker
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: out
+  - id: second
+    name: Second
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: out }
+    target: { node: second, port: task }
+  - source: { node: second, port: out }
+    target: { node: end, port: result }
+"#;
+
+/// A started Run of the [`RELAY`] pipeline in the world's repository: its
+/// run-scoped pipeline and prompts, its worktree, its `RunStarted`.
+pub async fn seed_relay(w: &World, run_id: &str) {
+    let repo = w.repo.path();
+    let run_dir = repo.join(".pdo").join("runs").join(run_id);
+    std::fs::create_dir_all(run_dir.join("worktree").join(".pdo").join("artifacts")).unwrap();
+    std::fs::write(run_dir.join("pipeline.yaml"), RELAY).unwrap();
+    let prompts = run_dir.join("pipeline.prompts");
+    std::fs::create_dir_all(&prompts).unwrap();
+    std::fs::write(prompts.join("worker.md"), "Do the work.\n").unwrap();
+    std::fs::write(prompts.join("second.md"), "Do the rest.\n").unwrap();
+    let mut started = event(run_id, EventKind::RunStarted, None);
+    started.payload = Some(serde_json::json!({
+        "pipeline_name": "relay",
+        "input": "go",
+        "target_repo": repo.to_string_lossy(),
+    }));
+    w.runs.append_event().execute(&started).await.unwrap();
+}
+
+/// Write the artifact `node_id`'s `out` port expects, where its agent would.
+pub fn write_out(w: &World, run_id: &str, node_id: &str) {
+    let dir = w
+        .repo
+        .path()
+        .join(".pdo/runs")
+        .join(run_id)
+        .join("worktree/.pdo/artifacts")
+        .join(node_id)
+        .join("iter-1/out");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("output.md"), "artifact\n").unwrap();
+}
+
+/// The kinds of the events `run_id`'s log holds, in order.
+pub fn kinds(w: &World, run_id: &str) -> Vec<EventKind> {
+    w.store
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| e.run_id == run_id)
+        .map(|e| e.kind.clone())
+        .collect()
+}
+
+/// Poll the log until `check` accepts it (the terminal tails run detached).
+pub async fn eventually(w: &World, run_id: &str, what: &str, check: impl Fn(&[EventKind]) -> bool) {
+    for _ in 0..200 {
+        if check(&kinds(w, run_id)) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!(
+        "{what}: never happened; the log holds {:?}",
+        kinds(w, run_id)
+    );
+}
+
+/// A started Run of `yaml` (a variant of [`RELAY`]) in the world's repository.
+pub async fn seed_run_of(w: &World, run_id: &str, yaml: &str) {
+    seed_relay(w, run_id).await;
+    let run_dir = w.repo.path().join(".pdo").join("runs").join(run_id);
+    std::fs::write(run_dir.join("pipeline.yaml"), yaml).unwrap();
 }

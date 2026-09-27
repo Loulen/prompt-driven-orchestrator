@@ -2,6 +2,7 @@
 //! domain says what happened, this says with which status and which body.
 
 pub mod completion;
+pub mod repo_edit;
 pub mod restart;
 pub mod retry;
 

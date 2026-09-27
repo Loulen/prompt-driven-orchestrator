@@ -636,8 +636,8 @@ fn the_router_reader_sees_every_route_declaration() {
 fn a_route_without_a_test_turns_the_coverage_red() {
     let src = std::fs::read_to_string(crate_dir().join("../pdo-daemon/src/lib.rs")).unwrap();
     let injected = src.replacen(
-        "fn build_router(state: Arc<AppState>) -> Router {\n    Router::new()\n",
-        "fn build_router(state: Arc<AppState>) -> Router {\n    Router::new()\n        \
+        "fn build_router(state: Arc<AppState>) -> Router {\n    let router = Router::new()\n",
+        "fn build_router(state: Arc<AppState>) -> Router {\n    let router = Router::new()\n        \
          .route(\"/net-914/fictitious\", get(fictitious))\n        \
          .route(\"/runs/reapable\", axum::routing::delete(fictitious))\n",
         1,

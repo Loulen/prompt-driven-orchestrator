@@ -1957,8 +1957,8 @@ async fn compute_performance(
     .await
     .map_err(|e| PerformanceError::Db(e.to_string()))?;
 
-    let (home_root, sandbox_root) =
-        crate::run_sandbox::sandbox_home_roots(state).unwrap_or_else(|_| {
+    let (home_root, sandbox_root) = crate::run_sandbox::sandbox_home_roots(&state.run)
+        .unwrap_or_else(|_| {
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let sandbox = home.join(".pdo").join("sandbox");
             (home, sandbox)

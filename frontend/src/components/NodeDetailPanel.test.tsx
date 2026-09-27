@@ -37,17 +37,23 @@ const markNodeDoneMock = vi.fn().mockResolvedValue({ kind: "completed" });
 const releaseNodeCompletionMock = vi.fn().mockResolvedValue({ kind: "released" });
 
 vi.mock("../api", () => ({
-  fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
-  fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
-  markNodeDone: (...args: unknown[]) => markNodeDoneMock(...args),
-  releaseNodeCompletion: (...args: unknown[]) => releaseNodeCompletionMock(...args),
+  artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
+}));
+vi.mock("../run/api/commands", () => ({
   killNode: (...args: unknown[]) => killNodeMock(...args),
   restartNode: (...args: unknown[]) => restartNodeMock(...args),
+}));
+vi.mock("../run/api/completion", () => ({
+  markNodeDone: (...args: unknown[]) => markNodeDoneMock(...args),
+  releaseNodeCompletion: (...args: unknown[]) => releaseNodeCompletionMock(...args),
+}));
+vi.mock("../run/api/nodes", () => ({
+  fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
+  fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
   stopNode: (...args: unknown[]) => stopNodeMock(...args),
   retryNode: (...args: unknown[]) => retryNodeMock(...args),
   retryNodePreview: (...args: unknown[]) => retryNodePreviewMock(...args),
   startNode: (...args: unknown[]) => startNodeMock(...args),
-  artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 
 vi.mock("../workspace/api/provisioning", async (importOriginal) => ({

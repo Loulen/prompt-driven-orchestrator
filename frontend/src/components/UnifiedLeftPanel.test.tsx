@@ -8,7 +8,7 @@ import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
 import { ApiError } from "../shared/http/client";
-import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../run/api/commands";
 import { createPipeline, deletePipeline, fetchPipelines, renamePipeline } from "../pipeline/api/pipelines";
 import { deleteLibraryPipeline, duplicateLibraryPipeline } from "../pipeline/api/libraryPipelines";
 import { importPipelineDocument } from "../pipeline/api/document";
@@ -50,12 +50,7 @@ vi.mock("../api", () => ({
       this.status = opts.status;
     }
   },
-  cleanupRun: vi.fn().mockResolvedValue(undefined),
   forgetRun: vi.fn().mockResolvedValue(undefined),
-  pauseRun: vi.fn().mockResolvedValue(undefined),
-  resumeRun: vi.fn().mockResolvedValue(undefined),
-  retryAll: vi.fn().mockResolvedValue({ run_id: "offspring-1" }),
-  renameRun: vi.fn().mockResolvedValue(undefined),
   renamePipeline: vi.fn().mockResolvedValue({ ok: true }),
   createPipeline: vi.fn().mockResolvedValue({ id: "new-pipe", scope: "repo", path: "/tmp" }),
   duplicatePipeline: vi.fn().mockResolvedValue({ id: "copy", scope: "instance", path: "/tmp" }),
@@ -78,6 +73,13 @@ vi.mock("../api", () => ({
   }),
   fetchSettings: vi.fn().mockResolvedValue({}),
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+}));
+vi.mock("../run/api/commands", () => ({
+  cleanupRun: vi.fn().mockResolvedValue(undefined),
+  pauseRun: vi.fn().mockResolvedValue(undefined),
+  resumeRun: vi.fn().mockResolvedValue(undefined),
+  retryAll: vi.fn().mockResolvedValue({ run_id: "offspring-1" }),
+  renameRun: vi.fn().mockResolvedValue(undefined),
 }));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({

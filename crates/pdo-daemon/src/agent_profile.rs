@@ -37,7 +37,7 @@ use pdo_harness::agent_choice::ResolvedCombo;
 /// The reserved id of the instance's floor profile (ADR-0057 ¶3). Distinct from
 /// its `name` (`Default`), which is editable — only the id is fixed forever, so
 /// a rename can never orphan the plancher every resolution falls back to.
-pub(crate) const DEFAULT_PROFILE_ID: &str = "default";
+pub(crate) const DEFAULT_PROFILE_ID: &str = pdo_harness::agent_choice::DEFAULT_PROFILE_ID;
 /// The seeded name of the reserved profile. Editable afterwards like any other
 /// profile's name (still subject to the case-insensitive uniqueness check).
 pub(crate) const DEFAULT_PROFILE_NAME: &str = "Default";

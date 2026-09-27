@@ -13,7 +13,10 @@ impl DaemonGauges for LegacySessionPorts {
     fn live_sessions(&self) -> BoxFuture<'_, usize> {
         Box::pin(async move {
             match self.state() {
-                Ok(state) => crate::count_global_live_sessions(&state.db).await,
+                Ok(state) => {
+                    pdo_run::application::admission_count::count_global_live_sessions(&state.run)
+                        .await
+                }
                 Err(_) => 0,
             }
         })
@@ -22,7 +25,7 @@ impl DaemonGauges for LegacySessionPorts {
     fn session_cap(&self) -> BoxFuture<'_, usize> {
         Box::pin(async move {
             let stored = match self.state() {
-                Ok(state) => crate::stored_session_cap(&state.db).await,
+                Ok(state) => pdo_run::application::settings::stored_session_cap(&state.run).await,
                 Err(_) => None,
             };
             pdo_run::adapters::env::configured_cap_with(stored)
@@ -98,10 +101,11 @@ impl AssistantHarness for LegacySessionPorts {
             let Ok(state) = self.state() else {
                 return pdo_harness::registry::claude();
             };
-            let default_harness = crate::stored_default_harness(&state.db).await;
+            let default_harness =
+                pdo_run::application::settings::stored_default_harness(&state.run).await;
             let harness_name =
                 pdo_harness::resolver::resolve_infra_harness(None, default_harness.as_deref());
-            let home_root = crate::run_sandbox::sandbox_home_roots(&state)
+            let home_root = crate::run_sandbox::sandbox_home_roots(&state.run)
                 .map(|(home, _)| home)
                 .unwrap_or_default();
             pdo_harness::adapters::descriptor_file::load(&home_root)

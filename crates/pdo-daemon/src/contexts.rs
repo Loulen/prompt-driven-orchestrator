@@ -19,7 +19,7 @@ use pdo_platform::application::ports::{BoxFuture, Runs, UpdateCheckSetting};
 use pdo_platform::domain::install::{InstallMethod, Supervision};
 use pdo_platform::domain::service_health::ServiceHealthOverride;
 use pdo_platform::Platform;
-use pdo_run::application::ports::LiveFacts;
+use pdo_run::application::ports::{InstanceSettings, LiveFacts, RunSurfaces};
 
 use pdo_session::application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunShells, SessionOwners, Templates,
@@ -28,7 +28,7 @@ use pdo_session::Session;
 use tokio::sync::broadcast;
 
 use crate::pipeline_ports::{LegacyActiveRuns, LegacyRenameLedger};
-use crate::run_ports::LegacyLiveFacts;
+use crate::run_ports::{LegacyInstanceSettings, LegacyLiveFacts, LegacyRunSurfaces};
 use crate::session_ports::LegacySessionPorts;
 use crate::SelfWrites;
 use crate::{event_log, instance_config, AppState, SessionClaim};
@@ -66,12 +66,23 @@ pub struct ContextResources {
     pub run: RunResources,
 }
 
-/// The run context's resources: the kernel's bus the daemon opened, and what a
-/// Run's detail reads from disk, which the legacy side still implements.
+/// The run context's resources: the kernel's bus the daemon opened, the
+/// upstream contexts it reads (the Projets, the skills), and what the legacy
+/// side still implements (a Run's detail read from disk, the instance
+/// settings, the Run's surfaces the Pipeline Manager reaches), with the
+/// daemon's per-run knobs.
 #[derive(Clone)]
 pub struct RunResources {
     pub bus: Arc<dyn EventBus>,
     pub live_facts: Arc<dyn LiveFacts>,
+    pub settings: Arc<dyn InstanceSettings>,
+    pub surfaces: Arc<dyn RunSurfaces>,
+    pub workspace: Arc<pdo_workspace::application::Workspace>,
+    pub skills: Arc<pdo_skill::Skills>,
+    pub docker_cmd_override: Option<String>,
+    pub sandbox_home_override: Option<PathBuf>,
+    pub panic_on_stale_sweep: bool,
+    pub panic_on_spawn: bool,
 }
 
 /// The pipeline context's resources: the ports the Runs and the Stats
@@ -144,6 +155,11 @@ pub(crate) struct ContextResourcesSeed {
     pub pipeline_events: broadcast::Sender<serde_json::Value>,
     pub self_writes: SelfWrites,
     pub bus: Arc<dyn EventBus>,
+    pub workspace: Arc<pdo_workspace::application::Workspace>,
+    pub docker_cmd_override: Option<String>,
+    pub sandbox_home_override: Option<PathBuf>,
+    pub panic_on_stale_sweep: bool,
+    pub panic_on_spawn: bool,
 }
 
 impl ContextResourcesSeed {
@@ -160,6 +176,18 @@ impl ContextResourcesSeed {
                 live_facts: Arc::new(LegacyLiveFacts {
                     state: state.clone(),
                 }),
+                settings: Arc::new(LegacyInstanceSettings {
+                    db: self.db.clone(),
+                }),
+                surfaces: Arc::new(LegacyRunSurfaces {
+                    state: state.clone(),
+                }),
+                workspace: self.workspace,
+                skills: self.skills.clone(),
+                docker_cmd_override: self.docker_cmd_override,
+                sandbox_home_override: self.sandbox_home_override,
+                panic_on_stale_sweep: self.panic_on_stale_sweep,
+                panic_on_spawn: self.panic_on_spawn,
             },
             session: SessionRunPorts::over(state),
             pipeline: PipelineResources {
@@ -214,7 +242,7 @@ impl Runs for LegacyRuns {
                 run_id: run_id.to_string(),
                 node_id: node_id.to_string(),
             };
-            crate::verify_session_claim(&state, &claim)
+            pdo_run::application::session_claim::verify_session_claim(&state.run, &claim)
                 .await
                 .map(|_| ())
                 .map_err(|(_, body)| body["error"].as_str().unwrap_or_default().to_string())
@@ -333,32 +361,62 @@ pub(crate) fn test_session(
 }
 
 /// The run context of a unit-test state: the SQLite log of the test
-/// database, the state's bus, the legacy live facts, and the session's tmux
-/// for the manager probe.
+/// database, the state's bus, the legacy live facts, settings and surfaces,
+/// the session's tmux and declared wait, the workspace's Projets and the skill
+/// context, and the test daemon's knobs (a node session runs `exec true`).
 #[cfg(test)]
-pub(crate) fn test_run(
-    state: Weak<AppState>,
-    db: &sqlx::SqlitePool,
-    bus_tx: &broadcast::Sender<serde_json::Value>,
-    session: &Session,
-    port: u16,
-) -> Arc<pdo_run::Runs> {
+pub(crate) struct TestRun<'a> {
+    pub state: Weak<AppState>,
+    pub db: &'a sqlx::SqlitePool,
+    pub bus_tx: &'a broadcast::Sender<serde_json::Value>,
+    pub session: &'a Arc<Session>,
+    pub workspace: Arc<pdo_workspace::application::Workspace>,
+    pub skills: Arc<pdo_skill::Skills>,
+    pub repo_root: PathBuf,
+    pub port: u16,
+    pub docker_cmd_override: Option<String>,
+    pub sandbox_home_override: Option<PathBuf>,
+}
+
+#[cfg(test)]
+pub(crate) fn test_run(t: TestRun<'_>) -> Arc<pdo_run::Runs> {
+    use pdo_run::adapters::contexts::{ContextSkills, SessionWaits, WorkspaceProjects};
     pdo_run::Runs::new(
         pdo_run::RunsPorts {
             store: Arc::new(
-                pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone()),
+                pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(t.db.clone()),
             ),
             bus: Arc::new(pdo_kernel::event_bus::BroadcastEventBus::from_sender(
-                bus_tx.clone(),
+                t.bus_tx.clone(),
             )),
-            live_facts: Arc::new(LegacyLiveFacts { state }),
+            live_facts: Arc::new(LegacyLiveFacts {
+                state: t.state.clone(),
+            }),
             managers: Arc::new(pdo_run::adapters::manager_sessions::TmuxManagerSessions(
-                session.tmux().clone(),
+                t.session.tmux().clone(),
             )),
+            tmux: t.session.tmux().clone(),
+            waits: Arc::new(SessionWaits(t.session.clone())),
+            projects: Arc::new(WorkspaceProjects(t.workspace)),
+            skills: Arc::new(ContextSkills(t.skills)),
+            sandbox_profiles: Arc::new(
+                pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles::new(t.db.clone()),
+            ),
+            settings: Arc::new(LegacyInstanceSettings { db: t.db.clone() }),
+            surfaces: Arc::new(LegacyRunSurfaces { state: t.state }),
+            extensions: Arc::new(pdo_kernel::extension_host::NoExtensions),
         },
         pdo_run::RunsOptions {
-            daemon_port: port,
+            daemon_port: t.port,
             allowed_ws_origins: Vec::new(),
+            repo_root: t.repo_root,
+            // Self-destructing no-op: should a test reach the spawn path, the node
+            // session runs `true` and exits immediately — never real claude.
+            tmux_cmd_override: Some("exec true".to_string()),
+            docker_cmd_override: t.docker_cmd_override,
+            sandbox_home_override: t.sandbox_home_override,
+            panic_on_stale_sweep: false,
+            panic_on_spawn: false,
         },
     )
 }

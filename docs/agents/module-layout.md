@@ -133,11 +133,48 @@ Contexts already out of the legacy crate:
   What a Run's detail reads from disk (LOC, cost, the run-scoped pipeline) is the `LiveFacts`
   port the legacy crate implements in `run_ports.rs`. The composition root wires the context;
   the legacy router merges its `router()` so the legacy crate's in-crate tests keep driving it.
-  The rest of the Run (scheduler, node lifecycle, the other surfaces) still lives in the legacy
-  crate and reads this one through `crate::event_log` (a re-export of the three domain modules)
-  and the re-exported rule modules. `RUST_LOG=pdo_daemon` (append, `/ws`) becomes
-  `RUST_LOG=pdo_run::application::append_event` and `pdo_run::adapters::http::ws`;
-  `pdo_daemon::event_log` becomes `pdo_run::domain::projection`.
+  `RUST_LOG=pdo_daemon` (append, `/ws`) becomes `RUST_LOG=pdo_run::application::append_event`
+  and `pdo_run::adapters::http::ws`; `pdo_daemon::event_log` becomes `pdo_run::domain::projection`.
+- `run`, second slice (#924): the scheduler and the node lifecycle join `crates/pdo-run`. The
+  three layers of ADR-0009 are the three hexagonal layers: the scheduler's pure evaluators
+  (`domain/scheduler/`, with `dispatcher`, `run_stall`, `recovery`, `merge_action`), the
+  primitives and the drivers (`application/node/` — spawn, primitives, prompt, inputs and
+  outputs, reap, reattach — and `application/scheduler/`: the one interpreter of the
+  evaluators' actions, a Run's advance, a node's completion, the retry of waiting nodes, the
+  run-level stall), and the gestures. Every gesture is a use case that receives the Acteur
+  `identify` set (`Agent{run, node}` for the agent CLI) and asks the Autorisation d'opération
+  first: `CompleteNode`, `ReleaseCompletion`, `FailNode`, `SkipNode`, `StartNode`, `StopNode`,
+  `RetryNode` (one file each, an Operation `node` × action on `<run>/<node>`), and `RunCommand`
+  (`application/commands/`, one file per family of commands; a node command asks about its
+  node, every other one about the Run, after the forgotten-run gate and the parse). The
+  scheduler's own transitions (a spawn, a completion's tail, `RunCompleted`, boot recovery, the
+  stale sweep, the sandbox preparation) never build an Operation (D10); a stage-2 test
+  (`tests/use_cases/scheduler.rs`) and a stage-4 one (`extension_authorization.rs`) prove an
+  extension refusing everything blocks no Run. These use cases answer the HTTP response
+  themselves (the ADR-0009 addendum: the command surface forwards it verbatim), so they reach
+  the verdicts' projection in `adapters/http/verdicts/`. The context reads the other contexts
+  through narrow ports (`application/ports.rs`): tmux and the declared wait (session), the
+  Projets (workspace), the bank and the delivery (skill), the staging profiles (sandbox),
+  wired by `adapters/contexts.rs`; and what is still legacy through `InstanceSettings` (the
+  instance defaults and the agentic profiles) and `RunSurfaces` (archive and `retry_all`,
+  whose answers the commands forward verbatim), implemented in `run_ports.rs`. The node routes,
+  `/runs/{run_id}/commands` and `/stale/health` are in its `router()`; the agent CLI (`pdo
+  complete`, `fail`, `skip`, `wait-user`, `run wait`) is `adapters/cli/`. The legacy crate keeps
+  thin wrappers of the same names over `AppState::run` for the Run's surfaces still there
+  (create, list, archive, review, the manager). Tests: the use cases against in-memory ports
+  (`tests/use_cases/`, stage 2); the context over its real adapters — SQLite, git in a
+  temporary repository, tmux on its own socket — driven through its router (`tests/lifecycle/`,
+  the legacy crate's in-crate tests of this code, moved); the unit tests beside their code.
+  `RUST_LOG` targets move with the code: `pdo_daemon::scheduler_interpreter` becomes
+  `pdo_run::application::scheduler::interpreter`, `pdo_daemon::run_advance`
+  `pdo_run::application::scheduler::advance`, `pdo_daemon::run_command`
+  `pdo_run::application::commands`, `pdo_daemon::node_spawn` `pdo_run::application::node::spawn`,
+  `pdo_daemon::node_primitives` `pdo_run::application::node::primitives`,
+  `pdo_daemon::stale_detector` `pdo_run::application::stale`, `pdo_daemon::boot_recovery`
+  `pdo_run::application::boot_recovery`, `pdo_daemon::run_sandbox`
+  `pdo_run::application::sandbox`, and the node handlers of `pdo_daemon` become
+  `pdo_run::application::{complete_node, fail_node, skip_node, start_node, stop_node,
+  retry_node, release_completion, merge_resolver}`.
 While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package

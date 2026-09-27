@@ -10,8 +10,10 @@ vi.mock("../api/update", () => ({
 }));
 vi.mock("../../api", () => ({
   fetchArtifact: vi.fn(),
-  fetchNodeIO: vi.fn(),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${path}`,
+}));
+vi.mock("../../run/api/nodes", () => ({
+  fetchNodeIO: vi.fn(),
 }));
 
 // The real react-markdown is ESM-heavy; a passthrough keeps the assertions on the TEXT

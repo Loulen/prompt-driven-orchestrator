@@ -10,6 +10,19 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.1 — Contexte `harness` extrait (#919, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques, bloc
+`harness_descriptors` de `GET /settings` identique à celui de la version précédente).
+
+- Nouveau crate `pdo-harness` (domain / application / adapters) : registre, argv, capacités par
+  harnais, catalogue, résolution et choix d'agent quittent `pdo-legacy`.
+- Le cycle probes ↔ coût / stale / staging / tmux / stats est cassé : les parseurs de transcripts,
+  de coût rapporté et de pic de contexte vivent dans le domaine harness. La résolution de
+  transcript sur disque et le probe des binaires deviennent des adaptateurs ; le cache du
+  catalogue devient un use case derrière le port `BinaryProbe`.
+- Front : les sélecteurs de harnais, modèle et effort passent dans `frontend/src/harness/`.
+
 ## 1.111.0 — Contrat typé et squelette hexagonal (#915, spec #913)
 
 Deuxième ticket de la spec #913 (ADR-0079..0081). Le contrat HTTP/WS ne change pas (snapshots

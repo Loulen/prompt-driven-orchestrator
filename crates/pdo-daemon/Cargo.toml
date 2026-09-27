@@ -25,6 +25,7 @@ path = "src/lib.rs"
 [dependencies]
 pdo-kernel.workspace = true
 pdo-platform.workspace = true
+pdo-harness.workspace = true
 ts-rs.workspace = true
 tokio.workspace = true
 axum.workspace = true

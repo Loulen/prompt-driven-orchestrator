@@ -4,7 +4,6 @@
 #![warn(unreachable_pub)]
 
 pub mod admission;
-mod agent_choice;
 mod agent_profile;
 mod auto_fail;
 mod blackboard;
@@ -13,9 +12,7 @@ mod child_awaiting;
 pub(crate) mod completion_refusal;
 #[allow(dead_code)]
 mod condition;
-mod context_peak;
 mod contexts;
-mod copilot_journal;
 #[allow(dead_code)]
 mod cron_schedule;
 mod declared_wait;
@@ -27,13 +24,6 @@ mod fire_decision;
 mod frontmatter_parser;
 mod graph_resolver;
 mod guard_runner;
-mod harness_argv;
-mod harness_binary;
-mod harness_catalogue;
-mod harness_probes;
-pub mod harness_registry;
-mod harness_resolver;
-pub mod harness_support;
 mod input_resolution;
 mod instance_config;
 mod library_store;
@@ -46,7 +36,6 @@ mod node_io_resolver;
 mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
-mod pi_session;
 mod pipeline;
 mod pipeline_migrator;
 #[cfg(test)]
@@ -88,7 +77,6 @@ pub mod stale_detector;
 mod stats;
 mod stats_absorption;
 mod stats_performance;
-pub mod steering;
 mod structured_diff;
 mod switch_router;
 pub mod tmux_session_manager;
@@ -414,7 +402,7 @@ pub enum DocsAction {
     /// The harness support matrix — which capability each harness has, what is
     /// absent and why, and the last validated version of each binary.
     ///
-    /// Rendered from the capability declaration in `harness_probes.rs`, its only
+    /// Rendered from the capability declaration in `pdo_harness::probes`, its only
     /// source of truth. `--check` fails (exit 1) if the block committed in the
     /// target file has drifted from the code; `--write` puts it back.
     SupportTable {
@@ -425,7 +413,7 @@ pub enum DocsAction {
         #[arg(long, conflicts_with = "check")]
         write: bool,
         /// The file carrying the generated block, between its two markers.
-        #[arg(long, default_value = crate::harness_support::DOCUMENT)]
+        #[arg(long, default_value = pdo_harness::support::DOCUMENT)]
         file: std::path::PathBuf,
     },
 }
@@ -543,12 +531,11 @@ struct AppState {
     docker_probe_cache: Arc<tokio::sync::Mutex<Option<(Instant, sandbox_image::DockerProbe)>>>,
     /// Per-harness offered-catalogue cache (ADR-0053 §3), keyed by harness name.
     /// Freshness contract: at most one `--version` re-check per harness per
-    /// [`CATALOGUE_VERSION_TTL`] window, and a full `--help` re-probe only when
-    /// that version changed — so an auto-updating binary is followed without a
-    /// restart, at bounded subprocess cost on the `/settings` path. Never
-    /// persisted: the truth is on disk, so a restart just re-reads it.
-    harness_catalogue_cache:
-        Arc<tokio::sync::Mutex<HashMap<String, (Instant, harness_catalogue::CachedCatalogue)>>>,
+    /// version window, and a full `--help` re-probe only when that version
+    /// changed — so an auto-updating binary is followed without a restart, at
+    /// bounded subprocess cost on the `/settings` path. Never persisted: the truth
+    /// is on disk, so a restart just re-reads it.
+    harness_catalogue: Arc<pdo_harness::application::read_catalogue::CatalogueReader>,
     /// Serializes price syncs. Unlike `trigger_tick_lock`, which serializes
     /// because both triggers must land, a second concurrent price sync brings
     /// nothing — so take it with `try_lock` and answer **409** on failure. The
@@ -683,7 +670,7 @@ struct CreateRunRequest {
     /// states no choice, so `harness` above still decides. `Some(Profile |
     /// Custom)` wins outright at this tier and never merges with `harness`.
     #[serde(default)]
-    agent_choice: Option<crate::agent_choice::AgentChoice>,
+    agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
     /// The Run tier of the **skills** selection (#669, ADR-0062): ids (+ label)
     /// added to every node of this Run, on top of the instance and Projet tiers.
     /// Frozen into `RunStarted` at the create chokepoint (only when non-empty). A
@@ -899,7 +886,7 @@ struct PatchProjectRequest {
     /// `harness`. `null` clears it, falling through to the legacy `harness` field
     /// and then to the instance tier.
     #[serde(default, deserialize_with = "deserialize_double_option")]
-    agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    agent_choice: Option<Option<pdo_harness::agent_choice::AgentChoice>>,
     /// The Projet's skills selection (#669), replaced wholesale: absent leaves it,
     /// a list sets it, an empty list clears it (flat — the empty list IS the clear).
     #[serde(default)]
@@ -1859,7 +1846,7 @@ fn daemon_cli_response<T: serde::de::DeserializeOwned>(
 /// true by construction rather than by discipline.
 pub fn run_docs(action: DocsAction) -> Result<()> {
     let DocsAction::SupportTable { check, write, file } = action;
-    let block = harness_support::render();
+    let block = pdo_harness::support::render();
 
     if !check && !write {
         print!("{block}");
@@ -1870,7 +1857,7 @@ pub fn run_docs(action: DocsAction) -> Result<()> {
         .with_context(|| format!("failed to read {}", file.display()))?;
 
     if check {
-        return match harness_support::check(&document) {
+        return match pdo_harness::support::check(&document) {
             Ok(()) => {
                 eprintln!(
                     "ok: {} carries the generated harness support table.",
@@ -1882,7 +1869,7 @@ pub fn run_docs(action: DocsAction) -> Result<()> {
         };
     }
 
-    let updated = harness_support::splice(&document, &block)
+    let updated = pdo_harness::support::splice(&document, &block)
         .map_err(|why| anyhow::anyhow!("{}: {why}", file.display()))?;
     if updated == document {
         eprintln!("unchanged: {} was already current.", file.display());
@@ -2763,7 +2750,9 @@ pub async fn serve_with_config(
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            harness_catalogue: Arc::new(
+                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+            ),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: config.price_source_url,
             price_refresh_at_boot: config.price_refresh_at_boot,
@@ -3507,7 +3496,7 @@ struct CreateTriggerRequest {
     /// legacy `harness` field above; `Profile`/`Custom` is folded into the fired Run's
     /// explicit tier at fire time.
     #[serde(default)]
-    agent_choice: Option<crate::agent_choice::AgentChoice>,
+    agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
     /// The Run-tier skills every fired Run carries (#669, ADR-0062). Folded into
     /// the fired Run's `skills` at fire time, like `harness`.
     #[serde(default)]
@@ -3816,7 +3805,7 @@ async fn create_trigger(
         // rather than persist as a harness named "".
         harness: req.harness.filter(|s| !s.trim().is_empty()),
         // No normalisation needed: `None`/`Inherit`/blank payloads are already
-        // transparent inside `agent_choice::resolve`.
+        // transparent inside `pdo_harness::agent_choice::resolve`.
         agent_choice: req.agent_choice,
         // #669: the store normalises (trim, dedupe) and stores NULL for empty.
         skills: req.skills,
@@ -4013,7 +4002,7 @@ struct PatchTriggerRequest {
     /// Per-Trigger `AgentChoice`, double-wrapped like `harness`; present `null` clears
     /// back to inheriting the legacy `harness` field.
     #[serde(default, deserialize_with = "deserialize_double_option")]
-    agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    agent_choice: Option<Option<pdo_harness::agent_choice::AgentChoice>>,
     /// The Run-tier skills (#669), replaced wholesale: absent leaves them, a list
     /// sets them, an empty list clears them. Flat: the empty list IS the clear.
     #[serde(default)]
@@ -5600,11 +5589,11 @@ async fn stored_default_harness_models(
         .as_ref()
         .map(|c| c.default_harness_model.clone())
         .unwrap_or_default();
-    if !map.contains_key(harness_registry::CLAUDE) {
+    if !map.contains_key(pdo_harness::registry::CLAUDE) {
         if let Some(legacy) =
             tmux_session_manager::default_model_with(cfg.and_then(|c| c.default_model))
         {
-            map.insert(harness_registry::CLAUDE.to_string(), legacy);
+            map.insert(pdo_harness::registry::CLAUDE.to_string(), legacy);
         }
     }
     map
@@ -7564,7 +7553,7 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
     // `spec.effort`.
     let claude = value
         .get("harnesses")
-        .and_then(|h| h.get(harness_registry::CLAUDE));
+        .and_then(|h| h.get(pdo_harness::registry::CLAUDE));
     let claude_model = claude
         .and_then(|c| c.get("model"))
         .and_then(|v| v.as_str())
@@ -8658,7 +8647,7 @@ async fn parse_multipart_create_run(
     let mut name = None;
     let mut sandbox: Option<event_log::SandboxMode> = None;
     let mut harness: Option<String> = None;
-    let mut agent_choice: Option<crate::agent_choice::AgentChoice> = None;
+    let mut agent_choice: Option<pdo_harness::agent_choice::AgentChoice> = None;
     let mut skills: Vec<crate::skill_selection::SkillRef> = Vec::new();
     let mut auto_name: Option<bool> = None;
     let mut auto_fail: Option<bool> = None;
@@ -9551,12 +9540,12 @@ async fn create_run_inner(
     // choice with a non-blank payload, so a Run that states none lets `harness` above
     // decide the Run tier.
     let explicit_agent_choice = match &req.agent_choice {
-        Some(crate::agent_choice::AgentChoice::Custom { harness, .. })
+        Some(pdo_harness::agent_choice::AgentChoice::Custom { harness, .. })
             if !harness.trim().is_empty() =>
         {
             req.agent_choice.clone()
         }
-        Some(crate::agent_choice::AgentChoice::Profile { profile_id })
+        Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id })
             if !profile_id.trim().is_empty() =>
         {
             req.agent_choice.clone()
@@ -10110,7 +10099,7 @@ async fn spawn_manager_session(
         .map(|(_, state)| state);
     let config = instance_config::get(&state.db).await.ok();
     let profiles = agent_profile::snapshot(&state.db).await.unwrap_or_default();
-    let manager_agent = agent_choice::resolve_infra(
+    let manager_agent = pdo_harness::agent_choice::resolve_infra(
         run_state.as_ref().and_then(|run| run.agent_choice.as_ref()),
         run_state.as_ref().and_then(|run| run.harness.as_deref()),
         config.as_ref().and_then(|cfg| cfg.agent_choice.as_ref()),
@@ -10148,14 +10137,14 @@ async fn spawn_manager_session(
     let harness_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
-    let manager_harness = harness_registry::HarnessRegistry::load(&harness_home_root)
+    let manager_harness = pdo_harness::adapters::descriptor_file::load(&harness_home_root)
         .resolve(&manager_harness_name)
         .unwrap_or_else(|| {
             warn!(
                 "manager for run {run_id}: unknown harness '{manager_harness_name}' — \
                  launching the manager on the claude floor (the first node spawn fails fast)"
             );
-            harness_registry::claude()
+            pdo_harness::registry::claude()
         });
     // #708: the manager runs the Run's harness inside the container, so it fills that
     // harness's staging set (once per Run — the first node may not have spawned yet)
@@ -10229,8 +10218,8 @@ async fn spawn_manager_session(
 fn apply_manager_profile_pin(
     stored: Option<&str>,
     found: Result<Option<agent_profile::AgentProfile>, String>,
-    follow_run: agent_choice::ResolvedCombo,
-) -> (agent_choice::ResolvedCombo, Option<String>) {
+    follow_run: pdo_harness::agent_choice::ResolvedCombo,
+) -> (pdo_harness::agent_choice::ResolvedCombo, Option<String>) {
     let Some(pin) = stored else {
         return (follow_run, None);
     };
@@ -10413,121 +10402,13 @@ async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
     probe
 }
 
-/// How often a harness binary's **version** is re-checked behind a `/settings`
-/// fetch. Long enough that a burst of settings reads pays at most one `--version`
-/// subprocess per harness; short enough that an auto-update is noticed within the
-/// minute, with no restart.
-const CATALOGUE_VERSION_TTL: Duration = Duration::from_secs(60);
-
-/// Env var that overrides [`CATALOGUE_VERSION_TTL`], in milliseconds. An unparseable
-/// value is ignored — a typo must not disable the cache.
-pub const CATALOGUE_VERSION_TTL_MS_ENV: &str = "PDO_CATALOGUE_VERSION_TTL_MS";
-
-/// The effective version re-check window. Read per call, NOT cached in a
-/// `OnceLock`, so a test setting the var after boot still sees it.
-fn catalogue_version_ttl() -> Duration {
-    std::env::var(CATALOGUE_VERSION_TTL_MS_ENV)
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(CATALOGUE_VERSION_TTL)
-}
-
-/// Return `harness`'s offered catalogue (models + efforts + the version they were
-/// read from), from the cache when fresh, else by (re)probing `binary`
-/// (ADR-0053 §3). The freshness protocol, per harness:
-///
-/// 1. A cache entry younger than [`CATALOGUE_VERSION_TTL`] is returned as-is — a
-///    burst of `/settings` reads pays no subprocess at all.
-/// 2. Past the window, `--version` is re-read (off the runtime thread). If it
-///    matches the cached version, the catalogue is still current: restamp and
-///    return it, no `--help` run.
-/// 3. On a first miss or a changed version, the catalogue ladder is re-run (help,
-///    and every source the binary declares — the RPC session included, #798) and
-///    the new `{version, catalogue}` cached.
-///
-/// All subprocess reads run under `spawn_blocking` with the probe's own timeouts, so
-/// a wedged binary can never hang the settings response — it degrades to the last
-/// good catalogue (or an empty one), i.e. the free-text fallback.
-async fn catalogue_for(
-    state: &AppState,
-    harness: &str,
-    binary: &str,
-) -> harness_catalogue::CachedCatalogue {
-    let mut guard = state.harness_catalogue_cache.lock().await;
-    if let Some((at, cached)) = guard.get(harness) {
-        if at.elapsed() < catalogue_version_ttl() {
-            return cached.clone();
-        }
-    }
-
-    let bin = binary.to_string();
-    let version = tokio::task::spawn_blocking(move || tmux_session_manager::probe_version(&bin))
-        .await
-        .ok()
-        .flatten();
-
-    if let Some((_, cached)) = guard.get(harness) {
-        if cached.version == version {
-            let refreshed = cached.clone();
-            guard.insert(harness.to_string(), (Instant::now(), refreshed.clone()));
-            return refreshed;
-        }
-    }
-
-    let bin = binary.to_string();
-    let catalogue =
-        tokio::task::spawn_blocking(move || tmux_session_manager::probe_catalogue(&bin))
-            .await
-            .unwrap_or_default();
-    let cached = harness_catalogue::CachedCatalogue { version, catalogue };
-    guard.insert(harness.to_string(), (Instant::now(), cached.clone()));
-    cached
-}
-
-/// One harness's picker entry of `GET /settings → harness_descriptors.harnesses`
-/// (#586, #616, #705, #798). PURE — the probed facts in, the wire JSON out — so the
-/// shape is pinned by a test without a database or an installed binary.
-fn harness_catalogue_entry(
-    name: &str,
-    source: &str,
-    installed: bool,
-    cached: &harness_catalogue::CachedCatalogue,
-    has_effort: bool,
-) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "source": source,
-        "installed": installed,
-        "version": cached.version,
-        "models": cached.catalogue.models,
-        // #705: the context window a source published beside each id (`pi
-        // --list-models`), keyed by id — a picker hint, verbatim. Empty when no
-        // source names one.
-        "model_contexts": cached.catalogue.model_contexts,
-        // #798: the per-model effort table, keyed by id like `model_contexts`. A
-        // MISSING key is unknown — the client falls back to the global `efforts`
-        // axis; a PRESENT key (an empty vec included) is the model's known offer,
-        // verbatim from the binary's RPC report.
-        "model_efforts": cached.catalogue.model_efforts,
-        "efforts": cached.catalogue.efforts,
-        "has_effort": has_effort,
-    })
-}
-
 /// Probe every installed harness's catalogue once, populating the cache, so the
-/// first `/settings` fetch answers warm. A harness whose binary is absent is skipped
-/// — no probe, an empty offer, the free-text field.
+/// first `/settings` fetch answers warm.
 async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
-    let registry = match sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h) {
-        Some(home) => harness_registry::HarnessRegistry::load(&home),
-        None => harness_registry::HarnessRegistry::builtin(),
-    };
-    for listing in registry.listing() {
-        if harness_binary::binary_available(&listing.binary) {
-            let _ = catalogue_for(state, &listing.name, &listing.binary).await;
-        }
-    }
+    let home = sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h);
+    let registry = pdo_harness::adapters::descriptor_file::load_or_builtin(home.as_deref());
+    pdo_harness::application::harness_offers::warm_catalogues(&state.harness_catalogue, &registry)
+        .await;
 }
 
 /// Build the `GET /settings` view: per knob, the effective value, the winning tier,
@@ -10621,9 +10502,9 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // so the screen shows exactly what the resolver's `instance` tier will read.
     let dhm_stored = cfg.default_harness_model.clone();
     let mut dhm_effective = dhm_stored.clone();
-    if !dhm_effective.contains_key(harness_registry::CLAUDE) {
+    if !dhm_effective.contains_key(pdo_harness::registry::CLAUDE) {
         if let Some(m) = dm_effective.clone() {
-            dhm_effective.insert(harness_registry::CLAUDE.to_string(), m);
+            dhm_effective.insert(pdo_harness::registry::CLAUDE.to_string(), m);
         }
     }
 
@@ -10839,63 +10720,18 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
 
     // The disk descriptor tier (ADR-0045), same posture as `price_table` above: a
     // hand-edited descriptor file passes through NO validator, so the only honest
-    // place to say a descriptor is inert or refused is here. The path is ALWAYS
-    // reported so the user knows where to write — nothing is ever seeded.
-    //
-    // The registry is pure (name/source/binary); `binary_available` — the same probe
-    // the spawn seam runs — decides `installed` HERE, beside the environment, so the
-    // picker greys a harness that would only fail-fast at launch. An uninstalled
-    // harness carries an empty offer: the free-text fallback, a declared absence.
-    let registry = match &host_home_path {
-        Some(home) => harness_registry::HarnessRegistry::load(home),
-        None => harness_registry::HarnessRegistry::builtin(),
-    };
-    let mut harness_list = Vec::new();
-    for h in registry.listing() {
-        let installed = harness_binary::binary_available(&h.binary);
-        let cached = if installed {
-            catalogue_for(state, &h.name, &h.binary).await
-        } else {
-            harness_catalogue::CachedCatalogue::default()
-        };
-        // The served effort-axis fact: the binary enumerates effort stops, OR the
-        // launch template carries an `{effort}` hole — a harness that takes effort but
-        // prints no list still offers the axis. Served, so the client needs no
-        // hard-coded map.
-        let has_effort_hole = registry
-            .resolve(&h.name)
-            .map(|d| d.has_effort_hole())
-            .unwrap_or(false);
-        let has_effort = cached.catalogue.has_effort_axis() || has_effort_hole;
-        harness_list.push(harness_catalogue_entry(
-            &h.name,
-            h.source.as_str(),
-            installed,
-            &cached,
-            has_effort,
-        ));
-    }
-    let harness_descriptors_view = match &host_home_path {
-        Some(home) => serde_json::json!({
-            "path": harness_registry::HarnessRegistry::descriptors_path(home).to_string_lossy(),
-            "names": registry.names(),
-            "harnesses": harness_list,
-            "rejected": registry
-                .rejected()
-                .iter()
-                .map(|r| serde_json::json!({ "name": r.name, "why": r.why }))
-                .collect::<Vec<_>>(),
-            "reason": registry.diagnostic(),
-        }),
-        None => serde_json::json!({
-            "path": null,
-            "names": registry.names(),
-            "harnesses": harness_list,
-            "rejected": [],
-            "reason": "HOME is unset, so the descriptor file has no resolvable path — \
-                       only the harnesses compiled into the binary apply",
-        }),
-    };
+    // place to say a descriptor is inert or refused is here. The harness context
+    // builds the whole block: each harness's offer, the refusals, the path.
+    let registry =
+        pdo_harness::adapters::descriptor_file::load_or_builtin(host_home_path.as_deref());
+    let offers =
+        pdo_harness::application::harness_offers::list_offers(&state.harness_catalogue, &registry)
+            .await;
+    let harness_descriptors_view = pdo_harness::adapters::http::descriptors_view::descriptors_view(
+        host_home_path.as_deref(),
+        &registry,
+        &offers,
+    );
 
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
@@ -11456,7 +11292,7 @@ async fn put_settings(
             let home_root = sandbox_run::sandbox_home_roots(&state)
                 .map(|(home, _)| home)
                 .unwrap_or_default();
-            let registry = harness_registry::HarnessRegistry::load(&home_root);
+            let registry = pdo_harness::adapters::descriptor_file::load(&home_root);
             if registry.resolve(h).is_none() {
                 return bad(&format!(
                     "unknown default harness `{h}`: it resolves to no embedded or declared \
@@ -11612,7 +11448,7 @@ async fn get_agent_profile_referents(
         .ok()
         .and_then(|config| config.agent_choice)
         .is_some_and(|choice| {
-            matches!(choice, agent_choice::AgentChoice::Profile { profile_id } if profile_id == id)
+            matches!(choice, pdo_harness::agent_choice::AgentChoice::Profile { profile_id } if profile_id == id)
         });
 
     let projects = project_store::list(&state.db)
@@ -11622,7 +11458,7 @@ async fn get_agent_profile_referents(
         .filter(|project| {
             matches!(
                 project.agent_choice.as_ref(),
-                Some(agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
+                Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
             )
         })
         .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
@@ -11635,7 +11471,7 @@ async fn get_agent_profile_referents(
         .filter(|trigger| {
             matches!(
                 trigger.agent_choice.as_ref(),
-                Some(agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
+                Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
             )
         })
         .map(|trigger| {
@@ -11666,7 +11502,7 @@ async fn get_agent_profile_referents(
                 .filter(|node| {
                     matches!(
                         node.agent_choice.as_ref(),
-                        Some(agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
+                        Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
                     )
                 })
                 .map(|node| {
@@ -15259,7 +15095,7 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     fn transcript_tail(&self) -> Option<stale_detector::TranscriptTail> {
         // Dispatch to the resolved harness's own implementation: a data-declared
         // harness resolves `None` and no tail is read.
-        harness_probes::resolve_transcript(
+        pdo_harness::adapters::transcripts::resolve_transcript(
             self.harness,
             self.projects_root,
             self.working_dir,
@@ -15415,7 +15251,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             // dispatches on this name, so the sweep never reads another harness's
             // store with claude's parser.
             let node_harness = find_launch_harness(&events, node_id, *iter)
-                .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
+                .unwrap_or_else(|| pdo_harness::registry::CLAUDE.to_string());
 
             // The store ROOT is the resolved harness's own; the per-harness
             // `resolve_transcript` joins the right leaf.
@@ -15846,7 +15682,7 @@ pub(crate) async fn reattach_node_session(
         .unwrap_or_default();
     let descriptor = match launch_harness.as_deref() {
         Some(name) => {
-            match harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name) {
+            match pdo_harness::adapters::descriptor_file::load(&harness_home_root).resolve(name) {
                 Some(d) => d,
                 None => {
                     return ReattachOutcome::FrozenHarnessGone {
@@ -15855,7 +15691,7 @@ pub(crate) async fn reattach_node_session(
                 }
             }
         }
-        None => harness_registry::claude(),
+        None => pdo_harness::registry::claude(),
     };
     // A harness with no resume tail cannot be re-attached (ADR-0045).
     if !descriptor.can_resume() {
@@ -16491,7 +16327,7 @@ async fn spawn_merge_resolver(
     // with a warning.
     let config = instance_config::get(&state.db).await.ok();
     let profiles = agent_profile::snapshot(&state.db).await.unwrap_or_default();
-    let resolver_agent = agent_choice::resolve_infra(
+    let resolver_agent = pdo_harness::agent_choice::resolve_infra(
         run_agent_choice.as_ref(),
         run_harness.as_deref(),
         config.as_ref().and_then(|cfg| cfg.agent_choice.as_ref()),
@@ -16506,14 +16342,14 @@ async fn spawn_merge_resolver(
     let resolver_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
-    let resolver_harness = harness_registry::HarnessRegistry::load(&resolver_home_root)
+    let resolver_harness = pdo_harness::adapters::descriptor_file::load(&resolver_home_root)
         .resolve(&resolver_harness_name)
         .unwrap_or_else(|| {
             warn!(
                 "merge resolver for run {run_id}: unknown harness '{resolver_harness_name}' — \
                  launching on the claude floor"
             );
-            harness_registry::claude()
+            pdo_harness::registry::claude()
         });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
@@ -18128,7 +17964,7 @@ async fn force_spawn_node(
     let harness_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
-    let harness_registry = harness_registry::HarnessRegistry::load(&harness_home_root);
+    let harness_registry = pdo_harness::adapters::descriptor_file::load(&harness_home_root);
 
     let params = node_primitives::StartNodeParams {
         run_id,
@@ -19093,25 +18929,26 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
 
     // Infra harness — no Run to follow: instance default, else the `claude` floor.
     let default_harness = stored_default_harness(&state.db).await;
-    let harness_name = harness_resolver::resolve_infra_harness(None, default_harness.as_deref());
+    let harness_name =
+        pdo_harness::resolver::resolve_infra_harness(None, default_harness.as_deref());
     // Resolve against the DISK TIER, like the manager/resolver.
     let libassist_home_root = sandbox_run::sandbox_home_roots(&state)
         .map(|(home, _)| home)
         .unwrap_or_default();
-    let harness = harness_registry::HarnessRegistry::load(&libassist_home_root)
+    let harness = pdo_harness::adapters::descriptor_file::load(&libassist_home_root)
         .resolve(&harness_name)
         .unwrap_or_else(|| {
             warn!(
                 "library assistant: unknown harness '{harness_name}' — launching on the claude floor"
             );
-            harness_registry::claude()
+            pdo_harness::registry::claude()
         });
     // The per-message focus hook rides on `--settings`, a hole only the `claude`
     // launch template has. On another harness the token is dropped silently and the
     // primer's fetch-the-focus instruction becomes the only mechanism — say so once,
     // at spawn, rather than let it be discovered from an assistant guessing wrong.
     if !harness.can_inject_hooks()
-        || !harness_probes::settings_hole_takes_claude_file(&harness.name)
+        || !pdo_harness::probes::settings_hole_takes_claude_file(&harness.name)
     {
         warn!(
             "library assistant on harness '{}': its launch template has no {{settings}} hole \
@@ -23387,7 +23224,9 @@ mod tests {
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            harness_catalogue: Arc::new(
+                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+            ),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -23724,23 +23563,22 @@ mod tests {
         .await;
 
         let claude_dir =
-            home.join(".claude")
-                .join("projects")
-                .join(stale_detector::encode_working_dir(
+            home.join(".claude").join("projects").join(
+                pdo_harness::claude_transcript::encode_working_dir(
                     &worktree_ops::sub_worktree_path(&state.repo_root, run_ids[0], "worker", 1),
-                ));
+                ),
+            );
         std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
             claude_dir.join("claude-1.jsonl"),
             r#"{"type":"assistant","requestId":"r1","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
         )
         .unwrap();
-        let legacy_dir =
-            home.join(".claude")
-                .join("projects")
-                .join(stale_detector::encode_working_dir(
-                    &worktree_ops::worktree_dir_for_run(&state.repo_root, run_ids[2]),
-                ));
+        let legacy_dir = home.join(".claude").join("projects").join(
+            pdo_harness::claude_transcript::encode_working_dir(
+                &worktree_ops::worktree_dir_for_run(&state.repo_root, run_ids[2]),
+            ),
+        );
         std::fs::create_dir_all(&legacy_dir).unwrap();
         std::fs::write(
             legacy_dir.join("legacy.jsonl"),
@@ -24003,12 +23841,11 @@ mod tests {
                 serde_json::json!({}),
             )
             .await;
-            let dir =
-                home.join(".claude")
-                    .join("projects")
-                    .join(stale_detector::encode_working_dir(
-                        &worktree_ops::sub_worktree_path(&state.repo_root, run, "worker", 1),
-                    ));
+            let dir = home.join(".claude").join("projects").join(
+                pdo_harness::claude_transcript::encode_working_dir(
+                    &worktree_ops::sub_worktree_path(&state.repo_root, run, "worker", 1),
+                ),
+            );
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join(format!("{run}-s.jsonl")),
@@ -24434,12 +24271,11 @@ mod tests {
                 serde_json::json!({}),
             )
             .await;
-            let dir =
-                home.join(".claude")
-                    .join("projects")
-                    .join(stale_detector::encode_working_dir(
-                        &worktree_ops::sub_worktree_path(&state.repo_root, run, node, 1),
-                    ));
+            let dir = home.join(".claude").join("projects").join(
+                pdo_harness::claude_transcript::encode_working_dir(
+                    &worktree_ops::sub_worktree_path(&state.repo_root, run, node, 1),
+                ),
+            );
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join(format!("{run}-s.jsonl")),
@@ -24918,12 +24754,11 @@ mod tests {
                     serde_json::json!({}),
                 )
                 .await;
-                let dir =
-                    home.join(".claude")
-                        .join("projects")
-                        .join(stale_detector::encode_working_dir(
-                            &worktree_ops::sub_worktree_path(&state.repo_root, &run, node, 1),
-                        ));
+                let dir = home.join(".claude").join("projects").join(
+                    pdo_harness::claude_transcript::encode_working_dir(
+                        &worktree_ops::sub_worktree_path(&state.repo_root, &run, node, 1),
+                    ),
+                );
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::write(
                     dir.join(format!("{run}-s.jsonl")),
@@ -26127,7 +25962,7 @@ mod tests {
                                  iter: i64,
                                  session: &str,
                                  tokens: u64| {
-            let dir = claude_root.join(stale_detector::encode_working_dir(
+            let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
                 &worktree_ops::sub_worktree_path(&state.repo_root, run_id, node_id, iter),
             ));
             std::fs::create_dir_all(&dir).unwrap();
@@ -26151,7 +25986,7 @@ mod tests {
         // Merge resolver session left in the conflicting Node's own
         // iter-3 worktree, alongside (and excluded from) that Node's own
         // "claude-3b" session — resolved by exclusion, never by path alone.
-        let pm_project_dir = claude_root.join(stale_detector::encode_working_dir(
+        let pm_project_dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
             &worktree_ops::worktree_dir_for_run(&state.repo_root, "perf-r1"),
         ));
         std::fs::create_dir_all(&pm_project_dir).unwrap();
@@ -26569,7 +26404,7 @@ mod tests {
         // never be attributed, since the co-resident Node's own identity is
         // unknown.
         let claude_root = home.join(".claude").join("projects");
-        let pm_project_dir = claude_root.join(stale_detector::encode_working_dir(
+        let pm_project_dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
             &worktree_ops::worktree_dir_for_run(&state.repo_root, "perf-amb"),
         ));
         std::fs::create_dir_all(&pm_project_dir).unwrap();
@@ -26823,7 +26658,7 @@ mod tests {
         .await;
 
         let claude_root = home.join(".claude").join("projects");
-        let dir = claude_root.join(stale_detector::encode_working_dir(
+        let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
             &worktree_ops::sub_worktree_path(&state.repo_root, "cache-r1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -26965,7 +26800,7 @@ mod tests {
         .await;
 
         let claude_root = home.join(".claude").join("projects");
-        let dir = claude_root.join(stale_detector::encode_working_dir(
+        let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
             &worktree_ops::sub_worktree_path(&state.repo_root, "cache-i1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -27035,7 +26870,7 @@ mod tests {
             serde_json::json!({}),
         )
         .await;
-        let dir2 = claude_root.join(stale_detector::encode_working_dir(
+        let dir2 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
             &worktree_ops::sub_worktree_path(&state.repo_root, "cache-i2", "worker", 1),
         ));
         std::fs::create_dir_all(&dir2).unwrap();
@@ -27232,7 +27067,7 @@ mod tests {
         // --- claude transcripts: iter 1's main file (opus) + subagent file
         // (sonnet — its own bucket), iter 2's mute file (no model line).
         let claude_root = home.join(".claude").join("projects");
-        let dir1 = claude_root.join(stale_detector::encode_working_dir(
+        let dir1 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
             &worktree_ops::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir1).unwrap();
@@ -27249,7 +27084,7 @@ mod tests {
              {\"type\":\"user\",\"timestamp\":\"2026-08-01T09:15:00Z\"}\n",
         )
         .unwrap();
-        let dir2 = claude_root.join(stale_detector::encode_working_dir(
+        let dir2 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
             &worktree_ops::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 2),
         ));
         std::fs::create_dir_all(&dir2).unwrap();
@@ -27618,7 +27453,7 @@ mod tests {
             )
         };
         let claude_dir = |iter: i64| {
-            let dir = claude_root.join(stale_detector::encode_working_dir(
+            let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
                 &worktree_ops::sub_worktree_path(&state.repo_root, run, "coder", iter),
             ));
             std::fs::create_dir_all(&dir).unwrap();
@@ -27678,13 +27513,14 @@ mod tests {
         .unwrap();
 
         // --- pi: launch + two human turns — count 2.
-        let pi_dir =
-            home.join(".pi")
-                .join("agent")
-                .join("sessions")
-                .join(pi_session::session_dir_name(
-                    &worktree_ops::sub_worktree_path(&state.repo_root, run, "pi-node", 1),
-                ));
+        let pi_dir = home.join(".pi").join("agent").join("sessions").join(
+            pdo_harness::pi_session::session_dir_name(&worktree_ops::sub_worktree_path(
+                &state.repo_root,
+                run,
+                "pi-node",
+                1,
+            )),
+        );
         std::fs::create_dir_all(&pi_dir).unwrap();
         std::fs::write(
             pi_dir.join("2026-08-01T09-18-00-000Z_pi1.jsonl"),
@@ -28601,7 +28437,9 @@ mod tests {
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            harness_catalogue: Arc::new(
+                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+            ),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -30443,7 +30281,9 @@ mod tests {
         let projects = home.path().join(".claude/projects");
         let run_id = "node-cost";
         let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
-        let project = projects.join(run_cost::cc_project_dirname(&working_dir));
+        let project = projects.join(pdo_harness::claude_transcript::cc_project_dirname(
+            &working_dir,
+        ));
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
             project.join("sid.jsonl"),
@@ -34591,7 +34431,9 @@ mod tests {
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            harness_catalogue: Arc::new(
+                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+            ),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -41301,7 +41143,9 @@ edges: []
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            harness_catalogue: Arc::new(
+                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+            ),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -41497,7 +41341,9 @@ edges: []
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            harness_catalogue: Arc::new(
+                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+            ),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -47885,7 +47731,7 @@ edges:
 
     #[test]
     fn no_pin_leaves_the_follow_the_run_combo_untouched() {
-        let follow_run = agent_choice::ResolvedCombo {
+        let follow_run = pdo_harness::agent_choice::ResolvedCombo {
             harness: "codex".into(),
             model: Some("gpt-5".into()),
             effort: Some("high".into()),
@@ -47899,7 +47745,7 @@ edges:
     fn a_resolved_pin_fully_replaces_the_follow_the_run_combo() {
         // Strong pin (design §2.2, decision #3): harness, model AND effort come
         // from the profile — the Run tier never leaks through.
-        let follow_run = agent_choice::ResolvedCombo {
+        let follow_run = pdo_harness::agent_choice::ResolvedCombo {
             harness: "codex".into(),
             model: Some("gpt-5".into()),
             effort: Some("high".into()),
@@ -47926,7 +47772,7 @@ edges:
         // #432 tombstone discipline: the profile was deleted after the pin was
         // stored — the spawn falls back to « Follow the Run », loudly, and the
         // stored value is never rewritten (nothing here persists anything).
-        let follow_run = agent_choice::ResolvedCombo {
+        let follow_run = pdo_harness::agent_choice::ResolvedCombo {
             harness: "codex".into(),
             model: None,
             effort: None,
@@ -47941,7 +47787,7 @@ edges:
 
     #[test]
     fn a_pin_that_cannot_be_looked_up_falls_back_with_a_warning() {
-        let follow_run = agent_choice::ResolvedCombo {
+        let follow_run = pdo_harness::agent_choice::ResolvedCombo {
             harness: "claude".into(),
             model: None,
             effort: None,
@@ -49187,71 +49033,5 @@ edges:
         assert!(dir.join("foo-bar.yaml").exists());
         let content = std::fs::read_to_string(dir.join("foo-bar.yaml")).unwrap();
         assert!(content.contains("name: Foo Bar"));
-    }
-
-    /// #798: the picker entry serves the per-model effort table beside
-    /// `model_contexts`, verbatim — and the semantics it carries are the wire
-    /// contract: an absent key would be unknown (global fallback), a present one
-    /// (here, `[off]` included) is the model's known offer.
-    #[test]
-    fn harness_catalogue_entry_serves_the_per_model_effort_table() {
-        let mut catalogue = harness_catalogue::Catalogue {
-            models: vec![
-                "openrouter/openai/gpt-5.4".to_string(),
-                "openrouter/stealth/union-alpha".to_string(),
-            ],
-            efforts: vec![
-                "off".to_string(),
-                "minimal".to_string(),
-                "low".to_string(),
-                "medium".to_string(),
-                "high".to_string(),
-                "xhigh".to_string(),
-                "max".to_string(),
-            ],
-            ..Default::default()
-        };
-        catalogue
-            .model_contexts
-            .insert("openrouter/openai/gpt-5.4".to_string(), "400K".to_string());
-        catalogue.model_efforts.insert(
-            "openrouter/openai/gpt-5.4".to_string(),
-            vec![
-                "off".to_string(),
-                "low".to_string(),
-                "medium".to_string(),
-                "high".to_string(),
-                "xhigh".to_string(),
-            ],
-        );
-        catalogue.model_efforts.insert(
-            "openrouter/stealth/union-alpha".to_string(),
-            vec!["off".to_string()],
-        );
-        let entry = harness_catalogue_entry(
-            "pi",
-            "builtin",
-            true,
-            &harness_catalogue::CachedCatalogue {
-                version: Some("pi 0.85.1".to_string()),
-                catalogue,
-            },
-            true,
-        );
-
-        assert_eq!(entry["name"], "pi");
-        assert_eq!(entry["version"], "pi 0.85.1");
-        // The exact levels the binary reported, beside the context window, keyed
-        // by the same ids as `models`.
-        assert_eq!(
-            entry["model_efforts"]["openrouter/openai/gpt-5.4"],
-            serde_json::json!(["off", "low", "medium", "high", "xhigh"])
-        );
-        assert_eq!(
-            entry["model_efforts"]["openrouter/stealth/union-alpha"],
-            serde_json::json!(["off"])
-        );
-        assert_eq!(entry["model_contexts"]["openrouter/openai/gpt-5.4"], "400K");
-        assert_eq!(entry["efforts"].as_array().map(Vec::len), Some(7));
     }
 }

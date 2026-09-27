@@ -125,7 +125,7 @@ pub(crate) struct InstanceConfig {
     /// Same `0`-not-`NULL` discipline as [`Self::default_auto_name`].
     pub review_agent_can_resolve: Option<i64>,
     /// The Instance tier of the agentic-profile union (#563, ADR-0057) — the
-    /// **coarsest** tier `agent_choice::resolve` consults, just above the
+    /// **coarsest** tier `pdo_harness::agent_choice::resolve` consults, just above the
     /// reserved Default profile floor. `None` (unset) preserves the pre-#563
     /// legacy precedence exactly: [`Self::default_harness`] /
     /// [`Self::default_harness_model`] still apply. `Some(Profile | Custom)`
@@ -133,7 +133,7 @@ pub(crate) struct InstanceConfig {
     /// JSON object in a nullable TEXT column, same idiom as
     /// [`Self::default_harness_model`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    pub agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
     /// The Instance tier of the **skills** selection (#669, ADR-0062): the
     /// baseline every node of every Run receives, unioned with the Projet, Run
     /// and Node tiers by `skill_selection::resolve`. Stored as a JSON list in a
@@ -157,7 +157,7 @@ pub(crate) struct InstanceConfig {
     pub manager_enabled: Option<i64>,
     /// Stored **agent-profile name** the manager is pinned to, or `None` when
     /// unset (« Follow the Run »): the manager mirrors the Run's harness
-    /// (`Run → instance → floor` via `agent_choice::resolve_infra`) and lands on
+    /// (`Run → instance → floor` via `pdo_harness::agent_choice::resolve_infra`) and lands on
     /// the default agent profile for model/effort. A stored name **pins** the
     /// manager to that profile's harness · model · effort, overriding the Run
     /// tier — the Run tier always resolves, so a pin that merely replaced the
@@ -240,7 +240,7 @@ pub(crate) struct UpdateInstanceConfig {
     /// Double-`Option`, mirroring [`crate::trigger_store::UpdateTrigger::harness`]
     /// — this column, unlike the set-only numeric knobs, needs a genuine "clear"
     /// path back to legacy precedence.
-    pub agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    pub agent_choice: Option<Option<pdo_harness::agent_choice::AgentChoice>>,
     /// Replace the Instance tier's skills selection wholesale (#669): `Some(list)`
     /// stores it (an empty list clears to `NULL`); `None` leaves it untouched.
     /// A flat `Option<Vec>` rather than a double-`Option`: an empty selection IS
@@ -1129,7 +1129,7 @@ mod tests {
         let db = test_db().await;
         assert_eq!(get(&db).await.unwrap().agent_choice, None);
 
-        let choice = crate::agent_choice::AgentChoice::Profile {
+        let choice = pdo_harness::agent_choice::AgentChoice::Profile {
             profile_id: "reviewer".to_string(),
         };
         let updated = update(
@@ -1172,7 +1172,7 @@ mod tests {
         .await
         .unwrap();
 
-        let choice = crate::agent_choice::AgentChoice::Custom {
+        let choice = pdo_harness::agent_choice::AgentChoice::Custom {
             harness: "opencode".to_string(),
             model: Some("gpt-5".to_string()),
             effort: Some("high".to_string()),
@@ -1234,7 +1234,7 @@ mod tests {
         assert_eq!(cfg.session_cap, Some(7), "pre-existing knob survives");
         assert_eq!(cfg.agent_choice, None, "new column defaults to NULL");
 
-        let choice = crate::agent_choice::AgentChoice::Profile {
+        let choice = pdo_harness::agent_choice::AgentChoice::Profile {
             profile_id: "reviewer".to_string(),
         };
         update(

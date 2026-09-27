@@ -153,12 +153,12 @@ struct NodeProjection<'a> {
     pin_harness: Option<&'a str>,
     /// Semantic (#550, ADR-0046), replacing the flat `model:`/`effort:` of
     /// #296/#424. A `BTreeMap` so the canonical form is key-ordered.
-    harnesses: &'a std::collections::BTreeMap<String, crate::harness_resolver::HarnessEntry>,
+    harnesses: &'a std::collections::BTreeMap<String, pdo_harness::resolver::HarnessEntry>,
     /// Semantic (#563, ADR-0057), like `pin_harness`/`harnesses` above.
     /// `skip_serializing_if` keeps a pre-#563 pipeline byte-identical to its old
     /// content hash — the same discipline `auto_fail` below uses.
     #[serde(skip_serializing_if = "Option::is_none")]
-    agent_choice: Option<&'a crate::agent_choice::AgentChoice>,
+    agent_choice: Option<&'a pdo_harness::agent_choice::AgentChoice>,
     /// Semantic (#669, ADR-0062): the skills a node carries change what its
     /// NodeRun works with. `skip_serializing_if` keeps a node that selects none
     /// byte-identical to its pre-#669 content hash.

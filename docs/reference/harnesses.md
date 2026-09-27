@@ -8,7 +8,7 @@ capability written harness by harness, and the table below says which one has wh
 ## Support table
 
 <!-- support-table:begin -->
-<!-- Generated from crates/pdo-daemon/src/harness_probes.rs. Do not edit by hand: run `make support-table`. `make check` fails if this block has drifted. -->
+<!-- Generated from crates/pdo-harness/src/domain/probes/. Do not edit by hand: run `make support-table`. `make check` fails if this block has drifted. -->
 
 PDO can launch, attach, resume, and complete nodes with every built-in harness.
 

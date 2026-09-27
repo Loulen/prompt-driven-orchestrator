@@ -9,7 +9,7 @@ import type { PipelineDef } from "../../shared/generated/PipelineDef";
 /**
  * A node as the editor holds it: the daemon's `NodeDef`, plus the flat
  * `model`/`effort` the pickers edit. They are folded out of `harnesses` on load
- * and merged back into it on save (`lib/harness.ts`); the daemon never sees
+ * and merged back into it on save (`harness/model/nodeHarness.ts`); the daemon never sees
  * them. A `name` the user cleared is `null` here and falls back to the node's id
  * on save (`lib/serializePipeline.ts`): the daemon always receives a name.
  */

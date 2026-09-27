@@ -13,7 +13,7 @@
 //! outer tier selected (CONTEXT.md: « aucun tier ne retire un skill hérité »).
 //!
 //! [`resolve`] is a function without side effects, called from the same spawn
-//! seam as `agent_choice::resolve` (`node_spawn`), against a snapshot of the
+//! seam as `pdo_harness::agent_choice::resolve` (`node_spawn`), against a snapshot of the
 //! bank's `id → name` map taken once per spawn. Identity is the **id**: the
 //! `name` a tier stores is a label written beside it for a readable document and
 //! is re-read from the bank at resolution (a rename never breaks a selection,

@@ -1,10 +1,10 @@
 import { useEditStore } from "../stores/editStore";
 import { SectionHead, Field } from "./InspectorPrimitives";
-import ModelPicker from "./ModelPicker";
-import EffortPicker from "./EffortPicker";
-import HarnessSelect from "./HarnessSelect";
-import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
-import { findHarnessOption, effortOffer, resolveEditorHarness } from "../lib/harness";
+import ModelPicker from "../harness/components/ModelPicker";
+import EffortPicker from "../harness/components/EffortPicker";
+import HarnessSelect from "../harness/components/HarnessSelect";
+import { useHarnessCatalog } from "../harness/store/useHarnessCatalog";
+import { findHarnessOption, effortOffer, resolveEditorHarness } from "../harness/model/catalog";
 
 export default function MergeInspector() {
   const openTabs = useEditStore((s) => s.openTabs);

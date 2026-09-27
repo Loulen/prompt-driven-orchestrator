@@ -1,0 +1,23 @@
+[package]
+name = "pdo-harness"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's harness context: descriptors, argv, per-harness capabilities, the offered catalogue, the model and effort resolution"
+publish = false
+
+[dependencies]
+pdo-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+filetime = "0.2"
+pretty_assertions.workspace = true
+tempfile.workspace = true

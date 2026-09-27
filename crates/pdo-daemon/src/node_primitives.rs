@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use pdo_harness::{adapters::binary_path, registry, resolver};
 use serde::Serialize;
 
 use crate::event_log::{self, EventKind, NodeStatus};
 use crate::pipeline::{self, PipelineDef};
 use crate::worktree_ops::{ensure_sub_worktree, sub_worktree_branch, sub_worktree_path};
-use crate::{blackboard, harness_registry, harness_resolver, tmux_session_manager};
+use crate::{blackboard, tmux_session_manager};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,7 +57,7 @@ pub(crate) struct StartNodeParams<'a> {
     /// The harness registry to resolve the winning harness name against. `Some`
     /// honours the **disk tier**, so a force-spawn reaches a user-declared harness
     /// exactly like the scheduler does; `None` is the embedded floor only.
-    pub harness_registry: Option<&'a harness_registry::HarnessRegistry>,
+    pub harness_registry: Option<&'a registry::HarnessRegistry>,
     /// Host `$HOME` for a sandboxed Run (#708): the root under which the resolved
     /// harness's staging set is filled at this spawn, mirroring `spawn_node`. `None`
     /// on the host path and when the daemon cannot resolve `$HOME` — the set is then
@@ -97,7 +98,7 @@ enum StartNodeTail {
     Agent {
         /// The resolved harness descriptor. Boxed so the wide descriptor does not
         /// bloat every `StartNodeTail` (`clippy::large_enum_variant`).
-        harness: Box<harness_registry::HarnessDescriptor>,
+        harness: Box<registry::HarnessDescriptor>,
         model: Option<String>,
         effort: Option<String>,
         /// The pinned Claude Code session id. `None` for a script node.
@@ -414,12 +415,12 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         // Back-compat fold, mirroring `stored_default_harness_models`: keep it here
         // so this primitive stays self-contained given its inputs.
         let mut default_models = params.default_harness_models.clone();
-        if !default_models.contains_key(harness_registry::CLAUDE) {
+        if !default_models.contains_key(registry::CLAUDE) {
             if let Some(m) = params.default_model.as_deref().filter(|s| !s.is_empty()) {
-                default_models.insert(harness_registry::CLAUDE.to_string(), m.to_string());
+                default_models.insert(registry::CLAUDE.to_string(), m.to_string());
             }
         }
-        let tiers = harness_resolver::HarnessTiers {
+        let tiers = resolver::HarnessTiers {
             node_pin: node.pin_harness.as_deref(),
             // The Run tier: the harness frozen in this Run's `RunStarted`.
             run: params.run_state.harness.as_deref(),
@@ -427,11 +428,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             project: params.project_harness.as_deref().filter(|s| !s.is_empty()),
             instance_default: params.default_harness.as_deref(),
         };
-        Some(harness_resolver::resolve(
-            &tiers,
-            &node.harnesses,
-            &default_models,
-        ))
+        Some(resolver::resolve(&tiers, &node.harnesses, &default_models))
     };
     let harness_descriptor = match &resolved_harness {
         None => None,
@@ -440,7 +437,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         Some(r) => {
             let resolved = match params.harness_registry {
                 Some(reg) => reg.resolve(&r.harness),
-                None => harness_registry::resolve(&r.harness),
+                None => registry::resolve(&r.harness),
             };
             match resolved {
                 Some(d) => Some(d),
@@ -461,8 +458,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     };
     // A missing harness binary is a spawn that cannot happen: reject, never a 2xx.
     if let Some(d) = &harness_descriptor {
-        if params.tmux_cmd_override.is_none() && !crate::harness_binary::binary_available(&d.binary)
-        {
+        if params.tmux_cmd_override.is_none() && !binary_path::binary_available(&d.binary) {
             return StartNodeResult {
                 outcome: PrimitiveOutcome::Rejected {
                     reason: format!(
@@ -473,7 +469,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
                         params.node_id,
                         d.name,
                         d.binary,
-                        crate::harness_binary::harness_probe_path()
+                        binary_path::harness_probe_path()
                     ),
                 },
                 events: vec![],

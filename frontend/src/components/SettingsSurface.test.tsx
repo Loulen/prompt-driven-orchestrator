@@ -65,12 +65,6 @@ vi.mock("../api", () => ({
   fetchAgentProfileReferents: vi.fn(),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  // #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
-  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
-  applyUpdate: vi.fn(),
-  fetchUpdateAttemptLog: (...args: unknown[]) =>
-    fetchUpdateAttemptLogMock(...args),
-  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   // #432: same Proxy trap as `browseFs` above — a missing key here throws the moment the
   // staging-profile panel mounts, not at import.
   fetchSandboxProfiles: (...args: unknown[]) =>
@@ -105,6 +99,14 @@ vi.mock("../api", () => ({
     status?: number;
     body?: unknown;
   },
+}));
+// #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
+vi.mock("../platform/api/update", () => ({
+  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
+  applyUpdate: vi.fn(),
+  fetchUpdateAttemptLog: (...args: unknown[]) =>
+    fetchUpdateAttemptLogMock(...args),
+  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
 }));
 
 vi.mock("../workspace/api/browse", async (importOriginal) => ({

@@ -61,14 +61,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
-use crate::harness_probes::{AutonomyFixup, StagingSet};
+use pdo_harness::probes::{AutonomyFixup, StagingSet};
 
 /// Baseline de managed settings poussée par l'organisation, cachée par Claude Code
 /// dans `~/.claude/`. Garantie G2 : recopiée dans les **deux** modes, jamais via
 /// le profil. Sans elle, la session bute sur le dialogue « managed settings require
 /// approval » (le consentement est comparé au contenu de ce fichier) et un Run
 /// autonome reste planté. Depuis ADR-0063 le chemin runtime est une **entrée du
-/// staging set de `claude`** ([`crate::harness_probes::CLAUDE_STAGING_SET`]) ; le
+/// staging set de `claude`** ([`pdo_harness::probes::CLAUDE_STAGING_SET`]) ; le
 /// nom court ne sert plus qu'aux fixtures de test, qui le pinnent contre le set.
 #[cfg(test)]
 const REMOTE_SETTINGS_FILE: &str = "remote-settings.json";
@@ -80,7 +80,7 @@ const REMOTE_SETTINGS_FILE: &str = "remote-settings.json";
 const CLAUDE_HOME_REL: &str = ".claude";
 
 /// Le `settings.json` du home stagé — porteur de la garantie G3
-/// ([`crate::harness_probes::AutonomyFixup::ClaudeBypassPermissions`]).
+/// ([`pdo_harness::probes::AutonomyFixup::ClaudeBypassPermissions`]).
 const SETTINGS_FILE: &str = "settings.json";
 
 /// Clé top-level qui désarme le prompt de confirmation du
@@ -250,7 +250,7 @@ pub(crate) fn prepare(
 /// avant le `docker create` évite le répertoire root-owned de la règle M1 de
 /// [`extra_mounts`]).
 pub(crate) fn ensure_mount_anchors(sandbox_root: &Path, run_id: &str) -> Result<()> {
-    for (harness, set) in crate::harness_probes::staging_sets() {
+    for (harness, set) in pdo_harness::probes::staging_sets() {
         // `claude`'s `.claude` home is the fixed `claude-home` mount, seeded whole by
         // the profile — it needs no separate anchor. `landing(".claude")` classifies
         // bare `.claude` as a HomeExtra (only `.claude/` is stripped), so guard on the
@@ -290,7 +290,7 @@ pub(crate) fn harness_home_mounts(
     host_home: &Path,
 ) -> Vec<StagedMount> {
     use crate::sandbox_profile::Landing;
-    crate::harness_probes::staging_sets()
+    pdo_harness::probes::staging_sets()
         .into_iter()
         .filter(|(_, set)| set.home_root != CLAUDE_HOME_REL)
         .filter_map(
@@ -373,7 +373,7 @@ pub(crate) fn fill_staging_set(
     harness: &str,
     trusted_root: Option<&Path>,
 ) -> Result<StagingFill> {
-    let Some(set) = crate::harness_probes::probes_for(harness).and_then(|p| p.staging_set()) else {
+    let Some(set) = pdo_harness::probes::probes_for(harness).and_then(|p| p.staging_set()) else {
         return Ok(StagingFill::NoSet);
     };
     let marker = staging_set_marker(sandbox_root, run_id, harness);
@@ -672,7 +672,7 @@ fn apply_staging_set(
 }
 
 /// Récupère les transcripts (`**/*.jsonl`) de **chaque puits déclaré par un staging
-/// set** ([`crate::harness_probes::staging_sets`] ; `claude` : `.claude/projects`,
+/// set** ([`pdo_harness::probes::staging_sets`] ; `claude` : `.claude/projects`,
 /// `pi` : `.pi/agent/sessions`) du staging vers `<home_root>/<puits>/`,
 /// **récursivement** (transcripts de sessions *et* de sous-agents
 /// `<uuid>/subagents/*.jsonl`), sous le même dirname encodé — pour `pi`, le nom du
@@ -689,7 +689,7 @@ fn apply_staging_set(
 /// l'appelant (la transition terminale du Run ne doit pas dépendre de ce merge).
 /// `projects/` staging absent (run sans session) = no-op propre.
 pub(crate) fn merge_back(home_root: &Path, sandbox_root: &Path, run_id: &str) -> Result<()> {
-    for (_, set) in crate::harness_probes::staging_sets() {
+    for (_, set) in pdo_harness::probes::staging_sets() {
         for rel in set.transcripts {
             let src = staged_path(sandbox_root, run_id, rel);
             let dest = home_root.join(rel);
@@ -1061,14 +1061,14 @@ mod tests {
             home_root,
             sandbox_root,
             run_id,
-            crate::harness_registry::CLAUDE,
+            pdo_harness::registry::CLAUDE,
             trusted_root,
         )?;
         Ok(staging)
     }
     use std::os::unix::fs::PermissionsExt;
 
-    // Un dirname encodé réaliste (cf. `stale_detector::encode_working_dir`) —
+    // Un dirname encodé réaliste (cf. `pdo_harness::claude_transcript::encode_working_dir`) —
     // merge_back le copie VERBATIM (aucun ré-encodage, cf. bug #373).
     const ENC: &str = "-home-u--pdo-runs-X-worktree";
     const UUID: &str = "0f1e2d3c-aaaa-bbbb-cccc-ddddeeeeffff";

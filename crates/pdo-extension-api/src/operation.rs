@@ -58,6 +58,8 @@ pub enum ResourceKind {
     Repository,
     Session,
     Update,
+    /// The daemon's OS service unit (`pdo service install` / `uninstall`).
+    Service,
 }
 
 /// What an [`Operation`] does to its resource.

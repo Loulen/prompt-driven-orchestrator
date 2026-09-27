@@ -3,16 +3,12 @@
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.
 crates/pdo-daemon/src/event_log.rs 3453
-crates/pdo-daemon/src/harness_catalogue.rs 894
-crates/pdo-daemon/src/harness_probes.rs 1366
-crates/pdo-daemon/src/harness_registry.rs 786
 crates/pdo-daemon/src/instance_config.rs 910
-crates/pdo-daemon/src/lib.rs 22403
+crates/pdo-daemon/src/lib.rs 20594
 crates/pdo-daemon/src/loop_region.rs 501
 crates/pdo-daemon/src/node_io_resolver.rs 436
-crates/pdo-daemon/src/node_primitives.rs 914
-crates/pdo-daemon/src/node_spawn.rs 1580
-crates/pdo-daemon/src/pi_session.rs 517
+crates/pdo-daemon/src/node_primitives.rs 910
+crates/pdo-daemon/src/node_spawn.rs 1577
 crates/pdo-daemon/src/pipeline.rs 1458
 crates/pdo-daemon/src/pipeline_migrator.rs 1626
 crates/pdo-daemon/src/pipeline_semantics.rs 477
@@ -23,7 +19,7 @@ crates/pdo-daemon/src/pty_bridge.rs 402
 crates/pdo-daemon/src/review_comments.rs 564
 crates/pdo-daemon/src/run_advance.rs 784
 crates/pdo-daemon/src/run_command.rs 2563
-crates/pdo-daemon/src/run_cost.rs 1435
+crates/pdo-daemon/src/run_cost.rs 1426
 crates/pdo-daemon/src/run_refs.rs 434
 crates/pdo-daemon/src/sandbox_container.rs 857
 crates/pdo-daemon/src/sandbox_image.rs 822
@@ -34,18 +30,16 @@ crates/pdo-daemon/src/scheduler.rs 1547
 crates/pdo-daemon/src/skill_bank.rs 1806
 crates/pdo-daemon/src/skill_delivery.rs 429
 crates/pdo-daemon/src/skill_import.rs 1417
-crates/pdo-daemon/src/stale_detector.rs 872
+crates/pdo-daemon/src/stale_detector.rs 599
 crates/pdo-daemon/src/stats.rs 1945
 crates/pdo-daemon/src/stats_absorption.rs 1799
 crates/pdo-daemon/src/stats_performance.rs 2386
 crates/pdo-daemon/src/structured_diff.rs 671
-crates/pdo-daemon/src/tmux_session_manager.rs 2314
+crates/pdo-daemon/src/tmux_session_manager.rs 1914
 crates/pdo-daemon/src/transition_guard.rs 469
 crates/pdo-daemon/src/trigger_store.rs 806
-crates/pdo-daemon/src/update_check.rs 624
-crates/pdo-daemon/src/update_executor.rs 434
 crates/pdo-daemon/src/workflow_importer.rs 1602
-frontend/src/api.ts 1952
+frontend/src/api.ts 1909
 frontend/src/app/App.tsx 1289
 frontend/src/components/DiffTab.tsx 747
 frontend/src/components/EdgeDetailPanel.tsx 777
@@ -58,7 +52,7 @@ frontend/src/components/NodeInspector.tsx 958
 frontend/src/components/OrthogonalEdge.tsx 577
 frontend/src/components/PasteSkillModal.tsx 799
 frontend/src/components/PipelineInfoPanel.tsx 1155
-frontend/src/components/SettingsSurface.tsx 2482
+frontend/src/components/SettingsSurface.tsx 2116
 frontend/src/components/SkillBankPanel.tsx 1729
 frontend/src/components/SkillFilesTab.tsx 438
 frontend/src/components/SkillTree.tsx 414

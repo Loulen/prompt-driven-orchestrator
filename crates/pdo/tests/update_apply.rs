@@ -23,7 +23,7 @@
 //!      apply; the fixture finishes on its own and its late line lands in the log.
 
 use crate::common::TestDaemon;
-use pdo_daemon::update_check::{InstallMethod, Supervision};
+use pdo_platform::domain::install::{InstallMethod, Supervision};
 use std::path::Path;
 use std::time::{Duration, Instant};
 

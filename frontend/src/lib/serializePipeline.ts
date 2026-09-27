@@ -26,7 +26,7 @@ import type { PortDef } from "../shared/generated/PortDef";
 import type { PortSide } from "../shared/generated/PortSide";
 import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
-import { foldNodeIntoHarnesses } from "./harness";
+import { foldNodeIntoHarnesses } from "../harness/model/nodeHarness";
 import { nodeIsolation } from "./nodeIsolation";
 import { hasProvisioningRules } from "../workspace/model/provisioning";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";

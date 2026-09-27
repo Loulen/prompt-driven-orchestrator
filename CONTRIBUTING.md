@@ -105,7 +105,7 @@ migration gives it a DTO.
 ### Harness support table
 
 The table in [docs/reference/harnesses.md](docs/reference/harnesses.md) is generated from
-`crates/pdo-daemon/src/harness_probes.rs`. Never edit the block by hand: run
+`crates/pdo-harness/src/domain/probes/`. Never edit the block by hand: run
 `make support-table` after adding a harness, adding a capability, or moving a "last validated
 version". `make check` fails if the committed block has drifted from the code.
 

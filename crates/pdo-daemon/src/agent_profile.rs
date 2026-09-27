@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use ts_rs::TS;
 
-use crate::agent_choice::ResolvedCombo;
+use pdo_harness::agent_choice::ResolvedCombo;
 
 /// The reserved id of the instance's floor profile (ADR-0057 ¶3). Distinct from
 /// its `name` (`Default`), which is editable — only the id is fixed forever, so
@@ -148,7 +148,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         .bind(DEFAULT_PROFILE_ID)
         .bind(DEFAULT_PROFILE_NAME)
-        .bind(crate::harness_registry::CLAUDE)
+        .bind(pdo_harness::registry::CLAUDE)
         .bind(&now)
         .bind(&now)
         .execute(db)
@@ -209,7 +209,7 @@ pub(crate) async fn get(db: &SqlitePool, id: &str) -> Result<Option<AgentProfile
 }
 
 /// The atomic snapshot the spawn seam (and the pure resolver in
-/// [`crate::agent_choice`]) reads: every profile's `id → combo`, in ONE query —
+/// [`pdo_harness::agent_choice`]) reads: every profile's `id → combo`, in ONE query —
 /// so a resolution walking Node → Run → Projet → instance → Default never mixes
 /// two revisions of the same profile, and never sees a profile renamed or edited
 /// mid-walk (ADR-0057 ¶4).
@@ -396,7 +396,7 @@ mod tests {
         let d = &all[0];
         assert_eq!(d.id, DEFAULT_PROFILE_ID);
         assert_eq!(d.name, DEFAULT_PROFILE_NAME);
-        assert_eq!(d.harness, crate::harness_registry::CLAUDE);
+        assert_eq!(d.harness, pdo_harness::registry::CLAUDE);
         assert_eq!(d.model, None);
         assert_eq!(d.effort, None);
     }
@@ -406,7 +406,7 @@ mod tests {
         // AC10: Default toujours disponible dès l'instanciation.
         let db = mem_db().await;
         let d = get(&db, DEFAULT_PROFILE_ID).await.unwrap().unwrap();
-        assert_eq!(d.combo().harness, crate::harness_registry::CLAUDE);
+        assert_eq!(d.combo().harness, pdo_harness::registry::CLAUDE);
     }
 
     #[tokio::test]
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(snap.len(), 3, "Default + Alpha + Bravo");
         assert_eq!(
             snap[DEFAULT_PROFILE_ID].harness,
-            crate::harness_registry::CLAUDE
+            pdo_harness::registry::CLAUDE
         );
         assert_eq!(snap[&a.id].harness, "claude");
         assert_eq!(snap[&a.id].model.as_deref(), Some("opus"));

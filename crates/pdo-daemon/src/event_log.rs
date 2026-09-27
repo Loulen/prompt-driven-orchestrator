@@ -1290,7 +1290,7 @@ pub struct RunState {
     /// created without an explicit choice — the payload omits the key, keeping it
     /// byte-identical to the pre-#551 shape). A blank/empty stored value collapses to
     /// `None` at the freeze (`Some("")` never persists), so it can never win a tier
-    /// (#347). Read at every spawn seam as the `run` tier of [`crate::harness_resolver`]
+    /// (#347). Read at every spawn seam as the `run` tier of [`pdo_harness::resolver`]
     /// and by the infra sessions (Pipeline Manager, merge resolver).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1306,7 +1306,7 @@ pub struct RunState {
     /// Run-only-harness rule for infra).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub(crate) agent_choice: Option<crate::agent_choice::AgentChoice>,
+    pub(crate) agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
     /// The Run tier of the **skills** selection (#669, ADR-0062), **frozen** here
     /// from the `RunStarted` payload — set once at create (a fired Run copies its
     /// Trigger's list), never mutated. Read at every node spawn as the `run` slot
@@ -2083,7 +2083,7 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 // and the legacy `harness` above still decides the Run tier.
                 if let Some(v) = payload.get("agent_choice") {
                     if let Ok(choice) =
-                        serde_json::from_value::<crate::agent_choice::AgentChoice>(v.clone())
+                        serde_json::from_value::<pdo_harness::agent_choice::AgentChoice>(v.clone())
                     {
                         state.agent_choice = Some(choice);
                     }

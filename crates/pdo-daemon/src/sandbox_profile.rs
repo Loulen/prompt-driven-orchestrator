@@ -225,7 +225,7 @@ pub(crate) struct StagingGuarantee {
 }
 
 /// `claude`'s staging set in the user's words, verbatim from
-/// [`crate::harness_probes::CLAUDE_STAGING_SET`] (ADR-0031 §1 G1–G5). G3/G4 appear
+/// [`pdo_harness::probes::CLAUDE_STAGING_SET`] (ADR-0031 §1 G1–G5). G3/G4 appear
 /// here as guarantees even though their files are class-(b) *entries* — the
 /// difference is the rule that decides the classes: **(b) = the fixup needs keys in
 /// the file; (c) = the set needs the file whole.**
@@ -266,7 +266,7 @@ pub(crate) const STAGING_GUARANTEES: &[StagingGuarantee] = &[
 /// edit. Copying a transcript sink would break the merge-back idempotence and the
 /// cost fold; copying a set entry would make the profile lie about owning it.
 pub(crate) fn set_owned_paths() -> Vec<&'static str> {
-    crate::harness_probes::staging_sets()
+    pdo_harness::probes::staging_sets()
         .into_iter()
         .flat_map(|(_, set)| {
             set.entries

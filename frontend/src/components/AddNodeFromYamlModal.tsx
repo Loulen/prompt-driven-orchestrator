@@ -3,7 +3,7 @@ import type { NodeType } from "../shared/generated/NodeType";
 import { parseNodeYaml, libraryPortToPortDef } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
-import { foldHarnessOntoNode } from "../lib/harness";
+import { foldHarnessOntoNode } from "../harness/model/nodeHarness";
 import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 /**

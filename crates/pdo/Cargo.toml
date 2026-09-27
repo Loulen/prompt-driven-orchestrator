@@ -45,6 +45,7 @@ path = "tests/it.rs"
 pdo-extension-api.workspace = true
 pdo-kernel.workspace = true
 pdo-legacy.workspace = true
+pdo-platform.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
@@ -52,6 +53,7 @@ tokio.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+pdo-harness.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

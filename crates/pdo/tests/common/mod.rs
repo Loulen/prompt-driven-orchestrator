@@ -486,8 +486,8 @@ impl TestDaemon {
     pub async fn spawn_with_update_executor<F>(
         setup: F,
         executor: String,
-        install_method: pdo_daemon::update_check::InstallMethod,
-        supervision: pdo_daemon::update_check::Supervision,
+        install_method: pdo_platform::domain::install::InstallMethod,
+        supervision: pdo_platform::domain::install::Supervision,
     ) -> Result<Self>
     where
         F: FnOnce(&Path) -> Result<()>,
@@ -1044,7 +1044,10 @@ pub fn fake_harness_bindir() -> std::path::PathBuf {
             "PDO_HARNESS_PROBE_PATH",
             format!("{}:{process_path}", dir.display()),
         );
-        std::env::set_var(pdo_daemon::CATALOGUE_VERSION_TTL_MS_ENV, "1");
+        std::env::set_var(
+            pdo_harness::adapters::binary_probe::CATALOGUE_VERSION_TTL_MS_ENV,
+            "1",
+        );
         dir
     })
     .clone()

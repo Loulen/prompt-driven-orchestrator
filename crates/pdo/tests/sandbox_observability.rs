@@ -27,7 +27,7 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::common::{ensure_pdo_on_path, TestDaemon};
-use pdo_daemon::stale_detector::encode_working_dir;
+use pdo_harness::claude_transcript::encode_working_dir;
 use tempfile::TempDir;
 
 const NODE_ID: &str = "worker";
@@ -384,7 +384,7 @@ async fn cost_reads_staging_during_minimal_run() {
 /// The real tail of the transcript of #469's node: parses as `TurnEnded` (an
 /// assistant `text` message, no tool call pending).
 const FIXTURE_TURN_ENDED: &str =
-    include_str!("../../pdo-daemon/tests/fixtures/turn_state/turn_ended.jsonl");
+    include_str!("../../pdo-harness/tests/fixtures/turn_state/turn_ended.jsonl");
 
 /// #408 invariant, re-proven on a signal that still exists (#469).
 ///

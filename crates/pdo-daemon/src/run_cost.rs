@@ -8,12 +8,12 @@
 //!
 //! That transcript-derived path is `claude`'s — a **derived** cost. A second
 //! first-party harness, `copilot`, counts its own cost and PDO converts it by a
-//! **published constant** ([`crate::copilot_journal`]) — a **reported** cost, read
+//! **published constant** ([`pdo_harness::copilot_journal`]) — a **reported** cost, read
 //! by session identity, never through the price table (so it can never flag an
 //! unpriced model). One attributed fold pairs the two into one summable dollar
 //! total that *says* itself per harness (`CostStat::by_harness`): "X via `copilot`,
 //! Y via `claude`". A third first-party harness, `pi`, reports a cost **already in
-//! dollars** per message (`usage.cost.total`, [`crate::pi_session`]) — a reported
+//! dollars** per message (`usage.cost.total`, [`pdo_harness::pi_session`]) — a reported
 //! cost of constant 1.0, flagged `reported_in_usd` so the surfaces drop the `~`;
 //! a pi message with tokens but no cost makes its node's total unavailable, never
 //! `$0` (#707, ADR-0052 §2 amended). A harness with no cost source at all
@@ -54,6 +54,7 @@
 use crate::event_log::{CostForm, CostStat, HarnessCost};
 use crate::price_table::{strip_date_suffix, PriceTable};
 use crate::sandbox_run::HarnessStores;
+use pdo_harness::claude_transcript::cc_project_dirname;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -279,7 +280,7 @@ fn collect_executions(
             .and_then(|p| p.get("harness"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or(crate::harness_registry::CLAUDE);
+            .unwrap_or(pdo_harness::registry::CLAUDE);
         let session_id = payload
             .and_then(|p| p.get("session_id"))
             .and_then(|v| v.as_str())
@@ -321,7 +322,7 @@ fn collect_executions(
         let project = working_dir
             .as_ref()
             .map(|working_dir| claude_root.join(cc_project_dirname(working_dir)));
-        let legacy_claim = harness == crate::harness_registry::CLAUDE
+        let legacy_claim = harness == pdo_harness::registry::CLAUDE
             && session_id.is_none()
             && is_isolated
             && project
@@ -329,7 +330,7 @@ fn collect_executions(
                 .is_some_and(|project| claimed_legacy_projects.insert(project.clone()));
         let unavailable_reason = if event.node_id.is_none() {
             Some("missing node identity".to_string())
-        } else if harness == crate::harness_registry::CLAUDE
+        } else if harness == pdo_harness::registry::CLAUDE
             && session_id.is_none()
             && is_isolated
             && !legacy_claim
@@ -359,11 +360,11 @@ fn collect_executions(
 /// reported_in_usd, slices)`.
 ///
 /// - `copilot`: the journal's cumulative `totalNanoAiu` × the published constant
-///   ([`crate::copilot_journal`]); converted, so not `reported_in_usd`. The
+///   ([`pdo_harness::copilot_journal`]); converted, so not `reported_in_usd`. The
 ///   slices come from the same journal — the model in effect at the usage
 ///   points, with the reasoning effort then in force.
 /// - `pi`: the sum of `usage.cost.total` over the session's assistant messages,
-///   **already in dollars** (constant 1.0, [`crate::pi_session`]) — `reported_in_usd`.
+///   **already in dollars** (constant 1.0, [`pdo_harness::pi_session`]) — `reported_in_usd`.
 ///   A message with tokens but no cost makes the figure **unavailable** with its
 ///   reason ("catalogue absent"), never `$0`. The slices come from the same
 ///   session — the per-message model and provider, the thinking level in effect.
@@ -383,12 +384,12 @@ fn reported_execution(
             Vec::new(),
         );
     };
-    if execution.harness == crate::harness_registry::COPILOT {
+    if execution.harness == pdo_harness::registry::COPILOT {
         let text =
             std::fs::read_to_string(stores.copilot.join(session_id).join("events.jsonl")).ok();
         let usd = text
             .as_deref()
-            .and_then(crate::copilot_journal::reported_cost_usd);
+            .and_then(pdo_harness::copilot_journal::reported_cost_usd);
         let slices = text
             .as_deref()
             .map(observed_slices_from_copilot)
@@ -401,7 +402,7 @@ fn reported_execution(
             slices,
         );
     }
-    if execution.harness == crate::harness_registry::PI {
+    if execution.harness == pdo_harness::registry::PI {
         let Some(working_dir) = execution.working_dir.as_deref() else {
             return (
                 None,
@@ -410,7 +411,7 @@ fn reported_execution(
                 Vec::new(),
             );
         };
-        let text = crate::harness_probes::resolve_transcript(
+        let text = pdo_harness::adapters::transcripts::resolve_transcript(
             &execution.harness,
             &stores.pi,
             working_dir,
@@ -418,11 +419,11 @@ fn reported_execution(
         )
         .and_then(|path| std::fs::read_to_string(path).ok());
         let slices = text.as_deref().map(observed_slices_from_pi);
-        return match text.as_deref().map(crate::pi_session::reported_cost) {
-            Some(crate::pi_session::ReportedCost::Usd(usd)) => {
+        return match text.as_deref().map(pdo_harness::pi_session::reported_cost) {
+            Some(pdo_harness::pi_session::ReportedCost::Usd(usd)) => {
                 (Some(usd), None, true, slices.unwrap_or_default())
             }
-            Some(crate::pi_session::ReportedCost::Unavailable { reason }) => {
+            Some(pdo_harness::pi_session::ReportedCost::Unavailable { reason }) => {
                 // The models are still observed even though the cost is not:
                 // the slices keep their identity and say why the dollars are "—".
                 let slices = slices
@@ -436,7 +437,7 @@ fn reported_execution(
                     .collect();
                 (None, Some(reason), true, slices)
             }
-            Some(crate::pi_session::ReportedCost::NoReading) | None => (
+            Some(pdo_harness::pi_session::ReportedCost::NoReading) | None => (
                 None,
                 Some("no reported cost reading".to_string()),
                 true,
@@ -456,7 +457,7 @@ fn reported_execution(
 /// model × thinking level the source names, cost reported (already dollars —
 /// never an estimate of this fold, hence `estimated: false`).
 fn observed_slices_from_pi(text: &str) -> Vec<ModelEffortSlice> {
-    crate::pi_session::observed_usage(text)
+    pdo_harness::pi_session::observed_usage(text)
         .into_iter()
         .map(|usage| ModelEffortSlice {
             model: usage.model,
@@ -478,7 +479,7 @@ fn observed_slices_from_pi(text: &str) -> Vec<ModelEffortSlice> {
 /// model × reasoning effort the usage points name, cost reported by the
 /// published constant (never an estimate, hence `estimated: false`).
 fn observed_slices_from_copilot(text: &str) -> Vec<ModelEffortSlice> {
-    crate::copilot_journal::observed_usage(text)
+    pdo_harness::copilot_journal::observed_usage(text)
         .into_iter()
         .map(|usage| ModelEffortSlice {
             model: usage.model,
@@ -519,7 +520,7 @@ fn execution_model_slices(
     observed: Vec<ModelEffortSlice>,
     derived: DerivedFold,
 ) -> Vec<ModelEffortSlice> {
-    if !crate::harness_probes::can_cost(&execution.harness) {
+    if !pdo_harness::probes::can_cost(&execution.harness) {
         return Vec::new();
     }
     // The source spoke (#736): `pi`'s per-message model/provider/effort,
@@ -527,7 +528,7 @@ fn execution_model_slices(
     if !observed.is_empty() {
         return observed;
     }
-    if crate::harness_probes::observed_identity_source(&execution.harness).is_none()
+    if pdo_harness::probes::observed_identity_source(&execution.harness).is_none()
         && execution.requested_model.is_none()
     {
         return Vec::new();
@@ -637,7 +638,7 @@ pub(crate) fn compute_run_cost_breakdown(
                 .iter()
                 .enumerate()
                 .find_map(|(index, execution)| {
-                    if execution.harness != crate::harness_registry::CLAUDE
+                    if execution.harness != pdo_harness::registry::CLAUDE
                         || execution.project.as_ref() != Some(project)
                     {
                         return None;
@@ -668,11 +669,10 @@ pub(crate) fn compute_run_cost_breakdown(
         let mut reported_in_usd = false;
         let mut observed_models: Option<BTreeMap<String, ModelUsage>> = None;
         let mut observed_slices: Vec<ModelEffortSlice> = Vec::new();
-        let (cost, form, reason) = if !crate::harness_probes::can_cost(&execution.harness) {
+        let (cost, form, reason) = if !pdo_harness::probes::can_cost(&execution.harness) {
             (None, None, Some("harness has no cost source".to_string()))
-        } else if crate::harness_probes::probes_for(&execution.harness)
-            .and_then(|p| p.cost_source())
-            == Some(crate::harness_probes::CostSource::ReportedByConstant)
+        } else if pdo_harness::probes::probes_for(&execution.harness).and_then(|p| p.cost_source())
+            == Some(pdo_harness::probes::CostSource::ReportedByConstant)
         {
             // #615/#707, ADR-0052: a reported cost — `copilot`'s journal, `pi`'s
             // session — read by identity, never through the price table. The
@@ -691,7 +691,7 @@ pub(crate) fn compute_run_cost_breakdown(
                 Some(CostForm::Reported),
                 unavailable,
             )
-        } else if execution.harness == crate::harness_registry::CLAUDE
+        } else if execution.harness == pdo_harness::registry::CLAUDE
             && execution.unavailable_reason.is_none()
             && owned_files[index]
         {
@@ -757,7 +757,7 @@ pub(crate) fn compute_run_cost_breakdown(
         .and_then(|payload| payload.get("harness"))
         .and_then(|value| value.as_str())
         .filter(|value| !value.is_empty())
-        .unwrap_or(crate::harness_registry::CLAUDE);
+        .unwrap_or(pdo_harness::registry::CLAUDE);
     let infrastructure_executions = i64::from(
         events
             .iter()
@@ -767,7 +767,7 @@ pub(crate) fn compute_run_cost_breakdown(
         .filter(|event| event.kind == crate::event_log::EventKind::MergeResolverStarted)
         .count() as i64;
     let ambiguous_shared_claude = executions.iter().any(|execution| {
-        execution.harness == crate::harness_registry::CLAUDE
+        execution.harness == pdo_harness::registry::CLAUDE
             && execution.session_id.is_none()
             && !execution.legacy_claim
     });
@@ -777,7 +777,7 @@ pub(crate) fn compute_run_cost_breakdown(
         let attributable = !ambiguous_shared_claude;
         contributions.push(CostContribution {
             harness: if attributable && leftover.is_some() {
-                crate::harness_registry::CLAUDE.to_string()
+                pdo_harness::registry::CLAUDE.to_string()
             } else {
                 run_harness.to_string()
             },
@@ -825,7 +825,7 @@ pub(crate) fn compute_run_cost_breakdown(
         leftover.filter(|_| ambiguous_shared_claude || infrastructure_executions == 0)
     {
         contributions.push(CostContribution {
-            harness: crate::harness_registry::CLAUDE.to_string(),
+            harness: pdo_harness::registry::CLAUDE.to_string(),
             scope: CostScope::Unassigned,
             node_id: None,
             executions: 0,
@@ -1100,7 +1100,7 @@ pub(crate) fn uncosted_harnesses(events: &[crate::event_log::Event]) -> Vec<Stri
         else {
             continue; // null harness ⇒ the claude floor ⇒ has a cost source
         };
-        if !crate::harness_probes::can_cost(harness) {
+        if !pdo_harness::probes::can_cost(harness) {
             names.insert(harness.to_string());
         }
     }
@@ -1123,7 +1123,7 @@ fn copilot_session_ids(events: &[crate::event_log::Event]) -> Vec<String> {
             continue;
         };
         let harness = payload.get("harness").and_then(|v| v.as_str());
-        if harness != Some(crate::harness_registry::COPILOT) {
+        if harness != Some(pdo_harness::registry::COPILOT) {
             continue;
         }
         let Some(sid) = payload
@@ -1163,7 +1163,7 @@ fn copilot_reported_cost(
         let Ok(text) = std::fs::read_to_string(&journal) else {
             continue;
         };
-        if let Some(c) = crate::copilot_journal::reported_cost_usd(&text) {
+        if let Some(c) = pdo_harness::copilot_journal::reported_cost_usd(&text) {
             usd += c;
             any = true;
         }
@@ -1194,7 +1194,7 @@ fn ventilate(
         partial = c.partial;
         unpriced_models = c.unpriced_models.clone();
         by_harness.push(HarnessCost {
-            harness: crate::harness_registry::CLAUDE.to_string(),
+            harness: pdo_harness::registry::CLAUDE.to_string(),
             usd: c.usd,
             form: CostForm::Derived,
             partial: c.partial,
@@ -1205,7 +1205,7 @@ fn ventilate(
     if let Some(usd) = copilot_usd {
         total_usd += usd;
         by_harness.push(HarnessCost {
-            harness: crate::harness_registry::COPILOT.to_string(),
+            harness: pdo_harness::registry::COPILOT.to_string(),
             usd,
             form: CostForm::Reported,
             // A reported cost never consults the price table, so it can never
@@ -1278,15 +1278,6 @@ pub(crate) fn run_cost_or_absence(
         return Some(cost_unavailable(uncosted, slices_or_empty(ventilated)));
     }
     ventilated
-}
-
-/// Encode an absolute path exactly as Claude Code names its `~/.claude/projects`
-/// directory: every non-`[A-Za-z0-9]` char → `-`, case preserved, runs NOT
-/// collapsed — so `/home/u/.pdo/runs/X/worktree` → `-home-u--pdo-runs-X-worktree`
-/// (verified against real dirs). Delegates to
-/// [`crate::stale_detector::encode_working_dir`], the single source of truth.
-pub(crate) fn cc_project_dirname(path: &Path) -> String {
-    crate::stale_detector::encode_working_dir(path)
 }
 
 /// The recursion is what captures subagent transcripts nested at
@@ -1440,10 +1431,10 @@ pub(crate) fn reported_stores_mtime_millis(
         .iter()
         .filter_map(|execution| {
             let session_id = execution.session_id.as_deref()?;
-            let path = if execution.harness == crate::harness_registry::COPILOT {
+            let path = if execution.harness == pdo_harness::registry::COPILOT {
                 stores.copilot.join(session_id).join("events.jsonl")
-            } else if execution.harness == crate::harness_registry::PI {
-                crate::harness_probes::resolve_transcript(
+            } else if execution.harness == pdo_harness::registry::PI {
+                pdo_harness::adapters::transcripts::resolve_transcript(
                     &execution.harness,
                     &stores.pi,
                     execution.working_dir.as_deref()?,
@@ -1555,22 +1546,6 @@ mod tests {
         assert!((line_cost(&u, 5.0, 25.0) - 46.75).abs() < 1e-9);
     }
 
-    // --- cc_project_dirname ---
-
-    #[test]
-    fn encodes_like_claude_code() {
-        // Verified against a real ~/.claude/projects dir name.
-        assert_eq!(
-            cc_project_dirname(Path::new("/home/u/.pdo/runs/X/worktree")),
-            "-home-u--pdo-runs-X-worktree"
-        );
-        // Case is preserved; every non-alphanumeric char maps to '-'.
-        assert_eq!(
-            cc_project_dirname(Path::new("/home/user/code/pdo")),
-            "-home-user-code-pdo"
-        );
-    }
-
     // --- parse_line ---
 
     fn assistant(id: &str, req: &str, model: &str, input: u64, output: u64) -> String {
@@ -1581,9 +1556,14 @@ mod tests {
 
     #[test]
     fn copilot_nano_aiu_converts_by_the_published_constant() {
-        assert!((crate::copilot_journal::nano_aiu_to_usd(2_823_580_000) - 0.0282358).abs() < 1e-12);
-        assert!((crate::copilot_journal::nano_aiu_to_usd(100_000_000_000) - 1.0).abs() < 1e-12);
-        assert_eq!(crate::copilot_journal::nano_aiu_to_usd(0), 0.0);
+        assert!(
+            (pdo_harness::copilot_journal::nano_aiu_to_usd(2_823_580_000) - 0.0282358).abs()
+                < 1e-12
+        );
+        assert!(
+            (pdo_harness::copilot_journal::nano_aiu_to_usd(100_000_000_000) - 1.0).abs() < 1e-12
+        );
+        assert_eq!(pdo_harness::copilot_journal::nano_aiu_to_usd(0), 0.0);
     }
 
     #[test]
@@ -1594,12 +1574,15 @@ mod tests {
             "{\"type\":\"session.shutdown\",\"data\":{\"totalNanoAiu\":2000000000}}\n",
             "{\"type\":\"session.shutdown\",\"data\":{\"totalNanoAiu\":3000000000}}\n"
         );
-        assert!((crate::copilot_journal::reported_cost_usd(journal).unwrap() - 0.03).abs() < 1e-12);
         assert!(
-            crate::copilot_journal::reported_cost_usd("{\"type\":\"assistant.turn_start\"}\n")
-                .is_none()
+            (pdo_harness::copilot_journal::reported_cost_usd(journal).unwrap() - 0.03).abs()
+                < 1e-12
         );
-        assert!(crate::copilot_journal::reported_cost_usd("").is_none());
+        assert!(pdo_harness::copilot_journal::reported_cost_usd(
+            "{\"type\":\"assistant.turn_start\"}\n"
+        )
+        .is_none());
+        assert!(pdo_harness::copilot_journal::reported_cost_usd("").is_none());
     }
 
     #[test]
@@ -2978,10 +2961,10 @@ mod tests {
 
     /// Write a `pi` session file for `session_id` under `pi_root`, in the folder
     /// named after the Run's shared worktree — the resolution
-    /// [`crate::pi_session::resolve_by_id`] globs.
+    /// [`pdo_harness::adapters::transcripts::pi_session_by_id`] globs.
     fn seed_pi_session(pi_root: &Path, repo: &Path, run_id: &str, session_id: &str, body: &str) {
         let working_dir = repo.join(".pdo").join("runs").join(run_id).join("worktree");
-        let dir = pi_root.join(crate::pi_session::session_dir_name(&working_dir));
+        let dir = pi_root.join(pdo_harness::pi_session::session_dir_name(&working_dir));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(format!("2026-09-07T10-00-00-000Z_{session_id}.jsonl")),

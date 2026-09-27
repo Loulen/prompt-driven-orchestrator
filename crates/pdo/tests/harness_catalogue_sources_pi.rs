@@ -21,10 +21,10 @@
 use crate::common::TestDaemon;
 
 /// The real `pi --help` of 0.85.1, verbatim — the fixture beside copilot's shapes.
-const HELP: &str = include_str!("../../pdo-daemon/tests/fixtures/catalogue/pi-0.85.1-help.txt");
+const HELP: &str = include_str!("../../pdo-harness/tests/fixtures/catalogue/pi-0.85.1-help.txt");
 /// The real `pi --list-models` of 0.85.1, abridged (alias rows + a few concrete ones).
 const LIST_MODELS: &str =
-    include_str!("../../pdo-daemon/tests/fixtures/catalogue/pi-0.85.1-list-models.txt");
+    include_str!("../../pdo-harness/tests/fixtures/catalogue/pi-0.85.1-list-models.txt");
 
 /// Write an executable fake `pi` that answers `--version`, `--help` and
 /// `--list-models` and model-capability RPC, and **hangs** on anything else so an unadvertised source

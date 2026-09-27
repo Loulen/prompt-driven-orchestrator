@@ -3,11 +3,11 @@ import { Bookmark, Check, ChevronDown, ChevronLeft, GitFork, SlidersHorizontal, 
 import type { AgentChoice } from "../shared/generated/AgentChoice";
 import type { AgentCombination } from "../settings/model/settings";
 import type { AgentProfile } from "../shared/generated/AgentProfile";
-import type { HarnessCatalog } from "../lib/harness";
-import { findHarnessOption, effortOffer } from "../lib/harness";
-import HarnessSelect from "./HarnessSelect";
-import ModelPicker from "./ModelPicker";
-import EffortPicker from "./EffortPicker";
+import type { HarnessCatalog } from "../harness/model/catalog";
+import { findHarnessOption, effortOffer } from "../harness/model/catalog";
+import HarnessSelect from "../harness/components/HarnessSelect";
+import ModelPicker from "../harness/components/ModelPicker";
+import EffortPicker from "../harness/components/EffortPicker";
 import { combinationLabel, resolveAgentChoice } from "../lib/agentProfiles";
 
 const EMPTY: AgentCombination = { harness: "claude", model: null, effort: null };

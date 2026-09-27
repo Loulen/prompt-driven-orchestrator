@@ -5,11 +5,11 @@
 import { useState, useCallback } from "react";
 import { Info, Terminal, X, FileText, Code, Bot, FileDiff, FolderGit2 } from "lucide-react";
 import AssistantPanel from "../../session/components/AssistantPanel";
-import DiffTab from "../../components/DiffTab";
+import DiffTab from "../../review/components/DiffTab";
 import RepositoriesSection from "../../run/components/RepositoriesSection";
-import { deliverySignature } from "../../lib/diffTab";
-import { useReviewUnread } from "../../hooks/useReviewUnread";
-import type { CollapsedFiles } from "../../lib/diffTab";
+import { deliverySignature } from "../../review/model/diffTab";
+import { useReviewUnread } from "../../review/store/useReviewUnread";
+import type { CollapsedFiles } from "../../review/model/diffTab";
 import type { LibraryPipelineEntry } from "../api/libraryPipelines";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";

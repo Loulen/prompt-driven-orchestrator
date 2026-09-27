@@ -5,9 +5,9 @@
 import { useCallback, useState } from "react";
 import type { RunState } from "../../shared/generated/RunState";
 import { isTerminalRun } from "../../run/model/runStatus";
-import { pendingCount, pendingTone, reviewQuickAccessTitle } from "../../lib/reviewComments";
+import { pendingCount, pendingTone, reviewQuickAccessTitle } from "../../review/model/commentStatus";
 import { reviewUrl } from "../../run/model/runRefs";
-import { useReviewSeen } from "../../hooks/useReviewUnread";
+import { useReviewSeen } from "../../review/store/useReviewUnread";
 import { reopenRun, retryAll } from "../../run/api/commands";
 import { useRunShell } from "../../session/store/useRunShell";
 // #723 — orchestrator pastilles on the run-view node card.

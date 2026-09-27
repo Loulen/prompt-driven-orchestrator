@@ -1,5 +1,5 @@
 import App from "./App";
-import ReviewPage from "../pages/ReviewPage";
+import ReviewPage from "../review/components/ReviewPage";
 import { reviewRunIdFromPath } from "../run/model/runRefs";
 
 /**

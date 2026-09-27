@@ -20,6 +20,9 @@ use pdo_platform::adapters::sqlite_audit_log::SqliteAuditLog;
 use pdo_platform::adapters::sqlite_page_mounts::SqlitePageMounts;
 use pdo_platform::application::update_context::UpdateOptions;
 use pdo_platform::{Platform, PlatformPorts};
+use pdo_review::adapters::git::CliGit;
+use pdo_review::adapters::runs::ContextRuns;
+use pdo_review::{Review, ReviewPorts};
 use pdo_run::adapters::contexts::{ContextSkills, SessionWaits, WorkspaceProjects};
 use pdo_run::adapters::disk_live_facts::DiskLiveFacts;
 use pdo_run::adapters::manager_sessions::TmuxManagerSessions;
@@ -34,12 +37,14 @@ use pdo_session::{Session, SessionOptions, SessionPorts};
 pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) -> Contexts {
     let session = session(&resources, host.clone());
     let run = run(&resources, &session, host.clone());
+    let review = review(&resources, &run, host.clone());
     let pipelines = pipelines(&resources, host.clone());
     let platform = platform(resources, host);
     Contexts {
         router: pdo_platform::router(platform.clone())
             .merge(pdo_session::router(session.clone()))
-            .merge(pdo_pipeline::adapters::http::router(pipelines)),
+            .merge(pdo_pipeline::adapters::http::router(pipelines))
+            .merge(pdo_review::router(review)),
         platform,
         session,
         run,
@@ -86,6 +91,17 @@ fn run(r: &ContextResources, session: &Arc<Session>, host: Arc<dyn ExtensionHost
             panic_on_spawn: legacy.panic_on_spawn,
         },
     )
+}
+
+/// The `review` context: the Runs of the run context, git through the
+/// workspace's adapter, and the instance setting the legacy daemon still owns.
+fn review(r: &ContextResources, run: &Arc<Runs>, host: Arc<dyn ExtensionHost>) -> Arc<Review> {
+    Review::new(ReviewPorts {
+        runs: Arc::new(ContextRuns(run.clone())),
+        git: Arc::new(CliGit),
+        settings: r.review_settings.clone(),
+        extensions: host,
+    })
 }
 
 /// The `session` context: tmux on the daemon's private socket, the OS terminal

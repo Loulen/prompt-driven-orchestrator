@@ -218,6 +218,33 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             format!("/runs/{RUN}/manager/stop"),
             None,
         ),
+        // The review's gestures (#926) refuse before looking the Run up.
+        call(
+            "POST",
+            "/runs/{run_id}/review/comments/send",
+            format!("/runs/{RUN}/review/comments/send"),
+            Some(
+                json!({ "comments": [{ "path": "a.rs", "side": "new", "line": 1, "text": "why?" }] }),
+            ),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/review/comments/{comment_id}/reply",
+            format!("/runs/{RUN}/review/comments/rc-001/reply"),
+            Some(json!({ "text": "done", "resolved": true })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/review/comments/{comment_id}/resolve",
+            format!("/runs/{RUN}/review/comments/rc-001/resolve"),
+            Some(json!({})),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/review/comments/{comment_id}/reopen",
+            format!("/runs/{RUN}/review/comments/rc-001/reopen"),
+            Some(json!({})),
+        ),
         // The run context's gestures (#924) refuse before looking the Run up.
         call(
             "POST",
@@ -416,7 +443,7 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
     ]
 }
 
-/// A Run id the session and run routes aim at: they refuse before looking it up.
+/// A Run id the session, run and review routes aim at: they refuse before looking it up.
 const RUN: &str = "20260101-000000-abcdef0";
 
 /// The reference file of the seeded skill.

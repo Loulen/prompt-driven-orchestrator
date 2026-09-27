@@ -1,5 +1,5 @@
 import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal } from "lucide-react";
-import type { PendingTone } from "../lib/reviewComments";
+import type { PendingTone } from "../review/model/commentStatus";
 import type { NodeType } from "../shared/generated/NodeType";
 import type { LibraryEntry } from "../pipeline/model/library";
 import { Tooltip } from "../shared/ui/tooltip";

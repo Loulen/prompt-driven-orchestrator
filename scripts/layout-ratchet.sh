@@ -141,9 +141,13 @@ cd "$(git rev-parse --show-toplevel)"
 #   only the price sync); NewRunModal, NodeDetailPanel, MarkdownArtifactModal,
 #   OrchestrationTab, RunFilters, runFilter, ForgetRunModal, CleanupConfirmModal,
 #   RepositoriesSection, SecondaryRepoRow and their tests to frontend/src/run/.
+# frontend/src/components: 129 and crates/pdo-daemon/src: 18 (#926, spec #913) ratchet down:
+#   the review of a Run moved out — structured_diff.rs and review_comments.rs to
+#   crates/pdo-review (review_ports.rs, the review's port the legacy side implements,
+#   takes one slot back); DiffTab and its test to frontend/src/review/.
 BASELINES='
-frontend/src/components 131
-crates/pdo-daemon/src 19
+frontend/src/components 129
+crates/pdo-daemon/src 18
 '
 
 fail=0

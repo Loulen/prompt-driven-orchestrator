@@ -408,9 +408,9 @@ pub(crate) fn test_run(t: TestRun<'_>) -> Arc<pdo_run::Runs> {
             settings: Arc::new(LegacyInstanceSettings { db: t.db.clone() }),
             bank: Arc::new(pdo_pipeline::adapters::skill_bank::BankOfSkills(t.skills)),
             pages: Arc::new(LegacyRunPages { state: t.state }),
-            run_dirs: Arc::new(pdo_run::adapters::run_dir_watch::DebouncedRunDirs(Arc::new(
-                std::sync::Mutex::new(None),
-            ))),
+            run_dirs: Arc::new(pdo_run::adapters::run_dir_watch::DebouncedRunDirs(
+                Arc::new(std::sync::Mutex::new(None)),
+            )),
             self_writes: SelfWrites::new(),
             extensions: Arc::new(pdo_kernel::extension_host::NoExtensions),
         },

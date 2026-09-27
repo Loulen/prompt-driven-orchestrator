@@ -127,8 +127,15 @@ async fn every_mutation_of_a_run_is_refused_before_anything_is_written() {
             on_run(action("stop_manager"), Some("r1")),
         ]
     );
-    assert_eq!(w.store.events.lock().unwrap().len(), before, "nothing written");
-    assert!(w.tmux.opened.lock().unwrap().is_empty(), "no session opened");
+    assert_eq!(
+        w.store.events.lock().unwrap().len(),
+        before,
+        "nothing written"
+    );
+    assert!(
+        w.tmux.opened.lock().unwrap().is_empty(),
+        "no session opened"
+    );
 }
 
 #[tokio::test]
@@ -156,7 +163,10 @@ async fn a_created_run_starts_in_its_repository_with_its_directory_watched() {
     let payload = started.payload.unwrap();
     assert_eq!(payload["pipeline_name"], "relay");
     assert_eq!(payload["input"], "go");
-    assert_eq!(payload["target_repo"], w.repo.path().to_string_lossy().as_ref());
+    assert_eq!(
+        payload["target_repo"],
+        w.repo.path().to_string_lossy().as_ref()
+    );
 
     let run_dir = w.repo.path().join(".pdo/runs").join(&run_id);
     assert!(run_dir.join("worktree").is_dir(), "the Run worktree is cut");
@@ -171,7 +181,10 @@ async fn a_created_run_starts_in_its_repository_with_its_directory_watched() {
     })
     .await;
     // A Run that asks nothing of the bank still gets its (empty) delivery.
-    assert_eq!(w.skills.delivered.lock().unwrap()[0].0, run_dir.join("worktree"));
+    assert_eq!(
+        w.skills.delivered.lock().unwrap()[0].0,
+        run_dir.join("worktree")
+    );
 }
 
 #[tokio::test]
@@ -187,7 +200,10 @@ async fn a_run_is_not_created_without_a_repository_nor_from_an_unknown_pipeline(
     )
     .await;
     assert_eq!(status, 400);
-    assert!(answer["error"].as_str().unwrap().contains("target_repo is required"));
+    assert!(answer["error"]
+        .as_str()
+        .unwrap()
+        .contains("target_repo is required"));
 
     let mut unknown = create_request(&w);
     unknown.pipeline = "nowhere".into();
@@ -198,7 +214,10 @@ async fn a_run_is_not_created_without_a_repository_nor_from_an_unknown_pipeline(
     )
     .await;
     assert_eq!(status, 400);
-    assert!(answer["error"].as_str().unwrap().contains("cannot read pipeline"));
+    assert!(answer["error"]
+        .as_str()
+        .unwrap()
+        .contains("cannot read pipeline"));
     assert!(w.store.events.lock().unwrap().is_empty(), "no Run exists");
 }
 

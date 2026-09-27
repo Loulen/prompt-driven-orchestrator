@@ -5,7 +5,9 @@ use std::path::Path;
 
 use axum::extract::Json;
 use axum::response::{IntoResponse, Response};
-use pdo_workspace::adapters::git::repository::{count_commits, last_fetch_at, ref_exists, upstream_of};
+use pdo_workspace::adapters::git::repository::{
+    count_commits, last_fetch_at, ref_exists, upstream_of,
+};
 use pdo_workspace::adapters::git::revisions;
 use serde::Serialize;
 use ts_rs::TS;
@@ -125,13 +127,12 @@ fn short_sha(sha: &str) -> String {
 /// of a Run's life, not an error to report as one.
 impl Runs {
     pub async fn source_drift(&self, run_id: &str) -> Response {
-    let state = self;
-    let (_events, run_state) = match load_projected(state, run_id).await {
-        Ok(t) => t,
-        Err(resp) => return *resp,
-    };
-    let repo = effective_repo_root(state, &run_state);
-    Json(source_drift(&repo, run_id, &run_state)).into_response()
+        let state = self;
+        let (_events, run_state) = match load_projected(state, run_id).await {
+            Ok(t) => t,
+            Err(resp) => return *resp,
+        };
+        let repo = effective_repo_root(state, &run_state);
+        Json(source_drift(&repo, run_id, &run_state)).into_response()
+    }
 }
-}
-

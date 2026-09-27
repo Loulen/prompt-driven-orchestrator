@@ -136,13 +136,15 @@ impl Runs {
         .await;
         let worktree_dir = materialize::materialize(
             self,
-            &target,
-            &launchable,
-            &provisioning.plan,
             &run_id,
             &mut started,
-            &req.input,
-            &attachments,
+            materialize::Materials {
+                target: &target,
+                launchable: &launchable,
+                provisioning_plan: &provisioning.plan,
+                input: &req.input,
+                attachments: &attachments,
+            },
         )
         .await?;
 

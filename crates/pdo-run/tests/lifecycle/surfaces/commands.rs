@@ -177,9 +177,7 @@ async fn every_kind_status_and_content_type_on_an_unstarted_run() {
         ),
     ];
 
-    for (i, (req_body, want_status, want_ct, want_body, want_events)) in
-        matrix.iter().enumerate()
-    {
+    for (i, (req_body, want_status, want_ct, want_body, want_events)) in matrix.iter().enumerate() {
         let run_id = format!("unstarted-{i}");
         let (status, ct, body) = command_triplet(&state, &run_id, req_body).await;
         assert_eq!(

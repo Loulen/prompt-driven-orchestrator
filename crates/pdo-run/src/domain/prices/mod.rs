@@ -35,7 +35,6 @@
 //! the sync that writes the fetched tier (the single egress) lives with the
 //! settings of the instance, strictly OUTSIDE the read path.
 
-
 mod builtin;
 pub mod parse;
 
@@ -191,7 +190,6 @@ impl PriceTable {
         }
     }
 
-
     /// Per-MTok price, or `None` for a model unknown to all THREE tiers (the
     /// caller then flips `partial` and the line contributes $0).
     ///
@@ -340,7 +338,6 @@ pub fn fingerprint_of(manual: Option<&[u8]>, fetched: Option<&[u8]>) -> u64 {
         v => v,
     }
 }
-
 
 /// A price, for the tests of the tiers.
 #[cfg(test)]
@@ -684,5 +681,4 @@ mod tests {
             fingerprint_of(None, Some(b"x"))
         );
     }
-
 }

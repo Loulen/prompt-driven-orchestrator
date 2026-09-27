@@ -15,7 +15,8 @@ use crate::domain::state::RepoPin;
 
 /// The message every write boundary returns when no target repo was named.
 /// Actionable on purpose: the caller must learn *what* to pass.
-pub const TARGET_REPO_REQUIRED: &str = "target_repo is required: name the absolute path of the git \
+pub const TARGET_REPO_REQUIRED: &str =
+    "target_repo is required: name the absolute path of the git \
     repository this must work in — the daemon's own working directory is not a default";
 
 /// Resolve a **required** target repo at a write boundary (ADR-0033).

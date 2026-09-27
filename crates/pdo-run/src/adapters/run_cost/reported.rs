@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 /// A **reported** cost for one execution (ADR-0052 §2), read from the store its
 /// harness's probes resolve, together with the observed model × effort slices
 /// the same source names (#736, ADR-0065 §1): `(usd, unavailable_reason,
@@ -146,4 +145,3 @@ pub fn observed_slices_from_copilot(text: &str) -> Vec<ModelEffortSlice> {
         })
         .collect()
 }
-

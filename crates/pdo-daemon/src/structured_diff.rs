@@ -204,7 +204,6 @@ pub(crate) fn compute_path(
     Ok(parse_patch(&String::from_utf8_lossy(&stdout)))
 }
 
-
 /// Parse a full unified `git diff` into per-file sections, in patch order.
 /// `[]` for empty/whitespace input. Never fails: a chunk it cannot understand
 /// still yields a `FileDiff` with empty paths.

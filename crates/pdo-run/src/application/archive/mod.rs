@@ -23,10 +23,7 @@ use crate::Runs;
 /// **post-order**: a run always comes after all of its own descendants, so a
 /// cascade that walks the list front to back tears grandchildren down before
 /// their parent. Pure over the projected store; `run_id` itself is not listed.
-pub fn descendant_runs_post_order(
-    runs: &[RunState],
-    run_id: &str,
-) -> Vec<RunState> {
+pub fn descendant_runs_post_order(runs: &[RunState], run_id: &str) -> Vec<RunState> {
     let mut out = Vec::new();
     for child in runs {
         if child.parent_run_id.as_deref() != Some(run_id) {
@@ -53,7 +50,6 @@ pub async fn load_all_projected_runs(state: &Runs) -> Result<Vec<RunState>> {
     }
     Ok(states)
 }
-
 
 /// `POST /runs/{run_id}/commands {"kind":"cleanup_run"}` — archive a run **and
 /// its terminated descendants** (#815).

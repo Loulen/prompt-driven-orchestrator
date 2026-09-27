@@ -151,7 +151,11 @@ impl LiveFacts for Disk {
         })
     }
 
-    fn cost<'a>(&'a self, _run: &'a RunState, _events: &'a [Event]) -> BoxFuture<'a, Option<CostStat>> {
+    fn cost<'a>(
+        &'a self,
+        _run: &'a RunState,
+        _events: &'a [Event],
+    ) -> BoxFuture<'a, Option<CostStat>> {
         Box::pin(async move {
             Some(CostStat {
                 usd: 1.5,
@@ -429,7 +433,10 @@ impl pdo_pipeline::application::ports::SkillBank for NoBank {
         &self,
         references: &[pdo_skill::domain::selection::SkillRef],
     ) -> (Vec<pdo_skill::domain::sidecar::SidecarSkill>, Vec<String>) {
-        (Vec::new(), references.iter().map(|r| r.id.clone()).collect())
+        (
+            Vec::new(),
+            references.iter().map(|r| r.id.clone()).collect(),
+        )
     }
     fn import_sidecar<'a>(
         &'a self,
@@ -439,7 +446,10 @@ impl pdo_pipeline::application::ports::SkillBank for NoBank {
         _sidecar: &'a [pdo_skill::domain::sidecar::SidecarSkill],
     ) -> pdo_pipeline::application::ports::BoxFuture<
         'a,
-        Result<pdo_skill::domain::sidecar::SidecarImportReport, pdo_skill::domain::error::SkillError>,
+        Result<
+            pdo_skill::domain::sidecar::SidecarImportReport,
+            pdo_skill::domain::error::SkillError,
+        >,
     > {
         Box::pin(async { Ok(Default::default()) })
     }

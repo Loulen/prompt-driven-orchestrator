@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 pub(crate) use pdo_run::domain::prices::parse::{validate_price, FETCHED_SCHEMA};
-pub(crate) use pdo_run::domain::prices::{strip_date_suffix, Price, PriceTable, PriceTier, RejectedRow};
+pub(crate) use pdo_run::domain::prices::{
+    strip_date_suffix, Price, PriceTable, PriceTier, RejectedRow,
+};
 
 /// Default price source (ADR-0034): models.dev, `anthropic` provider only.
 pub(crate) const PRICE_SOURCE_URL_DEFAULT: &str = "https://models.dev/api.json";
@@ -24,7 +26,6 @@ pub(crate) const PRICE_FETCH_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Age past which the boot refresh re-fetches an EXISTING cache. It never
 /// creates one (ADR-0034: no egress before the first explicit click).
 pub(crate) const PRICE_REFRESH_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
-
 
 /// GET the price source — the single egress, strictly outside the read path
 /// (ADR-0034). The daemon's ONLY outbound call outside `docker pull` and the
@@ -371,4 +372,3 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), before, "byte for byte");
     }
 }
-

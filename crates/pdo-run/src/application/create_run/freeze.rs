@@ -114,8 +114,7 @@ pub(super) async fn sandbox(
     let Some(name) = mode.profile() else {
         return Ok(frozen);
     };
-    match pdo_sandbox::application::profiles::resolve(state.sandbox_profiles.as_ref(), name).await
-    {
+    match pdo_sandbox::application::profiles::resolve(state.sandbox_profiles.as_ref(), name).await {
         Ok(Some(resolved)) => {
             frozen.env = resolved.env;
             frozen.image = resolved.image;

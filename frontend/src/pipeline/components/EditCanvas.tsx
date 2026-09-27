@@ -10,7 +10,7 @@ import type { RunState } from "../../shared/generated/RunState";
 import type { LibraryEntry } from "../model/library";
 import type { LibraryPipelineEntry } from "../api/libraryPipelines";
 import RunShellModal from "../../session/components/RunShellModal";
-import { RetryAllConfirmModal } from "../../components/UnifiedLeftPanel";
+import RetryAllConfirmModal from "../../run/components/runsList/RetryAllConfirmModal";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "../../components/editNodeDerivation";
 import { useEditStore } from "../store/editStore";
 import { ViewportWiringGridOverlay } from "../../components/WiringGridOverlay";

@@ -44,7 +44,6 @@ use pdo_workspace::adapters::git::worktrees::{
     worktree_dir_for_run,
 };
 
-
 #[tokio::test]
 async fn sync_run_pipeline_writes_canonical_prompt_path() {
     // Run-scoped sync must write each prompt to the canonical
@@ -58,9 +57,8 @@ async fn sync_run_pipeline_writes_canonical_prompt_path() {
     let mut prompts = HashMap::new();
     prompts.insert("worker".to_string(), "the role prompt".to_string());
 
-    let yaml =
-        std::fs::read_to_string(dir.join(".pdo").join("pipelines").join("auto-issue.yaml"))
-            .unwrap();
+    let yaml = std::fs::read_to_string(dir.join(".pdo").join("pipelines").join("auto-issue.yaml"))
+        .unwrap();
     sync_run_pipeline_to_template(&state, "run-xyz", "auto-issue", &yaml, &prompts);
 
     let pipelines = dir.join(".pdo").join("pipelines");
@@ -77,7 +75,6 @@ async fn sync_run_pipeline_writes_canonical_prompt_path() {
         "the flat prompts/ dir must never be written"
     );
 }
-
 
 #[test]
 fn sanitize_image_filename_accepts_valid_extensions() {

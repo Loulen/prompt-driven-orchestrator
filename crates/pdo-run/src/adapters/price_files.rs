@@ -135,5 +135,4 @@ mod tests {
         assert_eq!(t.fetched_path.as_deref(), Some(f.as_path()));
         assert!(!m.exists() && !f.exists(), "load must never seed a file");
     }
-
 }

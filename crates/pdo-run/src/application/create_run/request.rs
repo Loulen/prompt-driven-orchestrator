@@ -204,4 +204,3 @@ pub struct InputFile {
     /// sent under `files` is still discovered as an image at spawn.
     pub is_image: bool,
 }
-

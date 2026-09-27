@@ -65,62 +65,57 @@ pub struct RunListEntry {
     pub effective_repo: String,
 }
 
-/// A Trigger as returned by `GET /triggers`, wrapping the raw stored Trigger with
-/// a resolved `effective_repo` for the "group by project" view. Don't fold it into
-/// `trigger.target_repo`: the raw value drives the row badge, the detail panel and
-/// the Run-now pre-fill, while this one exists purely so the client can group by a
-
 impl Runs {
     /// `GET /runs`: every Run, as the list shows it.
     pub async fn list_runs(&self) -> Response {
-    let state = self;
-    let run_ids = match state.store().run_ids().await {
-        Ok(ids) => ids,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let mut states = Vec::new();
-    for run_id in run_ids {
-        let events = match state.store().events(&run_id).await {
-            Ok(e) => e,
-            Err(_) => continue,
+        let state = self;
+        let run_ids = match state.store().run_ids().await {
+            Ok(ids) => ids,
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
         };
-        if let Some(run_state) = project(&events) {
-            states.push(run_state);
-        }
-    }
-    // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read.
-    child_awaiting::overlay(&mut states);
 
-    let mut runs = Vec::new();
-    for run_state in states {
-        {
-            let stalled = is_stalled(&run_state);
-            // Must be computed before `run_state`'s fields move into the literal:
-            // `effective_repo_root` borrows `&run_state`.
-            let effective_repo = effective_repo_root(state, &run_state)
-                .to_string_lossy()
-                .into_owned();
-            runs.push(RunListEntry {
-                run_id: run_state.run_id,
-                pipeline_name: run_state.pipeline_name,
-                status: run_state.status,
-                stalled,
-                started_at: run_state.started_at,
-                failure_reason: run_state.failure_reason,
-                awaiting_reason: run_state.awaiting_reason,
-                awaiting_reason_code: run_state.awaiting_reason_code,
-                name: run_state.name,
-                triggered_by: run_state.triggered_by,
-                parent_run_id: run_state.parent_run_id,
-                parent_node_id: run_state.parent_node_id,
-                effective_repo,
-            });
+        let mut states = Vec::new();
+        for run_id in run_ids {
+            let events = match state.store().events(&run_id).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if let Some(run_state) = project(&events) {
+                states.push(run_state);
+            }
         }
-    }
+        // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read.
+        child_awaiting::overlay(&mut states);
 
-    Json(runs).into_response()
-}
+        let mut runs = Vec::new();
+        for run_state in states {
+            {
+                let stalled = is_stalled(&run_state);
+                // Must be computed before `run_state`'s fields move into the literal:
+                // `effective_repo_root` borrows `&run_state`.
+                let effective_repo = effective_repo_root(state, &run_state)
+                    .to_string_lossy()
+                    .into_owned();
+                runs.push(RunListEntry {
+                    run_id: run_state.run_id,
+                    pipeline_name: run_state.pipeline_name,
+                    status: run_state.status,
+                    stalled,
+                    started_at: run_state.started_at,
+                    failure_reason: run_state.failure_reason,
+                    awaiting_reason: run_state.awaiting_reason,
+                    awaiting_reason_code: run_state.awaiting_reason_code,
+                    name: run_state.name,
+                    triggered_by: run_state.triggered_by,
+                    parent_run_id: run_state.parent_run_id,
+                    parent_node_id: run_state.parent_node_id,
+                    effective_repo,
+                });
+            }
+        }
+
+        Json(runs).into_response()
+    }
 }

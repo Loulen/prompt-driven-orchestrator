@@ -332,4 +332,3 @@ pub fn cost_unavailable(uncosted: Vec<String>, slices: Vec<HarnessCost>) -> Cost
         by_harness: slices,
     }
 }
-

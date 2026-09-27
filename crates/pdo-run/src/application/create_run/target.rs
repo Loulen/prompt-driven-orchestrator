@@ -68,7 +68,8 @@ pub(super) fn resolve(
                 .filter(|s| !s.trim().is_empty())
         })
         .or_else(|| parent.map(|p| effective_repo_root(state, p).to_string_lossy().into_owned()));
-    let run_repo_root = required_target_repo(effective_target_repo.as_deref()).map_err(bad_request)?;
+    let run_repo_root =
+        required_target_repo(effective_target_repo.as_deref()).map_err(bad_request)?;
 
     // The primary's base branch is the scalar `source_branch` when present, else
     // `target_repos[0].base_branch`: row 0 of the multi-repo modal carries the

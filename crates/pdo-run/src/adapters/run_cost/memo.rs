@@ -37,11 +37,7 @@ pub fn max_mtime_recursive(dir: &Path, max_ms: &mut i64) {
 /// `run_id`'s cost — the same recursive glob [`compute_run_cost`] aggregates.
 /// `0` when nothing exists yet, so a later write bumps the key and invalidates
 /// the memo.
-pub fn max_transcript_mtime_millis(
-    projects_root: &Path,
-    repo_root: &Path,
-    run_id: &str,
-) -> i64 {
+pub fn max_transcript_mtime_millis(projects_root: &Path, repo_root: &Path, run_id: &str) -> i64 {
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
     let prefix = format!("{}-", cc_project_dirname(&run_dir));
     let Ok(entries) = std::fs::read_dir(projects_root) else {
@@ -169,4 +165,3 @@ pub fn compute_run_cost_breakdown_cached(
     guard.insert(key, value.clone());
     value
 }
-

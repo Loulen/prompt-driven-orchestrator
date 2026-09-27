@@ -69,95 +69,95 @@ pub struct RunChildrenResponse {
 }
 
 impl Runs {
-/// `GET /runs/{run_id}/children` — the dedicated children read (ADR-0064):
-/// every Run whose mechanical `parent_run_id` is this Run, grouped by parent
-/// node, in the parent's node-definition order (unknown/absent node last),
-/// children chronological within a group. Cost and duration live HERE, not on
-/// `GET /runs` — the global list stays cheap (ADR-0052: derived on read, never
-/// persisted).
+    /// `GET /runs/{run_id}/children` — the dedicated children read (ADR-0064):
+    /// every Run whose mechanical `parent_run_id` is this Run, grouped by parent
+    /// node, in the parent's node-definition order (unknown/absent node last),
+    /// children chronological within a group. Cost and duration live HERE, not on
+    /// `GET /runs` — the global list stays cheap (ADR-0052: derived on read, never
+    /// persisted).
     pub async fn run_children(&self, run_id: &str) -> Response {
-    let state = self;
-    let run_id = run_id.to_string();
-    // The parent must exist, so a typo'd id is a 404 — not a silent empty list
-    // (which would be indistinguishable from a childless Run).
-    let Some((_, parent_state)) = reload_run_state_with(state, &run_id).await else {
-        return (StatusCode::NOT_FOUND, "run not found").into_response();
-    };
-
-    let run_ids = match state.store().run_ids().await {
-        Ok(ids) => ids,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let mut by_node: HashMap<Option<String>, Vec<RunChildEntry>> = HashMap::new();
-    let mut projected: Vec<(Vec<Event>, RunState)> = Vec::new();
-    for child_id in run_ids {
-        if child_id == run_id {
-            continue;
-        }
-        let events = match state.store().events(&child_id).await {
-            Ok(e) => e,
-            Err(_) => continue,
+        let state = self;
+        let run_id = run_id.to_string();
+        // The parent must exist, so a typo'd id is a 404 — not a silent empty list
+        // (which would be indistinguishable from a childless Run).
+        let Some((_, parent_state)) = reload_run_state_with(state, &run_id).await else {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
         };
-        let Some(child) = project(&events) else {
-            continue;
-        };
-        projected.push((events, child));
-    }
-    // #588 / ADR-0069 §4: a grandchild's wait shows on the child row too, so
-    // the Orchestration tab and the run list agree about the same child.
-    let mut states: Vec<RunState> = projected.iter().map(|(_, s)| s.clone()).collect();
-    child_awaiting::overlay(&mut states);
-    for ((events, _), child) in projected.into_iter().zip(states) {
-        if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
-            continue;
-        }
-        let cost = state.live_facts.cost(&child, &events).await;
-        let stalled = is_stalled(&child);
-        let entry = RunChildEntry {
-            run_id: child.run_id,
-            pipeline_name: child.pipeline_name,
-            name: child.name,
-            status: child.status,
-            stalled,
-            started_at: child.started_at,
-            completed_at: child.completed_at,
-            cost,
-        };
-        by_node.entry(child.parent_node_id).or_default().push(entry);
-    }
 
-    // Group order: the parent's own node-definition order, so the response reads
-    // like the pipeline; a group keyed by an unknown or absent node id lands last.
-    let mut nodes: Vec<RunChildrenGroup> = Vec::new();
-    let mut seen: std::collections::HashSet<Option<String>> = Default::default();
-    let mut push_group = |node_id: Option<String>, by_node: &mut HashMap<_, _>| {
-        if !seen.insert(node_id.clone()) {
-            return;
-        }
-        let mut children: Vec<RunChildEntry> = by_node.remove(&node_id).unwrap_or_default();
-        if children.is_empty() {
-            return;
-        }
-        children.sort_by(|a, b| match (&a.started_at, &b.started_at) {
-            (Some(x), Some(y)) => x.cmp(y),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
-        nodes.push(RunChildrenGroup { node_id, children });
-    };
-    for def in &parent_state.node_defs {
-        push_group(Some(def.id.clone()), &mut by_node);
-    }
-    let mut leftover_keys: Vec<Option<String>> = by_node.keys().cloned().collect();
-    leftover_keys.sort();
-    for key in leftover_keys {
-        push_group(key, &mut by_node);
-    }
+        let run_ids = match state.store().run_ids().await {
+            Ok(ids) => ids,
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+        };
 
-    Json(RunChildrenResponse { run_id, nodes }).into_response()
-}
+        let mut by_node: HashMap<Option<String>, Vec<RunChildEntry>> = HashMap::new();
+        let mut projected: Vec<(Vec<Event>, RunState)> = Vec::new();
+        for child_id in run_ids {
+            if child_id == run_id {
+                continue;
+            }
+            let events = match state.store().events(&child_id).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let Some(child) = project(&events) else {
+                continue;
+            };
+            projected.push((events, child));
+        }
+        // #588 / ADR-0069 §4: a grandchild's wait shows on the child row too, so
+        // the Orchestration tab and the run list agree about the same child.
+        let mut states: Vec<RunState> = projected.iter().map(|(_, s)| s.clone()).collect();
+        child_awaiting::overlay(&mut states);
+        for ((events, _), child) in projected.into_iter().zip(states) {
+            if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
+                continue;
+            }
+            let cost = state.live_facts.cost(&child, &events).await;
+            let stalled = is_stalled(&child);
+            let entry = RunChildEntry {
+                run_id: child.run_id,
+                pipeline_name: child.pipeline_name,
+                name: child.name,
+                status: child.status,
+                stalled,
+                started_at: child.started_at,
+                completed_at: child.completed_at,
+                cost,
+            };
+            by_node.entry(child.parent_node_id).or_default().push(entry);
+        }
+
+        // Group order: the parent's own node-definition order, so the response reads
+        // like the pipeline; a group keyed by an unknown or absent node id lands last.
+        let mut nodes: Vec<RunChildrenGroup> = Vec::new();
+        let mut seen: std::collections::HashSet<Option<String>> = Default::default();
+        let mut push_group = |node_id: Option<String>, by_node: &mut HashMap<_, _>| {
+            if !seen.insert(node_id.clone()) {
+                return;
+            }
+            let mut children: Vec<RunChildEntry> = by_node.remove(&node_id).unwrap_or_default();
+            if children.is_empty() {
+                return;
+            }
+            children.sort_by(|a, b| match (&a.started_at, &b.started_at) {
+                (Some(x), Some(y)) => x.cmp(y),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            });
+            nodes.push(RunChildrenGroup { node_id, children });
+        };
+        for def in &parent_state.node_defs {
+            push_group(Some(def.id.clone()), &mut by_node);
+        }
+        let mut leftover_keys: Vec<Option<String>> = by_node.keys().cloned().collect();
+        leftover_keys.sort();
+        for key in leftover_keys {
+            push_group(key, &mut by_node);
+        }
+
+        Json(RunChildrenResponse { run_id, nodes }).into_response()
+    }
 }

@@ -184,9 +184,10 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
     // An id the bank does not know is a warning on the Run, never a refusal.
     let frozen_skills = {
         let instance_skills = defaults.skills.clone();
-        let project_skills = project_skills_for_path(state, &target.run_repo_root.to_string_lossy())
-            .await
-            .unwrap_or_default();
+        let project_skills =
+            project_skills_for_path(state, &target.run_repo_root.to_string_lossy())
+                .await
+                .unwrap_or_default();
         let bank = state.skills.bank_names().await;
         let tiers = pdo_skill::domain::selection::SkillTiers {
             instance: Some(&instance_skills),

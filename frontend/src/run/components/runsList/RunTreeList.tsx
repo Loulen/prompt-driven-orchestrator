@@ -1,0 +1,162 @@
+import { ChevronDown, ChevronRight, Pencil } from "lucide-react";
+import type { RunListEntry } from "../../../shared/generated/RunListEntry";
+import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
+import { handleSelectionKeydown } from "../../../lib/selectionKeys";
+import { flattenVisible, type RunTreeNode } from "../../model/runTree";
+import { EMPTY_RUN_FILTER } from "../../model/runFilter";
+import SelectControl from "../../../components/SelectControl";
+import RunRow from "./RunRow";
+import type { RunsPaneState } from "../../store/runsList/useRunsPane";
+
+interface Props {
+  pane: RunsPaneState;
+  runs: RunListEntry[];
+  triggers: TriggerListEntry[];
+  selectedRunId: string | null;
+  onSelectRun: (runId: string) => void;
+  onSelectTrigger?: (triggerId: string) => void;
+  onShowTriggers: () => void;
+}
+
+/**
+ * The scrollable run tree: the flat or Projet-grouped active list, then the
+ * collapsible Archived section.
+ */
+export default function RunTreeList({
+  pane,
+  runs,
+  triggers,
+  selectedRunId,
+  onSelectRun,
+  onSelectTrigger,
+  onShowTriggers,
+}: Props) {
+  const {
+    runsScrollRef, visibleRunIds, runSelIds, selectVisible, clearSel, cleanupItems, setRunBulkKind,
+    filterActive, filteredRuns, setRunFilter, runGroups, activeTree, isExpanded, runSel, selectGroup,
+    openProjectEditor, archivedCount, archivedOpen, setArchivedOpen, archivedTree,
+  } = pane;
+  const renderRunRow = (node: RunTreeNode) => (
+    <RunRow
+      key={node.run.run_id}
+      node={node}
+      pane={pane}
+      selectedRunId={selectedRunId}
+      triggers={triggers}
+      onSelectRun={onSelectRun}
+      onSelectTrigger={onSelectTrigger}
+      onShowTriggers={onShowTriggers}
+    />
+  );
+
+  return (
+    <div
+      ref={runsScrollRef}
+      className="flex-1 overflow-y-auto outline-none"
+      tabIndex={-1}
+      onKeyDown={(e) =>
+        handleSelectionKeydown(e, {
+          tab: "runs",
+          visibleIds: visibleRunIds,
+          hasSelection: runSelIds.length > 0,
+          selectVisible,
+          clear: clearSel,
+          onBulkDelete: () => {
+            if (cleanupItems.length > 0) setRunBulkKind("cleanup");
+          },
+        })
+      }
+    >
+      {runs.length === 0 && (
+        <div
+          className="px-3 py-4 text-center text-fg-4"
+          style={{ fontSize: "11px" }}
+        >
+          No runs yet
+        </div>
+      )}
+      {runs.length > 0 && filterActive && filteredRuns.length === 0 && (
+        <div
+          className="px-3 py-4 text-center text-fg-4"
+          style={{ fontSize: "11px" }}
+          data-testid="run-filter-empty"
+        >
+          No runs match filters
+          <button
+            data-testid="run-filter-empty-clear"
+            className="mt-1 block w-full cursor-pointer text-acc hover:underline"
+            onClick={() => setRunFilter(EMPTY_RUN_FILTER)}
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+      {runGroups === null
+        ? flattenVisible(activeTree, isExpanded).map(renderRunRow)
+        : runGroups.map((group) => (
+            <div
+              key={group.key}
+              data-testid="run-repo-group"
+              data-project={group.kind === "project" ? "true" : "false"}
+            >
+              <div
+                className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
+                style={{ fontSize: "10px" }}
+                title={group.title}
+              >
+                {/* #577 — "select all in this repo" (reveals on header hover). */}
+                <SelectControl
+                  selected={
+                    group.items.length > 0 &&
+                    flattenVisible(group.items, isExpanded).every((n) => runSel.has(n.run.run_id))
+                  }
+                  label={`Select all in ${group.label}`}
+                  onSelect={() =>
+                    selectGroup(
+                      "runs",
+                      flattenVisible(group.items, isExpanded).map((n) => n.run.run_id),
+                    )
+                  }
+                  testId="run-group-select-all"
+                />
+                <span className="truncate" data-testid="run-repo-label">
+                  {group.label}
+                </span>
+                {/* #552 — the pencil that names / renames the Projet. */}
+                <button
+                  onClick={() => openProjectEditor(group)}
+                  className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
+                  title={group.kind === "project" ? "Edit project" : "Name project"}
+                  aria-label={group.kind === "project" ? "Edit project" : "Name project"}
+                  data-testid="run-group-pencil"
+                >
+                  <Pencil size={10} />
+                </button>
+              </div>
+              {flattenVisible(group.items, isExpanded).map(renderRunRow)}
+            </div>
+          ))}
+      {/* #136 — archived runs in their own flat, collapsible section below
+          the active list. Reuses renderRunRow verbatim (same archived
+          styling / Forget action). The rendered gate is `archivedOpen`
+          ALONE — never `archivedOpen || some(selected)`, which dead-locks
+          the chevron while a selected run is archived (see decision 4). */}
+      {archivedCount > 0 && (
+        <div data-testid="run-archived-section" className="border-t border-line">
+          <button
+            onClick={() => setArchivedOpen((o) => !o)}
+            className="flex w-full items-center gap-1.5 px-3 py-2 text-fg-2 transition-colors hover:bg-bg-3 cursor-pointer"
+            style={{ fontSize: "11.5px" }}
+            data-testid="run-archived-toggle"
+          >
+            {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span className="font-medium">
+              Archived <span data-testid="run-archived-count">({archivedCount})</span>
+            </span>
+          </button>
+          {archivedOpen && flattenVisible(archivedTree, isExpanded).map(renderRunRow)}
+        </div>
+      )}
+    </div>
+  );
+}

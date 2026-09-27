@@ -1,7 +1,6 @@
 //! The Run's Pipeline Manager session: its spawn — the harness of the Run, or
 //! the instance's pinned profile — and the pin's resolution.
 
-
 use pdo_harness::agent_choice::ResolvedCombo;
 use tracing::{error, info, warn};
 
@@ -40,8 +39,7 @@ pub async fn spawn_manager_session(
     )
     .unwrap_or_default();
 
-    let full_prompt =
-        build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
+    let full_prompt = build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
 
     let session_name = pdo_session::domain::names::manager_session_name(run_id);
     // The manager follows the harness OF THE RUN — `Run → instance → floor`, no node
@@ -130,13 +128,7 @@ pub async fn spawn_manager_session(
     // event lands FIRST, the tmux spawn after. The projection ignores this kind —
     // the wire's `has_manager` stays an observed tmux fact, so a spawn that fails
     // after the reservation reads `false`, not `true`.
-    emit_run_event(
-        state,
-        run_id,
-        EventKind::ManagerStarted,
-        None,
-    )
-    .await;
+    emit_run_event(state, run_id, EventKind::ManagerStarted, None).await;
     if let Err(e) = pdo_session::application::launch::spawn(
         state.tmux(),
         &session_name,
@@ -157,10 +149,7 @@ pub async fn spawn_manager_session(
             effort: manager_combo.effort.as_deref(),
             session_id: None,
         },
-        sandbox
-            .as_ref()
-            .map(SandboxExec::wrap)
-            .as_ref(),
+        sandbox.as_ref().map(SandboxExec::wrap).as_ref(),
         // The manager is an infra session, not a pipeline node — it never calls
         // `pdo complete`, so it gets no turn-end `Stop` hook.
         false,

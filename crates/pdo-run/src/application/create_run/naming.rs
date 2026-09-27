@@ -32,11 +32,7 @@ pub fn placeholder_run_name(run_id: &str) -> String {
 /// itself is chosen by `Runs::start_run`. Hence the `false` branch ignoring `name`:
 /// a blank name still yields `UserProvided`, a stable placeholder with no rename
 /// instruction, which is what the Trigger case needs.
-pub fn run_name_hint(
-    auto_name: bool,
-    _name: Option<&str>,
-    input: &str,
-) -> RunNameHint {
+pub fn run_name_hint(auto_name: bool, _name: Option<&str>, input: &str) -> RunNameHint {
     if !auto_name {
         RunNameHint::UserProvided
     } else if input.trim().is_empty() {

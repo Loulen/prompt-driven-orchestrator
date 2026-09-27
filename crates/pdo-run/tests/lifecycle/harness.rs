@@ -120,7 +120,10 @@ impl pdo_pipeline::application::ports::SkillBank for NoBank {
         &self,
         references: &[pdo_skill::domain::selection::SkillRef],
     ) -> (Vec<pdo_skill::domain::sidecar::SidecarSkill>, Vec<String>) {
-        (Vec::new(), references.iter().map(|r| r.id.clone()).collect())
+        (
+            Vec::new(),
+            references.iter().map(|r| r.id.clone()).collect(),
+        )
     }
     fn import_sidecar<'a>(
         &'a self,
@@ -246,7 +249,11 @@ pub struct Build {
     pub db: Option<sqlx::SqlitePool>,
 }
 
-pub async fn build_with(root: PathBuf, owned: Option<tempfile::TempDir>, b: Build) -> Arc<TestState> {
+pub async fn build_with(
+    root: PathBuf,
+    owned: Option<tempfile::TempDir>,
+    b: Build,
+) -> Arc<TestState> {
     let db = match b.db {
         Some(db) => db,
         None => {
@@ -261,8 +268,9 @@ pub async fn build_with(root: PathBuf, owned: Option<tempfile::TempDir>, b: Buil
     };
     let (bus_tx, _) = broadcast::channel(80);
     let port = next_test_daemon_port();
-    let tmux: Arc<dyn Tmux> =
-        b.tmux.unwrap_or_else(|| Arc::new(pdo_session::adapters::tmux::TmuxCli::for_daemon(port)));
+    let tmux: Arc<dyn Tmux> = b
+        .tmux
+        .unwrap_or_else(|| Arc::new(pdo_session::adapters::tmux::TmuxCli::for_daemon(port)));
     let live_facts: Arc<dyn LiveFacts> = if b.on_disk {
         Arc::new(DiskLiveFacts::new(root.clone(), b.home.clone()))
     } else {

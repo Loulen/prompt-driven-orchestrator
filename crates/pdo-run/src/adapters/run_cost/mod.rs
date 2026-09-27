@@ -51,21 +51,20 @@
 //! - **Tolerant parsing.** Torn writes (an interleaved-flush `clauclaude-opus-4-8`
 //!   was observed) are skipped line-by-line, never `?`-propagated.
 
-
 mod breakdown;
 mod executions;
 mod memo;
 mod reported;
 mod slices;
 
+pub use crate::domain::run_cost::{
+    frozen_execution_identity, CostContribution, CostScope, FrozenExecutionIdentity,
+    ModelEffortSlice, RunCostBreakdown,
+};
 pub use breakdown::{compute_run_cost_breakdown, cost_unavailable};
 pub use memo::{
     compute_run_cost_breakdown_cached, event_fingerprint, max_transcript_mtime_millis,
     reported_stores_mtime_millis,
-};
-pub use crate::domain::run_cost::{
-    frozen_execution_identity, CostContribution, CostScope, FrozenExecutionIdentity,
-    ModelEffortSlice, RunCostBreakdown,
 };
 
 use crate::domain::prices::PriceTable;
@@ -84,6 +83,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
+/// Dedup by `(message.id, requestId)`, keeping the first. Lines without a
+/// `message.id` are always counted (no key to dedup on).
+///
+/// Unknown model ids are **de-dated** before collection, so a dated id and its
+/// family name one offender, not two — the same key a human would add to
+/// `models.yaml`. `partial` is **derived** from that set, so no caller can flip
+/// one without the other. `<synthetic>` is priced $0 by the table (never
+/// `None`), so it never lands here.
 #[cfg(test)]
 fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat {
     let mut seen = HashSet::new();
@@ -100,10 +107,6 @@ fn aggregate_with_seen(
 ) -> CostStat {
     aggregate_by_model(lines, prices, seen).0
 }
-
-/// Per-model cost subtotals of one transcript fold — the raw material of
-/// [`ModelEffortSlice`] (ADR-0065). Keyed by the **verbatim** `message.model`;
-/// unpriced ids still land here (at $0) so the axis can name the model and mark
 
 /// The distinct harnesses this Run launched a node on that have **no cost
 /// source**. Read off the `NodeStarted` payloads (the frozen-at-spawn harness,
@@ -305,7 +308,6 @@ fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<Line>) {
     }
 }
 
-
 /// Estimated cost for a run: every CC transcript whose project dir is under
 /// `<repo_root>/.pdo/runs/<run_id>/`. `None` when no such dir exists (UI "—");
 /// `Some { usd: 0.0, .. }` when dirs exist but carry no priced tokens.
@@ -338,7 +340,6 @@ pub fn compute_run_cost(
     }
     Some(aggregate(lines.into_iter(), prices))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1084,7 +1085,12 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let run_id = "resurrected-pane";
 
-        let node_dir = pdo_workspace::adapters::git::worktrees::sub_worktree_path(repo.path(), run_id, "claude", 1);
+        let node_dir = pdo_workspace::adapters::git::worktrees::sub_worktree_path(
+            repo.path(),
+            run_id,
+            "claude",
+            1,
+        );
         let project = claude.join(cc_project_dirname(&node_dir));
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
@@ -1239,7 +1245,12 @@ mod tests {
         let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "dedup";
-        let working_dir = pdo_workspace::adapters::git::worktrees::sub_worktree_path(repo.path(), run_id, "worker", 1);
+        let working_dir = pdo_workspace::adapters::git::worktrees::sub_worktree_path(
+            repo.path(),
+            run_id,
+            "worker",
+            1,
+        );
         let project = claude.join(cc_project_dirname(&working_dir));
         std::fs::create_dir_all(project.join("first/subagents")).unwrap();
         let replay = format!(
@@ -2043,4 +2054,3 @@ mod tests {
         }
     }
 }
-

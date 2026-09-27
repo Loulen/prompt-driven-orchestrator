@@ -23,10 +23,7 @@ use pdo_workspace::adapters::git::worktrees::remove_secondary_snapshot;
 /// `RunArchived`. No cascade and no status precondition here — the caller
 /// ([`super::cleanup_run`]) holds the page-mount lock and has already decided this
 /// run must go.
-pub async fn archive_single_run(
-    state: &Runs,
-    run_state: &RunState,
-) -> Result<(), Box<Response>> {
+pub async fn archive_single_run(state: &Runs, run_state: &RunState) -> Result<(), Box<Response>> {
     let run_id = run_state.run_id.as_str();
 
     if let Err(error) = state.pages.release(run_id).await {
@@ -208,7 +205,6 @@ pub async fn archive_single_run(
     info!("Run {run_id} archived (cleanup complete)");
     Ok(())
 }
-
 
 /// Recursively copy `src` into `dst`. Plain files and subdirectories ONLY — sound
 /// because the artifacts tree the callers copy holds `output.md` files plus optional

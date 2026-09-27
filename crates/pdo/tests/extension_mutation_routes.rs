@@ -600,7 +600,11 @@ async fn an_extension_refusing_everything_refuses_every_mutation_route() {
     assert_eq!(not_refused, Vec::<String>::new());
 
     // Nothing moved.
-    assert_eq!(daemon.get_json("/runs").await, json!([]), "no Run was created");
+    assert_eq!(
+        daemon.get_json("/runs").await,
+        json!([]),
+        "no Run was created"
+    );
     let project = daemon
         .get_json(&format!("/projects/{}", fixtures.project))
         .await;

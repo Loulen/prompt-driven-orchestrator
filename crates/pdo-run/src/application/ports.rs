@@ -45,7 +45,11 @@ pub trait LiveFacts: Send + Sync {
     fn fill<'a>(&'a self, run: &'a mut RunState, events: &'a [Event]) -> BoxFuture<'a, ()>;
     /// The Run's cost alone, without the lines-of-code walk: what the children
     /// list shows. `None` when it is unavailable (the surfaces' "—", never $0).
-    fn cost<'a>(&'a self, run: &'a RunState, events: &'a [Event]) -> BoxFuture<'a, Option<CostStat>>;
+    fn cost<'a>(
+        &'a self,
+        run: &'a RunState,
+        events: &'a [Event],
+    ) -> BoxFuture<'a, Option<CostStat>>;
 }
 
 /// The Pipeline Manager's sessions, as a Run's detail observes them.

@@ -50,7 +50,12 @@ pub(super) fn upload_transport_error(
 /// The detail of a non-2xx answer whose body is NOT the daemon's JSON (#839):
 /// it came from a reverse proxy or another intermediary, and a 413 there is
 /// that layer's body limit, not `max_attachments_mb`.
-pub(super) fn intermediary_refusal_detail(url: &str, status: u16, attachment_bytes: u64, raw: &str) -> String {
+pub(super) fn intermediary_refusal_detail(
+    url: &str,
+    status: u16,
+    attachment_bytes: u64,
+    raw: &str,
+) -> String {
     let sent = format_attachment_bytes(attachment_bytes);
     if status == 413 {
         return format!(

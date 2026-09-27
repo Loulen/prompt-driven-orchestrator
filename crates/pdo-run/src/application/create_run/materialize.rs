@@ -21,23 +21,41 @@ use crate::application::events::append_event;
 use crate::application::paths::{run_scoped_pipeline_path, run_scoped_prompts_dir};
 use crate::Runs;
 
+/// What the Run is made of on disk.
+pub(super) struct Materials<'a> {
+    pub target: &'a Target,
+    pub launchable: &'a Launchable,
+    pub provisioning_plan: &'a ProvisioningPlan,
+    /// The prompt, written to `_input/output.md`.
+    pub input: &'a str,
+    pub attachments: &'a [InputFile],
+}
+
 /// Make the Run exist on disk and in its log. Returns its worktree.
 pub(super) async fn materialize(
     state: &Runs,
-    target: &Target,
-    launchable: &Launchable,
-    provisioning_plan: &ProvisioningPlan,
     run_id: &str,
     started: &mut Started,
-    input: &str,
-    attachments: &[InputFile],
+    materials: Materials<'_>,
 ) -> Result<PathBuf, Refusal> {
+    let Materials {
+        target,
+        launchable,
+        provisioning_plan,
+        input,
+        attachments,
+    } = materials;
     // Artifacts live under <target_repo>/.pdo/runs/<run-id>/.
     let run_repo_root = &target.run_repo_root;
     let worktree_dir = worktree_dir_for_run(run_repo_root, run_id);
     let branch_name = format!("pdo/run-{run_id}");
 
-    if let Err(e) = create_worktree(run_repo_root, &worktree_dir, &branch_name, &target.source_ref) {
+    if let Err(e) = create_worktree(
+        run_repo_root,
+        &worktree_dir,
+        &branch_name,
+        &target.source_ref,
+    ) {
         error!("failed to create worktree: {e}");
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -68,9 +86,10 @@ pub(super) async fn materialize(
     // worktree's provisioning manifest, so no skill ever reaches the Run branch. A
     // versioned homonym is skipped and reported on the Run; an I/O failure refuses
     // the Run like a provisioning failure (never a partial environment).
-    let skill_delivery = state
-        .skills
-        .deliver(&worktree_dir, run_repo_root, run_id, &started.skills);
+    let skill_delivery =
+        state
+            .skills
+            .deliver(&worktree_dir, run_repo_root, run_id, &started.skills);
     match skill_delivery {
         Ok(skipped) => {
             for skipped in &skipped {
@@ -213,10 +232,16 @@ pub(crate) fn copy_pipeline_to_run(
 /// worktree and excluded their paths in the repo's `info/exclude`; take both back
 /// before the (then empty) Run directory goes.
 pub fn reap_orphan_run_worktree(repo_root: &Path, worktree_dir: &Path, branch: &str) {
-    pdo_workspace::adapters::git::worktrees::reap_orphan_sub_worktree(repo_root, worktree_dir, branch);
+    pdo_workspace::adapters::git::worktrees::reap_orphan_sub_worktree(
+        repo_root,
+        worktree_dir,
+        branch,
+    );
     if let Some(run_id) = branch.strip_prefix("pdo/run-") {
         let _ = pdo_skill::adapters::delivery::remove_exclusions(repo_root, run_id);
-        let _ = std::fs::remove_dir_all(pdo_skill::domain::delivery::snapshot_root(repo_root, run_id));
+        let _ = std::fs::remove_dir_all(pdo_skill::domain::delivery::snapshot_root(
+            repo_root, run_id,
+        ));
     }
     if let Some(run_dir) = worktree_dir.parent() {
         let _ = std::fs::remove_dir(run_dir);

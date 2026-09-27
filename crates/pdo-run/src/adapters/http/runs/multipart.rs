@@ -13,7 +13,9 @@ use super::attachments::{
     has_image_extension, multipart_cut_message, multipart_field_error,
     sanitize_attachment_filename, sanitize_image_filename, MultipartRefusal,
 };
-use crate::application::create_run::{CreateRunRequest, InputFile, TargetRepoInput, CREATE_RUN_FIELDS};
+use crate::application::create_run::{
+    CreateRunRequest, InputFile, TargetRepoInput, CREATE_RUN_FIELDS,
+};
 use crate::application::stale::detector::parse_bool_setting;
 use crate::domain::state::SandboxMode;
 

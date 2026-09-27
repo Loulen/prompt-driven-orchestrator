@@ -4,7 +4,9 @@
 
 mod graph;
 
-pub use graph::{edge_info_from_pipeline, node_def_from_pipeline, EdgeInfo, NodeDefInfo, PortBrief};
+pub use graph::{
+    edge_info_from_pipeline, node_def_from_pipeline, EdgeInfo, NodeDefInfo, PortBrief,
+};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

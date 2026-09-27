@@ -34,10 +34,7 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
     // whose retry-ability is still an open question.
     let is_terminal = matches!(
         run_state.status,
-        RunStatus::Completed
-            | RunStatus::Failed
-            | RunStatus::Skipped
-            | RunStatus::Halted
+        RunStatus::Completed | RunStatus::Failed | RunStatus::Skipped | RunStatus::Halted
     );
     if !is_terminal {
         return (
@@ -49,9 +46,7 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
             .into_response();
     }
 
-    let run_started_event = events
-        .iter()
-        .find(|e| e.kind == EventKind::RunStarted);
+    let run_started_event = events.iter().find(|e| e.kind == EventKind::RunStarted);
     let run_started_payload = run_started_event.and_then(|e| e.payload.as_ref());
 
     let pipeline_name = run_state.pipeline_name.clone();
@@ -153,7 +148,9 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
     };
     // ADR-0064: a retried Run is created by the daemon, not from a node
     // session — it is a root even when the archived original had a parent.
-    let new_run_resp = state.create_run_response(new_run_req, Vec::new(), None).await;
+    let new_run_resp = state
+        .create_run_response(new_run_req, Vec::new(), None)
+        .await;
 
     info!("retry_all: archived run {run_id}, created new run");
     new_run_resp

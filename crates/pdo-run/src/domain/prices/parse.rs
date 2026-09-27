@@ -328,5 +328,4 @@ mod tests {
         assert!(tier.rows.is_empty());
         assert_eq!(tier.rejected.len(), 1);
     }
-
 }

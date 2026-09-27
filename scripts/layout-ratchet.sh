@@ -136,9 +136,14 @@ cd "$(git rev-parse --show-toplevel)"
 #   outputs_validator, merge_action, recovery, boot_recovery, stale_detector and
 #   repo_edit_refusal to crates/pdo-run; run_sandbox.rs keeps only the sandbox context's routes
 #   and profile referents, renamed sandbox_ports.rs.
+# frontend/src/components: 131 and crates/pdo-daemon/src: 19 (#925, spec #913) ratchet down:
+#   the Run's surfaces moved out — run_cost and run_refs to crates/pdo-run (price_table keeps
+#   only the price sync); NewRunModal, NodeDetailPanel, MarkdownArtifactModal,
+#   OrchestrationTab, RunFilters, runFilter, ForgetRunModal, CleanupConfirmModal,
+#   RepositoriesSection, SecondaryRepoRow and their tests to frontend/src/run/.
 BASELINES='
-frontend/src/components 152
-crates/pdo-daemon/src 21
+frontend/src/components 131
+crates/pdo-daemon/src 19
 '
 
 fail=0

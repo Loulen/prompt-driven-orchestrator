@@ -93,14 +93,9 @@ pub fn parse_line(raw: &str) -> Option<Line> {
     })
 }
 
-/// Dedup by `(message.id, requestId)`, keeping the first. Lines without a
-/// `message.id` are always counted (no key to dedup on).
-///
-/// Unknown model ids are **de-dated** before collection, so a dated id and its
-/// family name one offender, not two — the same key a human would add to
-/// `models.yaml`. `partial` is **derived** from that set, so no caller can flip
-/// one without the other. `<synthetic>` is priced $0 by the table (never
-/// `None`), so it never lands here.
+/// Per-model cost subtotals of one transcript fold — the raw material of
+/// [`crate::domain::run_cost::ModelEffortSlice`] (ADR-0065). Keyed by the
+/// **verbatim** `message.model`; unpriced ids still land here (at $0) so the axis can name the model and mark
 /// it `†`, with the family remembered per id just like the run-level set.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModelUsage {
@@ -108,7 +103,7 @@ pub struct ModelUsage {
     pub unpriced: BTreeSet<String>,
 }
 
-/// [`aggregate_with_seen`] plus the per-model ventilation the « By model » axis
+/// The run-level aggregate plus the per-model ventilation the « By model » axis
 /// folds (ADR-0065). The run-level [`CostStat`] is byte-identical to before —
 /// the axis is additive, the totals never move.
 pub fn aggregate_by_model(

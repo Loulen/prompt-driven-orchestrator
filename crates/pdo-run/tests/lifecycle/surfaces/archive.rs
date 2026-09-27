@@ -1040,7 +1040,6 @@ async fn cleanup_run_removes_surviving_sub_worktrees_and_branches() {
     assert_eq!(run_state.status, event_log::RunStatus::Archived);
 }
 
-
 /// R1: archiving a run copies `worktree/.pdo/artifacts` + `pipeline.yaml` to
 /// the durable global dir `$HOME/.pdo/runs/<id>/` BEFORE the worktree is
 /// destroyed, and the run still projects `Archived`.

@@ -5409,12 +5409,12 @@ async fn skill_referents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdo_run::adapters::disk_live_facts::compute_run_loc;
     use pdo_run::application::complete_node::{
         complete_node_iteration, CompletionAttempt, CompletionSource,
     };
     use pdo_run::application::release_completion::release_node_completion;
     use pdo_run::application::reopen::embed_reopen_for_targeted_command;
-    use pdo_run::adapters::disk_live_facts::compute_run_loc;
     use pdo_run::application::scheduler::advance as run_advance;
     use pdo_run::domain::completion_refusal;
     use pdo_workspace::adapters::git::branches::list_branches;
@@ -5789,8 +5789,12 @@ mod tests {
         let mut inner = Arc::try_unwrap(state).ok().expect("an unshared test state");
         inner.sandbox_home_override = Some(home.clone());
         Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
-            inner.session =
-                contexts::test_session(weak.clone(), inner.repo_root.clone(), next_test_daemon_port(), None);
+            inner.session = contexts::test_session(
+                weak.clone(),
+                inner.repo_root.clone(),
+                next_test_daemon_port(),
+                None,
+            );
             inner.run = contexts::test_run(contexts::TestRun {
                 state: weak.clone(),
                 db: &inner.db,

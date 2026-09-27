@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 fn node_name(run_state: &RunState, node_id: &str) -> String {
     run_state
         .node_defs
@@ -73,7 +72,9 @@ fn live_nodes(run_id: &str, run_state: &RunState) -> Vec<(String, i64, String)> 
             (
                 n.node_id.clone(),
                 n.iter,
-                pdo_workspace::domain::worktree_layout::sub_worktree_branch(run_id, &n.node_id, n.iter),
+                pdo_workspace::domain::worktree_layout::sub_worktree_branch(
+                    run_id, &n.node_id, n.iter,
+                ),
             )
         })
         .collect();
@@ -230,12 +231,7 @@ pub enum Resolved {
 }
 
 /// Resolve a stable ref id against the Run's log. Pure: no git call.
-pub fn resolve_id(
-    run_id: &str,
-    run_state: &RunState,
-    events: &[Event],
-    id: &str,
-) -> Resolved {
+pub fn resolve_id(run_id: &str, run_state: &RunState, events: &[Event], id: &str) -> Resolved {
     if id == FORK_ID {
         return Resolved::Git(fork_base(run_state).to_string());
     }

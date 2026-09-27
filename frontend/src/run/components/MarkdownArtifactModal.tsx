@@ -1,27 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { X, ChevronLeft, ChevronRight } from "lucide-react";
-import Markdown from "react-markdown";
-import type { Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { fetchArtifact, artifactUrl } from "../api/artifacts";
+import { fetchArtifact } from "../api/artifacts";
 import { fetchNodeIO, type FileInfo } from "../api/nodes";
 import { registerTransientOverlay } from "../../lib/overlays";
 import type { IterationInfo } from "../../shared/generated/IterationInfo";
 import type { PortType } from "../../shared/generated/PortType";
-import type { Element } from "hast";
 import ImageLightbox from "../../components/ImageLightbox";
-import MermaidDiagram from "../../components/MermaidDiagram";
-
-// #369 (residual flicker): react-markdown remounts a custom component whenever the
-// `components` entry at its position changes IDENTITY. NodeDetailPanel polls node
-// I/O and re-renders the modal on every tick; rebuilding `remarkPlugins`/`components`
-// inline handed react-markdown a fresh `components.pre` each time, remounting the
-// routed <MermaidDiagram> — which resets to its empty `aria-busy` frame before
-// re-rendering the SVG (the blink). Hoisting `remarkPlugins` to module scope (and
-// memoising `components` per instance below) keeps those identities stable, so a
-// poll-driven re-render no longer remounts the diagram.
-const REMARK_PLUGINS = [remarkGfm];
+import { stripFrontmatter } from "../model/frontmatter";
+import ArtifactBody from "./artifacts/ArtifactBody";
+import ArtifactHeader from "./artifacts/ArtifactHeader";
+import { useMarkdownComponents } from "./artifacts/markdownComponents";
 
 export type ArtifactSource =
   | { kind: "static"; files: FileInfo[] }
@@ -224,71 +212,12 @@ export default function MarkdownArtifactModal({
   // frozen screen (`lib/overlays.ts`, #825). Nothing here knows what a tour is.
   useEffect(() => registerTransientOverlay(onClose), [onClose]);
 
-  // #369: memoise the markdown component overrides so their identities survive a
-  // poll-driven re-render (see the module-scope note on REMARK_PLUGINS). `setLightbox`
-  // is a stable useState setter, so an empty dep array is correct and keeps the
-  // `pre`/`img` references constant for the modal's whole lifetime — no remount of
-  // the routed <MermaidDiagram>, hence no flicker.
-  const markdownComponents = useMemo<Components>(
-    () => ({
-      // #698: an absolute http(s) link leaves the app in a new tab — a release note
-      // pointing at GitHub must never navigate the SPA away. Relative links stay.
-      a: ({ href, children, ...rest }) => {
-        const external = typeof href === "string" && /^https?:\/\//i.test(href);
-        return (
-          <a
-            href={href}
-            {...rest}
-            {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
-          >
-            {children}
-          </a>
-        );
-      },
-      img: ({ src, alt }) => {
-        const url = typeof src === "string" ? src : undefined;
-        return (
-          <img
-            src={url}
-            alt={alt ?? ""}
-            className="cursor-zoom-in rounded transition-opacity hover:opacity-90"
-            onClick={() => {
-              // A markdown-embedded <img> is rendered in isolation by
-              // react-markdown — there is no collected list to page through, so it
-              // is an honest single-image set.
-              if (url) setLightbox({ images: [url], index: 0 });
-            }}
-          />
-        );
-      },
-      // A ```mermaid fenced block parses to
-      // <pre><code class="language-mermaid">src</code></pre>. Detect it on the
-      // child <code> and unwrap to a rendered SVG diagram; every other block falls
-      // through to a plain <pre>. We override `pre` (not `code`) to avoid emitting a
-      // <div> inside a <pre> (invalid nesting). Regular ```ts / ```bash fences are
-      // untouched. (#240)
-      pre: ({ node, children, ...rest }) => {
-        const child = node?.children?.[0];
-        const isMermaid =
-          child?.type === "element" &&
-          child.tagName === "code" &&
-          ((child.properties?.className as string[]) ?? []).includes(
-            "language-mermaid",
-          );
-        if (isMermaid) {
-          const codeEl = child as Element;
-          const text = codeEl.children?.[0];
-          const source =
-            text && text.type === "text" ? text.value.replace(/\n$/, "") : "";
-          return <MermaidDiagram source={source} />;
-        }
-        return <pre {...rest}>{children}</pre>;
-      },
-    }),
+  const zoom = useCallback(
+    (images: string[], index: number) => setLightbox({ images, index }),
     [],
   );
+  const markdownComponents = useMarkdownComponents(zoom);
 
-  const frontmatter = file?.frontmatter;
   // An inline document is rendered as given (a release note may open on a `---` rule).
   const bodyContent = content ? (isInline ? content : stripFrontmatter(content)) : null;
 
@@ -313,173 +242,41 @@ export default function MarkdownArtifactModal({
         aria-modal="true"
         aria-label={portName}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          {header ?? (
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-fg" style={{ fontSize: "13px" }}>
-                {portName}
-              </span>
-              {file?.path && (
-                <span
-                  className="font-mono text-fg-4"
-                  style={{ fontSize: "10px" }}
-                >
-                  {file.path}
-                </span>
-              )}
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            {hasIterNav && (
-              <div className="flex items-center gap-1" data-testid="iter-nav">
-                <button
-                  data-testid="iter-prev"
-                  onClick={goPrevIter}
-                  disabled={iterIndex <= 0}
-                  className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
-                  aria-label="Previous iteration"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-                <span
-                  className="font-mono text-fg-3"
-                  style={{ fontSize: "11px" }}
-                >
-                  iter {iter} of {iterNumbers[iterNumbers.length - 1]}
-                </span>
-                <button
-                  data-testid="iter-next"
-                  onClick={goNextIter}
-                  disabled={iterIndex >= iterNumbers.length - 1}
-                  className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
-                  aria-label="Next iteration"
-                >
-                  <ChevronRight size={14} />
-                </button>
-              </div>
-            )}
-            {isRepeated && (
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setFileIndex(Math.max(0, fileIndex - 1))}
-                  disabled={fileIndex === 0}
-                  className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
-                  aria-label="Previous file"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-                <span
-                  className="font-mono text-fg-3"
-                  style={{ fontSize: "11px" }}
-                >
-                  file {fileIndex + 1} of {total}
-                </span>
-                <button
-                  onClick={() =>
-                    setFileIndex(Math.min(total - 1, fileIndex + 1))
-                  }
-                  disabled={fileIndex === total - 1}
-                  className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
-                  aria-label="Next file"
-                >
-                  <ChevronRight size={14} />
-                </button>
-              </div>
-            )}
-            <button
-              onClick={onClose}
-              className="rounded p-1 text-fg-3 hover:bg-bg-3 hover:text-fg"
-              aria-label="Close"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
+        <ArtifactHeader
+          header={header}
+          portName={portName}
+          path={file?.path}
+          hasIterNav={hasIterNav}
+          iter={iter}
+          iterIndex={iterIndex}
+          iterNumbers={iterNumbers}
+          goPrevIter={goPrevIter}
+          goNextIter={goNextIter}
+          isRepeated={isRepeated}
+          fileIndex={fileIndex}
+          total={total}
+          setFileIndex={setFileIndex}
+          onClose={onClose}
+        />
 
-        {/* Body */}
-        <div className="flex-1 overflow-auto p-4">
-          {isImage ? (
-            <ImageBody
-              runId={runId}
-              files={files}
-              filesLoading={filesLoading}
-              fileIndex={fileIndex}
-              portType={portType}
-              onZoom={(images, index) => setLightbox({ images, index })}
-            />
-          ) : isHtml ? (
-            /*
-             * #333 / ADR-0028: render the html artifact in a maximally isolated
-             * iframe. SECURITY INVARIANTS — DO NOT RELAX:
-             *  - `sandbox=""` is a literal empty allow-list: no scripts, opaque
-             *    origin, no form submission, no top-level navigation. NEVER add
-             *    `allow-scripts` / `allow-forms` / `allow-same-origin` — that
-             *    would let agent-authored (prompt-injectable) HTML execute.
-             *  - The HTML is passed via the `srcDoc` PROP, never
-             *    `dangerouslySetInnerHTML` and never concatenated into the
-             *    parent DOM.
-             *  - Uses raw `content` (fetched text), not `bodyContent` (which
-             *    strips a leading `---` frontmatter fence html doesn't have).
-             */
-            filesLoading || loading ? (
-              <span className="text-fg-4" style={{ fontSize: "11px" }}>
-                Loading...
-              </span>
-            ) : file?.exists ? (
-              <iframe
-                data-testid="html-artifact-frame"
-                sandbox=""
-                srcDoc={content ?? ""}
-                title={portName}
-                className="h-[70vh] w-full rounded border border-line bg-white"
-              />
-            ) : (
-              <span className="text-fg-4" style={{ fontSize: "11px" }}>
-                File does not exist yet.
-              </span>
-            )
-          ) : (
-            <>
-              {banner}
-              {/* Frontmatter card */}
-              {frontmatter && Object.keys(frontmatter).length > 0 && (
-                <div
-                  className="mb-3 grid rounded border border-line bg-bg-0 p-2 font-mono"
-                  style={{
-                    fontSize: "10.5px",
-                    gridTemplateColumns: "auto 1fr",
-                    gap: "4px 10px",
-                  }}
-                >
-                  {Object.entries(frontmatter).map(([k, v]) => (
-                    <FrontmatterRow key={k} field={k} value={v} />
-                  ))}
-                </div>
-              )}
-
-              {/* Markdown body */}
-              {filesLoading || loading ? (
-                <span className="text-fg-4" style={{ fontSize: "11px" }}>
-                  Loading...
-                </span>
-              ) : bodyContent ? (
-                <div className="artifact-markdown prose-sm">
-                  <Markdown
-                    remarkPlugins={REMARK_PLUGINS}
-                    components={markdownComponents}
-                  >
-                    {bodyContent}
-                  </Markdown>
-                </div>
-              ) : isInline ? null : (
-                <span className="text-fg-4" style={{ fontSize: "11px" }}>
-                  {file?.exists ? "Could not load content." : "File does not exist yet."}
-                </span>
-              )}
-            </>
-          )}
-        </div>
+        <ArtifactBody
+          runId={runId}
+          portName={portName}
+          portType={portType}
+          isImage={isImage}
+          isHtml={isHtml}
+          isInline={isInline}
+          files={files}
+          filesLoading={filesLoading}
+          fileIndex={fileIndex}
+          file={file}
+          loading={loading}
+          content={content}
+          bodyContent={bodyContent}
+          banner={banner}
+          markdownComponents={markdownComponents}
+          onZoom={zoom}
+        />
 
         {footer && (
           <div className="shrink-0 border-t border-line bg-bg-1 px-4 py-3">{footer}</div>
@@ -495,111 +292,4 @@ export default function MarkdownArtifactModal({
       )}
     </div>
   );
-}
-
-function FrontmatterRow({ field, value }: { field: string; value: unknown }) {
-  const display =
-    typeof value === "object" ? JSON.stringify(value) : String(value);
-  return (
-    <>
-      <span className="text-fg-3">{field}</span>
-      <span className="text-fg">{display}</span>
-    </>
-  );
-}
-
-function ImageBody({
-  runId,
-  files,
-  filesLoading,
-  fileIndex,
-  portType,
-  onZoom,
-}: {
-  runId: string;
-  files: FileInfo[];
-  filesLoading: boolean;
-  fileIndex: number;
-  portType: PortType;
-  onZoom: (images: string[], index: number) => void;
-}) {
-  const existingFiles = files.filter((f) => f.exists);
-
-  if (filesLoading) {
-    return (
-      <span className="text-fg-4" style={{ fontSize: "11px" }}>
-        Loading...
-      </span>
-    );
-  }
-
-  if (existingFiles.length === 0) {
-    return (
-      <span className="text-fg-4" style={{ fontSize: "11px" }}>
-        No image files yet.
-      </span>
-    );
-  }
-
-  if (portType === "image_list") {
-    return (
-      <div className="flex flex-col gap-3" data-testid="image-gallery">
-        {existingFiles.map((f, i) => (
-          <div key={f.path} className="flex flex-col gap-1">
-            <img
-              src={artifactUrl(runId, f.path)}
-              alt={f.path.split("/").pop() ?? ""}
-              className="max-h-[60vh] w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
-              onClick={() =>
-                onZoom(
-                  existingFiles.map((ef) => artifactUrl(runId, ef.path)),
-                  i,
-                )
-              }
-              data-testid={`gallery-image-${i}`}
-            />
-            <span
-              className="font-mono text-fg-4"
-              style={{ fontSize: "10px" }}
-            >
-              {f.path.split("/").pop()}
-            </span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  const currentIdx = existingFiles[fileIndex] ? fileIndex : 0;
-  const current = existingFiles[currentIdx];
-  if (!current) return null;
-
-  return (
-    <div className="flex flex-col items-center gap-2" data-testid="image-viewer">
-      <img
-        src={artifactUrl(runId, current.path)}
-        alt={current.path.split("/").pop() ?? ""}
-        className="max-h-[60vh] max-w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
-        onClick={() =>
-          onZoom(
-            existingFiles.map((f) => artifactUrl(runId, f.path)),
-            currentIdx,
-          )
-        }
-        data-testid="image-viewer-img"
-      />
-      <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
-        {current.path.split("/").pop()}
-      </span>
-    </div>
-  );
-}
-
-function stripFrontmatter(content: string): string {
-  const trimmed = content.trimStart();
-  if (!trimmed.startsWith("---")) return content;
-  const after = trimmed.slice(3);
-  const end = after.indexOf("\n---");
-  if (end === -1) return content;
-  return after.slice(end + 4).trimStart();
 }

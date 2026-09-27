@@ -59,7 +59,11 @@ pub fn run_git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
     run_git_env(repo, args, &[])
 }
 
-pub fn run_git_env(repo: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Result<Vec<u8>, GitError> {
+pub fn run_git_env(
+    repo: &Path,
+    args: &[&str],
+    envs: &[(&str, &Path)],
+) -> Result<Vec<u8>, GitError> {
     let out = std::process::Command::new("git")
         .args(args)
         .envs(envs.iter().map(|(k, v)| (*k, *v)))

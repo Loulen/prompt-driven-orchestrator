@@ -26,7 +26,6 @@ pub(super) async fn launch(
     name_hint: RunNameHint,
     manager_enabled: bool,
 ) {
-
     if !sandboxed {
         // Host path — inline, no docker.
         spawn_ready_after_event(state, run_id).await;
@@ -55,20 +54,18 @@ pub(super) async fn launch(
             .await;
             // A vanished/half-projected state → fail loud.
             let ctx = match reload_run_state(&task_state, &task_run_id).await {
-                Some((_, rs)) => {
-                    match context_from_state(&task_state, &rs).await {
-                        Ok(ctx) => ctx,
-                        Err(e) => {
-                            fail_run_sandbox_prep(
-                                &task_state,
-                                &task_run_id,
-                                &format!("sandbox prep failed: {e:#}"),
-                            )
-                            .await;
-                            return;
-                        }
+                Some((_, rs)) => match context_from_state(&task_state, &rs).await {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        fail_run_sandbox_prep(
+                            &task_state,
+                            &task_run_id,
+                            &format!("sandbox prep failed: {e:#}"),
+                        )
+                        .await;
+                        return;
                     }
-                }
+                },
                 None => {
                     fail_run_sandbox_prep(
                         &task_state,

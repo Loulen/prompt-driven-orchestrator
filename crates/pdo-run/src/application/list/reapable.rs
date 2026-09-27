@@ -90,77 +90,78 @@ pub fn dir_size_bytes(root: &Path) -> Option<u64> {
 }
 
 impl Runs {
-/// GET /runs/reapable — read-only surfacing of terminal runs whose on-disk
-/// worktree(s) still exist, so a human or a janitor pipeline can reclaim the disk via
-/// the explicit `cleanup_run` command.
-///
-/// DOCTRINE (ADR-0012a): this endpoint NEVER deletes anything. It only *surfaces*
-/// candidates; the irreversible teardown stays a pipeline/human action.
-///
-/// A run is emitted iff it is terminal AND not already `Archived` AND a `worktree/`
-/// or `nodes/` dir still exists under its run dir.
+    /// GET /runs/reapable — read-only surfacing of terminal runs whose on-disk
+    /// worktree(s) still exist, so a human or a janitor pipeline can reclaim the disk via
+    /// the explicit `cleanup_run` command.
+    ///
+    /// DOCTRINE (ADR-0012a): this endpoint NEVER deletes anything. It only *surfaces*
+    /// candidates; the irreversible teardown stays a pipeline/human action.
+    ///
+    /// A run is emitted iff it is terminal AND not already `Archived` AND a `worktree/`
+    /// or `nodes/` dir still exists under its run dir.
     pub async fn list_reapable(&self, q: ReapableQuery) -> Response {
-    let state = self;
-    let run_ids = match state.store().run_ids().await {
-        Ok(ids) => ids,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let now = chrono::Utc::now();
-    let mut entries = Vec::new();
-    for run_id in run_ids {
-        let events = match state.store().events(&run_id).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let Some(run_state) = project(&events) else {
-            continue;
+        let state = self;
+        let run_ids = match state.store().run_ids().await {
+            Ok(ids) => ids,
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
         };
 
-        // `Archived` is terminal too, so `is_terminal()` alone is not enough.
-        let eligible =
-            run_state.status.is_terminal() && run_state.status != RunStatus::Archived;
-        if !eligible {
-            continue;
-        }
+        let now = chrono::Utc::now();
+        let mut entries = Vec::new();
+        for run_id in run_ids {
+            let events = match state.store().events(&run_id).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let Some(run_state) = project(&events) else {
+                continue;
+            };
 
-        let repo_root = effective_repo_root(state, &run_state);
-        let run_dir = repo_root.join(".pdo").join("runs").join(&run_id);
-        let worktree_present = run_dir.join("worktree").exists() || run_dir.join("nodes").exists();
-        if !worktree_present {
-            continue;
-        }
+            // `Archived` is terminal too, so `is_terminal()` alone is not enough.
+            let eligible =
+                run_state.status.is_terminal() && run_state.status != RunStatus::Archived;
+            if !eligible {
+                continue;
+            }
 
-        // `completed_at` is borrowed here and moved into the entry below.
-        let age_secs = run_state
-            .completed_at
-            .as_deref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| {
-                now.signed_duration_since(dt.with_timezone(&chrono::Utc))
-                    .num_seconds()
+            let repo_root = effective_repo_root(state, &run_state);
+            let run_dir = repo_root.join(".pdo").join("runs").join(&run_id);
+            let worktree_present =
+                run_dir.join("worktree").exists() || run_dir.join("nodes").exists();
+            if !worktree_present {
+                continue;
+            }
+
+            // `completed_at` is borrowed here and moved into the entry below.
+            let age_secs = run_state
+                .completed_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| {
+                    now.signed_duration_since(dt.with_timezone(&chrono::Utc))
+                        .num_seconds()
+                });
+
+            let approx_disk_bytes = if q.size {
+                dir_size_bytes(&run_dir)
+            } else {
+                None
+            };
+
+            entries.push(ReapableEntry {
+                run_id: run_state.run_id,
+                pipeline_name: run_state.pipeline_name,
+                status: run_state.status,
+                completed_at: run_state.completed_at,
+                age_secs,
+                worktree_present,
+                effective_repo: repo_root.to_string_lossy().into_owned(),
+                approx_disk_bytes,
             });
+        }
 
-        let approx_disk_bytes = if q.size {
-            dir_size_bytes(&run_dir)
-        } else {
-            None
-        };
-
-        entries.push(ReapableEntry {
-            run_id: run_state.run_id,
-            pipeline_name: run_state.pipeline_name,
-            status: run_state.status,
-            completed_at: run_state.completed_at,
-            age_secs,
-            worktree_present,
-            effective_repo: repo_root.to_string_lossy().into_owned(),
-            approx_disk_bytes,
-        });
+        Json(entries).into_response()
     }
-
-    Json(entries).into_response()
-}
 }

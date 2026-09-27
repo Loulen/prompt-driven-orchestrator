@@ -10,6 +10,7 @@ use pdo_daemon::{DaemonConfig, DaemonHandle, ExtensionHostHandle, RouterLayer};
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::{ExtensionHost, Extensions};
 
+use crate::contexts;
 use crate::identify::with_identify;
 
 /// How to start a daemon.
@@ -98,12 +99,13 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
     } = config;
     let host: Arc<dyn ExtensionHost> = Arc::new(Extensions::new(extensions));
     daemon.extension_host = ExtensionHostHandle(host.clone());
-    daemon.router_layer = Some(identify_layer(host, inner_layer));
+    daemon.router_layer = Some(layer_asking(host, inner_layer));
     let handle = pdo_daemon::serve_with_config(addr, repo_root, daemon).await?;
     Ok(Daemon { handle })
 }
 
-/// Not covered by semver: what `serve` wraps the legacy router with — `inner`
+/// Not covered by semver: what `serve` plugs into the legacy daemon — the
+/// wiring of the extracted contexts, and around the assembled router `inner`
 /// (if any), then `identify` in front of everything. The test suite's daemons
 /// use it so every integration test goes through the same head as `pdo daemon`.
 #[doc(hidden)]
@@ -111,11 +113,13 @@ pub fn composed_router_layer(
     extensions: Vec<Box<dyn Extension>>,
     inner: Option<RouterLayer>,
 ) -> RouterLayer {
-    identify_layer(Arc::new(Extensions::new(extensions)), inner)
+    layer_asking(Arc::new(Extensions::new(extensions)), inner)
 }
 
-/// `inner` (if any), then `identify` asking `host`, in front of everything.
-fn identify_layer(host: Arc<dyn ExtensionHost>, inner: Option<RouterLayer>) -> RouterLayer {
+/// The wiring of the extracted contexts, and around the router `inner` (if
+/// any), then `identify` — all asking the same `host`.
+fn layer_asking(host: Arc<dyn ExtensionHost>, inner: Option<RouterLayer>) -> RouterLayer {
+    let contexts_host = host.clone();
     RouterLayer::new(move |router| {
         let router = match &inner {
             Some(inner) => inner.apply(router),
@@ -123,4 +127,5 @@ fn identify_layer(host: Arc<dyn ExtensionHost>, inner: Option<RouterLayer>) -> R
         };
         with_identify(router, host.clone())
     })
+    .with_contexts(move |resources| contexts::wire(resources, contexts_host.clone()))
 }

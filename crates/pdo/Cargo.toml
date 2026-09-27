@@ -45,6 +45,7 @@ path = "tests/it.rs"
 pdo-extension-api.workspace = true
 pdo-kernel.workspace = true
 pdo-legacy.workspace = true
+pdo-platform.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true

@@ -27,11 +27,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The files holding the assembled router (relative to this crate), and the
-/// function that builds each part: the legacy crate's router, and the routes of
-/// each context already extracted from it.
+/// function that builds each part: the legacy crate's router, and the
+/// `router()` of every context already extracted (merged by the daemon or the
+/// composition root).
 const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("../pdo-daemon/src/lib.rs", "fn build_router("),
     ("../pdo-sandbox/src/adapters/http/mod.rs", "pub fn router("),
+    ("../pdo-platform/src/adapters/http/mod.rs", "pub fn router("),
 ];
 
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
@@ -580,8 +582,7 @@ fn every_route_is_called_by_at_least_one_integration_test() {
 
 #[test]
 fn the_router_reader_sees_every_route_declaration() {
-    let src = std::fs::read_to_string(crate_dir().join("../pdo-daemon/src/lib.rs")).unwrap();
-    let routes = router_routes(&src, "fn build_router(");
+    let routes = assembled_routes();
     let paths: BTreeSet<&str> = routes.iter().map(|(_, p)| p.as_str()).collect();
     // Spot checks on the shapes the reader must handle.
     for expected in [

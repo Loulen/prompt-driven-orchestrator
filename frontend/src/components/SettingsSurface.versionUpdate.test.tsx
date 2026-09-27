@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { InstanceSettings } from "../settings/model/settings";
-import type { UpdateStatus } from "../platform/model/daemon";
+import type { UpdateStatus } from "../platform/model/update";
 
 // #697 — Settings › General › Version & update. Every api function the surface (and the
 // panels it mounts) imports must exist in this factory: Vitest 4 wraps the module
@@ -43,18 +43,20 @@ vi.mock("../api", () => ({
   createSkillFolder: vi.fn(),
   updateSkillFolder: vi.fn(),
   deleteSkillFolder: vi.fn(),
-  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
-  applyUpdate: vi.fn(),
-  fetchUpdateAttemptLog: (...args: unknown[]) => fetchUpdateAttemptLogMock(...args),
-  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;
   },
 }));
+vi.mock("../platform/api/update", () => ({
+  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
+  applyUpdate: vi.fn(),
+  fetchUpdateAttemptLog: (...args: unknown[]) => fetchUpdateAttemptLogMock(...args),
+  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
+}));
 
 import SettingsSurface from "./SettingsSurface";
-import { UPDATE_STATUS_CHANGED } from "../lib/updateStatus";
+import { UPDATE_STATUS_CHANGED } from "../platform/model/updateStatus";
 
 function settings(): InstanceSettings {
   return {

@@ -68,12 +68,6 @@ vi.mock("../api", () => ({
     .mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  // #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
-  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
-  applyUpdate: vi.fn(),
-  fetchUpdateAttemptLog: (...args: unknown[]) =>
-    fetchUpdateAttemptLogMock(...args),
-  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   browseFs: (...args: unknown[]) => browseFsMock(...args),
   fetchInstanceProvisioning: (...args: unknown[]) =>
     fetchInstanceProvisioningMock(...args),
@@ -102,6 +96,14 @@ vi.mock("../api", () => ({
     status?: number;
     body?: unknown;
   },
+}));
+// #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
+vi.mock("../platform/api/update", () => ({
+  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
+  applyUpdate: vi.fn(),
+  fetchUpdateAttemptLog: (...args: unknown[]) =>
+    fetchUpdateAttemptLogMock(...args),
+  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
 }));
 
 // #432: the staging-profile panel reads the sandbox context's own API module. Same Proxy

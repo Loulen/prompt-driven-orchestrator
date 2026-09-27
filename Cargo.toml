@@ -7,6 +7,7 @@ resolver = "2"
 members = [
   "crates/pdo-extension-api",
   "crates/pdo-kernel",
+  "crates/pdo-platform",
   "crates/pdo-harness",
   "crates/pdo-sandbox",
   "crates/pdo-daemon",
@@ -15,7 +16,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "1.111.1"
+version = "1.111.2"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -62,6 +63,7 @@ ts-rs = { version = "12", features = ["no-serde-warnings"] }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
 pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.1.0" }
 pdo-kernel = { path = "crates/pdo-kernel" }
+pdo-platform = { path = "crates/pdo-platform" }
 pdo-harness = { path = "crates/pdo-harness" }
 pdo-sandbox = { path = "crates/pdo-sandbox" }
 # The legacy crate keeps its library name `pdo_daemon` (so `RUST_LOG=pdo_daemon::…`

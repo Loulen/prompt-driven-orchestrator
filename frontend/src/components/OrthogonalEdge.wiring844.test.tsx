@@ -4,7 +4,7 @@ import { Handle, Position, ReactFlow, ReactFlowProvider, type Edge, type Node } 
 import OrthogonalEdge, { type OrthogonalEdgeData } from "./OrthogonalEdge";
 import NodeRimHandles from "./NodeRimHandles";
 import { anchorHandleId } from "../lib/anchorSide";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { useWiringStore } from "../stores/wiringStore";
 import type { PortSide } from "../shared/generated/PortSide";
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";

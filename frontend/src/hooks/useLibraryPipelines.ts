@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { fetchLibraryPipelines } from "../api";
-import type { LibraryPipelineEntry } from "../api";
-import type { OpenPipeline } from "../stores/editStore";
+import { fetchLibraryPipelines } from "../pipeline/api/libraryPipelines";
+import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
+import type { OpenPipeline } from "../pipeline/store/editState";
 import { pipelineToYamlObject } from "../lib/serializePipeline";
 import { deepEqual } from "../lib/deepEqual";
 import { stripLayout } from "../lib/layoutFields";

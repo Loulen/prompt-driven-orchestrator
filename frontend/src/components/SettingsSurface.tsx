@@ -13,7 +13,7 @@ import { announceSettingsChanged, useSettings } from "../hooks/useSettings";
 import { updateSettings } from "../api";
 import VersionUpdateSection from "../platform/components/VersionUpdateSection";
 import { KeyValueRow } from "../shared/ui/key-value-row";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { AgentChoice } from "../shared/generated/AgentChoice";
 import type { BoolSettingField, EnumSettingFieldWithReason, InstanceSettings, SettingField, StringSettingField } from "../settings/model/settings";
 import type { SkillRef } from "../shared/generated/SkillRef";

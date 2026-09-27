@@ -117,9 +117,15 @@ cd "$(git rev-parse --show-toplevel)"
 #   skill_delivery to crates/pdo-skill; the skill bank UI to frontend/src/skill/.
 # frontend/src/components: 163 and crates/pdo-daemon/src: 60 — #916, #917, #918, #919, #920
 #   and #921 combined.
+# frontend/src/components: 154 and crates/pdo-daemon/src: 52 (#922, spec #913) ratchet down:
+#   the pipeline context moved out — pipeline, pipeline_semantics (deleted: test-only),
+#   pipeline_migrator, pipeline_watcher, portable_pipeline, library_store,
+#   workflow_importer, mutation_validator and frontmatter_parser to crates/pdo-pipeline;
+#   EditCanvas, PipelineInfoPanel and their tests to frontend/src/pipeline/components/.
+#   pipeline_ports.rs is admitted: the legacy side of the context's ports (the Runs, Stats).
 BASELINES='
-frontend/src/components 163
-crates/pdo-daemon/src 60
+frontend/src/components 154
+crates/pdo-daemon/src 52
 '
 
 fail=0

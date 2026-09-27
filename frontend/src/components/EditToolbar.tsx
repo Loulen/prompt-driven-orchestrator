@@ -1,7 +1,7 @@
 import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal } from "lucide-react";
 import type { PendingTone } from "../lib/reviewComments";
 import type { NodeType } from "../shared/generated/NodeType";
-import type { LibraryEntry } from "../api";
+import type { LibraryEntry } from "../pipeline/model/library";
 import { Tooltip } from "../shared/ui/tooltip";
 import LibraryDropdown from "./LibraryDropdown";
 import {
@@ -10,7 +10,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "../shared/ui/dropdown-menu";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 
 interface Props {
   onAddNode: (type: NodeType) => void;

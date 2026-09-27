@@ -1,8 +1,8 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import TabBar from "./TabBar";
-import { useEditStore } from "../stores/editStore";
-import type { OpenPipeline } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
+import type { OpenPipeline } from "../pipeline/store/editState";
 
 function tab(id: string, over: Partial<OpenPipeline> = {}): OpenPipeline {
   return {

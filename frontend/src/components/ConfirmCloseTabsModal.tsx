@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import type { OpenPipeline } from "../stores/editStore";
-import { hasUnsavedWork } from "../stores/editStore";
+import type { OpenPipeline } from "../pipeline/store/editState";
+import { hasUnsavedWork } from "../pipeline/store/editState";
 
 interface Props {
   open: boolean;

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Save, X } from "lucide-react";
-import { useEditStore, hasUnsavedWork } from "../stores/editStore";
-import type { OpenPipeline } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
+import { hasUnsavedWork } from "../pipeline/store/editState";
+import type { OpenPipeline } from "../pipeline/store/editState";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
 
 function useRelativeTime(ts: number | undefined): string | null {

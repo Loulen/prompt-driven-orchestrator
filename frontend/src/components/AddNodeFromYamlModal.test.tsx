@@ -1,17 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
-import { useEditStore } from "../stores/editStore";
-import type { ParseNodeResult } from "../api";
+import { useEditStore } from "../pipeline/store/editStore";
+import type { ParseNodeResult } from "../pipeline/model/library";
 
 // Keep the real `libraryPortToPortDef`; only `parseNodeYaml` is stubbed per-test.
 vi.mock("../api", async (orig) => {
   const actual = await orig<typeof import("../api")>();
   return { ...actual, parseNodeYaml: vi.fn() };
 });
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
 vi.mock("../lib/nanoid", () => ({ generateNodeId: () => "fresh-node-id" }));
 
-import { parseNodeYaml } from "../api";
+import { parseNodeYaml } from "../pipeline/api/library";
 const mockParse = vi.mocked(parseNodeYaml);
 
 function seedTab() {

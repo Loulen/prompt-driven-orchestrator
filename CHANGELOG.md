@@ -10,6 +10,32 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.8 — Contexte `pipeline` extrait (#922, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les
+routes `/pipelines*`, `/library*` et `/nodes/parse` répondent comme avant).
+
+- Nouveau crate `pdo-pipeline` (domain / application / adapters) : le modèle de pipeline et son
+  parse, les références qu'il fait à lui-même, les régions de boucle et les cycles, le migrateur,
+  le document portable, l'import d'un workflow Claude Code, la bibliothèque de nodes, l'identité
+  d'une pipeline (nom ⇄ fichier) et les règles d'une édition pendant un Run quittent
+  `pdo-legacy` (`pipeline`, `pipeline_migrator`, `portable_pipeline`, `workflow_importer`,
+  `library_store`, `mutation_validator`, `frontmatter_parser`, `pipeline_watcher`). Le registre
+  d'instance, la bibliothèque et le watcher sont des adaptateurs.
+- Chaque mutation (créer, enregistrer, renommer, dupliquer, supprimer, importer un document ou
+  un workflow, épingler ou retirer un node de la bibliothèque) passe par un use case qui
+  construit une Opération (`pipeline` ou `library_entry`) et appelle l'autorisation.
+- Les Runs actifs d'une pipeline et l'absorption Stats d'un renommage sont des ports que le crate
+  legacy implémente tant que ces contextes y vivent (`pipeline_ports.rs`).
+- `pipeline_semantics` et le module `library_store::pipelines`, qui ne servaient qu'à des
+  tests (l'ancienne bibliothèque de pipelines, retirée par #774), sont supprimés avec leurs tests.
+- Les cibles `RUST_LOG` changent : `pdo_daemon::pipeline_watcher` devient
+  `pdo_pipeline::adapters::watcher`, `pdo_daemon::pipeline_migrator` devient
+  `pdo_pipeline::adapters::fs_migration`, `pdo_daemon` (handlers des pipelines) devient
+  `pdo_pipeline::application`.
+- Front : l'API, le store de l'éditeur, le canvas, le panneau d'info et l'onglet Pipelines passent
+  dans `frontend/src/pipeline/`, découpés en fichiers de 400 lignes au plus.
+
 ## 1.111.7 — API d'extension : identité et Autorisation d'opération (#930, spec #913)
 
 Sans extension, rien ne change : le contrat HTTP/WS est identique (snapshots inchangés).

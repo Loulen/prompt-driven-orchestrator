@@ -1,4 +1,4 @@
-import type { SelectionKind } from "../stores/editStore";
+import type { SelectionKind } from "../pipeline/store/editState";
 import type { RunStatus } from "../shared/generated/RunStatus";
 import { isNodeActiveRun } from "../run/model/runStatus";
 

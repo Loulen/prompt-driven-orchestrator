@@ -20,27 +20,19 @@ mod edge_router;
 mod event_log;
 #[allow(dead_code)]
 mod fire_decision;
-mod frontmatter_parser;
 mod graph_resolver;
 mod guard_runner;
 mod input_resolution;
 mod instance_config;
-mod library_store;
 #[allow(dead_code)]
 mod loop_region;
 #[allow(dead_code)]
 mod merge_action;
-mod mutation_validator;
 mod node_io_resolver;
 mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
-mod pipeline;
-mod pipeline_migrator;
-#[cfg(test)]
-mod pipeline_semantics;
-mod pipeline_watcher;
-mod portable_pipeline;
+mod pipeline_ports;
 mod price_table;
 mod prompt_augmenter;
 mod reap_policy;
@@ -72,13 +64,12 @@ mod trigger_scheduler;
 mod trigger_store;
 #[allow(dead_code)]
 mod variable_resolver;
-mod workflow_importer;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
@@ -87,7 +78,7 @@ use axum::extract::{
 };
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::Router;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
@@ -98,7 +89,7 @@ use tracing::{error, info, warn};
 use ts_rs::TS;
 
 use crate::contexts::ContextResourcesSeed;
-pub use crate::contexts::{ContextResources, Contexts, SessionRunPorts};
+pub use crate::contexts::{ContextResources, Contexts, PipelineResources, SessionRunPorts};
 use crate::node_spawn::SpawnContext;
 #[cfg(test)]
 use crate::node_spawn::{spawn_node, SpawnDeps, SpawnOutcome};
@@ -134,6 +125,15 @@ pub(crate) use pdo_workspace::domain::provisioning;
 // reports. Every skill gesture goes through `AppState::skills`.
 pub(crate) use pdo_skill::domain::delivery as skill_delivery;
 pub(crate) use pdo_skill::domain::selection as skill_selection;
+
+// The pipeline context's rules and adapters the rest of this crate reads: the
+// document, its frontmatter, the registry's paths and the watcher. Every
+// pipeline gesture of an actor goes through the context's own routes.
+pub(crate) use pdo_pipeline::adapters::self_writes::SelfWrites;
+pub(crate) use pdo_pipeline::adapters::watcher as pipeline_watcher;
+pub(crate) use pdo_pipeline::domain::migration as pipeline_migrator;
+pub(crate) use pdo_pipeline::domain::pipeline;
+pub(crate) use pdo_pipeline::domain::portable as portable_pipeline;
 
 const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
 const DEFAULT_DAEMON_URL: &str = pdo_platform::domain::service_unit::DEFAULT_DAEMON_URL;
@@ -450,7 +450,7 @@ struct AppState {
     /// `pipeline_changed` broadcasts for paths seen within the TTL window — that
     /// is how our own writes are told apart from external ones (vim, git
     /// checkout) without ignoring the latter.
-    recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
+    recent_writes: SelfWrites,
     /// Live handle to the pipeline file watcher. Run dirs are watched
     /// individually and non-recursively (see `pipeline_watcher::watch_run_dir`),
     /// so run creation must register each new run dir here.
@@ -552,26 +552,6 @@ impl AppState {
     fn tmux(&self) -> &dyn pdo_session::application::ports::Tmux {
         self.session.tmux().as_ref()
     }
-}
-
-/// TTL during which a recorded self-write suppresses watcher broadcasts.
-/// Larger than the debouncer interval (1s) with margin for filesystem latency.
-pub(crate) const SELF_WRITE_TTL: Duration = Duration::from_secs(2);
-
-/// Entries older than this are GCed when a new write is recorded.
-const SELF_WRITE_GC: Duration = Duration::from_secs(5);
-
-/// Record a path the daemon is about to write so the file watcher can skip its
-/// own broadcast when notify reports the change. Call this *before* `std::fs::write`
-/// — the watcher otherwise races against the insert.
-fn mark_self_write(map: &Mutex<HashMap<PathBuf, Instant>>, path: &Path) {
-    let now = Instant::now();
-    let mut guard = match map.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    guard.retain(|_, t| now.duration_since(*t) < SELF_WRITE_GC);
-    guard.insert(path.to_path_buf(), now);
 }
 
 #[derive(Deserialize)]
@@ -813,14 +793,6 @@ struct TriggerListEntry {
     #[serde(flatten)]
     trigger: trigger_store::Trigger,
     effective_repo: String,
-}
-
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct PipelineVariableInfo {
-    var_type: pipeline::VariableType,
-    #[ts(type = "unknown")]
-    default: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -1860,7 +1832,7 @@ pub fn run_migrate(dir: Option<std::path::PathBuf>, dry_run: bool) -> Result<()>
                             errors += 1;
                             continue;
                         }
-                        match pipeline_migrator::migrate_pipeline_file(&path) {
+                        match pdo_pipeline::adapters::fs_migration::migrate_pipeline_file(&path) {
                             Ok(_) => {
                                 println!(
                                     "migrated {} (backup: {})",
@@ -2582,7 +2554,7 @@ pub async fn serve_with_config(
     // `nested_daemon`: it is a pure filesystem fix-up, unrelated to tmux.
     {
         let repo_pipelines = repo_root.join(".pdo").join("pipelines");
-        match pipeline_migrator::migrate_stranded_flat_prompts(&repo_pipelines) {
+        match pdo_pipeline::adapters::fs_migration::migrate_stranded_flat_prompts(&repo_pipelines) {
             Ok(n) if n > 0 => info!(
                 "#231 migration: moved {n} stranded prompt(s) in {}",
                 repo_pipelines.display()
@@ -2592,13 +2564,13 @@ pub async fn serve_with_config(
         }
     }
 
-    migrate_legacy_pipelines(&repo_root)
+    pdo_pipeline::adapters::registry::unify_legacy_registries(&repo_root)
         .map_err(|error| anyhow::anyhow!("pipeline registry migration failed: {error}"))?;
 
     let (event_tx, _) = broadcast::channel::<event_log::Event>(256);
     let (pipeline_tx, _) = broadcast::channel::<serde_json::Value>(64);
 
-    let recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
+    let recent_writes = SelfWrites::new();
 
     let (run_modified_tx, run_modified_rx) =
         tokio::sync::mpsc::unbounded_channel::<pipeline_watcher::RunPipelineModified>();
@@ -2654,6 +2626,9 @@ pub async fn serve_with_config(
         service_health_override: config.service_health_override,
         tmux_cmd_override: config.tmux_cmd_override.clone(),
         allowed_ws_origins: config.allowed_ws_origins.clone(),
+        skills: skills.clone(),
+        pipeline_events: pipeline_tx.clone(),
+        self_writes: recent_writes.clone(),
     };
 
     let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
@@ -3859,36 +3834,6 @@ async fn fire_trigger_now(
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
-        .route("/pipelines", get(list_pipelines))
-        .route("/pipelines/{pipeline_id}", get(get_pipeline))
-        .route(
-            "/pipelines/{pipeline_id}/duplicate",
-            post(duplicate_pipeline),
-        )
-        .route("/pipelines/{pipeline_id}/rename", put(rename_pipeline))
-        .route(
-            "/pipelines/{pipeline_id}/document",
-            get(get_pipeline_document),
-        )
-        // #673 / ADR-0062: the skills sidecar of the portable document — a zip of
-        // `<pipeline>.skills/<id>/…` to unpack beside the YAML. The import takes it
-        // back as a base64 field of the same request; own body limit so a sidecar
-        // carrying a few reference files is not refused by the 2 MB default.
-        .route(
-            "/pipelines/{pipeline_id}/document/skills",
-            get(get_pipeline_document_skills),
-        )
-        .route(
-            "/pipelines/import",
-            post(import_pipeline_document).route_layer(axum::extract::DefaultBodyLimit::max(
-                pdo_skill::adapters::http::SKILL_UPLOAD_BODY_LIMIT,
-            )),
-        )
-        .route(
-            "/pipelines/{pipeline_id}",
-            axum::routing::put(save_pipeline).delete(delete_pipeline),
-        )
-        .route("/pipelines", post(create_pipeline))
         // #779: the multipart body of `POST /runs` is bounded by the
         // `max_attachments_mb` setting, enforced IN the handler on the attachment
         // parts (read fresh per request) — not by a static limit frozen at
@@ -3970,22 +3915,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         // re-answer); stop on a dead session is a calm no-op.
         .route("/runs/{run_id}/manager/start", post(start_run_manager))
         .route("/runs/{run_id}/manager/stop", post(stop_run_manager))
-        .route("/library", get(list_library))
-        .route("/library", post(save_to_library))
-        // Parse a single node's YAML into a canvas-instantiable spec. Disk-free.
-        .route("/nodes/parse", post(parse_node_yaml))
-        .route(
-            "/library/{name}",
-            axum::routing::delete(delete_from_library),
-        )
-        .route(
-            "/library/{name}/instantiate",
-            post(instantiate_from_library),
-        )
-        // #155 — import a Claude Code workflow .js as a draft pipeline (user scope).
-        // Static segment beside `/library/pipelines`; the `/library` vite proxy
-        // prefix already covers it (no vite proxy edit).
-        .route("/library/import", post(import_library_pipeline))
         .route("/triggers", get(list_triggers).post(create_trigger))
         .route("/triggers/health", get(triggers_health))
         // Dry-run a guard command with no side effects — the opposite pole of "Run
@@ -4971,1661 +4900,6 @@ impl EventRow {
     }
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct PipelineListEntry {
-    id: String,
-    name: String,
-    // Always "instance": the list only ever serves instance pipelines.
-    #[ts(type = "\"instance\"")]
-    scope: String,
-    path: String,
-    node_count: usize,
-    modified: Option<String>,
-    variables: HashMap<String, PipelineVariableInfo>,
-    /// Whether a manual Run must supply a non-empty prompt. Surfaced so the New Run
-    /// modal can make the prompt field optional.
-    prompt_required: bool,
-}
-
-#[derive(Deserialize)]
-struct CreatePipelineRequest {
-    name: String,
-    #[serde(default)]
-    scope: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SavePipelineRequest {
-    yaml: String,
-    #[serde(default)]
-    prompts: HashMap<String, String>,
-}
-
-fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntry> {
-    let mut entries = Vec::new();
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return entries;
-    };
-    for entry in read_dir.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
-            continue;
-        }
-        let file_stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        let modified = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .map(|t| {
-                let dt: chrono::DateTime<chrono::Utc> = t.into();
-                dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            });
-
-        let (name, node_count, variables, prompt_required) = match std::fs::read_to_string(&path) {
-            Ok(yaml) => match pipeline::parse_pipeline(&yaml) {
-                Ok(r) => {
-                    let vars: HashMap<String, PipelineVariableInfo> = r
-                        .pipeline
-                        .variables
-                        .iter()
-                        .map(|(k, v)| {
-                            let default = yaml_value_to_json(&v.default);
-                            (
-                                k.clone(),
-                                PipelineVariableInfo {
-                                    var_type: v.var_type.clone(),
-                                    default,
-                                },
-                            )
-                        })
-                        .collect();
-                    (
-                        r.pipeline.name.clone(),
-                        r.pipeline.nodes.len(),
-                        vars,
-                        r.pipeline.prompt_required,
-                    )
-                }
-                Err(_) => (file_stem.clone(), 0, HashMap::new(), true),
-            },
-            Err(_) => (file_stem.clone(), 0, HashMap::new(), true),
-        };
-
-        entries.push(PipelineListEntry {
-            id: file_stem,
-            name,
-            scope: scope.to_string(),
-            path: path.to_string_lossy().to_string(),
-            node_count,
-            modified,
-            variables,
-            prompt_required,
-        });
-    }
-    entries
-}
-
-async fn list_pipelines(State(state): State<Arc<AppState>>) -> Response {
-    if let Err(error) = migrate_legacy_pipelines(&state.repo_root) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response();
-    }
-    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "cannot determine instance pipeline directory",
-        )
-            .into_response();
-    };
-    let mut pipelines = scan_pipeline_dir(&dir, "instance");
-    pipelines.sort_by_key(|entry| entry.name.to_lowercase());
-    Json(pipelines).into_response()
-}
-
-async fn get_pipeline(
-    State(state): State<Arc<AppState>>,
-    AxumPath(pipeline_id): AxumPath<String>,
-) -> Response {
-    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
-    let yaml = match std::fs::read_to_string(&path) {
-        Ok(y) => y,
-        Err(_) => {
-            return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
-        }
-    };
-
-    let parse_result = match pipeline::parse_pipeline(&yaml) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("parse error: {e}") })),
-            )
-                .into_response();
-        }
-    };
-
-    let mut prompts: HashMap<String, String> = HashMap::new();
-    for node in &parse_result.pipeline.nodes {
-        if let Ok(c) = std::fs::read_to_string(pipeline::canonical_prompt_path(&path, &node.id)) {
-            prompts.insert(node.id.clone(), c);
-        }
-    }
-
-    let diagnostics: Vec<String> = parse_result
-        .diagnostics
-        .iter()
-        .map(|d| d.message.clone())
-        .collect();
-
-    let pipeline = match pipeline_json_with_node_provisioning(&parse_result.pipeline, &yaml) {
-        Ok(pipeline) => pipeline,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("parse node provisioning: {e}") })),
-            )
-                .into_response();
-        }
-    };
-
-    Json(serde_json::json!({
-        "id": pipeline_id,
-        "scope": pipeline_scope_for_response(&state.repo_root, &path),
-        "path": path.to_string_lossy(),
-        "yaml": yaml,
-        "pipeline": pipeline,
-        "prompts": prompts,
-        "diagnostics": diagnostics,
-    }))
-    .into_response()
-}
-
-fn pipeline_json_with_node_provisioning(
-    pipeline: &pipeline::PipelineDef,
-    yaml: &str,
-) -> anyhow::Result<serde_json::Value> {
-    let mut json = serde_json::to_value(pipeline)?;
-    let source: serde_yaml::Value = serde_yaml::from_str(yaml)?;
-    let Some(source_nodes) = source.get("nodes").and_then(serde_yaml::Value::as_sequence) else {
-        return Ok(json);
-    };
-    let Some(response_nodes) = json
-        .get_mut("nodes")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return Ok(json);
-    };
-
-    for source_node in source_nodes {
-        let Some(node_id) = source_node.get("id").and_then(serde_yaml::Value::as_str) else {
-            continue;
-        };
-        let Some(raw_rules) = source_node.get("provisioning") else {
-            continue;
-        };
-        let rules: provisioning::ProvisioningRules = serde_yaml::from_value(raw_rules.clone())?;
-        if let Some(response_node) = response_nodes
-            .iter_mut()
-            .find(|node| node.get("id").and_then(serde_json::Value::as_str) == Some(node_id))
-        {
-            response_node["provisioning"] = serde_json::to_value(rules)?;
-        }
-    }
-    Ok(json)
-}
-
-fn parse_error_to_structured(e: &pipeline::ParseError) -> (String, Option<usize>) {
-    match e {
-        pipeline::ParseError::InvalidYaml(yaml_err) => {
-            let loc = yaml_err.location();
-            let line = loc.map(|l| l.line());
-            (format!("{yaml_err}"), line)
-        }
-        pipeline::ParseError::MissingField(field) => {
-            (format!("missing required field: {field}"), None)
-        }
-        pipeline::ParseError::InvalidField(message) => (message.clone(), None),
-        pipeline::ParseError::UndeclaredWhenField {
-            node_id,
-            port,
-            field,
-        } => (
-            format!("switch node '{node_id}' output '{port}': when-clause field '{field}' not found in upstream schema"),
-            None,
-        ),
-    }
-}
-
-async fn save_pipeline(
-    State(state): State<Arc<AppState>>,
-    AxumPath(pipeline_id): AxumPath<String>,
-    Json(req): Json<SavePipelineRequest>,
-) -> Response {
-    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
-    if !path.exists() {
-        return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
-    }
-
-    let saved = match pipeline::parse_pipeline(&req.yaml) {
-        Ok(parsed) => parsed.pipeline,
-        Err(e) => {
-            let (message, line) = parse_error_to_structured(&e);
-            let mut body =
-                serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
-            if let Some(l) = line {
-                body["line"] = serde_json::json!(l);
-            }
-            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-        }
-    };
-
-    // #774 — the visible name and the file stem are 1:1: a save that changes
-    // the `name:` field MOVES the registry entry (`<old>.yaml` + `.prompts/`
-    // sidecar → the slug of the new name) instead of leaving a stale id
-    // behind. Collisions are refused, so two distinct pipelines can never end
-    // up listed under the same name.
-    //
-    // #886 — only a save that actually CHANGES `name:` is a rename, the same
-    // rule as `rename_pipeline`. Comparing the slug to the raw stem alone turned
-    // every save of a stem with an uppercase letter (`Mixed-Case.yaml`, whose
-    // slug is `mixed-case`) into a silent move — or a 409 while a run used it.
-    let new_name = saved.name.trim().to_string();
-    let desired_id = pipeline_slug(&new_name);
-    let name_changed = current_pipeline_name(&path).as_deref() != Some(new_name.as_str());
-    if name_changed && desired_id != pipeline_id {
-        let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "cannot determine instance pipeline directory",
-            )
-                .into_response();
-        };
-        if let Some(conflict) = pipeline_name_conflict(&dir, &pipeline_id, &new_name, &desired_id) {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("Cannot rename: {conflict}"),
-                    "message": conflict,
-                })),
-            )
-                .into_response();
-        }
-        let active_count = active_runs_using_pipeline(&state, &pipeline_id).await;
-        if active_count > 0 {
-            let message = format!(
-                "Cannot rename while runs are active: {active_count} active run(s) reference this pipeline"
-            );
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": message.clone(), "message": message })),
-            )
-                .into_response();
-        }
-        // The visible name before the save — what Stats shows for the old id.
-        let old_name = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
-            .map(|parsed| parsed.pipeline.name.trim().to_string())
-            .unwrap_or_else(|| pipeline_id.clone());
-        mark_self_write(&state.recent_writes, &path);
-        let new_path = match move_pipeline_entry(&dir, &path, &desired_id, &req.yaml) {
-            Ok(p) => p,
-            Err(error) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": error.clone(), "message": error })),
-                )
-                    .into_response()
-            }
-        };
-        mark_self_write(&state.recent_writes, &new_path);
-        // #891 / ADR-0077 §4: the new id carries the old id's Stats series.
-        stats_absorption::record_rename_best_effort(
-            &state.db,
-            stats_absorption::Named {
-                key: pipeline_id.clone(),
-                name: old_name,
-            },
-            stats_absorption::Named {
-                key: desired_id.clone(),
-                name: new_name.clone(),
-            },
-        )
-        .await;
-        for (node_id, content) in &req.prompts {
-            let prompt_path = pipeline::canonical_prompt_path(&new_path, node_id);
-            if let Some(parent) = prompt_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            mark_self_write(&state.recent_writes, &prompt_path);
-            if let Err(e) = std::fs::write(&prompt_path, content) {
-                warn!("failed to write prompt for {node_id}: {e}");
-            }
-        }
-        prune_orphan_prompts(&state, &new_path, &saved);
-
-        let _ = state.pipeline_tx.send(serde_json::json!({
-            "type": "pipeline_changed",
-            "pipeline_id": desired_id,
-            "path": new_path.to_string_lossy(),
-        }));
-        info!("Pipeline {pipeline_id} saved as {desired_id} (name changed)");
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "id": desired_id, "renamed": true })),
-        )
-            .into_response();
-    }
-
-    mark_self_write(&state.recent_writes, &path);
-    if let Err(e) = std::fs::write(&path, &req.yaml) {
-        let msg = format!("write failed: {e}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": msg, "message": msg })),
-        )
-            .into_response();
-    }
-
-    for (node_id, content) in &req.prompts {
-        let prompt_path = pipeline::canonical_prompt_path(&path, node_id);
-        if let Some(parent) = prompt_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        mark_self_write(&state.recent_writes, &prompt_path);
-        if let Err(e) = std::fs::write(&prompt_path, content) {
-            warn!("failed to write prompt for {node_id}: {e}");
-        }
-    }
-    prune_orphan_prompts(&state, &path, &saved);
-
-    info!("Pipeline {pipeline_id} saved");
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "ok": true, "id": pipeline_id, "renamed": false })),
-    )
-        .into_response()
-}
-
-#[derive(Deserialize)]
-struct RenamePipelineRequest {
-    name: String,
-}
-
-/// #774 — rename a pipeline: the visible name and the file stem move together
-/// (`<old>.yaml` + `.prompts/` sidecar → the slug of the new name). The YAML is
-/// NOT round-tripped: only its top-level `name:` line is spliced (#682), so
-/// comments and unknown keys survive. Collisions (target file stem or visible
-/// name already taken) and active runs referencing the pipeline are refused.
-async fn rename_pipeline(
-    State(state): State<Arc<AppState>>,
-    AxumPath(pipeline_id): AxumPath<String>,
-    Json(req): Json<RenamePipelineRequest>,
-) -> Response {
-    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
-    let yaml = match std::fs::read_to_string(&path) {
-        Ok(y) => y,
-        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
-    };
-    let new_name = req.name.trim().to_string();
-    if new_name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "name is required",
-                "message": "name is required",
-            })),
-        )
-            .into_response();
-    }
-    let parsed = match pipeline::parse_pipeline(&yaml) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            let (message, line) = parse_error_to_structured(&error);
-            let mut body = serde_json::json!({ "error": format!("invalid pipeline: {error}"), "message": message });
-            if let Some(l) = line {
-                body["line"] = serde_json::json!(l);
-            }
-            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-        }
-    };
-
-    // Renaming to the current visible name is a no-op — never a move.
-    if parsed.pipeline.name.trim() == new_name {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "id": pipeline_id,
-                "name": new_name,
-                "renamed": false,
-            })),
-        )
-            .into_response();
-    }
-
-    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "cannot determine instance pipeline directory",
-        )
-            .into_response();
-    };
-    let new_id = pipeline_slug(&new_name);
-    // Display-only rename (same stem, e.g. "foo-bar" → "foo bar"): splice the
-    // `name:` line in place — nothing moves, nothing can collide.
-    if new_id == pipeline_id {
-        let new_yaml = match rewrite_pipeline_name_field(&yaml, &new_name) {
-            Some(y) => y,
-            None => {
-                let msg = "pipeline has no top-level 'name:' key".to_string();
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
-                )
-                    .into_response();
-            }
-        };
-        mark_self_write(&state.recent_writes, &path);
-        if let Err(e) = std::fs::write(&path, new_yaml.as_bytes()) {
-            let msg = format!("write failed: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
-            )
-                .into_response();
-        }
-        let _ = state.pipeline_tx.send(serde_json::json!({
-            "type": "pipeline_changed",
-            "pipeline_id": pipeline_id,
-            "path": path.to_string_lossy(),
-        }));
-        info!("Pipeline {pipeline_id} display name updated to {new_name}");
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "id": pipeline_id,
-                "name": new_name,
-                "renamed": true,
-            })),
-        )
-            .into_response();
-    }
-    if let Some(conflict) = pipeline_name_conflict(&dir, &pipeline_id, &new_name, &new_id) {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("Cannot rename: {conflict}"),
-                "message": conflict,
-            })),
-        )
-            .into_response();
-    }
-    let active_count = active_runs_using_pipeline(&state, &pipeline_id).await;
-    if active_count > 0 {
-        let message = format!(
-            "Cannot rename while runs are active: {active_count} active run(s) reference this pipeline"
-        );
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": message.clone(), "message": message })),
-        )
-            .into_response();
-    }
-    let new_yaml = match rewrite_pipeline_name_field(&yaml, &new_name) {
-        Some(y) => y,
-        None => {
-            let msg = "pipeline has no top-level 'name:' key".to_string();
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
-            )
-                .into_response();
-        }
-    };
-
-    mark_self_write(&state.recent_writes, &path);
-    let new_path = match move_pipeline_entry(&dir, &path, &new_id, &new_yaml) {
-        Ok(p) => p,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": error.clone(), "message": error })),
-            )
-                .into_response()
-        }
-    };
-    mark_self_write(&state.recent_writes, &new_path);
-    // #891 / ADR-0077 §4: the new id carries the old id's Stats series.
-    stats_absorption::record_rename_best_effort(
-        &state.db,
-        stats_absorption::Named {
-            key: pipeline_id.clone(),
-            name: parsed.pipeline.name.trim().to_string(),
-        },
-        stats_absorption::Named {
-            key: new_id.clone(),
-            name: new_name.clone(),
-        },
-    )
-    .await;
-
-    // Announce the move ourselves: self-writes are suppressed by the watcher,
-    // and clients must refresh the list under the NEW id at once.
-    let _ = state.pipeline_tx.send(serde_json::json!({
-        "type": "pipeline_changed",
-        "pipeline_id": new_id,
-        "path": new_path.to_string_lossy(),
-    }));
-
-    info!("Pipeline {pipeline_id} renamed to {new_id}");
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "ok": true,
-            "id": new_id,
-            "name": new_name,
-            "path": new_path.to_string_lossy(),
-            "renamed": true,
-        })),
-    )
-        .into_response()
-}
-
-async fn create_pipeline(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreatePipelineRequest>,
-) -> Response {
-    // #886 — the file stem is `pipeline_slug(name)`, like duplicate/import and
-    // the rename paths. A stem built with its own case-keeping sanitiser
-    // (`Bugfix-auto-clean.yaml`) never equals the slug of its name, so the very
-    // first save took it for a rename.
-    let name = req.name.trim().to_string();
-    if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "name is required" })),
-        )
-            .into_response();
-    }
-    let id = pipeline_slug(&name);
-
-    let response_scope = "instance";
-    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "cannot determine instance pipeline directory",
-        )
-            .into_response();
-    };
-    let _ = req.scope;
-
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!("{id}.yaml"));
-    // Two stems can carry the same visible name ("Foo Bar" in `x.yaml`): the
-    // name ⇄ stem 1:1 rule refuses that as a collision too.
-    if scan_pipeline_dir(&dir, "instance")
-        .iter()
-        .any(|entry| entry.name.trim() == name)
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "pipeline already exists" })),
-        )
-            .into_response();
-    }
-
-    // Quoted exactly when the name needs it (`my: name`), so the scaffold parses.
-    let name_scalar = serde_yaml::to_string(&name)
-        .map(|scalar| scalar.trim_end().to_string())
-        .unwrap_or_else(|_| id.clone());
-    let scaffold = format!(
-        "name: {name_scalar}\nversion: \"1.0\"\n\nvariables: {{}}\n\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n\nedges: []\n"
-    );
-    // #823: every other handler that writes a pipeline file marks the write as its
-    // own; this one never did, so the watcher's debounce (1 s) re-announced the
-    // brand-new file as an EXTERNAL change. A client that had already opened the
-    // pipeline — which is exactly what the New Pipeline dialog does — and started
-    // editing it within that second was then shown a conflict dialog against a
-    // document nobody else had touched. The client already knows about this file:
-    // it asked for it.
-    mark_self_write(&state.recent_writes, &path);
-    let write_result = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, scaffold.as_bytes()));
-    if let Err(e) = write_result {
-        if e.kind() == std::io::ErrorKind::AlreadyExists {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": "pipeline already exists" })),
-            )
-                .into_response();
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("write failed: {e}") })),
-        )
-            .into_response();
-    }
-
-    info!("Created pipeline {id} at {}", path.display());
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "id": id,
-            "scope": response_scope,
-            "path": path.to_string_lossy(),
-        })),
-    )
-        .into_response()
-}
-
-/// #886 — the trimmed top-level `name:` of the pipeline file currently on disk.
-/// Read leniently (plain YAML, not the pipeline schema) so a save can tell
-/// whether it changes the name even when the stored document is out of date;
-/// `None` when the file is unreadable or has no string `name:`.
-fn current_pipeline_name(path: &Path) -> Option<String> {
-    let yaml = std::fs::read_to_string(path).ok()?;
-    let value = serde_yaml::from_str::<serde_yaml::Value>(&yaml).ok()?;
-    value
-        .as_mapping()?
-        .get(serde_yaml::Value::String("name".into()))?
-        .as_str()
-        .map(|name| name.trim().to_string())
-}
-
-fn read_pipeline_prompts(path: &Path) -> HashMap<String, String> {
-    read_prompts_from_dir(&path.with_extension("prompts"))
-}
-
-/// Delete the sidecar prompts of nodes the pipeline no longer defines.
-///
-/// A save carries the prompts of the nodes the editor still knows about and says
-/// nothing about the ones it dropped, so without this the `.md` of a deleted
-/// node survives forever: invisible in the UI, and enough to make the pipeline's
-/// portable document un-importable. The saved YAML is the authority — not the
-/// keys of the request, which are only the subset the client chose to send.
-fn prune_orphan_prompts(state: &AppState, path: &Path, saved: &pipeline::PipelineDef) {
-    let on_disk = read_pipeline_prompts(path);
-    let (_, orphans) = pipeline::split_live_prompts(saved, &on_disk);
-    for node_id in orphans {
-        let prompt_path = pipeline::canonical_prompt_path(path, &node_id);
-        mark_self_write(&state.recent_writes, &prompt_path);
-        match std::fs::remove_file(&prompt_path) {
-            Ok(()) => info!("Removed prompt of deleted node {node_id}"),
-            Err(e) => warn!("failed to remove prompt for deleted node {node_id}: {e}"),
-        }
-    }
-}
-
-fn read_prompts_from_dir(prompts_dir: &Path) -> HashMap<String, String> {
-    let mut prompts = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(prompts_dir) else {
-        return prompts;
-    };
-    for entry in entries.flatten() {
-        let prompt_path = entry.path();
-        if prompt_path.extension().and_then(|value| value.to_str()) != Some("md") {
-            continue;
-        }
-        if let (Some(id), Ok(content)) = (
-            prompt_path.file_stem().and_then(|value| value.to_str()),
-            std::fs::read_to_string(&prompt_path),
-        ) {
-            prompts.insert(id.to_string(), content);
-        }
-    }
-    prompts
-}
-
-/// #774 — the registry file stem a visible pipeline name maps to. One
-/// definition shared by identity allocation (create/duplicate/import) and by
-/// the rename paths (dedicated endpoint + save-with-changed-name), so "the
-/// visible name and the file stem are 1:1" can never drift between surfaces.
-fn pipeline_slug(requested_name: &str) -> String {
-    let slug = requested_name
-        .trim()
-        .chars()
-        .fold(String::new(), |mut slug, c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                slug.push(c.to_ascii_lowercase());
-            } else if !slug.ends_with('-') {
-                slug.push('-');
-            }
-            slug
-        });
-    let slug = slug.trim_matches('-');
-    if slug.is_empty() {
-        "pipeline".to_string()
-    } else {
-        slug.to_string()
-    }
-}
-
-/// #774 — rewrite ONLY the top-level `name:` scalar of a pipeline YAML, leaving
-/// every other byte (comments, unknown keys, formatting) untouched. A rename
-/// must never round-trip the document through parse/serialize (#682: that loses
-/// comments and unknown keys), so the new name is spliced into the existing
-/// text. `None` when the document has no top-level `name:` key — a malformed
-/// pipeline the caller must refuse rather than silently rename.
-fn rewrite_pipeline_name_field(yaml: &str, new_name: &str) -> Option<String> {
-    // `serde_yaml` scalar serialization quotes exactly when the value needs it
-    // (`my: name` → `'my: name'`), so the spliced line always re-parses.
-    let scalar = serde_yaml::to_string(new_name).ok()?.trim_end().to_string();
-    let mut replaced = false;
-    let mut out = String::with_capacity(yaml.len() + scalar.len() + 8);
-    for line in yaml.split_inclusive('\n') {
-        if !replaced && line.starts_with("name:") {
-            out.push_str("name: ");
-            out.push_str(&scalar);
-            if line.ends_with('\n') {
-                out.push('\n');
-            }
-            replaced = true;
-        } else {
-            out.push_str(line);
-        }
-    }
-    if replaced {
-        Some(out)
-    } else {
-        None
-    }
-}
-
-/// #774 — the two collisions a visible-name change must REFUSE: another
-/// pipeline file already owns the target stem, and another pipeline already
-/// carries the target visible name. Either would recreate the exact
-/// indistinguishable-rows state the name ⇄ stem 1:1 rule exists to prevent.
-/// Returns the human-readable refusal reason when conflicted.
-fn pipeline_name_conflict(
-    dir: &Path,
-    self_id: &str,
-    new_name: &str,
-    new_id: &str,
-) -> Option<String> {
-    // A display-only change whose slug maps back to the own stem ("foo-bar" →
-    // "foo bar") targets the pipeline's own file — never a collision.
-    if new_id != self_id && dir.join(format!("{new_id}.yaml")).exists() {
-        return Some(format!("a pipeline file '{new_id}.yaml' already exists"));
-    }
-    for entry in scan_pipeline_dir(dir, "instance") {
-        if entry.id != self_id && entry.name.trim() == new_name {
-            return Some(format!("a pipeline already uses the name \"{new_name}\""));
-        }
-    }
-    None
-}
-
-/// #774 — shared with `delete_pipeline`: the number of non-terminal runs whose
-/// `pipeline_name` resolves to this registry id. Rename, like delete, would
-/// silently orphan the completion path of a live run (its fallback resolves the
-/// pipeline by stem), so the gate is a refusal, not a migration.
-async fn active_runs_using_pipeline(state: &AppState, pipeline_id: &str) -> usize {
-    let mut active_count: usize = 0;
-    if let Ok(run_ids) = load_all_run_ids(&state.db).await {
-        for run_id in &run_ids {
-            let Ok(events) = load_events(&state.db, run_id).await else {
-                continue;
-            };
-            let Some(run_state) = event_log::project(&events) else {
-                continue;
-            };
-            // A third "active run" predicate, deliberately distinct from
-            // `RunStatus::is_terminal()`, which also treats Failed/Skipped/Halted as
-            // non-active.
-            if run_state.pipeline_name == pipeline_id
-                && run_state.status != event_log::RunStatus::Completed
-                && run_state.status != event_log::RunStatus::Archived
-            {
-                active_count += 1;
-            }
-        }
-    }
-    active_count
-}
-
-/// #774 — move one registry entry to a new stem: the YAML (written from
-/// `new_yaml`) and its `.prompts/` sidecar travel together. Collisions are the
-/// caller's refusal (`pipeline_name_conflict`); this only stages, publishes
-/// and rolls the whole move back on any failure — a half-done rename (new
-/// yaml without the sidecar, or both files present) must never be observable.
-/// The old sidecar is moved wholesale first so prompts the caller didn't carry
-/// survive the move (the save path prunes orphans afterwards).
-fn move_pipeline_entry(
-    dir: &Path,
-    old_path: &Path,
-    new_id: &str,
-    new_yaml: &str,
-) -> Result<PathBuf, String> {
-    let new_path = dir.join(format!("{new_id}.yaml"));
-    if new_path == *old_path {
-        return Ok(new_path);
-    }
-    let old_prompts = old_path.with_extension("prompts");
-    let new_prompts = new_path.with_extension("prompts");
-    let nonce = format!(
-        "{}.{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    );
-    let staged = dir.join(format!(".{new_id}.yaml.renaming-{nonce}"));
-    let prompts_moved = old_prompts.is_dir();
-    let result = (|| -> Result<(), String> {
-        if prompts_moved {
-            std::fs::rename(&old_prompts, &new_prompts)
-                .map_err(|e| format!("move prompts: {e}"))?;
-        }
-        std::fs::write(&staged, new_yaml.as_bytes()).map_err(|e| format!("write pipeline: {e}"))?;
-        std::fs::rename(&staged, &new_path).map_err(|e| format!("publish pipeline: {e}"))?;
-        std::fs::remove_file(old_path).map_err(|e| format!("retire old pipeline: {e}"))
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&staged);
-        let _ = std::fs::remove_file(&new_path);
-        if prompts_moved && new_prompts.is_dir() {
-            let _ = std::fs::rename(&new_prompts, &old_prompts);
-        }
-        return result.map(|()| new_path);
-    }
-    Ok(new_path)
-}
-
-fn available_pipeline_identity(dir: &Path, requested_name: &str) -> (String, String) {
-    let existing_names = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("yaml"))
-        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
-        .filter_map(|yaml| serde_yaml::from_str::<serde_yaml::Value>(&yaml).ok())
-        .filter_map(|value| {
-            value
-                .as_mapping()?
-                .get(serde_yaml::Value::String("name".into()))?
-                .as_str()
-                .map(str::trim)
-                .map(str::to_owned)
-        })
-        .collect::<std::collections::HashSet<_>>();
-    let base_name = requested_name.trim().to_string();
-    let base_name = if base_name.is_empty() {
-        "Untitled".to_string()
-    } else {
-        base_name
-    };
-    let slug = pipeline_slug(&base_name);
-    let mut id = slug.to_string();
-    let mut name = base_name.clone();
-    let mut suffix = 2u32;
-    while dir.join(format!("{id}.yaml")).exists() || existing_names.contains(&name) {
-        id = format!("{slug}-{suffix}");
-        name = format!("{base_name} ({suffix})");
-        suffix += 1;
-    }
-    (id, name)
-}
-
-fn write_pipeline_atomically(
-    dir: &Path,
-    id: &str,
-    pipeline: &pipeline::PipelineDef,
-    prompts: &HashMap<String, String>,
-) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("create pipeline registry: {e}"))?;
-    let path = dir.join(format!("{id}.yaml"));
-    let temp_path = dir.join(format!(".{id}.yaml.tmp"));
-    let temp_prompts = dir.join(format!(".{id}.prompts.tmp"));
-    let prompts_path = dir.join(format!("{id}.prompts"));
-    let lock_path = dir.join(format!(".{id}.create.lock"));
-    let lock = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-        .map_err(|e| format!("pipeline identity is no longer available: {e}"))?;
-    if path.exists() || prompts_path.exists() {
-        drop(lock);
-        let _ = std::fs::remove_file(&lock_path);
-        return Err("pipeline identity is no longer available".into());
-    }
-
-    let yaml = serde_yaml::to_string(pipeline).map_err(|e| format!("serialize pipeline: {e}"))?;
-    pipeline::parse_pipeline(&yaml).map_err(|e| format!("pipeline: {e}"))?;
-    // Never seed a fresh registry entry with a leftover: duplicate copies
-    // the source sidecar dir wholesale, orphans included.
-    let (prompts, _) = pipeline::split_live_prompts(pipeline, prompts);
-    let result = (|| {
-        std::fs::write(&temp_path, yaml).map_err(|e| format!("write pipeline: {e}"))?;
-
-        if !prompts.is_empty() {
-            std::fs::create_dir(&temp_prompts).map_err(|e| format!("stage prompts: {e}"))?;
-            for (node_id, content) in &prompts {
-                std::fs::write(temp_prompts.join(format!("{node_id}.md")), content)
-                    .map_err(|e| format!("write prompts.{node_id}: {e}"))?;
-            }
-            std::fs::rename(&temp_prompts, &prompts_path)
-                .map_err(|e| format!("publish prompts: {e}"))?;
-        }
-        std::fs::rename(&temp_path, &path).map_err(|e| format!("publish pipeline: {e}"))?;
-        Ok(path.clone())
-    })();
-    drop(lock);
-    let _ = std::fs::remove_file(&lock_path);
-    let _ = std::fs::remove_file(&temp_path);
-    if temp_prompts.is_dir() {
-        let _ = std::fs::remove_dir_all(&temp_prompts);
-    }
-    if result.is_err() && prompts_path.is_dir() {
-        let _ = std::fs::remove_dir_all(&prompts_path);
-    }
-    result
-}
-
-async fn duplicate_pipeline(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    let source = resolve_pipeline_path(&state.repo_root, &id);
-    let yaml = match std::fs::read_to_string(&source) {
-        Ok(yaml) => yaml,
-        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
-    };
-    let parsed = match pipeline::parse_pipeline(&yaml) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid source pipeline: {error}") })),
-            )
-                .into_response()
-        }
-    };
-    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "cannot determine instance pipeline directory",
-        )
-            .into_response();
-    };
-    let source_name = parsed.pipeline.name.trim();
-    let base_name = source_name
-        .rfind(" (copy")
-        .filter(|&index| {
-            let tail = &source_name[index..];
-            tail == " (copy)"
-                || tail
-                    .strip_prefix(" (copy ")
-                    .and_then(|value| value.strip_suffix(')'))
-                    .is_some_and(|value| {
-                        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
-                    })
-        })
-        .map(|index| &source_name[..index])
-        .unwrap_or(source_name);
-    let existing_names = scan_pipeline_dir(&dir, "instance")
-        .into_iter()
-        .map(|entry| entry.name)
-        .collect::<std::collections::HashSet<_>>();
-    let mut copy_number = 1u32;
-    let copy_name = loop {
-        let candidate = if copy_number == 1 {
-            format!("{base_name} (copy)")
-        } else {
-            format!("{base_name} (copy {copy_number})")
-        };
-        if !existing_names.contains(&candidate) {
-            break candidate;
-        }
-        copy_number += 1;
-    };
-    let (new_id, new_name) = available_pipeline_identity(&dir, &copy_name);
-    let mut copy = parsed.pipeline;
-    copy.name = new_name;
-    match write_pipeline_atomically(&dir, &new_id, &copy, &read_pipeline_prompts(&source)) {
-        Ok(path) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": new_id,
-                "scope": "instance",
-                "path": path.to_string_lossy(),
-            })),
-        )
-            .into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-    }
-}
-
-fn pipeline_document_response(path: &Path) -> Response {
-    let yaml = match std::fs::read_to_string(path) {
-        Ok(yaml) => yaml,
-        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
-    };
-    let parsed = match pipeline::parse_pipeline(&yaml) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid pipeline: {error}") })),
-            )
-                .into_response()
-        }
-    };
-    match portable_pipeline::export(&parsed.pipeline, &read_pipeline_prompts(path)) {
-        Ok(document) => (
-            [(header::CONTENT_TYPE, "application/yaml; charset=utf-8")],
-            document,
-        )
-            .into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-    }
-}
-
-async fn get_pipeline_document(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    pipeline_document_response(&resolve_pipeline_path(&state.repo_root, &id))
-}
-
-/// The skills sidecar of a parsed pipeline (#673): a zip of
-/// `<pipeline>.skills/<id>/…` read from the bank's disk root, or **204** when the
-/// pipeline references no skill (nothing to ship — the YAML alone is the
-/// document). A referenced id with no folder in the bank is left out: the
-/// exporting instance already shows the warning, and the importing one will.
-fn skills_sidecar_response(bank: &pdo_skill::Skills, pipeline: &pipeline::PipelineDef) -> Response {
-    let references = pipeline_skill_references(pipeline);
-    if references.is_empty() {
-        return StatusCode::NO_CONTENT.into_response();
-    }
-    let (skills, absent) = bank.sidecar_of(&references);
-    if !absent.is_empty() {
-        info!(
-            "skills sidecar of '{}': {} referenced skill(s) not in the bank: {}",
-            pipeline.name,
-            absent.len(),
-            absent.join(", ")
-        );
-    }
-    match pdo_skill::adapters::sidecar_zip::write_zip(&pipeline.name, &skills) {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, "application/zip".to_string()),
-                (
-                    header::CONTENT_DISPOSITION,
-                    format!(
-                        "attachment; filename=\"{}.zip\"",
-                        pdo_skill::domain::sidecar::sidecar_dir_name(&pipeline.name)
-                            .replace('"', "")
-                    ),
-                ),
-                (
-                    header::HeaderName::from_static("x-pdo-skills"),
-                    skills.len().to_string(),
-                ),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-    }
-}
-
-/// The unique skill references of a pipeline's nodes, in first-seen order.
-fn pipeline_skill_references(pipeline: &pipeline::PipelineDef) -> Vec<skill_selection::SkillRef> {
-    pdo_skill::domain::sidecar::referenced_skills(
-        pipeline.nodes.iter().map(|node| node.skills.as_slice()),
-    )
-}
-
-async fn get_pipeline_document_skills(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    let path = resolve_pipeline_path(&state.repo_root, &id);
-    let yaml = match std::fs::read_to_string(&path) {
-        Ok(yaml) => yaml,
-        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
-    };
-    let parsed = match pipeline::parse_pipeline(&yaml) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid pipeline: {error}") })),
-            )
-                .into_response()
-        }
-    };
-    skills_sidecar_response(&state.skills, &parsed.pipeline)
-}
-
-#[derive(Deserialize)]
-struct ImportPipelineDocumentRequest {
-    document: String,
-    /// #673: the skills sidecar as PDO exported it (or as the user re-zipped the
-    /// `<pipeline>.skills/` folder), base64. Absent ⇒ unknown ids import with the
-    /// "skill absent" warning, never a failure.
-    #[serde(default)]
-    skills_sidecar: Option<String>,
-}
-
-async fn import_pipeline_document(
-    State(state): State<Arc<AppState>>,
-    axum::Extension(actor): axum::Extension<pdo_kernel::Actor>,
-    Json(req): Json<ImportPipelineDocumentRequest>,
-) -> Response {
-    let interpreted = match portable_pipeline::interpret(&req.document) {
-        Ok(interpreted) => interpreted,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error })),
-            )
-                .into_response()
-        }
-    };
-    let sidecar = match req.skills_sidecar.as_deref().map(str::trim) {
-        Some(encoded) if !encoded.is_empty() => {
-            use base64::Engine as _;
-            let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded) {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({
-                            "error": format!("skills_sidecar: not valid base64: {error}")
-                        })),
-                    )
-                        .into_response()
-                }
-            };
-            match pdo_skill::adapters::sidecar_zip::read_zip(&bytes) {
-                Ok(skills) => skills,
-                Err(error) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": format!("skills_sidecar: {error}") })),
-                    )
-                        .into_response()
-                }
-            }
-        }
-        _ => Vec::new(),
-    };
-    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "cannot determine instance pipeline directory",
-        )
-            .into_response();
-    };
-    let (id, name) = available_pipeline_identity(&dir, &interpreted.pipeline.name);
-    let mut imported = interpreted.pipeline;
-    // #673: the bank first, the YAML second — a created skill is referenced by
-    // the id the document carries, so the pipeline is launchable as soon as it
-    // is written, and its node references are relabelled with the bank's names.
-    // The import folder is named after the document's own name (its provenance),
-    // before the "(2)" a same-named pipeline on this instance may add.
-    let mut warnings = interpreted.warnings;
-    let skills = match state
-        .skills
-        .import_sidecar(
-            &actor,
-            &imported.name,
-            pipeline_skill_references(&imported),
-            &sidecar,
-        )
-        .await
-    {
-        Ok(report) => report,
-        Err(error) => return pdo_skill::adapters::http::skill_error_response(error),
-    };
-    let final_names = skills.final_names();
-    for node in &mut imported.nodes {
-        for skill in &mut node.skills {
-            if let Some(name) = final_names.get(&skill.id) {
-                skill.name = name.clone();
-            }
-        }
-    }
-    warnings.extend(skills.warnings.iter().cloned());
-    imported.name = name;
-    match write_pipeline_atomically(&dir, &id, &imported, &interpreted.prompts) {
-        Ok(path) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": id,
-                "scope": "instance",
-                "path": path.to_string_lossy(),
-                "warnings": warnings,
-                "skills": skills,
-            })),
-        )
-            .into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-    }
-}
-
-// --- Library API handlers ---
-
-async fn list_library() -> Response {
-    Json(library_store::list()).into_response()
-}
-
-#[derive(Deserialize)]
-struct SaveToLibraryRequest {
-    name: String,
-    #[serde(rename = "type")]
-    node_type: pipeline::NodeType,
-    #[serde(default)]
-    inputs: Vec<pipeline::Port>,
-    #[serde(default)]
-    outputs: Vec<pipeline::Port>,
-    #[serde(default)]
-    interactive: bool,
-    /// Per-node model override. Optional so a client that omits it stars the node
-    /// as model-less rather than 400-ing.
-    #[serde(default)]
-    model: Option<String>,
-    /// Per-node reasoning-effort override. Optional for the same reason.
-    #[serde(default)]
-    effort: Option<String>,
-    #[serde(default)]
-    prompt: String,
-    /// Where an instance of this entry works (#655/ADR-0060). Optional so a
-    /// client that omits it stars the node on its type's default (stamped by
-    /// `library_store::save`) instead of 400-ing — same posture as `model`.
-    #[serde(default)]
-    isolated_worktree: Option<bool>,
-}
-
-async fn save_to_library(Json(req): Json<SaveToLibraryRequest>) -> Response {
-    let mut entry = library_store::LibraryEntry {
-        name: req.name,
-        node_type: req.node_type,
-        inputs: req.inputs,
-        outputs: req.outputs,
-        interactive: req.interactive,
-        model: req.model,
-        effort: req.effort,
-        max_iter: None,
-        branches: None,
-        prompt: req.prompt,
-        isolated_worktree: req.isolated_worktree,
-    };
-    // #655: stamp before saving AND before answering, so the 201 body shows the
-    // choice the library recorded rather than the silence the client sent.
-    entry.stamp_isolation();
-
-    if let Err(e) = library_store::save(&entry) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response();
-    }
-
-    (StatusCode::CREATED, Json(&entry)).into_response()
-}
-
-async fn delete_from_library(AxumPath(name): AxumPath<String>) -> Response {
-    match library_store::delete(&name) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "entry not found").into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
-    }
-}
-
-async fn instantiate_from_library(AxumPath(name): AxumPath<String>) -> Response {
-    match library_store::get(&name) {
-        Some(entry) => {
-            let prompt = entry.prompt.clone();
-            Json(serde_json::json!({
-                "spec": {
-                    "name": entry.name,
-                    "type": entry.node_type,
-                    "inputs": entry.inputs,
-                    "outputs": entry.outputs,
-                    "interactive": entry.interactive,
-                    // Carry model + effort, or instantiating drops the overrides and
-                    // the fresh node reads `diverged` at once.
-                    "model": entry.model,
-                    "effort": entry.effort,
-                    // #655/ADR-0060: restore the entry's workspace exactly. Left
-                    // out, the canvas would fall back to the type default and an
-                    // Agent starred in the Run's worktree would silently fork one
-                    // of its own on every instantiation. `null` for the types that
-                    // carry no isolation — the canvas leaves the key off those.
-                    "isolated_worktree": entry.isolated_worktree,
-                },
-                "prompt": prompt,
-            }))
-            .into_response()
-        }
-        None => (StatusCode::NOT_FOUND, "entry not found").into_response(),
-    }
-}
-
-/// Request body for `POST /nodes/parse`: the raw YAML text of a single node.
-#[derive(serde::Deserialize)]
-struct ParseNodeRequest {
-    yaml: String,
-}
-
-/// Node-library `LibraryEntry` fields plus the two identity/layout keys the canvas
-/// regenerates (`id`) or re-centres (`view`). Any *other* root key is surfaced as
-/// an ignored-field warning (ADR-0001: no silent loss). A field missing from this
-/// list is reported as ignored even when it parses fine — a false loss report.
-/// Keep it in sync with `library_store::LibraryEntry`.
-const KNOWN_NODE_KEYS: &[&str] = &[
-    "name",
-    "type",
-    "inputs",
-    "outputs",
-    "interactive",
-    "model",
-    "effort",
-    "max_iter",
-    "branches",
-    "prompt",
-    // The harness axis. `model`/`effort` above stay accepted — a pasted flat pair
-    // is folded into `harnesses.claude` by `normalize_node_value`.
-    "pin_harness",
-    "harnesses",
-    // Carried by `parse_node_spec` but not a `LibraryEntry` field.
-    "agent_choice",
-    // #653/ADR-0060: where the node works. `normalize_node_value` stamps the
-    // type's default onto every `agent`/`script`, so this key is present on
-    // virtually every pasted node spec — announcing it as an ignored field would
-    // be a warning about a loss that never happens.
-    "isolated_worktree",
-    // Accepted-and-dropped, not a semantic loss → no warning.
-    "id",
-    "view",
-];
-
-fn node_parse_error(msg: impl Into<String>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": msg.into() })),
-    )
-        .into_response()
-}
-
-/// Pure core of `POST /nodes/parse`, split from the axum handler so it is
-/// unit-testable without a router/AppState. `Err(msg)` is the verbatim 400 message.
-///
-/// The single source of truth for node coercion (serde structs +
-/// `pipeline::normalize_node_value`) — the front carries no YAML parser. It never
-/// touches the node library and never calls `parse_pipeline`, which requires a
-/// top-level `name:` AND a `nodes:` list.
-///
-/// Hard failures: invalid YAML, non-mapping root, a whole pipeline pasted by
-/// mistake, missing `name`, retired `for-each`. Soft losses ride back in
-/// `warnings[]` with the node still produced.
-fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
-    let mut value: serde_yaml::Value =
-        serde_yaml::from_str(yaml).map_err(|e| format!("invalid YAML: {e}"))?;
-
-    let Some(map) = value.as_mapping() else {
-        return Err(
-            "expected a single node definition (a YAML mapping), got a non-mapping document"
-                .to_string(),
-        );
-    };
-
-    // Reject a whole pipeline here, or serde reports a cryptic "missing field
-    // `type`" instead.
-    if map.contains_key(serde_yaml::Value::String("nodes".into()))
-        || map.contains_key(serde_yaml::Value::String("edges".into()))
-    {
-        return Err(
-            "this looks like a whole pipeline, not a node — paste a single node's YAML \
-             (import a full pipeline from the pipeline library instead)"
-                .to_string(),
-        );
-    }
-
-    if map.get(serde_yaml::Value::String("name".into())).is_none() {
-        return Err("missing required field: name".to_string());
-    }
-
-    // 5. Normalize the node `type` in place — shared with `parse_pipeline`:
-    //    default/coerce to non-isolated (warnings), refuse retired `for-each`.
-    let mut warnings: Vec<String> = pipeline::normalize_node_value(&mut value)
-        .map_err(|e| format!("{e}"))?
-        .into_iter()
-        .map(|d| d.message)
-        .collect();
-
-    // Surface every root key serde will silently ignore (ADR-0001).
-    if let Some(m) = value.as_mapping() {
-        for key in m.keys() {
-            if let Some(k) = key.as_str() {
-                if !KNOWN_NODE_KEYS.contains(&k) {
-                    warnings.push(format!("unknown field '{k}' (ignored)"));
-                }
-            }
-        }
-    }
-
-    // Read the harness axis off the value BEFORE the deserialize below consumes it.
-    // `normalize_node_value` folded any flat `model:`/`effort:` into
-    // `harnesses.claude`, so the claude entry is the source for `spec.model`/
-    // `spec.effort`.
-    let claude = value
-        .get("harnesses")
-        .and_then(|h| h.get(pdo_harness::registry::CLAUDE));
-    let claude_model = claude
-        .and_then(|c| c.get("model"))
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let claude_effort = claude
-        .and_then(|c| c.get("effort"))
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let pin_harness = value
-        .get("pin_harness")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let harnesses = value
-        .get("harnesses")
-        .map(yaml_value_to_json)
-        .unwrap_or(serde_json::Value::Null);
-    // Carried verbatim, not interpreted. Not a `LibraryEntry` field, so it must be
-    // read off the raw value here or the deserialize below silently drops it.
-    let agent_choice = value
-        .get("agent_choice")
-        .map(yaml_value_to_json)
-        .unwrap_or(serde_json::Value::Null);
-    // 8. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
-    //    to empty (a structural node carries none); unknown fields are ignored.
-    //    #655: `isolated_worktree` is a LibraryEntry field, so the pasted node's
-    //    workspace rides through the same door as the rest of it — and
-    //    `normalize_node_value` above already stamped the type default onto a
-    //    silent `agent`/`script`, so what comes out is never a guess.
-    let mut entry: library_store::LibraryEntry =
-        serde_yaml::from_value(value).map_err(|e| format!("{e}"))?;
-    entry.stamp_isolation();
-
-    Ok(serde_json::json!({
-        "spec": {
-            "name": entry.name,
-            "type": entry.node_type,
-            "inputs": entry.inputs,
-            "outputs": entry.outputs,
-            "interactive": entry.interactive,
-            // Claude-aware view, derived from the folded harnesses map.
-            "model": claude_model,
-            "effort": claude_effort,
-            "pin_harness": pin_harness,
-            "harnesses": harnesses,
-            "agent_choice": agent_choice,
-            // #653: where the node works.
-            "isolated_worktree": entry.isolated_worktree,
-            "max_iter": entry.max_iter,
-            "branches": entry.branches,
-        },
-        "prompt": entry.prompt,
-        "warnings": warnings,
-    }))
-}
-
-async fn parse_node_yaml(Json(req): Json<ParseNodeRequest>) -> Response {
-    match parse_node_spec(&req.yaml) {
-        Ok(body) => Json(body).into_response(),
-        Err(msg) => node_parse_error(msg),
-    }
-}
-
-/// Request body for `POST /library/import`: the raw `.js` source plus the original
-/// filename (used only for the fallback name and error messages). The content
-/// arrives over the wire, so the daemon never reads `~/.claude/workflows` off disk
-/// — it binds `0.0.0.0` and must stay host-agnostic.
-#[derive(serde::Deserialize)]
-struct ImportWorkflowRequest {
-    filename: String,
-    content: String,
-}
-
-/// Import a Claude Code workflow `.js` into the instance pipeline registry (#155 /
-/// ADR-0016). The `.js` is parsed to an AST — never executed — and the recognized
-/// idioms are rewired into a `PipelineDef`; lossy-translation diagnostics ride
-/// back in `warnings`. On parse/translation failure the verbatim error is
-/// surfaced as 400 (a real `.js` can legitimately fall outside the subset).
-async fn import_library_pipeline(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ImportWorkflowRequest>,
-) -> Response {
-    let stem = std::path::Path::new(&req.filename)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("imported-workflow");
-    let result = match workflow_importer::import_workflow_js(&req.content, stem) {
-        Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("import failed: {e}") })),
-            )
-                .into_response();
-        }
-    };
-    let parsed = match pipeline::parse_pipeline(&result.yaml_text) {
-        Ok(parsed) => parsed.pipeline,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("import failed: {error}") })),
-            )
-                .into_response();
-        }
-    };
-    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "cannot determine instance pipeline directory",
-        )
-            .into_response();
-    };
-    let (id, name) = available_pipeline_identity(&dir, &result.name);
-    let mut imported = parsed;
-    imported.name = name;
-    match write_pipeline_atomically(&dir, &id, &imported, &result.prompts) {
-        Ok(path) => {
-            let warnings: Vec<String> = result.warnings.iter().map(|d| d.message.clone()).collect();
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({
-                    "id": id,
-                    "scope": "instance",
-                    "path": path.to_string_lossy(),
-                    "warnings": warnings,
-                })),
-            )
-                .into_response()
-        }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
-    }
-}
-
-async fn delete_pipeline(
-    State(state): State<Arc<AppState>>,
-    AxumPath(pipeline_id): AxumPath<String>,
-) -> Response {
-    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
-    if !path.exists() {
-        return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
-    }
-
-    let active_count = active_runs_using_pipeline(&state, &pipeline_id).await;
-    if active_count > 0 {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("Cannot delete: {active_count} active run(s)")
-            })),
-        )
-            .into_response();
-    }
-
-    let prompts_dir = path.with_extension("prompts");
-    if prompts_dir.is_dir() {
-        if let Err(e) = std::fs::remove_dir_all(&prompts_dir) {
-            warn!("failed to remove prompts dir for {pipeline_id}: {e}");
-        }
-    }
-
-    if let Err(e) = std::fs::remove_file(&path) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("delete failed: {e}") })),
-        )
-            .into_response();
-    }
-
-    info!("Deleted pipeline {pipeline_id}");
-    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
-}
-
 // --- API handlers ---
 
 /// Deposits one `_item.md` per lap under the collection entry's artifact dir
@@ -7315,7 +5589,9 @@ fn resolve_source_frontmatter(
     for port in &node.outputs {
         let artifact_path =
             blackboard::artifact_path(artifacts_dir, completed_node_id, iter, &port.name);
-        if let Ok(port_fields) = frontmatter_parser::parse_frontmatter_from_file(&artifact_path) {
+        if let Ok(port_fields) =
+            pdo_pipeline::adapters::frontmatter_file::parse_frontmatter_from_file(&artifact_path)
+        {
             for (k, v) in port_fields {
                 fields.insert(format!("{}.{k}", port.name), v.clone());
                 fields.insert(k, v);
@@ -9134,35 +7410,6 @@ fn apply_manager_profile_pin(
     }
 }
 
-fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
-    match val {
-        serde_yaml::Value::Null => serde_json::Value::Null,
-        serde_yaml::Value::Bool(b) => serde_json::Value::Bool(*b),
-        serde_yaml::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                serde_json::Value::Number(i.into())
-            } else if let Some(f) = n.as_f64() {
-                serde_json::json!(f)
-            } else {
-                serde_json::Value::Null
-            }
-        }
-        serde_yaml::Value::String(s) => serde_json::Value::String(s.clone()),
-        serde_yaml::Value::Sequence(seq) => {
-            serde_json::Value::Array(seq.iter().map(yaml_value_to_json).collect())
-        }
-        serde_yaml::Value::Mapping(map) => {
-            let mut obj = serde_json::Map::new();
-            for (k, v) in map {
-                let key = k.as_str().unwrap_or("").to_string();
-                obj.insert(key, yaml_value_to_json(v));
-            }
-            serde_json::Value::Object(obj)
-        }
-        serde_yaml::Value::Tagged(tagged) => yaml_value_to_json(&tagged.value),
-    }
-}
-
 /// One knob's `stored → env → default` disclosure for `GET /settings` (ADR-0015):
 /// `effective` is what the daemon actually uses, produced by the same resolver, and
 /// each tier is exposed so the UI can *reveal* a shadowed env var instead of ignoring
@@ -10322,7 +8569,7 @@ async fn get_agent_profile_referents(
         .collect::<Vec<_>>();
 
     let pipeline_entries = instance_pipeline_dir(&state.repo_root)
-        .map(|directory| scan_pipeline_dir(&directory, "instance"))
+        .map(|directory| pdo_pipeline::adapters::registry::pipeline_files(&directory))
         .unwrap_or_default();
     let pipelines = pipeline_entries
         .into_iter()
@@ -10333,6 +8580,7 @@ async fn get_agent_profile_referents(
             let Ok(parsed) = pipeline::parse_pipeline(&yaml) else {
                 return Vec::new();
             };
+            let name = parsed.pipeline.name.clone();
             parsed
                 .pipeline
                 .nodes
@@ -10346,9 +8594,9 @@ async fn get_agent_profile_referents(
                 .map(|node| {
                     serde_json::json!({
                         "id": entry.id,
-                        "name": entry.name,
+                        "name": name,
                         "node_id": node.id,
-                        "scope": entry.scope
+                        "scope": "instance"
                     })
                 })
                 .collect::<Vec<_>>()
@@ -12376,7 +10624,10 @@ async fn run_pipeline_for_export(
         Some(run) => archived_or_live_prompts_dir(state, run, run_id),
         None => run_scoped_prompts_dir(&state.repo_root, run_id),
     };
-    Ok((parsed.pipeline, read_prompts_from_dir(&prompts_dir)))
+    Ok((
+        parsed.pipeline,
+        pdo_pipeline::adapters::registry::read_prompts_dir(&prompts_dir),
+    ))
 }
 
 async fn get_run_pipeline_document_skills(
@@ -12384,7 +10635,12 @@ async fn get_run_pipeline_document_skills(
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
     match run_pipeline_for_export(&state, &run_id).await {
-        Ok((pipeline, _)) => skills_sidecar_response(&state.skills, &pipeline),
+        Ok((pipeline, _)) => pdo_pipeline::adapters::http::skills_sidecar_response(
+            pdo_pipeline::application::sidecar_export(
+                &pdo_pipeline::adapters::skill_bank::BankOfSkills(state.skills.clone()),
+                &pipeline,
+            ),
+        ),
         Err(response) => *response,
     }
 }
@@ -12411,10 +10667,58 @@ async fn get_run_pipeline_document(
     }
 }
 
+/// What the pipeline context's run-edit rules read of a Run: each node's
+/// status, each loop's lap.
+fn run_progress(run_state: &event_log::RunState) -> pdo_pipeline::domain::mutation::RunProgress {
+    use event_log::NodeStatus as S;
+    use pdo_pipeline::domain::mutation::{LoopLap, NodeProgress as P, RunProgress};
+    RunProgress {
+        nodes: run_state
+            .nodes
+            .iter()
+            .map(|(id, node)| {
+                let progress = match node.status {
+                    S::Pending => P::Pending,
+                    S::Waiting => P::Waiting,
+                    S::Running => P::Running,
+                    S::AwaitingUser => P::AwaitingUser,
+                    S::Completed => P::Completed,
+                    S::Skipped => P::Skipped,
+                    S::Failed => P::Failed,
+                    S::Stopped => P::Stopped,
+                    S::Stale => P::Stale,
+                    S::Interrupted => P::Interrupted,
+                };
+                (id.clone(), progress)
+            })
+            .collect(),
+        laps: run_state
+            .loop_states
+            .iter()
+            .map(|(id, lap)| {
+                (
+                    id.clone(),
+                    LoopLap {
+                        current_iter: lap.current_iter,
+                        done: lap.done,
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+#[derive(Deserialize)]
+struct SaveRunPipelineRequest {
+    yaml: String,
+    #[serde(default)]
+    prompts: HashMap<String, String>,
+}
+
 async fn save_run_pipeline(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
-    Json(req): Json<SavePipelineRequest>,
+    Json(req): Json<SaveRunPipelineRequest>,
 ) -> Response {
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
@@ -12472,8 +10776,11 @@ async fn save_run_pipeline(
         }
     };
 
-    let rejections =
-        mutation_validator::validate_run_mutation(&old_pipeline, &new_pipeline, &run_state);
+    let rejections = pdo_pipeline::domain::mutation::validate_run_mutation(
+        &old_pipeline,
+        &new_pipeline,
+        &run_progress(&run_state),
+    );
     if !rejections.is_empty() {
         let details: Vec<_> = rejections
             .iter()
@@ -12486,7 +10793,7 @@ async fn save_run_pipeline(
             .into_response();
     }
 
-    mark_self_write(&state.recent_writes, &yaml_path);
+    state.recent_writes.mark(&yaml_path);
     if let Err(e) = std::fs::write(&yaml_path, &req.yaml) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -12501,7 +10808,7 @@ async fn save_run_pipeline(
         if let Some(parent) = prompt_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        mark_self_write(&state.recent_writes, &prompt_path);
+        state.recent_writes.mark(&prompt_path);
         if let Err(e) = std::fs::write(&prompt_path, content) {
             warn!("failed to write run prompt for {node_id}: {e}");
         }
@@ -12533,7 +10840,7 @@ fn sync_run_pipeline_to_template(
         let _ = std::fs::create_dir_all(parent);
     }
 
-    mark_self_write(&state.recent_writes, &template_path);
+    state.recent_writes.mark(&template_path);
 
     if let Err(e) = std::fs::write(&tmp_path, yaml) {
         warn!("sync_run_pipeline_to_template: write tmp failed: {e}");
@@ -12553,7 +10860,7 @@ fn sync_run_pipeline_to_template(
         if let Some(parent) = prompt_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        mark_self_write(&state.recent_writes, &prompt_path);
+        state.recent_writes.mark(&prompt_path);
         if let Err(e) = std::fs::write(&prompt_path, content) {
             warn!("sync_run_pipeline_to_template: prompt sync failed for {node_id}: {e}");
         }
@@ -17131,181 +15438,13 @@ fn edge_info_from_pipeline(e: &pipeline::EdgeDef) -> event_log::EdgeInfo {
     }
 }
 
+/// The instance registry of the pipeline context. This crate's own unit tests
+/// keep it inside their temporary repository.
 fn instance_pipeline_dir(repo_root: &Path) -> Option<PathBuf> {
-    // Unit and integration tests isolate the instance registry inside their
-    // temporary repo. The handlers and migration logic remain identical.
-    let integration_test_binary = cfg!(debug_assertions)
-        && std::env::current_exe()
-            .ok()
-            .and_then(|path| path.file_name().map(|name| name.to_owned()))
-            .and_then(|name| name.to_str().map(str::to_owned))
-            .is_some_and(|name| name.starts_with("it-"));
-    if cfg!(test) || integration_test_binary {
+    if cfg!(test) {
         return Some(repo_root.join(".pdo").join("pipelines"));
     }
-    dirs_next_home().map(|home| home.join(".pdo").join("pipelines"))
-}
-
-fn copy_directory(source: &Path, target: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(target).map_err(|e| format!("create {}: {e}", target.display()))?;
-    for entry in std::fs::read_dir(source).map_err(|e| format!("read {}: {e}", source.display()))? {
-        let entry = entry.map_err(|e| format!("read migration entry: {e}"))?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        if source_path.is_dir() {
-            copy_directory(&source_path, &target_path)?;
-        } else {
-            std::fs::copy(&source_path, &target_path)
-                .map_err(|e| format!("copy {}: {e}", source_path.display()))?;
-        }
-    }
-    Ok(())
-}
-
-fn directories_match(left: &Path, right: &Path) -> Result<bool, String> {
-    if left.is_dir() != right.is_dir() {
-        return Ok(false);
-    }
-    if !left.is_dir() {
-        return Ok(!right.exists());
-    }
-    let mut left_entries = std::fs::read_dir(left)
-        .map_err(|e| format!("read {}: {e}", left.display()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("read {}: {e}", left.display()))?;
-    let mut right_entries = std::fs::read_dir(right)
-        .map_err(|e| format!("read {}: {e}", right.display()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("read {}: {e}", right.display()))?;
-    left_entries.sort_by_key(|entry| entry.file_name());
-    right_entries.sort_by_key(|entry| entry.file_name());
-    if left_entries.len() != right_entries.len() {
-        return Ok(false);
-    }
-    for (left_entry, right_entry) in left_entries.iter().zip(&right_entries) {
-        if left_entry.file_name() != right_entry.file_name() {
-            return Ok(false);
-        }
-        let left_path = left_entry.path();
-        let right_path = right_entry.path();
-        if left_path.is_dir() {
-            if !directories_match(&left_path, &right_path)? {
-                return Ok(false);
-            }
-        } else if std::fs::read(&left_path)
-            .map_err(|e| format!("read {}: {e}", left_path.display()))?
-            != std::fs::read(&right_path)
-                .map_err(|e| format!("read {}: {e}", right_path.display()))?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-fn publish_migrated_pipeline(
-    source_yaml: &Path,
-    source_bytes: &[u8],
-    candidate: &Path,
-) -> Result<(), String> {
-    let source_prompts = source_yaml.with_extension("prompts");
-    let candidate_prompts = candidate.with_extension("prompts");
-    let nonce = format!(
-        "{}.{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    );
-    let staged_yaml = candidate.with_extension(format!("yaml.migrating-{nonce}"));
-    let staged_prompts = candidate.with_extension(format!("prompts.migrating-{nonce}"));
-    if !candidate.exists() && candidate_prompts.is_dir() {
-        std::fs::remove_dir_all(&candidate_prompts)
-            .map_err(|e| format!("recover {}: {e}", candidate_prompts.display()))?;
-    }
-    let result = (|| {
-        std::fs::write(&staged_yaml, source_bytes)
-            .map_err(|e| format!("stage {}: {e}", candidate.display()))?;
-        if source_prompts.is_dir() {
-            copy_directory(&source_prompts, &staged_prompts)?;
-            std::fs::rename(&staged_prompts, &candidate_prompts)
-                .map_err(|e| format!("publish {}: {e}", candidate_prompts.display()))?;
-        }
-        std::fs::rename(&staged_yaml, candidate)
-            .map_err(|e| format!("publish {}: {e}", candidate.display()))
-    })();
-    let _ = std::fs::remove_file(&staged_yaml);
-    if staged_prompts.is_dir() {
-        let _ = std::fs::remove_dir_all(&staged_prompts);
-    }
-    if result.is_err() && candidate_prompts.is_dir() {
-        let _ = std::fs::remove_dir_all(&candidate_prompts);
-    }
-    result
-}
-
-fn migrate_legacy_pipelines(repo_root: &Path) -> Result<(), String> {
-    let Some(target) = instance_pipeline_dir(repo_root) else {
-        return Err("cannot determine instance pipeline directory".into());
-    };
-    use sha2::{Digest, Sha256};
-    let source_key = Sha256::digest(repo_root.to_string_lossy().as_bytes());
-    let marker = target
-        .parent()
-        .expect("pipeline registry has a .pdo parent")
-        .join(format!(
-            ".pipelines-unified-v1-{}",
-            &format!("{source_key:x}")[..12]
-        ));
-    if marker.exists() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(&target).map_err(|e| format!("create pipeline registry: {e}"))?;
-    // The former user-scoped `~/.pdo/pipelines` directory is the unified
-    // registry itself, so its entries remain in place. Include it in the scan
-    // to make that no-loss case explicit and collision-safe.
-    let mut sources = vec![target.clone(), repo_root.join(".pdo").join("pipelines")];
-    if let Some(home) = dirs_next_home() {
-        sources.push(home.join(".pdo").join("library").join("pipelines"));
-    }
-
-    for source in sources {
-        let Ok(entries) = std::fs::read_dir(&source) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let source_yaml = entry.path();
-            if source_yaml.extension().and_then(|value| value.to_str()) != Some("yaml") {
-                continue;
-            }
-            let Some(base_id) = source_yaml.file_stem().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            let source_bytes = std::fs::read(&source_yaml)
-                .map_err(|e| format!("read {}: {e}", source_yaml.display()))?;
-            let mut id = base_id.to_string();
-            let mut suffix = 2u32;
-            loop {
-                let candidate = target.join(format!("{id}.yaml"));
-                let source_prompts = source_yaml.with_extension("prompts");
-                let candidate_prompts = candidate.with_extension("prompts");
-                if !candidate.exists() {
-                    publish_migrated_pipeline(&source_yaml, &source_bytes, &candidate)?;
-                    break;
-                }
-                if std::fs::read(&candidate).ok().as_deref() == Some(source_bytes.as_slice())
-                    && directories_match(&source_prompts, &candidate_prompts)?
-                {
-                    break;
-                }
-                id = format!("{base_id}-{suffix}");
-                suffix += 1;
-            }
-        }
-    }
-    std::fs::write(marker, b"1\n").map_err(|e| format!("finish pipeline migration: {e}"))
-}
-
-fn pipeline_scope_for_response(_repo_root: &Path, _path: &Path) -> &'static str {
-    "instance"
+    pdo_pipeline::adapters::registry::instance_pipeline_dir(repo_root)
 }
 
 fn resolve_pipeline_path(repo_root: &std::path::Path, pipeline_name: &str) -> PathBuf {
@@ -17821,7 +15960,7 @@ async fn skill_referents(
         .collect();
 
     let pipeline_entries = instance_pipeline_dir(repo_root)
-        .map(|directory| scan_pipeline_dir(&directory, "instance"))
+        .map(|directory| pdo_pipeline::adapters::registry::pipeline_files(&directory))
         .unwrap_or_default();
     let pipelines = pipeline_entries
         .into_iter()
@@ -17832,6 +15971,7 @@ async fn skill_referents(
             let Ok(parsed) = pipeline::parse_pipeline(&yaml) else {
                 return Vec::new();
             };
+            let name = parsed.pipeline.name.clone();
             parsed
                 .pipeline
                 .nodes
@@ -17839,9 +15979,9 @@ async fn skill_referents(
                 .filter(|node| skill_selection::selects(&node.skills, id))
                 .map(|node| PipelineReferent {
                     id: entry.id.clone(),
-                    name: entry.name.clone(),
+                    name: name.clone(),
                     node_id: node.id,
-                    scope: entry.scope.to_string(),
+                    scope: "instance".to_string(),
                 })
                 .collect::<Vec<_>>()
         })
@@ -18140,109 +16280,6 @@ mod tests {
             .fetch_add(1, Ordering::Relaxed)
     }
 
-    #[test]
-    fn migrated_pipeline_is_published_with_its_prompt_sidecars() {
-        let source = tempfile::tempdir().unwrap();
-        let target = tempfile::tempdir().unwrap();
-        let source_yaml = source.path().join("review.yaml");
-        let source_prompts = source.path().join("review.prompts");
-        std::fs::write(&source_yaml, "name: review\n").unwrap();
-        std::fs::create_dir(&source_prompts).unwrap();
-        std::fs::write(source_prompts.join("worker.md"), "review carefully").unwrap();
-        let candidate = target.path().join("review.yaml");
-        let interrupted_prompts = target.path().join("review.prompts");
-        std::fs::create_dir(&interrupted_prompts).unwrap();
-        std::fs::write(interrupted_prompts.join("worker.md"), "stale partial copy").unwrap();
-
-        publish_migrated_pipeline(&source_yaml, b"name: review\n", &candidate).unwrap();
-
-        assert_eq!(std::fs::read(&candidate).unwrap(), b"name: review\n");
-        assert_eq!(
-            std::fs::read_to_string(target.path().join("review.prompts/worker.md")).unwrap(),
-            "review carefully"
-        );
-        assert!(directories_match(&source_prompts, &target.path().join("review.prompts")).unwrap());
-    }
-
-    #[test]
-    fn migration_collision_comparison_includes_prompt_contents() {
-        let left = tempfile::tempdir().unwrap();
-        let right = tempfile::tempdir().unwrap();
-        std::fs::write(left.path().join("worker.md"), "left").unwrap();
-        std::fs::write(right.path().join("worker.md"), "right").unwrap();
-
-        assert!(!directories_match(left.path(), right.path()).unwrap());
-    }
-
-    #[test]
-    fn migration_moves_legacy_library_pipelines_once_and_preserves_collisions() {
-        let fake_home = FakeHome::new();
-        let repo = tempfile::tempdir().unwrap();
-        let registry = repo.path().join(".pdo/pipelines");
-        std::fs::create_dir_all(&registry).unwrap();
-        std::fs::write(registry.join("review.yaml"), "name: Repo review\n").unwrap();
-        std::fs::write(registry.join("personal.yaml"), "name: Personal\n").unwrap();
-        std::fs::create_dir(registry.join("review.prompts")).unwrap();
-        std::fs::write(registry.join("review.prompts/worker.md"), "repo prompt").unwrap();
-
-        let legacy = fake_home.path().join(".pdo/library/pipelines");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("review.yaml"), "name: Library review\n").unwrap();
-        std::fs::create_dir(legacy.join("review.prompts")).unwrap();
-        std::fs::write(legacy.join("review.prompts/worker.md"), "library prompt").unwrap();
-
-        migrate_legacy_pipelines(repo.path()).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(registry.join("review.yaml")).unwrap(),
-            "name: Repo review\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(registry.join("personal.yaml")).unwrap(),
-            "name: Personal\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(registry.join("review-2.yaml")).unwrap(),
-            "name: Library review\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(registry.join("review-2.prompts/worker.md")).unwrap(),
-            "library prompt"
-        );
-
-        std::fs::write(legacy.join("late.yaml"), "name: Late\n").unwrap();
-        migrate_legacy_pipelines(repo.path()).unwrap();
-        assert!(!registry.join("late.yaml").exists());
-    }
-
-    #[test]
-    fn available_pipeline_identity_avoids_an_existing_name_with_a_different_id() {
-        let registry = tempfile::tempdir().unwrap();
-        std::fs::write(
-            registry.path().join("legacy-id.yaml"),
-            "name: Release train\n",
-        )
-        .unwrap();
-
-        assert_eq!(
-            available_pipeline_identity(registry.path(), "Release train"),
-            ("release-train-2".into(), "Release train (2)".into())
-        );
-    }
-
-    #[test]
-    fn available_pipeline_identity_collapses_name_punctuation_in_the_file_id() {
-        let registry = tempfile::tempdir().unwrap();
-
-        assert_eq!(
-            available_pipeline_identity(registry.path(), "Release train (2) (copy)"),
-            (
-                "release-train-2-copy".into(),
-                "Release train (2) (copy)".into()
-            )
-        );
-    }
-
     // The nested-daemon (no-cleanup) posture resolver
     //
     // The truth table used to be inlined in `serve_with_config` as two
@@ -18277,163 +16314,6 @@ mod tests {
     fn either_signal_alone_is_enough() {
         assert!(nested_daemon_from(Some("worker"), Some("0")));
         assert!(nested_daemon_from(None, Some("1")));
-    }
-
-    // --- POST /nodes/parse: single-node YAML → canvas-instantiable spec.
-    // The core (`parse_node_spec`) is a pure fn, so most cases test it directly;
-    // two router oneshots confirm the route is actually mounted (the FP's
-    // headline "404 blocking" risk) and maps Ok/Err to 200/400. ---
-
-    #[test]
-    fn parse_node_spec_happy_path_library_shape() {
-        // Exactly what the front export emits (LibraryEntry shape) → no warnings.
-        let body = parse_node_spec(
-            "name: Writer\ntype: agent\nisolated_worktree: false\noutputs:\n  - name: adr\nprompt: |\n  Write an ADR.\n",
-        )
-        .unwrap();
-        assert_eq!(body["spec"]["type"], "agent");
-        assert_eq!(body["spec"]["name"], "Writer");
-        assert_eq!(body["spec"]["outputs"][0]["name"], "adr");
-        // #653: the pasted node's opt-out of isolation rides through — dropping
-        // it would silently fork a sub-worktree on instantiation.
-        assert_eq!(body["spec"]["isolated_worktree"], false);
-        assert_eq!(body["prompt"], "Write an ADR.\n");
-        assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
-    }
-
-    /// #653 / ADR-0060: a node pasted with no isolation line gets its type's
-    /// default stamped and states it in the spec — the canvas never has to
-    /// re-derive it. A type that carries no isolation reports `null`.
-    #[test]
-    fn parse_node_spec_states_the_isolation_for_every_node() {
-        for (yaml, expected) in [
-            ("name: n\ntype: agent\n", serde_json::json!(true)),
-            ("name: n\ntype: script\n", serde_json::json!(false)),
-            (
-                "name: n\ntype: agent\nisolated_worktree: false\n",
-                serde_json::json!(false),
-            ),
-            ("name: n\ntype: start\n", serde_json::Value::Null),
-            // #655: a stray line on a type that carries no isolation is dropped,
-            // not round-tripped — a Merge is isolated by construction.
-            (
-                "name: n\ntype: merge\nisolated_worktree: false\n",
-                serde_json::Value::Null,
-            ),
-        ] {
-            let body = parse_node_spec(yaml).unwrap();
-            assert_eq!(body["spec"]["isolated_worktree"], expected, "{yaml}");
-            assert_eq!(
-                body["warnings"].as_array().unwrap().len(),
-                0,
-                "the stamped default is not a loss to warn about: {yaml}"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_node_spec_missing_name_is_hard_error() {
-        let err = parse_node_spec("type: agent\n").unwrap_err();
-        assert!(err.contains("name"), "{err}");
-    }
-
-    #[test]
-    fn parse_node_spec_invalid_yaml_is_hard_error() {
-        let err = parse_node_spec("name: [unterminated\n").unwrap_err();
-        assert!(err.contains("invalid YAML"), "{err}");
-    }
-
-    #[test]
-    fn parse_node_spec_non_mapping_root_is_hard_error() {
-        let err = parse_node_spec("- just a list item\n").unwrap_err();
-        assert!(err.contains("mapping"), "{err}");
-    }
-
-    #[test]
-    fn parse_node_spec_whole_pipeline_is_hard_error() {
-        for yaml in ["name: p\nnodes: []\n", "name: p\nedges: []\n"] {
-            let err = parse_node_spec(yaml).unwrap_err();
-            assert!(err.contains("whole pipeline"), "{err}");
-        }
-    }
-
-    #[test]
-    fn parse_node_spec_foreach_is_hard_error() {
-        for t in ["for-each", "foreach"] {
-            let err = parse_node_spec(&format!("name: n\ntype: {t}\n")).unwrap_err();
-            assert!(
-                err.contains("removed") && err.contains("pdo migrate"),
-                "{err}"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_node_spec_missing_type_defaults_agent_with_warning() {
-        let body = parse_node_spec("name: n\n").unwrap();
-        assert_eq!(body["spec"]["type"], "agent");
-        let ws = body["warnings"].as_array().unwrap();
-        assert!(
-            ws.iter()
-                .any(|m| m.as_str().unwrap().contains("missing 'type'")),
-            "{ws:?}"
-        );
-    }
-
-    #[test]
-    fn parse_node_spec_unknown_type_coerces_agent_with_warning() {
-        let body = parse_node_spec("name: n\ntype: bogus\n").unwrap();
-        assert_eq!(body["spec"]["type"], "agent");
-        let ws = body["warnings"].as_array().unwrap();
-        assert!(
-            ws.iter()
-                .any(|m| m.as_str().unwrap().contains("unknown node type 'bogus'")),
-            "{ws:?}"
-        );
-    }
-
-    #[test]
-    fn parse_node_spec_legacy_types_kept_verbatim() {
-        // Legacy switch/loop are NOT coerced to `agent` (silent semantic loss is
-        // forbidden, ADR-0001/#268) — imported as-is (a soft warning is fine).
-        for t in ["switch", "loop"] {
-            let body = parse_node_spec(&format!("name: n\ntype: {t}\n")).unwrap();
-            assert_eq!(body["spec"]["type"], t, "legacy {t} must survive");
-        }
-    }
-
-    #[test]
-    fn parse_node_spec_unknown_field_warns_but_still_parses() {
-        let body =
-            parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\nwidget: 3\n").unwrap();
-        assert_eq!(body["spec"]["type"], "agent");
-        let ws = body["warnings"].as_array().unwrap();
-        assert!(
-            ws.iter()
-                .any(|m| m.as_str().unwrap().contains("unknown field 'widget'")),
-            "{ws:?}"
-        );
-    }
-
-    #[test]
-    fn parse_node_spec_drops_id_and_view_without_warning() {
-        // id is regenerated on add, view re-centred — dropping them is not a loss.
-        let body = parse_node_spec(
-            "name: n\ntype: agent\nisolated_worktree: false\nid: keepme\nview:\n  x: 1\n  y: 2\n",
-        )
-        .unwrap();
-        assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
-        assert!(body["spec"].get("id").is_none());
-    }
-
-    #[test]
-    fn parse_node_spec_model_round_trips() {
-        let body = parse_node_spec("name: n\ntype: agent\nisolated_worktree: true\nmodel: opus\n")
-            .unwrap();
-        assert_eq!(body["spec"]["model"], "opus");
-        // A node on the account default omits `model:` → null in the spec.
-        let plain = parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\n").unwrap();
-        assert!(plain["spec"]["model"].is_null());
     }
 
     #[test]
@@ -18499,99 +16379,6 @@ mod tests {
         let mut other = ev("probe", 5, Some(serde_json::json!({"effort": "max"})));
         other.kind = event_log::EventKind::NodeCompleted;
         assert_eq!(find_launch_effort(&[other], "probe", 5), None);
-    }
-
-    #[test]
-    fn parse_node_spec_effort_round_trips() {
-        // The only test that catches the `json!` spec in `parse_node_spec`
-        // dropping the effort — the macro compiles perfectly without the key, so
-        // *Add node from YAML…* would silently create an effort-less node.
-        let body = parse_node_spec(
-            "name: n\ntype: agent\nisolated_worktree: true\nmodel: opus\neffort: low\n",
-        )
-        .unwrap();
-        assert_eq!(body["spec"]["effort"], "low");
-        assert_eq!(body["spec"]["model"], "opus");
-        // …and `effort` is a KNOWN node key: a YAML that parses fine must NOT be
-        // announced as an ignored field (ADR-0001/#268 forbids the silent loss —
-        // and forbids reporting one that did not happen).
-        assert_eq!(
-            body["warnings"].as_array().unwrap().len(),
-            0,
-            "effort must not warn: {:?}",
-            body["warnings"]
-        );
-        // A node on the account default omits `effort:` → null in the spec.
-        let plain = parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\n").unwrap();
-        assert!(plain["spec"]["effort"].is_null());
-    }
-
-    #[test]
-    fn parse_node_spec_unknown_effort_level_passes_through() {
-        // The wire is free-text. A level the curated UI set does not know
-        // must reach the spec verbatim, not be dropped or coerced (the picker
-        // renders it in a dedicated pass-through segment).
-        let body =
-            parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\neffort: turbo\n")
-                .unwrap();
-        assert_eq!(body["spec"]["effort"], "turbo");
-        assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
-    }
-
-    #[test]
-    fn parse_node_spec_prompt_absent_defaults_empty() {
-        let body = parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\n").unwrap();
-        assert_eq!(body["prompt"], "");
-    }
-
-    #[tokio::test]
-    async fn nodes_parse_route_is_mounted_and_returns_spec() {
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/nodes/parse")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({
-                            "yaml": "name: n\ntype: agent\nisolated_worktree: false\nprompt: |\n  hi\n"
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(body["spec"]["type"], "agent");
-        assert_eq!(body["prompt"], "hi\n");
-    }
-
-    #[tokio::test]
-    async fn nodes_parse_route_returns_400_on_missing_name() {
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/nodes/parse")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({ "yaml": "type: agent\n" }))
-                            .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     // --- POST /triggers/guard/test: dry-run a guard, zero side effects.
@@ -18899,7 +16686,7 @@ mod tests {
             merge_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
-            recent_writes: Arc::new(Mutex::new(HashMap::new())),
+            recent_writes: SelfWrites::new(),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
             // spawn path, the node session runs `true` and exits immediately —
@@ -21005,328 +18792,6 @@ mod tests {
         for tree in node_couples(&cost, &performance, "coder") {
             assert_eq!(tree.len(), 3);
         }
-    }
-
-    /// #890 — an absorption is instance configuration, not a property of the
-    /// library: deleting the absorbed Pipeline's YAML leaves it in place, and a
-    /// dimension Stats does not combine is refused.
-    #[tokio::test]
-    async fn stats_absorption_survives_a_library_delete_and_refuses_unknown_dimensions() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "doomed");
-        let state = test_state_with_dir(tmp.path()).await;
-        let post = |body: serde_json::Value| {
-            let state = state.clone();
-            async move {
-                build_router(state)
-                    .oneshot(
-                        Request::builder()
-                            .method("POST")
-                            .uri("/stats/absorptions")
-                            .header("content-type", "application/json")
-                            .body(Body::from(body.to_string()))
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap()
-                    .status()
-            }
-        };
-        assert_eq!(
-            post(serde_json::json!({
-                "dimension": "pipeline",
-                "absorbent": {"key": "keeper", "name": "Keeper"},
-                "members": [{"key": "doomed", "name": "doomed"}],
-            }))
-            .await,
-            StatusCode::OK
-        );
-        assert_eq!(
-            post(serde_json::json!({
-                "dimension": "project",
-                "absorbent": {"key": "a", "name": "A"},
-                "members": [{"key": "b", "name": "B"}],
-            }))
-            .await,
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            post(serde_json::json!({
-                "dimension": "pipeline",
-                "absorbent": {"key": "a", "name": "A"},
-                "members": [{"key": "a", "name": "A"}],
-            }))
-            .await,
-            StatusCode::BAD_REQUEST,
-            "absorbing only itself is no absorption"
-        );
-
-        let deleted = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/pipelines/doomed")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(deleted.status().is_success(), "{}", deleted.status());
-
-        let listed = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/stats/absorptions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(listed.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(body["absorptions"][0]["members"][0]["key"], "doomed");
-    }
-
-    /// #891 / ADR-0077 §4 — the HTTP contract of the rename-born absorption: a
-    /// rename that changes the id records old → new (origin `rename`), a chain
-    /// of two renames leaves one absorbent carrying both old ids, and a
-    /// display-only rename (same id) records nothing. Stats then reads one row
-    /// for the old and the new Pipeline in every tab; `uncombined=true` reads two.
-    #[tokio::test]
-    async fn stats_absorption_is_recorded_by_a_pipeline_rename() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "alpha");
-        let mut state = test_state_with_dir(tmp.path()).await;
-        let home = tmp.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        state = with_home_override(state, home);
-        let repo = state.repo_root.to_string_lossy().into_owned();
-
-        async fn send(
-            state: &Arc<AppState>,
-            method: &str,
-            uri: &str,
-            body: Option<serde_json::Value>,
-        ) -> (StatusCode, serde_json::Value) {
-            let mut request = Request::builder().method(method).uri(uri);
-            if body.is_some() {
-                request = request.header("content-type", "application/json");
-            }
-            let response = build_router(state.clone())
-                .oneshot(
-                    request
-                        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            let status = response.status();
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            (
-                status,
-                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
-            )
-        }
-        async fn completed_run(
-            db: &sqlx::SqlitePool,
-            repo: &str,
-            run: &str,
-            pipeline_id: &str,
-            name: &str,
-            day: &str,
-        ) {
-            let events = [
-                (
-                    "09:00",
-                    "run_started",
-                    None,
-                    serde_json::json!({
-                        "pipeline_id": pipeline_id,
-                        "pipeline_name": name,
-                        "target_repo": repo,
-                        "harness": "claude",
-                        "node_defs": [{"id":"worker","name":"Worker","node_type":"agent"}]
-                    }),
-                ),
-                (
-                    "09:01",
-                    "node_started",
-                    Some("worker"),
-                    serde_json::json!({"node_type":"agent","harness":"claude","session_id":format!("{run}-s")}),
-                ),
-                (
-                    "09:11",
-                    "node_completed",
-                    Some("worker"),
-                    serde_json::json!({}),
-                ),
-                ("09:12", "run_completed", None, serde_json::json!({})),
-            ];
-            for (time, kind, node, payload) in events {
-                sqlx::query(
-                    "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
-                     VALUES (?, ?, ?, ?, ?, ?)",
-                )
-                .bind(run)
-                .bind(format!("{day}T{time}:00Z"))
-                .bind(kind)
-                .bind(node)
-                .bind(node.map(|_| 1_i64))
-                .bind(payload.to_string())
-                .execute(db)
-                .await
-                .unwrap();
-            }
-        }
-        let ids = |rows: &serde_json::Value| -> Vec<String> {
-            let mut ids: Vec<String> = rows
-                .as_array()
-                .unwrap_or_else(|| panic!("not rows: {rows}"))
-                .iter()
-                .map(|row| row["id"].as_str().unwrap().to_string())
-                .collect();
-            ids.sort();
-            ids
-        };
-
-        // A Run of `alpha`, then the rename that changes its id.
-        completed_run(&state.db, &repo, "ren-1", "alpha", "alpha", "2033-04-10").await;
-        let (status, body) = send(
-            &state,
-            "PUT",
-            "/pipelines/alpha/rename",
-            Some(serde_json::json!({"name": "Beta"})),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["id"], "beta");
-        let (_, list) = send(&state, "GET", "/stats/absorptions", None).await;
-        assert_eq!(
-            list["absorptions"],
-            serde_json::json!([{
-                "dimension": "pipeline",
-                "scope": "",
-                "absorbent": {"key": "beta", "name": "Beta"},
-                "members": [{
-                    "key": "alpha",
-                    "name": "alpha",
-                    "origin": "rename",
-                    "created_at": list["absorptions"][0]["members"][0]["created_at"],
-                }],
-            }])
-        );
-
-        // A Run of the renamed Pipeline: Stats reads one row, uncombined two.
-        completed_run(&state.db, &repo, "ren-2", "beta", "Beta", "2033-04-11").await;
-        let window = "from=2033-04-10T00:00:00Z&to=2033-04-12T00:00:00Z";
-        for (endpoint, rows) in [
-            ("overview", "sessions_by_pipeline"),
-            ("cost", "by_pipeline"),
-            ("performance", "by_pipeline"),
-        ] {
-            let uri = format!("/stats/{endpoint}?{window}&bucket=day");
-            let (status, combined) = send(&state, "GET", &uri, None).await;
-            assert_eq!(status, StatusCode::OK, "{endpoint}: {combined}");
-            assert_eq!(ids(&combined[rows]), vec!["beta"], "{endpoint}");
-            let row = &combined[rows][0];
-            assert_eq!(row["name"], "Beta", "{endpoint}");
-            assert_eq!(row["absorbed"][0]["key"], "alpha", "{endpoint}");
-            let (_, raw) = send(&state, "GET", &format!("{uri}&uncombined=true"), None).await;
-            assert_eq!(ids(&raw[rows]), vec!["alpha", "beta"], "{endpoint}");
-        }
-        let (_, overview) = send(
-            &state,
-            "GET",
-            &format!("/stats/overview?{window}&bucket=day"),
-            None,
-        )
-        .await;
-        assert_eq!(overview["sessions_by_pipeline"][0]["executions"], 2);
-
-        // A second rename: one absorbent, both old ids under it.
-        let (status, _) = send(
-            &state,
-            "PUT",
-            "/pipelines/beta/rename",
-            Some(serde_json::json!({"name": "Gamma"})),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        let (_, list) = send(&state, "GET", "/stats/absorptions", None).await;
-        let absorptions = list["absorptions"].as_array().unwrap();
-        assert_eq!(absorptions.len(), 1, "{list}");
-        assert_eq!(absorptions[0]["absorbent"]["key"], "gamma");
-        assert_eq!(absorptions[0]["absorbent"]["name"], "Gamma");
-        let mut members: Vec<(String, String)> = absorptions[0]["members"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| {
-                (
-                    m["key"].as_str().unwrap().to_string(),
-                    m["origin"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect();
-        members.sort();
-        assert_eq!(
-            members,
-            vec![
-                ("alpha".to_string(), "rename".to_string()),
-                ("beta".to_string(), "rename".to_string()),
-            ]
-        );
-
-        // A display-only rename keeps the id: nothing is recorded.
-        let (status, body) = send(
-            &state,
-            "PUT",
-            "/pipelines/gamma/rename",
-            Some(serde_json::json!({"name": "gamma"})),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["id"], "gamma");
-        let (_, after) = send(&state, "GET", "/stats/absorptions", None).await;
-        assert_eq!(after, list, "a same-id rename records nothing");
-    }
-
-    /// #891 — a save whose `name:` change moves the file is a rename too.
-    #[tokio::test]
-    async fn stats_absorption_is_recorded_by_a_save_that_changes_the_id() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "saved-old");
-        let state = test_state_with_dir(tmp.path()).await;
-        let yaml = std::fs::read_to_string(tmp.path().join(".pdo/pipelines/saved-old.yaml"))
-            .unwrap()
-            .replace("name: saved-old", "name: Saved New");
-        let response = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/saved-old")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({"yaml": yaml, "prompts": {}}).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let rows = stats_absorption::list(&state.db).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].member, "saved-old");
-        assert_eq!(rows[0].member_name, "saved-old");
-        assert_eq!(rows[0].absorbent, "saved-new");
-        assert_eq!(rows[0].absorbent_name, "Saved New");
-        assert_eq!(rows[0].origin, "rename");
     }
 
     /// `GET /stats/performance` — the whole shape in one cohort: success-only
@@ -24131,7 +21596,7 @@ mod tests {
             merge_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
-            recent_writes: Arc::new(Mutex::new(HashMap::new())),
+            recent_writes: SelfWrites::new(),
             run_watcher: Arc::new(Mutex::new(None)),
             tmux_cmd_override: Some("exec true".to_string()),
             docker_cmd_override: None,
@@ -29987,7 +27452,7 @@ mod tests {
             merge_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
-            recent_writes: Arc::new(Mutex::new(HashMap::new())),
+            recent_writes: SelfWrites::new(),
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
             // spawn path, the node session runs `true` and exits immediately —
@@ -30072,6 +27537,9 @@ mod tests {
 
     /// RAII guard that sets HOME to a temporary directory and restores it on drop.
     /// Holds HOME_TEST_LOCK to prevent concurrent env var mutation.
+    /// Serializes the tests that point `$HOME` at a temporary directory.
+    static HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct FakeHome {
         _lock: std::sync::MutexGuard<'static, ()>,
         dir: tempfile::TempDir,
@@ -30082,9 +27550,7 @@ mod tests {
         fn new() -> Self {
             // Poison-tolerant: the lock only serializes HOME mutation; a panic
             // in another test must not cascade here.
-            let lock = library_store::HOME_TEST_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let lock = HOME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let dir = tempfile::tempdir().unwrap();
             let prev = std::env::var("HOME").ok();
             std::env::set_var("HOME", dir.path());
@@ -30106,79 +27572,6 @@ mod tests {
                 std::env::set_var("HOME", h);
             }
         }
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn list_pipelines_scans_repo_dir() {
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-
-        write_test_pipeline(tmp.path(), "test-pipe");
-        write_test_pipeline(tmp.path(), "another-pipe");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(list.len(), 2);
-        assert!(list.iter().any(|p| p["id"] == "test-pipe"));
-        assert!(list.iter().any(|p| p["id"] == "another-pipe"));
-        assert!(list.iter().all(|p| p["scope"] == "instance"));
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn list_pipelines_exposes_prompt_required_flag() {
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-
-        // Default pipeline (prompt_required absent => true).
-        write_test_pipeline(tmp.path(), "required-pipe");
-        // Prompt-optional pipeline.
-        let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
-        let yaml = format!(
-            "name: optional-pipe\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
-        );
-        std::fs::write(pipelines_dir.join("optional-pipe.yaml"), yaml).unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-
-        let required = list.iter().find(|p| p["id"] == "required-pipe").unwrap();
-        assert_eq!(required["prompt_required"], serde_json::json!(true));
-        let optional = list.iter().find(|p| p["id"] == "optional-pipe").unwrap();
-        assert_eq!(optional["prompt_required"], serde_json::json!(false));
     }
 
     #[tokio::test]
@@ -30663,1486 +28056,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn list_pipelines_empty_when_no_dir() {
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        assert!(list.is_empty());
-    }
-
-    #[tokio::test]
-    async fn get_pipeline_returns_parsed_definition() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "my-pipe");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/my-pipe")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(detail["id"], "my-pipe");
-        assert_eq!(detail["pipeline"]["name"], "my-pipe");
-        assert_eq!(detail["pipeline"]["nodes"].as_array().unwrap().len(), 3);
-        assert!(detail["pipeline"]["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|n| n["id"] == "worker"));
-        assert!(detail["yaml"].as_str().unwrap().contains("name: my-pipe"));
-    }
-
-    #[tokio::test]
-    async fn get_pipeline_returns_loop_switch_fixture() {
-        // A pre-ADR-0011 file still on someone's disk is served as it is written:
-        // the route never migrates behind the user's back. (The shipped seed is
-        // migrated since #396, hence the inline legacy fixture.)
-        let tmp = tempfile::tempdir().unwrap();
-        let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
-        std::fs::create_dir_all(&pipelines_dir).unwrap();
-        let fixture = crate::pipeline_migrator::LEGACY_REVIEW_LOOP_YAML;
-        std::fs::write(pipelines_dir.join("review-loop.yaml"), fixture).unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/review-loop")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(detail["id"], "review-loop");
-
-        let nodes = detail["pipeline"]["nodes"].as_array().unwrap();
-        assert!(nodes.iter().any(|n| n["type"] == "loop"));
-        assert!(nodes.iter().any(|n| n["type"] == "switch"));
-
-        let loop_node = nodes.iter().find(|n| n["type"] == "loop").unwrap();
-        assert_eq!(loop_node["max_iter"], 3);
-
-        let switch_node = nodes.iter().find(|n| n["type"] == "switch").unwrap();
-        let switch_outputs = switch_node["outputs"].as_array().unwrap();
-        assert!(switch_outputs
-            .iter()
-            .any(|o| o["name"] == "pass" && o["when"].is_object()));
-        assert!(switch_outputs.iter().any(|o| o["name"] == "default"));
-
-        // No region is invented over the legacy loop node (it governs its own
-        // laps), and the response says so out loud instead of leaving the canvas
-        // silently region-less.
-        assert!(
-            detail["pipeline"]["loops"]
-                .as_array()
-                .is_none_or(|l| l.is_empty()),
-            "a cycle through a legacy loop node must not be wrapped in a region: {:?}",
-            detail["pipeline"]["loops"]
-        );
-        let diagnostics = detail["diagnostics"].as_array().unwrap();
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.as_str().is_some_and(|m| m.contains("pdo migrate"))),
-            "a legacy control node must be diagnosed: {diagnostics:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn get_pipeline_materializes_the_region_of_an_undeclared_cycle() {
-        // A pipeline whose graph closes a cycle but whose file carries no
-        // `loops:` block was served region-less, so the canvas drew no bounded
-        // region and `max_iter` — editable ONLY in the region inspector — was
-        // unreachable until the user redrew an edge. The invariant now lives at the
-        // parse boundary, so the route hands the editor a materialized region.
-        let tmp = tempfile::tempdir().unwrap();
-        let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
-        std::fs::create_dir_all(&pipelines_dir).unwrap();
-        let yaml = r#"
-name: cyclic
-version: "1.0"
-nodes:
-  - id: start
-    name: Start
-    type: start
-    outputs:
-      - { name: user_prompt, side: right }
-  - id: aaaa0001
-    name: implementer
-    type: agent
-    isolated_worktree: true
-    outputs:
-      - { name: code, side: right }
-  - id: aaaa0002
-    name: reviewer
-    type: agent
-    isolated_worktree: false
-    outputs:
-      - name: review
-        side: right
-        frontmatter:
-          verdict: { type: enum, allowed: [PASS, FAIL] }
-  - id: end
-    name: End
-    type: end
-    inputs:
-      - { name: result, side: left }
-edges:
-  - source: { node: start, port: user_prompt }
-    target: { node: aaaa0001, port: task }
-  - source: { node: aaaa0001, port: code }
-    target: { node: aaaa0002, port: code }
-  - source: { node: aaaa0002, port: review }
-    target: { node: end, port: result }
-    when:
-      verdict: { eq: PASS }
-  - source: { node: aaaa0002, port: review }
-    target: { node: aaaa0001, port: task }
-    else: true
-"#;
-        std::fs::write(pipelines_dir.join("cyclic.yaml"), yaml).unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/cyclic")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        let loops = detail["pipeline"]["loops"].as_array().unwrap();
-        assert_eq!(loops.len(), 1, "one materialized region: {loops:?}");
-        assert_eq!(loops[0]["kind"], "bounded");
-        assert_eq!(loops[0]["max_iter"], 5); // DEFAULT_MAX_ITER
-        assert_eq!(
-            loops[0]["id"],
-            crate::loop_region::generated_region_id(&[
-                "aaaa0001".to_string(),
-                "aaaa0002".to_string()
-            ]),
-            "the id must be the member-derived one the canvas mirror computes"
-        );
-        let members = loops[0]["members"].as_array().unwrap();
-        assert_eq!(members.len(), 2);
-
-        // Derived, not written: the file on disk is byte-identical, so opening the
-        // pipeline can never dirty it nor rewrite its YAML.
-        assert_eq!(
-            std::fs::read_to_string(pipelines_dir.join("cyclic.yaml")).unwrap(),
-            yaml,
-            "materialization must not touch the file"
-        );
-        assert!(
-            !detail["yaml"].as_str().unwrap().contains("loops:"),
-            "the served raw YAML is the file's, region-free"
-        );
-    }
-
-    #[tokio::test]
-    async fn get_pipeline_not_found() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/nonexistent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn create_pipeline_writes_scaffold() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "new-pipeline", "scope": "repo"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(result["id"], "new-pipeline");
-        assert_eq!(result["scope"], "instance");
-
-        let yaml_path = tmp
-            .path()
-            .join(".pdo")
-            .join("pipelines")
-            .join("new-pipeline.yaml");
-        assert!(yaml_path.exists());
-        let content = std::fs::read_to_string(&yaml_path).unwrap();
-        assert!(content.contains("name: new-pipeline"));
-    }
-
-    /// #823 — the file a client just asked us to create is not an external change.
-    ///
-    /// Without the `mark_self_write`, the watcher's 1 s debounce re-announced the
-    /// brand-new YAML as `pipeline_changed`, and a client that had already opened
-    /// it and started editing (what the New Pipeline dialog does) was shown a
-    /// conflict against a document nobody else had touched. The assertion is on the
-    /// suppression map the watcher consults, which is the whole mechanism.
-    #[tokio::test]
-    async fn create_pipeline_marks_its_own_write() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state.clone());
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "fresh"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-
-        let yaml_path = tmp.path().join(".pdo").join("pipelines").join("fresh.yaml");
-        let guard = state.recent_writes.lock().unwrap();
-        assert!(
-            guard.contains_key(&yaml_path),
-            "the created pipeline must be recorded as a self-write, else the \
-             watcher re-announces it as an external change",
-        );
-    }
-
-    #[tokio::test]
-    async fn create_pipeline_conflict_on_duplicate() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "existing");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "existing", "scope": "repo"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
-    async fn save_pipeline_updates_yaml_on_disk() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "editable");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let new_yaml =
-            format!("name: editable\nversion: \"2.0\"\nnodes:\n{START_END_YAML}edges: []\n");
-        let body = serde_json::json!({
-            "yaml": new_yaml,
-            "prompts": {}
-        });
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/editable")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let yaml_path = tmp
-            .path()
-            .join(".pdo")
-            .join("pipelines")
-            .join("editable.yaml");
-        let content = std::fs::read_to_string(&yaml_path).unwrap();
-        assert!(content.contains("version: \"2.0\""));
-    }
-
-    #[tokio::test]
-    async fn save_pipeline_rejects_invalid_yaml() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "bad-save");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let body = serde_json::json!({
-            "yaml": "{{invalid yaml:::",
-            "prompts": {}
-        });
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/bad-save")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn save_pipeline_returns_structured_error_with_line() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "struct-err");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let body = serde_json::json!({
-            "yaml": "{{invalid yaml:::",
-            "prompts": {}
-        });
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/struct-err")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(
-            json.get("message").is_some(),
-            "response must have 'message'"
-        );
-        assert!(
-            !json["message"].as_str().unwrap().is_empty(),
-            "message must be non-empty"
-        );
-    }
-
-    #[tokio::test]
-    async fn save_pipeline_missing_name_returns_structured_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "no-name");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let body = serde_json::json!({
-            "yaml": "version: \"1.0\"\nnodes: []\n",
-            "prompts": {}
-        });
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/no-name")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(
-            json.get("message").is_some(),
-            "response must have 'message'"
-        );
-    }
-
-    #[tokio::test]
-    async fn save_pipeline_writes_prompts_under_canonical_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "prompt-save");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let yaml = format!("name: prompt-save\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: ab12cd34\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n");
-        let body = serde_json::json!({
-            "yaml": yaml,
-            "prompts": { "ab12cd34": "You are a worker agent." }
-        });
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/prompt-save")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let prompt_path = tmp
-            .path()
-            .join(".pdo/pipelines/prompt-save.prompts/ab12cd34.md");
-        assert!(prompt_path.exists(), "canonical prompt file must exist");
-        let content = std::fs::read_to_string(&prompt_path).unwrap();
-        assert_eq!(content, "You are a worker agent.");
-    }
-
-    // --- #774 — pipeline rename (visible name ⇄ file stem 1:1) ---
-
-    #[tokio::test]
-    async fn rename_pipeline_moves_file_sidecar_and_name_field() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "old-name");
-        let dir = tmp.path().join(".pdo/pipelines");
-        // Comments + unknown keys on disk: a rename must NOT round-trip (#682).
-        let yaml = format!(
-            "# my pipeline, hand-annotated\nname: old-name\ncustom-field: keep-me\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n"
-        );
-        std::fs::write(dir.join("old-name.yaml"), yaml).unwrap();
-        std::fs::create_dir_all(dir.join("old-name.prompts")).unwrap();
-        std::fs::write(dir.join("old-name.prompts/worker.md"), "Role prompt.").unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/old-name/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Renamed Pipeline"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(val["renamed"], true);
-        assert_eq!(val["id"], "renamed-pipeline");
-        assert_eq!(val["name"], "Renamed Pipeline");
-
-        assert!(!dir.join("old-name.yaml").exists(), "old yaml must be gone");
-        assert!(
-            !dir.join("old-name.prompts").exists(),
-            "old sidecar must be gone"
-        );
-        let new_yaml = std::fs::read_to_string(dir.join("renamed-pipeline.yaml")).unwrap();
-        assert!(new_yaml.contains("name: Renamed Pipeline"));
-        assert!(
-            new_yaml.contains("# my pipeline, hand-annotated"),
-            "comments must survive"
-        );
-        assert!(
-            new_yaml.contains("custom-field: keep-me"),
-            "unknown keys must survive"
-        );
-        let prompt =
-            std::fs::read_to_string(dir.join("renamed-pipeline.prompts/worker.md")).unwrap();
-        assert_eq!(prompt, "Role prompt.");
-    }
-
-    #[tokio::test]
-    async fn rename_pipeline_refuses_when_target_file_exists() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "collider-a");
-        write_test_pipeline(tmp.path(), "collider-b");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        // "collider-b" slugs to collider-b, an existing FILE.
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/collider-a/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Collider B"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let dir = tmp.path().join(".pdo/pipelines");
-        assert!(
-            dir.join("collider-a.yaml").exists(),
-            "source must be untouched"
-        );
-        assert!(dir.join("collider-b.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn rename_pipeline_refuses_duplicated_visible_name() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "first");
-        // A pre-existing divergence: file stem `other`, visible name "Second".
-        let dir = tmp.path().join(".pdo/pipelines");
-        let yaml = format!("name: Second\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n");
-        std::fs::write(dir.join("other.yaml"), yaml).unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        // Renaming `first` to "Second" would create two distinct pipelines
-        // listed under the same visible name — the exact state #774 refuses.
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/first/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Second"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        assert!(dir.join("first.yaml").exists(), "source must be untouched");
-    }
-
-    #[tokio::test]
-    async fn rename_pipeline_returns_404_when_not_found() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/ghost/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Whatever"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn rename_pipeline_empty_name_is_400() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "quiet");
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/quiet/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "   "}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn rename_pipeline_same_name_is_a_noop() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "steady");
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/steady/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "steady"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(val["renamed"], false);
-        assert_eq!(val["id"], "steady");
-        assert!(tmp.path().join(".pdo/pipelines/steady.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn rename_pipeline_returns_409_when_active_runs_exist() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "busy-rename");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let run_started = event_log::Event {
-            id: None,
-            run_id: "run-774".into(),
-            ts: pdo_kernel::clock::now_iso(),
-            kind: event_log::EventKind::RunStarted,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({ "pipeline_name": "busy-rename" })),
-        };
-        append_event(&state, &run_started).await.unwrap();
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/busy-rename/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Free"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(val["error"].as_str().unwrap().contains("active run"));
-        assert!(tmp.path().join(".pdo/pipelines/busy-rename.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn rename_pipeline_succeeds_when_runs_completed() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "done-rename");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let run_started = event_log::Event {
-            id: None,
-            run_id: "run-done-774".into(),
-            ts: pdo_kernel::clock::now_iso(),
-            kind: event_log::EventKind::RunStarted,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({ "pipeline_name": "done-rename" })),
-        };
-        append_event(&state, &run_started).await.unwrap();
-        let run_completed = event_log::Event {
-            id: None,
-            run_id: "run-done-774".into(),
-            ts: pdo_kernel::clock::now_iso(),
-            kind: event_log::EventKind::RunCompleted,
-            node_id: None,
-            iter: None,
-            payload: None,
-        };
-        append_event(&state, &run_completed).await.unwrap();
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/done-rename/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Done Renamed"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let dir = tmp.path().join(".pdo/pipelines");
-        assert!(!dir.join("done-rename.yaml").exists());
-        assert!(dir.join("done-renamed.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn save_pipeline_moves_file_when_name_changes() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "stale-stem");
-        let dir = tmp.path().join(".pdo/pipelines");
-        std::fs::create_dir_all(dir.join("stale-stem.prompts")).unwrap();
-        std::fs::write(dir.join("stale-stem.prompts/worker.md"), "Role prompt.").unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let new_yaml =
-            format!("name: fresh stem\nversion: \"2.0\"\nnodes:\n{START_END_YAML}edges: []\n");
-        let body = serde_json::json!({ "yaml": new_yaml, "prompts": { "start": "New prompt." } });
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/stale-stem")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(val["renamed"], true);
-        assert_eq!(val["id"], "fresh-stem");
-
-        assert!(!dir.join("stale-stem.yaml").exists());
-        assert!(
-            !dir.join("stale-stem.prompts").exists(),
-            "old sidecar must not survive the move"
-        );
-        assert!(dir.join("fresh-stem.yaml").exists());
-        let prompt = std::fs::read_to_string(dir.join("fresh-stem.prompts/start.md")).unwrap();
-        assert_eq!(prompt, "New prompt.");
-    }
-
-    #[tokio::test]
-    async fn save_pipeline_refuses_name_collision_and_keeps_old_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "moving");
-        write_test_pipeline(tmp.path(), "occupied");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let new_yaml =
-            format!("name: occupied\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n");
-        let body = serde_json::json!({ "yaml": new_yaml, "prompts": {} });
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/moving")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(val.get("message").is_some());
-        let dir = tmp.path().join(".pdo/pipelines");
-        assert!(
-            dir.join("moving.yaml").exists(),
-            "old file must be untouched"
-        );
-        assert!(dir.join("occupied.yaml").exists());
-    }
-
-    /// #886 — PUT one pipeline YAML and return (status, JSON body).
-    async fn put_pipeline_yaml(
-        state: Arc<AppState>,
-        id: &str,
-        yaml: &str,
-    ) -> (StatusCode, serde_json::Value) {
-        let body = serde_json::json!({ "yaml": yaml, "prompts": {} });
-        let resp = build_router(state)
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/pipelines/{id}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or_default())
-    }
-
-    /// #886 — a save that keeps `name:` is not a rename, whatever the case of the
-    /// stem: `pipeline_slug("Mixed-Case")` is `mixed-case`, and comparing that to
-    /// the raw stem sent every save of `Mixed-Case.yaml` into the rename branch,
-    /// refused with a 409 while a run used the pipeline.
-    #[tokio::test]
-    async fn save_pipeline_same_name_on_mixed_case_stem_with_active_run_is_not_a_rename() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "Mixed-Case");
-        let state = test_state_with_dir(tmp.path()).await;
-        let run_started = event_log::Event {
-            id: None,
-            run_id: "run-886".into(),
-            ts: pdo_kernel::clock::now_iso(),
-            kind: event_log::EventKind::RunStarted,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({ "pipeline_name": "Mixed-Case" })),
-        };
-        append_event(&state, &run_started).await.unwrap();
-
-        let yaml =
-            format!("name: Mixed-Case\nversion: \"1.1\"\nnodes:\n{START_END_YAML}edges: []\n");
-        let (status, val) = put_pipeline_yaml(state, "Mixed-Case", &yaml).await;
-
-        assert_eq!(status, StatusCode::OK, "{val}");
-        assert_eq!(val["renamed"], false);
-        assert_eq!(val["id"], "Mixed-Case");
-        let dir = tmp.path().join(".pdo/pipelines");
-        let content = std::fs::read_to_string(dir.join("Mixed-Case.yaml")).unwrap();
-        assert!(
-            content.contains("version: \"1.1\""),
-            "the edit must be saved"
-        );
-        assert!(!dir.join("mixed-case.yaml").exists(), "nothing may move");
-    }
-
-    /// #886 — without a run to refuse it, the same save used to move the file to
-    /// the lowercase slug silently.
-    #[tokio::test]
-    async fn save_pipeline_same_name_on_mixed_case_stem_never_moves_the_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "Mixed-Case");
-        let dir = tmp.path().join(".pdo/pipelines");
-        std::fs::create_dir_all(dir.join("Mixed-Case.prompts")).unwrap();
-        std::fs::write(dir.join("Mixed-Case.prompts/start.md"), "Kept.").unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-
-        let yaml =
-            format!("name: Mixed-Case\nversion: \"1.1\"\nnodes:\n{START_END_YAML}edges: []\n");
-        let (status, val) = put_pipeline_yaml(state, "Mixed-Case", &yaml).await;
-
-        assert_eq!(status, StatusCode::OK, "{val}");
-        assert_eq!(val["renamed"], false);
-        assert!(dir.join("Mixed-Case.yaml").exists());
-        assert!(dir.join("Mixed-Case.prompts/start.md").exists());
-        assert!(!dir.join("mixed-case.yaml").exists());
-        assert!(!dir.join("mixed-case.prompts").exists());
-    }
-
-    /// #886 / #774 — a save that really changes `name:` on a mixed-case stem
-    /// still moves the entry to the slug of the new name.
-    #[tokio::test]
-    async fn save_pipeline_changed_name_on_mixed_case_stem_still_moves_the_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "Mixed-Case");
-        let state = test_state_with_dir(tmp.path()).await;
-
-        let yaml =
-            format!("name: Other Name\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n");
-        let (status, val) = put_pipeline_yaml(state, "Mixed-Case", &yaml).await;
-
-        assert_eq!(status, StatusCode::OK, "{val}");
-        assert_eq!(val["renamed"], true);
-        assert_eq!(val["id"], "other-name");
-        let dir = tmp.path().join(".pdo/pipelines");
-        assert!(!dir.join("Mixed-Case.yaml").exists());
-        assert!(dir.join("other-name.yaml").exists());
-    }
-
-    /// #886 — `create_pipeline` names the file with `pipeline_slug`, like
-    /// duplicate and import, and keeps the requested name as the visible one.
-    /// Its first save is then an ordinary save, not a rename.
-    #[tokio::test]
-    async fn create_pipeline_names_the_file_with_the_slug() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-
-        let resp = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Foo Bar"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(created["id"], "foo-bar");
-
-        let dir = tmp.path().join(".pdo/pipelines");
-        assert!(dir.join("foo-bar.yaml").exists());
-        assert!(!dir.join("Foo-Bar.yaml").exists());
-        let content = std::fs::read_to_string(dir.join("foo-bar.yaml")).unwrap();
-        let parsed = pipeline::parse_pipeline(&content).unwrap();
-        assert_eq!(parsed.pipeline.name, "Foo Bar");
-
-        let yaml = content.replace("version: \"1.0\"", "version: \"1.1\"");
-        let (status, val) = put_pipeline_yaml(state, "foo-bar", &yaml).await;
-        assert_eq!(status, StatusCode::OK, "{val}");
-        assert_eq!(val["renamed"], false);
-        assert!(dir.join("foo-bar.yaml").exists());
-    }
-
-    /// #886 — a create whose visible name another stem already carries is the
-    /// same collision the rename paths refuse.
-    #[tokio::test]
-    async fn create_pipeline_conflict_on_an_existing_visible_name() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "Foo_Bar");
-        let state = test_state_with_dir(tmp.path()).await;
-
-        let resp = build_router(state)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Foo_Bar"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        assert!(!tmp.path().join(".pdo/pipelines/foo_bar.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn get_pipeline_reads_prompts_from_canonical_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "prompt-read");
-
-        let prompts_dir = tmp.path().join(".pdo/pipelines/prompt-read.prompts");
-        std::fs::create_dir_all(&prompts_dir).unwrap();
-        std::fs::write(prompts_dir.join("worker.md"), "Role prompt here.").unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/prompt-read")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(val["prompts"]["worker"], "Role prompt here.");
-    }
-
-    #[tokio::test]
-    async fn pipeline_list_entry_includes_metadata() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "meta-pipe");
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        let entry = &list[0];
-        assert_eq!(entry["name"], "meta-pipe");
-        assert_eq!(entry["scope"], "instance");
-        assert_eq!(entry["node_count"], 3);
-        assert!(entry["modified"].as_str().is_some());
-    }
-
-    #[tokio::test]
-    async fn scan_pipeline_dir_ignores_non_yaml_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(".pdo").join("pipelines");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("readme.md"), "not a pipeline").unwrap();
-        std::fs::write(dir.join("notes.txt"), "not a pipeline").unwrap();
-        write_test_pipeline(tmp.path(), "real-pipe");
-
-        let entries = scan_pipeline_dir(&dir, "repo");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "real-pipe");
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn obsolete_pipeline_library_routes_are_not_registered() {
-        let fake_home = FakeHome::new();
-        write_test_pipeline(fake_home.path(), "promotable");
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        for (method, uri) in [
-            ("GET", "/library/pipelines"),
-            ("POST", "/pipelines/promotable/promote"),
-            ("POST", "/library/pipelines/promotable/duplicate"),
-            ("DELETE", "/library/pipelines/promotable"),
-        ] {
-            let resp = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(method)
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-
-            assert!(
-                resp.status().is_client_error(),
-                "{method} {uri} unexpectedly returned {}",
-                resp.status()
-            );
-        }
-    }
-
-    // #155 — POST /library/import: a Claude Code workflow .js becomes an
-    // instance-owned draft pipeline.
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn import_library_workflow_returns_201_and_writes_draft() {
-        let _fake_home = FakeHome::new();
-        let repo = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(repo.path()).await;
-        let app = build_router(state);
-
-        // A minimal inline workflow (the retired `.claude/workflows/*.js` fixtures
-        // are gone — #549). The `workflow_importer` unit tests cover every
-        // translation idiom against inline sources; here we only need the endpoint
-        // to accept a valid workflow and write the draft.
-        let content = r#"agent(`Fix the failing test.`, { label: 'implement' })"#;
-        let body = serde_json::json!({
-            "filename": "simple-bugfix.js",
-            "content": content,
-        })
-        .to_string();
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library/import")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(result["scope"], "instance");
-        assert!(result["warnings"].is_array(), "warnings array returned");
-
-        // The draft YAML + prompt sidecars land in the isolated instance registry.
-        let id = result["id"].as_str().unwrap();
-        let registry = repo.path().join(".pdo/pipelines");
-        assert!(
-            registry.join(format!("{id}.yaml")).exists(),
-            "draft YAML written to instance registry"
-        );
-        let prompts_dir = registry.join(format!("{id}.prompts"));
-        assert!(
-            prompts_dir.is_dir() && std::fs::read_dir(&prompts_dir).unwrap().next().is_some(),
-            "prompt sidecars written"
-        );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn import_library_workflow_rejects_invalid_js() {
-        let _fake_home = FakeHome::new();
-        let repo = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(repo.path()).await;
-        let app = build_router(state);
-
-        let body = serde_json::json!({
-            "filename": "broken.js",
-            "content": "const x = = ;",
-        })
-        .to_string();
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library/import")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn list_pipelines_migrates_an_identical_legacy_copy_once() {
-        let fake_home = FakeHome::new();
-
-        write_test_pipeline(fake_home.path(), "repo-pipe");
-
-        library_store::pipelines::promote(fake_home.path(), "repo-pipe").unwrap();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0]["id"], "repo-pipe");
-        assert_eq!(list[0]["scope"], "instance");
-        assert!(list[0].get("drifted").is_none());
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn list_pipelines_preserves_a_different_legacy_copy_as_a_collision() {
-        let fake_home = FakeHome::new();
-
-        write_test_pipeline(fake_home.path(), "drifting");
-        library_store::pipelines::promote(fake_home.path(), "drifting").unwrap();
-
-        let changed_yaml =
-            format!("name: drifting-modified\nversion: \"2.0\"\nnodes:\n{START_END_YAML}");
-        std::fs::write(
-            fake_home.path().join(".pdo/pipelines/drifting.yaml"),
-            changed_yaml,
-        )
-        .unwrap();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(list.len(), 2);
-        assert!(list.iter().all(|entry| entry["scope"] == "instance"));
-        assert!(list.iter().all(|entry| entry.get("drifted").is_none()));
-        assert!(list.iter().any(|entry| entry["id"] == "drifting"));
-        assert!(list.iter().any(|entry| entry["id"] == "drifting-2"));
-    }
-
-    #[tokio::test]
-    async fn delete_pipeline_removes_yaml_and_prompts() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "doomed");
-
-        // Also create a prompts directory
-        let prompts_dir = tmp.path().join(".pdo/pipelines/doomed.prompts");
-        std::fs::create_dir_all(&prompts_dir).unwrap();
-        std::fs::write(prompts_dir.join("worker.md"), "role prompt").unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/pipelines/doomed")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let yaml_path = tmp.path().join(".pdo/pipelines/doomed.yaml");
-        assert!(!yaml_path.exists(), "YAML file should be deleted");
-        assert!(!prompts_dir.exists(), "prompts dir should be deleted");
-    }
-
-    #[tokio::test]
-    async fn delete_pipeline_returns_404_when_not_found() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/pipelines/nonexistent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn delete_pipeline_ignores_retired_scope_and_deletes_the_instance_copy() {
-        let fake_home = FakeHome::new();
-        write_test_pipeline(fake_home.path(), "simple-bugfix");
-        // A sidecar prompts dir proves the `remove_dir_all` never reaches the repo.
-        let repo_prompts = fake_home
-            .path()
-            .join(".pdo/pipelines/simple-bugfix.prompts");
-        std::fs::create_dir_all(&repo_prompts).unwrap();
-        std::fs::write(repo_prompts.join("worker.md"), "repo prompt").unwrap();
-
-        library_store::pipelines::promote(fake_home.path(), "simple-bugfix").unwrap();
-        let lib_yaml = library_store::pipelines::user_pipelines_dir()
-            .unwrap()
-            .join("simple-bugfix.yaml");
-        assert!(lib_yaml.exists(), "library copy should exist after promote");
-
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/pipelines/simple-bugfix?scope=library")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        assert!(
-            lib_yaml.exists(),
-            "legacy library copy is not a CRUD target"
-        );
-        assert!(!fake_home
-            .path()
-            .join(".pdo/pipelines/simple-bugfix.yaml")
-            .exists());
-        assert!(!repo_prompts.exists());
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn get_pipeline_does_not_fall_back_to_a_legacy_library_copy() {
-        let fake_home = FakeHome::new();
-        write_test_pipeline(fake_home.path(), "promoted");
-        library_store::pipelines::promote(fake_home.path(), "promoted").unwrap();
-        // Source repo pipeline disappears (e.g. a prior buggy delete).
-        std::fs::remove_file(fake_home.path().join(".pdo/pipelines/promoted.yaml")).unwrap();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-
-        // Bare id no longer resolves — this is the "unclickable" symptom.
-        let app = build_router(Arc::clone(&state));
-        let bare = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/promoted")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(bare.status(), StatusCode::NOT_FOUND);
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/promoted?scope=library")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn get_pipeline_returns_node_provisioning_rules() {
-        let fake_home = FakeHome::new();
-        let pipelines = fake_home.path().join(".pdo/pipelines");
-        std::fs::create_dir_all(&pipelines).unwrap();
-        std::fs::write(
-            pipelines.join("provisioned.yaml"),
-            format!(
-                "name: provisioned\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: Worker\n    type: agent\n    isolated_worktree: true\n    provisioning:\n      copy: [\".env\"]\n      hardlink: [\"datasets/**\", \"!datasets/huge.bin\"]\n      symlink: []\n    outputs:\n      - name: result\n"
-            ),
-        )
-        .unwrap();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-        let response = build_router(state)
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/provisioned")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            json["pipeline"]["nodes"][2]["provisioning"],
-            serde_json::json!({
-                "copy": [".env"],
-                "hardlink": ["datasets/**", "!datasets/huge.bin"],
-                "symlink": []
-            })
-        );
-    }
-
     #[test]
     fn run_response_uses_the_current_iterations_frozen_node_provisioning() {
         let mut response = serde_json::json!({
@@ -32211,277 +28124,6 @@ edges:
             response["nodes"]["worker"]["provisioning_plan"]["entries"][0]["relative_path"],
             serde_json::json!("frozen")
         );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn save_pipeline_ignores_retired_scope_and_writes_the_instance_copy() {
-        let fake_home = FakeHome::new();
-        write_test_pipeline(fake_home.path(), "shared");
-        library_store::pipelines::promote(fake_home.path(), "shared").unwrap();
-
-        let repo_yaml_path = fake_home.path().join(".pdo/pipelines/shared.yaml");
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        let edited = format!("name: shared\nversion: \"9.9\"\nnodes:\n{START_END_YAML}");
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/shared?scope=library")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({ "yaml": edited, "prompts": {} }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let lib_yaml = library_store::pipelines::get_yaml(fake_home.path(), "shared").unwrap();
-        assert!(!lib_yaml.contains("9.9"));
-        assert!(std::fs::read_to_string(&repo_yaml_path)
-            .unwrap()
-            .contains("9.9"));
-    }
-
-    // Retired scope query parameters cannot redirect a save away from the
-    // instance registry; ordinary fields still survive the round trip.
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn save_pipeline_with_retired_scope_preserves_prompt_required_false() {
-        let fake_home = FakeHome::new();
-        // Seeded WITHOUT the flag => defaults to `prompt_required: true`, so
-        // saving `false` below is a genuine state transition (non-vacuous).
-        write_test_pipeline(fake_home.path(), "shared");
-        library_store::pipelines::promote(fake_home.path(), "shared").unwrap();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-
-        // Save the library template with the flag turned OFF (the "uncheck" edit).
-        let edited = format!(
-            "name: shared\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}"
-        );
-        let app = build_router(Arc::clone(&state));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/shared?scope=library")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({ "yaml": edited, "prompts": {} }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let lib_yaml = library_store::pipelines::get_yaml(fake_home.path(), "shared").unwrap();
-        assert!(
-            !lib_yaml.contains("prompt_required: false"),
-            "legacy library YAML must remain untouched, got: {lib_yaml}"
-        );
-
-        // Read-back exposes `false`, verbatim yaml, and no diagnostic.
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/shared?scope=library")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(val["pipeline"]["prompt_required"], false);
-        assert!(
-            val["yaml"]
-                .as_str()
-                .unwrap()
-                .contains("prompt_required: false"),
-            "scoped GET yaml must expose prompt_required: false"
-        );
-        let diags = val["diagnostics"].as_array().unwrap();
-        assert!(
-            !diags
-                .iter()
-                .any(|d| d.as_str().unwrap_or("").contains("prompt_required")),
-            "no unknown-field diagnostic for prompt_required (cf. #183/#241): {diags:?}"
-        );
-    }
-
-    // A retired user-scope query cannot redirect deletion away from the
-    // instance registry or mutate the old user location.
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn delete_pipeline_with_retired_user_scope_deletes_the_instance_copy() {
-        let fake_home = FakeHome::new();
-        let repo = tempfile::tempdir().unwrap();
-        write_test_pipeline(repo.path(), "foo");
-
-        let user_dir = fake_home.path().join(".pdo/pipelines");
-        std::fs::create_dir_all(&user_dir).unwrap();
-        std::fs::write(
-            user_dir.join("foo.yaml"),
-            format!("name: foo\nversion: \"1.0\"\nnodes:\n{START_END_YAML}"),
-        )
-        .unwrap();
-
-        let state = test_state_with_dir(repo.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/pipelines/foo?scope=user")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        assert!(
-            user_dir.join("foo.yaml").exists(),
-            "legacy user copy is untouched"
-        );
-        assert!(!repo.path().join(".pdo/pipelines/foo.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn delete_pipeline_returns_409_when_active_runs_exist() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "busy-pipe");
-
-        let state = test_state_with_dir(tmp.path()).await;
-
-        // Insert a run_started event referencing this pipeline
-        let run_started = event_log::Event {
-            id: None,
-            run_id: "run-001".into(),
-            ts: pdo_kernel::clock::now_iso(),
-            kind: event_log::EventKind::RunStarted,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({ "pipeline_name": "busy-pipe" })),
-        };
-        append_event(&state, &run_started).await.unwrap();
-
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/pipelines/busy-pipe")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(val["error"].as_str().unwrap().contains("active run"));
-    }
-
-    #[tokio::test]
-    async fn delete_pipeline_succeeds_when_runs_completed() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "done-pipe");
-
-        let state = test_state_with_dir(tmp.path()).await;
-
-        // Insert run_started + run_completed events
-        let run_started = event_log::Event {
-            id: None,
-            run_id: "run-done".into(),
-            ts: pdo_kernel::clock::now_iso(),
-            kind: event_log::EventKind::RunStarted,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({ "pipeline_name": "done-pipe" })),
-        };
-        append_event(&state, &run_started).await.unwrap();
-
-        let run_completed = event_log::Event {
-            id: None,
-            run_id: "run-done".into(),
-            ts: pdo_kernel::clock::now_iso(),
-            kind: event_log::EventKind::RunCompleted,
-            node_id: None,
-            iter: None,
-            payload: None,
-        };
-        append_event(&state, &run_completed).await.unwrap();
-
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/pipelines/done-pipe")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let yaml_path = tmp.path().join(".pdo/pipelines/done-pipe.yaml");
-        assert!(
-            !yaml_path.exists(),
-            "YAML file should be deleted after completed run"
-        );
-    }
-
-    #[tokio::test]
-    async fn delete_pipeline_then_get_returns_404() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "vanish");
-
-        let state = test_state_with_dir(tmp.path()).await;
-
-        // Delete
-        let app = build_router(Arc::clone(&state));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/pipelines/vanish")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        // GET should now 404
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/pipelines/vanish")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
@@ -36470,454 +32112,6 @@ edges:
     #[test]
     fn merge_resolver_node_id_is_dunder() {
         assert_eq!(MERGE_RESOLVER_NODE_ID, "__merge_resolver__");
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn library_full_flow() {
-        let _guard = crate::library_store::HOME_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
-        let tmp = std::env::temp_dir().join(format!("pdo-lib-http-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &tmp);
-
-        // Set up repo with a pipeline that has a named node
-        let repo = tmp.join("repo");
-        let pipe_dir = repo.join(".pdo").join("pipelines");
-        std::fs::create_dir_all(&pipe_dir).unwrap();
-        let yaml = r#"name: test-pipe
-nodes:
-  - id: start
-    name: Start
-    type: start
-    outputs:
-      - name: user_prompt
-  - id: end
-    name: End
-    type: end
-    inputs:
-      - name: result
-  - id: n1
-    name: Reviewer
-    type: agent
-    isolated_worktree: false
-    inputs:
-      - name: code
-    outputs:
-      - name: review
-edges: []
-"#;
-        std::fs::write(pipe_dir.join("test-pipe.yaml"), yaml).unwrap();
-        let prompts_dir = pipe_dir.join("test-pipe.prompts");
-        std::fs::create_dir_all(&prompts_dir).unwrap();
-        std::fs::write(prompts_dir.join("n1.md"), "You are a reviewer.").unwrap();
-
-        let db = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        init_db(&db).await.unwrap();
-        let (event_tx, _) = broadcast::channel(64);
-        let (pipeline_tx, _) = broadcast::channel(16);
-        let workspace = workspace_context(
-            &db,
-            &pipeline_tx,
-            &repo.clone(),
-            Arc::new(pdo_kernel::extension_host::NoExtensions),
-        );
-        let skills = skill_context(
-            &db,
-            &repo.clone(),
-            Arc::new(pdo_kernel::extension_host::NoExtensions),
-        );
-        let platform = test_platform(&db, None).await;
-        let test_repo_root: PathBuf = repo.clone();
-        let test_port: u16 = next_test_daemon_port();
-        let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
-            workspace,
-            skills,
-            platform,
-            db,
-            event_tx,
-            pipeline_tx,
-            repo_root: test_repo_root.clone(),
-            port: test_port,
-            merge_lock: tokio::sync::Mutex::new(()),
-            admission_lock: tokio::sync::Mutex::new(()),
-            trigger_tick_lock: tokio::sync::Mutex::new(()),
-            recent_writes: Arc::new(Mutex::new(HashMap::new())),
-            run_watcher: Arc::new(Mutex::new(None)),
-            // Self-destructing no-op: should any test POST /runs and reach the
-            // spawn path, the node session runs `true` and exits immediately —
-            // never real claude, never a lingering session.
-            tmux_cmd_override: Some("exec true".to_string()),
-            docker_cmd_override: None,
-            sandbox_home_override: None,
-            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_trigger_name: None,
-            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
-            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue: Arc::new(
-                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-            ),
-            price_sync_lock: tokio::sync::Mutex::new(()),
-            price_source_url: None,
-            price_refresh_at_boot: false,
-            allowed_ws_origins: Vec::new(),
-            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
-        });
-        let app = build_router(state);
-
-        // GET /library — empty initially
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/library")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(body.as_array().unwrap().len(), 0);
-
-        // POST /library — save node directly from in-memory spec (no disk
-        // round-trip through a pipeline file).
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({
-                            "name": "Reviewer",
-                            "type": "agent",
-                            "inputs": [{"name": "code"}],
-                            "outputs": [{"name": "review"}],
-                            "interactive": false,
-                            "prompt": "You are a reviewer."
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let entry: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(entry["name"], "Reviewer");
-        assert_eq!(entry["prompt"], "You are a reviewer.");
-
-        // GET /library — now has one entry
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/library")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(body.as_array().unwrap().len(), 1);
-
-        // POST /library/Reviewer/instantiate
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library/Reviewer/instantiate")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let inst: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(inst["spec"]["name"], "Reviewer");
-        assert_eq!(inst["prompt"], "You are a reviewer.");
-
-        // DELETE /library/Reviewer
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/library/Reviewer")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        // DELETE again → 404
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/library/Reviewer")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-
-        // Cleanup
-        if let Some(p) = prev_home {
-            std::env::set_var("HOME", p);
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn library_save_works_without_pipeline_on_disk() {
-        let _guard = crate::library_store::HOME_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
-        let tmp = std::env::temp_dir().join(format!("pdo-lib-nopipe-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &tmp);
-
-        // No pipeline file is written. repo_root points to an empty dir.
-        let repo = tmp.join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-
-        let db = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        init_db(&db).await.unwrap();
-        let (event_tx, _) = broadcast::channel(64);
-        let (pipeline_tx, _) = broadcast::channel(16);
-        let workspace = workspace_context(
-            &db,
-            &pipeline_tx,
-            &repo.clone(),
-            Arc::new(pdo_kernel::extension_host::NoExtensions),
-        );
-        let skills = skill_context(
-            &db,
-            &repo.clone(),
-            Arc::new(pdo_kernel::extension_host::NoExtensions),
-        );
-        let platform = test_platform(&db, None).await;
-        let test_repo_root: PathBuf = repo.clone();
-        let test_port: u16 = next_test_daemon_port();
-        let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
-            workspace,
-            skills,
-            platform,
-            db,
-            event_tx,
-            pipeline_tx,
-            repo_root: test_repo_root.clone(),
-            port: test_port,
-            merge_lock: tokio::sync::Mutex::new(()),
-            admission_lock: tokio::sync::Mutex::new(()),
-            trigger_tick_lock: tokio::sync::Mutex::new(()),
-            recent_writes: Arc::new(Mutex::new(HashMap::new())),
-            run_watcher: Arc::new(Mutex::new(None)),
-            // Self-destructing no-op: should any test POST /runs and reach the
-            // spawn path, the node session runs `true` and exits immediately —
-            // never real claude, never a lingering session.
-            tmux_cmd_override: Some("exec true".to_string()),
-            docker_cmd_override: None,
-            sandbox_home_override: None,
-            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_trigger_name: None,
-            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
-            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue: Arc::new(
-                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-            ),
-            price_sync_lock: tokio::sync::Mutex::new(()),
-            price_source_url: None,
-            price_refresh_at_boot: false,
-            allowed_ws_origins: Vec::new(),
-            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
-        });
-        let app = build_router(state);
-
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({
-                            "name": "DraftReviewer",
-                            "type": "agent",
-                            "inputs": [{"name": "in"}],
-                            "outputs": [{"name": "out"}],
-                            "interactive": false,
-                            "prompt": "Inline prompt — pipeline never saved."
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(body["name"], "DraftReviewer");
-        assert_eq!(body["prompt"], "Inline prompt — pipeline never saved.");
-
-        // Cleanup
-        let _ = library_store::delete("DraftReviewer");
-        if let Some(p) = prev_home {
-            std::env::set_var("HOME", p);
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    /// #655/ADR-0060 — the library round-trip that the Feature Path walks:
-    /// star a non-isolated Agent, then instantiate it somewhere else and get the
-    /// same workspace back. `POST /library` and `POST /library/{}/instantiate`
-    /// are both disk-only, so they are driven directly rather than through a
-    /// router (no AppState needed since `save_to_library` dropped its unused one).
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn library_round_trip_restores_the_entrys_workspace() {
-        let _guard = crate::library_store::HOME_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let tmp = std::env::temp_dir().join(format!("pdo-lib-iso-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &tmp);
-
-        async fn body_of(resp: Response) -> serde_json::Value {
-            serde_json::from_slice(
-                &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                    .await
-                    .unwrap(),
-            )
-            .unwrap()
-        }
-
-        // An Agent the author parked in the Run's worktree — the interesting case,
-        // because it is the one the type default would silently overwrite.
-        let saved = save_to_library(Json(
-            serde_json::from_value(serde_json::json!({
-                "name": "SharedScribe",
-                "type": "agent",
-                "inputs": [{"name": "in"}],
-                "outputs": [{"name": "out"}],
-                "interactive": false,
-                "isolated_worktree": false,
-                "prompt": "Write the note.",
-            }))
-            .unwrap(),
-        ))
-        .await;
-        assert_eq!(saved.status(), StatusCode::CREATED);
-        assert_eq!(body_of(saved).await["isolated_worktree"], false);
-
-        let spec =
-            body_of(instantiate_from_library(AxumPath("SharedScribe".to_string())).await).await;
-        assert_eq!(
-            spec["spec"]["isolated_worktree"], false,
-            "instantiating must restore the parked workspace, not the type default",
-        );
-
-        // A request that says nothing is stamped with the type's default rather
-        // than stored as a silence — so the entry always states where it works.
-        let saved = save_to_library(Json(
-            serde_json::from_value(serde_json::json!({
-                "name": "SilentScribe",
-                "type": "agent",
-                "prompt": "Write the note.",
-            }))
-            .unwrap(),
-        ))
-        .await;
-        assert_eq!(body_of(saved).await["isolated_worktree"], true);
-
-        // A type that carries no isolation reports `null`; the canvas leaves the
-        // key off such a node entirely.
-        let saved = save_to_library(Json(
-            serde_json::from_value(serde_json::json!({
-                "name": "Gatherer",
-                "type": "merge",
-                "isolated_worktree": false,
-                "prompt": "",
-            }))
-            .unwrap(),
-        ))
-        .await;
-        assert_eq!(
-            body_of(saved).await["isolated_worktree"],
-            serde_json::Value::Null
-        );
-        let spec = body_of(instantiate_from_library(AxumPath("Gatherer".to_string())).await).await;
-        assert_eq!(spec["spec"]["isolated_worktree"], serde_json::Value::Null);
-
-        for name in ["SharedScribe", "SilentScribe", "Gatherer"] {
-            let _ = library_store::delete(name);
-        }
-        if let Some(p) = prev_home {
-            std::env::set_var("HOME", p);
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -43292,41 +38486,6 @@ edges:
         git(&["commit", "-q", "-m", "init"]);
     }
 
-    #[tokio::test]
-    async fn rename_pipeline_display_only_change_updates_name_in_place() {
-        // "foo-bar" → "foo bar": the slug maps back to the own stem, so the
-        // file must NOT be treated as a collision target and nothing moves —
-        // only the `name:` line is spliced.
-        let tmp = tempfile::tempdir().unwrap();
-        write_test_pipeline(tmp.path(), "foo-bar");
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/pipelines/foo-bar/rename")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name": "Foo Bar"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(val["id"], "foo-bar");
-        assert_eq!(val["name"], "Foo Bar");
-        let dir = tmp.path().join(".pdo/pipelines");
-        assert!(dir.join("foo-bar.yaml").exists());
-        let content = std::fs::read_to_string(dir.join("foo-bar.yaml")).unwrap();
-        assert!(content.contains("name: Foo Bar"));
-    }
-
     #[test]
     fn frozen_node_provisioning_uses_the_started_iteration_recipe_and_plan() {
         let event = event_log::Event {
@@ -43447,5 +38606,293 @@ edges:
             .is_empty());
         // An empty selection is stored as none.
         assert_eq!(LegacyProjectSettings::encode_skills(vec![]), None);
+    }
+
+    /// A rename, recorded through the pipeline context's ledger port.
+    async fn record_rename(db: &sqlx::SqlitePool, old: (&str, &str), new: (&str, &str)) {
+        use pdo_pipeline::application::ports::{RenameLedger, Renamed};
+        crate::pipeline_ports::LegacyRenameLedger { db: db.clone() }
+            .record(&Renamed {
+                old_id: old.0.into(),
+                old_name: old.1.into(),
+                new_id: new.0.into(),
+                new_name: new.1.into(),
+            })
+            .await;
+    }
+
+    /// #890 — an absorption is instance configuration, not a property of the
+    /// library: deleting the absorbed Pipeline's YAML leaves it in place, and a
+    /// dimension Stats does not combine is refused.
+    #[tokio::test]
+    async fn stats_absorption_survives_a_library_delete_and_refuses_unknown_dimensions() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "doomed");
+        let state = test_state_with_dir(tmp.path()).await;
+        let post = |body: serde_json::Value| {
+            let state = state.clone();
+            async move {
+                build_router(state)
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/stats/absorptions")
+                            .header("content-type", "application/json")
+                            .body(Body::from(body.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+        assert_eq!(
+            post(serde_json::json!({
+                "dimension": "pipeline",
+                "absorbent": {"key": "keeper", "name": "Keeper"},
+                "members": [{"key": "doomed", "name": "doomed"}],
+            }))
+            .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            post(serde_json::json!({
+                "dimension": "project",
+                "absorbent": {"key": "a", "name": "A"},
+                "members": [{"key": "b", "name": "B"}],
+            }))
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post(serde_json::json!({
+                "dimension": "pipeline",
+                "absorbent": {"key": "a", "name": "A"},
+                "members": [{"key": "a", "name": "A"}],
+            }))
+            .await,
+            StatusCode::BAD_REQUEST,
+            "absorbing only itself is no absorption"
+        );
+
+        // The pipeline context deletes the YAML; Stats never hears of it.
+        std::fs::remove_file(tmp.path().join(".pdo/pipelines/doomed.yaml")).unwrap();
+
+        let listed = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/absorptions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(listed.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["absorptions"][0]["members"][0]["key"], "doomed");
+    }
+
+    /// #891 / ADR-0077 §4 — the rename-born absorption, as the pipeline context
+    /// records it through this crate's ledger: a rename that changes the id
+    /// records old → new (origin `rename`), and a chain of two renames leaves one
+    /// absorbent carrying both old ids. Stats then reads one row for the old and
+    /// the new Pipeline in every tab; `uncombined=true` reads two. (That a
+    /// display-only rename records nothing is the pipeline context's rule, its
+    /// use-case test `a_display_only_rename_splices_the_name_and_records_nothing`.)
+    #[tokio::test]
+    async fn stats_absorption_is_recorded_by_a_pipeline_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = test_state_with_dir(tmp.path()).await;
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        state = with_home_override(state, home);
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn send(
+            state: &Arc<AppState>,
+            method: &str,
+            uri: &str,
+            body: Option<serde_json::Value>,
+        ) -> (StatusCode, serde_json::Value) {
+            let mut request = Request::builder().method(method).uri(uri);
+            if body.is_some() {
+                request = request.header("content-type", "application/json");
+            }
+            let response = build_router(state.clone())
+                .oneshot(
+                    request
+                        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+            )
+        }
+        async fn completed_run(
+            db: &sqlx::SqlitePool,
+            repo: &str,
+            run: &str,
+            pipeline_id: &str,
+            name: &str,
+            day: &str,
+        ) {
+            let events = [
+                (
+                    "09:00",
+                    "run_started",
+                    None,
+                    serde_json::json!({
+                        "pipeline_id": pipeline_id,
+                        "pipeline_name": name,
+                        "target_repo": repo,
+                        "harness": "claude",
+                        "node_defs": [{"id":"worker","name":"Worker","node_type":"agent"}]
+                    }),
+                ),
+                (
+                    "09:01",
+                    "node_started",
+                    Some("worker"),
+                    serde_json::json!({"node_type":"agent","harness":"claude","session_id":format!("{run}-s")}),
+                ),
+                (
+                    "09:11",
+                    "node_completed",
+                    Some("worker"),
+                    serde_json::json!({}),
+                ),
+                ("09:12", "run_completed", None, serde_json::json!({})),
+            ];
+            for (time, kind, node, payload) in events {
+                sqlx::query(
+                    "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(run)
+                .bind(format!("{day}T{time}:00Z"))
+                .bind(kind)
+                .bind(node)
+                .bind(node.map(|_| 1_i64))
+                .bind(payload.to_string())
+                .execute(db)
+                .await
+                .unwrap();
+            }
+        }
+        let ids = |rows: &serde_json::Value| -> Vec<String> {
+            let mut ids: Vec<String> = rows
+                .as_array()
+                .unwrap_or_else(|| panic!("not rows: {rows}"))
+                .iter()
+                .map(|row| row["id"].as_str().unwrap().to_string())
+                .collect();
+            ids.sort();
+            ids
+        };
+
+        // A Run of `alpha`, then the rename that changes its id.
+        completed_run(&state.db, &repo, "ren-1", "alpha", "alpha", "2033-04-10").await;
+        record_rename(&state.db, ("alpha", "alpha"), ("beta", "Beta")).await;
+        let (_, list) = send(&state, "GET", "/stats/absorptions", None).await;
+        assert_eq!(
+            list["absorptions"],
+            serde_json::json!([{
+                "dimension": "pipeline",
+                "scope": "",
+                "absorbent": {"key": "beta", "name": "Beta"},
+                "members": [{
+                    "key": "alpha",
+                    "name": "alpha",
+                    "origin": "rename",
+                    "created_at": list["absorptions"][0]["members"][0]["created_at"],
+                }],
+            }])
+        );
+
+        // A Run of the renamed Pipeline: Stats reads one row, uncombined two.
+        completed_run(&state.db, &repo, "ren-2", "beta", "Beta", "2033-04-11").await;
+        let window = "from=2033-04-10T00:00:00Z&to=2033-04-12T00:00:00Z";
+        for (endpoint, rows) in [
+            ("overview", "sessions_by_pipeline"),
+            ("cost", "by_pipeline"),
+            ("performance", "by_pipeline"),
+        ] {
+            let uri = format!("/stats/{endpoint}?{window}&bucket=day");
+            let (status, combined) = send(&state, "GET", &uri, None).await;
+            assert_eq!(status, StatusCode::OK, "{endpoint}: {combined}");
+            assert_eq!(ids(&combined[rows]), vec!["beta"], "{endpoint}");
+            let row = &combined[rows][0];
+            assert_eq!(row["name"], "Beta", "{endpoint}");
+            assert_eq!(row["absorbed"][0]["key"], "alpha", "{endpoint}");
+            let (_, raw) = send(&state, "GET", &format!("{uri}&uncombined=true"), None).await;
+            assert_eq!(ids(&raw[rows]), vec!["alpha", "beta"], "{endpoint}");
+        }
+        let (_, overview) = send(
+            &state,
+            "GET",
+            &format!("/stats/overview?{window}&bucket=day"),
+            None,
+        )
+        .await;
+        assert_eq!(overview["sessions_by_pipeline"][0]["executions"], 2);
+
+        // A second rename: one absorbent, both old ids under it.
+        record_rename(&state.db, ("beta", "Beta"), ("gamma", "Gamma")).await;
+        let (_, list) = send(&state, "GET", "/stats/absorptions", None).await;
+        let absorptions = list["absorptions"].as_array().unwrap();
+        assert_eq!(absorptions.len(), 1, "{list}");
+        assert_eq!(absorptions[0]["absorbent"]["key"], "gamma");
+        assert_eq!(absorptions[0]["absorbent"]["name"], "Gamma");
+        let mut members: Vec<(String, String)> = absorptions[0]["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                (
+                    m["key"].as_str().unwrap().to_string(),
+                    m["origin"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        members.sort();
+        assert_eq!(
+            members,
+            vec![
+                ("alpha".to_string(), "rename".to_string()),
+                ("beta".to_string(), "rename".to_string()),
+            ]
+        );
+    }
+
+    /// #891 — the ledger the pipeline context records a rename through (a save
+    /// whose `name:` change moves the file is one) writes the absorption row.
+    #[tokio::test]
+    async fn the_rename_ledger_records_a_rename_born_absorption() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        record_rename(
+            &state.db,
+            ("saved-old", "saved-old"),
+            ("saved-new", "Saved New"),
+        )
+        .await;
+        let rows = stats_absorption::list(&state.db).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].member, "saved-old");
+        assert_eq!(rows[0].member_name, "saved-old");
+        assert_eq!(rows[0].absorbent, "saved-new");
+        assert_eq!(rows[0].absorbent_name, "Saved New");
+        assert_eq!(rows[0].origin, "rename");
     }
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import PipelineInspector from "./PipelineInspector";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { useWiringStore } from "../stores/wiringStore";
 import { serializePipeline } from "../lib/serializePipeline";
 import { TooltipProvider } from "../shared/ui/tooltip";
@@ -13,6 +13,15 @@ vi.mock("../api", () => ({
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 function seedTab(libraryBinding?: { id: string | null; scope: "repo" | "user" | null }) {

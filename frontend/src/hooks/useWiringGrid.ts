@@ -1,4 +1,4 @@
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { useWiringStore } from "../stores/wiringStore";
 import { gridStep, resolveGridSize, type GridSize } from "../lib/wiringGrid";
 

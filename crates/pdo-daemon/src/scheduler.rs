@@ -799,20 +799,7 @@ pub(crate) fn resolve_max_iter(
     loop_node: &crate::pipeline::NodeDef,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> i64 {
-    match &loop_node.max_iter {
-        Some(serde_yaml::Value::Number(n)) => n.as_i64().unwrap_or(5),
-        Some(serde_yaml::Value::String(s)) => {
-            if let Some(var_name) = s.strip_prefix('$') {
-                resolved_vars
-                    .get(var_name)
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(5)
-            } else {
-                s.parse::<i64>().unwrap_or(5)
-            }
-        }
-        _ => 5,
-    }
+    pdo_pipeline::domain::loops::resolve_node_max_iter(loop_node, resolved_vars)
 }
 
 fn handle_loop_input(

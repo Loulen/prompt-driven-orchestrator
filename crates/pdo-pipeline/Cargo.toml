@@ -1,0 +1,53 @@
+[package]
+# The `pipeline` bounded context (ADR-0079): the pipeline document (model,
+# parse, validation), its migration from retired shapes, its portable export
+# and import, the Claude Code workflow import, the node library, and the
+# instance registry on disk with its watcher.
+name = "pdo-pipeline"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's pipeline context: the pipeline document, its migration, import/export, the node library and the registry"
+publish = false
+autotests = false
+
+[lib]
+name = "pdo_pipeline"
+path = "src/lib.rs"
+
+[dependencies]
+pdo-kernel.workspace = true
+pdo-harness.workspace = true
+pdo-skill.workspace = true
+pdo-workspace.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+base64 = "0.22"
+chrono.workspace = true
+notify.workspace = true
+notify-debouncer-mini.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+
+[[test]]
+name = "use_cases"
+path = "tests/use_cases/main.rs"
+
+[dev-dependencies]
+# The in-memory extension host of the use-case tests implements the kernel's
+# `ExtensionHost`, whose signature names the API's types.
+pdo-extension-api.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true

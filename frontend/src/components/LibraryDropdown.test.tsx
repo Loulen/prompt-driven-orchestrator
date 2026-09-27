@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import LibraryDropdown from "./LibraryDropdown";
-import type { LibraryEntry } from "../api";
-import { useEditStore } from "../stores/editStore";
+import type { LibraryEntry } from "../pipeline/model/library";
+import { useEditStore } from "../pipeline/store/editStore";
 import { TooltipProvider } from "../shared/ui/tooltip";
 
 function renderDropdown(props: Parameters<typeof LibraryDropdown>[0]) {
@@ -27,6 +27,11 @@ vi.mock("../api", () => ({
     },
     prompt: "test prompt",
   }),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 vi.mock("../lib/nanoid", () => ({
@@ -161,7 +166,7 @@ describe("LibraryDropdown", () => {
   });
 
   it("restores the entry's workspace onto the dropped node", async () => {
-    const { instantiateFromLibrary } = await import("../api");
+    const { instantiateFromLibrary } = await import("../pipeline/api/library");
     vi.mocked(instantiateFromLibrary).mockResolvedValueOnce({
       spec: {
         name: "Sharer",

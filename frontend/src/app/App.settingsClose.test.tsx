@@ -282,6 +282,19 @@ vi.mock("../api", () => {
     },
   );
 });
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
 
 // The staging-profile panel reads the sandbox context's own API module (#432).
 vi.mock("../sandbox/api/profiles", () => {

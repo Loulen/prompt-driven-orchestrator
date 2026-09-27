@@ -1,4 +1,4 @@
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import ModelPicker from "../harness/components/ModelPicker";
 import EffortPicker from "../harness/components/EffortPicker";

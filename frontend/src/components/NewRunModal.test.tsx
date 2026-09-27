@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import NewRunModal from "./NewRunModal";
 import { mergeAttachments, overLimitIndices } from "../lib/attachments";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { BranchList } from "../shared/generated/BranchList";
 import type { BranchRef } from "../shared/generated/BranchRef";
 import type { InstanceSettings } from "../settings/model/settings";
@@ -81,6 +81,11 @@ vi.mock("../api", () => ({
     detail: null,
   }),
 }));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
 
 vi.mock("../workspace/api/browse", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspace/api/browse")>()),
@@ -121,7 +126,8 @@ vi.mock("../workspace/api/repos", async (importOriginal) => ({
   fetchRemotes: vi.fn(),
 }));
 
-const { createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, testGuard } = await import("../api");
+const { createRun, createTrigger, updateTrigger, fetchSettings, testGuard } = await import("../api");
+const { fetchPipelines } = await import("../pipeline/api/pipelines");
 const { validateRepo, listBranches, fetchRemotes } = await import("../workspace/api/repos");
 
 const noop = () => {};

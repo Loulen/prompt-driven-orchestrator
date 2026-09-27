@@ -2,7 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { useRightPaneRouter } from "./useRightPaneRouter";
 import type { RightPaneRouterArgs } from "./useRightPaneRouter";
-import type { Selection } from "../stores/editStore";
+import type { Selection } from "../pipeline/store/editState";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { RunState } from "../shared/generated/RunState";

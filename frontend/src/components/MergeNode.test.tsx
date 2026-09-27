@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import { TooltipProvider } from "../shared/ui/tooltip";
 import { MergeEditNode, MergeRunNode } from "./MergeNode";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus } from "../shared/generated/NodeStatus";
 

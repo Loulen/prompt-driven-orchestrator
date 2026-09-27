@@ -5,6 +5,11 @@ use std::sync::Arc;
 
 use pdo_daemon::{ContextResources, Contexts};
 use pdo_kernel::extension_host::ExtensionHost;
+use pdo_pipeline::adapters::events::BroadcastPipelineEvents;
+use pdo_pipeline::adapters::library_fs::FsNodeLibrary;
+use pdo_pipeline::adapters::registry::FsPipelineRegistry;
+use pdo_pipeline::adapters::skill_bank::BankOfSkills;
+use pdo_pipeline::{Pipelines, PipelinesPorts};
 use pdo_platform::adapters::detached_executor::DetachedExecutor;
 use pdo_platform::adapters::fs_update_journal::FsUpdateJournal;
 use pdo_platform::adapters::github_releases::GithubReleases;
@@ -22,9 +27,12 @@ use pdo_session::{Session, SessionOptions, SessionPorts};
 /// Wire every extracted context. Called once per daemon, at boot.
 pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) -> Contexts {
     let session = session(&resources, host.clone());
+    let pipelines = pipelines(&resources, host.clone());
     let platform = platform(resources, host);
     Contexts {
-        router: pdo_platform::router(platform.clone()).merge(pdo_session::router(session.clone())),
+        router: pdo_platform::router(platform.clone())
+            .merge(pdo_session::router(session.clone()))
+            .merge(pdo_pipeline::adapters::http::router(pipelines)),
         platform,
         session,
     }
@@ -54,6 +62,22 @@ fn session(r: &ContextResources, host: Arc<dyn ExtensionHost>) -> Arc<Session> {
             allowed_ws_origins: r.allowed_ws_origins.clone(),
         },
     )
+}
+
+/// The `pipeline` context: the instance registry and the node library on
+/// disk, the daemon's live stream, the skill bank, and the Run-side and
+/// Stats-side ports the legacy daemon still implements.
+fn pipelines(r: &ContextResources, host: Arc<dyn ExtensionHost>) -> Arc<Pipelines> {
+    let p = r.pipeline.clone();
+    Arc::new(Pipelines::new(PipelinesPorts {
+        registry: Arc::new(FsPipelineRegistry::new(r.repo_root.clone(), p.self_writes)),
+        library: Arc::new(FsNodeLibrary::home()),
+        events: Arc::new(BroadcastPipelineEvents(p.events)),
+        runs: p.runs,
+        renames: p.renames,
+        skills: Arc::new(BankOfSkills(p.skills)),
+        extensions: host,
+    }))
 }
 
 /// The `platform` context: SQLite for the mounts and the audit, the local

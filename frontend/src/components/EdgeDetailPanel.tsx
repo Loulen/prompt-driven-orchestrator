@@ -9,7 +9,7 @@ import {
   Layers,
   Tags,
 } from "lucide-react";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EdgeTriggerStatus } from "../pipeline/model/pipeline";
 import {

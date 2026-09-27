@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
-import type { OpenPipeline } from "../stores/editStore";
+import type { OpenPipeline } from "../pipeline/store/editState";
 
 function tab(id: string, over: Partial<OpenPipeline> = {}): OpenPipeline {
   return {

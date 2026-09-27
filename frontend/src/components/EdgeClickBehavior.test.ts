@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { edgeIndexFromId } from "./editNodeDerivation";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
@@ -18,6 +18,11 @@ vi.mock("../api", () => ({
   }),
   savePipeline: vi.fn().mockResolvedValue(undefined),
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 function makePipeline(nodes: EditorNodeDef[] = [], edges: EdgeDef[] = []): EditorPipelineDef {

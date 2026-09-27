@@ -1,0 +1,367 @@
+/**
+ * Undo and redo, and the pipeline on disk: save, rename, remove, reload, conflicts, the library binding.
+ */
+
+import type { StoreApi } from "zustand";
+import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
+import type { PipelineScope } from "../model/pipeline";
+import { ApiError } from "../../shared/http/client";
+import { fetchRunPipeline, saveRunPipeline } from "../../api";
+import { fetchPipeline, savePipeline, deletePipeline as apiDeletePipeline, renamePipeline as apiRenamePipeline } from "../api/pipelines";
+import { serializePipeline } from "../../lib/serializePipeline";
+import type { EditState } from "./editState";
+import { clearedHistory, droppedHistory, rekeyTab } from "./tabHistory";
+
+type Set = StoreApi<EditState>["setState"];
+type Get = StoreApi<EditState>["getState"];
+
+export function saveSlice(set: Set, get: Get): Partial<EditState> {
+  void get;
+  return {
+  undo: () => set((s) => {
+    const tabId = s.activeTabId;
+    if (!tabId) return {};
+    const h = s.history[tabId];
+    if (!h || h.past.length === 0) return {};
+    const idx = s.openTabs.findIndex((t) => t.id === tabId);
+    if (idx < 0) return {};
+    const current = s.openTabs[idx].pipeline;
+    const prev = h.past[h.past.length - 1];
+    const tabs = [...s.openTabs];
+    // dirty:true always — undo is an edit; no content-hash dirty-clearing (#226).
+    tabs[idx] = { ...tabs[idx], pipeline: prev, dirty: true };
+    return {
+      openTabs: tabs,
+      history: {
+        ...s.history,
+        [tabId]: {
+          past: h.past.slice(0, -1),
+          future: [...h.future, current],
+          // Reset so the next edit never coalesces across an undo boundary.
+          lastKey: null,
+          lastAt: 0,
+        },
+      },
+      // The edge selection key is positional and goes stale after an undo that
+      // changes the edge list (subagent #5) — same reason delete clears it.
+      selection: { kind: "none", id: null },
+    };
+  }),
+
+  redo: () => set((s) => {
+    const tabId = s.activeTabId;
+    if (!tabId) return {};
+    const h = s.history[tabId];
+    if (!h || h.future.length === 0) return {};
+    const idx = s.openTabs.findIndex((t) => t.id === tabId);
+    if (idx < 0) return {};
+    const current = s.openTabs[idx].pipeline;
+    const next = h.future[h.future.length - 1];
+    const tabs = [...s.openTabs];
+    tabs[idx] = { ...tabs[idx], pipeline: next, dirty: true };
+    return {
+      openTabs: tabs,
+      history: {
+        ...s.history,
+        [tabId]: {
+          past: [...h.past, current],
+          future: h.future.slice(0, -1),
+          lastKey: null,
+          lastAt: 0,
+        },
+      },
+      selection: { kind: "none", id: null },
+    };
+  }),
+
+  removePipeline: async (id: string, scope?: PipelineScope) => {
+    // Pass the entry's scope so a `library` delete hits the library store, not
+    // the same-named repo `.yaml` + `.prompts/` that would otherwise be
+    // destroyed (#216).
+    await apiDeletePipeline(id, scope);
+    set((s) => {
+      const openTabs = s.openTabs.filter((t) => t.id !== id);
+      let activeTabId = s.activeTabId;
+      if (s.activeTabId === id) {
+        activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : null;
+      }
+      // The merged /pipelines list can hold the same id under two scopes (a repo
+      // pipeline and its promoted `library` copy). Drop only the entry whose
+      // scope was deleted, so deleting the library row doesn't also blank the
+      // surviving repo row (#216). With no scope, fall back to id-only removal.
+      const removed = (p: PipelineListEntry) =>
+        p.id === id && (scope === undefined || p.scope === scope);
+      return {
+        pipelines: s.pipelines.filter((p) => !removed(p)),
+        openTabs,
+        activeTabId,
+        selection: s.activeTabId === id ? { kind: "none" as const, id: null } : s.selection,
+        // DROP undo history — this path closes the tab inline, bypassing closeTab.
+        history: droppedHistory(s.history, id),
+      };
+    });
+  },
+
+  // #774 — rename a pipeline: the daemon moves `<id>.yaml` + its `.prompts/`
+  // sidecar to the slug of the new name (refusing collisions and active-run
+  // renames), and answers with the final id. The list refreshes under the new
+  // id and the open tab — if the renamed pipeline is open — is rekeyed to it
+  // with its undo history intact: a rename is an identity change, not a
+  // content change, so the user's work follows.
+  renamePipeline: async (id: string, name: string) => {
+    const result = await apiRenamePipeline(id, name);
+    await get().loadPipelines();
+    const newId = result?.id && result.id !== id ? result.id : null;
+    if (!newId) return;
+    const tab = get().openTabs.find((t) => t.id === id);
+    set((s) =>
+      rekeyTab(s, id, newId, tab ? { pipeline: { ...tab.pipeline, name: result.name ?? name } } : undefined),
+    );
+  },
+
+  save: async (id: string) => {
+    const tab = get().openTabs.find((t) => t.id === id);
+    if (!tab) return;
+    try {
+      const yaml = serializePipeline(tab.pipeline);
+      if (tab.runId) {
+        await saveRunPipeline(tab.runId, yaml, tab.prompts);
+        set((s) => ({
+          openTabs: s.openTabs.map((t) =>
+            t.id === id ? { ...t, dirty: false, saveError: undefined } : t,
+          ),
+          lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
+        }));
+      } else {
+        // Save back into the same store the tab was opened from, so a
+        // `library`-scoped edit never overwrites a same-named repo file (#216).
+        const result = await savePipeline(id, yaml, tab.prompts, tab.scope);
+        // #774 — the save may have RENAMED the pipeline (a `name:` edit moved
+        // the file): rekey the tab to the daemon's final id in the same
+        // gesture, so the store never keeps a tab pointing at a dead stem.
+        const newId = result?.id && result.id !== id ? result.id : null;
+        if (newId) {
+          set((s) => {
+            const patch = rekeyTab(s, id, newId);
+            return {
+              ...patch,
+              openTabs: (patch.openTabs ?? s.openTabs).map((t) =>
+                t.id === newId ? { ...t, dirty: false, saveError: undefined } : t,
+              ),
+              lastSavedAt: { ...patch.lastSavedAt, [newId]: Date.now() },
+            };
+          });
+        } else {
+          set((s) => ({
+            openTabs: s.openTabs.map((t) =>
+              t.id === id ? { ...t, dirty: false, saveError: undefined } : t,
+            ),
+            lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
+          }));
+        }
+      }
+    } catch (err: unknown) {
+      // One typed error contract (`ApiError`) — no more sniffing an `unknown`
+      // shape. `status`/`line` are typed fields; a non-`ApiError` (unexpected)
+      // still degrades gracefully to its `Error.message`.
+      const apiErr = err instanceof ApiError ? err : null;
+      const status = apiErr?.status;
+      // A 404 on a run-scoped PUT means the run was archived (its pipeline.yaml
+      // was deleted) while this tab was still open and dirty. There's nothing
+      // left to save into — silently close the tab rather than surfacing a
+      // confusing save-error modal that the user would associate with whatever
+      // action triggered the flush (e.g. Launch new run).
+      if (status === 404 && tab.runId) {
+        set((s) => {
+          const tabs = s.openTabs.filter((t) => t.id !== id);
+          const lastSavedAt = { ...s.lastSavedAt };
+          delete lastSavedAt[id];
+          let activeTabId = s.activeTabId;
+          let selection = s.selection;
+          if (s.activeTabId === id) {
+            activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null;
+            selection = { kind: "none" as const, id: null };
+          }
+          // DROP undo history — this run tab is self-closing (its on-disk
+          // pipeline was archived away), so its stack must go with it.
+          return { openTabs: tabs, activeTabId, selection, lastSavedAt, history: droppedHistory(s.history, id) };
+        });
+        return;
+      }
+      const message =
+        apiErr?.message ?? (err instanceof Error ? err.message : "Save failed");
+      const line = apiErr?.line;
+      set((s) => ({
+        openTabs: s.openTabs.map((t) =>
+          t.id === id ? { ...t, saveError: { message, line } } : t,
+        ),
+      }));
+    }
+  },
+
+  flushPendingSaves: async () => {
+    const dirtyTabs = get().openTabs.filter((t) => t.dirty);
+    await Promise.all(dirtyTabs.map((t) => get().save(t.id)));
+  },
+
+  clearSaveError: (id: string) => {
+    set((s) => ({
+      openTabs: s.openTabs.map((t) =>
+        t.id === id ? { ...t, saveError: undefined } : t,
+      ),
+    }));
+  },
+
+  reloadPipeline: async (id: string) => {
+    try {
+      const tab = get().openTabs.find((t) => t.id === id);
+      const detail = await fetchPipeline(id, tab?.scope);
+      if (tab?.dirty) {
+        set((s) => ({
+          openTabs: s.openTabs.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  conflict: {
+                    pipeline: detail.pipeline,
+                    prompts: detail.prompts,
+                    diagnostics: detail.diagnostics ?? [],
+                  },
+                }
+              : t,
+          ),
+        }));
+        return;
+      }
+      set((s) => ({
+        openTabs: s.openTabs.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                pipeline: detail.pipeline,
+                prompts: detail.prompts,
+                diagnostics: detail.diagnostics ?? [],
+                dirty: false,
+                externalDirty: true,
+              }
+            : t,
+        ),
+        // CLEAR undo history — a clean external hot-reload replaced this tab's
+        // pipeline with foreign content; the old stack can't cross that boundary.
+        history: clearedHistory(s.history, id),
+      }));
+      setTimeout(() => {
+        set((s) => ({
+          openTabs: s.openTabs.map((t) =>
+            t.id === id ? { ...t, externalDirty: false } : t,
+          ),
+        }));
+      }, 2000);
+    } catch {
+      // ignore
+    }
+  },
+
+  resolveConflict: (id: string, resolution: "keep" | "take") => {
+    set((s) => {
+      const tab = s.openTabs.find((t) => t.id === id);
+      const hadConflict = tab?.conflict != null;
+      return {
+        openTabs: s.openTabs.map((t) => {
+          if (t.id !== id || !t.conflict) return t;
+          if (resolution === "keep") {
+            return { ...t, conflict: undefined };
+          }
+          return {
+            ...t,
+            pipeline: t.conflict.pipeline,
+            prompts: t.conflict.prompts,
+            diagnostics: t.conflict.diagnostics,
+            dirty: false,
+            conflict: undefined,
+          };
+        }),
+        // "Take theirs" replaces the pipeline → CLEAR. "Keep mine" leaves the
+        // local edits (and thus the undo stack) intact → KEEP (no change).
+        history:
+          resolution === "take" && hadConflict
+            ? clearedHistory(s.history, id)
+            : s.history,
+      };
+    });
+  },
+
+  setLibraryBinding: (tabId, libraryId, libraryScope) => {
+    set((s) => ({
+      openTabs: s.openTabs.map((t) =>
+        t.id === tabId ? { ...t, libraryId, libraryScope } : t,
+      ),
+    }));
+  },
+
+  reloadFromLibrary: async (tabId: string, libraryYaml: string) => {
+    const tab = get().openTabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    try {
+      if (tab.runId) {
+        await saveRunPipeline(tab.runId, libraryYaml, tab.prompts);
+        const detail = await fetchRunPipeline(tab.runId);
+        set((s) => ({
+          openTabs: s.openTabs.map((t) =>
+            t.id === tabId
+              ? {
+                  ...t,
+                  pipeline: detail.pipeline,
+                  prompts: detail.prompts,
+                  diagnostics: detail.diagnostics ?? [],
+                  dirty: false,
+                  saveError: undefined,
+                }
+              : t,
+          ),
+          lastSavedAt: { ...s.lastSavedAt, [tabId]: Date.now() },
+          // CLEAR — "Reload changes" overwrote this run tab with the library YAML.
+          history: clearedHistory(s.history, tabId),
+        }));
+      } else {
+        const result = await savePipeline(tabId, libraryYaml, tab.prompts, tab.scope);
+        // #774 — the save may have moved the file to a new stem; everything
+        // below must address the tab (and rekey its slots) under the final id.
+        const newId = result?.id && result.id !== tabId ? result.id : tabId;
+        const detail = await fetchPipeline(newId, tab.scope);
+        set((s) => {
+          const patch = newId !== tabId ? rekeyTab(s, tabId, newId) : {};
+          return {
+            ...patch,
+            openTabs: (patch.openTabs ?? s.openTabs).map((t) =>
+              t.id === newId
+                ? {
+                    ...t,
+                    pipeline: detail.pipeline,
+                    prompts: detail.prompts,
+                    diagnostics: detail.diagnostics ?? [],
+                    dirty: false,
+                    saveError: undefined,
+                  }
+                : t,
+            ),
+            lastSavedAt: { ...(patch.lastSavedAt ?? s.lastSavedAt), [newId]: Date.now() },
+            // CLEAR — "Reload changes" overwrote this tab with the library YAML.
+            history: clearedHistory(patch.history ?? s.history, newId),
+          };
+        });
+      }
+    } catch (err: unknown) {
+      const apiErr = err instanceof ApiError ? err : null;
+      const message =
+        apiErr?.message ?? (err instanceof Error ? err.message : "Reload failed");
+      const line = apiErr?.line;
+      set((s) => ({
+        openTabs: s.openTabs.map((t) =>
+          t.id === tabId ? { ...t, saveError: { message, line } } : t,
+        ),
+      }));
+    }
+  },
+  };
+}

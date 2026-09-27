@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchPipelines } from "../api";
+import { fetchPipelines } from "../pipeline/api/pipelines";
 import { pickDefaultBranch } from "../workspace/model/branchSelect";
 import { useBranchList } from "../workspace/store/useBranchList";
 import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";

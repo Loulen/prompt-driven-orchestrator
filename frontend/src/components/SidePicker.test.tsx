@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import SidePicker from "./SidePicker";
 import NodeInspector from "./NodeInspector";
 import { TooltipProvider } from "../shared/ui/tooltip";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 vi.mock("../skill/api/bank", () => ({
@@ -17,6 +17,11 @@ vi.mock("../api", () => ({
   instantiateFromLibrary: vi.fn(),
   // #586: NodeInspector's harness picker fetches /settings for its options.
   fetchSettings: vi.fn().mockResolvedValue({ harness_descriptors: null }),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({

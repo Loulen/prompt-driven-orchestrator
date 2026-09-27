@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeSyncState } from "./useLibrary";
-import type { LibraryEntry } from "../api";
+import type { LibraryEntry } from "../pipeline/model/library";
 import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 function makeNode(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {

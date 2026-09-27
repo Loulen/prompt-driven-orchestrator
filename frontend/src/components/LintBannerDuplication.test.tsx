@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import EditCanvas from "./EditCanvas";
+import EditCanvas from "../pipeline/components/EditCanvas";
 import PipelineInspector from "./PipelineInspector";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { TooltipProvider } from "../shared/ui/tooltip";
 
 // jsdom has no ResizeObserver; ReactFlow's container measurement needs it
@@ -40,6 +40,15 @@ vi.mock("../api", () => ({
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({

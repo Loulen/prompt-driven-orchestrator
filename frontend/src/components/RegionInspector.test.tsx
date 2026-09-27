@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import RegionInspector from "./RegionInspector";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { LoopRegion } from "../shared/generated/LoopRegion";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 

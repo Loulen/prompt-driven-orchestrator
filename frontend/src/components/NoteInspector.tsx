@@ -1,5 +1,5 @@
 import { StickyNote } from "lucide-react";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { SectionHead } from "./InspectorPrimitives";
 
 /**

@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, X, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun } from "../run/model/runStatus";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { RunStatus } from "../shared/generated/RunStatus";
-import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { Project } from "../workspace/model/project";
-import type { LibraryPipelineEntry } from "../api";
-import { ApiError } from "../shared/http/client";
-import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
+import { cleanupRun, forgetRun, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useRunShell } from "../session/store/useRunShell";
-import { announceSkillsChanged } from "../skill/store/useSkillBank";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import { handleSelectionKeydown } from "../lib/selectionKeys";
@@ -34,9 +31,7 @@ import { projectLookup } from "../workspace/model/projectLookup";
 import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
 import CleanupConfirmModal from "./CleanupConfirmModal";
-import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
-import LibraryRow from "./LibraryRow";
 import ProjectEditModal from "../workspace/components/ProjectEditModal";
 import RunFilters from "./RunFilters";
 import { EMPTY_RUN_FILTER, isFilterActive, runMatchesFilter } from "./runFilter";
@@ -44,6 +39,7 @@ import { ChildCountPills } from "./OrchestrationTab";
 import RunShellModal from "../session/components/RunShellModal";
 import SelectControl from "./SelectControl";
 import TriggersListPanel from "./TriggersListPanel";
+import PipelinesPane from "../pipeline/components/PipelinesPane";
 
 type LeftTab = "runs" | "triggers" | "library";
 
@@ -130,11 +126,6 @@ export default function UnifiedLeftPanel({
   const [renamingRunId, setRenamingRunId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  // #774 — inline rename of a Pipelines-tab row. Same pattern as the run rows
-  // above: the pencil flips the row's name into an input; Enter/blur commits,
-  // Escape cancels.
-  const [renamingPipelineId, setRenamingPipelineId] = useState<string | null>(null);
-  const [pipelineRenameValue, setPipelineRenameValue] = useState("");
   // #552 — the group-header pencil. Holds the Projet being edited (or `null` for
   // a fresh one, when the header is a derived path group) plus the pre-fill.
   const [projectEditor, setProjectEditor] = useState<{
@@ -143,12 +134,7 @@ export default function UnifiedLeftPanel({
     memberPaths: string[];
   } | null>(null);
 
-  const pipelines = useEditStore((s) => s.pipelines);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
-  const openPipeline = useEditStore((s) => s.openPipeline);
-  const removePipeline = useEditStore((s) => s.removePipeline);
-  const renamePipeline = useEditStore((s) => s.renamePipeline);
-  const activeTabId = useEditStore((s) => s.activeTabId);
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
 
   // #577 — multi-select. The per-tab sets live in the shared store (so a tab's
@@ -163,15 +149,7 @@ export default function UnifiedLeftPanel({
   const deselect = useSelectionStore((s) => s.deselect);
   const clearSel = useSelectionStore((s) => s.clear);
   const runSel = useMemo(() => new Set(runSelIds), [runSelIds]);
-  const librarySel = useMemo(() => new Set(librarySelIds), [librarySelIds]);
   const [runBulkKind, setRunBulkKind] = useState<"cleanup" | "retry" | "pause" | null>(null);
-  const [libBulkKind, setLibBulkKind] = useState<"delete" | "duplicate" | null>(null);
-
-  const [showNewModal, setShowNewModal] = useState(false);
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<PipelineListEntry | null>(null);
-  // Busy guard so a double-click on a library row's Copy icon fires once (#224).
-  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
 
   useEffect(() => {
     loadPipelines();
@@ -247,72 +225,6 @@ export default function UnifiedLeftPanel({
   function cancelRename() {
     setRenamingRunId(null);
     setRenameValue("");
-  }
-
-  // #774 — inline rename of a pipeline row. The store action drives everything
-  // (daemon rename, list refresh, open-tab rekey); a refusal (409 collision,
-  // active runs) is silently swallowed like every other row action — the list
-  // simply stays as it was.
-  function startPipelineRename(p: PipelineListEntry) {
-    setRenamingPipelineId(p.id);
-    setPipelineRenameValue(p.name);
-  }
-
-  async function commitPipelineRename() {
-    const id = renamingPipelineId;
-    const name = pipelineRenameValue.trim();
-    setRenamingPipelineId(null);
-    setPipelineRenameValue("");
-    if (!id || !name) return;
-    try {
-      await renamePipeline(id, name);
-    } catch {
-      // 409 (name/file collision, active runs) and network errors: the row
-      // stays under its current name.
-    }
-  }
-
-  function cancelPipelineRename() {
-    setRenamingPipelineId(null);
-    setPipelineRenameValue("");
-  }
-
-  async function handleConfirmDelete() {
-    if (!deleteTarget) return;
-    try {
-      await removePipeline(deleteTarget.id);
-      await loadPipelines();
-    } catch {
-      // ignore (e.g. 409 active runs)
-    } finally {
-      setDeleteTarget(null);
-    }
-  }
-
-  // #224/#371 — duplicate a library template. One shared seam for both Copy
-  // affordances (the block-1 scope:"library" row and the block-2 library-only
-  // row) so they can never again drift apart. Busy-guarded (a double-click on
-  // the Copy icon fires once), then refreshes BOTH pipeline lists:
-  //   - loadPipelines() re-fetches the authoritative /pipelines, where the
-  //     daemon tags the copy scope:"library" — so it lands in the proper
-  //     block-1 button path at once: a clickable, correctly-badged row.
-  //   - onLibraryPipelinesChanged() re-fetches /library/pipelines.
-  // Refreshing only the latter (the pre-#371 behaviour) left the copy in the
-  // degraded block-2 <div>: wrong "user" badge, no button role, dead click,
-  // until a full page reload. The New/Import handlers already loadPipelines()
-  // the same way; only Duplicate had drifted.
-  async function handleDuplicate(id: string) {
-    if (duplicatingId === id) return;
-    setDuplicatingId(id);
-    try {
-      const copy = await duplicatePipeline(id);
-      await loadPipelines();
-      await openPipeline(copy.id);
-    } catch {
-      /* ignore */
-    } finally {
-      setDuplicatingId(null);
-    }
   }
 
   // One run row, rendered identically whether the list is flat or grouped by
@@ -776,32 +688,6 @@ export default function UnifiedLeftPanel({
     [deselect],
   );
 
-  // #577 — Library multi-select. The two Library lists (openable /pipelines rows
-  // and passive library-only rows) delete through different seams, so each row
-  // registers its own `del`/`dup` keyed by the SAME id its React key uses. Bulk
-  // then just dispatches per selected id — no re-deriving which list it came from.
-  interface LibTarget { selId: string; name: string; del: () => Promise<void>; dup?: () => Promise<void>; }
-  const libTargets: LibTarget[] = pipelines.map((p) => ({
-      selId: `${p.scope}-${p.id}`,
-      name: p.name,
-      del: () => removePipeline(p.id, p.scope),
-      dup: () => duplicatePipeline(p.id).then(() => {}),
-    }));
-  const libTargetById = new Map(libTargets.map((t) => [t.selId, t]));
-  const libVisibleIds = libTargets.map((t) => t.selId);
-  const selectedLibTargets = libTargets.filter((t) => librarySel.has(t.selId));
-  const libDeleteItems: BulkItem[] = selectedLibTargets.map((t) => ({ id: t.selId, label: t.name }));
-  const libDupItems: BulkItem[] = selectedLibTargets
-    .filter((t) => t.dup)
-    .map((t) => ({ id: t.selId, label: t.name }));
-  const handleLibrarySettled = useCallback(
-    (o: BulkOutcome) => {
-      deselect("library", o.succeeded.map((r) => r.id));
-      void loadPipelines();
-    },
-    [deselect, loadPipelines],
-  );
-
   // Open the pencil on a group header: an existing Projet pre-fills its record;
   // a derived path group pre-fills the label + its own path as the sole member.
   const openProjectEditor = (group: {
@@ -1158,149 +1044,7 @@ export default function UnifiedLeftPanel({
       )}
 
       {/* Library pane */}
-      {activeTab === "library" && (
-        <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
-      <div
-        className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
-        style={{ fontSize: "11.5px" }}
-      >
-        Pipelines
-        <button
-          onClick={() => setShowImportModal(true)}
-          className="ml-auto grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
-          title="Import a workflow"
-          data-testid="import-workflow-button"
-        >
-          <FileUp size={12} />
-        </button>
-        <button
-          onClick={() => setShowNewModal(true)}
-          data-testid="new-pipeline-button"
-          className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
-          title="New pipeline"
-        >
-          <Plus size={12} />
-        </button>
-      </div>
-
-        <div
-          className="flex-1 overflow-y-auto outline-none"
-          tabIndex={-1}
-          onKeyDown={(e) =>
-            handleSelectionKeydown(e, {
-              tab: "library",
-              visibleIds: libVisibleIds,
-              hasSelection: librarySelIds.length > 0,
-              selectVisible,
-              clear: clearSel,
-              onBulkDelete: () => {
-                if (libDeleteItems.length > 0) setLibBulkKind("delete");
-              },
-            })
-          }
-        >
-          {pipelines.length === 0 && (
-            <div
-              className="px-3 py-4 text-center text-fg-4"
-              style={{ fontSize: "11px" }}
-            >
-              No pipelines found
-            </div>
-          )}
-          {pipelines.map((p) => (
-            <LibraryRow
-              key={p.id}
-              // #823: the tour's last step points at the row of the pipeline the
-              // user just built — keep it or delete it, both from here.
-              testId={`library-row-${p.id}`}
-              name={p.name}
-              nodeCount={p.node_count}
-              checked={librarySel.has(`${p.scope}-${p.id}`)}
-              onToggleSelect={(e) => {
-                const selId = `${p.scope}-${p.id}`;
-                if (e.shiftKey) selectRange("library", selId, libVisibleIds);
-                else toggleSel("library", selId);
-              }}
-              // A pipeline counts as "starred" when a library entry exists with
-              // the same name. This is the visible link the user expects when
-              // they click the canvas star: their pipeline gets a star badge
-              // here, confirming the action had effect.
-              selected={p.id === activeTabId}
-              // #273: scope:"library" rows now appear here in block 1 (the
-              // /pipelines scope-merge from #216 means they no longer fall
-              // through to the library-only block below). Surface the same Copy
-              // affordance #224 shipped, gated on identity (scope), not the
-              // name-absence filter that block 2 uses. `p.id` is the HOME
-              // library file-stem — duplicateLibraryPipeline resolves it.
-              showDuplicate
-              modified={p.modified}
-              onOpen={() => openPipeline(p.id)}
-              onDuplicate={() => handleDuplicate(p.id)}
-              onRenameStart={() => startPipelineRename(p)}
-              renaming={renamingPipelineId === p.id}
-              renameValue={pipelineRenameValue}
-              onRenameValueChange={setPipelineRenameValue}
-              onRenameCommit={commitPipelineRename}
-              onRenameCancel={cancelPipelineRename}
-              // Confirm-gated, because this row is a working pipeline file and
-              // the delete may cascade to its Library twin (#227).
-              onDelete={() => setDeleteTarget(p)}
-              deleteTitle="Delete pipeline"
-            />
-          ))}
-        </div>
-
-        {/* #577 — floating bulk-action bar for the Library tab. */}
-        {librarySelIds.length > 0 && (
-          <BulkActionBar
-            count={librarySelIds.length}
-            actions={[
-              {
-                key: "delete",
-                label: "Delete",
-                icon: <Trash2 size={13} />,
-                destructive: true,
-                onClick: () => setLibBulkKind("delete"),
-              },
-              {
-                key: "duplicate",
-                label: "Duplicate",
-                icon: <Copy size={13} />,
-                disabled: libDupItems.length === 0,
-                onClick: () => setLibBulkKind("duplicate"),
-              },
-            ]}
-            onClear={() => clearSel("library")}
-          />
-        )}
-        {libBulkKind === "delete" && (
-          <BulkActionModal
-            destructive
-            runningLabel="Deleting"
-            title={`Delete ${libDeleteItems.length} pipeline${libDeleteItems.length === 1 ? "" : "s"}?`}
-            description="This permanently removes the selected pipelines' files (YAML + prompts) from disk. This can't be undone."
-            confirmLabel="Delete"
-            items={libDeleteItems}
-            run={(selId) => libTargetById.get(selId)!.del()}
-            onClose={() => setLibBulkKind(null)}
-            onSettled={handleLibrarySettled}
-          />
-        )}
-        {libBulkKind === "duplicate" && (
-          <BulkActionModal
-            skipConfirm
-            runningLabel="Duplicating"
-            title=""
-            description=""
-            confirmLabel="Duplicate"
-            items={libDupItems}
-            run={(selId) => libTargetById.get(selId)!.dup!()}
-            onClose={() => setLibBulkKind(null)}
-            onSettled={handleLibrarySettled}
-          />
-        )}
-        </div>
-      )}
+      {activeTab === "library" && <PipelinesPane />}
 
       {confirmCleanup && (
         <CleanupConfirmModal
@@ -1343,377 +1087,10 @@ export default function UnifiedLeftPanel({
           onCancel={() => setConfirmRetryAll(null)}
         />
       )}
-
-      <ConfirmDeleteModal
-        // Remount per target so the checkbox resets to OFF each open (#227).
-        key={deleteTarget?.id ?? "none"}
-        open={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={handleConfirmDelete}
-        name={deleteTarget?.name ?? ""}
-      />
-
-      {showNewModal && (
-        <NewPipelineModal onClose={() => setShowNewModal(false)} />
-      )}
-
-      {showImportModal && (
-        <ImportWorkflowModal onClose={() => setShowImportModal(false)} />
-      )}
     </aside>
   );
 }
 
-function NewPipelineModal({ onClose }: { onClose: () => void }) {
-  const [name, setName] = useState("");
-  // #825 (FP iteration 2): what the daemon said when it refused. This used to be
-  // swallowed, and a refused Create was a button that did nothing — no message,
-  // no error state, the dialog simply sitting there. The way to meet it is
-  // ordinary: replay the *First pipeline* tour on an instance where you kept the
-  // pipeline it builds, and every click on Create is a silent 409.
-  const [error, setError] = useState<string | null>(null);
-
-  const loadPipelines = useEditStore((s) => s.loadPipelines);
-  const openPipeline = useEditStore((s) => s.openPipeline);
-
-  async function handleCreate() {
-    if (!name.trim()) return;
-    setError(null);
-    try {
-      const result = await createPipeline(name.trim());
-      await loadPipelines();
-      await openPipeline(result.id);
-      onClose();
-    } catch (e) {
-      // The collision is the one a reader can act on, so it is said in their
-      // terms — « pipeline already exists » does not name the pipeline. Anything
-      // else is quoted as the daemon phrased it rather than paraphrased.
-      setError(
-        e instanceof ApiError && e.status === 409
-          ? `A pipeline named ${name.trim()} already exists. Open it from the list, or pick another name.`
-          : e instanceof Error && e.message
-            ? e.message
-            : "The pipeline could not be created.",
-      );
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div
-        // #823: the *First pipeline* tour watches for the dialog itself (its
-        // presence ends the « create a new pipeline » step); the naming step
-        // lights only the field, so Create stays under the dim until asked (#837).
-        data-testid="new-pipeline-dialog"
-        className="w-[360px] rounded-lg border border-line bg-bg-4 p-4"
-        style={{ fontSize: "12px" }}
-      >
-        <div className="mb-3 font-medium text-fg">New Pipeline</div>
-
-        <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
-          Name
-        </label>
-        <input
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value);
-            // The refusal was about the name that was in the field; editing it
-            // is the user answering, so the sentence stops applying.
-            setError(null);
-          }}
-          placeholder="my-pipeline"
-          data-testid="new-pipeline-name"
-          className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
-          autoFocus
-          onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-        />
-
-        {error && (
-          <div
-            data-testid="new-pipeline-error"
-            role="alert"
-            className="rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
-            style={{ fontSize: "11px" }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleCreate}
-            data-testid="new-pipeline-create"
-            disabled={!name.trim()}
-            className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim disabled:opacity-50"
-          >
-            Create
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/// The base64 of a picked file (the skills sidecar zip, #673) — what the import
-/// request carries; the daemon decodes and unzips it.
-async function fileToBase64(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-/// Import a Claude Code workflow `.js` as a draft library pipeline (#155). The
-/// file is read client-side and POSTed as text — the daemon parses it to an AST
-/// (never executes it) and returns a draft plus lossy-translation warnings.
-function ImportWorkflowModal({
-  onClose,
-}: {
-  onClose: () => void;
-}) {
-  const [mode, setMode] = useState<"pdo" | "claude">("pdo");
-  const [file, setFile] = useState<File | null>(null);
-  const [content, setContent] = useState("");
-  // #673: the skills sidecar (`<pipeline>.skills.zip`) picked beside the YAML,
-  // sent as base64. Optional: without it, unknown skill ids import with a
-  // "skill absent" warning instead of failing.
-  const [sidecar, setSidecar] = useState<{ name: string; base64: string } | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [warnings, setWarnings] = useState<string[] | null>(null);
-  const loadPipelines = useEditStore((s) => s.loadPipelines);
-  const openPipeline = useEditStore((s) => s.openPipeline);
-
-  const looksLikePdo = /^\s*pdo_pipeline\s*:/m.test(content);
-  const looksLikeClaude =
-    /\b(?:agent|pipeline|parallel)\s*\(/.test(content) ||
-    /\bmeta\s*:\s*\{/.test(content) ||
-    /^\s*(?:export\s+default|const\s+\w+\s*=)/m.test(content);
-  const mismatch =
-    content.trim() &&
-    ((mode === "pdo" && looksLikeClaude && !looksLikePdo) ||
-      (mode === "claude" && looksLikePdo));
-
-  async function handleImport() {
-    if (!content.trim() || submitting || mismatch) return;
-    setSubmitting(true);
-    setError(null);
-    setWarnings(null);
-    try {
-      const result =
-        mode === "pdo"
-          ? await importPipelineDocument(content, sidecar?.base64)
-          : await importWorkflow(file?.name ?? "workflow.js", content);
-      await loadPipelines();
-      await openPipeline(result.id);
-      if (mode === "pdo") {
-        // The import may have added skills to the bank (#673): the Skills panel,
-        // the selectors and the missing-skill warnings all re-read it.
-        announceSkillsChanged();
-      }
-      const w = "warnings" in result ? result.warnings ?? [] : [];
-      if (w.length > 0) {
-        // Surface the diagnostics rather than silently closing: for a Claude
-        // workflow the lossy-translation annotation is the onboarding tutorial
-        // (ADR-0001); for a PDO document it says what the import dropped.
-        setWarnings(w);
-      } else {
-        onClose();
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function loadFile(next: File | null) {
-    setFile(next);
-    setContent(next ? await next.text() : "");
-    setError(null);
-    setWarnings(null);
-  }
-
-  /// PDO mode: the picker takes the YAML and, beside it, the skills sidecar
-  /// (`.zip`). Either may come alone; a later pick replaces its own kind only.
-  async function loadPdoFiles(files: FileList | null) {
-    setError(null);
-    setWarnings(null);
-    for (const next of Array.from(files ?? [])) {
-      if (/\.zip$/i.test(next.name)) {
-        setSidecar({ name: next.name, base64: await fileToBase64(next) });
-      } else {
-        setFile(next);
-        setContent(await next.text());
-      }
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div
-        className="w-[400px] rounded-lg border border-line bg-bg-4 p-4"
-        style={{ fontSize: "12px" }}
-        data-testid="import-workflow-modal"
-      >
-        <div className="mb-1 font-medium text-fg">Import a pipeline</div>
-        <div className="mb-3 grid grid-cols-2 rounded border border-line-strong bg-bg-3 p-0.5">
-          {([
-            ["pdo", "Pipeline PDO"],
-            ["claude", "Workflow Claude Code"],
-          ] as const).map(([value, label]) => (
-            <button
-              key={value}
-              onClick={() => {
-                setMode(value);
-                setError(null);
-                setWarnings(null);
-              }}
-              className={`rounded px-2 py-1.5 ${
-                mode === value ? "bg-bg-4 font-medium text-fg" : "text-fg-4"
-              }`}
-              aria-pressed={mode === value}
-              data-testid={`import-mode-${value}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {mode === "pdo" ? (
-          <>
-            <p className="mb-2 text-fg-4" style={{ fontSize: "11px" }}>
-              Paste a portable PDO pipeline document or load a YAML file. If the pipeline
-              selects skills, add its <code>.skills.zip</code> sidecar so the bank recreates them.
-            </p>
-            <textarea
-              value={content}
-              onChange={(event) => {
-                setContent(event.target.value);
-                setError(null);
-              }}
-              className="h-48 w-full resize-y rounded border border-line-strong bg-bg-3 p-2 font-mono text-fg outline-none focus:border-acc"
-              data-testid="pipeline-document-input"
-              autoFocus
-            />
-            <div className="mb-3 mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <label className="inline-block cursor-pointer text-acc hover:underline">
-                load files…
-                <input
-                  type="file"
-                  accept=".yaml,.yml,.zip"
-                  multiple
-                  className="hidden"
-                  data-testid="pipeline-document-files"
-                  onChange={(event) => void loadPdoFiles(event.target.files)}
-                />
-              </label>
-              {sidecar ? (
-                <span className="flex items-center gap-1 text-fg-3" data-testid="skills-sidecar-chip">
-                  skills sidecar: <code>{sidecar.name}</code>
-                  <button
-                    className="text-fg-4 hover:text-fg"
-                    onClick={() => setSidecar(null)}
-                    aria-label="Remove the skills sidecar"
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              ) : (
-                <span className="text-fg-4">no skills sidecar</span>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="mb-2 text-fg-4" style={{ fontSize: "11px" }}>
-              Decompile a Claude Code workflow into a draft. Unmapped idioms are
-              annotated instead of executed.
-            </p>
-            <input
-              type="file"
-              accept=".js"
-              data-testid="workflow-file-input"
-              onChange={(event) => void loadFile(event.target.files?.[0] ?? null)}
-              className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none file:mr-2 file:rounded file:border-0 file:bg-bg-4 file:px-2 file:py-0.5 file:text-fg-3"
-            />
-          </>
-        )}
-
-        {mismatch && (
-          <div className="mb-3 rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-fg-2">
-            This content looks like a {mode === "pdo" ? "Claude Code workflow" : "PDO pipeline"}.
-            <button
-              className="ml-1 text-acc hover:underline"
-              onClick={() => setMode(mode === "pdo" ? "claude" : "pdo")}
-            >
-              Switch mode
-            </button>
-          </div>
-        )}
-
-        {error && (
-          <div
-            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
-            style={{ fontSize: "11px" }}
-            data-testid="import-workflow-error"
-          >
-            {error}
-          </div>
-        )}
-
-        {warnings && (
-          <div
-            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-fg-2"
-            style={{ fontSize: "11px" }}
-            data-testid="import-workflow-warnings"
-          >
-            <div className="mb-1 font-medium text-st-await">
-              Imported with {warnings.length} warning
-              {warnings.length === 1 ? "" : "s"}:
-            </div>
-            <ul className="list-disc pl-4">
-              {warnings.map((w, i) => (
-                <li key={i}>{w}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
-          >
-            {warnings ? "Done" : "Cancel"}
-          </button>
-          {!warnings && (
-            <button
-              onClick={handleImport}
-              disabled={!content.trim() || submitting || !!mismatch}
-              className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim disabled:opacity-50"
-            >
-              {submitting ? "Importing…" : "Import"}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/// #110 — confirm dialog for the one destructive run-level control. Retry-all
-/// archives the current run and starts a fresh run of the same pipeline, so it
-/// gets a confirm gate (Pause/Resume don't — they're cheap and reversible).
 export function RetryAllConfirmModal({
   onConfirm,
   onCancel,

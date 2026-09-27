@@ -5,7 +5,6 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::event_log::RunState;
-use crate::frontmatter_parser;
 use crate::pipeline::{self, PipelineDef, PortType};
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -356,7 +355,7 @@ fn file_info_with_frontmatter(artifacts_dir: &Path, path: &Path) -> FileInfo {
         None
     };
     let frontmatter = if exists {
-        frontmatter_parser::parse_frontmatter_from_file(path)
+        pdo_pipeline::adapters::frontmatter_file::parse_frontmatter_from_file(path)
             .ok()
             .filter(|m| !m.is_empty())
             .map(|m| {

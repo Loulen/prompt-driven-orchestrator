@@ -1,7 +1,7 @@
 import type { NodeProps, Node } from "@xyflow/react";
 import type { NodeStatus } from "../shared/generated/NodeStatus";
 import type { PortSide } from "../shared/generated/PortSide";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { STATUS_DOT } from "../nodeStyles";
 import { NodeCard } from "./NodeCard";
 import PortRow from "./PortRow";

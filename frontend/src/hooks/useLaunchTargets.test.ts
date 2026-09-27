@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useLaunchTargets } from "./useLaunchTargets";
 import * as api from "../api";
+import * as repos from "../workspace/api/repos";
 import type { BranchList } from "../shared/generated/BranchList";
 import type { BranchRef } from "../shared/generated/BranchRef";
 import type { FastForwardOutcome } from "../workspace/model/branches";
@@ -9,6 +10,10 @@ import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn(),
+}));
+
+vi.mock("../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/repos")>()),
   listBranches: vi.fn(),
   fetchRemotes: vi.fn(),
   fastForwardBranch: vi.fn(),
@@ -30,8 +35,8 @@ function branchList(branches: BranchRef[], over: Partial<BranchList> = {}): Bran
  * about the fetch itself re-point `fetchRemotes` afterwards.
  */
 function listBranchesReturns(branches: BranchRef[], over: Partial<BranchList> = {}) {
-  vi.mocked(api.fetchRemotes).mockResolvedValue(branchList(branches, over));
-  return vi.mocked(api.listBranches).mockResolvedValue(branchList(branches, over));
+  vi.mocked(repos.fetchRemotes).mockResolvedValue(branchList(branches, over));
+  return vi.mocked(repos.listBranches).mockResolvedValue(branchList(branches, over));
 }
 
 function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
@@ -49,9 +54,9 @@ function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
 
 beforeEach(() => {
   vi.mocked(api.fetchPipelines).mockReset().mockResolvedValue([]);
-  vi.mocked(api.listBranches).mockReset();
-  vi.mocked(api.fetchRemotes).mockReset();
-  vi.mocked(api.fastForwardBranch).mockReset();
+  vi.mocked(repos.listBranches).mockReset();
+  vi.mocked(repos.fetchRemotes).mockReset();
+  vi.mocked(repos.fastForwardBranch).mockReset();
   listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
 });
 
@@ -146,7 +151,7 @@ describe("useLaunchTargets — the branches", () => {
   it("lists the target repo's branches", async () => {
     const { result } = setup();
     await load(result, "/home/user/project");
-    expect(api.listBranches).toHaveBeenCalledWith("/home/user/project");
+    expect(repos.listBranches).toHaveBeenCalledWith("/home/user/project");
     expect(result.current.branches).toEqual([
       local("main"),
       local("dev"),
@@ -159,8 +164,8 @@ describe("useLaunchTargets — the branches", () => {
     let release!: (list: BranchList) => void;
     // Both verbs answer the same repo state (see `listBranchesReturns`); only the
     // list is held open, so the flag is about the LIST arriving.
-    vi.mocked(api.fetchRemotes).mockResolvedValue(branchList([local("main")]));
-    vi.mocked(api.listBranches).mockReturnValue(
+    vi.mocked(repos.fetchRemotes).mockResolvedValue(branchList([local("main")]));
+    vi.mocked(repos.listBranches).mockReturnValue(
       new Promise<BranchList>((resolve) => {
         release = resolve;
       }),
@@ -301,7 +306,7 @@ describe("useLaunchTargets — the branches", () => {
   it("empties the list when the listing fails", async () => {
     const { result } = setup();
     await load(result, "/a");
-    vi.mocked(api.listBranches).mockRejectedValue(new Error("not a git repository"));
+    vi.mocked(repos.listBranches).mockRejectedValue(new Error("not a git repository"));
     await load(result, "/b");
     expect(result.current.branches).toEqual([]);
     expect(result.current.branchesLoading).toBe(false);
@@ -337,19 +342,19 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
   it("fetches the repo's remotes when its branches are loaded", async () => {
     const { result } = setup();
     await load(result, "/home/user/project");
-    expect(api.fetchRemotes).toHaveBeenCalledWith("/home/user/project");
+    expect(repos.fetchRemotes).toHaveBeenCalledWith("/home/user/project");
   });
 
   it("re-fetches when the target repo changes", async () => {
     const { result } = setup();
     await load(result, "/a");
     await load(result, "/b");
-    expect(vi.mocked(api.fetchRemotes).mock.calls.map(([p]) => p)).toEqual(["/a", "/b"]);
+    expect(vi.mocked(repos.fetchRemotes).mock.calls.map(([p]) => p)).toEqual(["/a", "/b"]);
   });
 
   it("lands the refreshed list and its date in place", async () => {
     const { result } = setup();
-    vi.mocked(api.fetchRemotes).mockResolvedValue(
+    vi.mocked(repos.fetchRemotes).mockResolvedValue(
       branchList([{ ...local("main"), upstream: "origin/main", ahead: 0, behind: 3 }], {
         last_fetch_at: "2026-09-18T09:00:00Z",
       }),
@@ -371,7 +376,7 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
     await load(result, "/a");
     act(() => result.current.setSourceBranch("feature-x"));
 
-    vi.mocked(api.fetchRemotes).mockResolvedValue(
+    vi.mocked(repos.fetchRemotes).mockResolvedValue(
       branchList([local("main"), local("dev"), local("feature-x")], {
         last_fetch_at: "2026-09-18T09:00:00Z",
       }),
@@ -389,7 +394,7 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
    */
   it("keeps the list, the selection and the date when the fetch fails", async () => {
     const { result } = setup();
-    vi.mocked(api.fetchRemotes).mockResolvedValue(
+    vi.mocked(repos.fetchRemotes).mockResolvedValue(
       branchList([local("main"), local("dev"), local("feature-x")], {
         last_fetch_at: "2026-09-16T08:00:00Z",
         fetch_error: { kind: "network", message: "ssh: Could not resolve hostname" },
@@ -410,12 +415,12 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
    */
   it("does not let a late plain list overwrite a landed fetch", async () => {
     let releaseList!: (list: BranchList) => void;
-    vi.mocked(api.listBranches).mockReturnValue(
+    vi.mocked(repos.listBranches).mockReturnValue(
       new Promise<BranchList>((resolve) => {
         releaseList = resolve;
       }),
     );
-    vi.mocked(api.fetchRemotes).mockResolvedValue(
+    vi.mocked(repos.fetchRemotes).mockResolvedValue(
       branchList([{ ...local("main"), upstream: "origin/main", ahead: 0, behind: 3 }], {
         last_fetch_at: "2026-09-18T09:00:00Z",
       }),
@@ -439,7 +444,7 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
 
   it("survives a fetch request that throws outright", async () => {
     const { result } = setup();
-    vi.mocked(api.fetchRemotes).mockRejectedValue(new Error("daemon unreachable"));
+    vi.mocked(repos.fetchRemotes).mockRejectedValue(new Error("daemon unreachable"));
     await load(result, "/a");
     await waitFor(() => expect(result.current.fetchError?.message).toContain("daemon unreachable"));
     expect(result.current.branches).toHaveLength(3);
@@ -453,7 +458,7 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
    */
   it("ignores a fetch that answers about a repo the user has left", async () => {
     let releaseSlow!: (list: BranchList) => void;
-    vi.mocked(api.fetchRemotes).mockReturnValueOnce(
+    vi.mocked(repos.fetchRemotes).mockReturnValueOnce(
       new Promise<BranchList>((resolve) => {
         releaseSlow = resolve;
       }),
@@ -462,7 +467,7 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
     await load(result, "/slow");
 
     listBranchesReturns([local("other")]);
-    vi.mocked(api.fetchRemotes).mockResolvedValue(branchList([local("other")]));
+    vi.mocked(repos.fetchRemotes).mockResolvedValue(branchList([local("other")]));
     await load(result, "/fast");
     expect(result.current.branches).toEqual([local("other")]);
 
@@ -479,7 +484,7 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
 
   it("clearBranches drops the freshness state with the list", async () => {
     const { result } = setup();
-    vi.mocked(api.fetchRemotes).mockResolvedValue(
+    vi.mocked(repos.fetchRemotes).mockResolvedValue(
       branchList([local("main")], {
         last_fetch_at: "2026-09-18T09:00:00Z",
         fetch_error: { kind: "auth", message: "Permission denied" },
@@ -498,7 +503,7 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
     await act(async () => {
       result.current.refetchRemotes();
     });
-    expect(api.fetchRemotes).not.toHaveBeenCalled();
+    expect(repos.fetchRemotes).not.toHaveBeenCalled();
   });
 });
 
@@ -525,15 +530,15 @@ describe("useLaunchTargets — re-reading the local refs (#803)", () => {
 
     // The commit someone made in a terminal while the form sat open: the branch
     // has diverged, and nothing on screen would say so without this read.
-    vi.mocked(api.listBranches).mockResolvedValue(
+    vi.mocked(repos.listBranches).mockResolvedValue(
       branchList([{ ...local("main"), upstream: "origin/main", ahead: 1, behind: 1 }]),
     );
-    const fetchesBefore = vi.mocked(api.fetchRemotes).mock.calls.length;
+    const fetchesBefore = vi.mocked(repos.fetchRemotes).mock.calls.length;
     await act(async () => {
       result.current.rereadBranches();
     });
     await waitFor(() => expect(result.current.branches[0]?.ahead).toBe(1));
-    expect(vi.mocked(api.fetchRemotes).mock.calls).toHaveLength(fetchesBefore);
+    expect(vi.mocked(repos.fetchRemotes).mock.calls).toHaveLength(fetchesBefore);
   });
 
   /**
@@ -549,7 +554,7 @@ describe("useLaunchTargets — re-reading the local refs (#803)", () => {
     await load(result, "/a");
     await waitFor(() => expect(result.current.branches[0]?.behind).toBe(3));
 
-    vi.mocked(api.listBranches).mockResolvedValue(
+    vi.mocked(repos.listBranches).mockResolvedValue(
       branchList([{ ...local("main"), upstream: "origin/main", ahead: 2, behind: 3 }]),
     );
     await act(async () => {
@@ -567,7 +572,7 @@ describe("useLaunchTargets — re-reading the local refs (#803)", () => {
     await load(result, "/a");
     await waitFor(() => expect(result.current.fetchError).not.toBeNull());
 
-    vi.mocked(api.listBranches).mockResolvedValue(branchList([local("main"), local("dev")]));
+    vi.mocked(repos.listBranches).mockResolvedValue(branchList([local("main"), local("dev")]));
     await act(async () => {
       result.current.rereadBranches();
     });
@@ -580,7 +585,7 @@ describe("useLaunchTargets — re-reading the local refs (#803)", () => {
     await load(result, "/a");
     await waitFor(() => expect(result.current.branches).toHaveLength(3));
 
-    vi.mocked(api.listBranches).mockRejectedValue(new Error("daemon unreachable"));
+    vi.mocked(repos.listBranches).mockRejectedValue(new Error("daemon unreachable"));
     await act(async () => {
       result.current.rereadBranches();
     });
@@ -593,7 +598,7 @@ describe("useLaunchTargets — re-reading the local refs (#803)", () => {
     await act(async () => {
       result.current.rereadBranches();
     });
-    expect(api.listBranches).not.toHaveBeenCalled();
+    expect(repos.listBranches).not.toHaveBeenCalled();
   });
 });
 
@@ -630,7 +635,7 @@ describe("useLaunchTargets — the fast-forward (#803)", () => {
     await load(result, "/a");
     await waitFor(() => expect(result.current.branches).toHaveLength(1));
 
-    vi.mocked(api.fastForwardBranch).mockResolvedValue(
+    vi.mocked(repos.fastForwardBranch).mockResolvedValue(
       ffDone([{ last_commit_at: null, last_commit_subject: null, head: false, name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 0 }]),
     );
     await act(async () => {
@@ -649,7 +654,7 @@ describe("useLaunchTargets — the fast-forward (#803)", () => {
     await load(result, "/a");
     await waitFor(() => expect(result.current.branches).toHaveLength(1));
 
-    vi.mocked(api.fastForwardBranch).mockResolvedValue({
+    vi.mocked(repos.fastForwardBranch).mockResolvedValue({
       kind: "refused",
       refusal: { reason: "up_to_date", message: "already up to date" },
       list: branchList([{ last_commit_at: null, last_commit_subject: null, head: false, name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 0 }]),
@@ -673,7 +678,7 @@ describe("useLaunchTargets — the fast-forward (#803)", () => {
     await load(result, "/a");
     await waitFor(() => expect(result.current.fetchError).not.toBeNull());
 
-    vi.mocked(api.fastForwardBranch).mockResolvedValue(ffDone([local("main")]));
+    vi.mocked(repos.fastForwardBranch).mockResolvedValue(ffDone([local("main")]));
     await act(async () => {
       await result.current.fastForward("main");
     });
@@ -686,7 +691,7 @@ describe("useLaunchTargets — the fast-forward (#803)", () => {
     await load(result, "/a");
 
     let release: (o: FastForwardOutcome) => void = () => {};
-    vi.mocked(api.fastForwardBranch).mockReturnValue(
+    vi.mocked(repos.fastForwardBranch).mockReturnValue(
       new Promise<FastForwardOutcome>((r) => (release = r)),
     );
     let second: unknown;
@@ -699,7 +704,7 @@ describe("useLaunchTargets — the fast-forward (#803)", () => {
       await first;
     });
     expect(second).toBeNull();
-    expect(api.fastForwardBranch).toHaveBeenCalledTimes(1);
+    expect(repos.fastForwardBranch).toHaveBeenCalledTimes(1);
   });
 
   it("fast-forwards nothing when no repo is loaded", async () => {
@@ -707,6 +712,6 @@ describe("useLaunchTargets — the fast-forward (#803)", () => {
     await act(async () => {
       expect(await result.current.fastForward("main")).toBeNull();
     });
-    expect(api.fastForwardBranch).not.toHaveBeenCalled();
+    expect(repos.fastForwardBranch).not.toHaveBeenCalled();
   });
 });

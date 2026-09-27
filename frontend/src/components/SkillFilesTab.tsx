@@ -2,7 +2,7 @@ import { useState } from "react";
 import { FileText, Pencil, Trash2 } from "lucide-react";
 import { SKILL_MD, formatBytes } from "../lib/skillFiles";
 import type { SkillFiles } from "../hooks/useSkillFiles";
-import FsExplorerModal from "./FsExplorerModal";
+import FsExplorerModal from "../workspace/components/FsExplorerModal";
 import SkillFileDropZone from "./SkillFileDropZone";
 
 interface Props {

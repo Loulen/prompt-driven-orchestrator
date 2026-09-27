@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import FsExplorerModal from "../../components/FsExplorerModal";
+import FsExplorerModal from "../../workspace/components/FsExplorerModal";
 import { relativiseToHome } from "../model/paths";
 import type { SandboxProfileEntry } from "../model/sandbox";
 import { useStagingProfiles } from "../store/useStagingProfiles";

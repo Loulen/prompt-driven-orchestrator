@@ -4,19 +4,17 @@
 # shrink one. Never add a line or raise a size.
 crates/pdo-daemon/src/event_log.rs 3453
 crates/pdo-daemon/src/instance_config.rs 910
-crates/pdo-daemon/src/lib.rs 22413
+crates/pdo-daemon/src/lib.rs 20594
 crates/pdo-daemon/src/loop_region.rs 501
 crates/pdo-daemon/src/node_io_resolver.rs 436
 crates/pdo-daemon/src/node_primitives.rs 910
-crates/pdo-daemon/src/node_spawn.rs 1580
+crates/pdo-daemon/src/node_spawn.rs 1577
 crates/pdo-daemon/src/pipeline.rs 1458
 crates/pdo-daemon/src/pipeline_migrator.rs 1626
 crates/pdo-daemon/src/pipeline_semantics.rs 477
 crates/pdo-daemon/src/pipeline_watcher.rs 403
 crates/pdo-daemon/src/price_table.rs 760
-crates/pdo-daemon/src/project_store.rs 403
 crates/pdo-daemon/src/prompt_augmenter.rs 1265
-crates/pdo-daemon/src/provisioning.rs 670
 crates/pdo-daemon/src/pty_bridge.rs 402
 crates/pdo-daemon/src/review_comments.rs 564
 crates/pdo-daemon/src/run_advance.rs 784
@@ -36,13 +34,11 @@ crates/pdo-daemon/src/tmux_session_manager.rs 1914
 crates/pdo-daemon/src/transition_guard.rs 469
 crates/pdo-daemon/src/trigger_store.rs 806
 crates/pdo-daemon/src/workflow_importer.rs 1602
-crates/pdo-daemon/src/worktree_ops.rs 1331
-frontend/src/api.ts 2207
+frontend/src/api.ts 1909
 frontend/src/app/App.tsx 1289
 frontend/src/components/DiffTab.tsx 747
 frontend/src/components/EdgeDetailPanel.tsx 777
 frontend/src/components/EditCanvas.tsx 1288
-frontend/src/components/FsExplorerModal.tsx 433
 frontend/src/components/ImportSkillsModal.tsx 1295
 frontend/src/components/MarkdownArtifactModal.tsx 605
 frontend/src/components/NewRunModal.tsx 2142
@@ -51,12 +47,10 @@ frontend/src/components/NodeInspector.tsx 958
 frontend/src/components/OrthogonalEdge.tsx 577
 frontend/src/components/PasteSkillModal.tsx 799
 frontend/src/components/PipelineInfoPanel.tsx 1155
-frontend/src/components/ProvisioningRulesEditor.tsx 408
 frontend/src/components/SettingsSurface.tsx 2116
 frontend/src/components/SkillBankPanel.tsx 1729
 frontend/src/components/SkillFilesTab.tsx 438
 frontend/src/components/SkillTree.tsx 414
-frontend/src/components/SourceBranchField.tsx 1358
 frontend/src/components/StatsAbsorption.tsx 544
 frontend/src/components/StatsCharts.tsx 3793
 frontend/src/components/StatsModal.tsx 478
@@ -76,6 +70,6 @@ frontend/src/lib/reviewComments.ts 539
 frontend/src/lib/serializePipeline.ts 466
 frontend/src/lib/tour.ts 588
 frontend/src/lib/tours/firstPipeline.ts 624
-frontend/src/lib/tours/firstRun.ts 681
+frontend/src/lib/tours/firstRun.ts 676
 frontend/src/pages/ReviewPage.tsx 1397
 frontend/src/stores/editStore.ts 1224

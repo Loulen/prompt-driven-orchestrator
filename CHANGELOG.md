@@ -10,6 +10,22 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.3 — Contexte `workspace` extrait (#917, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les
+routes `/projects*`, `/repos*`, `/fs/browse` et `/settings/provisioning` répondent comme avant).
+
+- Nouveau crate `pdo-workspace` (domain / application / adapters) : projets, provisioning,
+  worktrees et création de dépôt quittent `pdo-legacy` (`project_store`, `provisioning`,
+  `worktree_ops`, `repo_scaffold`). Chaque mutation passe par un use case qui construit une
+  Opération et appelle l'autorisation.
+- Git passe derrière un port : un adaptateur unique (`adapters/git`), testé contre un vrai
+  dépôt temporaire, que les autres contextes appelleront à leur migration.
+- Le crate legacy monte le routeur du contexte et lui passe l'hôte d'extensions par
+  `DaemonConfig::extension_host` ; le passage par `contexts.rs`, comme `platform`, reste à faire.
+- Front : édition de projet, `SourceBranchField`, éditeurs de provisioning, explorateur de
+  dossiers et combobox de dépôt passent dans `frontend/src/workspace/`.
+
 ## 1.111.2 — Contexte `platform` extrait (#916, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les

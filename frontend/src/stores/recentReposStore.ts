@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { fetchRecentRepos } from "../api";
+import { fetchRecentRepos } from "../workspace/api/repos";
 
 interface RecentReposState {
   recentRepos: string[];

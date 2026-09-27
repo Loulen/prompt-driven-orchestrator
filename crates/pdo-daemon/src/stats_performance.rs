@@ -116,9 +116,9 @@
 //! a Node's can:
 //!
 //! - **Pipeline Manager** orchestrates from the Run's own top-level working
-//!   directory ([`crate::worktree_ops::worktree_dir_for_run`]) — the same
+//!   directory ([`crate::worktrees::worktree_dir_for_run`]) — the same
 //!   directory every non-isolated Node also runs in (an isolated
-//!   Node gets its own disjoint [`crate::worktree_ops::sub_worktree_path`], so
+//!   Node gets its own disjoint [`crate::worktrees::sub_worktree_path`], so
 //!   it never collides). Every Claude `.jsonl` file in that directory that
 //!   isn't a known Node's own `session_id` is a Pipeline Manager candidate.
 //! - **Merge resolver** operates on the conflicting Node's own worktree
@@ -2227,14 +2227,14 @@ fn fold_performance(
                             .record_run_as(&node.raw_key, &run_id, &started_at);
                         node_acc.kind = p.kind;
                         let working_dir = if p.isolated {
-                            crate::worktree_ops::sub_worktree_path(
+                            crate::worktrees::sub_worktree_path(
                                 &repo_root,
                                 &run_id,
                                 event.node_id.as_deref().unwrap_or(""),
                                 iter,
                             )
                         } else {
-                            crate::worktree_ops::worktree_dir_for_run(&repo_root, &run_id)
+                            crate::worktrees::worktree_dir_for_run(&repo_root, &run_id)
                         };
                         harnesses_seen.insert(p.harness.clone());
                         let waited = waits.get(&(node_id.clone(), iter)).copied().unwrap_or(0.0);
@@ -2285,7 +2285,7 @@ fn fold_performance(
                         let (working_dir, excluded, ambiguous) =
                             match (&started.conflicting_node_id, started.iter) {
                                 (Some(conflicting_node_id), Some(conflict_iter)) => {
-                                    let dir = crate::worktree_ops::sub_worktree_path(
+                                    let dir = crate::worktrees::sub_worktree_path(
                                         &repo_root,
                                         &run_id,
                                         conflicting_node_id,
@@ -2330,7 +2330,7 @@ fn fold_performance(
                     if let Some(started_at) = pipeline_manager_started.take() {
                         harnesses_seen.insert(run_harness.clone());
                         let duration = duration_millis(&started_at, &event.ts);
-                        let topdir = crate::worktree_ops::worktree_dir_for_run(&repo_root, &run_id);
+                        let topdir = crate::worktrees::worktree_dir_for_run(&repo_root, &run_id);
                         let excluded: HashSet<String> = node_starts
                             .values()
                             .flatten()

@@ -39,11 +39,11 @@ import ImageLightbox from "./ImageLightbox";
 import TmuxTerminal from "./TmuxTerminal";
 import { formatCostAmount, nodeCostTitle } from "../lib/costLabel";
 import { nodeReviewTarget, reviewUrl } from "../lib/runRefs";
-import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import ProvisioningRulesEditor from "../workspace/components/ProvisioningRulesEditor";
 import {
   EMPTY_PROVISIONING_RULES,
   hasProvisioningRules,
-} from "../lib/provisioning";
+} from "../workspace/model/provisioning";
 // #723 — Orchestration tab + pastilles.
 import { ChildCountPills, OrchestrationTab } from "./OrchestrationTab";
 import {

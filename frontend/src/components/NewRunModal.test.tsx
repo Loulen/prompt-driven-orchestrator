@@ -40,7 +40,6 @@ vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   // #669: the skills selector's reads (bank + inherited tiers), empty by default.
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
-  fetchProjects: vi.fn().mockResolvedValue([]),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   // #410: the modal fetches settings on open (default_sandbox prefill +
   // sandbox_docker greying). Default: off + Docker available. Tests override per case.
@@ -69,6 +68,20 @@ vi.mock("../api", () => ({
     price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
     updated_at: "2026-07-01T10:00:00.000Z",
   }),
+  createRun: vi.fn().mockResolvedValue({ run_id: "test-run" }),
+  createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
+  updateTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
+  testGuard: vi.fn().mockResolvedValue({
+    outcome: "pass",
+    stdout: "",
+    stderr: "",
+    exit_code: 0,
+    detail: null,
+  }),
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
   // #431 prophylaxis: this file renders `RepoCombobox`, which mounts `FsExplorerModal`
   // on a loupe click. No test clicks it today, but a missing key here would throw at
   // FIRST ACCESS (`No "browseFs" export is defined`), not at import — a trap worth
@@ -80,30 +93,34 @@ vi.mock("../api", () => ({
     truncated: false,
     error: null,
   }),
-  createRun: vi.fn().mockResolvedValue({ run_id: "test-run" }),
+}));
+
+vi.mock("../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
   previewProvisioning: vi.fn().mockResolvedValue({
     entries: [],
     rules: [],
     conflicts: [],
   }),
-  createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
-  updateTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
+}));
+
+vi.mock("../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/repos")>()),
   validateRepo: vi.fn().mockResolvedValue({ valid: true }),
   listBranches: vi.fn(),
   // #802: the form fetches every remote on open and on repo change. Mocked here
   // so no test accidentally exercises the real request; `listBranchesReturns`
   // keeps the two verbs answering the same repo state.
   fetchRemotes: vi.fn(),
-  testGuard: vi.fn().mockResolvedValue({
-    outcome: "pass",
-    stdout: "",
-    stderr: "",
-    exit_code: 0,
-    detail: null,
-  }),
 }));
 
-const { validateRepo, listBranches, fetchRemotes, createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, testGuard } = await import("../api");
+const { createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, testGuard } = await import("../api");
+const { validateRepo, listBranches, fetchRemotes } = await import("../workspace/api/repos");
 
 const noop = () => {};
 

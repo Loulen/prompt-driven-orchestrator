@@ -345,7 +345,7 @@ pub fn merge_back(home_root: &Path, sandbox_root: &Path, run_id: &str) -> Result
 }
 
 /// Supprime `<sandbox_root>/<run_id>/`. No-op si absent (best-effort, miroir de
-/// `worktree_ops::reap_orphan_sub_worktree`).
+/// `worktrees::reap_orphan_sub_worktree` du contexte workspace).
 pub fn teardown(sandbox_root: &Path, run_id: &str) -> Result<()> {
     let _ = std::fs::remove_dir_all(staging_dir_for_run(sandbox_root, run_id));
     Ok(())

@@ -91,7 +91,7 @@ pub(crate) async fn context_from_state(
     run_state: &RunState,
 ) -> Result<RunSandboxPrep> {
     let repo_root = crate::effective_repo_root(state, run_state);
-    let run_worktree = crate::worktree_ops::worktree_dir_for_run(&repo_root, &run_state.run_id);
+    let run_worktree = crate::worktrees::worktree_dir_for_run(&repo_root, &run_state.run_id);
     let (home_root, sandbox_root) = sandbox_home_roots(state)?;
     let pdo_bin = pdo_bin_path()?;
     // ADR-0047: the `.git` of every WRITABLE secondary — outside `repo_root`, so the

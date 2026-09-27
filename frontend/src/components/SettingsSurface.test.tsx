@@ -63,14 +63,8 @@ vi.mock("../api", () => ({
   updateAgentProfile: vi.fn(),
   deleteAgentProfile: vi.fn(),
   fetchAgentProfileReferents: vi.fn(),
-  saveInstanceProvisioning: vi
-    .fn()
-    .mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  browseFs: (...args: unknown[]) => browseFsMock(...args),
-  fetchInstanceProvisioning: (...args: unknown[]) =>
-    fetchInstanceProvisioningMock(...args),
   // #668: the skill bank drill-down. Same Proxy trap: every function `SkillBankPanel`
   // / `PasteSkillModal` import must exist here or the panel throws on first access.
   fetchSkillBank: vi
@@ -107,7 +101,7 @@ vi.mock("../platform/api/update", () => ({
 }));
 
 // #432: the staging-profile panel reads the sandbox context's own API module. Same Proxy
-// trap as `browseFs` above — a missing key here throws the moment the panel mounts.
+// trap as the `../api` factory above — a missing key here throws the moment the panel mounts.
 vi.mock("../sandbox/api/profiles", () => ({
   fetchSandboxProfiles: (...args: unknown[]) =>
     fetchSandboxProfilesMock(...args),
@@ -116,6 +110,20 @@ vi.mock("../sandbox/api/profiles", () => ({
     deleteSandboxProfileMock(...args),
   fetchSandboxProfileReferents: (...args: unknown[]) =>
     fetchSandboxProfileReferentsMock(...args),
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+  browseFs: (...args: unknown[]) => browseFsMock(...args),
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+  saveInstanceProvisioning: vi
+    .fn()
+    .mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
+  fetchInstanceProvisioning: (...args: unknown[]) =>
+    fetchInstanceProvisioningMock(...args),
 }));
 
 import SettingsSurface from "./SettingsSurface";

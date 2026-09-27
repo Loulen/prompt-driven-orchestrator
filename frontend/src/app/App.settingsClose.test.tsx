@@ -188,12 +188,10 @@ vi.mock("../api", () => {
         tick_interval_secs: 30,
         paused: false,
       }),
-      fetchProjects: vi.fn().mockResolvedValue([]),
       pauseTriggers: vi.fn().mockResolvedValue(undefined),
       fetchLibrary: vi.fn().mockResolvedValue([]),
       fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
       fetchPipelines: vi.fn().mockResolvedValue([]),
-      listBranches: vi.fn().mockResolvedValue([]),
       fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
       createAgentProfile: vi.fn().mockResolvedValue({}),
       updateAgentProfile: vi.fn().mockResolvedValue(undefined),
@@ -212,24 +210,6 @@ vi.mock("../api", () => {
       uploadSkillFileFromPath: vi.fn().mockResolvedValue({}),
       uploadSkillFiles: vi.fn().mockResolvedValue({}),
       writeSkillFile: vi.fn().mockResolvedValue(undefined),
-      browseFs: vi.fn().mockResolvedValue({
-        path: "/home/user",
-        parent: null,
-        entries: [],
-        truncated: false,
-        error: null,
-      }),
-      // Instance provisioning rules (Settings › Provisioning): the empty rule set.
-      fetchInstanceProvisioning: vi.fn().mockResolvedValue({
-        copy: [],
-        hardlink: [],
-        symlink: [],
-      }),
-      saveInstanceProvisioning: vi.fn().mockResolvedValue({
-        copy: [],
-        hardlink: [],
-        symlink: [],
-      }),
       fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
       closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
       putLibassistFocus: vi.fn().mockResolvedValue(undefined),
@@ -336,6 +316,42 @@ vi.mock("../sandbox/api/profiles", () => {
     fetchSandboxProfileReferents: vi.fn().mockResolvedValue({ runs: [], triggers: [] }),
   };
 });
+
+vi.mock("../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/repos")>()),
+  listBranches: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+  browseFs: vi.fn().mockResolvedValue({
+    path: "/home/user",
+    parent: null,
+    entries: [],
+    truncated: false,
+    error: null,
+  }),
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+  // Instance provisioning rules (Settings › Provisioning): the empty rule set.
+  fetchInstanceProvisioning: vi.fn().mockResolvedValue({
+    copy: [],
+    hardlink: [],
+    symlink: [],
+  }),
+  saveInstanceProvisioning: vi.fn().mockResolvedValue({
+    copy: [],
+    hardlink: [],
+    symlink: [],
+  }),
+}));
 
 // The canvas is outside the paths under test; collapse it like the EditCanvas
 // tests do so no real ReactFlow measurement runs under jsdom.

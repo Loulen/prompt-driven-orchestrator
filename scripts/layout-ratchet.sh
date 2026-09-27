@@ -95,10 +95,17 @@ cd "$(git rev-parse --show-toplevel)"
 #   five sandbox modules to crates/pdo-sandbox; run_sandbox.rs keeps the Run's side of it
 #   (building a Run's sandbox context from its state) until the run context moves.
 # frontend/src/components: 191 and crates/pdo-daemon/src: 79 — #916 and #919 combined.
-# frontend/src/components: 190 and crates/pdo-daemon/src: 75 — #916, #919 and #921 combined.
+# frontend/src/components: 190 and crates/pdo-daemon/src: 73 — #916, #919 and #921 combined.
+# frontend/src/components: 194 and crates/pdo-daemon/src: 89 (#917, spec #913) ratchet down:
+#   the workspace context moved out — project_store.rs, provisioning.rs, worktree_ops.rs and
+#   repo_scaffold.rs to crates/pdo-workspace; ProjectEditModal, SourceBranchField,
+#   ProvisioningRulesEditor, PersistedProvisioningEditor, FsExplorerModal, RepoCombobox and
+#   their tests to frontend/src/workspace/components.
+# frontend/src/components: 180 and crates/pdo-daemon/src: 73 — #917, #916 and #919 combined.
+# frontend/src/components: 179 and crates/pdo-daemon/src: 69 — #916, #917, #919 and #921 combined.
 BASELINES='
-frontend/src/components 190
-crates/pdo-daemon/src 75
+frontend/src/components 179
+crates/pdo-daemon/src 69
 '
 
 fail=0

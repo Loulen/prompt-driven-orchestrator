@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Search } from "lucide-react";
-import FsExplorerModal from "../../components/FsExplorerModal";
+import FsExplorerModal from "../../workspace/components/FsExplorerModal";
 import { dockerfileStartDir } from "../model/paths";
 import type { SandboxProfile } from "../model/sandbox";
 import type { SandboxProfileImage } from "../../shared/generated/SandboxProfileImage";

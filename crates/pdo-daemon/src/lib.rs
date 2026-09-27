@@ -43,14 +43,11 @@ mod pipeline_semantics;
 mod pipeline_watcher;
 mod portable_pipeline;
 mod price_table;
-mod project_store;
 mod prompt_augmenter;
-mod provisioning;
 mod pty_bridge;
 mod reap_policy;
 pub(crate) mod recovery;
 pub(crate) mod repo_edit_refusal;
-mod repo_scaffold;
 pub(crate) mod restart_verdict;
 pub(crate) mod retry_verdict;
 mod review_comments;
@@ -84,7 +81,6 @@ mod trigger_store;
 #[allow(dead_code)]
 mod variable_resolver;
 mod workflow_importer;
-mod worktree_ops;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -114,18 +110,32 @@ use crate::node_spawn::SpawnContext;
 use crate::node_spawn::{spawn_node, SpawnDeps, SpawnOutcome};
 use crate::run_command::run_command;
 use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
-#[cfg(test)]
-use crate::worktree_ops::{commit_and_merge_sub_worktree, create_sub_worktree};
-use crate::worktree_ops::{
-    create_secondary_snapshot, create_worktree, remove_secondary_snapshot, rev_parse_verified,
-    secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
-    worktree_dir_for_run, worktree_has_tracked_changes,
-};
 use contexts::ContextResourcesSeed;
 pub use contexts::{ContextResources, Contexts};
 pub use pdo_platform::adapters::cli::{PageAction, ServiceAction};
 use pdo_platform::adapters::http::OriginHint;
 pub use pdo_platform::domain::service_health::ServiceHealthOverride;
+use pdo_workspace::adapters::git::fetch::fetch_all_remotes;
+use pdo_workspace::adapters::git::repository::{
+    count_commits, last_fetch_at, ref_exists, upstream_of, validate_source_branch,
+    validate_target_repo,
+};
+
+// The workspace context's modules the rest of this crate reads, until each
+// context migrates onto the workspace's ports.
+pub(crate) use pdo_workspace::adapters::fs::provisioner;
+pub(crate) use pdo_workspace::adapters::git::manifest;
+pub(crate) use pdo_workspace::adapters::git::worktrees;
+#[cfg(test)]
+use pdo_workspace::adapters::git::worktrees::create_sub_worktree;
+use pdo_workspace::adapters::git::worktrees::{
+    create_secondary_snapshot, create_worktree, remove_secondary_snapshot, rev_parse_verified,
+    secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
+    worktree_dir_for_run, worktree_has_tracked_changes,
+};
+pub(crate) use pdo_workspace::adapters::sqlite as workspace_db;
+use pdo_workspace::domain::branches::FetchError;
+pub(crate) use pdo_workspace::domain::provisioning;
 
 const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
 const DEFAULT_DAEMON_URL: &str = pdo_platform::domain::service_unit::DEFAULT_DAEMON_URL;
@@ -415,6 +425,8 @@ pub enum DocsAction {
 }
 
 struct AppState {
+    /// The workspace context: Projets, repositories, provisioning, git.
+    workspace: Arc<pdo_workspace::application::Workspace>,
     db: sqlx::SqlitePool,
     event_tx: broadcast::Sender<event_log::Event>,
     pipeline_tx: broadcast::Sender<serde_json::Value>,
@@ -858,47 +870,6 @@ struct TriggerListEntry {
     #[serde(flatten)]
     trigger: trigger_store::Trigger,
     effective_repo: String,
-}
-
-/// Body of `POST /projects` — the only path that creates a `projects` row from a
-/// name. Membership and the harness are attached afterwards, so a Projet begins
-/// empty and harness-less.
-#[derive(Deserialize)]
-struct CreateProjectRequest {
-    name: String,
-}
-
-/// Body of `PATCH /projects/{id}` — rename the Projet and/or (re)set the harness
-/// it carries. `harness` is a double-`Option`: **absent** leaves it untouched,
-/// `null` clears it, a string sets it. An empty string clears it too — don't let
-/// `Some("")` through as a harness name.
-#[derive(Deserialize)]
-struct PatchProjectRequest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    harness: Option<Option<String>>,
-    /// The Projet's `AgentChoice` (ADR-0057), same double-`Option` shape as
-    /// `harness`. `null` clears it, falling through to the legacy `harness` field
-    /// and then to the instance tier.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    agent_choice: Option<Option<pdo_harness::agent_choice::AgentChoice>>,
-    /// The Projet's skills selection (#669), replaced wholesale: absent leaves it,
-    /// a list sets it, an empty list clears it (flat — the empty list IS the clear).
-    #[serde(default)]
-    skills: Option<Vec<crate::skill_selection::SkillRef>>,
-    /// The Projet's `auto_fail` (ADR-0049), same double-`Option` shape as
-    /// `harness`; `null` states no preference.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    auto_fail: Option<Option<bool>>,
-}
-
-/// Body of `POST` / `DELETE /projects/{id}/members` — one member path, compared
-/// **verbatim** (ADR-0033). The attach enforces at-most-one membership before any
-/// write; a path owned by another Projet is a 409 naming the owner.
-#[derive(Deserialize)]
-struct ProjectMemberRequest {
-    path: String,
 }
 
 #[derive(Serialize, TS)]
@@ -2708,6 +2679,7 @@ pub async fn serve_with_config(
     let nested_daemon = config.nested_daemon;
     let router_layer = config.router_layer.clone();
     let extension_host = config.extension_host.0.clone();
+    let workspace = workspace_context(&db, &pipeline_tx, &repo_root, extension_host.clone());
     let wire_contexts = router_layer
         .as_ref()
         .and_then(RouterLayer::contexts)
@@ -2739,6 +2711,7 @@ pub async fn serve_with_config(
         let wired = wire_contexts(resources.into_resources(weak.clone()));
         contexts_router = Some(wired.router);
         AppState {
+            workspace,
             platform: wired.platform,
             db,
             event_tx,
@@ -3001,477 +2974,6 @@ pub fn daemon_cli_config(bind: Option<IpAddr>, port: u16) -> DaemonConfig {
     config.relaunch_command = pdo_platform::adapters::host_installation::invoked_exe_path()
         .map(|exe| daemon_relaunch_command(&exe, bind, port));
     config
-}
-
-#[derive(Deserialize)]
-struct RepoPathQuery {
-    path: String,
-}
-
-async fn repos_branches(Query(q): Query<RepoPathQuery>) -> Response {
-    let repo = match validate_target_repo(&q.path) {
-        Ok(p) => p,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-    match branch_list(&repo) {
-        Ok(list) => Json(list).into_response(),
-        Err(msg) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response(),
-    }
-}
-
-/// Fetch every remote of the target repo, then answer the refreshed list (#802).
-///
-/// A failed fetch is **200 with `fetch_error` set**, not an HTTP error: the list is
-/// still the truth on disk, launching is still possible, and a 4xx/5xx would push the
-/// client into an error path for a repo that is merely offline (ADR-0070 §1). The only
-/// non-200 here is a target repo that is not a repo at all.
-async fn repos_fetch(Query(q): Query<RepoPathQuery>) -> Response {
-    let repo = match validate_target_repo(&q.path) {
-        Ok(p) => p,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-    let fetch_error = fetch_all_remotes(&repo).await;
-    match branch_list(&repo) {
-        Ok(mut list) => {
-            list.fetch_error = fetch_error;
-            Json(list).into_response()
-        }
-        Err(msg) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-struct FastForwardBody {
-    /// The LOCAL branch to advance. A remote-tracking ref is refused up front — it
-    /// is the upstream, there is nothing to move.
-    branch: String,
-}
-
-/// Fast-forward a local branch onto its tracking branch (#803, ADR-0070 §2).
-///
-/// **200** with what moved plus the refreshed list; **409** with the named refusal
-/// AND the same refreshed list, so the two benign races (`up_to_date`, `no_upstream`)
-/// let the client flip to the corresponding #802 state instead of painting an error.
-/// A 400 is reserved for a request that never made sense: a repo that is not a repo,
-/// an empty branch, a branch that is not a local one.
-async fn repos_fast_forward(
-    Query(q): Query<RepoPathQuery>,
-    Json(body): Json<FastForwardBody>,
-) -> Response {
-    let repo = match validate_target_repo(&q.path) {
-        Ok(p) => p,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-    let branch = body.branch.trim();
-    if branch.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "branch is required" })),
-        )
-            .into_response();
-    }
-    if !ref_exists(&repo, &format!("refs/heads/{branch}")) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": format!("'{branch}' is not a local branch of {}", repo.display())
-            })),
-        )
-            .into_response();
-    }
-
-    let outcome = fast_forward_branch(&repo, branch);
-    // Read the list AFTER the attempt, in both directions: a 200 must answer with
-    // the branch already moved, and a 409 with whatever the race actually left.
-    let list = match branch_list(&repo) {
-        Ok(list) => list,
-        Err(msg) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-    match outcome {
-        Ok(fast_forward) => Json(FastForwardOk { fast_forward, list }).into_response(),
-        Err(refusal) => (
-            StatusCode::CONFLICT,
-            Json(FastForwardRefusedBody { refusal, list }),
-        )
-            .into_response(),
-    }
-}
-
-async fn repos_validate(Query(q): Query<RepoPathQuery>) -> Response {
-    match validate_target_repo(&q.path) {
-        Ok(_) => Json(serde_json::json!({ "valid": true })).into_response(),
-        Err(msg) => Json(serde_json::json!({ "valid": false, "error": msg })).into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-struct CreateRepoRequest {
-    parent: String,
-    name: String,
-    #[serde(default)]
-    files: Vec<repo_scaffold::ScaffoldFile>,
-}
-
-/// POST /repos/create — make a git repository at `<parent>/<name>` (#824).
-///
-/// A generic verb with no tour vocabulary in it (ADR-0071 §3): the *First run*
-/// tour calls it with `/tmp` + `pdo-tutorial`, and that is the only thing tying
-/// the two together. Idempotent on an existing repository, refuses by name on an
-/// existing non-repository — see `repo_scaffold` for the three outcomes.
-///
-/// Deliberately **not** recorded in recent repositories: that list is built from
-/// `run_started` events, and a scaffolded repo has never run anything. The user
-/// browses to it once, and it joins the recents the moment a Run uses it.
-async fn repos_create(Json(req): Json<CreateRepoRequest>) -> Response {
-    match repo_scaffold::create_repo(&req.parent, &req.name, &req.files) {
-        Ok(outcome) => Json(serde_json::json!({
-            "path": outcome.path.to_string_lossy(),
-            "created": outcome.created,
-        }))
-        .into_response(),
-        Err(msg) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response(),
-    }
-}
-
-async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
-    let rows: Result<Vec<(String,)>, _> = sqlx::query_as(
-        "SELECT payload FROM events \
-         WHERE kind = 'run_started' AND payload IS NOT NULL \
-         ORDER BY ts DESC",
-    )
-    .fetch_all(&state.db)
-    .await;
-
-    match rows {
-        Ok(rows) => {
-            let mut seen = std::collections::HashSet::new();
-            let mut repos = Vec::new();
-            for (payload_str,) in &rows {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(payload_str) {
-                    if let Some(repo) = val["target_repo"].as_str() {
-                        if seen.insert(repo.to_string()) {
-                            repos.push(repo.to_string());
-                            if repos.len() >= 5 {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            Json(repos).into_response()
-        }
-        Err(e) => {
-            error!("failed to query recent repos: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to query recent repos" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-// GET /fs/browse — read-only, single-level filesystem explorer.
-//
-// Exposure, stated exactly: the daemon binds `0.0.0.0`, and the LAN reachability is
-// assumed by the owner, so this surface has no authentication and any LAN peer can
-// enumerate, one level per request, whatever the daemon's uid can traverse. It emits
-// names, a path and three booleans — never file CONTENTS, and it has no read path at
-// all. Don't invent a partial mitigation here: it would give a false sense of a
-// boundary and break the staging-profile picker, whose entries live in `$HOME`
-// dotfiles. The right boundary is authenticating the whole HTTP surface.
-
-/// Listing cap, applied **per genre** with directories claiming the budget first.
-/// Don't make it one shared budget: files would starve directories, and 50 000 files
-/// beside two subdirectories in `~/Downloads` would yield zero navigable rows.
-const BROWSE_CAP: usize = 1000;
-
-#[derive(Deserialize)]
-struct BrowseQuery {
-    /// Absolute directory to list. Omitted → the default chain (`$HOME → repo_root →
-    /// /`). The frontend only ever sends absolute paths; a relative one is a caller
-    /// bug (→ 400).
-    #[serde(default)]
-    path: Option<String>,
-    /// List regular files alongside the navigable directories.
-    ///
-    /// **Wire vocabulary is strict**: axum's `Query` goes through `serde_urlencoded` →
-    /// `str::parse::<bool>()`, so only the lowercase literals `true` / `false` are
-    /// accepted. A valueless `?files`, `?files=1` or `?files=TRUE` is a `400`, NOT a
-    /// silent `false`.
-    #[serde(default)]
-    files: bool,
-    /// Show dot-entries (`.claude`, `.pdo`, …). Needed by the Dockerfile picker, whose
-    /// default lives at `~/.pdo/sandbox/Dockerfile`. Same strict wire vocabulary as
-    /// [`BrowseQuery::files`].
-    #[serde(default)]
-    hidden: bool,
-}
-
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct BrowseEntry {
-    name: String,
-    /// `canonical_dir.join(name)` — NOT re-canonicalized, so a symlinked child keeps
-    /// the path the user clicked rather than collapsing to its target.
-    path: String,
-    /// Cheap `.git`-presence hint (NOT a `git rev-parse` subprocess). A hint, not a
-    /// gate: every folder stays pickable and the authoritative validation runs at
-    /// selection time via `/repos/validate` (ADR-0001 — sharp tool, not safe tool).
-    /// Hard `false` for a file, where it has no meaning.
-    is_git_repo: bool,
-    is_symlink: bool,
-    /// `true` for a directory (symlinks FOLLOWED), `false` for a regular file. Always
-    /// emitted, including under the dirs-only default where it is invariably `true`,
-    /// so an entry's shape never depends on the query.
-    is_dir: bool,
-}
-
-/// What a `read_dir` child is, for the purposes of this listing.
-#[derive(Debug, PartialEq, Eq)]
-enum EntryKind {
-    Dir,
-    File,
-    /// Not offered in either mode.
-    Skip,
-}
-
-/// Classify one child. `meta` is [`std::fs::metadata`] (which **follows** symlinks);
-/// `None` means unclassifiable (broken link, `ELOOP`) → `Skip`.
-///
-/// Special files (fifo / socket / device) `Skip` in both modes: nothing downstream can
-/// consume one — every consumer resolves the picked path, so the row would be
-/// unpickable by construction, and a fifo handed to `ensure_image` blocks forever.
-fn classify_browse_entry(meta: Option<&std::fs::Metadata>, include_files: bool) -> EntryKind {
-    match meta {
-        None => EntryKind::Skip,
-        Some(m) if m.is_dir() => EntryKind::Dir,
-        Some(m) if m.is_file() && include_files => EntryKind::File,
-        _ => EntryKind::Skip,
-    }
-}
-
-/// Merge the two genre buckets: each sorted case-insensitively, directories first,
-/// **directories claim the budget first**, total `<= cap`.
-///
-/// `truncated` is `total > cap`, which is why the caller collects at most `cap + 1` per
-/// genre — a `(cap + 1)`th survivor is all `truncated` needs.
-fn merge_browse_entries(
-    mut dirs: Vec<BrowseEntry>,
-    mut files: Vec<BrowseEntry>,
-    cap: usize,
-) -> (Vec<BrowseEntry>, bool) {
-    dirs.sort_by_key(|a| a.name.to_lowercase());
-    files.sort_by_key(|a| a.name.to_lowercase());
-    let truncated = dirs.len() + files.len() > cap;
-    dirs.truncate(cap);
-    files.truncate(cap - dirs.len());
-    dirs.extend(files);
-    (dirs, truncated)
-}
-
-/// Why the requested browse root could not be resolved into a listable directory.
-#[derive(Debug, PartialEq, Eq)]
-enum BrowseRootError {
-    /// `path` was provided but is not absolute (caller bug → 400).
-    Relative,
-    /// No directory in the default chain (`$HOME → repo_root → /`) exists (→ 500).
-    NoDefault,
-}
-
-/// First existing directory in `[home, repo_root, "/"]`. `None` only when none of the
-/// three is an existing directory.
-fn default_chain(home: Option<&Path>, repo_root: &Path) -> Option<PathBuf> {
-    if let Some(h) = home {
-        if h.is_dir() {
-            return Some(h.to_path_buf());
-        }
-    }
-    if repo_root.is_dir() {
-        return Some(repo_root.to_path_buf());
-    }
-    let root = Path::new("/");
-    if root.is_dir() {
-        return Some(root.to_path_buf());
-    }
-    None
-}
-
-/// Resolve the directory to list. `home`/`repo_root` are injected rather than read
-/// from the real env, so it stays deterministic under cargo's parallel test threads.
-fn resolve_browse_root(
-    path: Option<&str>,
-    home: Option<&Path>,
-    repo_root: &Path,
-) -> Result<PathBuf, BrowseRootError> {
-    match path {
-        Some(p) => {
-            let pb = PathBuf::from(p);
-            if !pb.is_absolute() {
-                return Err(BrowseRootError::Relative);
-            }
-            if pb.is_dir() {
-                Ok(pb)
-            } else if pb.is_file() {
-                Ok(pb.parent().map(Path::to_path_buf).unwrap_or(pb))
-            } else {
-                // Non-existent (e.g. a stale/half-typed combobox value) → clamp to the
-                // default so the explorer opens gracefully instead of erroring.
-                default_chain(home, repo_root).ok_or(BrowseRootError::NoDefault)
-            }
-        }
-        None => default_chain(home, repo_root).ok_or(BrowseRootError::NoDefault),
-    }
-}
-
-/// Human label for the in-body `error` when a navigable directory can't be listed.
-fn browse_io_label(e: &std::io::Error) -> &'static str {
-    match e.kind() {
-        std::io::ErrorKind::PermissionDenied => "permission denied",
-        std::io::ErrorKind::NotFound => "not found",
-        _ => "could not read directory",
-    }
-}
-
-async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQuery>) -> Response {
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
-    let resolved = match resolve_browse_root(q.path.as_deref(), home.as_deref(), &state.repo_root) {
-        Ok(p) => p,
-        Err(BrowseRootError::Relative) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "path must be an absolute path" })),
-            )
-                .into_response();
-        }
-        Err(BrowseRootError::NoDefault) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": "could not resolve a default browse directory"
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    // Canonicalize the requested dir ONLY. Don't re-canonicalize children: that
-    // collapses symlinks and shows a path the user didn't click. On failure fall back
-    // to the un-canonicalized path so `read_dir` below produces a clean in-body error
-    // rather than a 500.
-    let canonical_dir = std::fs::canonicalize(&resolved).unwrap_or(resolved);
-    let parent = canonical_dir
-        .parent()
-        .map(|p| p.to_string_lossy().into_owned());
-
-    let read = match std::fs::read_dir(&canonical_dir) {
-        Ok(rd) => rd,
-        Err(e) => {
-            // Navigable-but-unlistable (EACCES, etc.): 200 with an in-body error and
-            // the breadcrumb preserved, so the user is never stranded.
-            return Json(serde_json::json!({
-                "path": canonical_dir.to_string_lossy(),
-                "parent": parent,
-                "entries": Vec::<BrowseEntry>::new(),
-                "truncated": false,
-                "error": format!("{}: {}", browse_io_label(&e), canonical_dir.display()),
-            }))
-            .into_response();
-        }
-    };
-
-    // Each bucket collects at most `BROWSE_CAP + 1`: a (CAP+1)th survivor is all
-    // `truncated` needs.
-    let mut dirs: Vec<BrowseEntry> = Vec::new();
-    let mut files: Vec<BrowseEntry> = Vec::new();
-    for child in read {
-        let child = match child {
-            Ok(c) => c,
-            Err(_) => continue, // skip an entry that can't be stat'd mid-listing
-        };
-        let name = child.file_name().to_string_lossy().into_owned();
-        if !q.hidden && name.starts_with('.') {
-            continue; // dot-entries hidden unless `?hidden=true`; `.`/`..` never yielded
-        }
-        let is_symlink = child.file_type().map(|t| t.is_symlink()).unwrap_or(false);
-        // Don't use `DirEntry::metadata()`: it lstat's, so every symlinked dir would
-        // report as non-dir. The free `std::fs::metadata` FOLLOWS the link.
-        let meta = std::fs::metadata(child.path()).ok();
-        let kind = classify_browse_entry(meta.as_ref(), q.files);
-        if kind == EntryKind::Skip {
-            continue;
-        }
-        let is_dir = kind == EntryKind::Dir;
-        let entry_path = canonical_dir.join(&name);
-        let is_git_repo = is_dir && entry_path.join(".git").exists();
-        let entry = BrowseEntry {
-            name,
-            path: entry_path.to_string_lossy().into_owned(),
-            is_git_repo,
-            is_symlink,
-            is_dir,
-        };
-        let bucket = if is_dir { &mut dirs } else { &mut files };
-        if bucket.len() <= BROWSE_CAP {
-            bucket.push(entry);
-        }
-        // The `!q.files` arm is load-bearing: without it, `files` staying empty under
-        // the defaults means a directory with > CAP subdirectories is walked in full
-        // instead of stopping at CAP+1.
-        if dirs.len() > BROWSE_CAP && (!q.files || files.len() > BROWSE_CAP) {
-            break;
-        }
-    }
-
-    // Known limitation: when the early-stop fires, the collected CAP+1 entries are in
-    // arbitrary `read_dir` order, so the sort keeps the alphabetically-first CAP *of an
-    // arbitrary sample*. Inherent to capping without a global sort.
-    let (entries, truncated) = merge_browse_entries(dirs, files, BROWSE_CAP);
-
-    Json(serde_json::json!({
-        "path": canonical_dir.to_string_lossy(),
-        "parent": parent,
-        "entries": entries,
-        "truncated": truncated,
-        "error": serde_json::Value::Null,
-    }))
-    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -4575,21 +4077,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Static segment beside `/library/pipelines`; the `/library` vite proxy
         // prefix already covers it (no vite proxy edit).
         .route("/library/import", post(import_library_pipeline))
-        .route("/repos/branches", get(repos_branches))
-        // #802/ADR-0070: the ONE place the daemon talks to a remote, and only on a
-        // human intention (form opened, repo changed, sync clicked). Read-only:
-        // fetch + prune, never a push, a merge or a rebase.
-        .route("/repos/fetch", post(repos_fetch))
-        .route("/repos/fast-forward", post(repos_fast_forward))
-        .route("/repos/validate", get(repos_validate))
-        // #824 — create a repository from a parent + a name + initial files. The
-        // only write-a-new-repo verb in the crate; knows nothing about tours.
-        .route("/repos/create", post(repos_create))
-        .route("/repos/recent", get(repos_recent))
-        .route("/repos/provisioning/preview", post(preview_provisioning))
-        // Filesystem explorer — not repo-specific (it also serves the settings
-        // Dockerfile picker), hence `/fs` rather than `/repos/browse`.
-        .route("/fs/browse", get(fs_browse))
         .route("/triggers", get(list_triggers).post(create_trigger))
         .route("/triggers/health", get(triggers_health))
         // Dry-run a guard command with no side effects — the opposite pole of "Run
@@ -4603,10 +4090,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         // {effective, source, stored, env, default} view; `PUT` writes the stored
         // tier, with fail-fast validation.
         .route("/settings", get(get_settings).put(put_settings))
-        .route(
-            "/settings/provisioning",
-            get(get_instance_provisioning).put(put_instance_provisioning),
-        )
         // Staging profiles (ADR-0031 §2-§7) sit UNDER `/settings` as a routing
         // decision only. It is NOT a claim about the schema: profiles are ROWS, not
         // an {effective, source, stored, env, default} knob, and they must NOT be
@@ -4704,22 +4187,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/stats/absorptions/member",
             axum::routing::delete(stats_absorption::delete_absorption_member),
         )
-        // Out-of-Run audit feed (ADR-0044).
-        // Projets (ADR-0046) — the group-header pencil's CRUD and the middle tier of
-        // the harness axis.
-        .route("/projects", get(list_projects).post(create_project))
-        .route(
-            "/projects/{project_id}",
-            get(get_project).patch(patch_project).delete(delete_project),
-        )
-        .route(
-            "/projects/{project_id}/members",
-            post(add_project_member).delete(remove_project_member),
-        )
-        .route(
-            "/projects/{project_id}/provisioning",
-            get(get_project_provisioning).put(put_project_provisioning),
-        )
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -4728,463 +4195,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Manual "Run now" — a first-class fire.
         .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
-        .with_state(state)
-}
-
-#[derive(Deserialize)]
-struct ProvisioningPreviewRequest {
-    repository: String,
-    #[serde(default = "default_provisioning_git_ref")]
-    git_ref: String,
-    scope: provisioning::ProvisioningScope,
-    #[serde(default)]
-    rules: provisioning::ProvisioningRules,
-    #[serde(default)]
-    inherited: Option<Vec<provisioning::ScopedRules>>,
-}
-
-fn default_provisioning_git_ref() -> String {
-    "HEAD".to_string()
-}
-
-fn provisioning_rules_through_scope(
-    mut rules: Vec<provisioning::ScopedRules>,
-    scope: provisioning::ProvisioningScope,
-) -> Vec<provisioning::ScopedRules> {
-    rules.retain(|candidate| candidate.scope <= scope);
-    rules
-}
-
-async fn scoped_provisioning_rules(
-    db: &sqlx::SqlitePool,
-    repository: &str,
-    run: provisioning::ProvisioningRules,
-    node: provisioning::ProvisioningRules,
-) -> Result<Vec<provisioning::ScopedRules>, sqlx::Error> {
-    let mut rules = vec![provisioning::ScopedRules {
-        scope: provisioning::ProvisioningScope::Instance,
-        rules: provisioning::load(db, provisioning::ProvisioningScope::Instance, "instance")
-            .await?,
-    }];
-    if let Some(project) = project_store::owner_of(db, repository).await? {
-        rules.push(provisioning::ScopedRules {
-            scope: provisioning::ProvisioningScope::Project,
-            rules: provisioning::load(db, provisioning::ProvisioningScope::Project, &project.id)
-                .await?,
-        });
-    }
-    rules.push(provisioning::ScopedRules {
-        scope: provisioning::ProvisioningScope::Run,
-        rules: run,
-    });
-    if !node.is_empty() {
-        rules.push(provisioning::ScopedRules {
-            scope: provisioning::ProvisioningScope::IsolatedNode,
-            rules: node,
-        });
-    }
-    Ok(rules)
-}
-
-async fn preview_provisioning(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ProvisioningPreviewRequest>,
-) -> Response {
-    let repository = PathBuf::from(req.repository.trim());
-    if !repository.is_absolute() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "repository must be an absolute path" })),
+        .with_state(state.clone())
+        .merge(
+            pdo_workspace::adapters::http::router::<LegacyProjectSettings>(state.workspace.clone()),
         )
-            .into_response();
-    }
-    let scoped = match req.inherited {
-        Some(rules) => rules,
-        None => match scoped_provisioning_rules(
-            &state.db,
-            req.repository.trim(),
-            provisioning::ProvisioningRules::default(),
-            provisioning::ProvisioningRules::default(),
-        )
-        .await
-        {
-            Ok(rules) => rules,
-            Err(e) => {
-                error!("failed to load provisioning rules: {e}");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "provisioning store unavailable" })),
-                )
-                    .into_response();
-            }
-        },
-    };
-    let mut scoped = provisioning_rules_through_scope(scoped, req.scope);
-    if let Some(current) = scoped.iter_mut().find(|rules| rules.scope == req.scope) {
-        current.rules = req.rules;
-    } else {
-        scoped.push(provisioning::ScopedRules {
-            scope: req.scope,
-            rules: req.rules,
-        });
-        scoped.sort_by_key(|rules| rules.scope);
-    }
-    match provisioning::resolve_at_git_ref(&repository, &scoped, &req.git_ref) {
-        Ok(plan) => (StatusCode::OK, Json(plan)).into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("{e:#}") })),
-        )
-            .into_response(),
-    }
-}
-
-async fn get_instance_provisioning(State(state): State<Arc<AppState>>) -> Response {
-    provisioning_response(
-        provisioning::load(
-            &state.db,
-            provisioning::ProvisioningScope::Instance,
-            "instance",
-        )
-        .await,
-    )
-}
-
-async fn put_instance_provisioning(
-    State(state): State<Arc<AppState>>,
-    Json(rules): Json<provisioning::ProvisioningRules>,
-) -> Response {
-    match provisioning::save(
-        &state.db,
-        provisioning::ProvisioningScope::Instance,
-        "instance",
-        &rules,
-    )
-    .await
-    {
-        Ok(()) => (StatusCode::OK, Json(rules)).into_response(),
-        Err(e) => {
-            error!("failed to save instance provisioning rules: {e}");
-            provisioning_store_error()
-        }
-    }
-}
-
-async fn get_project_provisioning(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-) -> Response {
-    provisioning_response(
-        provisioning::load(
-            &state.db,
-            provisioning::ProvisioningScope::Project,
-            &project_id,
-        )
-        .await,
-    )
-}
-
-async fn put_project_provisioning(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(rules): Json<provisioning::ProvisioningRules>,
-) -> Response {
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "project not found" })),
-            )
-                .into_response()
-        }
-        Err(_) => return provisioning_store_error(),
-    }
-    match provisioning::save(
-        &state.db,
-        provisioning::ProvisioningScope::Project,
-        &project_id,
-        &rules,
-    )
-    .await
-    {
-        Ok(()) => (StatusCode::OK, Json(rules)).into_response(),
-        Err(e) => {
-            error!("failed to save project provisioning rules: {e}");
-            provisioning_store_error()
-        }
-    }
-}
-
-fn provisioning_response(result: Result<provisioning::ProvisioningRules, sqlx::Error>) -> Response {
-    match result {
-        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
-        Err(e) => {
-            error!("failed to load provisioning rules: {e}");
-            provisioning_store_error()
-        }
-    }
-}
-
-fn provisioning_store_error() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": "provisioning store unavailable" })),
-    )
-        .into_response()
-}
-
-// A Projet is the middle tier of the harness axis and a named grouping of member
-// repo paths. Nothing is seeded: a row exists only once a human names a group or
-// attaches a setting (ADR-0046).
-
-fn project_list_error() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": "project store unavailable" })),
-    )
-        .into_response()
-}
-
-async fn list_projects(State(state): State<Arc<AppState>>) -> Response {
-    match project_store::list(&state.db).await {
-        Ok(projects) => Json(projects).into_response(),
-        Err(e) => {
-            error!("failed to list projects: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn get_project(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-) -> Response {
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(p)) => Json(p).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to load project {project_id}: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn create_project(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateProjectRequest>,
-) -> Response {
-    let name = req.name.trim();
-    if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "project name is required" })),
-        )
-            .into_response();
-    }
-    match project_store::create(&state.db, name).await {
-        Ok(project) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
-                "type": "project_changed",
-                "project_id": project.id,
-            }));
-            (StatusCode::CREATED, Json(project)).into_response()
-        }
-        Err(e) => {
-            error!("failed to create project: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn patch_project(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(req): Json<PatchProjectRequest>,
-) -> Response {
-    // A PATCH never materialises a Projet — only `POST /projects` does.
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to load project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    if let Some(name) = req.name.as_deref() {
-        let name = name.trim();
-        if name.is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "project name cannot be blank" })),
-            )
-                .into_response();
-        }
-        if let Err(e) = project_store::rename(&state.db, &project_id, name).await {
-            error!("failed to rename project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    // Double-`Option`: `Some(None)` and `Some(Some(""))` both clear; `Some(Some(h))`
-    // sets. `set_harness` normalises the empty string to NULL itself.
-    if let Some(harness) = req.harness {
-        let harness = harness.as_deref();
-        if let Err(e) = project_store::set_harness(&state.db, &project_id, harness).await {
-            error!("failed to set harness on project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    // Same double-`Option` semantics as `harness`: `Some(None)` clears the
-    // AgentChoice, falling through to the legacy `harness` field.
-    if let Some(agent_choice) = req.agent_choice {
-        if let Err(e) = project_store::set_agent_choice(&state.db, &project_id, agent_choice).await
-        {
-            error!("failed to set agent_choice on project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    // #669: replace the Projet's skills selection wholesale; an empty list clears.
-    if let Some(skills) = req.skills {
-        if let Err(e) = project_store::set_skills(&state.db, &project_id, skills).await {
-            error!("failed to set skills on project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    // Same double-`Option` semantics as `harness` (ADR-0049): `Some(None)` clears
-    // the preference, `Some(Some(b))` sets it.
-    if let Some(auto_fail) = req.auto_fail {
-        if let Err(e) = project_store::set_auto_fail(&state.db, &project_id, auto_fail).await {
-            error!("failed to set auto_fail on project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(p)) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
-                "type": "project_changed",
-                "project_id": project_id,
-            }));
-            Json(p).into_response()
-        }
-        Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to reload project {project_id}: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn delete_project(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-) -> Response {
-    match project_store::delete(&state.db, &project_id).await {
-        Ok(true) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
-                "type": "project_changed",
-                "project_id": project_id,
-            }));
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to delete project {project_id}: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn add_project_member(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(req): Json<ProjectMemberRequest>,
-) -> Response {
-    let path = req.path.trim();
-    if path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "member path is required" })),
-        )
-            .into_response();
-    }
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to load project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    match project_store::add_member(&state.db, &project_id, path).await {
-        Ok(project_store::AddMember::Added) | Ok(project_store::AddMember::AlreadyMember) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
-                "type": "project_changed",
-                "project_id": project_id,
-            }));
-            match project_store::get(&state.db, &project_id).await {
-                Ok(Some(p)) => Json(p).into_response(),
-                _ => StatusCode::NO_CONTENT.into_response(),
-            }
-        }
-        // A path already owned by another Projet is refused BEFORE any effect, and
-        // the refusal NAMES the owner so the pencil can say which one.
-        Ok(project_store::AddMember::Refused {
-            owner_id,
-            owner_name,
-        }) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("path already belongs to project '{owner_name}'"),
-                "owner_id": owner_id,
-                "owner_name": owner_name,
-            })),
-        )
-            .into_response(),
-        Err(e) => {
-            error!("failed to add member to project {project_id}: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn remove_project_member(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(req): Json<ProjectMemberRequest>,
-) -> Response {
-    let path = req.path.trim();
-    // Scope the detach to the named Projet: a path owned by a *different* Projet
-    // is left alone (idempotent no-op), so a stale client can't strip another
-    // Projet's member.
-    match project_store::owner_of(&state.db, path).await {
-        Ok(Some(owner)) if owner.id == project_id => {}
-        Ok(_) => {
-            return match project_store::get(&state.db, &project_id).await {
-                Ok(Some(p)) => Json(p).into_response(),
-                Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
-                Err(e) => {
-                    error!("failed to load project {project_id}: {e}");
-                    project_list_error()
-                }
-            };
-        }
-        Err(e) => {
-            error!("failed to resolve owner of {path}: {e}");
-            return project_list_error();
-        }
-    }
-    if let Err(e) = project_store::remove_member(&state.db, path).await {
-        error!("failed to remove member from project {project_id}: {e}");
-        return project_list_error();
-    }
-    let _ = state.pipeline_tx.send(serde_json::json!({
-        "type": "project_changed",
-        "project_id": project_id,
-    }));
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(p)) => Json(p).into_response(),
-        _ => StatusCode::NO_CONTENT.into_response(),
-    }
 }
 
 async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
@@ -5246,13 +4260,9 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     // context, which creates its own tables (`Platform::init`).
 
     // Materialised on demand — nothing seeded.
-    project_store::init(db)
+    pdo_workspace::adapters::sqlite::init(db)
         .await
-        .context("failed to create project tables")?;
-
-    provisioning::init(db)
-        .await
-        .context("failed to create provisioning rules table")?;
+        .context("failed to create project and provisioning rules tables")?;
 
     // Unlike `project_store`, this table IS seeded: the reserved `Default` profile
     // must exist on every instance, immediately.
@@ -9320,13 +8330,14 @@ async fn create_run_inner(
         return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
     }
 
-    let frozen_provisioning = match scoped_provisioning_rules(
-        &state.db,
-        &run_repo_root.to_string_lossy(),
-        req.provisioning.clone(),
-        provisioning::ProvisioningRules::default(),
-    )
-    .await
+    let frozen_provisioning = match state
+        .workspace
+        .scoped_provisioning_rules(
+            &run_repo_root.to_string_lossy(),
+            req.provisioning.clone(),
+            provisioning::ProvisioningRules::default(),
+        )
+        .await
     {
         Ok(rules) => rules,
         Err(e) => {
@@ -9337,28 +8348,31 @@ async fn create_run_inner(
             ));
         }
     };
-    let provisioning_plan =
-        match provisioning::resolve_at_git_ref(&run_repo_root, &frozen_provisioning, source_ref) {
-            Ok(plan) if plan.conflicts.is_empty() => plan,
-            Ok(plan) => {
-                let conflict = &plan.conflicts[0];
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    serde_json::json!({
-                        "error": format!(
-                            "mode conflict in {:?}: `{}` is declared in multiple modes",
-                            conflict.scope, conflict.relative_path
-                        )
-                    }),
-                ));
-            }
-            Err(e) => {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    serde_json::json!({ "error": format!("invalid provisioning recipe: {e:#}") }),
-                ))
-            }
-        };
+    let provisioning_plan = match pdo_workspace::adapters::fs::provisioner::resolve_at_git_ref(
+        &run_repo_root,
+        &frozen_provisioning,
+        source_ref,
+    ) {
+        Ok(plan) if plan.conflicts.is_empty() => plan,
+        Ok(plan) => {
+            let conflict = &plan.conflicts[0];
+            return Err((
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({
+                    "error": format!(
+                        "mode conflict in {:?}: `{}` is declared in multiple modes",
+                        conflict.scope, conflict.relative_path
+                    )
+                }),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({ "error": format!("invalid provisioning recipe: {e:#}") }),
+            ))
+        }
+    };
 
     let run_id = event_log::generate_run_id();
 
@@ -9367,7 +8381,10 @@ async fn create_run_inner(
     // displaces the LOC/diff base and sweeps in phantom line counts. A resolve
     // failure is non-fatal — it degrades to the `source_branch`/`HEAD` fallback
     // ladder at read time and must never block run creation.
-    let fork_sha = match crate::worktree_ops::rev_parse_verified(&run_repo_root, source_ref) {
+    let fork_sha = match pdo_workspace::adapters::git::worktrees::rev_parse_verified(
+        &run_repo_root,
+        source_ref,
+    ) {
         Ok(sha) => Some(sha),
         Err(e) => {
             warn!("could not resolve fork_sha for run {run_id} from {source_ref}: {e}");
@@ -9589,7 +8606,7 @@ async fn create_run_inner(
             .map(|c| c.skills)
             .unwrap_or_default();
         let project_skills =
-            crate::project_store::skills_for_path(&state.db, &run_repo_root.to_string_lossy())
+            crate::project_skills_for_path(&state.db, &run_repo_root.to_string_lossy())
                 .await
                 .unwrap_or_default();
         let bank = crate::skill_bank::snapshot_names(&state.db)
@@ -9732,10 +8749,12 @@ async fn create_run_inner(
         ));
     }
 
-    if let Err(e) =
-        provisioning::provision_missing(&run_repo_root, &worktree_dir, &provisioning_plan)
-    {
-        crate::worktree_ops::reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
+    if let Err(e) = pdo_workspace::adapters::fs::provisioner::provision_missing(
+        &run_repo_root,
+        &worktree_dir,
+        &provisioning_plan,
+    ) {
+        reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({
@@ -9787,11 +8806,7 @@ async fn create_run_inner(
         }
         Err(e) => {
             let _ = crate::skill_delivery::remove_exclusions(&run_repo_root, &run_id);
-            crate::worktree_ops::reap_orphan_run_worktree(
-                &run_repo_root,
-                &worktree_dir,
-                &branch_name,
-            );
+            reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 serde_json::json!({
@@ -9816,11 +8831,7 @@ async fn create_run_inner(
             for (repo, snapshot) in &created_secondary_snapshots {
                 remove_secondary_snapshot(Path::new(repo), snapshot);
             }
-            crate::worktree_ops::reap_orphan_run_worktree(
-                &run_repo_root,
-                &worktree_dir,
-                &branch_name,
-            );
+            reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 serde_json::json!({
@@ -9836,7 +8847,7 @@ async fn create_run_inner(
         for (repo, snapshot) in &created_secondary_snapshots {
             remove_secondary_snapshot(Path::new(repo), snapshot);
         }
-        crate::worktree_ops::reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
+        reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({ "error": "event log error" }),
@@ -11441,14 +10452,14 @@ async fn get_agent_profile_referents(
             matches!(choice, pdo_harness::agent_choice::AgentChoice::Profile { profile_id } if profile_id == id)
         });
 
-    let projects = project_store::list(&state.db)
+    let projects = pdo_workspace::adapters::sqlite::list(&state.db)
         .await
         .unwrap_or_default()
         .into_iter()
         .filter(|project| {
             matches!(
-                project.agent_choice.as_ref(),
-                Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
+                project_agent_choice(project),
+                Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == id
             )
         })
         .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
@@ -11763,11 +10774,11 @@ async fn get_skill_referents(
         .map(|config| skill_selection::selects(&config.skills, &id))
         .unwrap_or(false);
 
-    let projects = project_store::list(&state.db)
+    let projects = pdo_workspace::adapters::sqlite::list(&state.db)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|project| skill_selection::selects(&project.skills, &id))
+        .filter(|project| skill_selection::selects(&project_skills(project), &id))
         .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
         .collect::<Vec<_>>();
 
@@ -13245,8 +12256,8 @@ fn run_worktree_dir(
     run_state: &event_log::RunState,
     run_id: &str,
 ) -> Option<PathBuf> {
-    let dir = worktree_ops::worktree_dir_for_run(&effective_repo_root(state, run_state), run_id);
-    worktree_ops::is_git_worktree(&dir).then_some(dir)
+    let dir = worktrees::worktree_dir_for_run(&effective_repo_root(state, run_state), run_id);
+    worktrees::is_git_worktree(&dir).then_some(dir)
 }
 
 /// The id a `from`/`to`/`ref` query defaults to when absent: the working tree
@@ -16440,7 +15451,7 @@ pub(crate) async fn deliver_node_run(
     // cleanliness probe did. An ISOLATED NodeRun deliberately does not take this
     // exit: its merge-back must still fail loudly if either worktree is missing,
     // because that is #489's silent-loss guard.
-    if !isolated && !worktree_ops::is_git_worktree(worktree_dir) {
+    if !isolated && !worktrees::is_git_worktree(worktree_dir) {
         warn!(
             "Run {run_id}: {} is not a git worktree — nothing to deliver for {node_id} iter-{iter}",
             worktree_dir.display()
@@ -16463,7 +15474,7 @@ pub(crate) async fn deliver_node_run(
     // coin toss.
     let delivery = {
         let _lock = state.merge_lock.lock().await;
-        worktree_ops::deliver_node_work(
+        worktrees::deliver_node_work(
             worktree_dir,
             &node_worktree_dir,
             isolated,
@@ -16518,7 +15529,7 @@ pub(crate) async fn deliver_node_run(
         // the branch did not move. Either way the completion continues; only the
         // first case is worth an event, and that event is what makes the NodeRun's
         // diff answerable whatever its type or isolation.
-        worktree_ops::DeliveryOutcome::Delivered(delivered) => {
+        worktrees::DeliveryOutcome::Delivered(delivered) => {
             if delivered.changed() {
                 let event = event_log::Event {
                     id: None,
@@ -16542,7 +15553,7 @@ pub(crate) async fn deliver_node_run(
         // #503: not a failure — but PDO rewrote a branch, so it is logged with both
         // tips, the resolution commit and the blast radius. The completion
         // continues exactly as a clean merge would.
-        worktree_ops::DeliveryOutcome::ResolvedInNodeFavour(adoption) => {
+        worktrees::DeliveryOutcome::ResolvedInNodeFavour(adoption) => {
             let resolved = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
@@ -16556,7 +15567,7 @@ pub(crate) async fn deliver_node_run(
                          the node's favour",
                         adoption.conflicting_files.len(),
                     ),
-                    "rule": worktree_ops::ADOPTION_RULE,
+                    "rule": worktrees::ADOPTION_RULE,
                     "pipeline_tip": adoption.pipeline_tip,
                     "node_tip": adoption.node_tip,
                     "merge_commit": adoption.merge_commit,
@@ -16588,7 +15599,7 @@ pub(crate) async fn deliver_node_run(
             let _ = append_event(state, &delivered).await;
             None
         }
-        worktree_ops::DeliveryOutcome::Conflict(conflict) => {
+        worktrees::DeliveryOutcome::Conflict(conflict) => {
             let reason = format!(
                 "merge conflict on {node_id}: {} conflicting file(s) merging {} into the \
                  pipeline branch at {}",
@@ -16652,7 +15663,7 @@ pub(crate) async fn deliver_node_run(
                 node_id: node_id.to_string(),
             })
         }
-        worktree_ops::DeliveryOutcome::ConflictPendingResolution(conflict) => {
+        worktrees::DeliveryOutcome::ConflictPendingResolution(conflict) => {
             let conflict_event = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
@@ -17053,7 +16064,7 @@ async fn resolve_run_auto_fail(
         .target_repo
         .clone()
         .unwrap_or_else(|| state.repo_root.to_string_lossy().to_string());
-    let project = project_store::auto_fail_for_path(&state.db, &primary_repo)
+    let project = pdo_workspace::adapters::sqlite::auto_fail_for_path(&state.db, &primary_repo)
         .await
         .unwrap_or(None);
 
@@ -17517,10 +16528,13 @@ async fn force_spawn_node(
         default_harness_models: stored_default_harness_models(&state.db).await,
         // The Projet tier, resolved fresh so a manual force-spawn honours a Projet
         // setting attached mid-Run. A DB error degrades to a transparent tier.
-        project_harness: project_store::harness_for_path(&state.db, &repo_root.to_string_lossy())
-            .await
-            .ok()
-            .flatten(),
+        project_harness: pdo_workspace::adapters::sqlite::harness_for_path(
+            &state.db,
+            &repo_root.to_string_lossy(),
+        )
+        .await
+        .ok()
+        .flatten(),
         // Same reasoning as `default_model`: resolve fresh, or a force-spawned node
         // silently misses the `Stop` hook on this seam alone.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,
@@ -18122,7 +17136,8 @@ async fn ensure_run_manager(
     // The manager works in the Run's worktree; an archived/cleaned Run has none
     // left, and a session spawned into a dead cwd would only fail at tmux.
     let repo_root = effective_repo_root(state, run_state);
-    let worktree_dir = crate::worktree_ops::worktree_dir_for_run(&repo_root, run_id);
+    let worktree_dir =
+        pdo_workspace::adapters::git::worktrees::worktree_dir_for_run(&repo_root, run_id);
     if !worktree_dir.exists() {
         return Err((
             StatusCode::CONFLICT,
@@ -19425,57 +18440,6 @@ fn required_target_repo(field: Option<&str>) -> Result<PathBuf, String> {
     }
 }
 
-fn validate_target_repo(path: &str) -> Result<PathBuf, String> {
-    let p = PathBuf::from(path);
-    if !p.is_absolute() {
-        return Err("target_repo must be an absolute path".into());
-    }
-    if !p.is_dir() {
-        return Err(format!(
-            "target_repo does not exist or is not a directory: {path}"
-        ));
-    }
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .current_dir(&p)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => Ok(p),
-        _ => Err(format!("target_repo is not a git repository: {path}")),
-    }
-}
-
-/// Accept exactly a local branch OR a remote-tracking ref as a Run source, probing
-/// each namespace with an exact-ref lookup.
-///
-/// Don't go back to `git branch --list <b>`: it is blind to remote-tracking refs AND
-/// treats its argument as a glob (`mai*` matches `main`). `show-ref --verify` takes a
-/// full refname literally. Deliberately NOT widened to any commit-ish — `rev-parse`
-/// would accept SHAs and tags, and the contract is a *branch*.
-fn validate_source_branch(repo: &Path, branch: &str) -> Result<(), String> {
-    for fullref in [
-        format!("refs/heads/{branch}"),
-        format!("refs/remotes/{branch}"),
-    ] {
-        let output = std::process::Command::new("git")
-            .args(["show-ref", "--verify", "--quiet", &fullref])
-            .current_dir(repo)
-            .output();
-        match output {
-            Ok(o) if o.status.success() => return Ok(()),
-            // Ref absent in this namespace: try the next before giving up.
-            Ok(_) => {}
-            Err(e) => return Err(format!("failed to run git: {e}")),
-        }
-    }
-    Err(format!(
-        "branch '{branch}' does not exist in {} \
-         (looked for a local branch refs/heads/{branch} and a \
-         remote-tracking ref refs/remotes/{branch})",
-        repo.display()
-    ))
-}
-
 /// Validate and freeze the secondary repos of a multi-repo create (ADR-0042).
 ///
 /// `inputs` is the full `target_repos` list: `[0]` is the primary, `[1..]` the
@@ -19794,505 +18758,6 @@ async fn patch_run_repos(
     }
 }
 
-/// A branch offered as a Run source: a local branch or a remote-tracking ref. `name`
-/// is the exact string the client posts back as `source_branch`, so a remote-tracking
-/// ref keeps its `origin/` prefix. NEVER re-derive locality by string surgery: a
-/// *local* branch may legitimately be named `origin/x`, so `kind` — classified from
-/// the full refname — is the only authoritative signal.
-///
-/// #802/ADR-0070: the entry also carries what makes freshness *visible* at launch —
-/// the upstream branch, the écart amont (`ahead`/`behind`) **as of the last fetch**,
-/// and the tip commit's date and subject. Every extra field is optional on purpose:
-/// a branch with no upstream has no écart (not a zero one), and a repo git cannot
-/// read a date from is not an error.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "BranchRef")]
-struct BranchEntry {
-    name: String,
-    kind: BranchKind,
-    /// The tracking branch's short name (`origin/main`), when this local branch has
-    /// one. Always `None` for a remote-tracking ref — it *is* the upstream.
-    upstream: Option<String>,
-    /// Commits this branch has that its upstream does not, as of the last fetch.
-    /// `None` when there is no upstream, or when the upstream ref is gone.
-    ahead: Option<u32>,
-    /// Commits the upstream has that this branch does not, as of the last fetch.
-    behind: Option<u32>,
-    /// Tip commit date, ISO-8601 with offset (`git`'s `iso-strict`).
-    last_commit_at: Option<String>,
-    last_commit_subject: Option<String>,
-    /// #803: this branch is the repo's checked-out one. Decides one sentence in
-    /// the fast-forward popover — advancing HEAD walks the working tree forward,
-    /// advancing any other branch is a pure ref move that changes no file.
-    /// Always `false` for a remote-tracking ref.
-    head: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-#[serde(rename_all = "snake_case")]
-enum BranchKind {
-    Local,
-    Remote,
-}
-
-/// What `GET /repos/branches` and `POST /repos/fetch` both answer (#802).
-///
-/// One shape for the two verbs, so a refetch replaces the list in place instead of
-/// teaching the client a second format. `last_fetch_at` is **derived from the repo
-/// itself** (the mtime of `FETCH_HEAD`), never stored by PDO: a fetch anyone ran —
-/// from a terminal, from an IDE — dates the numbers just as well as ours.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-struct BranchList {
-    branches: Vec<BranchEntry>,
-    /// RFC-3339 timestamp of the last successful fetch, or `None` when the repo has
-    /// never fetched (fresh `git init`, or a clone that never refreshed).
-    last_fetch_at: Option<String>,
-    /// Only ever set by the fetch verb, and only when the fetch failed. The list
-    /// beside it is still the truth on disk — a failed fetch degrades the écart to
-    /// "unknown, as of `last_fetch_at`", it never empties the list (ADR-0070 §1).
-    fetch_error: Option<FetchError>,
-}
-
-/// Why a fetch did not happen, named rather than raw (#802). The client picks its
-/// wording from `kind`; `message` carries git's own stderr for the detail line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-#[serde(rename_all = "snake_case")]
-enum FetchErrorKind {
-    /// The repo has no remote at all — a legitimate, purely local repo.
-    NoRemote,
-    /// Exceeded `FETCH_TIMEOUT`.
-    Timeout,
-    /// Credentials missing or refused. Never a prompt: the fetch runs
-    /// non-interactive, so this is what a missing key looks like.
-    Auth,
-    /// Host unreachable / unresolvable.
-    Network,
-    /// Anything else git refused to do.
-    Failed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "BranchFetchError")]
-struct FetchError {
-    kind: FetchErrorKind,
-    message: String,
-}
-
-/// How long a fetch may take before it is abandoned (spec #801: "de l'ordre de vingt
-/// secondes"). The form fetches on open, so an unreachable remote must not keep a
-/// spinner alive for git's own (unbounded) patience.
-const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// The configured remote names, longest first so stripping a remote's `<name>/`
-/// prefix off a tracking ref is unambiguous even when a remote name itself
-/// contains `/` (or is a prefix of another). Empty on a repo with no remotes.
-fn git_remote_names(repo: &Path) -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("git")
-        .args(["remote"])
-        .current_dir(repo)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let mut names: Vec<String> = stdout
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect();
-            names.sort_by_key(|n| std::cmp::Reverse(n.len()));
-            Ok(names)
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            Err(format!("git remote failed: {stderr}"))
-        }
-        Err(e) => Err(format!("failed to run git: {e}")),
-    }
-}
-
-/// Strip the `<remote>/` prefix off a remote-tracking short name, yielding the
-/// bare branch name used for the dedup test. Falls back to the input unchanged
-/// when no configured remote prefixes it.
-fn strip_remote_prefix(short: &str, remotes: &[String]) -> String {
-    for r in remotes {
-        if let Some(rest) = short.strip_prefix(&format!("{r}/")) {
-            return rest.to_string();
-        }
-    }
-    short.to_string()
-}
-
-/// List the branches a Run can be cut from: local branches AND remote-tracking refs.
-/// Everything is resolved **locally, without a single `git fetch`** — freshness of
-/// the tracking refs is the operator's own concern.
-///
-/// Don't go back to `git branch -a`: it emits a `(HEAD detached at …)` pseudo-entry,
-/// obeys the operator's `branch.sort`, and is porcelain. The `%(symref)` column is the
-/// only robust discriminant of `origin/HEAD`, which otherwise appears as a bare
-/// `origin` entry.
-///
-/// A remote-tracking ref whose bare name already exists as a local branch is dropped
-/// unconditionally — no divergence test — on the convention that the local branch is
-/// what the user manipulates. Remote-vs-remote twins (`origin/foo` + `upstream/foo`)
-/// are BOTH kept: two remotes may point at different SHAs, so merging them would lie.
-///
-/// Locals before remotes via an EXPLICIT partition — never lean on
-/// `refs/heads` < `refs/remotes` lexical luck, since the first entry may become the
-/// client's default and a local `main` must win.
-fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
-    let remotes = git_remote_names(repo)?;
-
-    let output = std::process::Command::new("git")
-        .args([
-            "for-each-ref",
-            "--sort=refname",
-            // Subject LAST: it is the only field that may itself contain a tab, so a
-            // `splitn` on the count of the fields before it cannot be derailed by it.
-            "--format=%(refname)%09%(refname:short)%09%(symref)%09%(upstream:short)\
-             %09%(upstream:track)%09%(HEAD)%09%(committerdate:iso-strict)%09%(contents:subject)",
-            "refs/heads",
-            "refs/remotes",
-        ])
-        // Belt and braces on a guarantee we depend on but do not control: the
-        // `ahead %d` / `behind %d` / `gone` words of `%(upstream:track)` are git's
-        // UNTRANSLATED plumbing strings — `for-each-ref` never calls
-        // `setup_ref_filter_porcelain_msg()`, unlike `git branch -vv`, whose
-        // localized output must never be parsed. Pinning the locale costs nothing
-        // and keeps that distinction from becoming load-bearing by accident.
-        .env("LC_ALL", "C")
-        .current_dir(repo)
-        .output();
-    let stdout = match output {
-        Ok(o) if o.status.success() => o.stdout,
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            return Err(format!("git for-each-ref failed: {stderr}"));
-        }
-        Err(e) => return Err(format!("failed to run git: {e}")),
-    };
-    let stdout = String::from_utf8_lossy(&stdout);
-
-    let mut locals: Vec<BranchEntry> = Vec::new();
-    let mut remote_pairs: Vec<(String, BranchEntry)> = Vec::new();
-    let mut local_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for line in stdout.lines() {
-        let mut fields = line.splitn(8, '\t');
-        let refname = fields.next().unwrap_or("");
-        let short = fields.next().unwrap_or("");
-        let symref = fields.next().unwrap_or("");
-        let upstream = fields.next().unwrap_or("");
-        let track = fields.next().unwrap_or("");
-        // `%(HEAD)` is `*` for the checked-out branch, a space otherwise — git's
-        // own marker, so a detached HEAD marks nothing and no branch claims it.
-        let head = fields.next().unwrap_or("").trim() == "*";
-        let date = fields.next().unwrap_or("");
-        let subject = fields.next().unwrap_or("");
-        if !symref.is_empty() {
-            continue;
-        }
-        let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
-        // Classify by the FULL refname prefix, never the short name: a local branch
-        // literally named `origin/ambig` lives under refs/heads/ and must list local.
-        if refname.starts_with("refs/heads/") {
-            let (ahead, behind) = parse_upstream_track(track, !upstream.is_empty());
-            local_names.insert(short.to_string());
-            locals.push(BranchEntry {
-                name: short.to_string(),
-                kind: BranchKind::Local,
-                upstream: some(upstream),
-                ahead,
-                behind,
-                last_commit_at: some(date),
-                last_commit_subject: some(subject),
-                head,
-            });
-        } else if refname.starts_with("refs/remotes/") {
-            let bare = strip_remote_prefix(short, &remotes);
-            remote_pairs.push((
-                bare,
-                BranchEntry {
-                    name: short.to_string(),
-                    kind: BranchKind::Remote,
-                    // A remote-tracking ref IS the upstream; it has no écart of its own.
-                    upstream: None,
-                    ahead: None,
-                    behind: None,
-                    last_commit_at: some(date),
-                    last_commit_subject: some(subject),
-                    // A remote-tracking ref is never anyone's HEAD.
-                    head: false,
-                },
-            ));
-        }
-    }
-
-    let mut remotes_out: Vec<BranchEntry> = remote_pairs
-        .into_iter()
-        .filter(|(bare, _entry)| !local_names.contains(bare))
-        .map(|(_bare, entry)| entry)
-        .collect();
-
-    locals.sort_by(|a, b| a.name.cmp(&b.name));
-    remotes_out.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut out = locals;
-    out.extend(remotes_out);
-    Ok(out)
-}
-
-/// Read `git`'s `%(upstream:track)` column into the écart amont (#802).
-///
-/// git prints `[ahead 2]`, `[behind 3]`, `[ahead 2, behind 3]`, `[gone]`, or an
-/// EMPTY string when the branch is exactly level with its upstream. That last case
-/// is why `has_upstream` is a separate argument: empty-and-tracking means `0↑ 0↓`
-/// ("up to date"), empty-and-not-tracking means *there is no écart to speak of*, and
-/// collapsing the two would paint a ✓ on every branch that tracks nothing.
-///
-/// `[gone]` — the upstream was pruned away — keeps `upstream` set but leaves the
-/// counts unknown; there is nothing left to count against.
-fn parse_upstream_track(track: &str, has_upstream: bool) -> (Option<u32>, Option<u32>) {
-    if !has_upstream {
-        return (None, None);
-    }
-    let inner = track.trim().trim_start_matches('[').trim_end_matches(']');
-    if inner.is_empty() {
-        return (Some(0), Some(0));
-    }
-    if inner == "gone" {
-        return (None, None);
-    }
-    let mut ahead = Some(0);
-    let mut behind = Some(0);
-    for part in inner.split(',') {
-        let part = part.trim();
-        if let Some(n) = part.strip_prefix("ahead ") {
-            ahead = n.trim().parse().ok();
-        } else if let Some(n) = part.strip_prefix("behind ") {
-            behind = n.trim().parse().ok();
-        }
-    }
-    (ahead, behind)
-}
-
-/// The repo's common git dir — where `FETCH_HEAD` lives. `--git-common-dir` (not
-/// `--git-dir`) because a linked worktree has its own git dir but shares the common
-/// one, and PDO's own Runs live in linked worktrees: reading the per-worktree dir
-/// would report "never fetched" for every Run worktree.
-fn git_common_dir(repo: &Path) -> Option<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--git-common-dir"])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if raw.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(&raw);
-    Some(if path.is_absolute() {
-        path
-    } else {
-        repo.join(path)
-    })
-}
-
-/// When this repo last fetched successfully, read off `FETCH_HEAD`'s mtime (#802).
-///
-/// Derived, never stored (ADR-0070 §1): git rewrites `FETCH_HEAD` on every successful
-/// fetch, whoever ran it — a `git fetch` in a terminal dates the écart just as well as
-/// one of ours, and a PDO-owned timestamp would claim otherwise.
-///
-/// An EMPTY `FETCH_HEAD` reads as "never" rather than "just now": a fetch that reached
-/// no remote truncates the file to zero bytes and re-dates it, so its mtime dates a
-/// FAILURE. Trusting it would print "fetched 2 s ago" over numbers nobody refreshed —
-/// the precise lie this feature exists to remove. (PDO's own fetch restores the file
-/// when it fails, see `run_git_fetch`; this guard covers the failed fetches run
-/// outside PDO, from a terminal or an IDE.)
-fn last_fetch_at(repo: &Path) -> Option<String> {
-    let meta = std::fs::metadata(git_common_dir(repo)?.join("FETCH_HEAD")).ok()?;
-    if meta.len() == 0 {
-        return None;
-    }
-    Some(chrono::DateTime::<chrono::Utc>::from(meta.modified().ok()?).to_rfc3339())
-}
-
-/// `FETCH_HEAD` as it stood before a fetch attempt, so a failed attempt can put it
-/// back exactly as it was (#802).
-///
-/// git opens `FETCH_HEAD` for writing at the START of a fetch, so a fetch that reaches
-/// no remote leaves it truncated and freshly dated — which would wipe out the "dernier
-/// fetch réussi" the unknown state is supposed to report, and re-date it to the moment
-/// of the failure. Restoring is not a mutation of the repo: it leaves it byte- and
-/// mtime-identical to before PDO asked.
-struct FetchHeadSnapshot {
-    path: PathBuf,
-    /// `None` when the file did not exist at all (a repo that never fetched).
-    before: Option<(Vec<u8>, std::time::SystemTime)>,
-}
-
-impl FetchHeadSnapshot {
-    fn take(repo: &Path) -> Option<Self> {
-        let path = git_common_dir(repo)?.join("FETCH_HEAD");
-        let before = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|modified| Some((std::fs::read(&path).ok()?, modified)));
-        Some(Self { path, before })
-    }
-
-    /// Put `FETCH_HEAD` back. Best-effort throughout: a repo we cannot write to is a
-    /// reason to leave it alone, never a reason to fail a read-only fetch.
-    fn restore(&self) {
-        match &self.before {
-            Some((bytes, modified)) => {
-                if std::fs::write(&self.path, bytes).is_ok() {
-                    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&self.path) {
-                        let _ = file.set_modified(*modified);
-                    }
-                }
-            }
-            // Nothing was there before; the failed attempt's empty husk is the only
-            // trace, and `last_fetch_at` already reads it as "never".
-            None => {
-                let _ = std::fs::remove_file(&self.path);
-            }
-        }
-    }
-}
-
-/// The whole answer of `GET /repos/branches`: the list plus the date it is good as of.
-fn branch_list(repo: &Path) -> Result<BranchList, String> {
-    Ok(BranchList {
-        branches: list_branches(repo)?,
-        last_fetch_at: last_fetch_at(repo),
-        fetch_error: None,
-    })
-}
-
-/// Classify git's fetch stderr into a named reason (#802).
-///
-/// Matching on git's prose is unavoidable — `git fetch` exits 128 for everything —
-/// but the *consequence* of a mis-classification is only a slightly wrong sentence in
-/// the popover: the stderr line itself is always shown, and no branch of the UI
-/// behaves differently per kind. Hence substring matching rather than an exhaustive
-/// parser that would rot faster.
-fn classify_fetch_error(stderr: &str) -> FetchErrorKind {
-    let s = stderr.to_lowercase();
-    let network = [
-        "could not resolve host",
-        "could not resolve hostname",
-        "temporary failure in name resolution",
-        "connection refused",
-        "connection timed out",
-        "network is unreachable",
-        "no route to host",
-        "operation timed out",
-        "failed to connect",
-    ];
-    let auth = [
-        "permission denied",
-        "authentication failed",
-        "could not read username",
-        "could not read password",
-        "terminal prompts disabled",
-        "access denied",
-        "invalid username or password",
-        "publickey",
-    ];
-    if network.iter().any(|m| s.contains(m)) {
-        return FetchErrorKind::Network;
-    }
-    if auth.iter().any(|m| s.contains(m)) {
-        return FetchErrorKind::Auth;
-    }
-    FetchErrorKind::Failed
-}
-
-/// The in-flight fetch of each repo, so concurrent callers **join** the running one
-/// instead of starting a second (spec #801). The value is the outcome slot the leader
-/// publishes into; followers clone the receiver and await it.
-#[allow(clippy::type_complexity)]
-fn fetch_in_flight() -> &'static std::sync::Mutex<
-    std::collections::HashMap<PathBuf, tokio::sync::watch::Receiver<Option<Option<FetchError>>>>,
-> {
-    static FLIGHTS: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<
-                PathBuf,
-                tokio::sync::watch::Receiver<Option<Option<FetchError>>>,
-            >,
-        >,
-    > = std::sync::OnceLock::new();
-    FLIGHTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
-
-/// Fetch every remote of `repo`, pruning refs that vanished server-side. Returns
-/// `None` on success, or the named reason it did not happen (#802, ADR-0070 §1).
-///
-/// Read-only and **non-interactive by construction**: `GIT_TERMINAL_PROMPT=0` plus a
-/// batch-mode ssh, so a missing credential fails with git's own message instead of
-/// hanging on a prompt nobody can see (the `skill_import` clone precedent). Bounded by
-/// `FETCH_TIMEOUT`. Never pushes, merges or rebases — that is the whole of ADR-0070 §2.
-///
-/// Only ONE fetch per repo runs at a time: the form fetches on open and on repo
-/// change, and the sync popover refetches, so three overlapping asks on the same repo
-/// are routine. The second and third await the first's outcome.
-async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
-    enum Role {
-        Leader(tokio::sync::watch::Sender<Option<Option<FetchError>>>),
-        Follower(tokio::sync::watch::Receiver<Option<Option<FetchError>>>),
-    }
-    let role = {
-        let mut map = fetch_in_flight().lock().unwrap_or_else(|p| p.into_inner());
-        match map.get(repo) {
-            Some(rx) => Role::Follower(rx.clone()),
-            None => {
-                let (tx, rx) = tokio::sync::watch::channel(None);
-                map.insert(repo.to_path_buf(), rx);
-                Role::Leader(tx)
-            }
-        }
-    };
-
-    let mut rx = match role {
-        Role::Follower(rx) => rx,
-        Role::Leader(tx) => {
-            let outcome = run_git_fetch(repo).await;
-            // Leave the map BEFORE publishing, so a caller arriving after the result
-            // starts a fresh fetch rather than joining a finished one. Followers that
-            // already cloned the receiver still read the value: a watch receiver keeps
-            // the last value after the sender is dropped.
-            fetch_in_flight()
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(repo);
-            let _ = tx.send(Some(outcome.clone()));
-            return outcome;
-        }
-    };
-
-    loop {
-        if rx.borrow().is_some() {
-            break;
-        }
-        if rx.changed().await.is_err() {
-            break;
-        }
-    }
-    let published = rx.borrow().clone();
-    published.unwrap_or(Some(FetchError {
-        kind: FetchErrorKind::Failed,
-        message: "the in-flight fetch ended without a result".into(),
-    }))
-}
-
 /// Every repository a Trigger fire is about to cut from, **primary first** (#804).
 ///
 /// Takes the Trigger's two stored fields verbatim (the secondary list is raw JSON
@@ -20362,491 +18827,6 @@ async fn fetch_before_trigger_cut(targets: &[String]) -> Option<FetchError> {
         }
     }
     primary_error
-}
-
-/// The fetch itself, with no in-flight bookkeeping. Split out so the join logic above
-/// stays readable, and so tests can drive a real `git fetch` against a bare origin.
-async fn run_git_fetch(repo: &Path) -> Option<FetchError> {
-    match git_remote_names(repo) {
-        // A repo with no remote is a legitimate case, not a failure to report as one:
-        // named so the popover can say "no remote" instead of quoting git at the user.
-        Ok(remotes) if remotes.is_empty() => {
-            return Some(FetchError {
-                kind: FetchErrorKind::NoRemote,
-                message: "this repository has no remote".into(),
-            });
-        }
-        Ok(_) => {}
-        Err(e) => {
-            return Some(FetchError {
-                kind: FetchErrorKind::Failed,
-                message: e,
-            });
-        }
-    }
-
-    // Keep an operator's own `GIT_SSH_COMMAND` (a jump host, an identity file) and
-    // only append the batch flag — replacing it would break the very setups that need
-    // a custom command, in the name of not prompting.
-    let ssh_command = match std::env::var("GIT_SSH_COMMAND") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} -oBatchMode=yes"),
-        _ => "ssh -oBatchMode=yes".to_string(),
-    };
-
-    // Taken BEFORE the attempt: git truncates FETCH_HEAD on its way in, so by the time
-    // we know the fetch failed the previous date is already gone.
-    let snapshot = FetchHeadSnapshot::take(repo);
-    let failed = |error: FetchError| {
-        if let Some(snapshot) = &snapshot {
-            snapshot.restore();
-        }
-        Some(error)
-    };
-
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.args(["fetch", "--all", "--prune", "--quiet"])
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "true")
-        .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", ssh_command)
-        .env("LC_ALL", "C")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-
-    let spawned = match cmd.spawn() {
-        Ok(child) => child,
-        Err(e) => {
-            return failed(FetchError {
-                kind: FetchErrorKind::Failed,
-                message: format!("cannot run git: {e}"),
-            });
-        }
-    };
-
-    match tokio::time::timeout(FETCH_TIMEOUT, spawned.wait_with_output()).await {
-        Ok(Ok(output)) if output.status.success() => None,
-        Ok(Ok(output)) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let message = if stderr.is_empty() {
-                format!("git fetch exited with {}", output.status)
-            } else {
-                stderr.clone()
-            };
-            failed(FetchError {
-                kind: classify_fetch_error(&stderr),
-                message,
-            })
-        }
-        Ok(Err(e)) => failed(FetchError {
-            kind: FetchErrorKind::Failed,
-            message: format!("git fetch failed: {e}"),
-        }),
-        Err(_) => failed(FetchError {
-            kind: FetchErrorKind::Timeout,
-            message: format!(
-                "git fetch did not finish within {}s",
-                FETCH_TIMEOUT.as_secs()
-            ),
-        }),
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Fast-forward of a local branch (#803, ADR-0070 §2)
-//
-// The ONLY write PDO ever performs on a local branch, and only on an explicit
-// click. Never a merge commit, never a rebase, never a push: either the ref moves
-// on its own (`update-ref`, branch not checked out anywhere) or git's own
-// `merge --ff-only` walks the checkout forward. Both are reversible by reflog.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Why a fast-forward did not happen, named rather than raw (#803).
-///
-/// Three of these — `diverged`, `no_upstream`, `up_to_date` — are already knowable
-/// from the enriched list (#802), so the UI does not even offer the button for them;
-/// they are answered here only for the RACE between the list and the click. The other
-/// two need the checkout inspected at click time, which is precisely why they cannot
-/// be pre-computed: a tree can get dirty between a render and a click.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "FastForwardReason")]
-#[serde(rename_all = "snake_case")]
-enum FastForwardRefusal {
-    /// The branch is checked out HERE and tracked files are modified.
-    DirtyTree,
-    /// The branch is checked out in ANOTHER worktree — not ours to move.
-    CheckedOutElsewhere,
-    /// The branch has commits the upstream does not: a ff would drop them.
-    Diverged,
-    /// The branch tracks nothing, so there is nothing to fast-forward to.
-    NoUpstream,
-    /// The upstream has nothing this branch lacks.
-    UpToDate,
-}
-
-/// A refused fast-forward, with everything the popover needs to name it (#803).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "FastForwardRefusal")]
-struct FastForwardRefused {
-    reason: FastForwardRefusal,
-    message: String,
-    /// The checkout the branch sits in — ours for `dirty_tree`, someone else's for
-    /// `checked_out_elsewhere`. `None` for the three list-knowable reasons.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    checkout: Option<String>,
-    /// `M path` lines of the modified TRACKED files, capped (`dirty_tree` only).
-    /// Untracked files never appear: they do not block a fast-forward.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    #[ts(optional = nullable)]
-    dirty_files: Vec<String>,
-    /// How many tracked files are modified, uncapped — `dirty_files` may be shorter.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    dirty_count: Option<u32>,
-}
-
-/// How many `git status` lines travel in a refusal. The popover shows a short
-/// listing, not a diff: past a handful the count alone says it.
-const DIRTY_FILES_SHOWN: usize = 8;
-
-/// What a successful fast-forward moved (#803) — the S3 card's sentence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "FastForwardResult")]
-struct FastForwardDone {
-    branch: String,
-    upstream: String,
-    /// Short SHA the branch sat on before.
-    from: String,
-    /// Short SHA it sits on now.
-    to: String,
-    /// Commits gained — the number that was the `n↓` before the click.
-    commits: u32,
-    /// The new tip's commit subject, for the `from → to · subject` line.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    subject: Option<String>,
-    /// The checkout whose FILES moved with the ref, when the branch was checked
-    /// out in the repo we launch from. `None` = a pure ref move, nothing on disk
-    /// changed — a distinction the popover states out loud before and after.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    moved_checkout: Option<String>,
-}
-
-/// The 200 of `POST /repos/fast-forward`: what moved, plus the list refreshed from
-/// the same repo, so the client replaces its branches in place instead of asking
-/// again (and reading a list from between the two calls).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-struct FastForwardOk {
-    fast_forward: FastForwardDone,
-    #[serde(flatten)]
-    list: BranchList,
-}
-
-/// The 409 of `POST /repos/fast-forward`: the named refusal, plus the SAME refreshed
-/// list. The list travels with a refusal too, because two of the five reasons are
-/// races the client recovers from by simply re-reading the truth (`up_to_date`,
-/// `no_upstream`): it flips to the corresponding #802 state instead of painting an
-/// error for something benign.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-struct FastForwardRefusedBody {
-    refusal: FastForwardRefused,
-    #[serde(flatten)]
-    list: BranchList,
-}
-
-/// One line of `git worktree list --porcelain`: which checkout holds which branch.
-///
-/// Parsed rather than `git branch --show-current`-ed per worktree: the porcelain
-/// format is stable, names every worktree of the repo in one call, and reports a
-/// detached HEAD as the ABSENCE of a `branch` line (so a detached checkout never
-/// claims a branch it does not hold).
-fn worktree_holding_branch(repo: &Path, branch: &str) -> Option<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let wanted = format!("refs/heads/{branch}");
-    let mut current: Option<&str> = None;
-    for line in stdout.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current = Some(path);
-        } else if let Some(r) = line.strip_prefix("branch ") {
-            if r == wanted {
-                return current.map(PathBuf::from);
-            }
-        }
-    }
-    None
-}
-
-/// The modified TRACKED files of a checkout, as `git status --porcelain` reports
-/// them (`XY path`). Untracked files are excluded on purpose: they survive a
-/// fast-forward untouched, so refusing over them would refuse the commonest tree
-/// there is (#803, spec #801).
-fn dirty_tracked_files(checkout: &Path) -> Vec<String> {
-    let output = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no"])
-        .current_dir(checkout)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(|l| l.trim_end().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// `git rev-list --left-right --count a...b` → `(ahead, behind)`, or `None` when
-/// either side does not resolve.
-fn ahead_behind(repo: &Path, branch: &str, upstream: &str) -> Option<(u32, u32)> {
-    let range = format!("refs/heads/{branch}...refs/remotes/{upstream}");
-    let output = std::process::Command::new("git")
-        .args(["rev-list", "--left-right", "--count", &range])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut parts = stdout.split_whitespace();
-    let ahead = parts.next()?.parse().ok()?;
-    let behind = parts.next()?.parse().ok()?;
-    Some((ahead, behind))
-}
-
-/// The tracking branch of a local branch, short form (`origin/main`), or `None`.
-fn upstream_of(repo: &Path, branch: &str) -> Option<String> {
-    let spec = format!("{branch}@{{upstream}}");
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", &spec])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!name.is_empty()).then_some(name)
-}
-
-/// Short SHA + subject of a ref, for the "a1b2c3d → e4f5a6b · subject" line.
-fn tip_summary(repo: &Path, r: &str) -> (String, Option<String>) {
-    let output = std::process::Command::new("git")
-        .args(["log", "-1", "--format=%h%x09%s", r])
-        .current_dir(repo)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let line = stdout.trim_end_matches('\n');
-            let mut fields = line.splitn(2, '\t');
-            let sha = fields.next().unwrap_or("").to_string();
-            let subject = fields
-                .next()
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty());
-            (sha, subject)
-        }
-        _ => (String::new(), None),
-    }
-}
-
-/// Fast-forward `branch` onto its tracking branch, if and only if it is lossless
-/// (#803, ADR-0070 §2).
-///
-/// The conditions are cumulative and checked in the order a person would read them:
-/// a tracking branch exists → the branch is strictly behind (no commit of its own to
-/// drop) → nobody else's checkout holds it → if OUR checkout holds it, its tracked
-/// files are unmodified. Only then does anything move, and what moves is decided by
-/// where the branch lives:
-///
-/// - checked out **here** → `git merge --ff-only` in that checkout, so the working
-///   tree walks forward with the ref (`update-ref` alone would leave every fetched
-///   commit staged as a deletion — the one way this could destroy work);
-/// - checked out **nowhere** → `git update-ref` with the old value as a guard, a pure
-///   ref move that touches no file at all.
-///
-/// Never a `git pull`: that is a fetch *and* a merge, and the merge is exactly the
-/// thing ADR-0070 forbids.
-fn fast_forward_branch(repo: &Path, branch: &str) -> Result<FastForwardDone, FastForwardRefused> {
-    let refused = |reason: FastForwardRefusal, message: String| FastForwardRefused {
-        reason,
-        message,
-        checkout: None,
-        dirty_files: Vec::new(),
-        dirty_count: None,
-    };
-
-    let Some(upstream) = upstream_of(repo, branch) else {
-        return Err(refused(
-            FastForwardRefusal::NoUpstream,
-            format!("'{branch}' tracks no branch, so there is nothing to fast-forward to"),
-        ));
-    };
-
-    let Some((ahead, behind)) = ahead_behind(repo, branch, &upstream) else {
-        return Err(refused(
-            FastForwardRefusal::NoUpstream,
-            format!("the gap between '{branch}' and '{upstream}' could not be read"),
-        ));
-    };
-
-    // Order matters: "behind 0" is `up_to_date` even when ahead > 0 — there is
-    // genuinely nothing upstream to take. Divergence is only a refusal when a
-    // fast-forward would have had somewhere to go and local commits in the way.
-    if behind == 0 {
-        return Err(refused(
-            FastForwardRefusal::UpToDate,
-            format!("'{branch}' already has everything '{upstream}' has"),
-        ));
-    }
-    if ahead > 0 {
-        return Err(refused(
-            FastForwardRefusal::Diverged,
-            format!(
-                "'{branch}' has {ahead} commit(s) '{upstream}' does not: a fast-forward \
-                 would drop them"
-            ),
-        ));
-    }
-
-    let holder = worktree_holding_branch(repo, branch);
-    let here = holder.as_deref().is_some_and(|h| same_checkout(h, repo));
-    if let Some(elsewhere) = holder.as_ref().filter(|_| !here) {
-        return Err(FastForwardRefused {
-            reason: FastForwardRefusal::CheckedOutElsewhere,
-            message: format!(
-                "'{branch}' is checked out in another worktree; PDO only fast-forwards a \
-                 branch in the repository you launch from"
-            ),
-            checkout: Some(elsewhere.display().to_string()),
-            dirty_files: Vec::new(),
-            dirty_count: None,
-        });
-    }
-
-    if here {
-        let dirty = dirty_tracked_files(repo);
-        if !dirty.is_empty() {
-            return Err(FastForwardRefused {
-                reason: FastForwardRefusal::DirtyTree,
-                message: format!(
-                    "'{branch}' is checked out here and {} tracked file(s) are modified; \
-                     PDO will not touch them",
-                    dirty.len()
-                ),
-                checkout: Some(repo.display().to_string()),
-                dirty_count: Some(dirty.len() as u32),
-                dirty_files: dirty.into_iter().take(DIRTY_FILES_SHOWN).collect(),
-            });
-        }
-    }
-
-    let from = rev_parse_short(repo, &format!("refs/heads/{branch}")).unwrap_or_default();
-    let target_full = format!("refs/remotes/{upstream}");
-    let Some(target_sha) = structured_diff::rev_parse(repo, &target_full) else {
-        return Err(refused(
-            FastForwardRefusal::NoUpstream,
-            format!("'{upstream}' does not resolve any more — fetch and try again"),
-        ));
-    };
-
-    let outcome = if here {
-        // `--ff-only` can only ever move the ref; it refuses rather than create a
-        // merge commit, which is the guarantee ADR-0070 §2 asks for in git's own
-        // words rather than in ours.
-        std::process::Command::new("git")
-            .args(["merge", "--ff-only", "--quiet", &target_full])
-            .current_dir(repo)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-    } else {
-        let old =
-            structured_diff::rev_parse(repo, &format!("refs/heads/{branch}")).unwrap_or_default();
-        // The old value is passed as a guard: if anything moved the branch between
-        // our check and this call, git refuses instead of overwriting the winner.
-        std::process::Command::new("git")
-            .args([
-                "update-ref",
-                &format!("refs/heads/{branch}"),
-                &target_sha,
-                &old,
-            ])
-            .current_dir(repo)
-            .output()
-    };
-
-    match outcome {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            return Err(refused(
-                FastForwardRefusal::Diverged,
-                if stderr.is_empty() {
-                    format!("git refused to fast-forward '{branch}'")
-                } else {
-                    stderr
-                },
-            ));
-        }
-        Err(e) => {
-            return Err(refused(
-                FastForwardRefusal::Diverged,
-                format!("failed to run git: {e}"),
-            ));
-        }
-    }
-
-    let (to, subject) = tip_summary(repo, &format!("refs/heads/{branch}"));
-    Ok(FastForwardDone {
-        branch: branch.to_string(),
-        upstream,
-        from,
-        to,
-        commits: behind,
-        subject,
-        moved_checkout: here.then(|| repo.display().to_string()),
-    })
-}
-
-/// Short SHA of a ref (`--short` leaves git to pick a unambiguous length).
-fn rev_parse_short(repo: &Path, r: &str) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--short", r])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!sha.is_empty()).then_some(sha)
-}
-
-/// Whether two paths name the same checkout. Canonicalised on BOTH sides — the
-/// target repo is stored verbatim (ADR-0033) while `git worktree list` prints
-/// resolved paths, so a `/tmp` that is a symlink to `/private/tmp` (macOS) would
-/// otherwise make our own checkout look like somebody else's and refuse every
-/// fast-forward on the platform.
-fn same_checkout(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -20946,28 +18926,6 @@ fn source_drift(repo: &Path, run_id: &str, run_state: &event_log::RunState) -> S
         upstream_behind,
         last_fetch_at: last_fetch_at(repo),
     }
-}
-
-/// `git rev-list --count from..to` — commits `to` has that `from` does not.
-fn count_commits(repo: &Path, from: &str, to: &str) -> Option<u32> {
-    let range = format!("{from}..{to}");
-    let output = std::process::Command::new("git")
-        .args(["rev-list", "--count", &range])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
-}
-
-fn ref_exists(repo: &Path, fullref: &str) -> bool {
-    std::process::Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", fullref])
-        .current_dir(repo)
-        .output()
-        .is_ok_and(|o| o.status.success())
 }
 
 /// The 7-char form every other PDO surface shows a SHA in.
@@ -21945,9 +19903,239 @@ const DEV_PLACEHOLDER: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The workspace context (crates/pdo-workspace), wired into this daemon
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The settings a Projet carries for the contexts still in this crate: the
+/// agentic profile (ADR-0057) and the skills selection (ADR-0062).
+pub(crate) struct LegacyProjectSettings;
+
+impl pdo_workspace::adapters::http::ProjectSettings for LegacyProjectSettings {
+    type AgentChoice = pdo_harness::agent_choice::AgentChoice;
+    type Skill = skill_selection::SkillRef;
+
+    fn encode_skills(skills: Vec<Self::Skill>) -> Option<String> {
+        skill_selection::to_stored_json(&skill_selection::normalise(skills))
+    }
+
+    fn decode_skills(stored: Option<&str>) -> Vec<Self::Skill> {
+        skill_selection::from_stored_json(stored.map(str::to_string))
+    }
+}
+
+/// The agentic profile a Projet carries, as this crate types it.
+fn project_agent_choice(
+    project: &pdo_workspace::domain::project::Project,
+) -> Option<pdo_harness::agent_choice::AgentChoice> {
+    use pdo_workspace::adapters::http::ProjectSettings;
+    project
+        .agent_choice
+        .as_ref()
+        .and_then(|stored| LegacyProjectSettings::decode_agent_choice(stored.as_str()))
+}
+
+/// The skills a Projet selects, as this crate types them.
+fn project_skills(
+    project: &pdo_workspace::domain::project::Project,
+) -> Vec<skill_selection::SkillRef> {
+    use pdo_workspace::adapters::http::ProjectSettings;
+    LegacyProjectSettings::decode_skills(project.skills.as_ref().map(|s| s.as_str()))
+}
+
+/// The Projet tier of [`agent_choice::resolve`]. `None` ⇒ transparent — the
+/// legacy `harness` signal then applies.
+pub(crate) async fn project_agent_choice_for_path(
+    db: &sqlx::SqlitePool,
+    path: &str,
+) -> Result<Option<pdo_harness::agent_choice::AgentChoice>, sqlx::Error> {
+    Ok(pdo_workspace::adapters::sqlite::owner_of(db, path)
+        .await?
+        .as_ref()
+        .and_then(project_agent_choice))
+}
+
+/// The Projet tier of `skill_selection::resolve`: the skills selected by the
+/// Projet owning `path`, or empty when no Projet owns it.
+pub(crate) async fn project_skills_for_path(
+    db: &sqlx::SqlitePool,
+    path: &str,
+) -> Result<Vec<skill_selection::SkillRef>, sqlx::Error> {
+    Ok(pdo_workspace::adapters::sqlite::owner_of(db, path)
+        .await?
+        .as_ref()
+        .map(project_skills)
+        .unwrap_or_default())
+}
+
+/// A Projet change, announced on the live pipeline stream the UI listens to.
+struct PipelineChannelEvents(broadcast::Sender<serde_json::Value>);
+
+impl pdo_workspace::application::ports::ProjectEvents for PipelineChannelEvents {
+    fn project_changed(&self, project_id: &str) {
+        let _ = self.0.send(serde_json::json!({
+            "type": "project_changed",
+            "project_id": project_id,
+        }));
+    }
+}
+
+/// The workspace context over this daemon's database, live stream and
+/// repository root, with `host` as the Autorisation d'opération.
+fn workspace_context(
+    db: &sqlx::SqlitePool,
+    pipeline_tx: &broadcast::Sender<serde_json::Value>,
+    repo_root: &Path,
+    host: Arc<dyn pdo_kernel::extension_host::ExtensionHost>,
+) -> Arc<pdo_workspace::application::Workspace> {
+    use pdo_workspace::adapters::{fs, git, sqlite};
+    Arc::new(pdo_workspace::application::Workspace::new(
+        pdo_workspace::application::WorkspacePorts {
+            projects: Arc::new(sqlite::SqliteProjects::new(db.clone())),
+            provisioning: Arc::new(sqlite::SqliteProvisioningRules::new(db.clone())),
+            recent: Arc::new(sqlite::SqliteRecentRepositories::new(db.clone())),
+            events: Arc::new(PipelineChannelEvents(pipeline_tx.clone())),
+            git: Arc::new(git::GitCli),
+            source_tree: Arc::new(fs::FsSourceTree),
+            files: Arc::new(fs::FsBrowser::new(repo_root)),
+        },
+        host,
+    ))
+}
+
+/// Reap the worktree of a Run aborted at create, and what it left beside it.
+///
+/// #672: a Run aborted at create may already have snapshotted skills beside the
+/// worktree and excluded their paths in the repo's `info/exclude`; take both back
+/// before the (then empty) Run directory goes.
+fn reap_orphan_run_worktree(repo_root: &Path, worktree_dir: &Path, branch: &str) {
+    worktrees::reap_orphan_sub_worktree(repo_root, worktree_dir, branch);
+    if let Some(run_id) = branch.strip_prefix("pdo/run-") {
+        let _ = skill_delivery::remove_exclusions(repo_root, run_id);
+        let _ = std::fs::remove_dir_all(skill_delivery::snapshot_root(repo_root, run_id));
+    }
+    if let Some(run_dir) = worktree_dir.parent() {
+        let _ = std::fs::remove_dir(run_dir);
+    }
+}
+
+/// The provisioning rules the `NodeStarted` of `node_id`/`iter` froze.
+pub(crate) fn frozen_node_rules(
+    events: &[event_log::Event],
+    node_id: &str,
+    iter: i64,
+) -> Option<provisioning::ProvisioningRules> {
+    events.iter().rev().find_map(|event| {
+        if event.kind != event_log::EventKind::NodeStarted
+            || event.node_id.as_deref() != Some(node_id)
+            || event.iter != Some(iter)
+        {
+            return None;
+        }
+        event
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("provisioning"))
+            .cloned()
+            .and_then(|rules| serde_json::from_value(rules).ok())
+    })
+}
+
+pub(crate) fn frozen_node_plan(
+    events: &[event_log::Event],
+    node_id: &str,
+    iter: i64,
+) -> Option<provisioning::ProvisioningPlan> {
+    events.iter().rev().find_map(|event| {
+        if event.kind != event_log::EventKind::NodeStarted
+            || event.node_id.as_deref() != Some(node_id)
+            || event.iter != Some(iter)
+        {
+            return None;
+        }
+        event
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("provisioning_plan"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+    })
+}
+
+/// Read the node extension directly from the frozen pipeline document. Keeping
+/// provisioning as an extension avoids widening the heavily shared NodeDef
+/// runtime shape while still preserving it through YAML authoring.
+pub(crate) fn node_rules_from_pipeline(
+    pipeline_path: &Path,
+    node_id: &str,
+) -> Result<provisioning::ProvisioningRules> {
+    let yaml = match std::fs::read_to_string(pipeline_path) {
+        Ok(yaml) => yaml,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(
+                "pipeline {} is absent; node {node_id} has no provisioning extension",
+                pipeline_path.display()
+            );
+            return Ok(provisioning::ProvisioningRules::default());
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read pipeline {}", pipeline_path.display()));
+        }
+    };
+    let document: serde_yaml::Value = serde_yaml::from_str(&yaml)
+        .with_context(|| format!("parse pipeline {}", pipeline_path.display()))?;
+    let Some(nodes) = document
+        .get("nodes")
+        .and_then(serde_yaml::Value::as_sequence)
+    else {
+        return Ok(provisioning::ProvisioningRules::default());
+    };
+    for node in nodes {
+        if node.get("id").and_then(serde_yaml::Value::as_str) == Some(node_id) {
+            return node
+                .get("provisioning")
+                .cloned()
+                .map(serde_yaml::from_value)
+                .transpose()
+                .context("parse node provisioning rules")
+                .map(Option::unwrap_or_default);
+        }
+    }
+    Ok(provisioning::ProvisioningRules::default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdo_workspace::adapters::git::branches::list_branches;
+    use pdo_workspace::domain::branches::BranchEntry;
+
+    fn branch_named<'a>(branches: &'a [BranchEntry], name: &str) -> &'a BranchEntry {
+        branches
+            .iter()
+            .find(|b| b.name == name)
+            .unwrap_or_else(|| panic!("no branch {name} in {branches:?}"))
+    }
+
+    /// The merge-back on its **conservative** arm: `keep_conflict` off and no
+    /// spawn base, so a conflict still reads `MergeResult::Conflict`.
+    fn commit_and_merge_sub_worktree(
+        sub_worktree_dir: &Path,
+        pipeline_worktree_dir: &Path,
+        sub_branch: &str,
+        node_id: &str,
+        iter: i64,
+    ) -> Result<worktrees::MergeResult> {
+        worktrees::commit_and_merge_sub_worktree_inner(
+            sub_worktree_dir,
+            pipeline_worktree_dir,
+            sub_branch,
+            node_id,
+            iter,
+            false,
+            None,
+        )
+    }
     use axum::body::Body;
     use axum::http::Request;
     use pdo_platform::domain::service_health::ServiceHealth;
@@ -22721,6 +20909,12 @@ mod tests {
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         Arc::new(AppState {
+            workspace: workspace_context(
+                &db,
+                &pipeline_tx,
+                &std::env::current_dir().unwrap(),
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
             platform: test_platform(&db, None).await,
             db,
             event_tx,
@@ -23090,12 +21284,14 @@ mod tests {
         )
         .await;
 
-        let claude_dir =
-            home.join(".claude").join("projects").join(
-                pdo_harness::claude_transcript::encode_working_dir(
-                    &worktree_ops::sub_worktree_path(&state.repo_root, run_ids[0], "worker", 1),
-                ),
-            );
+        let claude_dir = home.join(".claude").join("projects").join(
+            pdo_harness::claude_transcript::encode_working_dir(&worktrees::sub_worktree_path(
+                &state.repo_root,
+                run_ids[0],
+                "worker",
+                1,
+            )),
+        );
         std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
             claude_dir.join("claude-1.jsonl"),
@@ -23103,9 +21299,10 @@ mod tests {
         )
         .unwrap();
         let legacy_dir = home.join(".claude").join("projects").join(
-            pdo_harness::claude_transcript::encode_working_dir(
-                &worktree_ops::worktree_dir_for_run(&state.repo_root, run_ids[2]),
-            ),
+            pdo_harness::claude_transcript::encode_working_dir(&worktrees::worktree_dir_for_run(
+                &state.repo_root,
+                run_ids[2],
+            )),
         );
         std::fs::create_dir_all(&legacy_dir).unwrap();
         std::fs::write(
@@ -23369,11 +21566,12 @@ mod tests {
                 serde_json::json!({}),
             )
             .await;
-            let dir = home.join(".claude").join("projects").join(
-                pdo_harness::claude_transcript::encode_working_dir(
-                    &worktree_ops::sub_worktree_path(&state.repo_root, run, "worker", 1),
-                ),
-            );
+            let dir =
+                home.join(".claude").join("projects").join(
+                    pdo_harness::claude_transcript::encode_working_dir(
+                        &worktrees::sub_worktree_path(&state.repo_root, run, "worker", 1),
+                    ),
+                );
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join(format!("{run}-s.jsonl")),
@@ -23799,11 +21997,12 @@ mod tests {
                 serde_json::json!({}),
             )
             .await;
-            let dir = home.join(".claude").join("projects").join(
-                pdo_harness::claude_transcript::encode_working_dir(
-                    &worktree_ops::sub_worktree_path(&state.repo_root, run, node, 1),
-                ),
-            );
+            let dir =
+                home.join(".claude").join("projects").join(
+                    pdo_harness::claude_transcript::encode_working_dir(
+                        &worktrees::sub_worktree_path(&state.repo_root, run, node, 1),
+                    ),
+                );
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join(format!("{run}-s.jsonl")),
@@ -24284,7 +22483,7 @@ mod tests {
                 .await;
                 let dir = home.join(".claude").join("projects").join(
                     pdo_harness::claude_transcript::encode_working_dir(
-                        &worktree_ops::sub_worktree_path(&state.repo_root, &run, node, 1),
+                        &worktrees::sub_worktree_path(&state.repo_root, &run, node, 1),
                     ),
                 );
                 std::fs::create_dir_all(&dir).unwrap();
@@ -25491,7 +23690,7 @@ mod tests {
                                  session: &str,
                                  tokens: u64| {
             let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-                &worktree_ops::sub_worktree_path(&state.repo_root, run_id, node_id, iter),
+                &worktrees::sub_worktree_path(&state.repo_root, run_id, node_id, iter),
             ));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
@@ -25515,7 +23714,7 @@ mod tests {
         // iter-3 worktree, alongside (and excluded from) that Node's own
         // "claude-3b" session — resolved by exclusion, never by path alone.
         let pm_project_dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::worktree_dir_for_run(&state.repo_root, "perf-r1"),
+            &worktrees::worktree_dir_for_run(&state.repo_root, "perf-r1"),
         ));
         std::fs::create_dir_all(&pm_project_dir).unwrap();
         std::fs::write(
@@ -25933,7 +24132,7 @@ mod tests {
         // unknown.
         let claude_root = home.join(".claude").join("projects");
         let pm_project_dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::worktree_dir_for_run(&state.repo_root, "perf-amb"),
+            &worktrees::worktree_dir_for_run(&state.repo_root, "perf-amb"),
         ));
         std::fs::create_dir_all(&pm_project_dir).unwrap();
         std::fs::write(
@@ -26187,7 +24386,7 @@ mod tests {
 
         let claude_root = home.join(".claude").join("projects");
         let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-r1", "worker", 1),
+            &worktrees::sub_worktree_path(&state.repo_root, "cache-r1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -26329,7 +24528,7 @@ mod tests {
 
         let claude_root = home.join(".claude").join("projects");
         let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-i1", "worker", 1),
+            &worktrees::sub_worktree_path(&state.repo_root, "cache-i1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -26399,7 +24598,7 @@ mod tests {
         )
         .await;
         let dir2 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-i2", "worker", 1),
+            &worktrees::sub_worktree_path(&state.repo_root, "cache-i2", "worker", 1),
         ));
         std::fs::create_dir_all(&dir2).unwrap();
         std::fs::write(
@@ -26596,7 +24795,7 @@ mod tests {
         // (sonnet — its own bucket), iter 2's mute file (no model line).
         let claude_root = home.join(".claude").join("projects");
         let dir1 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 1),
+            &worktrees::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir1).unwrap();
         std::fs::write(
@@ -26613,7 +24812,7 @@ mod tests {
         )
         .unwrap();
         let dir2 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 2),
+            &worktrees::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 2),
         ));
         std::fs::create_dir_all(&dir2).unwrap();
         // A file that reads but says nothing: no model line, no readable peak.
@@ -26982,7 +25181,7 @@ mod tests {
         };
         let claude_dir = |iter: i64| {
             let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-                &worktree_ops::sub_worktree_path(&state.repo_root, run, "coder", iter),
+                &worktrees::sub_worktree_path(&state.repo_root, run, "coder", iter),
             ));
             std::fs::create_dir_all(&dir).unwrap();
             dir
@@ -27042,7 +25241,7 @@ mod tests {
 
         // --- pi: launch + two human turns — count 2.
         let pi_dir = home.join(".pi").join("agent").join("sessions").join(
-            pdo_harness::pi_session::session_dir_name(&worktree_ops::sub_worktree_path(
+            pdo_harness::pi_session::session_dir_name(&worktrees::sub_worktree_path(
                 &state.repo_root,
                 run,
                 "pi-node",
@@ -27937,6 +26136,12 @@ mod tests {
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         Arc::new(AppState {
+            workspace: workspace_context(
+                &db,
+                &pipeline_tx,
+                &std::env::current_dir().unwrap(),
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
             platform: test_platform(&db, Some(service_health)).await,
             db,
             event_tx,
@@ -28700,7 +26905,9 @@ mod tests {
     /// into "writing offered" — the A/B control of the whole feature.
     #[test]
     fn secondary_dirtied_guard_only_trips_on_read_only_pins() {
-        use crate::worktree_ops::{create_secondary_snapshot, secondary_snapshot_path};
+        use pdo_workspace::adapters::git::worktrees::{
+            create_secondary_snapshot, secondary_snapshot_path,
+        };
 
         fn git(dir: &std::path::Path, args: &[&str]) {
             let out = std::process::Command::new("git")
@@ -29808,7 +28015,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude/projects");
         let run_id = "node-cost";
-        let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
+        let working_dir = worktrees::worktree_dir_for_run(repo.path(), run_id);
         let project = projects.join(pdo_harness::claude_transcript::cc_project_dirname(
             &working_dir,
         ));
@@ -30807,7 +29014,7 @@ mod tests {
         std::fs::write(sub_wt_dir.join("foo.rs"), "fn main() {}\n").unwrap();
         let result =
             commit_and_merge_sub_worktree(&sub_wt_dir, &wt_dir, &sub_branch, "impl-1", 1).unwrap();
-        assert!(matches!(result, worktree_ops::MergeResult::Success));
+        assert!(matches!(result, worktrees::MergeResult::Success));
 
         // Sub-worktree must exist before cleanup (refs #32)
         assert!(sub_wt_dir.exists());
@@ -33628,32 +31835,6 @@ mod tests {
         (origin, work)
     }
 
-    /// Add a second remote `upstream` (from a fresh local origin) that also has a
-    /// `feature-remote-only` branch, then fetch it — no network, a filesystem
-    /// path. Leaves `work` with both `origin/feature-remote-only` and
-    /// `upstream/feature-remote-only`. Returns the upstream tempdir to keep alive.
-    fn add_upstream_with_same_branch(work: &std::path::Path) -> tempfile::TempDir {
-        let up = tempfile::tempdir().unwrap();
-        run_git(up.path(), &["init", "-b", "main"]);
-        run_git(up.path(), &["config", "user.email", "test@test.com"]);
-        run_git(up.path(), &["config", "user.name", "Test"]);
-        std::fs::write(up.path().join("README.md"), "# up\n").unwrap();
-        run_git(up.path(), &["add", "."]);
-        run_git(up.path(), &["commit", "-m", "init"]);
-        run_git(up.path(), &["checkout", "-b", "feature-remote-only"]);
-        std::fs::write(up.path().join("y.txt"), "y\n").unwrap();
-        run_git(up.path(), &["add", "."]);
-        run_git(up.path(), &["commit", "-m", "feat"]);
-        run_git(up.path(), &["checkout", "main"]);
-
-        run_git(
-            work,
-            &["remote", "add", "upstream", up.path().to_str().unwrap()],
-        );
-        run_git(work, &["fetch", "--quiet", "upstream"]);
-        up
-    }
-
     #[test]
     fn parse_numstat_sums_text_and_counts_binary_without_lines() {
         // Text rows sum +/- ; binary rows show `-` so contribute 0 lines
@@ -33928,6 +32109,12 @@ mod tests {
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         Arc::new(AppState {
+            workspace: workspace_context(
+                &db,
+                &pipeline_tx,
+                dir,
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
             platform: test_platform(&db, None).await,
             db,
             event_tx,
@@ -34860,78 +33047,6 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    /// #824 — `POST /repos/create` over the real router: the three outcomes of
-    /// `repo_scaffold` as a client sees them (200 + created, 200 + reused, 400 +
-    /// the refusal sentence). The verb's own semantics are covered unit-side; this
-    /// is the wire contract the tour reads.
-    #[tokio::test]
-    async fn repos_create_creates_reuses_and_refuses() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-        let parent = tmp.path().join("parent");
-        std::fs::create_dir(&parent).unwrap();
-
-        let body = serde_json::json!({
-            "parent": parent.to_string_lossy(),
-            "name": "pdo-tutorial",
-            "files": [{ "path": "notes.txt", "content": "hello\n" }],
-        })
-        .to_string();
-
-        let post = |body: String| {
-            let app = build_router(state.clone());
-            async move {
-                app.oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/repos/create")
-                        .header("content-type", "application/json")
-                        .body(Body::from(body))
-                        .unwrap(),
-                )
-                .await
-                .unwrap()
-            }
-        };
-        let read = |resp: Response| async move {
-            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
-        };
-
-        let resp = post(body.clone()).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let created = read(resp).await;
-        assert_eq!(created["created"], true);
-        assert_eq!(
-            created["path"],
-            parent.join("pdo-tutorial").to_string_lossy().as_ref()
-        );
-        assert!(parent.join("pdo-tutorial").join("notes.txt").exists());
-
-        // Second call: same path, no second commit.
-        let resp = post(body).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(read(resp).await["created"], false);
-
-        // A folder that is not a repository is refused, by name.
-        std::fs::create_dir(parent.join("occupied")).unwrap();
-        let resp = post(
-            serde_json::json!({ "parent": parent.to_string_lossy(), "name": "occupied" })
-                .to_string(),
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            read(resp).await["error"],
-            format!(
-                "{} exists and is not a git repository",
-                parent.join("occupied").display()
-            )
-        );
     }
 
     #[tokio::test]
@@ -36240,29 +34355,6 @@ edges:
         );
     }
 
-    #[test]
-    fn provisioning_preview_drops_rules_narrower_than_the_requested_scope() {
-        let scoped = vec![
-            provisioning::ScopedRules {
-                scope: provisioning::ProvisioningScope::Instance,
-                rules: provisioning::ProvisioningRules::default(),
-            },
-            provisioning::ScopedRules {
-                scope: provisioning::ProvisioningScope::Project,
-                rules: provisioning::ProvisioningRules {
-                    copy: vec!["project.env".into()],
-                    ..Default::default()
-                },
-            },
-        ];
-
-        let visible =
-            provisioning_rules_through_scope(scoped, provisioning::ProvisioningScope::Instance);
-
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0].scope, provisioning::ProvisioningScope::Instance);
-    }
-
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn save_pipeline_ignores_retired_scope_and_writes_the_instance_copy() {
@@ -37416,7 +35508,7 @@ edges:
         std::fs::write(sub_wt_dir.join("foo.rs"), "fn main() {}\n").unwrap();
         let result =
             commit_and_merge_sub_worktree(&sub_wt_dir, &wt_dir, &sub_branch, "impl-1", 1).unwrap();
-        assert!(matches!(result, worktree_ops::MergeResult::Success));
+        assert!(matches!(result, worktrees::MergeResult::Success));
 
         // Prompt endpoint must return 200 for the completed iter
         let app = build_router(state);
@@ -39924,7 +38016,8 @@ edges:
         let wt_dir = worktree_dir_for_run(dir, run_id);
         create_worktree(dir, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
 
-        let sub_wt_dir = crate::worktree_ops::sub_worktree_path(dir, run_id, "worker", 1);
+        let sub_wt_dir =
+            pdo_workspace::adapters::git::worktrees::sub_worktree_path(dir, run_id, "worker", 1);
         let body = r#"{"kind":"restart_node","node_id":"worker","iter":1}"#;
 
         let (status, _, first) = command_triplet(&state, run_id, body).await;
@@ -40640,6 +38733,12 @@ edges: []
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         let state = Arc::new(AppState {
+            workspace: workspace_context(
+                &db,
+                &pipeline_tx,
+                &repo.clone(),
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
             platform: test_platform(&db, None).await,
             db,
             event_tx,
@@ -40838,6 +38937,12 @@ edges: []
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         let state = Arc::new(AppState {
+            workspace: workspace_context(
+                &db,
+                &pipeline_tx,
+                &repo.clone(),
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
             platform: test_platform(&db, None).await,
             db,
             event_tx,
@@ -41013,38 +39118,6 @@ edges: []
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    // --- Multi-repo run creation tests (issue #114) ---
-
-    #[test]
-    fn validate_target_repo_rejects_relative_path() {
-        let result = validate_target_repo("relative/path");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("absolute path"));
-    }
-
-    #[test]
-    fn validate_target_repo_rejects_nonexistent_path() {
-        let result = validate_target_repo("/nonexistent/path/that/does/not/exist");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("does not exist"));
-    }
-
-    #[test]
-    fn validate_target_repo_rejects_non_git_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let result = validate_target_repo(tmp.path().to_str().unwrap());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not a git repository"));
-    }
-
-    #[test]
-    fn validate_target_repo_accepts_git_repo() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        let result = validate_target_repo(tmp.path().to_str().unwrap());
-        assert!(result.is_ok());
-    }
-
     #[test]
     fn required_target_repo_rejects_absent() {
         let err = required_target_repo(None).unwrap_err();
@@ -41075,123 +39148,6 @@ edges: []
         assert_eq!(required_target_repo(Some(&padded)).unwrap(), tmp.path());
     }
 
-    #[test]
-    fn validate_source_branch_rejects_nonexistent() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        let result = validate_source_branch(tmp.path(), "nonexistent-branch");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("does not exist"));
-    }
-
-    #[test]
-    fn validate_source_branch_accepts_existing_branch() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        // init_test_repo creates a default branch, find its name
-        let output = std::process::Command::new("git")
-            .args(["branch", "--format=%(refname:short)"])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert!(!branch.is_empty());
-        let result = validate_source_branch(tmp.path(), &branch);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn list_branches_returns_branches() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        // Exactly one local branch (the default checked-out one, whatever the
-        // operator's `init.defaultBranch` names it) and no remotes — the shape,
-        // not just "non-empty".
-        let branches = list_branches(tmp.path()).unwrap();
-        assert_eq!(branches.len(), 1, "one local branch expected: {branches:?}");
-        assert_eq!(branches[0].kind, BranchKind::Local);
-    }
-
-    #[test]
-    fn list_branches_includes_remote_tracking_branches() {
-        let (_origin, work) = init_repo_with_remote();
-        let branches = list_branches(work.path()).unwrap();
-        assert!(
-            branches
-                .iter()
-                .any(|b| b.name == "origin/feature-remote-only" && b.kind == BranchKind::Remote),
-            "remote-only tracking ref must be listed: {branches:?}"
-        );
-    }
-
-    #[test]
-    fn list_branches_excludes_origin_head_symref() {
-        let (_origin, work) = init_repo_with_remote();
-        let branches = list_branches(work.path()).unwrap();
-        // Neither the symref itself nor its bare-`origin` shadow may appear.
-        assert!(
-            !branches.iter().any(|b| b.name == "origin/HEAD"),
-            "origin/HEAD symref must never be listed: {branches:?}"
-        );
-        assert!(
-            !branches.iter().any(|b| b.name == "origin"),
-            "bare 'origin' (the symref's short form) must never be listed: {branches:?}"
-        );
-    }
-
-    #[test]
-    fn list_branches_dedups_remote_twin_of_local_branch() {
-        let (_origin, work) = init_repo_with_remote();
-        let branches = list_branches(work.path()).unwrap();
-        // The clone created a local `main` tracking `origin/main`; the remote twin
-        // is dropped, the local kept.
-        assert!(
-            branches
-                .iter()
-                .any(|b| b.name == "main" && b.kind == BranchKind::Local),
-            "local main must be listed: {branches:?}"
-        );
-        assert!(
-            !branches.iter().any(|b| b.name == "origin/main"),
-            "origin/main (twin of local main) must be deduped away: {branches:?}"
-        );
-    }
-
-    #[test]
-    fn list_branches_keeps_both_remotes_for_same_name() {
-        let (_origin, work) = init_repo_with_remote();
-        let _upstream = add_upstream_with_same_branch(work.path());
-        let branches = list_branches(work.path()).unwrap();
-        // No local `feature-remote-only`, so BOTH tracking refs survive — two
-        // remotes may point at different SHAs; merging them would lie.
-        assert!(
-            branches
-                .iter()
-                .any(|b| b.name == "origin/feature-remote-only" && b.kind == BranchKind::Remote),
-            "origin twin must be listed: {branches:?}"
-        );
-        assert!(
-            branches
-                .iter()
-                .any(|b| b.name == "upstream/feature-remote-only" && b.kind == BranchKind::Remote),
-            "upstream twin must be listed: {branches:?}"
-        );
-    }
-
-    #[test]
-    fn list_branches_orders_locals_before_remotes() {
-        let (_origin, work) = init_repo_with_remote();
-        let branches = list_branches(work.path()).unwrap();
-        let first_remote = branches.iter().position(|b| b.kind == BranchKind::Remote);
-        let last_local = branches.iter().rposition(|b| b.kind == BranchKind::Local);
-        // Both partitions are non-empty here (local main + remote feature), so a
-        // strict last-local < first-remote proves the ordering, not luck.
-        let (Some(fr), Some(ll)) = (first_remote, last_local) else {
-            panic!("expected at least one local and one remote: {branches:?}");
-        };
-        assert!(ll < fr, "all locals must precede all remotes: {branches:?}");
-    }
-
     // ── #802 / ADR-0070: écart amont, dates, and the fetch verb ──────────────
     //
     // Every test below drives a REAL pair of repos (a clone of a filesystem
@@ -41208,246 +39164,6 @@ edges: []
             run_git(dir, &["add", "."]);
             run_git(dir, &["commit", "-m", &format!("{prefix} {i}")]);
         }
-    }
-
-    fn branch_named<'a>(branches: &'a [BranchEntry], name: &str) -> &'a BranchEntry {
-        branches
-            .iter()
-            .find(|b| b.name == name)
-            .unwrap_or_else(|| panic!("no branch {name} in {branches:?}"))
-    }
-
-    #[test]
-    fn list_branches_reports_the_gap_after_origin_moves_ahead() {
-        let (origin, work) = init_repo_with_remote();
-        commit_n(origin.path(), 3, "upstream-move");
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-
-        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(main.upstream.as_deref(), Some("origin/main"));
-        assert_eq!(main.behind, Some(3), "three commits arrived on origin");
-        assert_eq!(main.ahead, Some(0));
-    }
-
-    #[test]
-    fn list_branches_reports_a_diverged_gap_on_both_axes() {
-        let (origin, work) = init_repo_with_remote();
-        commit_n(origin.path(), 2, "theirs");
-        commit_n(work.path(), 1, "mine");
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-
-        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!((main.ahead, main.behind), (Some(1), Some(2)));
-    }
-
-    #[test]
-    fn list_branches_reports_a_zero_gap_when_level_with_upstream() {
-        let (_origin, work) = init_repo_with_remote();
-        // A tracking branch that is exactly level: `%(upstream:track)` is EMPTY here,
-        // which must read as `0↑ 0↓` ("up to date"), never as "no upstream".
-        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(main.upstream.as_deref(), Some("origin/main"));
-        assert_eq!((main.ahead, main.behind), (Some(0), Some(0)));
-    }
-
-    #[test]
-    fn list_branches_leaves_a_branch_without_upstream_without_a_gap() {
-        let (_origin, work) = init_repo_with_remote();
-        run_git(work.path(), &["checkout", "-q", "-b", "local-only"]);
-
-        let solo = branch_named(&list_branches(work.path()).unwrap(), "local-only").clone();
-        assert_eq!(solo.upstream, None);
-        assert_eq!(
-            (solo.ahead, solo.behind),
-            (None, None),
-            "a branch tracking nothing has no écart — not a zero one"
-        );
-    }
-
-    #[test]
-    fn list_branches_carries_the_tip_commit_date_and_subject() {
-        let (_origin, work) = init_repo_with_remote();
-        std::fs::write(work.path().join("z.txt"), "z\n").unwrap();
-        run_git(work.path(), &["add", "."]);
-        run_git(work.path(), &["commit", "-m", "a readable subject"]);
-
-        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(
-            main.last_commit_subject.as_deref(),
-            Some("a readable subject")
-        );
-        let date = main.last_commit_at.expect("a tip date");
-        assert!(
-            chrono::DateTime::parse_from_rfc3339(&date).is_ok(),
-            "the date must parse as RFC-3339 for the client: {date}"
-        );
-    }
-
-    #[test]
-    fn parse_upstream_track_reads_each_shape_git_prints() {
-        assert_eq!(parse_upstream_track("", true), (Some(0), Some(0)));
-        assert_eq!(parse_upstream_track("[ahead 2]", true), (Some(2), Some(0)));
-        assert_eq!(parse_upstream_track("[behind 3]", true), (Some(0), Some(3)));
-        assert_eq!(
-            parse_upstream_track("[ahead 2, behind 3]", true),
-            (Some(2), Some(3))
-        );
-        // Pruned upstream: still tracking something, but nothing left to count.
-        assert_eq!(parse_upstream_track("[gone]", true), (None, None));
-        // No upstream at all — the empty column must NOT read as "level".
-        assert_eq!(parse_upstream_track("", false), (None, None));
-    }
-
-    #[test]
-    fn classify_fetch_error_names_the_common_refusals() {
-        assert_eq!(
-            classify_fetch_error("ssh: Could not resolve hostname github.com"),
-            FetchErrorKind::Network
-        );
-        assert_eq!(
-            classify_fetch_error("git@github.com: Permission denied (publickey)."),
-            FetchErrorKind::Auth
-        );
-        assert_eq!(
-            classify_fetch_error("fatal: couldn't find remote ref"),
-            FetchErrorKind::Failed
-        );
-    }
-
-    #[test]
-    fn last_fetch_at_is_absent_before_any_fetch_and_set_after_one() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        assert_eq!(
-            last_fetch_at(tmp.path()),
-            None,
-            "a repo that never fetched has no date to show"
-        );
-
-        let (_origin, work) = init_repo_with_remote();
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-        let date = last_fetch_at(work.path()).expect("FETCH_HEAD dates the fetch");
-        assert!(
-            chrono::DateTime::parse_from_rfc3339(&date).is_ok(),
-            "{date}"
-        );
-    }
-
-    #[test]
-    fn last_fetch_at_reads_an_empty_fetch_head_as_never() {
-        // What a fetch that reached no remote leaves behind — freshly dated, but
-        // zero bytes. Reporting its mtime would print "fetched just now" over
-        // numbers nobody refreshed. Reproduced here as a plain truncation, which is
-        // exactly what a terminal `git fetch` does when it fails.
-        let (_origin, work) = init_repo_with_remote();
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-        std::fs::write(work.path().join(".git/FETCH_HEAD"), b"").unwrap();
-        assert_eq!(last_fetch_at(work.path()), None);
-    }
-
-    #[tokio::test]
-    async fn fetch_all_remotes_makes_a_new_origin_commit_visible() {
-        let (origin, work) = init_repo_with_remote();
-        // Origin moves ahead and the clone has NOT fetched: the gap is invisible.
-        commit_n(origin.path(), 3, "after-clone");
-        let before = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(before.behind, Some(0), "stale refs still look level");
-
-        assert_eq!(
-            fetch_all_remotes(work.path()).await,
-            None,
-            "fetch succeeded"
-        );
-
-        let after = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(
-            after.behind,
-            Some(3),
-            "the fetch made the three commits visible"
-        );
-        assert!(last_fetch_at(work.path()).is_some());
-    }
-
-    #[tokio::test]
-    async fn fetch_all_remotes_prunes_a_branch_that_vanished_upstream() {
-        let (origin, work) = init_repo_with_remote();
-        run_git(origin.path(), &["branch", "-D", "feature-remote-only"]);
-
-        assert_eq!(fetch_all_remotes(work.path()).await, None);
-
-        let branches = list_branches(work.path()).unwrap();
-        assert!(
-            !branches
-                .iter()
-                .any(|b| b.name == "origin/feature-remote-only"),
-            "a ref deleted upstream must be pruned away: {branches:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn fetch_all_remotes_names_a_repo_with_no_remote() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        let error = fetch_all_remotes(tmp.path()).await.expect("a named reason");
-        assert_eq!(
-            error.kind,
-            FetchErrorKind::NoRemote,
-            "a purely local repo is a legitimate case with its own name"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_failed_fetch_leaves_the_list_and_the_previous_date_intact() {
-        let (_origin, work) = init_repo_with_remote();
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-        let dated_at = last_fetch_at(work.path()).expect("a first successful fetch");
-
-        // Break the remote the way an offline machine or a moved repo would.
-        run_git(
-            work.path(),
-            &["remote", "set-url", "origin", "/nonexistent/repo.git"],
-        );
-        let error = fetch_all_remotes(work.path()).await.expect("a failure");
-        assert!(
-            !error.message.is_empty(),
-            "git's own words reach the popover"
-        );
-
-        // ADR-0070 §1: the écart degrades to "unknown, as of the last successful
-        // fetch" — the list itself is untouched and launching stays possible.
-        let branches = list_branches(work.path()).unwrap();
-        assert!(branches.iter().any(|b| b.name == "main"));
-        // git truncates and re-dates FETCH_HEAD on its way into a doomed fetch, so
-        // without the restore this reads as "fetched just now" over refs nobody
-        // refreshed — and the popover's "last successful fetch 2 d ago" would be a
-        // fabrication. The date must be the one the LAST SUCCESS left.
-        assert_eq!(
-            last_fetch_at(work.path()).as_deref(),
-            Some(dated_at.as_str()),
-            "a failed fetch must leave the last successful fetch's date standing"
-        );
-    }
-
-    #[tokio::test]
-    async fn concurrent_fetches_of_one_repo_share_a_single_flight() {
-        let (_origin, work) = init_repo_with_remote();
-        let path = work.path().to_path_buf();
-        let outcomes = futures_util::future::join_all((0..4).map(|_| {
-            let path = path.clone();
-            async move { fetch_all_remotes(&path).await }
-        }))
-        .await;
-        assert!(
-            outcomes.iter().all(|o| o.is_none()),
-            "every joined caller reads the leader's outcome: {outcomes:?}"
-        );
-        assert!(
-            !fetch_in_flight()
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .contains_key(&path),
-            "the flight is released, so the next ask fetches for real"
-        );
     }
 
     // ── #804: the pre-cut fetch of a Trigger fire ───────────────────────────────
@@ -41568,330 +39284,8 @@ edges: []
         assert_eq!(fetch_before_trigger_cut(&targets).await, None);
     }
 
-    #[test]
-    fn validate_source_branch_accepts_remote_tracking_ref() {
-        let (_origin, work) = init_repo_with_remote();
-        // The remote-only branch has no local counterpart — this was the 400 the
-        // change fixes.
-        let result = validate_source_branch(work.path(), "origin/feature-remote-only");
-        assert!(
-            result.is_ok(),
-            "remote-tracking ref must validate: {result:?}"
-        );
-    }
-
-    #[test]
-    fn validate_source_branch_rejects_unknown_remote_ref() {
-        let (_origin, work) = init_repo_with_remote();
-        let err = validate_source_branch(work.path(), "origin/nope").unwrap_err();
-        assert!(err.contains("does not exist"), "message was: {err}");
-        assert!(
-            err.contains("origin/nope"),
-            "message must name the ref: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_source_branch_does_not_glob() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        // A default branch exists (main/master); a glob would match it. The exact
-        // `show-ref --verify` probe must NOT — `mai*` is not a real branch.
-        let err = validate_source_branch(tmp.path(), "mai*").unwrap_err();
-        assert!(err.contains("does not exist"), "message was: {err}");
-    }
-
-    // ── Fast-forward (#803, ADR-0070 §2) ────────────────────────────────────
-    //
-    // Every case is driven against a REAL repository with a real origin: the
-    // question "did the branch move, and did the files move with it?" has no
-    // meaningful answer over a mocked git.
-
-    /// A clone whose `main` is `n` commits behind `origin/main`, already fetched
-    /// so the gap is visible without any network.
-    fn clone_behind_origin(n: usize) -> (tempfile::TempDir, tempfile::TempDir) {
-        let (origin, work) = init_repo_with_remote();
-        commit_n(origin.path(), n, "upstream-move");
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-        (origin, work)
-    }
-
     fn head_sha(repo: &std::path::Path) -> String {
         structured_diff::rev_parse(repo, "HEAD").expect("HEAD resolves")
-    }
-
-    #[test]
-    fn fast_forward_moves_a_behind_branch_and_its_checkout() {
-        let (origin, work) = clone_behind_origin(3);
-        let before = head_sha(work.path());
-
-        let done = fast_forward_branch(work.path(), "main").expect("a lossless fast-forward");
-
-        assert_eq!(done.commits, 3, "the count is the écart that was shown");
-        assert_eq!(done.upstream, "origin/main");
-        assert_eq!(
-            head_sha(work.path()),
-            head_sha(origin.path()),
-            "the branch now sits on the upstream tip"
-        );
-        assert_ne!(head_sha(work.path()), before, "and it actually moved");
-        // `main` IS checked out here, so the working tree walked forward with the
-        // ref — the file the origin added must exist on disk.
-        assert_eq!(
-            done.moved_checkout.as_deref(),
-            Some(work.path().display().to_string().as_str()),
-            "the popover must be able to name the checkout that moved"
-        );
-        assert!(
-            work.path().join("upstream-move-2.txt").exists(),
-            "an `update-ref` alone would have left the fetched files missing"
-        );
-        // The gap is gone from the list the same response carries.
-        let branches = list_branches(work.path()).unwrap();
-        assert_eq!(branch_named(&branches, "main").behind, Some(0));
-    }
-
-    #[test]
-    fn fast_forward_of_an_unchecked_out_branch_is_a_pure_ref_move() {
-        let (origin, work) = init_repo_with_remote();
-        // `feature-remote-only` exists on origin only; give the clone a local
-        // branch tracking it, WITHOUT checking it out (main stays HEAD).
-        run_git(
-            work.path(),
-            &[
-                "branch",
-                "--track",
-                "feature-remote-only",
-                "origin/feature-remote-only",
-            ],
-        );
-        run_git(origin.path(), &["checkout", "feature-remote-only"]);
-        commit_n(origin.path(), 2, "remote-side");
-        run_git(origin.path(), &["checkout", "main"]);
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-
-        let head_before = head_sha(work.path());
-        let done =
-            fast_forward_branch(work.path(), "feature-remote-only").expect("a pure ref move");
-
-        assert_eq!(done.commits, 2);
-        assert!(
-            done.moved_checkout.is_none(),
-            "no checkout holds the branch: none of the user's files change"
-        );
-        assert_eq!(
-            head_sha(work.path()),
-            head_before,
-            "the CHECKED-OUT branch must not budge when another branch is advanced"
-        );
-        assert!(
-            !work.path().join("remote-side-0.txt").exists(),
-            "a pure ref move touches no file in the working tree"
-        );
-        let branches = list_branches(work.path()).unwrap();
-        assert_eq!(
-            branch_named(&branches, "feature-remote-only").behind,
-            Some(0),
-            "the ref really moved, not just the report"
-        );
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_dirty_tree_and_names_the_files() {
-        let (_origin, work) = clone_behind_origin(2);
-        std::fs::write(work.path().join("README.md"), "# dirtied\n").unwrap();
-        let before = head_sha(work.path());
-
-        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
-
-        assert_eq!(refusal.reason, FastForwardRefusal::DirtyTree);
-        assert_eq!(refusal.dirty_count, Some(1));
-        assert!(
-            refusal.dirty_files.iter().any(|l| l.contains("README.md")),
-            "the popover lists what is in the way: {:?}",
-            refusal.dirty_files
-        );
-        assert!(refusal.checkout.is_some(), "and where to look");
-        assert_eq!(
-            head_sha(work.path()),
-            before,
-            "a refusal changes nothing at all"
-        );
-    }
-
-    #[test]
-    fn fast_forward_ignores_untracked_files() {
-        let (origin, work) = clone_behind_origin(1);
-        // Untracked files survive a fast-forward untouched: refusing over them
-        // would refuse the commonest working tree there is.
-        std::fs::write(work.path().join("scratch.txt"), "notes\n").unwrap();
-
-        fast_forward_branch(work.path(), "main").expect("untracked files never block");
-
-        assert_eq!(head_sha(work.path()), head_sha(origin.path()));
-        assert!(
-            work.path().join("scratch.txt").exists(),
-            "and they are still there afterwards"
-        );
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_diverged_branch() {
-        let (_origin, work) = clone_behind_origin(3);
-        commit_n(work.path(), 1, "local-work");
-        let before = head_sha(work.path());
-
-        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
-
-        assert_eq!(refusal.reason, FastForwardRefusal::Diverged);
-        assert_eq!(
-            head_sha(work.path()),
-            before,
-            "the local commit is exactly what must not be dropped"
-        );
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_branch_checked_out_in_another_worktree() {
-        let (_origin, work) = clone_behind_origin(2);
-        // Park `main` in a sibling worktree, the shape a PDO Run itself creates.
-        let elsewhere = tempfile::tempdir().unwrap();
-        let park = elsewhere.path().join("parked");
-        run_git(work.path(), &["checkout", "-q", "-b", "side"]);
-        run_git(
-            work.path(),
-            &["worktree", "add", park.to_str().unwrap(), "main"],
-        );
-        let before = structured_diff::rev_parse(work.path(), "refs/heads/main").unwrap();
-
-        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
-
-        assert_eq!(refusal.reason, FastForwardRefusal::CheckedOutElsewhere);
-        assert!(
-            refusal
-                .checkout
-                .as_deref()
-                .is_some_and(|c| c.contains("parked")),
-            "the worktree is named so the person knows where to look: {refusal:?}"
-        );
-        assert_eq!(
-            structured_diff::rev_parse(work.path(), "refs/heads/main").unwrap(),
-            before
-        );
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_branch_without_an_upstream() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        run_git(tmp.path(), &["checkout", "-q", "-b", "solo"]);
-
-        let refusal = fast_forward_branch(tmp.path(), "solo").expect_err("a named refusal");
-
-        assert_eq!(refusal.reason, FastForwardRefusal::NoUpstream);
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_branch_already_up_to_date() {
-        let (_origin, work) = init_repo_with_remote();
-
-        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
-
-        assert_eq!(
-            refusal.reason,
-            FastForwardRefusal::UpToDate,
-            "the benign race: nothing to take, and nothing red about it"
-        );
-    }
-
-    #[tokio::test]
-    async fn fast_forward_endpoint_answers_200_with_the_refreshed_list() {
-        let (_origin, work) = clone_behind_origin(2);
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/repos/fast-forward?path={}",
-                        work.path().to_str().unwrap()
-                    ))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"branch":"main"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["fast_forward"]["commits"], 2);
-        assert_eq!(json["fast_forward"]["upstream"], "origin/main");
-        // The list travels in the SAME response: the client never has to make a
-        // second call and read a repo from between the two.
-        let main = json["branches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|b| b["name"] == "main")
-            .expect("main is listed");
-        assert_eq!(main["behind"], 0);
-    }
-
-    #[tokio::test]
-    async fn fast_forward_endpoint_answers_409_with_the_reason_and_the_list() {
-        let (_origin, work) = clone_behind_origin(2);
-        std::fs::write(work.path().join("README.md"), "# dirty\n").unwrap();
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/repos/fast-forward?path={}",
-                        work.path().to_str().unwrap()
-                    ))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"branch":"main"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["refusal"]["reason"], "dirty_tree");
-        assert!(
-            json["branches"].is_array(),
-            "the list is still there: {json}"
-        );
-    }
-
-    #[tokio::test]
-    async fn fast_forward_endpoint_rejects_a_remote_tracking_ref() {
-        let (_origin, work) = init_repo_with_remote();
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/repos/fast-forward?path={}",
-                        work.path().to_str().unwrap()
-                    ))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"branch":"origin/feature-remote-only"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        // Not a 409: a tracking ref IS the upstream, so asking to advance it is a
-        // malformed request, not a refusal with a reason to show.
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     // ── Dérive de la source (#803, ADR-0070 §4) ──────────────────────────────
@@ -42910,7 +40304,7 @@ edges: []
             .unwrap();
         }
         // impl-1 is still running and isolated: give it a live sub-worktree branch.
-        let live_branch = worktree_ops::sub_worktree_branch(run_id, "impl-1", 1);
+        let live_branch = worktrees::sub_worktree_branch(run_id, "impl-1", 1);
         git_in(target, &["branch", &live_branch, &c2]);
 
         let app = build_router(state);
@@ -45967,429 +43361,6 @@ edges:
         assert_eq!(json["affected_count"], 0);
     }
 
-    static SEED_TS_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-    async fn seed_run_started(state: &Arc<AppState>, run_id: &str, target_repo: Option<&str>) {
-        let seq = SEED_TS_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let ts = format!("2026-01-01T00:00:{:02}.000Z", seq);
-        let mut payload = serde_json::json!({
-            "pipeline_name": "test-pipe",
-            "input": "test",
-        });
-        if let Some(repo) = target_repo {
-            payload["target_repo"] = serde_json::json!(repo);
-        }
-        append_event(
-            state,
-            &event_log::Event {
-                id: None,
-                run_id: run_id.into(),
-                ts,
-                kind: event_log::EventKind::RunStarted,
-                node_id: None,
-                iter: None,
-                payload: Some(payload),
-            },
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn repos_recent_empty_when_no_events() {
-        let state = test_state().await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert!(repos.is_empty());
-    }
-
-    #[tokio::test]
-    async fn repos_recent_returns_single_repo() {
-        let state = test_state().await;
-        seed_run_started(&state, "run-1", Some("/home/user/project-a")).await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(repos, vec!["/home/user/project-a"]);
-    }
-
-    #[tokio::test]
-    async fn repos_recent_deduplicates_and_orders_by_most_recent() {
-        let state = test_state().await;
-        seed_run_started(&state, "run-1", Some("/repo/a")).await;
-        seed_run_started(&state, "run-2", Some("/repo/b")).await;
-        seed_run_started(&state, "run-3", Some("/repo/a")).await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(repos, vec!["/repo/a", "/repo/b"]);
-    }
-
-    #[tokio::test]
-    async fn repos_recent_limits_to_5() {
-        let state = test_state().await;
-        for i in 0..8 {
-            seed_run_started(&state, &format!("run-{i}"), Some(&format!("/repo/{i}"))).await;
-        }
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(repos.len(), 5);
-    }
-
-    #[tokio::test]
-    async fn repos_recent_ignores_events_without_target_repo() {
-        let state = test_state().await;
-        seed_run_started(&state, "run-1", None).await;
-        seed_run_started(&state, "run-2", Some("/repo/real")).await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(repos, vec!["/repo/real"]);
-    }
-
-    // GET /fs/browse default-root resolution (issue #131)
-    //
-    // `resolve_browse_root` is pure w.r.t. the environment (home/repo_root injected),
-    // so these never touch the real `$HOME` and are safe under cargo's parallel test
-    // threads. Each test seeds real temp dirs so the `is_dir`/`is_file` probes are
-    // deterministic.
-
-    #[test]
-    fn resolve_browse_root_explicit_existing_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(Some(tmp.path().to_str().unwrap()), None, repo_root.path())
-            .unwrap();
-        assert_eq!(got, tmp.path());
-    }
-
-    #[test]
-    fn resolve_browse_root_file_resolves_to_parent() {
-        let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("notes.txt");
-        std::fs::write(&file, "x").unwrap();
-        let repo_root = tempfile::tempdir().unwrap();
-        let got =
-            resolve_browse_root(Some(file.to_str().unwrap()), None, repo_root.path()).unwrap();
-        assert_eq!(got, tmp.path());
-    }
-
-    #[test]
-    fn resolve_browse_root_nonexistent_clamps_to_home() {
-        let home = tempfile::tempdir().unwrap();
-        let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(
-            Some("/this/path/definitely/does/not/exist/131"),
-            Some(home.path()),
-            repo_root.path(),
-        )
-        .unwrap();
-        assert_eq!(
-            got,
-            home.path(),
-            "non-existent path clamps to the default (home)"
-        );
-    }
-
-    #[test]
-    fn resolve_browse_root_relative_path_errors() {
-        let repo_root = tempfile::tempdir().unwrap();
-        let err = resolve_browse_root(Some("relative/path"), None, repo_root.path()).unwrap_err();
-        assert_eq!(err, BrowseRootError::Relative);
-    }
-
-    #[test]
-    fn resolve_browse_root_none_uses_home() {
-        let home = tempfile::tempdir().unwrap();
-        let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(None, Some(home.path()), repo_root.path()).unwrap();
-        assert_eq!(got, home.path());
-    }
-
-    #[test]
-    fn resolve_browse_root_none_without_home_uses_repo_root() {
-        let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(None, None, repo_root.path()).unwrap();
-        assert_eq!(got, repo_root.path());
-    }
-
-    #[test]
-    fn resolve_browse_root_falls_through_to_filesystem_root() {
-        // No home, and a repo_root that does not exist → falls through to `/`
-        // (which always exists), so the chain never collapses in practice.
-        let got = resolve_browse_root(None, None, Path::new("/this/repo/root/does/not/exist/131"))
-            .unwrap();
-        assert_eq!(got, Path::new("/"));
-    }
-
-    /// Deserialise a query string through the PRODUCTION extractor (`Query`'s own
-    /// `try_from_uri`, public in axum 0.8) — no HTTP, no router, but the exact
-    /// `serde_urlencoded` path a real request takes.
-    fn browse_query(query: &str) -> Result<BrowseQuery, axum::extract::rejection::QueryRejection> {
-        let uri: axum::http::Uri = format!("/fs/browse{query}").parse().unwrap();
-        Query::<BrowseQuery>::try_from_uri(&uri).map(|Query(q)| q)
-    }
-
-    #[test]
-    fn browse_query_defaults_are_dirs_only_hidden_off() {
-        // The load-bearing default: no query string ⇒ the pre-#431 listing, bit for bit.
-        let q = browse_query("").unwrap();
-        assert_eq!(q.path, None);
-        assert!(!q.files, "files must default to false (dirs only)");
-        assert!(
-            !q.hidden,
-            "hidden must default to false (dot-entries filtered)"
-        );
-    }
-
-    #[test]
-    fn browse_query_accepts_true_and_false() {
-        let q = browse_query("?path=/tmp&files=true&hidden=true").unwrap();
-        assert_eq!(q.path.as_deref(), Some("/tmp"));
-        assert!(q.files);
-        assert!(q.hidden);
-
-        let q = browse_query("?files=false&hidden=false").unwrap();
-        assert!(!q.files);
-        assert!(!q.hidden);
-    }
-
-    #[test]
-    fn browse_query_rejects_valueless_and_non_literal_flags() {
-        // Pins the STRICT wire vocabulary: `serde_urlencoded` defers to
-        // `str::parse::<bool>()`, so anything but the lowercase literals is a 400 —
-        // never a silent `false`. Documented on `BrowseQuery` so nobody discovers this
-        // by hand.
-        for q in [
-            "?files",
-            "?files=1",
-            "?files=0",
-            "?files=yes",
-            "?files=TRUE",
-            "?hidden",
-            "?hidden=yes",
-        ] {
-            assert!(
-                browse_query(q).is_err(),
-                "`{q}` must be rejected, not coerced"
-            );
-        }
-    }
-
-    #[test]
-    fn classify_browse_entry_offers_dirs_always_and_files_only_on_demand() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("a-dir");
-        std::fs::create_dir(&dir).unwrap();
-        let file = tmp.path().join("a-file");
-        std::fs::write(&file, "x").unwrap();
-        // A REAL symlink → dir, so `std::fs::metadata` genuinely follows it (the
-        // `DirEntry::metadata` trap this guards against).
-        let link = tmp.path().join("a-link");
-        std::os::unix::fs::symlink(&dir, &link).unwrap();
-
-        let m = |p: &Path| std::fs::metadata(p).ok();
-
-        // Directories are offered in BOTH modes.
-        assert_eq!(
-            classify_browse_entry(m(&dir).as_ref(), false),
-            EntryKind::Dir
-        );
-        assert_eq!(
-            classify_browse_entry(m(&dir).as_ref(), true),
-            EntryKind::Dir
-        );
-        // A symlink to a dir is a dir (metadata follows).
-        assert_eq!(
-            classify_browse_entry(m(&link).as_ref(), false),
-            EntryKind::Dir
-        );
-        // A regular file only when asked for.
-        assert_eq!(
-            classify_browse_entry(m(&file).as_ref(), false),
-            EntryKind::Skip
-        );
-        assert_eq!(
-            classify_browse_entry(m(&file).as_ref(), true),
-            EntryKind::File
-        );
-    }
-
-    #[test]
-    fn classify_browse_entry_skips_broken_links_and_specials_in_every_mode() {
-        // Unclassifiable (broken link / ELOOP): `metadata` errs → None.
-        assert_eq!(classify_browse_entry(None, false), EntryKind::Skip);
-        assert_eq!(
-            classify_browse_entry(None, true),
-            EntryKind::Skip,
-            "a dangling link must stay invisible even with files=true"
-        );
-
-        // A special file: `Some(meta)` that is neither a dir nor a regular file.
-        let tmp = tempfile::tempdir().unwrap();
-        let sock = tmp.path().join("sock");
-        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        let meta = std::fs::metadata(&sock).unwrap();
-        assert!(!meta.is_dir() && !meta.is_file(), "fixture must be special");
-        assert_eq!(classify_browse_entry(Some(&meta), false), EntryKind::Skip);
-        assert_eq!(
-            classify_browse_entry(Some(&meta), true),
-            EntryKind::Skip,
-            "a socket/fifo must stay invisible: nothing downstream can consume one"
-        );
-    }
-
-    fn browse_entry(name: &str, is_dir: bool) -> BrowseEntry {
-        BrowseEntry {
-            name: name.to_string(),
-            path: format!("/x/{name}"),
-            is_git_repo: false,
-            is_symlink: false,
-            is_dir,
-        }
-    }
-
-    #[test]
-    fn merge_browse_entries_puts_dirs_before_files() {
-        let (entries, truncated) = merge_browse_entries(
-            vec![browse_entry("z-dir", true)],
-            vec![browse_entry("a-file", false)],
-            BROWSE_CAP,
-        );
-        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["z-dir", "a-file"],
-            "genre beats name: a navigable dir is never buried under files"
-        );
-        assert!(!truncated);
-    }
-
-    #[test]
-    fn merge_browse_entries_gives_dirs_first_claim() {
-        // 3 dirs + 2000 files: the dirs are never starved, files fill what's left.
-        let dirs: Vec<BrowseEntry> = (0..3)
-            .map(|i| browse_entry(&format!("d{i}"), true))
-            .collect();
-        let files: Vec<BrowseEntry> = (0..2000)
-            .map(|i| browse_entry(&format!("f{i:04}"), false))
-            .collect();
-        let (entries, truncated) = merge_browse_entries(dirs, files, 1000);
-        assert_eq!(entries.len(), 1000);
-        assert_eq!(entries.iter().filter(|e| e.is_dir).count(), 3);
-        assert_eq!(entries.iter().filter(|e| !e.is_dir).count(), 997);
-        assert!(entries[..3].iter().all(|e| e.is_dir), "dirs come first");
-        assert!(truncated);
-
-        // 1500 dirs + 10 files: dirs consume the whole budget, files get nothing.
-        let dirs: Vec<BrowseEntry> = (0..1500)
-            .map(|i| browse_entry(&format!("d{i:04}"), true))
-            .collect();
-        let files: Vec<BrowseEntry> = (0..10)
-            .map(|i| browse_entry(&format!("f{i}"), false))
-            .collect();
-        let (entries, truncated) = merge_browse_entries(dirs, files, 1000);
-        assert_eq!(entries.len(), 1000);
-        assert!(
-            entries.iter().all(|e| e.is_dir),
-            "dirs claim the budget first"
-        );
-        assert!(truncated);
-    }
-
-    #[test]
-    fn merge_browse_entries_dirs_only_matches_pre_431() {
-        // The default path: `files` empty ⇒ identical to the pre-#431
-        // `sort_by_key(name.to_lowercase()) + truncate(cap)`, and NOT truncated under
-        // the cap.
-        let dirs = vec![
-            browse_entry("Zeta", true),
-            browse_entry("alpha", true),
-            browse_entry("Beta", true),
-        ];
-        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), BROWSE_CAP);
-        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["alpha", "Beta", "Zeta"]);
-        assert!(!truncated);
-
-        // Exactly `cap` dirs is NOT truncated (the pre-#431 `len > cap` semantics).
-        let dirs: Vec<BrowseEntry> = (0..1000)
-            .map(|i| browse_entry(&format!("d{i:04}"), true))
-            .collect();
-        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), 1000);
-        assert_eq!(entries.len(), 1000);
-        assert!(!truncated, "exactly `cap` entries is not a truncation");
-    }
-
     #[test]
     fn prompt_required_pipeline_rejects_empty_input() {
         assert!(validate_run_input(true, "").is_err());
@@ -48567,5 +45538,127 @@ edges:
         assert!(dir.join("foo-bar.yaml").exists());
         let content = std::fs::read_to_string(dir.join("foo-bar.yaml")).unwrap();
         assert!(content.contains("name: Foo Bar"));
+    }
+
+    #[test]
+    fn frozen_node_provisioning_uses_the_started_iteration_recipe_and_plan() {
+        let event = event_log::Event {
+            id: None,
+            run_id: "run".into(),
+            ts: "2026-09-01T12:00:00Z".into(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some("worker".into()),
+            iter: Some(2),
+            payload: Some(serde_json::json!({
+                "provisioning": {
+                    "copy": [".env"],
+                    "hardlink": [],
+                    "symlink": []
+                },
+                "provisioning_plan": {
+                    "entries": [{
+                        "relative_path": ".env",
+                        "mode": "copy",
+                        "origin_scope": "isolated_node",
+                        "pattern": ".env",
+                        "provided_by_git": false
+                    }],
+                    "rules": [],
+                    "conflicts": []
+                }
+            })),
+        };
+
+        assert_eq!(
+            frozen_node_rules(std::slice::from_ref(&event), "worker", 2)
+                .unwrap()
+                .copy,
+            vec![".env"]
+        );
+        assert_eq!(
+            frozen_node_plan(&[event], "worker", 2).unwrap().entries[0].relative_path,
+            ".env"
+        );
+        assert!(frozen_node_rules(&[], "worker", 2).is_none());
+        assert!(frozen_node_plan(&[], "worker", 2).is_none());
+    }
+
+    #[test]
+    fn reap_orphan_run_worktree_removes_empty_run_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let worktree = worktree_dir_for_run(repo, "failed-run");
+        reap_orphan_run_worktree(repo, &worktree, "pdo/run-failed-run");
+
+        assert!(
+            !worktree.parent().unwrap().exists(),
+            "an aborted Run must not leave its empty directory behind"
+        );
+    }
+
+    /// The Projet's agentic profile and skills are stored opaque by the
+    /// workspace; this crate decodes them for the harness and skill tiers.
+    #[tokio::test]
+    async fn the_projet_tiers_decode_what_the_workspace_stores() {
+        use pdo_workspace::adapters::http::ProjectSettings;
+        use pdo_workspace::application::ports::ProjectRepository;
+        use pdo_workspace::domain::project::StoredSetting;
+
+        let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        pdo_workspace::adapters::sqlite::init(&db).await.unwrap();
+        let store = pdo_workspace::adapters::sqlite::SqliteProjects::new(db.clone());
+        let project = store.create("Alpha").await.unwrap();
+        store.add_member(&project.id, "/repos/front").await.unwrap();
+        assert_eq!(
+            project_agent_choice_for_path(&db, "/repos/front")
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(project_skills_for_path(&db, "/repos/front")
+            .await
+            .unwrap()
+            .is_empty());
+
+        let choice = pdo_harness::agent_choice::AgentChoice::Profile {
+            profile_id: "reviewer".to_string(),
+        };
+        let encoded = LegacyProjectSettings::encode_agent_choice(&choice);
+        store
+            .set_agent_choice(&project.id, Some(StoredSetting(encoded)))
+            .await
+            .unwrap();
+        let skills = LegacyProjectSettings::encode_skills(vec![
+            skill_selection::SkillRef {
+                id: " tdd ".into(),
+                name: "TDD".into(),
+            },
+            skill_selection::SkillRef {
+                id: "tdd".into(),
+                name: "dup".into(),
+            },
+        ]);
+        store
+            .set_skills(&project.id, skills.map(StoredSetting))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            project_agent_choice_for_path(&db, "/repos/front")
+                .await
+                .unwrap(),
+            Some(choice)
+        );
+        let selected = project_skills_for_path(&db, "/repos/front").await.unwrap();
+        assert_eq!(selected.len(), 1, "normalised on the way in: {selected:?}");
+        assert_eq!(selected[0].id, "tdd");
+        assert!(project_skills_for_path(&db, "/repos/other")
+            .await
+            .unwrap()
+            .is_empty());
+        // An empty selection is stored as none.
+        assert_eq!(LegacyProjectSettings::encode_skills(vec![]), None);
     }
 }

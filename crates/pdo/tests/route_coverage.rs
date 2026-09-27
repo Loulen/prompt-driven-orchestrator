@@ -9,7 +9,8 @@
 //! runtime recorder could see the calls the other tests make:
 //!
 //! - **the routes**: the `.route("<path>", <method router>)` calls of
-//!   `build_router` in `src/lib.rs`, each top-level `get(`/`post(`/`put(`/
+//!   `build_router` in the legacy crate and of every context router it merges,
+//!   each top-level `get(`/`post(`/`put(`/
 //!   `patch(`/`delete(` of the method router being one route. When the
 //!   migration moves the router, point [`ROUTER_SOURCES`] at its new home.
 //! - **the calls**: every string literal of `tests/**/*.rs` that reads as a URL
@@ -27,12 +28,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The files holding the assembled router (relative to this crate), and the
-/// function that builds each part: the legacy crate's router, and the
-/// `router()` of every context already extracted (merged by the daemon or the
+/// function that builds each part: the legacy crate's router, and the router of
+/// every context already extracted (merged by the legacy router or by the
 /// composition root).
 const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("../pdo-daemon/src/lib.rs", "fn build_router("),
     ("../pdo-sandbox/src/adapters/http/mod.rs", "pub fn router("),
+    (
+        "../pdo-workspace/src/adapters/http/mod.rs",
+        "pub fn router<S: ProjectSettings>(",
+    ),
     ("../pdo-platform/src/adapters/http/mod.rs", "pub fn router("),
 ];
 
@@ -91,7 +96,9 @@ fn router_routes(src: &str, marker: &str) -> Vec<Route> {
     let body_open = start + src[start..].find('{').unwrap();
     let body = &src[body_open..find_block_end(src, body_open)];
     let body = strip_line_comments(body);
-    for shape in [".nest(", ".merge(", ".route_service(", ".nest_service("] {
+    // `.merge(…)` is read through [`ROUTER_SOURCES`]: the merged router is
+    // listed there with its own marker.
+    for shape in [".nest(", ".route_service(", ".nest_service("] {
         assert!(
             !body.contains(shape),
             "the router uses `{shape}`: teach route_coverage.rs to read it"

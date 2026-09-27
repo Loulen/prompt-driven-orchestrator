@@ -119,7 +119,7 @@ impl std::error::Error for AgentProfileError {}
 
 /// Create the `agent_profiles` table if absent and seed the reserved
 /// [`DEFAULT_PROFILE_ID`] row if it is missing. Idempotent — safe on every boot,
-/// same idiom as the sandbox profile store's `init` / `project_store::init`.
+/// same idiom as the sandbox profile store's `init` / `crate::workspace_db::init`.
 pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS agent_profiles (

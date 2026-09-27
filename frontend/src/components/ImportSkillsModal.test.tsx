@@ -11,7 +11,6 @@ vi.mock("../api", () => ({
   cancelSkillScan: (...args: unknown[]) => cancelMock(...args),
   importSkills: (...args: unknown[]) => importMock(...args),
   fetchRecentSkillSources: (...args: unknown[]) => recentMock(...args),
-  browseFs: vi.fn().mockResolvedValue({ path: "/home/user", parent: null, entries: [], truncated: false, error: null }),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;
@@ -21,6 +20,11 @@ vi.mock("../api", () => ({
       this.body = opts.body;
     }
   },
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+  browseFs: vi.fn().mockResolvedValue({ path: "/home/user", parent: null, entries: [], truncated: false, error: null }),
 }));
 
 import { ApiError } from "../shared/http/client";

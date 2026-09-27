@@ -99,7 +99,7 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
     } = config;
     let host: Arc<dyn ExtensionHost> = Arc::new(Extensions::new(extensions));
     daemon.extension_host = ExtensionHostHandle(host.clone());
-    daemon.router_layer = Some(layer_asking(host, inner_layer));
+    daemon.router_layer = Some(identify_layer(host, inner_layer));
     let handle = pdo_daemon::serve_with_config(addr, repo_root, daemon).await?;
     Ok(Daemon { handle })
 }
@@ -113,12 +113,12 @@ pub fn composed_router_layer(
     extensions: Vec<Box<dyn Extension>>,
     inner: Option<RouterLayer>,
 ) -> RouterLayer {
-    layer_asking(Arc::new(Extensions::new(extensions)), inner)
+    identify_layer(Arc::new(Extensions::new(extensions)), inner)
 }
 
-/// The wiring of the extracted contexts, and around the router `inner` (if
-/// any), then `identify` — all asking the same `host`.
-fn layer_asking(host: Arc<dyn ExtensionHost>, inner: Option<RouterLayer>) -> RouterLayer {
+/// The wiring of the extracted contexts, `inner` (if any), then `identify`
+/// asking `host`, in front of everything.
+fn identify_layer(host: Arc<dyn ExtensionHost>, inner: Option<RouterLayer>) -> RouterLayer {
     let contexts_host = host.clone();
     RouterLayer::new(move |router| {
         let router = match &inner {

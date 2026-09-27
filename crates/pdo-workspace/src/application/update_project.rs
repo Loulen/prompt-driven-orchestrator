@@ -106,12 +106,15 @@ mod tests {
 
     async fn seeded() -> (Fixture, String) {
         let f = fixture();
-        let id = f
+        let crate::application::ProjectCreated::Created(project) = f
             .workspace
-            .create_project(&Actor::LocalOperator, "Front")
+            .create_project(&Actor::LocalOperator, "Front", &[])
             .await
             .unwrap()
-            .id;
+        else {
+            panic!("expected a creation")
+        };
+        let id = project.id;
         (f, id)
     }
 

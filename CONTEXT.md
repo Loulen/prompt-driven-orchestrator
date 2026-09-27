@@ -576,7 +576,7 @@ La brique **unique** de sélection de chemin à la souris : un listing à **un n
 Un **Projet** est un regroupement **nommé** de dépôts qui se travaillent ensemble (un front et un back, par exemple). Il porte un nom éditable et une liste de chemins **membres**, comparés verbatim comme partout ailleurs (cf. *Repo cible*).
 
 - **Un chemin appartient à au plus un Projet**, et le Projet d'un Run est celui qui possède son **dépôt primaire**. Un secondaire membre d'un autre Projet n'y change rien : c'est un contexte read-only, pas une appartenance (ADR-0042).
-- **Matérialisé à la demande, jamais seedé** : tant qu'aucun nom n'est donné ni aucun réglage attaché, il n'existe pas de Projet — les listes se groupent sur le libellé dérivé du chemin. Nommer un en-tête de groupe est ce qui crée l'entité.
+- **Matérialisé à la demande, jamais seedé** : tant qu'aucun nom n'est donné ni aucun réglage attaché, il n'existe pas de Projet — les listes se groupent sur le libellé dérivé du chemin. Nommer un en-tête de groupe est ce qui crée l'entité, avec ses membres initiaux : c'est une seule Opération de création (cf. *Extensions*).
 - **Réglages portés** : le harnais agentique, dont il est le tier intermédiaire (ADR-0046), et ses skills sélectionnés (cf. *Banque de skills*).
 
 _Éviter_ : « projet » pour un dépôt seul (c'est le *repo cible*) ou pour le `projects/` d'un home stagé.

@@ -23,7 +23,14 @@ Sans extension, rien ne change : le contrat HTTP/WS est identique (snapshots inc
 - Une Opération refusée répond `403` avec `{"error": "operation_refused", "message", "reason"}`
   (convention d'ADR-0035). Les réponses `403` de refus de `platform` et `workspace` passent de
   `{"error": "operation refused: …"}` à ce corps. L'UI affiche la raison dans l'erreur existante
-  du geste. Une panique dans `authorize` vaut refus et laisse une ligne de log.
+  du geste. Une panique dans `authorize` vaut refus et laisse une ligne de log, qui nomme
+  l'Acteur (pour un Acteur identifié : `<namespace>:<id>`).
+- Nommer un groupe est **une seule** Opération `Create` : `POST /projects` accepte un champ
+  optionnel `members` (les chemins du groupe), rattachés à la création ; un chemin déjà membre
+  d'un autre Projet refuse toute la création (`409` qui nomme le propriétaire, rien n'est
+  écrit). Sans `members`, la requête et la réponse sont inchangées. Le crayon de groupe n'envoie
+  plus de `PATCH` vide après la création, et si une étape suivante échoue, il garde le Projet
+  créé (un nouvel essai le modifie, sans doublon).
 
 ## 1.111.3 — Contexte `workspace` extrait (#917, spec #913)
 

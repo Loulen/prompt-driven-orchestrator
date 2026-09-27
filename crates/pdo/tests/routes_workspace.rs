@@ -139,6 +139,32 @@ async fn removing_a_member_detaches_it_only_from_its_own_project() {
 }
 
 #[tokio::test]
+async fn naming_a_project_with_members_attaches_them_or_names_the_owner() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let (status, alpha) = flow::post_json(
+        &daemon,
+        "/projects",
+        serde_json::json!({ "name": "Alpha", "members": ["/srv/a1", "/srv/a2"] }),
+    )
+    .await;
+    assert_eq!(status, 201, "{alpha}");
+    assert_eq!(alpha["members"], serde_json::json!(["/srv/a1", "/srv/a2"]));
+
+    // An initial member owned elsewhere refuses the whole creation, by name.
+    let (status, body) = flow::post_json(
+        &daemon,
+        "/projects",
+        serde_json::json!({ "name": "Beta", "members": ["/srv/a2"] }),
+    )
+    .await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["owner_name"], "Alpha");
+    assert_eq!(body["owner_id"], alpha["id"]);
+    let list = daemon.get_json("/projects").await;
+    assert_eq!(list.as_array().unwrap().len(), 1, "nothing written: {list}");
+}
+
+#[tokio::test]
 async fn project_provisioning_rules_round_trip_and_need_an_existing_project() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let project = create_project(&daemon, "Alpha").await;

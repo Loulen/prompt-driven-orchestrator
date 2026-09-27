@@ -20,6 +20,7 @@ mod workspace;
 pub(crate) mod testing;
 
 pub use add_project_member::MemberAdded;
+pub use create_project::ProjectCreated;
 pub use error::{WorkspaceError, WorkspaceResult};
 pub use fast_forward_branch::FastForwarded;
 pub use queries::{PreviewRequest, RECENT_REPOSITORIES};

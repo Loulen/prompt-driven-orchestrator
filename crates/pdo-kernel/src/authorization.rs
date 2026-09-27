@@ -68,10 +68,21 @@ pub fn authorize(
                 operation.resource,
                 operation.verb,
                 operation.target,
-                actor.kind(),
+                who(actor),
             );
             Err(Denied { reason })
         }
+    }
+}
+
+/// The actor as a refusal's log line names it: its kind, and for an identified
+/// one the extension's namespace and id, so the refusal can be audited.
+fn who(actor: &Actor) -> String {
+    match actor {
+        Actor::Identified { namespace, id } => format!("{namespace}:{id}"),
+        Actor::Agent { run_id, node_id } => format!("agent {run_id}/{node_id}"),
+        Actor::Trigger { trigger_id } => format!("trigger {trigger_id}"),
+        other => other.kind().to_string(),
     }
 }
 
@@ -90,6 +101,25 @@ mod tests {
             node_id: "n1".into(),
         };
         assert_eq!(authorize(&NoExtensions, &agent, &op), Ok(()));
+    }
+
+    #[test]
+    fn a_refusal_log_names_who_asked() {
+        assert_eq!(who(&Actor::LocalOperator), "local_operator");
+        assert_eq!(
+            who(&Actor::Identified {
+                namespace: "acme".into(),
+                id: "alice".into()
+            }),
+            "acme:alice"
+        );
+        assert_eq!(
+            who(&Actor::Agent {
+                run_id: "r1".into(),
+                node_id: "n1".into()
+            }),
+            "agent r1/n1"
+        );
     }
 
     #[tokio::test]

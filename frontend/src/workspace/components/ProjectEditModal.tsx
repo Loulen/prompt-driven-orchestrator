@@ -50,6 +50,10 @@ export default function ProjectEditModal({
   onSaved: () => void;
 }) {
   const [name, setName] = useState(initialName);
+  // The Projet this modal created, when a later step of the save failed: a retry
+  // edits it instead of naming a duplicate.
+  const [created, setCreated] = useState<Project | null>(null);
+  const editing = initialProject ?? created;
   const [harness, setHarness] = useState<string>(initialProject?.harness ?? "");
   const [agentChoice, setAgentChoice] = useState<AgentChoice>(
     initialProject?.agent_choice ?? { mode: "inherit" },
@@ -58,7 +62,7 @@ export default function ProjectEditModal({
   const [skills, setSkills] = useState<SkillRef[]>(initialProject?.skills ?? []);
   const skillsChanged =
     skills.map((skill) => skill.id).join("\u0000") !==
-    (initialProject?.skills ?? []).map((skill) => skill.id).join("\u0000");
+    (editing?.skills ?? []).map((skill) => skill.id).join("\u0000");
   const { bank: skillBank } = useSkillBank();
   const { instance: instanceSkills } = useSkillTiers(null);
   const [checked, setChecked] = useState<Set<string>>(
@@ -77,11 +81,11 @@ export default function ProjectEditModal({
   const ownerElsewhere = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of projects) {
-      if (initialProject && p.id === initialProject.id) continue;
+      if (editing && p.id === editing.id) continue;
       for (const path of p.members) map.set(path, p.name);
     }
     return map;
-  }, [projects, initialProject]);
+  }, [projects, editing]);
 
   // The candidate universe: the surrounding list's repos, plus any existing
   // members (so a member currently filtered out of the list can still be unchecked).
@@ -107,12 +111,16 @@ export default function ProjectEditModal({
     if (!canSave) return;
     setSubmitting(true);
     setError(null);
+    let createdNow = false;
     try {
       // Materialise (or reuse) the Projet, then reconcile its name, harness and
-      // members. Create first so a fresh Projet has an id to attach against.
+      // members. A fresh Projet is named with its members in one creation, so an
+      // extension refusing only updates still lets the group be named.
       let projectId: string;
-      if (initialProject) {
-        projectId = initialProject.id;
+      let current: Set<string>;
+      if (editing) {
+        projectId = editing.id;
+        current = new Set(editing.members);
         await updateProject(projectId, {
           name: trimmedName,
           // Empty select → clear the harness (null); a value sets it.
@@ -122,16 +130,19 @@ export default function ProjectEditModal({
           ...(skillsChanged ? { skills } : {}),
         });
       } else {
-        const created = await createProject(trimmedName);
-        projectId = created.id;
-        await updateProject(projectId, {
+        const project = await createProject(trimmedName, [...checked]);
+        projectId = project.id;
+        current = new Set(project.members);
+        setCreated(project);
+        createdNow = true;
+        const settings = {
           ...(harness ? { harness } : {}),
           ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
           ...(skills.length > 0 ? { skills } : {}),
-        });
+        };
+        if (Object.keys(settings).length > 0) await updateProject(projectId, settings);
       }
 
-      const current = new Set(initialProject?.members ?? []);
       const desired = checked;
       // Attach newly-checked paths; a path owned elsewhere is skipped by the
       // disabled checkbox, but the daemon refuses it too (409 naming the owner).
@@ -146,6 +157,8 @@ export default function ProjectEditModal({
       onSaved();
       onClose();
     } catch (e) {
+      // The Projet exists even though a later step failed: let the list show it.
+      if (createdNow) onSaved();
       const msg =
         e instanceof ApiError
           ? e.message
@@ -172,7 +185,7 @@ export default function ProjectEditModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-1 font-medium text-fg">
-          {initialProject ? "Edit project" : "Name project"}
+          {editing ? "Edit project" : "Name project"}
         </div>
         <p className="mb-3 text-fg-4" style={{ fontSize: "11px" }}>
           Group repositories that work together under one name. A repo belongs to

@@ -12,9 +12,14 @@ export function fetchProjects(): Promise<Project[]> {
   return request<Project[]>("GET", "/projects");
 }
 
-export function createProject(name: string): Promise<Project> {
+/**
+ * Name a new Projet (`POST /projects`). The initial `members` travel with the
+ * name, so naming a group is a single creation. Throws an {@link ApiError} with
+ * `status: 409` naming the owner when a member already belongs to another Projet.
+ */
+export function createProject(name: string, members: string[] = []): Promise<Project> {
   return request<Project>("POST", "/projects", {
-    body: { name },
+    body: members.length > 0 ? { name, members } : { name },
     label: "POST /projects",
   });
 }

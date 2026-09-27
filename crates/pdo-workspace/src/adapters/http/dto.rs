@@ -67,11 +67,14 @@ impl<A, S> ProjectDto<A, S> {
 }
 
 /// Body of `POST /projects` — the only path that creates a `projects` row from a
-/// name. Membership and the harness are attached afterwards, so a Projet begins
-/// empty and harness-less.
+/// name. `members` (optional) are the repo paths the named group starts with, so
+/// naming a group is one `Create` Opération; the harness and the other settings
+/// are attached afterwards.
 #[derive(Deserialize)]
 pub(crate) struct CreateProjectRequest {
     pub name: String,
+    #[serde(default)]
+    pub members: Vec<String>,
 }
 
 /// Body of `PATCH /projects/{id}` — rename the Projet and/or (re)set the settings

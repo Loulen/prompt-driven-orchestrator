@@ -82,6 +82,28 @@ async fn refusing_project_updates_refuses_the_rename_and_lets_the_creation_throu
     assert_eq!(stored["name"], "demo");
 }
 
+/// The pencil's "name this group" gesture: the initial members travel with the
+/// name, so refusing only `Update` still lets a whole Projet be created (FP #930).
+#[tokio::test]
+async fn refusing_project_updates_still_creates_a_projet_with_its_initial_members() {
+    let (daemon, _) = daemon(Refusal::Only(ResourceKind::Project, Verb::Update)).await;
+
+    let (status, project) = answer(
+        reqwest::Client::new()
+            .post(format!("{}/projects", daemon.url()))
+            .json(&json!({ "name": "demo", "members": ["/repos/front"] }))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "the creation passes: {project}");
+    assert_eq!(project["members"], json!(["/repos/front"]));
+    let id = project["id"].as_str().unwrap();
+    let stored = daemon.get_json(&format!("/projects/{id}")).await;
+    assert_eq!(stored["members"], json!(["/repos/front"]));
+}
+
 #[tokio::test]
 async fn the_actor_identify_sets_is_the_one_authorize_receives() {
     let (daemon, control) = daemon(Refusal::Nothing).await;

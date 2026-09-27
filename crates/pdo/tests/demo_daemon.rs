@@ -8,9 +8,12 @@
 //!
 //! - `PDO_DEMO_PORT`: the port, `6280` by default. It binds `127.0.0.1`.
 //! - `PDO_DEMO_ROOT`: the directory the daemon keeps its state under, like the
-//!   working directory of `pdo daemon`; the current one by default.
+//!   working directory of `pdo daemon`; the current one by default. Pipelines
+//!   are read from `$PDO_DEMO_ROOT/.pdo/pipelines`, not from `$HOME`.
 //! - `PDO_TEST_EXTENSION_REFUSE`: what the test extension refuses (`none`, `all`,
 //!   `panic`, `<resource>:<verb>`), `project:update` by default.
+//!
+//! With `--exact`, the filter is the full path `demo_daemon::demo_daemon`.
 //!
 //! The caller named by the `x-pdo-test-actor` header is the identified Actor.
 

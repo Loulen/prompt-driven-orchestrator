@@ -10,7 +10,6 @@ use axum::{Extension, Json};
 use pdo_kernel::Actor;
 use serde::Deserialize;
 
-use super::refused;
 use crate::application::declared_wait::{DeclareWaitCommand, DeclareWaitError};
 use crate::domain::declared_wait::{DeclareOutcome, WaitRefusal};
 use crate::Session;
@@ -50,7 +49,7 @@ pub(super) async fn declare(
             })),
         )
             .into_response(),
-        Err(DeclareWaitError::Refused(denied)) => refused(denied),
+        Err(DeclareWaitError::Refused(denied)) => denied.into_response(),
         Err(DeclareWaitError::Wait(refusal)) => wait_refused(&refusal, &run_id, &node_id, iter),
     }
 }

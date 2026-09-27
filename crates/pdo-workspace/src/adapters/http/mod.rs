@@ -125,11 +125,6 @@ pub(crate) fn error(status: StatusCode, message: impl Into<String>) -> Response 
     (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
 }
 
-/// An Operation an extension refused: 403, with the reason.
-pub(crate) fn denied(denied: pdo_kernel::authorization::Denied) -> Response {
-    error(StatusCode::FORBIDDEN, denied.to_string())
-}
-
 /// Deserialize a double-`Option` PATCH field so a present `null` maps to
 /// `Some(None)` ("clear to NULL"), distinct from absent → `None` ("leave
 /// untouched"). serde's default for `Option<Option<T>>` collapses both to

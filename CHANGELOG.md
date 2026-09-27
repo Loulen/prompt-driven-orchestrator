@@ -10,6 +10,30 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.7 — API d'extension : identité et Autorisation d'opération (#930, spec #913)
+
+Sans extension, rien ne change : le contrat HTTP/WS est identique (snapshots inchangés).
+
+- `serve(config, extensions)` enregistre les extensions après avoir vérifié leur manifest : un
+  id valide et unique, et une version de l'API d'extension compatible (`Manifest::api_version`,
+  par défaut celle contre laquelle l'extension est compilée). Sinon, le daemon refuse de démarrer
+  et dit pourquoi.
+- `identify` pose l'Acteur choisi par une extension ; `authorize` est consulté par chaque use
+  case de mutation des contextes extraits, jamais par les transitions que le daemon fait seul.
+- Une Opération refusée répond `403` avec `{"error": "operation_refused", "message", "reason"}`
+  (convention d'ADR-0035). Les réponses `403` de refus de `platform`, `workspace`, `session`,
+  `sandbox` et `skill` passent de `{"error": "operation refused: …"}` à ce corps ; le refus de
+  `skill` perd au passage son champ `"code": "denied"` (le `403` `locked` du skill fourni garde
+  le sien). L'UI affiche la raison dans l'erreur existante du geste. Une panique dans
+  `authorize` vaut refus et laisse une ligne de log, qui nomme l'Acteur (pour un Acteur
+  identifié : `<namespace>:<id>`).
+- Nommer un groupe est **une seule** Opération `Create` : `POST /projects` accepte un champ
+  optionnel `members` (les chemins du groupe), rattachés à la création ; un chemin déjà membre
+  d'un autre Projet refuse toute la création (`409` qui nomme le propriétaire, rien n'est
+  écrit). Sans `members`, la requête et la réponse sont inchangées. Le crayon de groupe n'envoie
+  plus de `PATCH` vide après la création, et si une étape suivante échoue, il garde le Projet
+  créé (un nouvel essai le modifie, sans doublon).
+
 ## 1.111.6 — Contexte `skill` extrait (#918, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les

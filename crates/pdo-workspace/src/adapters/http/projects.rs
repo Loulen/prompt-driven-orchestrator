@@ -9,11 +9,11 @@ use axum::{Extension, Json};
 use pdo_kernel::Actor;
 use tracing::error;
 
-use crate::application::{MemberAdded, MemberRemoved, WorkspaceError};
+use crate::application::{MemberAdded, MemberRemoved, ProjectCreated, WorkspaceError};
 use crate::domain::project::Project;
 
 use super::dto::{CreateProjectRequest, PatchProjectRequest, ProjectDto, ProjectMemberRequest};
-use super::{denied, error as error_body, Http, ProjectSettings};
+use super::{error as error_body, Http, ProjectSettings};
 
 fn store_error() -> Response {
     error_body(
@@ -30,10 +30,24 @@ fn project_json<S: ProjectSettings>(project: Project) -> Response {
     Json(ProjectDto::from_project::<S>(project)).into_response()
 }
 
+/// A path already owned by another Projet is refused BEFORE any effect, and the
+/// refusal NAMES the owner so the pencil can say which one.
+fn owned_elsewhere(owner_id: String, owner_name: String) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": format!("path already belongs to project '{owner_name}'"),
+            "owner_id": owner_id,
+            "owner_name": owner_name,
+        })),
+    )
+        .into_response()
+}
+
 /// The response of a use case that failed, in the project routes' vocabulary.
 fn failure(err: WorkspaceError) -> Response {
     match err {
-        WorkspaceError::Denied(d) => denied(d),
+        WorkspaceError::Denied(d) => d.into_response(),
         WorkspaceError::Invalid(message) => error_body(StatusCode::BAD_REQUEST, message),
         WorkspaceError::NotFound => no_such_project(),
         WorkspaceError::Storage(e) => {
@@ -82,12 +96,20 @@ pub(super) async fn create<S: ProjectSettings>(
     Extension(actor): Extension<Actor>,
     Json(req): Json<CreateProjectRequest>,
 ) -> Response {
-    match http.workspace.create_project(&actor, &req.name).await {
-        Ok(project) => (
+    match http
+        .workspace
+        .create_project(&actor, &req.name, &req.members)
+        .await
+    {
+        Ok(ProjectCreated::Created(project)) => (
             StatusCode::CREATED,
             Json(ProjectDto::from_project::<S>(project)),
         )
             .into_response(),
+        Ok(ProjectCreated::Refused {
+            owner_id,
+            owner_name,
+        }) => owned_elsewhere(owner_id, owner_name),
         Err(e) => failure(e),
     }
 }
@@ -133,20 +155,10 @@ pub(super) async fn add_member<S: ProjectSettings>(
     {
         Ok(MemberAdded::Attached(Some(project))) => project_json::<S>(project),
         Ok(MemberAdded::Attached(None)) => StatusCode::NO_CONTENT.into_response(),
-        // A path already owned by another Projet is refused BEFORE any effect, and
-        // the refusal NAMES the owner so the pencil can say which one.
         Ok(MemberAdded::Refused {
             owner_id,
             owner_name,
-        }) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("path already belongs to project '{owner_name}'"),
-                "owner_id": owner_id,
-                "owner_name": owner_name,
-            })),
-        )
-            .into_response(),
+        }) => owned_elsewhere(owner_id, owner_name),
         Err(e) => failure(e),
     }
 }

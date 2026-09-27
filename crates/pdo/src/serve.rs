@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use axum::Router;
 use pdo_daemon::{DaemonConfig, DaemonHandle, ExtensionHostHandle, RouterLayer};
 use pdo_extension_api::Extension;
-use pdo_kernel::extension_host::{ExtensionHost, Extensions};
+use pdo_kernel::extension_host::{ExtensionHost, Extensions, NoExtensions};
 
 use crate::contexts;
 use crate::identify::with_identify;
@@ -90,6 +90,10 @@ impl Daemon {
 /// With no extension, the caller of every request is the local operator (or the
 /// agent of the node session a CLI call comes from), every Operation is
 /// allowed, and PDO behaves exactly as without the extension API.
+///
+/// Refuses to start, before opening anything, when an extension's manifest does
+/// not pass registration: an invalid or shared id, or a version of the extension
+/// API this build does not implement. The error says which and why.
 pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Result<Daemon> {
     let Config {
         addr,
@@ -97,23 +101,34 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
         mut daemon,
         inner_layer,
     } = config;
-    let host: Arc<dyn ExtensionHost> = Arc::new(Extensions::new(extensions));
-    daemon.extension_host = ExtensionHostHandle(host.clone());
-    daemon.router_layer = Some(identify_layer(host, inner_layer));
+    compose(&mut daemon, extensions, inner_layer)?;
     let handle = pdo_daemon::serve_with_config(addr, repo_root, daemon).await?;
     Ok(Daemon { handle })
 }
 
-/// Not covered by semver: what `serve` plugs into the legacy daemon — the
-/// wiring of the extracted contexts, and around the assembled router `inner`
-/// (if any), then `identify` in front of everything. The test suite's daemons
-/// use it so every integration test goes through the same head as `pdo daemon`.
+/// Not covered by semver: register `extensions` and plug into the legacy
+/// daemon's knobs what `serve` plugs — the extension host every context asks,
+/// the wiring of the extracted contexts, `inner` (if any) around the assembled
+/// router, then `identify` in front of everything. The test suite's daemons use
+/// it so they go through the same head as `pdo daemon`.
 #[doc(hidden)]
-pub fn composed_router_layer(
+pub fn compose(
+    daemon: &mut DaemonConfig,
     extensions: Vec<Box<dyn Extension>>,
     inner: Option<RouterLayer>,
-) -> RouterLayer {
-    identify_layer(Arc::new(Extensions::new(extensions)), inner)
+) -> Result<()> {
+    let host: Arc<dyn ExtensionHost> =
+        Arc::new(Extensions::register(extensions).context("the daemon refused an extension")?);
+    daemon.extension_host = ExtensionHostHandle(host.clone());
+    daemon.router_layer = Some(identify_layer(host, inner));
+    Ok(())
+}
+
+/// Not covered by semver: [`compose`]'s router head for a daemon with no
+/// extension, for the tests that assemble their [`DaemonConfig`] by hand.
+#[doc(hidden)]
+pub fn composed_router_layer(inner: Option<RouterLayer>) -> RouterLayer {
+    identify_layer(Arc::new(NoExtensions), inner)
 }
 
 /// The wiring of the extracted contexts, `inner` (if any), then `identify`

@@ -86,11 +86,15 @@ pub fn router(skills: Arc<Skills>) -> Router {
 }
 
 /// The response of a refused write: its status, the reason, its stable code.
+/// An Operation an extension refused answers as every context does.
 pub fn skill_error_response(error: SkillError) -> Response {
     use SkillError as E;
+    if let E::Denied(denied) = error {
+        return denied.into_response();
+    }
     let status = match &error {
         E::NotFound | E::FileNotFound(_) => StatusCode::NOT_FOUND,
-        E::Locked { .. } | E::Denied(_) => StatusCode::FORBIDDEN,
+        E::Locked { .. } => StatusCode::FORBIDDEN,
         E::DuplicateName { .. } => StatusCode::CONFLICT,
         E::FileTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
         E::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -107,11 +111,17 @@ pub fn skill_error_response(error: SkillError) -> Response {
         | E::FolderNotFound
         | E::EmptyFolderName
         | E::FolderCycle => StatusCode::BAD_REQUEST,
+        E::Denied(_) => unreachable!("handled above"),
     };
     (status, Json(skill_error_body(&error))).into_response()
 }
 
+/// A refusal's body is [`Denied::body`](pdo_kernel::authorization::Denied::body),
+/// the partial failure of an upload included.
 fn skill_error_body(error: &SkillError) -> serde_json::Value {
+    if let SkillError::Denied(denied) = error {
+        return denied.body();
+    }
     let mut body = serde_json::json!({
         "error": error.to_string(),
         "code": error.code(),
@@ -147,4 +157,20 @@ where
     T: Deserialize<'de>,
 {
     Ok(Some(Option::<T>::deserialize(deserializer)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdo_kernel::authorization::Denied;
+
+    #[test]
+    fn a_refusal_answers_the_body_every_context_answers() {
+        let denied = Denied {
+            reason: "the bank is frozen".into(),
+        };
+        let error = SkillError::Denied(denied.clone());
+        assert_eq!(skill_error_body(&error), denied.body());
+        assert_eq!(skill_error_response(error).status(), StatusCode::FORBIDDEN);
+    }
 }

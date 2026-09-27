@@ -11,7 +11,7 @@ use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{refused, run_lookup};
+use super::run_lookup;
 use crate::application::read_pane::ReadPaneError;
 use crate::Session;
 
@@ -60,6 +60,6 @@ pub(super) async fn read(
         Err(ReadPaneError::NodeNotFound) => {
             (StatusCode::NOT_FOUND, "node not found in run").into_response()
         }
-        Err(ReadPaneError::Refused(denied)) => refused(denied),
+        Err(ReadPaneError::Refused(denied)) => denied.into_response(),
     }
 }

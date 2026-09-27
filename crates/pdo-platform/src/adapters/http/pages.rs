@@ -10,7 +10,7 @@ use axum::{Extension, Json};
 use pdo_kernel::Actor;
 use serde::Deserialize;
 
-use super::{error, refused, OriginHint};
+use super::{error, OriginHint};
 use crate::application::mount_page::{MountPageCommand, MountPageError};
 use crate::application::unmount_page::UnmountPageError;
 use crate::domain::page_mount::MountError;
@@ -48,7 +48,7 @@ pub(super) async fn mount(
     };
     match platform.mount_page.execute(&actor, command).await {
         Ok(mount) => (StatusCode::CREATED, Json(mount)).into_response(),
-        Err(MountPageError::Refused(denied)) => refused(denied),
+        Err(MountPageError::Refused(denied)) => denied.into_response(),
         Err(MountPageError::SessionRefused(message)) => error(StatusCode::FORBIDDEN, message),
         Err(MountPageError::Invalid(MountError::Invalid(message))) => {
             error(StatusCode::BAD_REQUEST, message)
@@ -75,7 +75,7 @@ pub(super) async fn unmount(
 ) -> Response {
     match platform.unmount_page.execute(&actor, &name, hint).await {
         Ok(mount) => Json(mount).into_response(),
-        Err(UnmountPageError::Refused(denied)) => refused(denied),
+        Err(UnmountPageError::Refused(denied)) => denied.into_response(),
         Err(UnmountPageError::SessionRefused(message)) => error(StatusCode::FORBIDDEN, message),
         Err(UnmountPageError::NotFound(name)) => error(
             StatusCode::NOT_FOUND,

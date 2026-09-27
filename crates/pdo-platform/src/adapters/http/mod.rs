@@ -16,7 +16,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use pdo_kernel::authorization::Denied;
 
 pub use origin::OriginHint;
 
@@ -37,12 +36,6 @@ pub fn router(platform: Arc<Platform>) -> Router {
         .route("/update/attempts/{id}/log", get(update::attempt_log))
         .route("/audit", get(audit::feed))
         .with_state(platform)
-}
-
-/// An Operation an extension refused: 403, the reason in the `error` the
-/// gesture already shows.
-fn refused(denied: Denied) -> Response {
-    error(StatusCode::FORBIDDEN, denied.to_string())
 }
 
 /// A JSON error body, `{"error": …}`.

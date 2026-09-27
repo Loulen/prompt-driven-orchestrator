@@ -42,7 +42,7 @@ vi.mock("../../api", () => {
 vi.mock("../api/projects", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/projects")>()),
   fetchProjects: vi.fn().mockResolvedValue([]),
-  createProject: (name: string) => createProject(name),
+  createProject: (name: string, members?: string[]) => createProject(name, members),
   updateProject: (id: string, req: unknown) => updateProject(id, req),
   addProjectMember: (id: string, path: string) => addProjectMember(id, path),
   removeProjectMember: (id: string, path: string) => removeProjectMember(id, path),
@@ -109,9 +109,14 @@ describe("ProjectEditModal", () => {
     expect(frontCheckbox).not.toBeDisabled();
   });
 
-  it("creates a project, sets its harness, and attaches the checked members on save", async () => {
+  it("creates a project with the checked members, then sets its harness, on save", async () => {
     const user = userEvent.setup();
-    createProject.mockResolvedValue({ id: "p9", name: "front", harness: null, members: [] });
+    createProject.mockResolvedValue({
+      id: "p9",
+      name: "front",
+      harness: null,
+      members: ["/repos/front", "/repos/back"],
+    });
     updateProject.mockResolvedValue({});
     addProjectMember.mockResolvedValue({});
     const { onSaved, onClose } = renderModal();
@@ -128,11 +133,67 @@ describe("ProjectEditModal", () => {
     fireEvent.click(screen.getByTestId("project-edit-save"));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(createProject).toHaveBeenCalledWith("front");
+    expect(createProject).toHaveBeenCalledWith("front", ["/repos/front", "/repos/back"]);
     expect(updateProject).toHaveBeenCalledWith("p9", { harness: "opencode" });
-    expect(addProjectMember).toHaveBeenCalledWith("p9", "/repos/front");
-    expect(addProjectMember).toHaveBeenCalledWith("p9", "/repos/back");
+    // The members travelled with the creation: no separate attach.
+    expect(addProjectMember).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // #930 FP: an extension refusing only updates must not break naming a group.
+  it("names a group with no settings in one creation, without any update", async () => {
+    createProject.mockResolvedValue({
+      id: "p9",
+      name: "front",
+      harness: null,
+      members: ["/repos/front"],
+    });
+    const { onSaved, onClose } = renderModal();
+
+    fireEvent.click(screen.getByTestId("project-edit-save"));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(createProject).toHaveBeenCalledWith("front", ["/repos/front"]);
+    expect(updateProject).not.toHaveBeenCalled();
+    expect(addProjectMember).not.toHaveBeenCalled();
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it("keeps a created project when a later step is refused, and a retry edits it", async () => {
+    const user = userEvent.setup();
+    createProject.mockResolvedValue({
+      id: "p9",
+      name: "front",
+      harness: null,
+      members: ["/repos/front"],
+    });
+    updateProject.mockRejectedValue(new ApiError("operation refused: updates are frozen"));
+    const { onSaved, onClose } = renderModal();
+
+    await user.click(screen.getByTestId("project-harness-select"));
+    await user.click(
+      await screen.findByTestId("project-harness-select-option-opencode"),
+    );
+    fireEvent.click(screen.getByTestId("project-edit-save"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("project-edit-error").textContent).toBe(
+        "operation refused: updates are frozen",
+      ),
+    );
+    // The Projet exists: the list refreshes and the modal now edits it.
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("project-edit-modal").textContent).toContain("Edit project");
+
+    fireEvent.click(screen.getByTestId("project-edit-save"));
+    await waitFor(() => expect(updateProject).toHaveBeenCalledTimes(2));
+    expect(createProject).toHaveBeenCalledTimes(1);
+    expect(updateProject).toHaveBeenLastCalledWith(
+      "p9",
+      expect.objectContaining({ name: "front", harness: "opencode" }),
+    );
+    expect(addProjectMember).not.toHaveBeenCalled();
   });
 
   it("renames and diffs members for an existing project (adds new, removes dropped)", async () => {
@@ -172,8 +233,7 @@ describe("ProjectEditModal", () => {
   });
 
   it("surfaces a refusal that names the owning project and keeps the modal open", async () => {
-    createProject.mockResolvedValue({ id: "p9", name: "front", harness: null, members: [] });
-    addProjectMember.mockRejectedValue(
+    createProject.mockRejectedValue(
       new ApiError("path already belongs to project 'Other'"),
     );
     const { onSaved, onClose } = renderModal();
@@ -185,6 +245,47 @@ describe("ProjectEditModal", () => {
     );
     expect(onSaved).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // #930: an extension refusing the rename answers 403 with its reason; the
+  // modal's existing error shows it, with no extension-specific code.
+  it("shows the reason an extension refused a rename in the modal's error", async () => {
+    const actual = await vi.importActual<typeof import("../api/projects")>("../api/projects");
+    updateProject.mockImplementation(actual.updateProject);
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({
+        error: "operation_refused",
+        message: "operation refused: renames are frozen",
+        reason: "renames are frozen",
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const existing: Project = { id: "p1", name: "Product", members: [] };
+    const { onSaved, onClose } = renderModal({
+      initialProject: existing,
+      initialName: "Product",
+      initialMemberPaths: [],
+    });
+
+    fireEvent.change(screen.getByTestId("project-name-input"), {
+      target: { value: "Renamed" },
+    });
+    fireEvent.click(screen.getByTestId("project-edit-save"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("project-edit-error").textContent).toBe(
+        "operation refused: renames are frozen",
+      ),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/projects/p1",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 
   it("disables Save when the name is blank", () => {

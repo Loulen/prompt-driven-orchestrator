@@ -8,6 +8,7 @@ use pdo_extension_api::{Authorization, Extension, RequestParts};
 use serde_json::Value;
 
 use crate::actor::actor_from_headers;
+use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
 /// The core's view of its extensions.
@@ -53,10 +54,22 @@ pub struct Extensions {
 }
 
 impl Extensions {
-    pub fn new(extensions: Vec<Box<dyn Extension>>) -> Self {
-        Self {
-            extensions: extensions.into_iter().map(Arc::from).collect(),
+    /// Register `extensions`, in this order, once their manifests pass the
+    /// checks (a valid and unique id, a compatible API version). The daemon
+    /// refuses to start otherwise.
+    pub fn register(extensions: Vec<Box<dyn Extension>>) -> Result<Self, RegistrationError> {
+        let extensions: Vec<Arc<dyn Extension>> = extensions.into_iter().map(Arc::from).collect();
+        let manifests: Vec<_> = extensions.iter().map(|ext| ext.manifest()).collect();
+        check_manifests(&manifests)?;
+        for manifest in &manifests {
+            tracing::info!(
+                "extension `{}` {} registered (extension API {})",
+                manifest.id,
+                manifest.version,
+                manifest.api_version
+            );
         }
+        Ok(Self { extensions })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -88,9 +101,14 @@ impl ExtensionHost for Extensions {
             match catch_unwind(AssertUnwindSafe(|| ext.authorize(actor, operation))) {
                 Ok(Authorization::Allow) => {}
                 Ok(deny) => return deny,
-                Err(_) => {
+                Err(panic) => {
                     let id = ext.manifest().id;
-                    tracing::warn!("extension `{id}` panicked in authorize; refused");
+                    tracing::error!(
+                        "extension `{id}` panicked in authorize ({}); {:?} {:?} refused",
+                        panic_message(panic.as_ref()),
+                        operation.resource,
+                        operation.verb,
+                    );
                     return Authorization::deny(format!("extension `{id}` failed"));
                 }
             }
@@ -105,6 +123,15 @@ impl ExtensionHost for Extensions {
             }
         }
     }
+}
+
+/// What a panic said, when it said it with a string.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message")
 }
 
 #[cfg(test)]
@@ -180,7 +207,7 @@ mod tests {
 
     #[test]
     fn an_empty_registry_behaves_like_no_extensions() {
-        let host = Extensions::new(vec![]);
+        let host = Extensions::register(vec![]).unwrap();
         assert!(host.is_empty());
         assert_eq!(host.identify(&parts(&[])), Actor::LocalOperator);
         assert!(host.authorize(&Actor::LocalOperator, &op()).is_allowed());
@@ -188,7 +215,7 @@ mod tests {
 
     #[test]
     fn the_first_extension_that_identifies_wins() {
-        let host = Extensions::new(vec![Box::new(Named("a")), Box::new(Named("b"))]);
+        let host = Extensions::register(vec![Box::new(Named("a")), Box::new(Named("b"))]).unwrap();
         assert_eq!(
             host.identify(&parts(&[])),
             Actor::Identified {
@@ -200,12 +227,76 @@ mod tests {
 
     #[test]
     fn one_refusal_refuses_and_a_panic_refuses_too() {
-        let host = Extensions::new(vec![Box::new(Named("a")), Box::new(Refuses)]);
+        let host = Extensions::register(vec![Box::new(Named("a")), Box::new(Refuses)]).unwrap();
         assert_eq!(
             host.authorize(&Actor::LocalOperator, &op()),
             Authorization::deny("admins only")
         );
-        let host = Extensions::new(vec![Box::new(Panics)]);
+        let host = Extensions::register(vec![Box::new(Panics)]).unwrap();
         assert!(!host.authorize(&Actor::LocalOperator, &op()).is_allowed());
+    }
+
+    #[test]
+    fn registration_refuses_an_extension_this_build_cannot_honour() {
+        struct Future;
+        impl Extension for Future {
+            fn manifest(&self) -> Manifest {
+                Manifest::new("future", "Future", "0.0.0").requiring_api("99.0.0")
+            }
+        }
+        let err = Extensions::register(vec![Box::new(Future)]).err().unwrap();
+        assert!(
+            matches!(err, RegistrationError::IncompatibleApi { .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_panic_in_authorize_is_a_logged_refusal() {
+        let log = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(log.clone())
+            .with_ansi(false)
+            .finish();
+        let host = Extensions::register(vec![Box::new(Panics)]).unwrap();
+        let answer = tracing::subscriber::with_default(subscriber, || {
+            host.authorize(&Actor::LocalOperator, &op())
+        });
+        assert_eq!(answer, Authorization::deny("extension `panics` failed"));
+        let log = log.text();
+        assert_eq!(
+            log.lines()
+                .filter(|l| l.contains("extension `panics` panicked in authorize (boom)"))
+                .count(),
+            1,
+            "{log}"
+        );
+    }
+
+    /// A `tracing` writer into memory.
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl LogBuffer {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+        }
+    }
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+        type Writer = LogBuffer;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
     }
 }

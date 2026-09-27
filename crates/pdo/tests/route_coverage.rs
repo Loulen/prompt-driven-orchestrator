@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 /// every context already extracted (merged by the legacy router or by the
 /// composition root).
 const ROUTER_SOURCES: &[(&str, &str)] = &[
-    ("../pdo-daemon/src/lib.rs", "fn build_router("),
+    (LEGACY_ROUTER, "fn build_router("),
     ("../pdo-sandbox/src/adapters/http/mod.rs", "pub fn router("),
     (
         "../pdo-workspace/src/adapters/http/mod.rs",
@@ -43,9 +43,13 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("../pdo-session/src/adapters/http/mod.rs", "pub fn router("),
 ];
 
+/// The legacy crate's router, which the migration empties context by context.
+const LEGACY_ROUTER: &str = "../pdo-daemon/src/lib.rs";
+
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
 
-type Route = (String, String);
+/// `(METHOD, path template)`.
+pub(crate) type Route = (String, String);
 
 fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -552,6 +556,19 @@ fn test_sources() -> Vec<(String, String)> {
 fn assembled_routes() -> Vec<Route> {
     ROUTER_SOURCES
         .iter()
+        .flat_map(|(file, marker)| {
+            let src = std::fs::read_to_string(crate_dir().join(file)).unwrap();
+            router_routes(&src, marker)
+        })
+        .collect()
+}
+
+/// The routes of every bounded context already extracted from the legacy crate
+/// — what [`ROUTER_SOURCES`] lists beside the legacy router.
+pub(crate) fn context_routes() -> Vec<Route> {
+    ROUTER_SOURCES
+        .iter()
+        .filter(|(file, _)| *file != LEGACY_ROUTER)
         .flat_map(|(file, marker)| {
             let src = std::fs::read_to_string(crate_dir().join(file)).unwrap();
             router_routes(&src, marker)

@@ -18,7 +18,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use pdo_kernel::authorization::Denied;
 
 use crate::application::ports::RunLookup;
 use crate::Session;
@@ -63,12 +62,6 @@ pub fn router(session: Arc<Session>) -> Router {
         // second naming is a way of naming the wrong file.
         .route("/sessions/libassist/save", post(assistant::save))
         .with_state(session)
-}
-
-/// An Operation an extension refused: 403, the reason in the `error` the
-/// gesture already shows.
-fn refused(denied: Denied) -> Response {
-    error(StatusCode::FORBIDDEN, denied.to_string())
 }
 
 /// A JSON error body, `{"error": …}`.

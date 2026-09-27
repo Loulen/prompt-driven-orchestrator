@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use pdo_kernel::Actor;
 
-use super::{error, refused};
+use super::error;
 use crate::application::apply_update::ApplyError;
 use crate::application::check_for_update::CheckError;
 use crate::application::read_attempt_log::LogError;
@@ -54,7 +54,7 @@ pub(super) async fn check(
 ) -> Response {
     match platform.check_for_update.execute(&actor).await {
         Ok(()) => Json(status_json(platform.get_update_status.execute().await)).into_response(),
-        Err(CheckError::Refused(denied)) => refused(denied),
+        Err(CheckError::Refused(denied)) => denied.into_response(),
         Err(CheckError::Off) => error(
             StatusCode::CONFLICT,
             "the update check is off — turn it on to check now",
@@ -97,7 +97,7 @@ pub(super) async fn apply(
             })),
         )
             .into_response(),
-        Err(ApplyError::Refused(denied)) => refused(denied),
+        Err(ApplyError::Refused(denied)) => denied.into_response(),
         Err(ApplyError::Blocked { reason, method }) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({

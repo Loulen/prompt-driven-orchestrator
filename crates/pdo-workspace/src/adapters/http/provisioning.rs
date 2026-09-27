@@ -12,7 +12,7 @@ use tracing::error;
 use crate::application::{PreviewRequest, RulesOwner, WorkspaceError, INSTANCE_SCOPE_ID};
 use crate::domain::provisioning::{ProvisioningRules, ProvisioningScope, ScopedRules};
 
-use super::{denied, error as error_body, Http, ProjectSettings};
+use super::{error as error_body, Http, ProjectSettings};
 
 #[derive(Deserialize)]
 pub(super) struct ProvisioningPreviewRequest {
@@ -50,7 +50,7 @@ fn rules_response(result: Result<ProvisioningRules, impl std::fmt::Display>) -> 
 fn saved(result: Result<ProvisioningRules, WorkspaceError>) -> Response {
     match result {
         Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
-        Err(WorkspaceError::Denied(d)) => denied(d),
+        Err(WorkspaceError::Denied(d)) => d.into_response(),
         Err(WorkspaceError::NotFound) => error_body(StatusCode::NOT_FOUND, "project not found"),
         Err(WorkspaceError::Invalid(message)) => error_body(StatusCode::BAD_REQUEST, message),
         Err(WorkspaceError::Storage(e)) => {
@@ -81,7 +81,7 @@ pub(super) async fn preview<S: ProjectSettings>(
             error!("{e}");
             store_error()
         }
-        Err(WorkspaceError::Denied(d)) => denied(d),
+        Err(WorkspaceError::Denied(d)) => d.into_response(),
         Err(WorkspaceError::Invalid(message)) | Err(WorkspaceError::Git(message)) => {
             error_body(StatusCode::BAD_REQUEST, message)
         }

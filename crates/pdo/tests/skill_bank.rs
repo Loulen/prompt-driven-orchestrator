@@ -517,7 +517,7 @@ async fn the_bank_survives_a_daemon_restart() {
         allowed_ws_origins: Vec::new(),
         run_trigger_scheduler_loop: false,
         nested_daemon: true,
-        router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+        router_layer: Some(pdo::composed_router_layer(None)),
         extension_host: Default::default(),
     };
 

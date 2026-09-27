@@ -12,7 +12,7 @@ use tracing::error;
 use crate::application::{FastForwarded, WorkspaceError};
 use crate::domain::scaffold::ScaffoldFile;
 
-use super::{denied, error as error_body, Http, ProjectSettings};
+use super::{error as error_body, Http, ProjectSettings};
 
 #[derive(Deserialize)]
 pub(super) struct RepoPathQuery {
@@ -38,7 +38,7 @@ pub(super) struct CreateRepoRequest {
 /// 400, a list git cannot read a 500, both with the message.
 fn failure(err: WorkspaceError) -> Response {
     match err {
-        WorkspaceError::Denied(d) => denied(d),
+        WorkspaceError::Denied(d) => d.into_response(),
         WorkspaceError::Invalid(message) => error_body(StatusCode::BAD_REQUEST, message),
         WorkspaceError::Git(message) => error_body(StatusCode::INTERNAL_SERVER_ERROR, message),
         WorkspaceError::Storage(e) => error_body(StatusCode::INTERNAL_SERVER_ERROR, e.0),

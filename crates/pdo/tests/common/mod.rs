@@ -49,7 +49,7 @@ impl TestDaemon {
                 allowed_ws_origins: Vec::new(),
                 run_trigger_scheduler_loop: false,
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -148,7 +148,7 @@ impl TestDaemon {
                 // A TestDaemon is a TOP-LEVEL daemon (sweeps armed) whatever env
                 // the suite was launched with; `spawn_nested` is the only opt-out.
                 nested_daemon,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -176,10 +176,42 @@ impl TestDaemon {
         setup(tempdir.path())?;
         let mut config = DaemonConfig {
             tmux_cmd_override: Some("exec sleep 600".to_string()),
-            router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+            router_layer: Some(pdo::composed_router_layer(None)),
             ..DaemonConfig::default()
         };
         configure(tempdir.path(), &mut config);
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            config,
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
+    /// Spawn a daemon from the default [`DaemonConfig`] with `extensions`
+    /// registered the way `pdo::serve` registers them: every context asks them
+    /// for the Autorisation d'opération, and `identify` asks them who calls.
+    pub async fn spawn_with_extensions<F>(
+        setup: F,
+        extensions: Vec<Box<dyn pdo::extension_api::Extension>>,
+    ) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+        let mut config = DaemonConfig {
+            tmux_cmd_override: Some("exec sleep 600".to_string()),
+            ..DaemonConfig::default()
+        };
+        pdo::compose(&mut config, extensions, None)?;
 
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -238,7 +270,7 @@ impl TestDaemon {
                 run_trigger_scheduler_loop: false,
                 // See the sibling constructors: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -296,7 +328,7 @@ impl TestDaemon {
                 run_trigger_scheduler_loop: false,
                 // See the sibling constructors: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -357,7 +389,7 @@ impl TestDaemon {
                 run_trigger_scheduler_loop: false,
                 // See the sibling constructors: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -407,7 +439,7 @@ impl TestDaemon {
                 run_trigger_scheduler_loop: false,
                 // See the sibling constructors: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -465,7 +497,7 @@ impl TestDaemon {
                 run_trigger_scheduler_loop: false,
                 // See the sibling literals: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -517,7 +549,7 @@ impl TestDaemon {
                 allowed_ws_origins: Vec::new(),
                 run_trigger_scheduler_loop: false,
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -564,7 +596,7 @@ impl TestDaemon {
                 run_trigger_scheduler_loop: false,
                 // See the sibling literals: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
             },
         )
@@ -617,7 +649,7 @@ impl TestDaemon {
                 run_trigger_scheduler_loop: false,
                 // See the sibling literals: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
-                router_layer: Some(pdo::composed_router_layer(Vec::new(), None)),
+                router_layer: Some(pdo::composed_router_layer(None)),
                 extension_host: Default::default(),
                 allowed_ws_origins: origins,
             },

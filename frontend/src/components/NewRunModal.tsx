@@ -16,7 +16,7 @@ import SourceBranchField from "../workspace/components/SourceBranchField";
 import GuardTestResult from "./GuardTestResult";
 import AgentControl from "./AgentControl";
 import HarnessSelect, { SelectedMarker } from "../harness/components/HarnessSelect";
-import SkillSelector from "./SkillSelector";
+import SkillSelector from "../skill/components/SkillSelector";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -26,8 +26,8 @@ import {
 import { highlightSegments } from "../workspace/model/branchSelect";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import { SETTINGS_CHANGED } from "../hooks/useSettings";
-import { useSkillBank } from "../hooks/useSkillBank";
-import { useSkillTiers } from "../hooks/useSkillTiers";
+import { useSkillBank } from "../skill/store/useSkillBank";
+import { useSkillTiers } from "../skill/store/useSkillTiers";
 import type { AgentChoice } from "../shared/generated/AgentChoice";
 import type { SkillRef } from "../shared/generated/SkillRef";
 import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";

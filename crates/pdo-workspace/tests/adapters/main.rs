@@ -7,6 +7,7 @@ mod common;
 mod fs_browse;
 mod fs_provisioner;
 mod git_branches;
+mod git_clone;
 mod git_fast_forward;
 mod git_fetch;
 mod git_repository;

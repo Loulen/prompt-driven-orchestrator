@@ -70,10 +70,9 @@ pub(crate) struct SpawnDeps<'a> {
     /// user-declared harness resolves at spawn — and so a layer-3 test that sets
     /// the override reads descriptors from its own tempdir, never the real home.
     pub(crate) home_override: Option<&'a std::path::Path>,
-    /// #672: the daemon's repo root, where the Banque de skills keeps its content
-    /// (`.pdo/skills/<id>/`) — distinct from the Run's target repo, which is
-    /// where the snapshot and the worktrees live.
-    pub(crate) bank_root: &'a std::path::Path,
+    /// #672: the skill context — the Banque de skills and the delivery of a
+    /// node's skills into the tree it works in.
+    pub(crate) skills: &'a pdo_skill::Skills,
 }
 
 impl<'a> SpawnDeps<'a> {
@@ -89,7 +88,7 @@ impl<'a> SpawnDeps<'a> {
             tmux_cmd_override: state.tmux_cmd_override.as_deref(),
             docker_cmd_override: state.docker_cmd_override.as_deref(),
             home_override: state.sandbox_home_override.as_deref(),
-            bank_root: &state.repo_root,
+            skills: &state.skills,
         }
     }
 }
@@ -597,12 +596,14 @@ pub(crate) async fn spawn_node(
     let resolved_skills = if node.node_type == pipeline::NodeType::Script {
         None
     } else {
-        let frozen_base = loaded
-            .as_ref()
-            .and_then(|(events, _)| crate::skill_delivery::frozen_run_skills(events));
-        let mut bank = crate::skill_bank::snapshot_names(deps.db)
-            .await
-            .unwrap_or_default();
+        let frozen_base = loaded.as_ref().and_then(|(events, _)| {
+            events
+                .iter()
+                .find(|e| e.kind == event_log::EventKind::RunStarted)
+                .and_then(|e| e.payload.as_ref())
+                .and_then(crate::skill_delivery::FrozenRunSkills::from_run_started)
+        });
+        let mut bank = deps.skills.bank_names().await.unwrap_or_default();
         let (instance_skills, project_skills, run_skills): (
             Vec<crate::skill_selection::SkillRef>,
             Vec<crate::skill_selection::SkillRef>,
@@ -959,22 +960,9 @@ pub(crate) async fn spawn_node(
     // (visible on the node); an I/O failure refuses the spawn like provisioning.
     let mut skipped_skills: Vec<crate::skill_delivery::SkippedSkill> = Vec::new();
     if let Some(resolved) = resolved_skills.as_ref() {
-        let delivery = crate::skill_delivery::snapshot_skills(
-            deps.bank_root,
-            spawn_ctx.repo_root,
-            run_id,
-            &resolved.skills,
-        )
-        .and_then(|mut skipped| {
-            let mut report = crate::skill_delivery::deliver(
-                &working_dir,
-                &crate::skill_delivery::snapshot_root(spawn_ctx.repo_root, run_id),
-                run_id,
-                &resolved.skills,
-            )?;
-            skipped.append(&mut report.skipped);
-            Ok(skipped)
-        });
+        let delivery =
+            deps.skills
+                .deliver(&working_dir, spawn_ctx.repo_root, run_id, &resolved.skills);
         match delivery {
             Ok(skipped) => {
                 for s in &skipped {

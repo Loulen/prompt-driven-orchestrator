@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
 import type { RunRefs } from "../../shared/generated/RunRefs";
-import { pairOfDelivery, refById, shortSha } from "../../lib/runRefs";
-import type { RefPair } from "../../lib/runRefs";
+import { pairOfDelivery, refById, shortSha } from "../../run/model/runRefs";
+import type { RefPair } from "../../run/model/runRefs";
 
 /**
  * One side of the Review page's `source → destination` pair (#749, design

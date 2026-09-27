@@ -15,11 +15,15 @@ vi.mock("../run/api/runs", () => ({
   fetchRun: vi.fn(),
 }));
 
+vi.mock("../run/api/artifacts", () => ({
+  fetchRunRefs: vi.fn(),
+  fetchRunFileAtRef: vi.fn(),
+  fetchArtifact: vi.fn(),
+  artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
+}));
 vi.mock("../api", () => ({
   fetchReviewComments: vi.fn(),
-  fetchRunRefs: vi.fn(),
   fetchRunStructuredDiff: vi.fn(),
-  fetchRunFileAtRef: vi.fn(),
   sendReviewComments: vi.fn(),
   resolveReviewComment: vi.fn(),
   reopenReviewComment: vi.fn(),
@@ -90,11 +94,10 @@ vi.mock("@git-diff-view/react", async () => {
 });
 
 import { fetchRun } from "../run/api/runs";
+import { fetchRunFileAtRef, fetchRunRefs } from "../run/api/artifacts";
 import {
   fetchReviewComments,
-  fetchRunRefs,
   fetchRunStructuredDiff,
-  fetchRunFileAtRef,
   sendReviewComments,
   resolveReviewComment,
   reopenReviewComment,

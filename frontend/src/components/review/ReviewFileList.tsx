@@ -1,7 +1,7 @@
 import { PanelLeftClose } from "lucide-react";
 import type { RefObject } from "react";
 import type { DiffFile } from "../../shared/generated/DiffFile";
-import { baseName, filePath, groupByDir, miniBar, statusLetter } from "../../lib/runRefs";
+import { baseName, filePath, groupByDir, miniBar, statusLetter } from "../../run/model/runRefs";
 import { History, Hourglass } from "lucide-react";
 import type { ReviewEntry, StateCounts } from "../../lib/reviewComments";
 import { anchorLabel, authorKind, authorLabel, commentState, footerStatus, plural, sortForSidebar } from "../../lib/reviewComments";

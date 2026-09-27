@@ -1,6 +1,6 @@
 import type { BranchFetchError } from "../shared/generated/BranchFetchError";
 import type { SourceDrift } from "../shared/generated/SourceDrift";
-import { driftAxes, driftChip, driftTooltip } from "../lib/sourceDrift";
+import { driftAxes, driftChip, driftTooltip } from "../run/model/sourceDrift";
 
 export function SectionHead({
   title,

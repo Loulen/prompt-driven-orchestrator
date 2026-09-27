@@ -199,7 +199,6 @@ vi.mock("../api", () => {
 
   return new Proxy(
     {
-      fetchRuns: vi.fn().mockResolvedValue([]),
       fetchTriggers: vi.fn().mockResolvedValue([]),
       fetchTriggersHealth: vi.fn().mockResolvedValue({
         last_tick_at: null,
@@ -336,6 +335,9 @@ vi.mock("../sandbox/api/profiles", () => {
 vi.mock("../run/api/runs", () => ({
   fetchRun: vi.fn().mockResolvedValue({}),
   fetchRunEvents: vi.fn().mockResolvedValue([]),
+  fetchRuns: vi.fn().mockResolvedValue([]),
+  forgetRun: vi.fn().mockResolvedValue(undefined),
+  fetchSourceDrift: vi.fn().mockResolvedValue({ state: "unavailable", reason: "test" }),
 }));
 vi.mock("../session/api/sessions", () => ({
   fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
@@ -549,7 +551,7 @@ describe("App — the welcome modal (#823)", () => {
 
   it("does not flash before the run list has answered", async () => {
     localStorage.clear();
-    const { fetchRuns } = await import("../api");
+    const { fetchRuns } = await import("../run/api/runs");
     let release: (runs: unknown[]) => void = () => {};
     vi.mocked(fetchRuns).mockReturnValueOnce(
       new Promise((resolve) => {
@@ -567,7 +569,7 @@ describe("App — the welcome modal (#823)", () => {
 
   it("takes an instance that already has Runs for what it is", async () => {
     localStorage.clear();
-    const { fetchRuns } = await import("../api");
+    const { fetchRuns } = await import("../run/api/runs");
     vi.mocked(fetchRuns).mockResolvedValueOnce([
       {
         run_id: "r1",

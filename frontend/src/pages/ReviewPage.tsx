@@ -15,14 +15,8 @@ import {
   SquareArrowOutUpRight,
 } from "lucide-react";
 import "@git-diff-view/react/styles/diff-view.css";
-import {
-  fetchReviewComments,
-  fetchRunRefs,
-  fetchRunStructuredDiff,
-  reopenReviewComment,
-  resolveReviewComment,
-  sendReviewComments,
-} from "../api";
+import { fetchReviewComments, fetchRunStructuredDiff, reopenReviewComment, resolveReviewComment, sendReviewComments } from "../api";
+import { fetchRunRefs } from "../run/api/artifacts";
 import { fetchRun } from "../run/api/runs";
 import { useDaemonSocket } from "../run/store/useDaemonSocket";
 import type { ReviewComment } from "../shared/generated/ReviewComment";
@@ -79,8 +73,8 @@ import {
   reviewUrl,
   writeListOpen,
   writeView,
-} from "../lib/runRefs";
-import type { RefPair, ViewMode } from "../lib/runRefs";
+} from "../run/model/runRefs";
+import type { RefPair, ViewMode } from "../run/model/runRefs";
 
 /**
  * The **Review page** (#749, ADR-0067; CONTEXT.md § "Relecture de diff"): a

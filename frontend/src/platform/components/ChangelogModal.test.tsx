@@ -12,6 +12,11 @@ vi.mock("../../api", () => ({
   fetchArtifact: vi.fn(),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${path}`,
 }));
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../../run/api/artifacts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
 vi.mock("../../run/api/nodes", () => ({
   fetchNodeIO: vi.fn(),
 }));

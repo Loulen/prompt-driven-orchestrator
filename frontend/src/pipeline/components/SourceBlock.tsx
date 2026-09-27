@@ -4,7 +4,7 @@
 
 import { RefreshCw } from "lucide-react";
 import { SourceDriftChip } from "../../components/InspectorPrimitives";
-import { useSourceDrift } from "../../hooks/useSourceDrift";
+import { useSourceDrift } from "../../run/store/useSourceDrift";
 import type { RunState } from "../../shared/generated/RunState";
 import { shortAge } from "../../workspace/model/branchSelect";
 

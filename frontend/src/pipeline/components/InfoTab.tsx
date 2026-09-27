@@ -6,8 +6,8 @@ import { Info, Box, Loader, CloudOff } from "lucide-react";
 import { SectionHead } from "../../components/InspectorPrimitives";
 import type { RunState } from "../../shared/generated/RunState";
 import { isLiveRun } from "../../run/model/runStatus";
-import { formatDuration, useRunDuration } from "../../lib/runDuration";
-import { formatEstCost } from "../../lib/costLabel";
+import { formatDuration, useRunDuration } from "../../run/model/runDuration";
+import { formatEstCost } from "../../run/model/costLabel";
 import type { EditorPipelineDef } from "../model/pipeline";
 
 import { SourceBlock } from "./SourceBlock";

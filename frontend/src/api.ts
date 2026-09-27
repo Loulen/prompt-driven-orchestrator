@@ -1,6 +1,3 @@
-import type { PipelineDetail } from "./pipeline/model/pipeline";
-import type { RunListEntry } from "./shared/generated/RunListEntry";
-import type { RunState } from "./shared/generated/RunState";
 import type { Trigger } from "./shared/generated/Trigger";
 import type { TriggerListEntry } from "./shared/generated/TriggerListEntry";
 import type { TriggerFire } from "./shared/generated/TriggerFire";
@@ -11,23 +8,15 @@ import type { StatsCost } from "./shared/generated/StatsCost";
 import type { StatsPerformance } from "./shared/generated/StatsPerformance";
 import type { StatsAbsorption } from "./shared/generated/StatsAbsorption";
 import type { StatsAbsorptionList } from "./shared/generated/StatsAbsorptionList";
-import type { SourceDrift } from "./shared/generated/SourceDrift";
 import type { AgentChoice } from "./shared/generated/AgentChoice";
 import type { AgentProfile } from "./shared/generated/AgentProfile";
 import type { AgentProfileInput } from "./shared/generated/AgentProfileInput";
-import type { ProvisioningRules } from "./shared/generated/ProvisioningRules";
 import type { SkillRef } from "./shared/generated/SkillRef";
 import type { StructuredDiff } from "./shared/generated/StructuredDiff";
-import type { RunRefs } from "./shared/generated/RunRefs";
 import type { ReviewCommentsListResponse, ReviewDecisionResponse, SendReviewCommentsResponse } from "./review/model/review";
 import type { SendReviewCommentInput } from "./shared/generated/SendReviewCommentInput";
-import { sidecarBlob } from "./shared/http/sidecar";
-import { foldPipelineDetail } from "./pipeline/model/pipelineDetail";
-import { ApiError, apiErrorMessage, BASE, request } from "./shared/http/client";
-
-export function fetchRuns(): Promise<RunListEntry[]> {
-  return request<RunListEntry[]>("GET", "/runs");
-}
+import { ApiError, request } from "./shared/http/client";
+import type { TargetRepoInput } from "./run/api/createRun";
 
 export function fetchSettings(): Promise<InstanceSettings> {
   return request<InstanceSettings>("GET", "/settings");
@@ -253,161 +242,6 @@ export function reopenReviewComment(runId: string, commentId: string): Promise<R
   );
 }
 
-export function fetchArtifact(
-  runId: string,
-  relativePath: string,
-): Promise<string> {
-  return request<string>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/artifact`,
-    { query: { path: relativePath }, responseMode: "text", label: "GET artifact" },
-  );
-}
-
-export function artifactUrl(runId: string, relativePath: string): string {
-  return `${BASE}/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`;
-}
-
-/** One repo line of a multi-repo create (#465, ADR-0042/0047): a path, an optional
- *  base branch (default HEAD, the local ref), and an optional `read_only` opt-in
- *  (default `false` ⇒ writable). `[0]` is the primary; `[1..]` become secondary
- *  snapshots, writable unless `read_only`. Shared by create, `EditRunReposBody.add`
- *  and the trigger `target_repos` blob. */
-export interface TargetRepoInput {
-  repo: string;
-  base_branch?: string;
-  read_only?: boolean;
-}
-
-export interface CreateRunRequest {
-  pipeline: string;
-  input: string;
-  variables: Record<string, unknown>;
-  pipeline_id?: string;
-  target_repo?: string;
-  /** Read-only secondary repos (#465). `[0]` is the primary (kept in sync with
-   *  `target_repo`), `[1..]` are secondaries. Omit for a mono-repo Run. */
-  target_repos?: TargetRepoInput[];
-  source_branch?: string;
-  name?: string;
-  /** Explicit sandbox (#410/#432): `"off"` or a staging-profile name. Omitted → the
-   *  server defers to the trigger/instance default at the create chokepoint. */
-  sandbox?: string;
-  /** Explicit harness (#551, ADR-0046): the `run` tier of the precedence chain. Omitted/
-   *  blank → the Run names no harness and each free node resolves through the instance
-   *  default and the `claude` floor. Frozen into `RunStarted` at the create chokepoint. */
-  harness?: string;
-  agent_choice?: AgentChoice;
-  /** #669/ADR-0062: the Run tier of the skills selection, frozen into `RunStarted`
-   *  when non-empty. Omit for none. */
-  skills?: SkillRef[];
-  /** Whether the manager auto-names this Run (#338). The modal always sends it; omit and
-   *  the server resolves back-compat by the presence of `name`, then the instance default. */
-  auto_name?: boolean;
-  images?: File[];
-  /** #779: non-image attachments, sent as the multipart `files` field. */
-  files?: File[];
-  provisioning?: ProvisioningRules;
-}
-
-export interface CreateRunResponse {
-  run_id: string;
-}
-
-export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
-  const hasImages = req.images && req.images.length > 0;
-  const hasFiles = req.files && req.files.length > 0;
-
-  if (hasImages || hasFiles) {
-    const form = new FormData();
-    form.append("pipeline", req.pipeline);
-    form.append("input", req.input);
-    form.append("variables", JSON.stringify(req.variables));
-    if (req.pipeline_id) form.append("pipeline_id", req.pipeline_id);
-    if (req.target_repo) form.append("target_repo", req.target_repo);
-    // Every field of the JSON path must be mirrored here: a field the multipart
-    // branch omits is silently dropped for a Run created WITH attached images.
-    // Non-scalars ride as JSON strings, bools as stringified bools.
-    if (req.target_repos && req.target_repos.length > 0)
-      form.append("target_repos", JSON.stringify(req.target_repos));
-    if (req.source_branch) form.append("source_branch", req.source_branch);
-    if (req.name) form.append("name", req.name);
-    if (req.sandbox) form.append("sandbox", req.sandbox);
-    if (req.harness) form.append("harness", req.harness);
-    if (req.agent_choice) form.append("agent_choice", JSON.stringify(req.agent_choice));
-    if (req.skills && req.skills.length > 0) form.append("skills", JSON.stringify(req.skills));
-    if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
-    if (req.provisioning) form.append("provisioning", JSON.stringify(req.provisioning));
-    for (const file of req.images ?? []) {
-      form.append("images", file, file.name);
-    }
-    // #779: everything that is not an image rides in `files` — same `_input/`
-    // destination on the daemon, listed under `## Input Files` for the entry node.
-    for (const file of req.files ?? []) {
-      form.append("files", file, file.name);
-    }
-
-    // FormData → no manual Content-Type, so the browser sets the boundary.
-    return request<CreateRunResponse>("POST", "/runs", { body: form, label: "POST /runs" });
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { images: _omitted, files: _omittedFiles, ...jsonBody } = req;
-  return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "POST /runs" });
-}
-
-/** The body of a mid-run repo-list edit (#465 slice 2). `add` entries mirror the
- *  create-modal secondary rows; `remove` names aliases. Both optional — an empty
- *  body is a legal no-op. */
-export interface EditRunReposBody {
-  add?: TargetRepoInput[];
-  remove?: string[];
-}
-
-/**
- * What one `PATCH /runs/{id}/repos` did (#465 slice 2, ADR-0042).
- *
- * A refusal is a **verdict, not an exception** — same contract as {@link markNodeDone}:
- * the daemon names the cause with a slug and prose, so the panel shows it inline
- * rather than throwing a hard error. Only a breakdown of the call itself (network)
- * throws.
- */
-export type EditRunReposOutcome =
-  | { kind: "ok"; run: RunState }
-  | { kind: "refused"; slug: string | null; message: string; status: number };
-
-/**
- * Add / remove read-only secondary repos on a live Run (#465 slice 2, ADR-0042).
- *
- * Returns the reprojected {@link RunState} on success (so the caller refreshes in one
- * round-trip), or a typed refusal on any 4xx/5xx the daemon argues
- * (`run_not_editable`, `secondary_is_primary`, `bad_secondary_repo`, …). Precedent:
- * `PATCH /triggers/{id}` for the verb, {@link markNodeDone} for the verdict shape.
- */
-export async function editRunRepos(
-  runId: string,
-  body: EditRunReposBody,
-): Promise<EditRunReposOutcome> {
-  // Raw mode: a 4xx/5xx here is a nameable refusal, not a failed call, so we read the
-  // body ourselves instead of letting `request` throw.
-  const resp = await request<Response>(
-    "PATCH",
-    `/runs/${encodeURIComponent(runId)}/repos`,
-    { body, responseMode: "raw", label: `PATCH /runs/${runId}/repos` },
-  );
-  const parsed: unknown = await resp.json().catch(() => null);
-  if (resp.ok) {
-    return { kind: "ok", run: parsed as RunState };
-  }
-  const b = parsed as { error?: unknown } | null;
-  return {
-    kind: "refused",
-    slug: typeof b?.error === "string" ? b.error : null,
-    message: apiErrorMessage(parsed, `edit repos refused: ${resp.status}`),
-    status: resp.status,
-  };
-}
-
 export interface CreateTriggerRequest {
   name: string;
   pipeline_id: string;
@@ -584,86 +418,6 @@ export function testGuard(
   );
 }
 
-/**
- * A Run's drift from its source branch since the fork (#803, ADR-0070 §4).
- *
- * A pure READ over local refs — it never fetches, because opening a Run must not
- * put traffic on someone's repository. `unavailable` is a 200, not an error: an
- * archived Run whose branch was cleaned up is the expected end of a Run's life.
- */
-export function fetchSourceDrift(runId: string): Promise<SourceDrift> {
-  return request<SourceDrift>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/source-drift`,
-    { label: `GET /runs/${runId}/source-drift` },
-  );
-}
-
-/** Manager on demand: start the Run's Pipeline Manager session on demand.
- *  Idempotent — the daemon answers `created: false` when the session already
- *  existed (a double-click Start is a benign re-answer). */
-export function startRunManager(runId: string): Promise<{ ok: boolean; session: string; created: boolean }> {
-  return request(
-    "POST",
-    `/runs/${encodeURIComponent(runId)}/manager/start`,
-    { label: `POST /runs/${runId}/manager/start` },
-  );
-}
-
-/** Manager on demand: stop the Run's Pipeline Manager session. A stop on a
- *  session that is already gone is a calm no-op (`stopped: false`). */
-export function stopRunManager(runId: string): Promise<{ ok: boolean; stopped: boolean }> {
-  return request(
-    "POST",
-    `/runs/${encodeURIComponent(runId)}/manager/stop`,
-    { label: `POST /runs/${runId}/manager/stop` },
-  );
-}
-
-export function forgetRun(runId: string): Promise<void> {
-  return request<void>(
-    "DELETE",
-    `/runs/${encodeURIComponent(runId)}`,
-    { responseMode: "void", label: `DELETE /runs/${runId}` },
-  );
-}
-
-export function fetchRunPipeline(runId: string): Promise<PipelineDetail> {
-  return request<PipelineDetail>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/pipeline`,
-    { label: `GET /runs/${runId}/pipeline` },
-  ).then(foldPipelineDetail);
-}
-
-export function saveRunPipeline(
-  runId: string,
-  yaml: string,
-  prompts: Record<string, string>,
-): Promise<void> {
-  return request<void>(
-    "PUT",
-    `/runs/${encodeURIComponent(runId)}/pipeline`,
-    { body: { yaml, prompts }, responseMode: "void", label: `PUT /runs/${runId}/pipeline` },
-  );
-}
-
-export function fetchRunPipelineDocument(runId: string): Promise<string> {
-  return request("GET", `/runs/${encodeURIComponent(runId)}/pipeline/document`, {
-    responseMode: "text",
-    label: `GET /runs/${runId}/pipeline/document`,
-  });
-}
-
-export async function fetchRunPipelineSkillsSidecar(runId: string): Promise<Blob | null> {
-  const resp = await request<Response>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/pipeline/document/skills`,
-    { responseMode: "raw", label: `GET /runs/${runId}/pipeline/document/skills` },
-  );
-  return sidecarBlob(resp, `GET /runs/${runId}/pipeline/document/skills`);
-}
-
 export function fetchRunDiff(runId: string): Promise<string> {
   return request<string>(
     "GET",
@@ -692,28 +446,3 @@ export function fetchRunStructuredDiff(
   );
 }
 
-/** Full content of one file at a Run ref (#748); defaults to the Run tip. */
-export function fetchRunFileAtRef(
-  runId: string,
-  path: string,
-  ref?: string,
-): Promise<string> {
-  const params = new URLSearchParams({ path });
-  if (ref) params.set("ref", ref);
-  return request<string>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/file?${params.toString()}`,
-    { responseMode: "text", label: `GET /runs/${runId}/file` },
-  );
-}
-
-/**
- * The Run's refs (#749, ADR-0067 §1): fork point, Run tip, every node delivery's
- * `before`/`after`, the live branch of a running isolated node — with the
- * ready-made delivery pairs. Ids are stable; SHAs are informative only.
- */
-export function fetchRunRefs(runId: string): Promise<RunRefs> {
-  return request<RunRefs>("GET", `/runs/${encodeURIComponent(runId)}/refs`, {
-    label: `GET /runs/${runId}/refs`,
-  });
-}

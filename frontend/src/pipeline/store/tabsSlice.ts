@@ -4,7 +4,7 @@
 
 import type { StoreApi } from "zustand";
 import type { PipelineScope } from "../model/pipeline";
-import { fetchRunPipeline } from "../../api";
+import { fetchRunPipeline } from "../../run/api/runPipeline";
 import { fetchPipeline, fetchPipelines } from "../api/pipelines";
 import { loadTabsDisabled, saveTabsDisabled } from "../../lib/uiPrefs";
 import type { EditState } from "./editState";

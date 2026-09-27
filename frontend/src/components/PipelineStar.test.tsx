@@ -19,6 +19,11 @@ vi.mock("../api", () => ({
   fetchPipelines: vi.fn().mockResolvedValue([]),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
 }));
+// The run context's API answers with the mock of `../api`.
+vi.mock("../run/api/runPipeline", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),

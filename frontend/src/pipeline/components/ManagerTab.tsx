@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { Terminal, Loader, Play, PowerOff } from "lucide-react";
 import TmuxTerminal from "../../session/components/TmuxTerminal";
-import { startRunManager, stopRunManager } from "../../api";
+import { startRunManager, stopRunManager } from "../../run/api/manager";
 import type { RunState } from "../../shared/generated/RunState";
 
 export function ManagerTab({

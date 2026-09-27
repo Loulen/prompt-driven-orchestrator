@@ -5,7 +5,7 @@ import type { OpenPipeline, Selection } from "./editState";
 import { generatedRegionId } from "../../lib/loopRegions";
 import { pipelinesEquivalent } from "../../hooks/useLibraryPipelines";
 import { ApiError } from "../../shared/http/client";
-import { saveRunPipeline } from "../../api";
+import { saveRunPipeline } from "../../run/api/runPipeline";
 import { savePipeline, fetchPipeline, fetchPipelines, deletePipeline, renamePipeline } from "../api/pipelines";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
@@ -45,6 +45,11 @@ vi.mock("../../api", async (importOriginal) => ({
   deletePipeline: vi.fn().mockResolvedValue(undefined),
   renamePipeline: vi.fn().mockResolvedValue({ ok: true }),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "x", scope: "user" }),
+}));
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../../run/api/runPipeline", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
 }));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../api/pipelines", async (importOriginal) => ({

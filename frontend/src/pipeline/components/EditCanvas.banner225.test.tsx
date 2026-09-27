@@ -41,6 +41,11 @@ vi.mock("../../api", () => ({
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
 }));
+// The run context's API answers with the mock of `../../api`.
+vi.mock("../../run/api/runPipeline", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),

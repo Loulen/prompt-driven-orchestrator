@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { fetchRunStructuredDiff } from "../api";
 import { wordDiff } from "../lib/wordDiff";
-import { reviewUrl } from "../lib/runRefs";
+import { reviewUrl } from "../run/model/runRefs";
 import { pendingCount } from "../lib/reviewComments";
 import {
   LARGE_DIFF_FILES,

@@ -31,7 +31,7 @@ import type { StatsSessionEntity } from "../shared/generated/StatsSessionEntity"
 import type { StatsSessionHarness } from "../shared/generated/StatsSessionHarness";
 import type { StatsSessionPeriod } from "../shared/generated/StatsSessionPeriod";
 import type { StatsSteeredRate } from "../shared/generated/StatsSteeredRate";
-import { formatCostAmount } from "../lib/costLabel";
+import { formatCostAmount } from "../run/model/costLabel";
 import { harnessColor } from "../harness/model/color";
 import { cssColor } from "../lib/cssColor";
 import { useTheme } from "../hooks/useTheme";

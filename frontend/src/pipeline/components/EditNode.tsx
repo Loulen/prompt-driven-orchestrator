@@ -19,9 +19,9 @@ import { anchorHandleId, landsByDrop } from "../../lib/anchorSide";
 import { WIRE, WIRE_SOFT } from "../../lib/wiringColors";
 import { Bookmark, SlidersHorizontal, TriangleAlert } from "lucide-react";
 // #723 — orchestrator pastilles on the run-view node card.
-import { ChildCountPills } from "../../components/OrchestrationTab";
-import { totalChildren } from "../../lib/orchestration";
-import type { ChildCounts } from "../../lib/orchestration";
+import { ChildCountPills } from "../../run/components/OrchestrationTab";
+import { totalChildren } from "../../run/model/orchestration";
+import type { ChildCounts } from "../../run/model/orchestration";
 // The four emergent body anchor handles (#168), each pinned to its side-centre
 // with the matching xyflow `Position` so a bound incoming edge arrives from that
 // side. `transform` re-centres the 1px handle on the edge midpoint.

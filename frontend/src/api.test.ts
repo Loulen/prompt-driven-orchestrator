@@ -5,7 +5,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, request, uploadTimeoutMs } from "./shared/http/client";
-import { createRun, editRunRepos, saveRunPipeline } from "./api";
+import { createRun, editRunRepos } from "./run/api/createRun";
+import { saveRunPipeline } from "./run/api/runPipeline";
 import { deletePipeline, fetchPipeline, savePipeline } from "./pipeline/api/pipelines";
 import { duplicateLibraryPipeline } from "./pipeline/api/libraryPipelines";
 import { browseFs } from "./workspace/api/browse";

@@ -112,6 +112,18 @@ Two patterns the workspace set for the contexts that follow:
   generated TypeScript type is `Project<A, S>` (the front aliases it in
   `workspace/model/project.ts`).
 
+Every mutation of a context goes through the Autorisation d'opération (`pdo_kernel::
+authorization::authorize`) inside its use case, never in the route, and never in a transition
+the daemon makes on its own (scheduler, periodic check, archive). A refusal maps to the
+kernel's `Denied::into_response()`: `403` and `{"error": "operation_refused", "message",
+"reason"}`, which the front's `ApiError` already shows. Do not write a context-specific refusal
+body. `crates/pdo/tests/extension_mutation_routes.rs` reads the mutation routes of every router
+listed in `ROUTER_SOURCES` and checks that each one answers that `403` under an extension that
+refuses everything. When you extract a context, add a request for each of its mutation routes
+there (or list a `POST` that mutates nothing, with the reason). The extension it uses lives in
+`crates/pdo/tests/test_extension/`; `demo_daemon.rs` next to it serves `pdo daemon` with that
+extension for the Feature Paths (see its header).
+
 The HTTP and WebSocket contract stays frozen for the whole migration. A temporary suite,
 `crates/pdo/tests/snapshots_temporary/`, plays eight business scenarios against the real
 daemon and freezes every response and every `/ws` message as a masked `insta` snapshot. A move

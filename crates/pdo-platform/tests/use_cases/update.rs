@@ -194,6 +194,26 @@ async fn the_periodic_pass_skips_a_fresh_cache() {
     );
 }
 
+/// The daemon's own checks (the 6 h loop, the one re-enabling the setting
+/// triggers) are internal transitions, not Operations: an extension that
+/// refuses everything neither stops them nor is asked about them.
+#[tokio::test]
+async fn the_daemons_own_checks_never_ask_the_authorization() {
+    let mut w = world(
+        true,
+        source_ok(&newer()),
+        Journal::default(),
+        InstallMethod::Script,
+        Some(0),
+    );
+    w.host = Host::refusing();
+    w.check().periodic().await;
+    w.check().now().await;
+    assert_eq!(w.source.latest_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(w.status().execute().await.latest_version, Some(newer()));
+    assert!(w.host.asked.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn a_refused_check_touches_nothing() {
     let mut w = world(

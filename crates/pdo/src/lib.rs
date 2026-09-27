@@ -17,7 +17,7 @@ mod identify;
 mod serve;
 
 #[doc(hidden)]
-pub use serve::composed_router_layer;
+pub use serve::{compose, composed_router_layer};
 pub use serve::{serve, Config, Daemon};
 
 /// The extension API this build of PDO implements.

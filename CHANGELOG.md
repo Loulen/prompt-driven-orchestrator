@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.4 — API d'extension : identité et Autorisation d'opération (#930, spec #913)
+
+Sans extension, rien ne change : le contrat HTTP/WS est identique (snapshots inchangés).
+
+- `serve(config, extensions)` enregistre les extensions après avoir vérifié leur manifest : un
+  id valide et unique, et une version de l'API d'extension compatible (`Manifest::api_version`,
+  par défaut celle contre laquelle l'extension est compilée). Sinon, le daemon refuse de démarrer
+  et dit pourquoi.
+- `identify` pose l'Acteur choisi par une extension ; `authorize` est consulté par chaque use
+  case de mutation des contextes extraits, jamais par les transitions que le daemon fait seul.
+- Une Opération refusée répond `403` avec `{"error": "operation_refused", "message", "reason"}`
+  (convention d'ADR-0035). Les réponses `403` de refus de `platform` et `workspace` passent de
+  `{"error": "operation refused: …"}` à ce corps. L'UI affiche la raison dans l'erreur existante
+  du geste. Une panique dans `authorize` vaut refus et laisse une ligne de log.
+
 ## 1.111.3 — Contexte `workspace` extrait (#917, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les

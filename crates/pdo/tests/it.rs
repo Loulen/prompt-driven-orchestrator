@@ -50,6 +50,20 @@ mod file_size;
 #[path = "composition_root.rs"]
 mod composition_root;
 
+// The extension API (#930): the internal test extension, the Autorisation
+// d'opération against the real daemon, and the demo daemon of the Feature Paths
+// (ignored: it serves until killed).
+mod test_extension;
+
+#[path = "extension_authorization.rs"]
+mod extension_authorization;
+
+#[path = "extension_mutation_routes.rs"]
+mod extension_mutation_routes;
+
+#[path = "demo_daemon.rs"]
+mod demo_daemon;
+
 // The refactor net (#914): one file per bounded context, for the routes no
 // other test called.
 #[path = "routes_pipeline.rs"]

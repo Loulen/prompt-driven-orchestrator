@@ -13,7 +13,7 @@ use crate::application::{MemberAdded, MemberRemoved, WorkspaceError};
 use crate::domain::project::Project;
 
 use super::dto::{CreateProjectRequest, PatchProjectRequest, ProjectDto, ProjectMemberRequest};
-use super::{denied, error as error_body, Http, ProjectSettings};
+use super::{error as error_body, Http, ProjectSettings};
 
 fn store_error() -> Response {
     error_body(
@@ -33,7 +33,7 @@ fn project_json<S: ProjectSettings>(project: Project) -> Response {
 /// The response of a use case that failed, in the project routes' vocabulary.
 fn failure(err: WorkspaceError) -> Response {
     match err {
-        WorkspaceError::Denied(d) => denied(d),
+        WorkspaceError::Denied(d) => d.into_response(),
         WorkspaceError::Invalid(message) => error_body(StatusCode::BAD_REQUEST, message),
         WorkspaceError::NotFound => no_such_project(),
         WorkspaceError::Storage(e) => {

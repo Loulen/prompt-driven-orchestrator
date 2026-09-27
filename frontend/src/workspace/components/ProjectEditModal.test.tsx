@@ -185,6 +185,47 @@ describe("ProjectEditModal", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  // #930: an extension refusing the rename answers 403 with its reason; the
+  // modal's existing error shows it, with no extension-specific code.
+  it("shows the reason an extension refused a rename in the modal's error", async () => {
+    const actual = await vi.importActual<typeof import("../api/projects")>("../api/projects");
+    updateProject.mockImplementation(actual.updateProject);
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({
+        error: "operation_refused",
+        message: "operation refused: renames are frozen",
+        reason: "renames are frozen",
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const existing: Project = { id: "p1", name: "Product", members: [] };
+    const { onSaved, onClose } = renderModal({
+      initialProject: existing,
+      initialName: "Product",
+      initialMemberPaths: [],
+    });
+
+    fireEvent.change(screen.getByTestId("project-name-input"), {
+      target: { value: "Renamed" },
+    });
+    fireEvent.click(screen.getByTestId("project-edit-save"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("project-edit-error").textContent).toBe(
+        "operation refused: renames are frozen",
+      ),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/projects/p1",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("disables Save when the name is blank", () => {
     renderModal({ initialName: "  " });
     expect(screen.getByTestId("project-edit-save")).toBeDisabled();

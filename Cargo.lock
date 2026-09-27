@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "1.111.3"
+version = "1.111.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "1.111.3"
+version = "1.111.4"
 dependencies = [
  "filetime",
  "pdo-kernel",
@@ -2031,18 +2031,19 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "1.111.3"
+version = "1.111.4"
 dependencies = [
  "chrono",
  "pdo-extension-api",
  "serde_json",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "pdo-legacy"
-version = "1.111.3"
+version = "1.111.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -2089,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "1.111.3"
+version = "1.111.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -2113,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "1.111.3"
+version = "1.111.4"
 dependencies = [
  "anyhow",
  "axum",

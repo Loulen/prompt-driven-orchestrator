@@ -51,958 +51,39 @@
 //! - **Tolerant parsing.** Torn writes (an interleaved-flush `clauclaude-opus-4-8`
 //!   was observed) are skipped line-by-line, never `?`-propagated.
 
-use crate::event_log::{CostForm, CostStat, HarnessCost};
-use crate::price_table::{strip_date_suffix, PriceTable};
+
+mod breakdown;
+mod executions;
+mod memo;
+mod reported;
+mod slices;
+
+pub use breakdown::{compute_run_cost_breakdown, cost_unavailable};
+pub use memo::{
+    compute_run_cost_breakdown_cached, event_fingerprint, max_transcript_mtime_millis,
+    reported_stores_mtime_millis,
+};
+pub use crate::domain::run_cost::{
+    frozen_execution_identity, CostContribution, CostScope, FrozenExecutionIdentity,
+    ModelEffortSlice, RunCostBreakdown,
+};
+
+use crate::domain::prices::PriceTable;
+use crate::domain::run_cost::usage::{aggregate_by_model, parse_line, Line, ModelUsage};
+#[cfg(test)]
+use crate::domain::run_cost::usage::{line_cost, Usage};
+use crate::domain::state::{CostForm, CostStat, HarnessCost};
+use executions::{collect_executions, collect_jsonl_file, collect_jsonl_paths, Execution};
 use pdo_harness::claude_transcript::cc_project_dirname;
 use pdo_sandbox::adapters::staging::stores::HarnessStores;
+use reported::reported_execution;
+use slices::{execution_model_slices, leftover_model_slices, DerivedFold};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CostScope {
-    Node,
-    Infrastructure,
-    Unassigned,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CostContribution {
-    pub harness: String,
-    pub scope: CostScope,
-    pub node_id: Option<String>,
-    pub executions: i64,
-    pub readable_executions: i64,
-    pub usd: Option<f64>,
-    pub form: Option<CostForm>,
-    /// A reported cost already in dollars (constant 1.0, `pi`) — see
-    /// [`HarnessCost::reported_in_usd`]. `false` for derived and converted slices.
-    pub reported_in_usd: bool,
-    pub partial: bool,
-    pub unpriced_models: Vec<String>,
-    pub unavailable_reasons: Vec<String>,
-    /// The execution's cost **ventilated by model × effort** (ADR-0065) — the
-    /// raw material of the « By model » axis and the Node leaves' pairs. One
-    /// slice per model the execution provably ran on; empty for a harness with
-    /// no cost source (absent from the axis, never a "default of X" bucket)
-    /// and for a mute source with no requested model.
-    pub model_slices: Vec<ModelEffortSlice>,
-}
-
-/// One model bucket of one execution's cost (ADR-0065). An execution with two
-/// models produces two slices and counts — and costs — in both buckets, so a
-/// bucket's average per execution stays coherent with its cost (ADR-0065 §3).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ModelEffortSlice {
-    /// The model id **verbatim** (ADR-0065 §2): no aliasing, no de-dating, no
-    /// fallback to the price table's undated family.
-    pub model: String,
-    /// `true` when the harness's source reported this id (observed); `false`
-    /// when it is the startup event's requested id, read in fallback because
-    /// the source was mute.
-    pub model_observed: bool,
-    /// The execution's effort, or `None` when neither source named one — the
-    /// "not set" bucket, never merged with a real effort.
-    pub effort: Option<String>,
-    /// `Some(false)` = requested, `Some(true)` = observed, `None` when `effort`
-    /// is `None` (not set has no provenance to show).
-    pub effort_observed: Option<bool>,
-    /// The provider the source named for this model (`pi` via openrouter), the
-    /// tooltip's « via … » — never part of the identity (ADR-0065 §2). `None`
-    /// for a source that does not name one (`claude`, `copilot`).
-    pub provider: Option<String>,
-    pub usd: Option<f64>,
-    /// Derived (transcript × price table) — the wire's `~` flag. A reported
-    /// slice (`copilot`, `pi`) and an unreadable one are not estimates of this
-    /// fold.
-    pub estimated: bool,
-    pub partial: bool,
-    pub executions: i64,
-    pub unpriced_models: Vec<String>,
-    pub missing_reasons: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct RunCostBreakdown {
-    pub contributions: Vec<CostContribution>,
-    pub cost: Option<CostStat>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum FrozenExecutionIdentity {
-    Session {
-        harness: String,
-        session_id: String,
-    },
-    Legacy {
-        node_id: String,
-        iter: i64,
-        event_id: Option<i64>,
-        order: usize,
-    },
-}
-
-pub(crate) fn frozen_execution_identity(
-    harness: &str,
-    session_id: Option<&str>,
-    node_id: Option<&str>,
-    iter: Option<i64>,
-    event_id: Option<i64>,
-    order: usize,
-) -> FrozenExecutionIdentity {
-    match session_id.filter(|session_id| !session_id.is_empty()) {
-        Some(session_id) => FrozenExecutionIdentity::Session {
-            harness: harness.to_string(),
-            session_id: session_id.to_string(),
-        },
-        None => FrozenExecutionIdentity::Legacy {
-            node_id: node_id.unwrap_or("(unknown)").to_string(),
-            iter: iter.unwrap_or(1),
-            event_id,
-            order,
-        },
-    }
-}
-
-fn collect_jsonl_file(path: &Path, out: &mut Vec<Line>) {
-    if let Ok(content) = std::fs::read_to_string(path) {
-        out.extend(content.lines().filter_map(parse_line));
-    }
-}
-
-struct Execution {
-    harness: String,
-    node_id: Option<String>,
-    session_id: Option<String>,
-    /// The model × effort FROZEN in the startup event (ADR-0046) — the
-    /// **requested** values the fold falls back to when the source is mute
-    /// (ADR-0065 §1). `None` when the event named nothing.
-    requested_model: Option<String>,
-    requested_effort: Option<String>,
-    /// Where this execution worked (#653): the store folder of a cwd-keyed harness
-    /// (`claude`'s encoded project dir, `pi`'s session folder) derives from it.
-    working_dir: Option<PathBuf>,
-    project: Option<PathBuf>,
-    legacy_claim: bool,
-    unavailable_reason: Option<String>,
-}
-
-/// The Run's **frozen executions** — one per distinct `NodeStarted` identity, with
-/// the harness, session id and working directory attribution reads from. Shared by
-/// the fold and by the cache key ([`reported_stores_mtime_millis`]), so the two can
-/// never disagree about which file belongs to which node.
-fn collect_executions(
-    events: &[crate::event_log::Event],
-    claude_root: &Path,
-    repo_root: &Path,
-    run_id: &str,
-) -> Vec<Execution> {
-    let node_defs: Vec<&serde_json::Value> = events
-        .iter()
-        .find(|event| event.kind == crate::event_log::EventKind::RunStarted)
-        .and_then(|event| event.payload.as_ref())
-        .and_then(|payload| payload.get("node_defs"))
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .collect();
-    let node_types: BTreeMap<String, String> = node_defs
-        .iter()
-        .filter_map(|node| {
-            Some((
-                node.get("id")?.as_str()?.to_string(),
-                node.get("node_type")?.as_str()?.to_string(),
-            ))
-        })
-        .collect();
-    // #653/ADR-0060: which nodes work in a sub-worktree of their own, from the
-    // Run snapshot. Attribution asks this and not the node's type, because the
-    // type no longer says where the transcript's `cwd` will be.
-    let snapshot_isolation: BTreeMap<String, bool> = node_defs
-        .iter()
-        .filter_map(|node| {
-            let id = node.get("id")?.as_str()?.to_string();
-            let isolated = node
-                .get("isolated_worktree")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(matches!(
-                    node.get("node_type").and_then(serde_json::Value::as_str),
-                    Some("agent") | Some("merge")
-                ));
-            Some((id, isolated))
-        })
-        .collect();
-    let node_type = |event: &crate::event_log::Event| {
-        event
-            .payload
-            .as_ref()
-            .and_then(|payload| payload.get("node_type"))
-            .and_then(|value| value.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                event
-                    .node_id
-                    .as_ref()
-                    .and_then(|id| node_types.get(id))
-                    .cloned()
-            })
-    };
-    // The NodeRun's FROZEN isolation, else the snapshot's answer for its node.
-    let isolated = |event: &crate::event_log::Event| {
-        event
-            .payload
-            .as_ref()
-            .and_then(|payload| payload.get("isolated_worktree"))
-            .and_then(serde_json::Value::as_bool)
-            .or_else(|| {
-                event
-                    .node_id
-                    .as_ref()
-                    .and_then(|id| snapshot_isolation.get(id))
-                    .copied()
-            })
-            .unwrap_or(false)
-    };
-    let mut executions = Vec::new();
-    let mut seen_executions = HashSet::new();
-    let mut claimed_legacy_projects = HashSet::new();
-    for (order, event) in events.iter().enumerate() {
-        if event.kind != crate::event_log::EventKind::NodeStarted {
-            continue;
-        }
-        let payload = event.payload.as_ref();
-        if node_type(event).as_deref() == Some("script") {
-            continue;
-        }
-        let harness = payload
-            .and_then(|p| p.get("harness"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(pdo_harness::registry::CLAUDE);
-        let session_id = payload
-            .and_then(|p| p.get("session_id"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-        let requested_model = payload
-            .and_then(|p| p.get("model"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        let requested_effort = payload
-            .and_then(|p| p.get("effort"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        let identity = frozen_execution_identity(
-            harness,
-            session_id,
-            event.node_id.as_deref(),
-            event.iter,
-            event.id,
-            order,
-        );
-        if !seen_executions.insert(identity) {
-            continue;
-        }
-        let is_isolated = isolated(event);
-        let working_dir = if is_isolated {
-            event.node_id.as_deref().map(|node_id| {
-                crate::worktrees::sub_worktree_path(
-                    repo_root,
-                    run_id,
-                    node_id,
-                    event.iter.unwrap_or(1),
-                )
-            })
-        } else {
-            Some(crate::worktrees::worktree_dir_for_run(repo_root, run_id))
-        };
-        let project = working_dir
-            .as_ref()
-            .map(|working_dir| claude_root.join(cc_project_dirname(working_dir)));
-        let legacy_claim = harness == pdo_harness::registry::CLAUDE
-            && session_id.is_none()
-            && is_isolated
-            && project
-                .as_ref()
-                .is_some_and(|project| claimed_legacy_projects.insert(project.clone()));
-        let unavailable_reason = if event.node_id.is_none() {
-            Some("missing node identity".to_string())
-        } else if harness == pdo_harness::registry::CLAUDE
-            && session_id.is_none()
-            && is_isolated
-            && !legacy_claim
-        {
-            Some("cost not separable from an earlier start in the same iteration".to_string())
-        } else {
-            None
-        };
-        executions.push(Execution {
-            harness: harness.to_string(),
-            node_id: event.node_id.clone(),
-            session_id: session_id.map(str::to_string),
-            requested_model,
-            requested_effort,
-            working_dir,
-            project,
-            legacy_claim,
-            unavailable_reason,
-        });
-    }
-    executions
-}
-
-/// A **reported** cost for one execution (ADR-0052 §2), read from the store its
-/// harness's probes resolve, together with the observed model × effort slices
-/// the same source names (#736, ADR-0065 §1): `(usd, unavailable_reason,
-/// reported_in_usd, slices)`.
-///
-/// - `copilot`: the journal's cumulative `totalNanoAiu` × the published constant
-///   ([`pdo_harness::copilot_journal`]); converted, so not `reported_in_usd`. The
-///   slices come from the same journal — the model in effect at the usage
-///   points, with the reasoning effort then in force.
-/// - `pi`: the sum of `usage.cost.total` over the session's assistant messages,
-///   **already in dollars** (constant 1.0, [`pdo_harness::pi_session`]) — `reported_in_usd`.
-///   A message with tokens but no cost makes the figure **unavailable** with its
-///   reason ("catalogue absent"), never `$0`. The slices come from the same
-///   session — the per-message model and provider, the thinking level in effect.
-///
-/// Attribution is by the imposed session identity (both harnesses); `pi` also needs
-/// the working directory, whose folder its file lives in. A reading exists
-/// mid-session for both, so a live node has a cost rather than a "—" until its reap.
-fn reported_execution(
-    execution: &Execution,
-    stores: &HarnessStores,
-) -> (Option<f64>, Option<String>, bool, Vec<ModelEffortSlice>) {
-    let Some(session_id) = execution.session_id.as_deref() else {
-        return (
-            None,
-            Some("missing session identity".to_string()),
-            false,
-            Vec::new(),
-        );
-    };
-    if execution.harness == pdo_harness::registry::COPILOT {
-        let text =
-            std::fs::read_to_string(stores.copilot.join(session_id).join("events.jsonl")).ok();
-        let usd = text
-            .as_deref()
-            .and_then(pdo_harness::copilot_journal::reported_cost_usd);
-        let slices = text
-            .as_deref()
-            .map(observed_slices_from_copilot)
-            .unwrap_or_default();
-        return (
-            usd,
-            usd.is_none()
-                .then(|| "no reported cost reading".to_string()),
-            false,
-            slices,
-        );
-    }
-    if execution.harness == pdo_harness::registry::PI {
-        let Some(working_dir) = execution.working_dir.as_deref() else {
-            return (
-                None,
-                Some("missing node identity".to_string()),
-                true,
-                Vec::new(),
-            );
-        };
-        let text = pdo_harness::adapters::transcripts::resolve_transcript(
-            &execution.harness,
-            &stores.pi,
-            working_dir,
-            Some(session_id),
-        )
-        .and_then(|path| std::fs::read_to_string(path).ok());
-        let slices = text.as_deref().map(observed_slices_from_pi);
-        return match text.as_deref().map(pdo_harness::pi_session::reported_cost) {
-            Some(pdo_harness::pi_session::ReportedCost::Usd(usd)) => {
-                (Some(usd), None, true, slices.unwrap_or_default())
-            }
-            Some(pdo_harness::pi_session::ReportedCost::Unavailable { reason }) => {
-                // The models are still observed even though the cost is not:
-                // the slices keep their identity and say why the dollars are "—".
-                let slices = slices
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|mut slice| {
-                        slice.usd = None;
-                        slice.missing_reasons = vec![reason.clone()];
-                        slice
-                    })
-                    .collect();
-                (None, Some(reason), true, slices)
-            }
-            Some(pdo_harness::pi_session::ReportedCost::NoReading) | None => (
-                None,
-                Some("no reported cost reading".to_string()),
-                true,
-                Vec::new(),
-            ),
-        };
-    }
-    (
-        None,
-        Some("harness has no reported cost".to_string()),
-        false,
-        Vec::new(),
-    )
-}
-
-/// The observed [`ModelEffortSlice`]s of one `pi` session (#736): one per
-/// model × thinking level the source names, cost reported (already dollars —
-/// never an estimate of this fold, hence `estimated: false`).
-fn observed_slices_from_pi(text: &str) -> Vec<ModelEffortSlice> {
-    pdo_harness::pi_session::observed_usage(text)
-        .into_iter()
-        .map(|usage| ModelEffortSlice {
-            model: usage.model,
-            model_observed: true,
-            effort: usage.effort.clone(),
-            effort_observed: usage.effort.as_ref().map(|_| true),
-            usd: Some(usage.usd),
-            estimated: false,
-            partial: false,
-            executions: 1,
-            unpriced_models: Vec::new(),
-            missing_reasons: Vec::new(),
-            provider: usage.provider,
-        })
-        .collect()
-}
-
-/// The observed [`ModelEffortSlice`]s of one `copilot` journal (#736): one per
-/// model × reasoning effort the usage points name, cost reported by the
-/// published constant (never an estimate, hence `estimated: false`).
-fn observed_slices_from_copilot(text: &str) -> Vec<ModelEffortSlice> {
-    pdo_harness::copilot_journal::observed_usage(text)
-        .into_iter()
-        .map(|usage| ModelEffortSlice {
-            model: usage.model,
-            model_observed: true,
-            effort: usage.effort.clone(),
-            effort_observed: usage.effort.as_ref().map(|_| true),
-            usd: Some(usage.usd),
-            estimated: false,
-            partial: false,
-            executions: 1,
-            unpriced_models: Vec::new(),
-            missing_reasons: Vec::new(),
-            provider: None,
-        })
-        .collect()
-}
-
-/// The claude transcript fold's per-model output plus the execution's own
-/// availability — what a derived (token × price table) fold can hand the slice
-/// builder, bundled so the builder's signature stays readable.
-struct DerivedFold {
-    models: Option<BTreeMap<String, ModelUsage>>,
-    usd: Option<f64>,
-    form: Option<CostForm>,
-    partial: bool,
-    unpriced_models: Vec<String>,
-    missing_reasons: Vec<String>,
-}
-
-/// The **model × effort slices** of one execution (ADR-0065): the observed
-/// slices the source reported when it named any, else the claude fold's
-/// per-message models, else the requested id in fallback — with the
-/// execution's own availability carried along. A harness with no cost source
-/// gets NO slices (absent from « By model », never a "default of X" bucket),
-/// and so does a mute source with no requested model: nothing is invented.
-fn execution_model_slices(
-    execution: &Execution,
-    observed: Vec<ModelEffortSlice>,
-    derived: DerivedFold,
-) -> Vec<ModelEffortSlice> {
-    if !pdo_harness::probes::can_cost(&execution.harness) {
-        return Vec::new();
-    }
-    // The source spoke (#736): `pi`'s per-message model/provider/effort,
-    // `copilot`'s usage-point model/effort — the observed values win verbatim.
-    if !observed.is_empty() {
-        return observed;
-    }
-    if pdo_harness::probes::observed_identity_source(&execution.harness).is_none()
-        && execution.requested_model.is_none()
-    {
-        return Vec::new();
-    }
-    if let Some(models) = derived.models {
-        if !models.is_empty() {
-            // Observed: one slice per verbatim id the source named, the effort
-            // requested (`claude`'s source never writes it — ADR-0065 §1).
-            return models
-                .into_iter()
-                .map(|(model, usage)| ModelEffortSlice {
-                    model,
-                    model_observed: true,
-                    effort: execution.requested_effort.clone(),
-                    effort_observed: execution.requested_effort.as_ref().map(|_| false),
-                    provider: None,
-                    usd: Some(usage.usd),
-                    estimated: true,
-                    partial: !usage.unpriced.is_empty(),
-                    executions: 1,
-                    unpriced_models: usage.unpriced.into_iter().collect(),
-                    missing_reasons: Vec::new(),
-                })
-                .collect();
-        }
-    }
-    // Source mute for the model (or no readable transcript): the requested id
-    // in fallback, carrying the execution's own readability.
-    execution
-        .requested_model
-        .clone()
-        .map(|model| {
-            vec![ModelEffortSlice {
-                model,
-                model_observed: false,
-                effort: execution.requested_effort.clone(),
-                effort_observed: execution.requested_effort.as_ref().map(|_| false),
-                provider: None,
-                usd: derived.usd,
-                estimated: derived.form == Some(CostForm::Derived) && derived.usd.is_some(),
-                partial: derived.partial,
-                executions: 1,
-                unpriced_models: derived.unpriced_models,
-                missing_reasons: derived.missing_reasons,
-            }]
-        })
-        .unwrap_or_default()
-}
-
-/// Leftover (infrastructure / unassigned) cost, ventilated by its observed
-/// models. No effort: those sessions have no node and no startup event, so they
-/// land in the "not set" bucket (ADR-0065).
-fn leftover_model_slices(
-    models: &BTreeMap<String, ModelUsage>,
-    executions: i64,
-) -> Vec<ModelEffortSlice> {
-    models
-        .iter()
-        .map(|(model, usage)| ModelEffortSlice {
-            model: model.clone(),
-            model_observed: true,
-            effort: None,
-            effort_observed: None,
-            provider: None,
-            usd: Some(usage.usd),
-            estimated: true,
-            partial: !usage.unpriced.is_empty(),
-            executions,
-            unpriced_models: usage.unpriced.iter().cloned().collect(),
-            missing_reasons: Vec::new(),
-        })
-        .collect()
-}
-
-pub(crate) fn compute_run_cost_breakdown(
-    events: &[crate::event_log::Event],
-    claude_root: &Path,
-    stores: &HarnessStores,
-    repo_root: &Path,
-    run_id: &str,
-    prices: &PriceTable,
-) -> RunCostBreakdown {
-    let executions = collect_executions(events, claude_root, repo_root, run_id);
-
-    let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
-    let prefix = format!("{}-", cc_project_dirname(&run_dir));
-    let mut project_dirs: Vec<PathBuf> = std::fs::read_dir(claude_root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
-    project_dirs.sort();
-
-    let mut owned_lines: Vec<Vec<Line>> = (0..executions.len()).map(|_| Vec::new()).collect();
-    let mut owned_files = vec![false; executions.len()];
-    let mut leftover_lines = Vec::new();
-    let mut leftover_files = false;
-    for project in &project_dirs {
-        let mut files = Vec::new();
-        collect_jsonl_paths(project, &mut files);
-        files.sort();
-        for file in files {
-            let owner = executions
-                .iter()
-                .enumerate()
-                .find_map(|(index, execution)| {
-                    if execution.harness != pdo_harness::registry::CLAUDE
-                        || execution.project.as_ref() != Some(project)
-                    {
-                        return None;
-                    }
-                    if let Some(session_id) = execution.session_id.as_deref() {
-                        let main = project.join(format!("{session_id}.jsonl"));
-                        let subagents = project.join(session_id).join("subagents");
-                        (file == main || file.starts_with(subagents)).then_some(index)
-                    } else {
-                        execution.legacy_claim.then_some(index)
-                    }
-                });
-            let mut lines = Vec::new();
-            collect_jsonl_file(&file, &mut lines);
-            if let Some(index) = owner {
-                owned_files[index] = true;
-                owned_lines[index].extend(lines);
-            } else {
-                leftover_files = true;
-                leftover_lines.extend(lines);
-            }
-        }
-    }
-
-    let mut contributions = Vec::new();
-    let mut seen_messages = HashSet::new();
-    for (index, execution) in executions.iter().enumerate() {
-        let mut reported_in_usd = false;
-        let mut observed_models: Option<BTreeMap<String, ModelUsage>> = None;
-        let mut observed_slices: Vec<ModelEffortSlice> = Vec::new();
-        let (cost, form, reason) = if !pdo_harness::probes::can_cost(&execution.harness) {
-            (None, None, Some("harness has no cost source".to_string()))
-        } else if pdo_harness::probes::probes_for(&execution.harness).and_then(|p| p.cost_source())
-            == Some(pdo_harness::probes::CostSource::ReportedByConstant)
-        {
-            // #615/#707, ADR-0052: a reported cost — `copilot`'s journal, `pi`'s
-            // session — read by identity, never through the price table. The
-            // same read yields the observed model × effort slices (#736).
-            let (usd, unavailable, in_usd, slices) = reported_execution(execution, stores);
-            reported_in_usd = in_usd;
-            observed_slices = slices;
-            (
-                usd.map(|usd| CostStat {
-                    usd,
-                    partial: false,
-                    unpriced_models: Vec::new(),
-                    uncosted_harnesses: Vec::new(),
-                    by_harness: Vec::new(),
-                }),
-                Some(CostForm::Reported),
-                unavailable,
-            )
-        } else if execution.harness == pdo_harness::registry::CLAUDE
-            && execution.unavailable_reason.is_none()
-            && owned_files[index]
-        {
-            let (stat, by_model) =
-                aggregate_by_model(owned_lines[index].drain(..), prices, &mut seen_messages);
-            observed_models = Some(by_model);
-            (Some(stat), Some(CostForm::Derived), None)
-        } else {
-            (
-                None,
-                Some(CostForm::Derived),
-                execution
-                    .unavailable_reason
-                    .clone()
-                    .or_else(|| Some("no attributable Claude transcript".to_string())),
-            )
-        };
-        let usd = cost.as_ref().map(|cost| cost.usd);
-        let unavailable_reasons: Vec<String> = cost
-            .is_none()
-            .then_some(reason)
-            .flatten()
-            .into_iter()
-            .collect();
-        let model_slices = execution_model_slices(
-            execution,
-            observed_slices,
-            DerivedFold {
-                models: observed_models,
-                usd,
-                form,
-                partial: cost.as_ref().map(|cost| cost.partial).unwrap_or(false),
-                unpriced_models: cost
-                    .as_ref()
-                    .map(|cost| cost.unpriced_models.clone())
-                    .unwrap_or_default(),
-                missing_reasons: unavailable_reasons.clone(),
-            },
-        );
-        contributions.push(CostContribution {
-            harness: execution.harness.clone(),
-            scope: CostScope::Node,
-            node_id: execution.node_id.clone(),
-            executions: 1,
-            readable_executions: i64::from(usd.is_some()),
-            usd,
-            form: usd.and(form),
-            reported_in_usd: usd.is_some() && reported_in_usd,
-            partial: cost.as_ref().is_some_and(|cost| cost.partial),
-            unpriced_models: cost
-                .as_ref()
-                .map(|cost| cost.unpriced_models.clone())
-                .unwrap_or_default(),
-            unavailable_reasons,
-            model_slices,
-        });
-    }
-
-    let run_harness = events
-        .iter()
-        .find(|event| event.kind == crate::event_log::EventKind::RunStarted)
-        .and_then(|event| event.payload.as_ref())
-        .and_then(|payload| payload.get("harness"))
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(pdo_harness::registry::CLAUDE);
-    let infrastructure_executions = i64::from(
-        events
-            .iter()
-            .any(|event| event.kind == crate::event_log::EventKind::RunStarted),
-    ) + events
-        .iter()
-        .filter(|event| event.kind == crate::event_log::EventKind::MergeResolverStarted)
-        .count() as i64;
-    let ambiguous_shared_claude = executions.iter().any(|execution| {
-        execution.harness == pdo_harness::registry::CLAUDE
-            && execution.session_id.is_none()
-            && !execution.legacy_claim
-    });
-    let leftover = leftover_files
-        .then(|| aggregate_by_model(leftover_lines.into_iter(), prices, &mut seen_messages));
-    if infrastructure_executions > 0 {
-        let attributable = !ambiguous_shared_claude;
-        contributions.push(CostContribution {
-            harness: if attributable && leftover.is_some() {
-                pdo_harness::registry::CLAUDE.to_string()
-            } else {
-                run_harness.to_string()
-            },
-            scope: CostScope::Infrastructure,
-            node_id: None,
-            executions: infrastructure_executions,
-            readable_executions: if attributable && leftover.is_some() {
-                infrastructure_executions
-            } else {
-                0
-            },
-            usd: attributable
-                .then(|| leftover.as_ref().map(|(cost, _)| cost.usd))
-                .flatten(),
-            form: (attributable && leftover.is_some()).then_some(CostForm::Derived),
-            reported_in_usd: false,
-            partial: attributable && leftover.as_ref().is_some_and(|(cost, _)| cost.partial),
-            unpriced_models: if attributable {
-                leftover
-                    .as_ref()
-                    .map(|(cost, _)| cost.unpriced_models.clone())
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            },
-            unavailable_reasons: if attributable && leftover.is_some() {
-                Vec::new()
-            } else {
-                vec!["no attributable infrastructure cost".to_string()]
-            },
-            // The infrastructure sessions' models are observed off the same
-            // leftover lines; they carry no effort ("not set"). Unattributable
-            // leftovers go to the Unassigned bucket below instead.
-            model_slices: if attributable {
-                leftover
-                    .as_ref()
-                    .map(|(_, models)| leftover_model_slices(models, infrastructure_executions))
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            },
-        });
-    }
-    if let Some((cost, models)) =
-        leftover.filter(|_| ambiguous_shared_claude || infrastructure_executions == 0)
-    {
-        contributions.push(CostContribution {
-            harness: pdo_harness::registry::CLAUDE.to_string(),
-            scope: CostScope::Unassigned,
-            node_id: None,
-            executions: 0,
-            readable_executions: 0,
-            usd: Some(cost.usd),
-            form: Some(CostForm::Derived),
-            reported_in_usd: false,
-            partial: cost.partial,
-            unpriced_models: cost.unpriced_models,
-            unavailable_reasons: vec![
-                "Claude transcript cannot be matched to a node or infrastructure".to_string(),
-            ],
-            // The orphan lines' models are still known (observed) even though
-            // their node is not: they ventilate inside the model axis, under the
-            // pipeline's "Unassigned" node, effort "not set".
-            model_slices: leftover_model_slices(&models, 0),
-        });
-    }
-
-    let any_readable = contributions.iter().any(|c| c.usd.is_some());
-    let unpriced_models: Vec<String> = contributions
-        .iter()
-        .flat_map(|c| c.unpriced_models.iter().cloned())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let uncosted_harnesses: Vec<String> = contributions
-        .iter()
-        .filter(|contribution| {
-            contribution.usd.is_none()
-                && contribution
-                    .unavailable_reasons
-                    .iter()
-                    .any(|reason| reason == "harness has no cost source")
-        })
-        .map(|contribution| contribution.harness.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let mut harnesses: BTreeMap<String, HarnessCost> = BTreeMap::new();
-    for contribution in &contributions {
-        let (Some(usd), Some(form)) = (contribution.usd, contribution.form) else {
-            continue;
-        };
-        let entry = harnesses
-            .entry(contribution.harness.clone())
-            .or_insert_with(|| HarnessCost {
-                harness: contribution.harness.clone(),
-                usd: 0.0,
-                form,
-                partial: false,
-                unpriced_models: Vec::new(),
-                // A slice is "in dollars" only if every contribution is: ANDed
-                // below, seeded true so the first one decides.
-                reported_in_usd: true,
-            });
-        entry.usd += usd;
-        entry.reported_in_usd &= contribution.reported_in_usd;
-        entry.partial |= contribution.partial;
-        entry
-            .unpriced_models
-            .extend(contribution.unpriced_models.iter().cloned());
-        entry.unpriced_models.sort();
-        entry.unpriced_models.dedup();
-    }
-    let slices: Vec<HarnessCost> = harnesses.into_values().collect();
-    let cost = if !uncosted_harnesses.is_empty() {
-        Some(cost_unavailable(uncosted_harnesses, slices))
-    } else {
-        any_readable.then(|| CostStat {
-            usd: contributions.iter().filter_map(|c| c.usd).sum(),
-            partial: !unpriced_models.is_empty(),
-            unpriced_models,
-            uncosted_harnesses: Vec::new(),
-            by_harness: slices,
-        })
-    };
-    RunCostBreakdown {
-        contributions,
-        cost,
-    }
-}
-
-/// The four cache buckets are disjoint from `input`/`output` — CC's
-/// `input_tokens` already excludes cache tokens, so they sum without subtraction.
-#[derive(Default)]
-struct Usage {
-    input: u64,
-    output: u64,
-    cache_read: u64,
-    cache_create_5m: u64,
-    cache_create_1h: u64,
-}
-
-struct Line {
-    message_id: Option<String>,
-    request_id: Option<String>,
-    model: String,
-    usage: Usage,
-}
-
-/// The 5-term ccusage formula. `in_p`/`out_p` are per-MTok list prices; the
-/// three cache rates are derived from `in_p`.
-fn line_cost(u: &Usage, in_p: f64, out_p: f64) -> f64 {
-    (u.input as f64 * in_p
-        + u.output as f64 * out_p
-        + u.cache_create_5m as f64 * in_p * 1.25
-        + u.cache_create_1h as f64 * in_p * 2.0
-        + u.cache_read as f64 * in_p * 0.1)
-        / 1_000_000.0
-}
-
-/// Tolerant: a torn/invalid JSON line is skipped, never `?`-propagated. Only
-/// `assistant` lines with a real (non-`<synthetic>`, non-error, non-zero) usage
-/// carry cost.
-fn parse_line(raw: &str) -> Option<Line> {
-    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
-    if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
-        return None;
-    }
-    if v.get("isApiErrorMessage").and_then(|b| b.as_bool()) == Some(true) {
-        return None;
-    }
-    let msg = v.get("message")?;
-    let model = msg.get("model").and_then(|m| m.as_str())?.to_string();
-    if model == "<synthetic>" {
-        return None;
-    }
-    let u = msg.get("usage")?;
-    let field = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-    let input = field("input_tokens");
-    let output = field("output_tokens");
-    let cache_read = field("cache_read_input_tokens");
-    // Prefer the nested 5m/1h split; else drop the flat total into the 5m bucket
-    // (ccusage's fallback for transcripts without the split).
-    let (cache_create_5m, cache_create_1h) = match u.get("cache_creation") {
-        Some(cc) => (
-            cc.get("ephemeral_5m_input_tokens")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0),
-            cc.get("ephemeral_1h_input_tokens")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0),
-        ),
-        None => (field("cache_creation_input_tokens"), 0),
-    };
-    let usage = Usage {
-        input,
-        output,
-        cache_read,
-        cache_create_5m,
-        cache_create_1h,
-    };
-    // All-zero usage carries no cost and would needlessly occupy a dedup slot.
-    if input == 0 && output == 0 && cache_read == 0 && cache_create_5m == 0 && cache_create_1h == 0
-    {
-        return None;
-    }
-    Some(Line {
-        message_id: msg.get("id").and_then(|x| x.as_str()).map(String::from),
-        request_id: v
-            .get("requestId")
-            .and_then(|x| x.as_str())
-            .map(String::from),
-        model,
-        usage,
-    })
-}
-
-/// Dedup by `(message.id, requestId)`, keeping the first. Lines without a
-/// `message.id` are always counted (no key to dedup on).
-///
-/// Unknown model ids are **de-dated** before collection, so a dated id and its
-/// family name one offender, not two — the same key a human would add to
-/// `models.yaml`. `partial` is **derived** from that set, so no caller can flip
-/// one without the other. `<synthetic>` is priced $0 by the table (never
-/// `None`), so it never lands here.
 #[cfg(test)]
 fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat {
     let mut seen = HashSet::new();
@@ -1023,72 +104,16 @@ fn aggregate_with_seen(
 /// Per-model cost subtotals of one transcript fold — the raw material of
 /// [`ModelEffortSlice`] (ADR-0065). Keyed by the **verbatim** `message.model`;
 /// unpriced ids still land here (at $0) so the axis can name the model and mark
-/// it `†`, with the family remembered per id just like the run-level set.
-#[derive(Debug, Clone, Default, PartialEq)]
-struct ModelUsage {
-    usd: f64,
-    unpriced: BTreeSet<String>,
-}
-
-/// [`aggregate_with_seen`] plus the per-model ventilation the « By model » axis
-/// folds (ADR-0065). The run-level [`CostStat`] is byte-identical to before —
-/// the axis is additive, the totals never move.
-fn aggregate_by_model(
-    lines: impl Iterator<Item = Line>,
-    prices: &PriceTable,
-    seen: &mut HashSet<(String, Option<String>)>,
-) -> (CostStat, BTreeMap<String, ModelUsage>) {
-    let mut usd = 0.0;
-    let mut unpriced: BTreeSet<String> = BTreeSet::new();
-    let mut by_model: BTreeMap<String, ModelUsage> = BTreeMap::new();
-    for l in lines {
-        if let Some(id) = &l.message_id {
-            if !seen.insert((id.clone(), l.request_id.clone())) {
-                continue; // duplicate: replay on resume/compaction
-            }
-        }
-        let entry = by_model.entry(l.model.clone()).or_default();
-        match prices.price_for(&l.model) {
-            Some(p) => {
-                let line_usd = line_cost(&l.usage, p.input, p.output);
-                usd += line_usd;
-                entry.usd += line_usd;
-            }
-            // Unknown real model → $0 + named in the lower-bound signal (#425).
-            None => {
-                unpriced.insert(strip_date_suffix(&l.model).to_string());
-                entry
-                    .unpriced
-                    .insert(strip_date_suffix(&l.model).to_string());
-            }
-        }
-    }
-    let unpriced_models: Vec<String> = unpriced.into_iter().collect();
-    let stat = CostStat {
-        usd,
-        partial: !unpriced_models.is_empty(),
-        unpriced_models,
-        // The aggregate is transcript-derived — i.e. it already ran because the
-        // Run's harness HAS a cost source. Absent-cost-source harnesses are handled
-        // by the attributed fold, which returns a "—"-with-reason `CostStat`.
-        uncosted_harnesses: Vec::new(),
-        // The claude-derived aggregate carries no ventilation of its own; the
-        // by-harness breakdown is assembled by the attributed fold, which pairs
-        // this derived slice with `copilot`'s reported one (#615).
-        by_harness: Vec::new(),
-    };
-    (stat, by_model)
-}
 
 /// The distinct harnesses this Run launched a node on that have **no cost
 /// source**. Read off the `NodeStarted` payloads (the frozen-at-spawn harness,
 /// ADR-0046), never the current YAML. A `null` harness is the `claude` floor,
 /// which HAS a cost source, so it never lands here.
 #[cfg(test)]
-pub(crate) fn uncosted_harnesses(events: &[crate::event_log::Event]) -> Vec<String> {
+pub fn uncosted_harnesses(events: &[crate::domain::event::Event]) -> Vec<String> {
     let mut names: BTreeSet<String> = BTreeSet::new();
     for e in events {
-        if e.kind != crate::event_log::EventKind::NodeStarted {
+        if e.kind != crate::domain::event::EventKind::NodeStarted {
             continue;
         }
         let Some(harness) = e
@@ -1112,11 +137,11 @@ pub(crate) fn uncosted_harnesses(events: &[crate::event_log::Event]) -> Vec<Stri
 /// `NodeStarted` with a frozen `copilot` harness AND a non-empty session id
 /// contributes, so an infra or other-harness journal is never attributed here.
 #[cfg(test)]
-fn copilot_session_ids(events: &[crate::event_log::Event]) -> Vec<String> {
+fn copilot_session_ids(events: &[crate::domain::event::Event]) -> Vec<String> {
     // Last `NodeStarted` per (node, iter) wins (a restart re-pins a fresh id).
     let mut latest: BTreeMap<(String, i64), String> = BTreeMap::new();
     for e in events {
-        if e.kind != crate::event_log::EventKind::NodeStarted {
+        if e.kind != crate::domain::event::EventKind::NodeStarted {
             continue;
         }
         let Some(payload) = e.payload.as_ref() else {
@@ -1153,7 +178,7 @@ fn copilot_session_ids(events: &[crate::event_log::Event]) -> Vec<String> {
 /// copilot node has a cost rather than a "—" until its reap.
 #[cfg(test)]
 fn copilot_reported_cost(
-    events: &[crate::event_log::Event],
+    events: &[crate::domain::event::Event],
     stores: &HarnessStores,
 ) -> Option<f64> {
     let mut usd = 0.0;
@@ -1176,7 +201,7 @@ fn copilot_reported_cost(
 #[cfg(test)]
 fn ventilate(
     claude: Option<CostStat>,
-    events: &[crate::event_log::Event],
+    events: &[crate::domain::event::Event],
     stores: &HarnessStores,
 ) -> Option<CostStat> {
     let copilot_usd = copilot_reported_cost(events, stores);
@@ -1226,30 +251,6 @@ fn ventilate(
     })
 }
 
-/// A Run whose cost is **unavailable** because a node ran on a harness with no
-/// cost source — "—" with a reason, never a `$0`.
-///
-/// `slices` are the per-harness costs PDO could still compute for the Run's
-/// *other* nodes; they **survive** the unavailable total (ADR-0052 §3). What is
-/// refused is the sum, not the knowledge.
-fn cost_unavailable(uncosted: Vec<String>, slices: Vec<HarnessCost>) -> CostStat {
-    CostStat {
-        // Not a total, and never rendered as one: `uncosted_harnesses` non-empty is
-        // what makes every surface print "—". The slices say themselves; this field
-        // stays 0.0 rather than half a sum, which would read as a total.
-        usd: 0.0,
-        // NOT `partial`: `partial` means "priced, but a lower bound" and still
-        // shows a dollar figure. This is a categorically different state — the
-        // aggregate is unavailable, not merely incomplete — so it stays out of
-        // the `partial ⟺ !unpriced_models.is_empty()` invariant (both empty).
-        // A slice keeps its own `partial`; the Run-level one is about the total.
-        partial: false,
-        unpriced_models: Vec::new(),
-        uncosted_harnesses: uncosted,
-        by_harness: slices,
-    }
-}
-
 #[cfg(test)]
 fn slices_or_empty(ventilated: Option<CostStat>) -> Vec<HarnessCost> {
     ventilated.map(|c| c.by_harness).unwrap_or_default()
@@ -1263,8 +264,8 @@ fn slices_or_empty(ventilated: Option<CostStat>) -> Vec<HarnessCost> {
 /// runs, so a mixed Run says what came through each harness even while refusing
 /// to add them (ADR-0052 §3). Only the sum is withheld.
 #[cfg(test)]
-pub(crate) fn run_cost_or_absence(
-    events: &[crate::event_log::Event],
+pub fn run_cost_or_absence(
+    events: &[crate::domain::event::Event],
     claude_root: &Path,
     stores: &HarnessStores,
     repo_root: &Path,
@@ -1304,19 +305,6 @@ fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<Line>) {
     }
 }
 
-fn collect_jsonl_paths(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_paths(&path, out);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
-            out.push(path);
-        }
-    }
-}
 
 /// Estimated cost for a run: every CC transcript whose project dir is under
 /// `<repo_root>/.pdo/runs/<run_id>/`. `None` when no such dir exists (UI "—");
@@ -1326,7 +314,7 @@ fn collect_jsonl_paths(dir: &Path, out: &mut Vec<PathBuf>) {
 /// as already resolved by `effective_repo_root`): it builds the run-id dir
 /// prefix, NOT the read root — that is `projects_root`.
 #[cfg(test)]
-pub(crate) fn compute_run_cost(
+pub fn compute_run_cost(
     projects_root: &Path,
     repo_root: &Path,
     run_id: &str,
@@ -1351,171 +339,6 @@ pub(crate) fn compute_run_cost(
     Some(aggregate(lines.into_iter(), prices))
 }
 
-// Read-side memo for `/stats/cost`, which fans over every Run in the cohort. It
-// stores the complete harness contribution breakdown, never a superseded scalar.
-// Nothing is persisted.
-const BREAKDOWN_MEMO_CAP: usize = 4096;
-
-/// Mirrors [`collect_jsonl_recursive`]'s traversal but `stat`s only — no file
-/// contents are read.
-fn max_mtime_recursive(dir: &Path, max_ms: &mut i64) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            max_mtime_recursive(&path, max_ms);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-            if let Ok(ms) = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
-            {
-                if ms > *max_ms {
-                    *max_ms = ms;
-                }
-            }
-        }
-    }
-}
-
-/// Max mtime (epoch millis) across every `*.jsonl` transcript contributing to
-/// `run_id`'s cost — the same recursive glob [`compute_run_cost`] aggregates.
-/// `0` when nothing exists yet, so a later write bumps the key and invalidates
-/// the memo.
-pub(crate) fn max_transcript_mtime_millis(
-    projects_root: &Path,
-    repo_root: &Path,
-    run_id: &str,
-) -> i64 {
-    let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
-    let prefix = format!("{}-", cc_project_dirname(&run_dir));
-    let Ok(entries) = std::fs::read_dir(projects_root) else {
-        return 0;
-    };
-    let mut max_ms: i64 = 0;
-    for entry in entries.flatten() {
-        if !entry.file_name().to_string_lossy().starts_with(&prefix) {
-            continue;
-        }
-        max_mtime_recursive(&entry.path(), &mut max_ms);
-    }
-    max_ms
-}
-
-type BreakdownMemoKey = (String, i64, i64, u64, u64, u64);
-type BreakdownMemoMap = HashMap<BreakdownMemoKey, RunCostBreakdown>;
-
-static BREAKDOWN_MEMO: OnceLock<Mutex<BreakdownMemoMap>> = OnceLock::new();
-
-fn breakdown_memo() -> &'static Mutex<BreakdownMemoMap> {
-    BREAKDOWN_MEMO.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// The reported-cost mirror of [`max_transcript_mtime_millis`]: the newest mtime of
-/// every `copilot` journal and `pi` session file the Run's executions resolve to
-/// (#615/#707). `pub(crate)` so a whole-cohort cache key (`stats_performance`'s) can
-/// fold a Run's reported-store contribution alongside its Claude one without
-/// re-deriving the lookup. Resolution is the fold's own ([`collect_executions`] +
-/// the per-harness `resolve_transcript`), so the key tracks exactly the files the
-/// fold reads.
-pub(crate) fn reported_stores_mtime_millis(
-    events: &[crate::event_log::Event],
-    claude_root: &Path,
-    stores: &HarnessStores,
-    repo_root: &Path,
-    run_id: &str,
-) -> i64 {
-    collect_executions(events, claude_root, repo_root, run_id)
-        .iter()
-        .filter_map(|execution| {
-            let session_id = execution.session_id.as_deref()?;
-            let path = if execution.harness == pdo_harness::registry::COPILOT {
-                stores.copilot.join(session_id).join("events.jsonl")
-            } else if execution.harness == pdo_harness::registry::PI {
-                pdo_harness::adapters::transcripts::resolve_transcript(
-                    &execution.harness,
-                    &stores.pi,
-                    execution.working_dir.as_deref()?,
-                    Some(session_id),
-                )?
-            } else {
-                return None;
-            };
-            std::fs::metadata(path).and_then(|m| m.modified()).ok()
-        })
-        .map(|modified| {
-            modified
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-/// Order-and-content fingerprint of a Run's own event log. `pub(crate)` so any
-/// other cache keyed on "this Run's events haven't changed" reuses this exact
-/// hash rather than defining a second, possibly inconsistent one.
-pub(crate) fn event_fingerprint(events: &[crate::event_log::Event]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for event in events {
-        event.run_id.hash(&mut hasher);
-        event.ts.hash(&mut hasher);
-        serde_json::to_string(&event.kind)
-            .unwrap_or_default()
-            .hash(&mut hasher);
-        event.node_id.hash(&mut hasher);
-        event.iter.hash(&mut hasher);
-        event
-            .payload
-            .as_ref()
-            .map(serde_json::Value::to_string)
-            .hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
-pub(crate) fn compute_run_cost_breakdown_cached(
-    events: &[crate::event_log::Event],
-    claude_root: &Path,
-    stores: &HarnessStores,
-    repo_root: &Path,
-    run_id: &str,
-    prices: &PriceTable,
-) -> RunCostBreakdown {
-    let mut roots = DefaultHasher::new();
-    claude_root.hash(&mut roots);
-    stores.copilot.hash(&mut roots);
-    stores.pi.hash(&mut roots);
-    repo_root.hash(&mut roots);
-    let key = (
-        run_id.to_string(),
-        max_transcript_mtime_millis(claude_root, repo_root, run_id),
-        reported_stores_mtime_millis(events, claude_root, stores, repo_root, run_id),
-        prices.fingerprint(),
-        event_fingerprint(events),
-        roots.finish(),
-    );
-    {
-        let guard = breakdown_memo()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(hit) = guard.get(&key) {
-            return hit.clone();
-        }
-    }
-    let value = compute_run_cost_breakdown(events, claude_root, stores, repo_root, run_id, prices);
-    let mut guard = breakdown_memo()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    if guard.len() >= BREAKDOWN_MEMO_CAP {
-        guard.clear();
-    }
-    guard.insert(key, value.clone());
-    value
-}
 
 #[cfg(test)]
 mod tests {
@@ -1871,7 +694,7 @@ mod tests {
     // The test that guarantees "absence is said": a Run on a harness with no cost
     // source shows "—" and a reason, never `0`.
 
-    use crate::event_log::{Event, EventKind};
+    use crate::domain::event::{Event, EventKind};
 
     fn node_started(node: &str, harness: Option<&str>) -> Event {
         Event {
@@ -2261,7 +1084,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let run_id = "resurrected-pane";
 
-        let node_dir = crate::worktrees::sub_worktree_path(repo.path(), run_id, "claude", 1);
+        let node_dir = pdo_workspace::adapters::git::worktrees::sub_worktree_path(repo.path(), run_id, "claude", 1);
         let project = claude.join(cc_project_dirname(&node_dir));
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
@@ -2416,7 +1239,7 @@ mod tests {
         let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "dedup";
-        let working_dir = crate::worktrees::sub_worktree_path(repo.path(), run_id, "worker", 1);
+        let working_dir = pdo_workspace::adapters::git::worktrees::sub_worktree_path(repo.path(), run_id, "worker", 1);
         let project = claude.join(cc_project_dirname(&working_dir));
         std::fs::create_dir_all(project.join("first/subagents")).unwrap();
         let replay = format!(
@@ -3220,3 +2043,4 @@ mod tests {
         }
     }
 }
+

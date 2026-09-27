@@ -12,6 +12,7 @@ use pdo_skill::domain::selection::ActiveSkill;
 use pdo_skill::Skills;
 use pdo_workspace::application::Workspace;
 use pdo_workspace::domain::project::Project;
+use pdo_workspace::domain::provisioning::{ProvisioningRules, ScopedRules};
 
 use crate::application::ports::{BoxFuture, DeclaredWaits, NodeSkills, Projects};
 
@@ -41,6 +42,19 @@ impl Projects for WorkspaceProjects {
     fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
         Box::pin(async move { self.0.owner_of(path).await.map_err(|e| e.to_string()) })
     }
+
+    fn provisioning_rules<'a>(
+        &'a self,
+        repository: &'a str,
+        run: ProvisioningRules,
+    ) -> BoxFuture<'a, Result<Vec<ScopedRules>, String>> {
+        Box::pin(async move {
+            self.0
+                .scoped_provisioning_rules(repository, run, ProvisioningRules::default())
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
 }
 
 /// The bank and the delivery, over the skill context.
@@ -59,6 +73,10 @@ impl NodeSkills for ContextSkills {
         skills: &[ActiveSkill],
     ) -> anyhow::Result<Vec<SkippedSkill>> {
         self.0.deliver(worktree, run_repo_root, run_id, skills)
+    }
+
+    fn withdraw(&self, repo_root: &Path, run_id: &str) -> anyhow::Result<()> {
+        self.0.withdraw(repo_root, run_id)
     }
 }
 

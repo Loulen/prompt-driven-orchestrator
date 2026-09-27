@@ -38,6 +38,12 @@ impl PageMountLock {
     pub async fn lock(&self) -> MutexGuard<'_, ()> {
         self.0.lock().await
     }
+
+    /// The same lock, held by a guard that owns its share of it: what a caller
+    /// in another context keeps across its own awaits.
+    pub async fn lock_owned(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.0.clone().lock_owned().await
+    }
 }
 
 /// Journal a mount (`before` absent) or an unmount (`after` absent).

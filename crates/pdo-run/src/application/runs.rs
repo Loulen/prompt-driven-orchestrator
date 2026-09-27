@@ -14,9 +14,12 @@ use pdo_sandbox::application::ports::SandboxProfileRepository;
 use pdo_session::application::ports::Tmux;
 
 use super::append_event::AppendEvent;
+use pdo_pipeline::adapters::self_writes::SelfWrites;
+use pdo_pipeline::application::ports::SkillBank;
+
 use super::ports::{
     DeclaredWaits, EventStore, InstanceSettings, LiveFacts, ManagerSessions, NodeSkills, Projects,
-    RunSurfaces,
+    RunDirWatch, RunPages,
 };
 use super::read_run::ReadRun;
 
@@ -26,7 +29,7 @@ pub struct RunsPorts {
     /// The kernel's bus: every appended event is published there, as `/ws`
     /// relays it.
     pub bus: Arc<dyn EventBus>,
-    /// What a Run's detail reads from disk (implemented by the legacy side).
+    /// What a Run's detail reads from disk (`adapters::disk_live_facts`).
     pub live_facts: Arc<dyn LiveFacts>,
     pub managers: Arc<dyn ManagerSessions>,
     /// tmux on this daemon's private socket (the session context's port).
@@ -41,8 +44,17 @@ pub struct RunsPorts {
     pub sandbox_profiles: Arc<dyn SandboxProfileRepository>,
     /// The instance settings a spawn reads (implemented by the legacy side).
     pub settings: Arc<dyn InstanceSettings>,
-    /// The Run's surfaces still in the legacy crate: archive, create.
-    pub surfaces: Arc<dyn RunSurfaces>,
+    /// The skill bank as the pipeline context reads it: the skills sidecar of
+    /// a Run's pipeline.
+    pub bank: Arc<dyn SkillBank>,
+    /// The page mounts a Run published (the platform context), released at
+    /// archive.
+    pub pages: Arc<dyn RunPages>,
+    /// The pipeline watcher a new Run's directory is registered with.
+    pub run_dirs: Arc<dyn RunDirWatch>,
+    /// The daemon's own writes, which the pipeline watcher does not announce:
+    /// an edit of the run-scoped pipeline marks what it writes.
+    pub self_writes: SelfWrites,
     /// Asked before every gesture of an actor, never before a transition.
     pub extensions: Arc<dyn ExtensionHost>,
 }
@@ -81,7 +93,11 @@ pub struct Runs {
     pub(crate) skills: Arc<dyn NodeSkills>,
     pub(crate) sandbox_profiles: Arc<dyn SandboxProfileRepository>,
     pub(crate) settings: Arc<dyn InstanceSettings>,
-    pub(crate) surfaces: Arc<dyn RunSurfaces>,
+    pub(crate) bank: Arc<dyn SkillBank>,
+    pub(crate) live_facts: Arc<dyn LiveFacts>,
+    pub(crate) pages: Arc<dyn RunPages>,
+    pub(crate) run_dirs: Arc<dyn RunDirWatch>,
+    pub(crate) self_writes: SelfWrites,
     extensions: Arc<dyn ExtensionHost>,
     pub(crate) repo_root: PathBuf,
     pub(crate) port: u16,
@@ -137,12 +153,16 @@ impl Runs {
             skills,
             sandbox_profiles,
             settings,
-            surfaces,
+            bank,
+            pages,
+            run_dirs,
+            self_writes,
             extensions,
         } = ports;
         Arc::new(Self {
             append_event: AppendEvent::new(store.clone(), bus.clone()),
-            read_run: ReadRun::new(store.clone(), live_facts, managers),
+            read_run: ReadRun::new(store.clone(), live_facts.clone(), managers),
+            live_facts,
             store,
             bus,
             tmux,
@@ -151,7 +171,10 @@ impl Runs {
             skills,
             sandbox_profiles,
             settings,
-            surfaces,
+            bank,
+            pages,
+            run_dirs,
+            self_writes,
             extensions,
             repo_root: options.repo_root.clone(),
             port: options.daemon_port,

@@ -8,16 +8,22 @@
 //! - [`application`] holds the ports and the use cases: the scheduler (its
 //!   interpreter and its drivers), the node lifecycle (spawn, completion,
 //!   failure, skip, start, stop, retry, reattach), the Pipeline Manager's
-//!   commands, boot recovery and the stale sweep. Every gesture of an actor
+//!   commands, the Run's surfaces (create, forget, archive, the repositories,
+//!   the run-scoped pipeline, the manager, the reads of the list), boot
+//!   recovery and the stale sweep. Every gesture of an actor
 //!   asks the Autorisation d'opération; a transition of the scheduler never
 //!   does (D10).
-//! - [`adapters`] holds the event store over SQLite, the routes (a Run's
-//!   detail and events, `/ws`, the node routes, `/runs/{id}/commands`) and the
-//!   agent CLI (`pdo complete`, `fail`, `skip`, `wait-user`, `wait`).
+//! - [`adapters`] holds the event store over SQLite, a Run's cost and LOC read
+//!   from disk, the price table's files, the routes (the Run's surfaces, a
+//!   Run's detail and events, `/ws`, the node routes, `/runs/{id}/commands`)
+//!   and the CLI (`pdo complete`, `fail`, `skip`, `wait-user`, `run wait`,
+//!   `run create`, `reap`).
 //!
-//! The Run's other surfaces (create, list, archive, review, the manager) still
-//! live in the legacy crate and call this one. It depends on the kernel and on
-//! the pipeline, session, sandbox, workspace, skill and harness contexts.
+//! The review of a Run (its diff, its comments) is the review context's. This
+//! one depends on the kernel and on the pipeline, session, sandbox, workspace,
+//! skill and harness contexts; the contexts downstream of it (review, trigger,
+//! stats, settings) read it through what it makes `pub`: the use cases of
+//! [`Runs`], the domain types, [`router`].
 
 pub mod adapters;
 pub mod application;

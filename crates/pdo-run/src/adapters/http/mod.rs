@@ -1,9 +1,11 @@
-//! The run context's routes: a Run's detail and its events, the `/ws` stream,
-//! the node routes (the agent's `done` / `fail` / `skip`, the canvas buttons,
-//! what a node reads), the Pipeline Manager's `/runs/{id}/commands` and the
-//! liveness sweep's heartbeat. The legacy router merges [`router`] while it
-//! still assembles the daemon, behind the `identify` middleware of the
-//! composition root.
+//! The run context's routes: the Run's surfaces (create, list, forget, the
+//! children, the artifacts, the refs, the source drift, the Run's own pipeline,
+//! its repositories, its Pipeline Manager), a Run's detail and its events, the
+//! `/ws` stream, the node routes (the agent's `done` / `fail` / `skip`, the
+//! canvas buttons, what a node reads), the Pipeline Manager's
+//! `/runs/{id}/commands` and the liveness sweep's heartbeat. The legacy router
+//! merges [`router`] while it still assembles the daemon, behind the
+//! `identify` middleware of the composition root.
 //!
 //! ROUTER TRAP: a NEW top-level path prefix also needs its entry in the vite dev
 //! proxy whitelist (`frontend/vite.config.ts`).
@@ -11,13 +13,15 @@
 mod commands;
 pub mod nodes;
 mod run_detail;
+pub mod runs;
 mod stale;
 pub mod verdicts;
 mod ws;
 
 use std::sync::Arc;
 
-use axum::routing::{get, post};
+use axum::extract::DefaultBodyLimit;
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
 use crate::Runs;
@@ -26,6 +30,39 @@ use nodes::{gestures, read};
 /// The routes of the run context, with their state.
 pub fn router(runs: Arc<Runs>) -> Router {
     Router::new()
+        // #779: the multipart body of `POST /runs` is bounded by the
+        // `max_attachments_mb` setting, enforced IN the handler on the attachment
+        // parts (read fresh per request) — not by a static limit frozen at
+        // router build. The JSON branch keeps its own 10 MB `to_bytes` cap.
+        .route(
+            "/runs",
+            post(runs::create).route_layer(DefaultBodyLimit::disable()),
+        )
+        .route("/runs", get(runs::list))
+        // Static path — must stay declared before `/runs/{run_id}`.
+        .route("/runs/reapable", get(runs::reapable))
+        .route("/runs/{run_id}", delete(runs::forget))
+        .route("/runs/{run_id}/children", get(runs::children))
+        .route("/runs/{run_id}/file", get(runs::file))
+        .route("/runs/{run_id}/refs", get(runs::refs))
+        .route("/runs/{run_id}/source-drift", get(runs::source_drift))
+        .route("/runs/{run_id}/artifact", get(runs::artifact))
+        .route("/runs/{run_id}/pipeline", get(runs::pipeline))
+        .route(
+            "/runs/{run_id}/pipeline/document",
+            get(runs::pipeline_document),
+        )
+        .route(
+            "/runs/{run_id}/pipeline/document/skills",
+            get(runs::pipeline_document_skills),
+        )
+        .route("/runs/{run_id}/repos", patch(runs::edit_repos))
+        .route("/runs/{run_id}/pipeline", put(runs::save_pipeline))
+        // Manager on demand: start/stop the Run's Pipeline Manager from the
+        // Manager tab. Start is idempotent (a double-click is a benign
+        // re-answer); stop on a dead session is a calm no-op.
+        .route("/runs/{run_id}/manager/start", post(runs::start_manager))
+        .route("/runs/{run_id}/manager/stop", post(runs::stop_manager))
         .route("/ws", get(ws::upgrade))
         .route("/runs/{run_id}", get(run_detail::detail))
         .route("/runs/{run_id}/events", get(run_detail::events))

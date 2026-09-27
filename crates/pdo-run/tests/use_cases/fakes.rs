@@ -4,8 +4,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use pdo_extension_api::{Authorization, RequestParts};
 use pdo_harness::agent_choice::ResolvedCombo;
 use pdo_kernel::event_bus::EventBus;
@@ -13,7 +11,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_run::application::ports::*;
 use pdo_run::domain::event::{Event, EventKind};
-use pdo_run::domain::state::RunState;
+use pdo_run::domain::state::{CostStat, RunState};
 use pdo_run::{Runs, RunsOptions, RunsPorts};
 use pdo_sandbox::application::ports::{SandboxProfileRepository, StoreError};
 use pdo_sandbox::domain::profile::draft::ProfileDraft;
@@ -22,6 +20,7 @@ use pdo_session::application::ports::Tmux;
 use pdo_skill::domain::delivery::SkippedSkill;
 use pdo_skill::domain::selection::ActiveSkill;
 use pdo_workspace::domain::project::Project;
+use pdo_workspace::domain::provisioning::{ProvisioningRules, ProvisioningScope, ScopedRules};
 use tokio::sync::broadcast;
 
 /// The event log, as a list. A Run listed in `forgotten` refuses every append;
@@ -95,6 +94,14 @@ impl EventStore for Store {
             })
         })
     }
+
+    fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(async move {
+            self.forgotten.lock().unwrap().insert(run_id.to_string());
+            self.events.lock().unwrap().retain(|e| e.run_id != run_id);
+            Ok(())
+        })
+    }
 }
 
 /// The bus, recording what was published.
@@ -141,6 +148,18 @@ impl LiveFacts for Disk {
                 deletions: 1,
                 files_changed: 1,
             });
+        })
+    }
+
+    fn cost<'a>(&'a self, _run: &'a RunState, _events: &'a [Event]) -> BoxFuture<'a, Option<CostStat>> {
+        Box::pin(async move {
+            Some(CostStat {
+                usd: 1.5,
+                partial: false,
+                unpriced_models: Vec::new(),
+                uncosted_harnesses: Vec::new(),
+                by_harness: Vec::new(),
+            })
         })
     }
 }
@@ -265,6 +284,19 @@ impl Projects for FakeProjects {
                 .cloned())
         })
     }
+
+    fn provisioning_rules<'a>(
+        &'a self,
+        _repository: &'a str,
+        run: ProvisioningRules,
+    ) -> BoxFuture<'a, Result<Vec<ScopedRules>, String>> {
+        Box::pin(async move {
+            Ok(vec![ScopedRules {
+                scope: ProvisioningScope::Run,
+                rules: run,
+            }])
+        })
+    }
 }
 
 /// The skill bank, and the deliveries asked of it.
@@ -272,6 +304,7 @@ impl Projects for FakeProjects {
 pub struct FakeSkills {
     pub bank: Mutex<BTreeMap<String, String>>,
     pub delivered: Mutex<Vec<(PathBuf, Vec<String>)>>,
+    pub withdrawn: Mutex<Vec<(PathBuf, String)>>,
 }
 
 impl NodeSkills for FakeSkills {
@@ -290,6 +323,13 @@ impl NodeSkills for FakeSkills {
             skills.iter().map(|s| s.id.clone()).collect(),
         ));
         Ok(Vec::new())
+    }
+    fn withdraw(&self, repo_root: &Path, run_id: &str) -> anyhow::Result<()> {
+        self.withdrawn
+            .lock()
+            .unwrap()
+            .push((repo_root.to_path_buf(), run_id.to_string()));
+        Ok(())
     }
 }
 
@@ -339,24 +379,69 @@ impl InstanceSettings for Settings {
     fn agent_profiles(&self) -> BoxFuture<'_, BTreeMap<String, ResolvedCombo>> {
         Box::pin(async move { self.profiles.lock().unwrap().clone() })
     }
-}
-
-/// The Run's legacy surfaces: every call recorded, answered `200`.
-#[derive(Default)]
-pub struct Surfaces(pub Mutex<Vec<String>>);
-
-impl RunSurfaces for Surfaces {
-    fn cleanup<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Response> {
+    fn profile_named<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ResolvedCombo>, String>> {
         Box::pin(async move {
-            self.0.lock().unwrap().push(format!("cleanup {run_id}"));
-            (StatusCode::OK, "archived").into_response()
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, combo)| combo.clone()))
         })
     }
-    fn retry_all<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Response> {
+}
+
+/// The page mounts: every release recorded, every hold granted.
+#[derive(Default)]
+pub struct Pages(pub Mutex<Vec<String>>);
+
+impl RunPages for Pages {
+    fn hold(&self) -> BoxFuture<'_, Box<dyn Send>> {
+        Box::pin(async { Box::new(()) as Box<dyn Send> })
+    }
+    fn release<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.0.lock().unwrap().push(format!("retry_all {run_id}"));
-            (StatusCode::CREATED, "created").into_response()
+            self.0.lock().unwrap().push(run_id.to_string());
+            Ok(())
         })
+    }
+}
+
+/// The pipeline watcher: every Run directory registered.
+#[derive(Default)]
+pub struct Watcher(pub Mutex<Vec<PathBuf>>);
+
+impl RunDirWatch for Watcher {
+    fn watch(&self, run_dir: &Path) {
+        self.0.lock().unwrap().push(run_dir.to_path_buf());
+    }
+}
+
+/// An empty bank, as the pipeline context reads it.
+pub struct NoBank;
+
+impl pdo_pipeline::application::ports::SkillBank for NoBank {
+    fn sidecar_of(
+        &self,
+        references: &[pdo_skill::domain::selection::SkillRef],
+    ) -> (Vec<pdo_skill::domain::sidecar::SidecarSkill>, Vec<String>) {
+        (Vec::new(), references.iter().map(|r| r.id.clone()).collect())
+    }
+    fn import_sidecar<'a>(
+        &'a self,
+        _actor: &'a Actor,
+        _pipeline_name: &'a str,
+        _references: Vec<pdo_skill::domain::selection::SkillRef>,
+        _sidecar: &'a [pdo_skill::domain::sidecar::SidecarSkill],
+    ) -> pdo_pipeline::application::ports::BoxFuture<
+        'a,
+        Result<pdo_skill::domain::sidecar::SidecarImportReport, pdo_skill::domain::error::SkillError>,
+    > {
+        Box::pin(async { Ok(Default::default()) })
     }
 }
 
@@ -400,7 +485,8 @@ pub struct World {
     pub projects: Arc<FakeProjects>,
     pub skills: Arc<FakeSkills>,
     pub settings: Arc<Settings>,
-    pub surfaces: Arc<Surfaces>,
+    pub pages: Arc<Pages>,
+    pub watcher: Arc<Watcher>,
     pub host: Arc<Host>,
     /// The daemon's repo root, a fresh directory.
     pub repo: tempfile::TempDir,
@@ -420,7 +506,8 @@ pub fn world_over(store: Store) -> World {
     let projects = Arc::new(FakeProjects::default());
     let skills = Arc::new(FakeSkills::default());
     let settings = Arc::new(Settings::default());
-    let surfaces = Arc::new(Surfaces::default());
+    let pages = Arc::new(Pages::default());
+    let watcher = Arc::new(Watcher::default());
     let host = Arc::new(Host::default());
     let repo = tempfile::tempdir().unwrap();
     let runs = Runs::new(
@@ -435,7 +522,10 @@ pub fn world_over(store: Store) -> World {
             skills: skills.clone(),
             sandbox_profiles: Arc::new(NoProfiles),
             settings: settings.clone(),
-            surfaces: surfaces.clone(),
+            bank: Arc::new(NoBank),
+            pages: pages.clone(),
+            run_dirs: watcher.clone(),
+            self_writes: pdo_pipeline::adapters::self_writes::SelfWrites::new(),
             extensions: host.clone(),
         },
         RunsOptions {
@@ -458,7 +548,8 @@ pub fn world_over(store: Store) -> World {
         projects,
         skills,
         settings,
-        surfaces,
+        pages,
+        watcher,
         host,
         repo,
     }

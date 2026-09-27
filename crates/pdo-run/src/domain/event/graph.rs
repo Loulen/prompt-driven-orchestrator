@@ -1,6 +1,7 @@
 //! The pipeline graph a Run froze at start, as its `RunStarted` payload carries
 //! it: the edges and the nodes with their ports.
 
+use pdo_pipeline::domain::pipeline;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -60,4 +61,48 @@ pub struct NodeDefInfo {
     pub view_y: Option<f64>,
     pub inputs: Vec<PortBrief>,
     pub outputs: Vec<PortBrief>,
+}
+
+fn port_brief(p: &pipeline::Port, default_side: &str) -> PortBrief {
+    PortBrief {
+        name: p.name.clone(),
+        side: p
+            .side
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| default_side.into()),
+        description: p.description.clone(),
+    }
+}
+
+/// A pipeline node, as a Run freezes its definition.
+pub fn node_def_from_pipeline(n: &pipeline::NodeDef) -> NodeDefInfo {
+    NodeDefInfo {
+        id: n.id.clone(),
+        name: Some(n.name.clone()),
+        node_type: n.node_type.as_str().into(),
+        // #653/ADR-0060: the isolation the Run's snapshot froze for this node —
+        // what the completion path reads back to know whether a sub-worktree has
+        // to be merged, without re-deriving it from a type that no longer says.
+        isolated_worktree: n.isolated_worktree,
+        // #723/#724/ADR-0064: the « Orchestrator » toggle, frozen at run start —
+        // what the strong binding gate reads to know whether this node's NodeRun
+        // is held while its child runs are non-terminal.
+        orchestrator: n.orchestrator,
+        view_x: n.view.as_ref().map(|v| v.x),
+        view_y: n.view.as_ref().map(|v| v.y),
+        inputs: n.inputs.iter().map(|p| port_brief(p, "left")).collect(),
+        outputs: n.outputs.iter().map(|p| port_brief(p, "right")).collect(),
+    }
+}
+
+/// A pipeline edge, as a Run freezes it.
+pub fn edge_info_from_pipeline(e: &pipeline::EdgeDef) -> EdgeInfo {
+    EdgeInfo {
+        source_node: e.source.node.clone(),
+        source_port: e.source.port().to_string(),
+        target_node: e.target.node.clone(),
+        target_port: e.target.port.clone(),
+        halt_message: e.reason.clone(),
+        when_clause: None,
+    }
 }

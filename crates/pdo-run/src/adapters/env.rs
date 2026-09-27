@@ -1,4 +1,5 @@
-//! The run context's environment variables.
+//! The run context's environment variables: the session cap and the
+//! attachment budget of a `POST /runs`.
 
 use crate::domain::admission::{parse_cap, resolve_cap, SESSION_CAP_ENV};
 
@@ -23,6 +24,35 @@ pub fn configured_cap_with(stored: Option<usize>) -> usize {
 /// The configured global session cap from the env var alone (`stored = None`).
 pub fn configured_cap() -> usize {
     configured_cap_with(None)
+}
+
+/// Built-in per-run attachment budget (images + files, bytes counted on the
+/// multipart parts) when neither the stored setting nor
+/// [`MAX_ATTACHMENTS_MB_ENV`] speaks: 50 MB. The modal reads the SAME value
+/// from `GET /settings` so its client-side gate and the daemon's agree (#779).
+pub const MAX_ATTACHMENTS_MB_DEFAULT: i64 = 50;
+/// Env seam of the attachment budget, read only inside
+/// [`resolve_max_attachments_mb`].
+pub const MAX_ATTACHMENTS_MB_ENV: &str = "PDO_MAX_ATTACHMENTS_MB";
+
+/// The attachment budget in MB, `stored → env → default(50)`. A stored `0` or
+/// negative is impossible (`PUT /settings` refuses `< 1`), an unparsable env
+/// falls through to the default.
+pub fn resolve_max_attachments_mb(stored: Option<i64>) -> i64 {
+    if let Some(n) = stored.filter(|&n| n >= 1) {
+        return n;
+    }
+    if let Some(n) = env_max_attachments_mb() {
+        return n;
+    }
+    MAX_ATTACHMENTS_MB_DEFAULT
+}
+
+pub fn env_max_attachments_mb() -> Option<i64> {
+    std::env::var(MAX_ATTACHMENTS_MB_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|&n| n >= 1)
 }
 
 #[cfg(test)]

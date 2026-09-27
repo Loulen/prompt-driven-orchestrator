@@ -1,20 +1,22 @@
 //! The run context over its real adapters — the SQLite event store on an
 //! in-memory database, tmux on a socket of its own, git and the filesystem in a
 //! temporary repository — and in-memory adapters for the ports the other
-//! contexts answer (settings, Projets, skills, the Run's legacy surfaces).
-//! Driven through its router, as the local operator.
+//! contexts answer (settings, Projets, skills, the page mounts). Driven through
+//! its router, as the local operator. [`Build::on_disk`] reads a Run's detail
+//! from disk too (its LOC, its cost), as the daemon does.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
-use axum::response::{IntoResponse, Response};
 use axum::{Extension, Router};
 use pdo_harness::agent_choice::ResolvedCombo;
 use pdo_kernel::event_bus::BroadcastEventBus;
 use pdo_kernel::extension_host::NoExtensions;
 use pdo_kernel::Actor;
+use pdo_pipeline::adapters::self_writes::SelfWrites;
+use pdo_run::adapters::disk_live_facts::DiskLiveFacts;
 use pdo_run::adapters::manager_sessions::TmuxManagerSessions;
 use pdo_run::adapters::sqlite_event_store::{self, SqliteEventStore};
 use pdo_run::application::ports::*;
@@ -28,6 +30,7 @@ use pdo_session::application::ports::Tmux;
 use pdo_skill::domain::delivery::SkippedSkill;
 use pdo_skill::domain::selection::ActiveSkill;
 use pdo_workspace::domain::project::Project;
+use pdo_workspace::domain::provisioning::{ProvisioningRules, ProvisioningScope, ScopedRules};
 use tokio::sync::broadcast;
 
 /// A Run's events, its state and their projection, under the name these tests
@@ -42,6 +45,10 @@ pub mod event_log {
 pub struct TestState {
     pub db: sqlx::SqlitePool,
     pub run: Arc<Runs>,
+    /// The daemon's repo root: the test's temporary repository.
+    pub repo_root: PathBuf,
+    /// The page mounts the archives released, in order.
+    pub released_pages: Arc<Pages>,
     _root: Option<tempfile::TempDir>,
 }
 
@@ -59,6 +66,13 @@ impl LiveFacts for NoLiveFacts {
     fn fill<'a>(&'a self, _run: &'a mut RunState, _events: &'a [Event]) -> BoxFuture<'a, ()> {
         Box::pin(async {})
     }
+    fn cost<'a>(
+        &'a self,
+        _run: &'a RunState,
+        _events: &'a [Event],
+    ) -> BoxFuture<'a, Option<pdo_run::domain::state::CostStat>> {
+        Box::pin(async { None })
+    }
 }
 
 /// The instance settings of a fresh instance: nothing stored.
@@ -70,28 +84,88 @@ impl InstanceSettings for DefaultSettings {
     fn agent_profiles(&self) -> BoxFuture<'_, BTreeMap<String, ResolvedCombo>> {
         Box::pin(async { BTreeMap::new() })
     }
-}
-
-/// The Run's legacy surfaces, which these tests never reach.
-struct NoSurfaces;
-impl RunSurfaces for NoSurfaces {
-    fn cleanup<'a>(&'a self, _run_id: &'a str) -> BoxFuture<'a, Response> {
-        Box::pin(async {
-            (axum::http::StatusCode::NOT_IMPLEMENTED, "no archive here").into_response()
-        })
-    }
-    fn retry_all<'a>(&'a self, _run_id: &'a str) -> BoxFuture<'a, Response> {
-        Box::pin(async {
-            (axum::http::StatusCode::NOT_IMPLEMENTED, "no create here").into_response()
-        })
+    fn profile_named<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ResolvedCombo>, String>> {
+        Box::pin(async { Ok(None) })
     }
 }
 
-/// No Projet owns anything.
+/// The page mounts: none, and every release recorded.
+#[derive(Default)]
+pub struct Pages(pub std::sync::Mutex<Vec<String>>);
+impl RunPages for Pages {
+    fn hold(&self) -> BoxFuture<'_, Box<dyn Send>> {
+        Box::pin(async { Box::new(()) as Box<dyn Send> })
+    }
+    fn release<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.0.lock().unwrap().push(run_id.to_string());
+            Ok(())
+        })
+    }
+}
+
+/// No pipeline watcher runs.
+struct NoWatcher;
+impl RunDirWatch for NoWatcher {
+    fn watch(&self, _run_dir: &Path) {}
+}
+
+/// An empty bank, as the pipeline context reads it.
+struct NoBank;
+impl pdo_pipeline::application::ports::SkillBank for NoBank {
+    fn sidecar_of(
+        &self,
+        references: &[pdo_skill::domain::selection::SkillRef],
+    ) -> (Vec<pdo_skill::domain::sidecar::SidecarSkill>, Vec<String>) {
+        (Vec::new(), references.iter().map(|r| r.id.clone()).collect())
+    }
+    fn import_sidecar<'a>(
+        &'a self,
+        _actor: &'a Actor,
+        _pipeline_name: &'a str,
+        _references: Vec<pdo_skill::domain::selection::SkillRef>,
+        _sidecar: &'a [pdo_skill::domain::sidecar::SidecarSkill],
+    ) -> pdo_pipeline::application::ports::BoxFuture<
+        'a,
+        Result<
+            pdo_skill::domain::sidecar::SidecarImportReport,
+            pdo_skill::domain::error::SkillError,
+        >,
+    > {
+        Box::pin(async { Ok(Default::default()) })
+    }
+}
+
+/// No Projet owns anything, and no tier provisions a Run but its own.
 struct NoProjects;
 impl Projects for NoProjects {
     fn owner_of<'a>(&'a self, _path: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
         Box::pin(async { Ok(None) })
+    }
+    fn provisioning_rules<'a>(
+        &'a self,
+        _repository: &'a str,
+        run: ProvisioningRules,
+    ) -> BoxFuture<'a, Result<Vec<ScopedRules>, String>> {
+        Box::pin(async move {
+            Ok(vec![
+                ScopedRules {
+                    scope: ProvisioningScope::Instance,
+                    rules: ProvisioningRules::default(),
+                },
+                ScopedRules {
+                    scope: ProvisioningScope::Project,
+                    rules: ProvisioningRules::default(),
+                },
+                ScopedRules {
+                    scope: ProvisioningScope::Run,
+                    rules: run,
+                },
+            ])
+        })
     }
 }
 
@@ -109,6 +183,9 @@ impl NodeSkills for NoSkills {
         _skills: &[ActiveSkill],
     ) -> anyhow::Result<Vec<SkippedSkill>> {
         Ok(Vec::new())
+    }
+    fn withdraw(&self, _repo_root: &Path, _run_id: &str) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -155,27 +232,48 @@ impl SandboxProfileRepository for NoProfiles {
     }
 }
 
-async fn build(
-    root: PathBuf,
-    owned: Option<tempfile::TempDir>,
-    tmux: Option<Arc<dyn Tmux>>,
-    docker_cmd_override: Option<String>,
-) -> Arc<TestState> {
-    let db = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect("sqlite::memory:")
-        .await
-        .unwrap();
-    sqlite_event_store::init(&db).await.unwrap();
+/// How one test's run context is built.
+#[derive(Default)]
+pub struct Build {
+    pub tmux: Option<Arc<dyn Tmux>>,
+    pub docker_cmd_override: Option<String>,
+    /// Replaces `$HOME` for the sandbox staging, the transcripts and the price
+    /// files.
+    pub home: Option<PathBuf>,
+    /// Read a Run's detail from disk ([`DiskLiveFacts`]), as the daemon does.
+    pub on_disk: bool,
+    /// Over this database instead of a fresh one.
+    pub db: Option<sqlx::SqlitePool>,
+}
+
+pub async fn build_with(root: PathBuf, owned: Option<tempfile::TempDir>, b: Build) -> Arc<TestState> {
+    let db = match b.db {
+        Some(db) => db,
+        None => {
+            let db = sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .unwrap();
+            sqlite_event_store::init(&db).await.unwrap();
+            db
+        }
+    };
     let (bus_tx, _) = broadcast::channel(80);
     let port = next_test_daemon_port();
     let tmux: Arc<dyn Tmux> =
-        tmux.unwrap_or_else(|| Arc::new(pdo_session::adapters::tmux::TmuxCli::for_daemon(port)));
+        b.tmux.unwrap_or_else(|| Arc::new(pdo_session::adapters::tmux::TmuxCli::for_daemon(port)));
+    let live_facts: Arc<dyn LiveFacts> = if b.on_disk {
+        Arc::new(DiskLiveFacts::new(root.clone(), b.home.clone()))
+    } else {
+        Arc::new(NoLiveFacts)
+    };
+    let pages = Arc::new(Pages::default());
     let run = Runs::new(
         RunsPorts {
             store: Arc::new(SqliteEventStore::new(db.clone())),
             bus: Arc::new(BroadcastEventBus::from_sender(bus_tx.clone())),
-            live_facts: Arc::new(NoLiveFacts),
+            live_facts,
             managers: Arc::new(TmuxManagerSessions(tmux.clone())),
             tmux,
             waits: Arc::new(NoWaits),
@@ -183,7 +281,10 @@ async fn build(
             skills: Arc::new(NoSkills),
             sandbox_profiles: Arc::new(NoProfiles),
             settings: Arc::new(DefaultSettings),
-            surfaces: Arc::new(NoSurfaces),
+            bank: Arc::new(NoBank),
+            pages: pages.clone(),
+            run_dirs: Arc::new(NoWatcher),
+            self_writes: SelfWrites::new(),
             extensions: Arc::new(NoExtensions),
         },
         RunsOptions {
@@ -193,8 +294,8 @@ async fn build(
             // Self-destructing no-op: a spawned node session runs `true` and
             // exits at once — never a real harness, never a lingering session.
             tmux_cmd_override: Some("exec true".to_string()),
-            docker_cmd_override,
-            sandbox_home_override: None,
+            docker_cmd_override: b.docker_cmd_override,
+            sandbox_home_override: b.home,
             panic_on_stale_sweep: false,
             panic_on_spawn: false,
         },
@@ -202,8 +303,28 @@ async fn build(
     Arc::new(TestState {
         db,
         run,
+        repo_root: root,
+        released_pages: pages,
         _root: owned,
     })
+}
+
+async fn build(
+    root: PathBuf,
+    owned: Option<tempfile::TempDir>,
+    tmux: Option<Arc<dyn Tmux>>,
+    docker_cmd_override: Option<String>,
+) -> Arc<TestState> {
+    build_with(
+        root,
+        owned,
+        Build {
+            tmux,
+            docker_cmd_override,
+            ..Build::default()
+        },
+    )
+    .await
 }
 
 /// A run context over a fresh temporary repository.

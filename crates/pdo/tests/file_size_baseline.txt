@@ -3,14 +3,11 @@
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.
 crates/pdo-daemon/src/instance_config.rs 910
-crates/pdo-daemon/src/lib.rs 10443
-crates/pdo-daemon/src/price_table.rs 760
-crates/pdo-daemon/src/run_cost.rs 1426
-crates/pdo-daemon/src/run_refs.rs 434
+crates/pdo-daemon/src/lib.rs 5404
 crates/pdo-daemon/src/stats.rs 1945
 crates/pdo-daemon/src/stats_absorption.rs 1799
 crates/pdo-daemon/src/stats_performance.rs 2386
-crates/pdo-daemon/src/structured_diff.rs 671
+crates/pdo-daemon/src/structured_diff.rs 521
 crates/pdo-daemon/src/trigger_store.rs 806
 frontend/src/api.ts 719
 frontend/src/app/App.tsx 1242

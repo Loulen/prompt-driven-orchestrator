@@ -11,6 +11,7 @@ pub mod clone;
 pub mod fast_forward;
 pub mod fetch;
 pub mod manifest;
+pub mod revisions;
 pub mod repository;
 pub mod scaffold;
 pub mod worktrees;

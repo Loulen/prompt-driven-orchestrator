@@ -9,6 +9,8 @@
 //!   [`completion_refusal`], [`retry_verdict`], [`restart_verdict`],
 //!   [`reap_policy`], [`auto_fail`], [`child_awaiting`].
 //! - [`review_comment`]: the review comments a Run folds.
+//! - What a Run costs: [`prices`] (the price table's tiers) and [`run_cost`]
+//!   (the contributions and a transcript's usage).
 
 pub mod admission;
 pub mod auto_fail;
@@ -22,12 +24,15 @@ pub mod graph_resolver;
 pub mod input_resolution;
 pub mod loop_region;
 pub mod merge_action;
+pub mod prices;
 pub mod projection;
 pub mod reap_policy;
 pub mod recovery;
 pub mod restart_verdict;
 pub mod retry_verdict;
 pub mod review_comment;
+pub mod run_cost;
+pub mod run_refs;
 pub mod run_stall;
 pub mod scheduler;
 pub mod state;

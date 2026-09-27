@@ -1,151 +1,7 @@
-//! Refs of the Run (#749, ADR-0067 §1; CONTEXT.md § "Ref de Run").
-//!
-//! A **Run ref** is a persistent git point the Run knows about, offered as the
-//! source or destination of the Review page: the **fork point**, the **Run tip**,
-//! and for every node delivery its **`before`/`after`** SHAs (read from the
-//! `NodeDelivered` events of the log, labelled by node name and `iter`). A
-//! running isolated node adds its **live** sub-worktree branch.
-//!
-//! Every ref carries a **stable id** — `fork`, `tip`, `node:<id>:<iter>:before`,
-//! `node:<id>:<iter>:after`, `live:<id>` — that the Review page puts in its URL
-//! instead of a SHA: a link keeps its meaning while the Run moves, and the
-//! `pdo/sub-*` branches, which die at merge-back, never become an identity
-//! (ADR-0067 §1). The diff and file-at-ref endpoints accept those ids and
-//! resolve them here, so the labels and the resolution have one source.
-//!
-//! While the Run's shared worktree exists, a **`worktree`** ref (#835) points at
-//! its working tree — commits *and* uncommitted edits, untracked files included.
-//! It is the default destination: a running node does not have to commit for
-//! its work to show in the Review page. Its `sha` is the id of a **snapshot
-//! tree** written by `structured_diff::snapshot_worktree` (not a commit): a
-//! comment anchored on it keeps a stable object to re-map from (#752).
+//! The Run refs collected from the log and the ids resolved back to git.
 
-use serde::Serialize;
-use ts_rs::TS;
+use super::*;
 
-use crate::event_log::{Event, EventKind, NodeStatus, RunState};
-
-pub(crate) const FORK_ID: &str = "fork";
-pub(crate) const TIP_ID: &str = "tip";
-/// The Run's shared working tree — commits plus uncommitted edits (#835).
-pub(crate) const WORKTREE_ID: &str = "worktree";
-
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
-#[ts(export, rename = "RunRefKind")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RefKind {
-    Fork,
-    Tip,
-    Before,
-    After,
-    Live,
-    /// The Run's shared working tree, uncommitted edits included (#835).
-    Worktree,
-}
-
-/// One Run ref, as the UI and the CLI see it.
-#[derive(Serialize, Debug, Clone, PartialEq, Eq, TS)]
-#[ts(export)]
-pub(crate) struct RunRef {
-    /// Stable id, the only thing a URL should carry.
-    pub id: String,
-    pub kind: RefKind,
-    /// Human label built server-side, e.g. `implement · iter 1 · after`.
-    pub label: String,
-    /// What the id resolves to for git: a SHA for a delivery, a branch for the
-    /// tip and a live node, the fork SHA (or source branch) for the fork point.
-    pub git_ref: String,
-    /// `git_ref` resolved to a commit SHA; `None` when it does not resolve any
-    /// more (an archived Run, a live branch already merged back).
-    pub sha: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub node_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub node_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub iter: Option<i64>,
-}
-
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
-#[ts(export, rename = "RunDeliveryStatus")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum DeliveryStatus {
-    Delivered,
-    Running,
-}
-
-/// One node delivery (or one running node's live branch), as a ready-made pair
-/// the Review page can select in one click.
-#[derive(Serialize, Debug, Clone, PartialEq, Eq, TS)]
-#[ts(export, rename = "RunDelivery")]
-pub(crate) struct Delivery {
-    pub node_id: String,
-    pub node_name: String,
-    pub iter: i64,
-    pub status: DeliveryStatus,
-    /// Ref id of the pair's source.
-    pub before: String,
-    /// Ref id of the pair's destination when delivered.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub after: Option<String>,
-    /// Ref id of the live sub-worktree branch when running.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub live: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub delivered_at: Option<String>,
-}
-
-/// The answer of `GET /runs/<id>/refs`.
-#[derive(Serialize, Debug, Clone, TS)]
-#[ts(export)]
-pub(crate) struct RunRefs {
-    /// Order: fork, deliveries in delivery order, live branches, tip, worktree
-    /// (when the Run's worktree exists).
-    pub refs: Vec<RunRef>,
-    pub deliveries: Vec<Delivery>,
-    pub default_from: &'static str,
-    pub default_to: &'static str,
-}
-
-/// The Run's branch — the tip.
-pub(crate) fn tip_branch(run_id: &str) -> String {
-    format!("pdo/run-{run_id}")
-}
-
-/// What the `worktree` ref shows as its git side: the Run's worktree, relative
-/// to the target repository (the path `worktree_ops::worktree_dir_for_run` builds).
-pub(crate) fn worktree_display(run_id: &str) -> String {
-    format!(".pdo/runs/{run_id}/worktree")
-}
-
-/// The Run's stable base: its frozen fork SHA, else the source branch, else
-/// `HEAD` (pre-fork-sha logs only). Never the shared checkout's wandering HEAD
-/// when a fork point is known (#417).
-pub(crate) fn fork_base(run_state: &RunState) -> &str {
-    run_state
-        .fork_sha
-        .as_deref()
-        .or(run_state.source_branch.as_deref())
-        .unwrap_or("HEAD")
-}
-
-pub(crate) fn before_id(node_id: &str, iter: i64) -> String {
-    format!("node:{node_id}:{iter}:before")
-}
-
-pub(crate) fn after_id(node_id: &str, iter: i64) -> String {
-    format!("node:{node_id}:{iter}:after")
-}
-
-pub(crate) fn live_id(node_id: &str) -> String {
-    format!("live:{node_id}")
-}
 
 fn node_name(run_state: &RunState, node_id: &str) -> String {
     run_state
@@ -217,7 +73,7 @@ fn live_nodes(run_id: &str, run_state: &RunState) -> Vec<(String, i64, String)> 
             (
                 n.node_id.clone(),
                 n.iter,
-                crate::worktrees::sub_worktree_branch(run_id, &n.node_id, n.iter),
+                pdo_workspace::domain::worktree_layout::sub_worktree_branch(run_id, &n.node_id, n.iter),
             )
         })
         .collect();
@@ -232,13 +88,13 @@ fn live_nodes(run_id: &str, run_state: &RunState) -> Vec<(String, i64, String)> 
 /// `worktree` is `Some` while the Run's worktree directory exists, `None` once
 /// it is gone: with it the `worktree` ref is listed and is the default
 /// destination (#835). The inner value is the worktree's snapshot tree id
-/// (`structured_diff::snapshot_worktree`), `None` when snapshotting failed — the
+/// (`pdo_workspace::adapters::git::revisions::snapshot_worktree`), `None` when snapshotting failed — the
 /// ref is still listed (without a `sha`) so this listing and the diff endpoint,
 /// which defaults on the directory alone, never disagree on the default.
 ///
 /// A live branch that no longer resolves (merged back between two projections)
 /// is dropped: offering it would make the picker lie.
-pub(crate) fn collect(
+pub fn collect(
     run_id: &str,
     run_state: &RunState,
     events: &[Event],
@@ -360,11 +216,11 @@ pub(crate) fn collect(
 
 /// What a `from`/`to` query value turned out to be.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Resolved {
+pub enum Resolved {
     /// A Run ref id, resolved to the git ref to hand to `git`.
     Git(String),
     /// The `worktree` id (#835): the Run's working tree, snapshotted by the
-    /// caller (`structured_diff::snapshot_worktree`) — a 404 when it is gone.
+    /// caller (`pdo_workspace::adapters::git::revisions::snapshot_worktree`) — a 404 when it is gone.
     Worktree,
     /// Shaped like a Run ref id but the Run knows no such ref (a node that never
     /// delivered at that iter, a node that is not running, …).
@@ -374,7 +230,7 @@ pub(crate) enum Resolved {
 }
 
 /// Resolve a stable ref id against the Run's log. Pure: no git call.
-pub(crate) fn resolve_id(
+pub fn resolve_id(
     run_id: &str,
     run_state: &RunState,
     events: &[Event],
@@ -428,14 +284,14 @@ pub(crate) fn resolve_id(
 /// `true` when the pair is the fork → tip (or fork → worktree, #835) default,
 /// which is compared three-dot (merge-base) like the LOC stat. `None` = the
 /// side was not given.
-pub(crate) fn is_default_pair(from: Option<&str>, to: Option<&str>) -> bool {
+pub fn is_default_pair(from: Option<&str>, to: Option<&str>) -> bool {
     matches!(from, None | Some(FORK_ID)) && matches!(to, None | Some(TIP_ID) | Some(WORKTREE_ID))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::project;
+    use crate::domain::projection::project;
     use pdo_kernel::clock::now_iso;
 
     fn run_started(run_id: &str, node_defs: serde_json::Value) -> Event {

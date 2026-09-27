@@ -51,6 +51,8 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
     let q = format!("path={repo}");
     let project = &fixtures.project;
     let site = fixtures.site.to_string_lossy().to_string();
+    let skill = &fixtures.skill;
+    let folder = &fixtures.folder;
     vec![
         call(
             "POST",
@@ -177,20 +179,119 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             "/settings/sandbox-profiles/team".into(),
             None,
         ),
+        call(
+            "POST",
+            "/settings/skills",
+            "/settings/skills".into(),
+            Some(json!({ "content": skill_md("another") })),
+        ),
+        call(
+            "PUT",
+            "/settings/skills/{id}",
+            format!("/settings/skills/{skill}"),
+            Some(json!({ "name": "renamed" })),
+        ),
+        call(
+            "DELETE",
+            "/settings/skills/{id}",
+            format!("/settings/skills/{skill}"),
+            None,
+        ),
+        call(
+            "POST",
+            "/settings/skills/{id}/files",
+            format!("/settings/skills/{skill}/files"),
+            Some(json!({ "from_path": fixtures.host_file })),
+        ),
+        call(
+            "PUT",
+            "/settings/skills/{id}/files/{*path}",
+            format!("/settings/skills/{skill}/files/{SKILL_FILE}"),
+            Some(json!("changed")),
+        ),
+        call(
+            "DELETE",
+            "/settings/skills/{id}/files/{*path}",
+            format!("/settings/skills/{skill}/files/{SKILL_FILE}"),
+            None,
+        ),
+        call(
+            "POST",
+            "/settings/skill-folders",
+            "/settings/skill-folders".into(),
+            Some(json!({ "name": "another" })),
+        ),
+        call(
+            "PUT",
+            "/settings/skill-folders/{id}",
+            format!("/settings/skill-folders/{folder}"),
+            Some(json!({ "name": "renamed" })),
+        ),
+        call(
+            "DELETE",
+            "/settings/skill-folders/{id}",
+            format!("/settings/skill-folders/{folder}"),
+            None,
+        ),
+        // The Source routes refuse before any clone: nothing leaves the host.
+        call(
+            "POST",
+            "/settings/skills/scan",
+            "/settings/skills/scan".into(),
+            Some(json!({ "scan_id": "scan-1", "source": SOURCE })),
+        ),
+        call(
+            "POST",
+            "/settings/skills/scan/{scan_id}/cancel",
+            "/settings/skills/scan/scan-1/cancel".into(),
+            None,
+        ),
+        call(
+            "POST",
+            "/settings/skills/import",
+            "/settings/skills/import".into(),
+            Some(json!({ "scan_id": "scan-1", "source": SOURCE, "items": [] })),
+        ),
+        call(
+            "POST",
+            "/settings/skill-folders/{id}/rescan",
+            format!("/settings/skill-folders/{folder}/rescan"),
+            Some(json!({ "scan_id": "scan-1" })),
+        ),
+        call(
+            "POST",
+            "/settings/skill-folders/{id}/update",
+            format!("/settings/skill-folders/{folder}/update"),
+            Some(json!({ "scan_id": "scan-1", "items": [] })),
+        ),
     ]
 }
 
 /// A Run id the session routes aim at: they refuse before looking it up.
 const RUN: &str = "20260101-000000-abcdef0";
 
+/// The reference file of the seeded skill.
+const SKILL_FILE: &str = "notes.md";
+const SKILL_FILE_TEXT: &str = "keep me";
+
+/// A Source the import routes name.
+const SOURCE: &str = "https://github.com/acme/skills";
+
+fn skill_md(name: &str) -> String {
+    format!("---\nname: {name}\ndescription: The {name} method.\n---\n\n# {name}\n")
+}
+
 struct Fixtures {
     project: String,
     site: std::path::PathBuf,
     scratch: String,
+    skill: String,
+    folder: String,
+    host_file: String,
 }
 
-/// A Projet with the daemon's repo as member, a mounted page, and the
-/// assistant's focus on a template.
+/// A Projet with the daemon's repo as member, a mounted page, the assistant's
+/// focus on a template, and a skill with a reference file in a bank folder.
 async fn seed(daemon: &TestDaemon, scratch: &Path) -> Fixtures {
     let client = reqwest::Client::new();
     let url = daemon.url();
@@ -229,10 +330,44 @@ async fn seed(daemon: &TestDaemon, scratch: &Path) -> Fixtures {
         .await
         .unwrap();
     assert!(focus.status().is_success(), "{}", focus.status());
+
+    let folder: Value = client
+        .post(format!("{url}/settings/skill-folders"))
+        .json(&json!({ "name": "fixture" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let folder = folder["id"].as_str().unwrap().to_string();
+    let skill: Value = client
+        .post(format!("{url}/settings/skills"))
+        .json(&json!({ "content": skill_md("fixture"), "folder_id": folder }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let skill = skill["id"].as_str().unwrap().to_string();
+    let host_file = scratch.join("cheatsheet.md");
+    std::fs::write(&host_file, SKILL_FILE_TEXT).unwrap();
+    let file = client
+        .post(format!("{url}/settings/skills/{skill}/files"))
+        .json(&json!({ "from_path": host_file, "path": SKILL_FILE }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(file.status(), 201);
+
     Fixtures {
         project,
         site,
         scratch: scratch.to_string_lossy().to_string(),
+        skill,
+        folder,
+        host_file: host_file.to_string_lossy().to_string(),
     }
 }
 
@@ -297,4 +432,40 @@ async fn an_extension_refusing_everything_refuses_every_mutation_route() {
     assert_eq!(pages.as_array().map(Vec::len), Some(1), "{pages}");
     let focus = daemon.get_json("/sessions/libassist/focus").await;
     assert_eq!(focus["pipeline_id"], "review", "{focus}");
+    let bank = daemon.get_json("/settings/skills").await;
+    let entries = |key: &str| -> Vec<(Value, Value)> {
+        bank[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| (entry["id"].clone(), entry["name"].clone()))
+            .collect()
+    };
+    let (skills, folders) = (entries("skills"), entries("folders"));
+    assert!(
+        skills.contains(&(json!(fixtures.skill), json!("fixture"))),
+        "{bank}"
+    );
+    assert!(
+        folders.contains(&(json!(fixtures.folder), json!("fixture"))),
+        "{bank}"
+    );
+    assert!(
+        !skills
+            .iter()
+            .chain(&folders)
+            .any(|(_, name)| name == "another"),
+        "{bank}"
+    );
+    let file = daemon
+        .get_json(&format!(
+            "/settings/skills/{}/files/{SKILL_FILE}",
+            fixtures.skill
+        ))
+        .await;
+    assert_eq!(file["text"], SKILL_FILE_TEXT, "{file}");
+    let skill = daemon
+        .get_json(&format!("/settings/skills/{}", fixtures.skill))
+        .await;
+    assert_eq!(skill["files"].as_array().map(Vec::len), Some(1), "{skill}");
 }

@@ -28,8 +28,9 @@ import { pendingCount, pendingTone, reviewQuickAccessTitle } from "../lib/review
 import { reviewUrl } from "../lib/runRefs";
 import { useReviewSeen } from "../hooks/useReviewUnread";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
-import { openRunShell, reopenRun, retryAll } from "../api";
-import RunShellModal from "./RunShellModal";
+import { reopenRun, retryAll } from "../api";
+import { useRunShell } from "../session/store/useRunShell";
+import RunShellModal from "../session/components/RunShellModal";
 import { RetryAllConfirmModal } from "./UnifiedLeftPanel";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId, resolveTargetGeometrySide } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
@@ -439,7 +440,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     activeRunState.status !== "archived";
 
   // Ad-hoc bash shell opened on the terminal run from the toolbar (#316/#598).
-  const [shellSession, setShellSession] = useState<string | null>(null);
+  const runShell = useRunShell();
   // Retry-all confirm gate (destructive: archive + fresh run).
   const [confirmRetryAll, setConfirmRetryAll] = useState(false);
 
@@ -467,15 +468,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     }
   }, [activeRunState, onSelectRun]);
 
+  const { open: openShell } = runShell;
   const handleOpenShell = useCallback(async () => {
-    if (!activeRunState) return;
-    try {
-      const { session } = await openRunShell(activeRunState.run_id);
-      setShellSession(session);
-    } catch {
-      // The server gate may 409 if the worktree vanished out-of-band.
-    }
-  }, [activeRunState]);
+    if (activeRunState) await openShell(activeRunState.run_id);
+  }, [activeRunState, openShell]);
   const { profiles: agentProfiles } = useAgentProfiles();
   const agentProfileIds = useMemo(
     () => new Set(agentProfiles.map((profile) => profile.id)),
@@ -1152,11 +1148,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
 
       {/* #598 / ADR-0049: the finished-run group's Open-shell and Retry-all
           modals, reusing the exact components the left-panel row uses. */}
-      {shellSession && (
-        <RunShellModal
-          session={shellSession}
-          onClose={() => setShellSession(null)}
-        />
+      {runShell.shell && (
+        <RunShellModal session={runShell.shell.session} onClose={runShell.close} />
       )}
       {confirmRetryAll && (
         <RetryAllConfirmModal

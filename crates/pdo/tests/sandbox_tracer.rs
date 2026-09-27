@@ -1512,7 +1512,7 @@ async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
     );
 }
 
-/// The manager's runtime preamble, written by `tmux_session_manager::spawn` *before* tmux is
+/// The manager's runtime preamble, written by `pdo_session::application::launch::spawn` *before* tmux is
 /// invoked — so it exists whether or not the harmless tail actually started.
 fn manager_preamble_path(daemon: &TestDaemon, run_id: &str) -> PathBuf {
     daemon

@@ -3,11 +3,12 @@ import { ArrowLeft, GitFork, Settings, BarChart3 } from "lucide-react";
 import { useDaemonSocket, type ConnectionStatus } from "../hooks/useDaemonSocket";
 import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
-import { fetchRuns, fetchRun, fetchTriggers, fetchSessions, fetchTriggersHealth, pauseTriggers } from "../api";
+import { fetchRuns, fetchRun, fetchTriggers, fetchTriggersHealth, pauseTriggers } from "../api";
+import { useDaemonSessions } from "../session/store/useDaemonSessions";
 import { fetchProjects } from "../workspace/api/projects";
 import { pickLatestLiveNode } from "../lib/pickLatestLiveNode";
 import { useRightPaneRouter } from "../hooks/useRightPaneRouter";
-import { useLibassistLifecycle } from "../hooks/useLibassistLifecycle";
+import { useLibassistLifecycle } from "../session/store/useLibassistLifecycle";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { RunState } from "../shared/generated/RunState";
 import type { Trigger } from "../shared/generated/Trigger";
@@ -88,20 +89,6 @@ function useRuns() {
   return { runs, runsLoaded: loaded, refresh };
 }
 
-function useSessions() {
-  const [sessions, setSessions] = useState<DaemonStatus>({ live: 0, cap: 0 });
-
-  const refresh = useCallback(async () => {
-    try {
-      setSessions(await fetchSessions());
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  return { sessions, refresh };
-}
-
 function useTriggers() {
   const [triggers, setTriggers] = useState<TriggerListEntry[]>([]);
 
@@ -170,7 +157,7 @@ export default function App() {
   const { status, subscribe } = useDaemonSocket();
   const { entries: libraryEntries, refresh: refreshLibrary } = useLibrary();
   const { runs, runsLoaded, refresh: refreshRuns } = useRuns();
-  const { sessions, refresh: refreshSessions } = useSessions();
+  const { sessions, refresh: refreshSessions } = useDaemonSessions();
   // #697: the daemon's cached version-check state, for the status-bar badge.
   const { status: updateStatus, refresh: refreshUpdateStatus } = useUpdateStatus();
   const { triggers, refresh: refreshTriggers } = useTriggers();

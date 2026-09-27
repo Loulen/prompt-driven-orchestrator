@@ -33,11 +33,13 @@ use std::path::{Path, PathBuf};
 /// composition root).
 const ROUTER_SOURCES: &[(&str, &str)] = &[
     (LEGACY_ROUTER, "fn build_router("),
+    ("../pdo-sandbox/src/adapters/http/mod.rs", "pub fn router("),
     (
         "../pdo-workspace/src/adapters/http/mod.rs",
         "pub fn router<S: ProjectSettings>(",
     ),
     ("../pdo-platform/src/adapters/http/mod.rs", "pub fn router("),
+    ("../pdo-session/src/adapters/http/mod.rs", "pub fn router("),
 ];
 
 /// The legacy crate's router, which the migration empties context by context.

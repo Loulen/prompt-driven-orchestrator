@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.111.4 — API d'extension : identité et Autorisation d'opération (#930, spec #913)
+## 1.111.6 — API d'extension : identité et Autorisation d'opération (#930, spec #913)
 
 Sans extension, rien ne change : le contrat HTTP/WS est identique (snapshots inchangés).
 
@@ -21,16 +21,54 @@ Sans extension, rien ne change : le contrat HTTP/WS est identique (snapshots inc
 - `identify` pose l'Acteur choisi par une extension ; `authorize` est consulté par chaque use
   case de mutation des contextes extraits, jamais par les transitions que le daemon fait seul.
 - Une Opération refusée répond `403` avec `{"error": "operation_refused", "message", "reason"}`
-  (convention d'ADR-0035). Les réponses `403` de refus de `platform` et `workspace` passent de
-  `{"error": "operation refused: …"}` à ce corps. L'UI affiche la raison dans l'erreur existante
-  du geste. Une panique dans `authorize` vaut refus et laisse une ligne de log, qui nomme
-  l'Acteur (pour un Acteur identifié : `<namespace>:<id>`).
+  (convention d'ADR-0035). Les réponses `403` de refus de `platform`, `workspace`, `session` et
+  `sandbox` passent de `{"error": "operation refused: …"}` à ce corps. L'UI affiche la raison
+  dans l'erreur existante du geste. Une panique dans `authorize` vaut refus et laisse une ligne
+  de log, qui nomme l'Acteur (pour un Acteur identifié : `<namespace>:<id>`).
 - Nommer un groupe est **une seule** Opération `Create` : `POST /projects` accepte un champ
   optionnel `members` (les chemins du groupe), rattachés à la création ; un chemin déjà membre
   d'un autre Projet refuse toute la création (`409` qui nomme le propriétaire, rien n'est
   écrit). Sans `members`, la requête et la réponse sont inchangées. Le crayon de groupe n'envoie
   plus de `PATCH` vide après la création, et si une étape suivante échoue, il garde le Projet
   créé (un nouvel essai le modifie, sans doublon).
+
+## 1.111.5 — Contexte `sandbox` extrait (#921, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les
+routes des profils de staging et de leurs référents répondent comme avant).
+
+- Nouveau crate `pdo-sandbox` (domain / application / adapters) : profils de staging, image,
+  conteneur, staging du home et préparation d'un Run quittent `pdo-legacy`. `run_sandbox.rs` garde
+  le côté Run (contexte sandbox d'un Run depuis son état) jusqu'à l'extraction du contexte run.
+- Docker passe derrière le port `DockerCli` (adaptateur `ProcessDocker`). Créer, modifier et
+  supprimer un profil sont des use cases qui construisent une Opération et passent par
+  l'autorisation, avec l'Acteur du middleware `identify` et le même hôte d'extensions que les
+  autres contextes. Les ports du contexte session (`SandboxExec`, `ContainerExec`) s'appuient
+  désormais sur `pdo-sandbox`.
+- Reste à faire : comme workspace, le routeur sandbox est encore monté dans `pdo-legacy`
+  (`run_sandbox::router`) plutôt que via `contexts.rs`.
+- Front : l'éditeur de profils de staging passe dans `frontend/src/sandbox/`.
+
+## 1.111.4 — Contexte `session` extrait (#920, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques).
+
+- Nouveau crate `pdo-session` (domain / application / adapters) : gestionnaire tmux, pont PTY,
+  terminal partagé, attente déclarée et assistant de bibliothèque quittent `pdo-legacy`, avec
+  les routes `/sessions*`, `…/nodes/{id}/pane` et `…/wait-user`.
+- tmux passe derrière un port unique (`Tmux`) : le crate legacy, le pont PTY et les deux appels
+  du terminal partagé (`list-clients`, `refresh-client`) y passent. Le gestionnaire (5,4 k lignes)
+  est découpé par responsabilité : cycle de vie des sessions, envoi de texte, reaper, pilote du
+  terminal.
+- Chaque mutation du contexte (attente, reprise sur Entrée, shell, assistant, focus, sauvegarde,
+  prise de main, pop-out, résurrection d'un pane) passe par un use case qui demande
+  l'Autorisation d'opération ; le reaper et l'attente posée par le daemon sur une complétion
+  refusée restent des transitions internes.
+- Cibles `RUST_LOG` : `pdo_daemon::tmux_session_manager` devient `pdo_session::adapters::tmux`
+  (et `pdo_session::application::launch`), `pdo_daemon::pty_bridge` devient
+  `pdo_session::adapters::pty`.
+- Front : le terminal, la modale du shell de Run et le panneau de l'assistant passent dans
+  `frontend/src/session/`.
 
 ## 1.111.3 — Contexte `workspace` extrait (#917, spec #913)
 

@@ -2,7 +2,7 @@
 //!
 //! **Session death is the only verdict of death (#469, ADR-0032).** For an agent
 //! node the death of the agent *is* the death of the tmux session by
-//! construction: `tmux_session_manager::wrap_with_env` emits
+//! construction: `pdo_session::domain::launch::wrap_with_env` emits
 //! `exec bash -c '<exports> && <tail>'` and `build_agent_tail` emits
 //! `exec claude …`, so the `claude` process **is** the pane leader of the
 //! session's only window. It exits → the pane dies → the session dies →
@@ -243,7 +243,7 @@ pub fn detection_events(
     let (kind, reason) = match detection {
         Detection::Ok | Detection::TurnEnded => return vec![],
         Detection::SessionDied => {
-            let session = crate::tmux_session_manager::node_session_name(run_id, node_id, iter);
+            let session = pdo_session::domain::names::node_session_name(run_id, node_id, iter);
             (
                 EventKind::NodeInterrupted,
                 format!("session_died: tmux session {session} no longer exists"),
@@ -396,7 +396,7 @@ fn informational_event(
 /// `prior_events` is the run's event-log snapshot, used purely for the
 /// rising-edge de-dup of `NodeBlockedOnLimit` (see [`episode_has_event`]).
 // The probe set + policy toggles are all distinct facts a sweep tick needs; the
-// same posture as the four `tmux_session_manager` builders that allow this lint.
+// same posture as the four session-launch builders (`pdo_session`) that allow this lint.
 #[allow(clippy::too_many_arguments)]
 pub fn assess_node(
     probes: &impl NodeProbes,
@@ -575,7 +575,7 @@ pub fn parse_meminfo(contents: &str) -> (Option<u64>, Option<u64>) {
 /// Count how many of `running` (other than `self_node`) are session-dead,
 /// according to `is_dead`. Pure given the predicate so the counting logic is
 /// testable without tmux; the impure sweep passes a closure backed by
-/// `tmux_session_manager::session_exists`.
+/// the session context's `Tmux::session_exists`.
 pub fn count_correlated_deaths(
     running: &[(String, i64)],
     self_node: (&str, i64),

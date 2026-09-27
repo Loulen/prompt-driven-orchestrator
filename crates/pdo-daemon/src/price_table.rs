@@ -717,7 +717,7 @@ pub(crate) fn normalize_models_dev(
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Serialise and write `fetched.json` by tmp + `rename` **in the same
-/// directory** (idiom of `sandbox_staging.rs:790`), so a concurrent
+/// directory** (idiom of the sandbox staging's `atomic_copy_into`), so a concurrent
 /// `PriceTable::load` can never read a half-written document.
 ///
 /// **Never writes an empty table** — the one path by which this feature could

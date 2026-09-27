@@ -50,6 +50,10 @@ mod file_size;
 #[path = "composition_root.rs"]
 mod composition_root;
 
+// The session context's Operations under a refusing extension (#920).
+#[path = "session_authorization.rs"]
+mod session_authorization;
+
 // The extension API (#930): the internal test extension, the Autorisation
 // d'opération against the real daemon, and the demo daemon of the Feature Paths
 // (ignored: it serves until killed).

@@ -36,7 +36,7 @@ import {
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { ArtifactSource } from "./MarkdownArtifactModal";
 import ImageLightbox from "./ImageLightbox";
-import TmuxTerminal from "./TmuxTerminal";
+import TmuxTerminal from "../session/components/TmuxTerminal";
 import { formatCostAmount, nodeCostTitle } from "../lib/costLabel";
 import { nodeReviewTarget, reviewUrl } from "../lib/runRefs";
 import ProvisioningRulesEditor from "../workspace/components/ProvisioningRulesEditor";

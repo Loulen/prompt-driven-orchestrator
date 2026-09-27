@@ -224,7 +224,7 @@ async fn wait_for_marker(
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut last = String::new();
     while std::time::Instant::now() < deadline {
-        pdo_daemon::tmux_session_manager::send_keys(socket, session, command);
+        crate::common::tmux(socket).send_keys(session, command);
         last = std::fs::read_to_string(path).unwrap_or_default();
         if last.contains(needle) {
             break;
@@ -244,7 +244,8 @@ async fn post_shell(daemon: &TestDaemon, run_id: &str) -> reqwest::Response {
 
 /// Number of `pdo-shell-*` sessions on the daemon's socket.
 fn shell_session_count(socket: &str) -> usize {
-    pdo_daemon::tmux_session_manager::list_pdo_sessions(socket)
+    crate::common::tmux(socket)
+        .list_pdo_sessions()
         .into_iter()
         .filter(|s| s.starts_with("pdo-shell-"))
         .count()
@@ -294,7 +295,7 @@ async fn open_shell_creates_session_on_failed_run() {
         "shell POST on a failed run should succeed"
     );
     let body = resp.json::<serde_json::Value>().await.unwrap();
-    let expected = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let expected = pdo_session::domain::names::shell_session_name(&run_id);
     assert_eq!(body["session"].as_str(), Some(expected.as_str()));
     assert_eq!(
         body["created"],
@@ -305,7 +306,7 @@ async fn open_shell_creates_session_on_failed_run() {
 
     let socket = daemon.tmux_socket();
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, &expected),
+        crate::common::tmux(&socket).session_exists(&expected),
         "the tmux session must exist after opening the shell"
     );
 }
@@ -360,7 +361,7 @@ async fn shell_runs_real_bash_in_pipeline_worktree() {
 
     let resp = post_shell(&daemon, &run_id).await;
     assert_eq!(resp.status(), 200);
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let session = pdo_session::domain::names::shell_session_name(&run_id);
     let socket = daemon.tmux_socket();
 
     // A real bash — not the `sleep 600` test override — in the pipeline worktree.
@@ -411,17 +412,15 @@ async fn shell_survives_reaper_for_terminal_run() {
     let run_id = failed_run(&daemon).await;
 
     post_shell(&daemon, &run_id).await;
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let session = pdo_session::domain::names::shell_session_name(&run_id);
     let socket = daemon.tmux_socket();
-    assert!(pdo_daemon::tmux_session_manager::session_exists(
-        &socket, &session
-    ));
+    assert!(crate::common::tmux(&socket).session_exists(&session));
 
     // A non-zero (default) TTL sweep must NOT reap the shell of a live terminal
     // run — the Shell arm reaps only on absent/archived, never a TTL.
     daemon.run_orphan_sweep_tick().await;
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        crate::common::tmux(&socket).session_exists(&session),
         "shell of a terminal, non-archived run must survive the reaper"
     );
 }
@@ -435,8 +434,9 @@ async fn reaper_kills_shell_of_absent_run() {
         .unwrap();
     let socket = daemon.tmux_socket();
     let bogus_run = "20200101-000000-deadbee";
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(bogus_run);
-    pdo_daemon::tmux_session_manager::spawn_shell(
+    let session = pdo_session::domain::names::shell_session_name(bogus_run);
+    pdo_session::application::launch::spawn_shell(
+        crate::common::tmux(&socket).as_ref(),
         &session,
         daemon.repo_root(),
         bogus_run,
@@ -444,13 +444,11 @@ async fn reaper_kills_shell_of_absent_run() {
         None,
     )
     .unwrap();
-    assert!(pdo_daemon::tmux_session_manager::session_exists(
-        &socket, &session
-    ));
+    assert!(crate::common::tmux(&socket).session_exists(&session));
 
     daemon.run_orphan_sweep_tick().await;
     assert!(
-        !pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        !crate::common::tmux(&socket).session_exists(&session),
         "a shell for an absent run must be reaped"
     );
 }
@@ -467,7 +465,7 @@ async fn reaper_kills_shell_of_archived_run() {
     .unwrap();
     let run_id = failed_run(&daemon).await;
     let socket = daemon.tmux_socket();
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let session = pdo_session::domain::names::shell_session_name(&run_id);
 
     // Archive the run (cleanup_run). It kills the shell + removes the worktree.
     let resp = reqwest::Client::new()
@@ -481,7 +479,8 @@ async fn reaper_kills_shell_of_archived_run() {
 
     // Re-spawn a shell session for the now-archived run out-of-band, then sweep:
     // the Shell arm resolves is_archived=true → reap.
-    pdo_daemon::tmux_session_manager::spawn_shell(
+    pdo_session::application::launch::spawn_shell(
+        crate::common::tmux(&socket).as_ref(),
         &session,
         daemon.repo_root(),
         &run_id,
@@ -489,12 +488,10 @@ async fn reaper_kills_shell_of_archived_run() {
         None,
     )
     .unwrap();
-    assert!(pdo_daemon::tmux_session_manager::session_exists(
-        &socket, &session
-    ));
+    assert!(crate::common::tmux(&socket).session_exists(&session));
     daemon.run_orphan_sweep_tick().await;
     assert!(
-        !pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        !crate::common::tmux(&socket).session_exists(&session),
         "a shell for an archived run must be reaped"
     );
 }
@@ -511,12 +508,10 @@ async fn cleanup_run_kills_the_shell() {
     .unwrap();
     let run_id = failed_run(&daemon).await;
     let socket = daemon.tmux_socket();
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let session = pdo_session::domain::names::shell_session_name(&run_id);
 
     post_shell(&daemon, &run_id).await;
-    assert!(pdo_daemon::tmux_session_manager::session_exists(
-        &socket, &session
-    ));
+    assert!(crate::common::tmux(&socket).session_exists(&session));
 
     let resp = reqwest::Client::new()
         .post(format!("{}/runs/{run_id}/commands", daemon.url()))
@@ -526,7 +521,7 @@ async fn cleanup_run_kills_the_shell() {
         .unwrap();
     assert!(resp.status().is_success());
     assert!(
-        !pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        !crate::common::tmux(&socket).session_exists(&session),
         "cleanup_run must kill the run shell before tearing down the worktree"
     );
 }
@@ -543,12 +538,10 @@ async fn resume_run_kills_the_shell() {
     .unwrap();
     let run_id = failed_run(&daemon).await;
     let socket = daemon.tmux_socket();
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let session = pdo_session::domain::names::shell_session_name(&run_id);
 
     post_shell(&daemon, &run_id).await;
-    assert!(pdo_daemon::tmux_session_manager::session_exists(
-        &socket, &session
-    ));
+    assert!(crate::common::tmux(&socket).session_exists(&session));
 
     // Resume the failed run — the interlock kills the shell (best-effort) before
     // re_evaluate_after_command re-drives the merge.
@@ -563,7 +556,7 @@ async fn resume_run_kills_the_shell() {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut killed = false;
     while std::time::Instant::now() < deadline {
-        if !pdo_daemon::tmux_session_manager::session_exists(&socket, &session) {
+        if !crate::common::tmux(&socket).session_exists(&session) {
             killed = true;
             break;
         }
@@ -591,9 +584,9 @@ async fn gate_rejects_live_run() {
     let resp = post_shell(&daemon, &run_id).await;
     assert_eq!(resp.status(), 409, "a live run is not shell-eligible");
     let socket = daemon.tmux_socket();
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let session = pdo_session::domain::names::shell_session_name(&run_id);
     assert!(
-        !pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        !crate::common::tmux(&socket).session_exists(&session),
         "no shell session may be spawned for a rejected live run"
     );
 }
@@ -654,11 +647,11 @@ async fn shell_survives_pty_client_disconnect() {
     .unwrap();
     let run_id = failed_run(&daemon).await;
     let socket = daemon.tmux_socket();
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let session = pdo_session::domain::names::shell_session_name(&run_id);
 
     post_shell(&daemon, &run_id).await;
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        crate::common::tmux(&socket).session_exists(&session),
         "shell must exist right after opening"
     );
 
@@ -691,7 +684,7 @@ async fn shell_survives_pty_client_disconnect() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        crate::common::tmux(&socket).session_exists(&session),
         "shell session must SURVIVE the PTY client disconnecting (ADR-0021 #4)"
     );
 }
@@ -717,11 +710,11 @@ async fn shell_survives_eof_and_exit() {
     .unwrap();
     let run_id = failed_run(&daemon).await;
     let socket = daemon.tmux_socket();
-    let session = pdo_daemon::tmux_session_manager::shell_session_name(&run_id);
+    let session = pdo_session::domain::names::shell_session_name(&run_id);
 
     post_shell(&daemon, &run_id).await;
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        crate::common::tmux(&socket).session_exists(&session),
         "shell must exist right after opening"
     );
 
@@ -736,11 +729,11 @@ async fn shell_survives_eof_and_exit() {
         send_raw("C-d");
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    pdo_daemon::tmux_session_manager::send_keys(&socket, &session, "exit");
+    crate::common::tmux(&socket).send_keys(&session, "exit");
     tokio::time::sleep(Duration::from_millis(400)).await;
 
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, &session),
+        crate::common::tmux(&socket).session_exists(&session),
         "shell session must SURVIVE EOF/exit — its interactive bash is respawned \
          so the pane (and session) outlives any single shell (ADR-0021 #4)"
     );

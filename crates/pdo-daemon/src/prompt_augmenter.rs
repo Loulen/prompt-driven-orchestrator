@@ -367,7 +367,7 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
 /// - `PDO_VAR_<NAME>` — each resolved pipeline variable (sorted for determinism).
 ///
 /// The base four (`PDO_RUN_ID`/`NODE_ID`/`NODE_ITER`/`DAEMON_URL`) are exported
-/// by `tmux_session_manager::wrap_with_env` and are *not* repeated here.
+/// by `pdo_session::domain::launch::wrap_with_env` and are *not* repeated here.
 pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
     let mut env = Vec::new();
 
@@ -1187,79 +1187,6 @@ pub(crate) fn build_manager_prompt(
     name_hint: RunNameHint,
 ) -> String {
     let preamble = build_manager_preamble(run_id, daemon_url, name_hint);
-    format!("{preamble}{role_prompt}")
-}
-
-/// Runtime preamble for the library pipeline authoring assistant (ADR-0048,
-/// reshaped by ADR-0051).
-///
-/// Prepended to `prompts/builtin/library-assistant.md`. Same discipline as the
-/// manager: we own the session prompt, so the endpoints are documented in plain
-/// text rather than shipping a custom MCP. The **write-on-save** rule is restated
-/// here so it holds even if the static role file is trimmed.
-///
-/// **It names no pipeline.** One assistant serves every template, so a pipeline
-/// id frozen at spawn would be wrong from the second template onwards. Which one
-/// is open arrives per message via the `UserPromptSubmit` hook; the instruction to
-/// fetch it is kept here in plain text because that hook only exists on a harness
-/// exposing `--settings` (ADR-0051 §3).
-pub(crate) fn build_library_assistant_preamble(daemon_url: &str) -> String {
-    format!(
-        r#"# Pipeline Assistant Runtime Preamble
-
-You author PDO pipeline templates in natural language, on the user's behalf. You
-are **one shared assistant for the whole daemon**: the user switches between
-templates without restarting you, so the template you work on changes over time
-and your conversation history does not.
-
-## Which pipeline is open
-
-A line beginning `PDO — pipeline actuellement ouverte` is injected into your
-context at **every** user message. It names the pipeline id, its scope, and the
-**absolute path** of its YAML file. Work on that file, at that path — never on a
-sibling you guessed from the working directory.
-
-If that line is missing (some harnesses cannot inject it), fetch the same fact
-yourself **before acting**: `curl -s {daemon_url}/sessions/libassist/focus`. If it
-answers no pipeline, ask the user which one — do not pick one.
-
-Your working directory is the repo's templates folder; read the `*.yaml` files in
-it for real, in-house examples of the format. It is a source of examples, **not**
-the location of the file you are editing: that is the absolute path the focus
-gives you, and it may live in another folder entirely.
-
-- Daemon base URL: `{daemon_url}`
-- Which pipeline is open: `curl -s {daemon_url}/sessions/libassist/focus`
-- List every template: `curl {daemon_url}/library/pipelines`
-- Validate a single node's YAML before you save: `curl -X POST {daemon_url}/nodes/parse -H 'Content-Type: application/json' -d '{{"yaml":"<node yaml>"}}'`
-- Persist the open template: `curl -X POST {daemon_url}/sessions/libassist/save -H 'Content-Type: application/json' -d '{{"yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
-
-**Saving takes no id and no scope.** The daemon writes into the file the focus
-names, because it is the only party that knows where that is. Do **not** save
-through `POST /library/pipelines`: it writes into the *library store*, a different
-tree from the `.pdo/pipelines/` an edit tab opens — you would leave a duplicate
-there, leave the edited file untouched, and report a save that did not happen.
-
-## Write on save, never on every edit
-
-Do **not** touch files as you reason. When the user asks for a change: describe
-what you will change, **show a diff**, and write **only after the user says OK**.
-Validate node YAML via `POST /nodes/parse` first; then persist the full template
-via `POST /sessions/libassist/save`. The canvas re-reads the template the moment
-you save — so send the whole file at once, never a half-edited one, and never
-write it with `Write`/`Edit`/`sed` (the canvas would not hear about it).
-
-You drive no Run and issue no run commands: your only durable effect is the YAML
-the user reviews. Read first, propose second, write last.
-
-"#
-    )
-}
-
-/// Runtime preamble + the static role prompt. Mirror of
-/// [`build_manager_prompt`].
-pub(crate) fn build_library_assistant_prompt(daemon_url: &str, role_prompt: &str) -> String {
-    let preamble = build_library_assistant_preamble(daemon_url);
     format!("{preamble}{role_prompt}")
 }
 
@@ -2571,7 +2498,7 @@ mod tests {
 
     #[test]
     fn manager_preamble_sandboxed_carries_the_container_side_url_only() {
-        let url = crate::sandbox_container::daemon_url(6193, true);
+        let url = pdo_sandbox::domain::container::daemon_url(6193, true);
         let preamble = build_manager_preamble("run-1", &url, RunNameHint::DeriveFromInput);
         assert!(
             preamble.contains("Daemon base URL: `http://host.docker.internal:6193`"),
@@ -2588,7 +2515,7 @@ mod tests {
 
     #[test]
     fn manager_preamble_host_path_is_unchanged() {
-        let url = crate::sandbox_container::daemon_url(6193, false);
+        let url = pdo_sandbox::domain::container::daemon_url(6193, false);
         let preamble = build_manager_preamble("run-1", &url, RunNameHint::DeriveFromInput);
         assert!(preamble.contains("Daemon base URL: `http://localhost:6193`"));
         assert!(
@@ -3223,31 +3150,5 @@ mod tests {
         std::fs::create_dir_all(tmp.path()).unwrap();
 
         assert!(!read_start_prompt_present(tmp.path()).unwrap());
-    }
-
-    /// The primer names **one** write path, and names the other as a trap.
-    ///
-    /// On a harness with no `--settings` hole the hook never arms (ADR-0051 §3),
-    /// so this text is the only thing standing between the assistant and the bug
-    /// it used to be instructed into: `POST /library/pipelines` reads `scope` in
-    /// the library store's vocabulary, so a `repo` template saved there became a
-    /// duplicate in another tree while the edited file never moved.
-    #[test]
-    fn library_assistant_preamble_points_the_save_at_the_focus() {
-        let p = build_library_assistant_preamble("http://localhost:1234");
-
-        assert!(
-            p.contains("/sessions/libassist/save"),
-            "the primer names the focus-driven save endpoint:\n{p}"
-        );
-        assert!(
-            !p.contains("-X POST http://localhost:1234/library/pipelines"),
-            "and never offers the library store as a way to save:\n{p}"
-        );
-        assert!(
-            p.contains("Do **not** save\nthrough `POST /library/pipelines`"),
-            "the trap is named outright, so a model that knows the old endpoint is \
-             warned off it:\n{p}"
-        );
     }
 }

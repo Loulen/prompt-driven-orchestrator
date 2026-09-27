@@ -8,7 +8,7 @@ use super::probes_for;
 pub struct StagingEntry {
     /// `$HOME`-relative path (`.claude/.credentials.json`, `.pi/agent/auth.json`).
     /// Routed by the same classifier as a profile entry
-    /// (`sandbox_profile::landing`), so the copy view and the mount view
+    /// (the sandbox context's `landing`), so the copy view and the mount view
     /// cannot drift.
     pub rel: &'static str,
     /// What to log at `info` when the host lacks the entry, or `None` for a silent
@@ -24,7 +24,7 @@ pub struct StagingEntry {
 /// session never waits for a human. `claude` has them; `copilot` and `pi` carry the
 /// equivalent on their argv (`--allow-all`, `-a`) and declare none.
 ///
-/// Each variant is applied by `sandbox_staging`, the only module that
+/// Each variant is applied by the sandbox context's staging, the only module that
 /// writes into a staging — this enum only *names* the write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutonomyFixup {
@@ -46,9 +46,9 @@ pub enum AutonomyFixup {
 /// [`staging_set_absence_note`]). `None` is a declared value (ADR-0051), published
 /// in the support table.
 ///
-/// The set is **data**; `sandbox_staging` is the one interpreter. It is
+/// The set is **data**; the sandbox staging is the one interpreter. It is
 /// copied at the spawn of the **first** session of the Run that resolves the harness
-/// (`sandbox_staging::fill_staging_set`, #708, ADR-0063 §3) — never at `RunStarted`,
+/// (`fill_staging_set`, #708, ADR-0063 §3) — never at `RunStarted`,
 /// never for a harness the Run does not launch. Its `home_root` is mounted **empty**
 /// at container creation so that later copy lands under a mount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +96,7 @@ impl StagingSet {
 /// - **G5 empty transcript sink** → transcripts `.claude/projects`.
 ///
 /// The `~/.claude` allowlist itself (skills, plugins, settings…) is NOT here: it is
-/// the user's `full` profile (`sandbox_profile::DEFAULT_FULL_ENTRIES`),
+/// the user's `full` profile (`DEFAULT_FULL_ENTRIES` of the sandbox context),
 /// the harness-agnostic diff of ADR-0063 §4.
 pub const CLAUDE_STAGING_SET: StagingSet = StagingSet {
     label: "the `.claude` home — credentials and org managed settings copied, trust and \

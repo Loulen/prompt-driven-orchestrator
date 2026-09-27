@@ -1,0 +1,33 @@
+[package]
+# The `session` bounded context (ADR-0079): the tmux sessions agents, shells and
+# the library assistant run in — their launch and reaping, the PTY bridge and the
+# shared terminal, a node's pane, the declared wait. Hexagonal inside: `domain/`,
+# `application/` (ports, tmux behind one of them, + one use case per file),
+# `adapters/`.
+name = "pdo-session"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's session context: tmux behind a port, the PTY bridge and shared terminal, the declared wait, the library assistant"
+publish = false
+
+[dependencies]
+pdo-kernel.workspace = true
+pdo-harness.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+futures-util = "0.3"
+portable-pty.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+pdo-extension-api.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true

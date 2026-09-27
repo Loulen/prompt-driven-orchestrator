@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -2016,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "filetime",
  "pdo-kernel",
@@ -2032,7 +2032,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "chrono",
  "pdo-extension-api",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-legacy"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -2116,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-sandbox"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -2138,7 +2138,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-session"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-skill"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "1.111.5"
+version = "1.111.6"
 dependencies = [
  "anyhow",
  "axum",

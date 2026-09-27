@@ -20,9 +20,13 @@ vi.mock("../api", () => ({
   stopNode: vi.fn(),
   retryNode: vi.fn(),
   retryNodePreview: vi.fn().mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] }),
-  previewProvisioning: vi.fn().mockResolvedValue({ entries: [], rules: [], conflicts: [] }),
   startNode: vi.fn(),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+  previewProvisioning: vi.fn().mockResolvedValue({ entries: [], rules: [], conflicts: [] }),
 }));
 
 vi.mock("../session/components/TmuxTerminal", () => ({

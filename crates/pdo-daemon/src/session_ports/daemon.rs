@@ -32,7 +32,7 @@ impl DaemonGauges for LegacySessionPorts {
     fn service_health(&self) -> serde_json::Value {
         self.state()
             .ok()
-            .and_then(|state| serde_json::to_value(&*state.service_health).ok())
+            .and_then(|state| serde_json::to_value(state.platform.service_health()).ok())
             .unwrap_or(serde_json::Value::Null)
     }
 }

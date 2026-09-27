@@ -157,7 +157,7 @@ impl RunShells for LegacySessionPorts {
         Box::pin(async move {
             let (state, _, run_state) = self.projected(run_id).await?;
             let repo_root = crate::effective_repo_root(&state, &run_state);
-            let worktree = crate::worktree_ops::worktree_dir_for_run(&repo_root, run_id);
+            let worktree = crate::worktree_dir_for_run(&repo_root, run_id);
             let eligible = run_state.status.is_terminal()
                 && run_state.status != event_log::RunStatus::Archived
                 && worktree.exists();

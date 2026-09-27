@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pdo_daemon::{
-    run_complete, run_docs, run_fail, run_migrate, run_page, run_reap, run_review, run_run_create,
-    run_run_wait, run_service, run_skip, run_wait_user, Cli, Commands, RunAction,
+    run_complete, run_docs, run_fail, run_migrate, run_reap, run_review, run_run_create,
+    run_run_wait, run_skip, run_wait_user, Cli, Commands, RunAction,
 };
+use pdo_kernel::extension_host::NoExtensions;
+use pdo_platform::adapters::cli::{run_page, run_service};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -62,7 +64,8 @@ fn main() -> ExitCode {
         Commands::Skip { reason } => run_skip(reason),
         // Every arm below is a blocking one-shot: no tokio runtime, for the
         // `reqwest::blocking` reason given above.
-        Commands::Service { action } => run_service(action),
+        // The binary PDO ships has no extension (`serve(config, vec![])`).
+        Commands::Service { action } => run_service(action, &NoExtensions),
         Commands::Migrate { dir, dry_run } => run_migrate(dir, dry_run),
         Commands::Reap {
             count,

@@ -126,7 +126,7 @@ pub(crate) fn deliver(
     if skills.is_empty() {
         return Ok(report);
     }
-    let manifest: BTreeSet<Vec<u8>> = crate::provisioning::materialized_paths(worktree)?
+    let manifest: BTreeSet<Vec<u8>> = crate::manifest::materialized_paths(worktree)?
         .into_iter()
         .collect();
     let mut exclusions: Vec<String> = Vec::new();
@@ -231,7 +231,7 @@ pub(crate) fn deliver(
 
     if !exclusions.is_empty() {
         add_exclusions(worktree, run_id, &exclusions)?;
-        crate::provisioning::record_materialized_paths(worktree, &recorded)?;
+        crate::manifest::record_materialized_paths(worktree, &recorded)?;
     }
     Ok(report)
 }
@@ -560,7 +560,7 @@ mod tests {
             ]
         );
         // The provisioning manifest lists both, so the completion commit filters them.
-        let recorded = crate::provisioning::materialized_paths(&wt).unwrap();
+        let recorded = crate::manifest::materialized_paths(&wt).unwrap();
         assert!(recorded.contains(&b".agents/skills/tdd".to_vec()));
         assert!(recorded.contains(&b".claude/skills/tdd".to_vec()));
     }
@@ -746,7 +746,7 @@ mod tests {
             &["add", "-f", ".agents/skills/tdd", ".claude/skills/tdd"],
         );
         std::fs::write(wt.join("work.txt"), "done\n").unwrap();
-        let sha = crate::worktree_ops::stage_and_commit(&wt, "n", 1).unwrap();
+        let sha = crate::worktrees::stage_and_commit(&wt, "n", 1).unwrap();
         assert!(sha.is_some());
         let files = git(&wt, &["show", "--name-only", "--format=", "HEAD"]);
         assert_eq!(files.trim(), "work.txt");

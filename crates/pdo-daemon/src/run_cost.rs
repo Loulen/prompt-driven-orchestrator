@@ -309,7 +309,7 @@ fn collect_executions(
         let is_isolated = isolated(event);
         let working_dir = if is_isolated {
             event.node_id.as_deref().map(|node_id| {
-                crate::worktree_ops::sub_worktree_path(
+                crate::worktrees::sub_worktree_path(
                     repo_root,
                     run_id,
                     node_id,
@@ -317,7 +317,7 @@ fn collect_executions(
                 )
             })
         } else {
-            Some(crate::worktree_ops::worktree_dir_for_run(repo_root, run_id))
+            Some(crate::worktrees::worktree_dir_for_run(repo_root, run_id))
         };
         let project = working_dir
             .as_ref()
@@ -2261,7 +2261,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let run_id = "resurrected-pane";
 
-        let node_dir = crate::worktree_ops::sub_worktree_path(repo.path(), run_id, "claude", 1);
+        let node_dir = crate::worktrees::sub_worktree_path(repo.path(), run_id, "claude", 1);
         let project = claude.join(cc_project_dirname(&node_dir));
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
@@ -2416,7 +2416,7 @@ mod tests {
         let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "dedup";
-        let working_dir = crate::worktree_ops::sub_worktree_path(repo.path(), run_id, "worker", 1);
+        let working_dir = crate::worktrees::sub_worktree_path(repo.path(), run_id, "worker", 1);
         let project = claude.join(cc_project_dirname(&working_dir));
         std::fs::create_dir_all(project.join("first/subagents")).unwrap();
         let replay = format!(

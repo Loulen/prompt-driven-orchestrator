@@ -70,6 +70,12 @@ behaviour goes into the context crate once that crate exists.
 
 Contexts already out of the legacy crate:
 
+- `platform` (#916): `crates/pdo-platform`, `frontend/src/platform/` (page mounts, update,
+  audit journal, service unit). The first context out and the template the next ones copy:
+  pure rules in `domain/`, `application/ports.rs` plus one use case per file, `adapters/` for
+  the routes (`http/`), the CLI (`cli/`) and the implementations of the ports. Its use cases
+  are tested against in-memory ports in `crates/pdo-platform/tests/use_cases/` (stage 2), its
+  adapters against the real resource in their own `#[cfg(test)]` module (stage 3).
 - `harness` (#919): `crates/pdo-harness`, `frontend/src/harness/`. The parsers of each
   harness's own artefacts (transcripts, turn state, reported cost, context peak, steering)
   live in its `domain/`; cost, stale detection, staging, tmux and stats read them from
@@ -89,8 +95,33 @@ While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package
 `pdo-daemon`: dist names the installer after it), which exposes `serve(config, extensions)` and
-delegates to the legacy crate. The daemon's integration tests (stage 4) live there too, in
+delegates to the legacy crate. The legacy daemon still opens the database and binds the
+listener; it hands the composition root its `ContextResources` (the pool, the per-daemon
+knobs, and the ports a context needs from what is still legacy, such as the Runs), and
+`crates/pdo/src/contexts.rs` wires each extracted context's adapters onto its ports and
+merges its `router()` before `identify` wraps everything. Route coverage reads each
+context's `router()` too (`ROUTER_SOURCES`). The daemon's integration tests (stage 4) live there too, in
 `crates/pdo/tests/`, and every test daemon goes through the same `identify` head as `pdo daemon`.
+
+Extracted so far: `workspace` (`crates/pdo-workspace`, `frontend/src/workspace/`). While the
+legacy crate still assembles the daemon, it wires an extracted context's adapters onto its ports
+(`workspace_context` in `lib.rs`) and `.merge(…)`s its `router()` into `build_router`; list every
+merged router in `ROUTER_SOURCES` of `route_coverage.rs`. The legacy crate may call an extracted
+context's public API (its use cases, its adapters' free functions, re-exported at the root of
+`lib.rs` for the modules that still read them), never the other way round.
+
+Two patterns the workspace set for the contexts that follow:
+
+- **A port for a whole technology.** Every `git` call of the workspace lives in
+  `adapters/git/`, behind the `Git` port for the workspace's own use cases. A context that still
+  lives in the legacy crate calls the adapter's functions directly until it migrates onto the
+  port.
+- **Settings a downstream context owns.** A Projet carries the agentic profile and the skills
+  selection, which belong to contexts downstream of the workspace. The workspace stores them as
+  opaque JSON (`StoredSetting`) and never reads them; its HTTP adapter is generic over a
+  `ProjectSettings` trait that names their real types, so the wire keeps its shape and the
+  generated TypeScript type is `Project<A, S>` (the front aliases it in
+  `workspace/model/project.ts`).
 
 The HTTP and WebSocket contract stays frozen for the whole migration. A temporary suite,
 `crates/pdo/tests/snapshots_temporary/`, plays eight business scenarios against the real

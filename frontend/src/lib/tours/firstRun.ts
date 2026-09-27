@@ -21,15 +21,10 @@
  */
 
 import { ApiError } from "../../shared/http/client";
-import { createPipeline, createRepo, fetchPipelines, savePipeline } from "../../api";
-import {
-  isNodeFinished,
-  type TourAppState,
-  type TourDef,
-  type TourObservation,
-  type TourRunNode,
-  type TourStep,
-} from "../tour";
+import { createPipeline, fetchPipelines, savePipeline } from "../../api";
+import { createRepo } from "../../workspace/api/repos";
+import { isNodeFinished } from "../tour";
+import type { TourAppState, TourDef, TourObservation, TourRunNode, TourStep } from "../tour";
 
 /** Where the training repository is created, and the folder the explorer opens on. */
 export const TUTORIAL_REPO_PARENT = "/tmp";

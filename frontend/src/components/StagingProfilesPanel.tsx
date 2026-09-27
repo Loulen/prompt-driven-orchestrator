@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, Search, Trash2, X } from "lucide-react";
-import FsExplorerModal from "./FsExplorerModal";
+import FsExplorerModal from "../workspace/components/FsExplorerModal";
 import {
   deleteSandboxProfile,
   fetchSandboxProfileReferents,

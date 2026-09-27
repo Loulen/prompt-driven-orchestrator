@@ -20,7 +20,7 @@
 
 use tracing::{error, warn};
 
-use crate::worktree_ops::sub_worktree_branch;
+use crate::worktrees::sub_worktree_branch;
 use crate::{admission, event_log};
 use crate::{
     append_event, effective_repo_root, load_all_run_ids, load_events, reconcile_run_level_stall,

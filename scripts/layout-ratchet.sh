@@ -83,17 +83,30 @@ cd "$(git rev-parse --show-toplevel)"
 #   Settings › General › Stats absorptions list (every absorption, its origin, uncombine as
 #   you go). SettingsSurface renders it; it reuses StatsAbsorption's UncombineButton and
 #   lib/statsAbsorption, so only the Settings layout is new.
+# frontend/src/components: 197 and crates/pdo-daemon/src: 89 (#916) — the platform
+#   context moved out: its components to frontend/src/platform/, its modules to
+#   crates/pdo-platform. contexts.rs is the one file admitted in the legacy crate: the
+#   seam the composition root wires the extracted contexts through.
 # frontend/src/components: 199 and crates/pdo-daemon/src: 81 (#919) ratchet down: the
 #   harness context moved out — HarnessSelect, ModelPicker, EffortPicker and their tests to
 #   frontend/src/harness/components/, the twelve harness modules to crates/pdo-harness.
+# frontend/src/components: 191 and crates/pdo-daemon/src: 79 — #916 and #919 combined.
+# frontend/src/components: 194 and crates/pdo-daemon/src: 89 (#917, spec #913) ratchet down:
+#   the workspace context moved out — project_store.rs, provisioning.rs, worktree_ops.rs and
+#   repo_scaffold.rs to crates/pdo-workspace; ProjectEditModal, SourceBranchField,
+#   ProvisioningRulesEditor, PersistedProvisioningEditor, FsExplorerModal, RepoCombobox and
+#   their tests to frontend/src/workspace/components.
+# frontend/src/components: 180 and crates/pdo-daemon/src: 73 — #917, #916 and #919 combined.
 # frontend/src/components: 195 and crates/pdo-daemon/src: 78 (#920) ratchet down: the
 #   session context moved out — TmuxTerminal, RunShellModal and their tests to
 #   frontend/src/session/components/, tmux_session_manager, pty_bridge, shared_terminal and
 #   declared_wait to crates/pdo-session. The legacy side of its ports is one new module,
 #   contexts.rs, plus the session_ports/ directory (not a direct file).
+# frontend/src/components: 176 and crates/pdo-daemon/src: 69 — #920, #917, #916 and #919
+#   combined.
 BASELINES='
-frontend/src/components 195
-crates/pdo-daemon/src 78
+frontend/src/components 176
+crates/pdo-daemon/src 69
 '
 
 fail=0

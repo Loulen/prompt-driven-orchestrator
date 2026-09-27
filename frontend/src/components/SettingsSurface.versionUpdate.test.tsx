@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { InstanceSettings } from "../settings/model/settings";
-import type { UpdateStatus } from "../platform/model/daemon";
+import type { UpdateStatus } from "../platform/model/update";
 
 // #697 — Settings › General › Version & update. Every api function the surface (and the
 // panels it mounts) imports must exist in this factory: Vitest 4 wraps the module
@@ -21,15 +21,12 @@ vi.mock("../api", () => ({
   updateAgentProfile: vi.fn(),
   deleteAgentProfile: vi.fn(),
   fetchAgentProfileReferents: vi.fn(),
-  saveInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  browseFs: vi.fn(),
   fetchSandboxProfiles: vi.fn().mockResolvedValue({ profiles: [], home: "/home/user" }),
   saveSandboxProfile: vi.fn(),
   deleteSandboxProfile: vi.fn(),
   fetchSandboxProfileReferents: vi.fn(),
-  fetchInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
   createSkill: vi.fn(),
   fetchSkill: vi.fn(),
@@ -39,18 +36,31 @@ vi.mock("../api", () => ({
   createSkillFolder: vi.fn(),
   updateSkillFolder: vi.fn(),
   deleteSkillFolder: vi.fn(),
-  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
-  applyUpdate: vi.fn(),
-  fetchUpdateAttemptLog: (...args: unknown[]) => fetchUpdateAttemptLogMock(...args),
-  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;
   },
 }));
+vi.mock("../platform/api/update", () => ({
+  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
+  applyUpdate: vi.fn(),
+  fetchUpdateAttemptLog: (...args: unknown[]) => fetchUpdateAttemptLogMock(...args),
+  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+  browseFs: vi.fn(),
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+  saveInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
+  fetchInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
+}));
 
 import SettingsSurface from "./SettingsSurface";
-import { UPDATE_STATUS_CHANGED } from "../lib/updateStatus";
+import { UPDATE_STATUS_CHANGED } from "../platform/model/updateStatus";
 
 function settings(): InstanceSettings {
   return {

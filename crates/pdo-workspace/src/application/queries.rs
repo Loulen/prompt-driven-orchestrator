@@ -1,0 +1,278 @@
+//! What the workspace answers without changing anything. Reads never go
+//! through the Autorisation d'opération: it guards mutations only.
+
+use std::path::{Path, PathBuf};
+
+use crate::domain::branches::BranchList;
+use crate::domain::browse::BrowseRootError;
+use crate::domain::project::Project;
+use crate::domain::provisioning::{
+    preview_levels, ProvisioningPlan, ProvisioningRules, ProvisioningScope, ScopedRules,
+};
+
+use super::error::{WorkspaceError, WorkspaceResult};
+use super::ports::{Listing, StorageError, StoreResult};
+use super::save_provisioning_rules::INSTANCE_SCOPE_ID;
+use super::workspace::Workspace;
+
+/// How many repositories the recent list holds.
+pub const RECENT_REPOSITORIES: usize = 5;
+
+/// A provisioning preview request.
+#[derive(Debug, Clone)]
+pub struct PreviewRequest {
+    pub repository: String,
+    pub git_ref: String,
+    pub scope: ProvisioningScope,
+    /// The rules being edited at `scope`.
+    pub rules: ProvisioningRules,
+    /// The inherited levels the editor already holds; `None` reads them from
+    /// the stores, for the Projet that owns `repository`.
+    pub inherited: Option<Vec<ScopedRules>>,
+}
+
+impl Workspace {
+    pub async fn list_projects(&self) -> StoreResult<Vec<Project>> {
+        self.projects.list().await
+    }
+
+    pub async fn project(&self, id: &str) -> StoreResult<Option<Project>> {
+        self.projects.get(id).await
+    }
+
+    /// The Projet owning `path`, compared verbatim (ADR-0033).
+    pub async fn owner_of(&self, path: &str) -> StoreResult<Option<Project>> {
+        self.projects.owner_of(path).await
+    }
+
+    pub async fn provisioning_rules(
+        &self,
+        scope: ProvisioningScope,
+        scope_id: &str,
+    ) -> StoreResult<ProvisioningRules> {
+        self.provisioning.load(scope, scope_id).await
+    }
+
+    /// Every provisioning level a Run in `repository` inherits, coarsest first:
+    /// the instance, the Projet owning the repository (if any), the Run's own
+    /// rules, then the isolated node's when it states some.
+    pub async fn scoped_provisioning_rules(
+        &self,
+        repository: &str,
+        run: ProvisioningRules,
+        node: ProvisioningRules,
+    ) -> StoreResult<Vec<ScopedRules>> {
+        let mut rules = vec![ScopedRules {
+            scope: ProvisioningScope::Instance,
+            rules: self
+                .provisioning
+                .load(ProvisioningScope::Instance, INSTANCE_SCOPE_ID)
+                .await?,
+        }];
+        if let Some(project) = self.projects.owner_of(repository).await? {
+            rules.push(ScopedRules {
+                scope: ProvisioningScope::Project,
+                rules: self
+                    .provisioning
+                    .load(ProvisioningScope::Project, &project.id)
+                    .await?,
+            });
+        }
+        rules.push(ScopedRules {
+            scope: ProvisioningScope::Run,
+            rules: run,
+        });
+        if !node.is_empty() {
+            rules.push(ScopedRules {
+                scope: ProvisioningScope::IsolatedNode,
+                rules: node,
+            });
+        }
+        Ok(rules)
+    }
+
+    /// What the rules being edited would provision, resolved over the source
+    /// repository at `git_ref`.
+    pub async fn preview_provisioning(
+        &self,
+        request: PreviewRequest,
+    ) -> WorkspaceResult<ProvisioningPlan> {
+        let repository = PathBuf::from(request.repository.trim());
+        if !repository.is_absolute() {
+            return Err(WorkspaceError::Invalid(
+                "repository must be an absolute path".into(),
+            ));
+        }
+        let inherited = match request.inherited {
+            Some(rules) => rules,
+            None => self
+                .scoped_provisioning_rules(
+                    request.repository.trim(),
+                    ProvisioningRules::default(),
+                    ProvisioningRules::default(),
+                )
+                .await
+                .map_err(|e| StorageError(format!("failed to load provisioning rules: {e}")))?,
+        };
+        let levels = preview_levels(inherited, request.scope, request.rules);
+        self.source_tree
+            .plan(&repository, &levels, &request.git_ref)
+            .map_err(|e| WorkspaceError::Invalid(format!("{e:#}")))
+    }
+
+    /// `path` as a repository a Run can work in.
+    pub fn validate_repository(&self, path: &str) -> Result<PathBuf, String> {
+        self.git.validate_repository(path)
+    }
+
+    /// The branches of the repository at `path`, read locally.
+    pub fn branches(&self, path: &str) -> WorkspaceResult<BranchList> {
+        let repo = self
+            .git
+            .validate_repository(path)
+            .map_err(WorkspaceError::Invalid)?;
+        self.git.branches(&repo).map_err(WorkspaceError::Git)
+    }
+
+    /// The branches of an already validated repository.
+    pub fn branches_of(&self, repo: &Path) -> Result<BranchList, String> {
+        self.git.branches(repo)
+    }
+
+    /// The last repositories Runs worked in, most recent first, each once.
+    pub async fn recent_repositories(&self) -> StoreResult<Vec<String>> {
+        self.recent.recent(RECENT_REPOSITORIES).await
+    }
+
+    /// One level of the directory at `path` (the default chain when `None`).
+    pub fn browse(
+        &self,
+        path: Option<&str>,
+        files: bool,
+        hidden: bool,
+    ) -> Result<Listing, BrowseRootError> {
+        self.files.browse(path, files, hidden)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::testing::fixture;
+    use crate::domain::project::Project;
+    use pdo_kernel::Actor;
+
+    fn rules(copy: &str) -> ProvisioningRules {
+        ProvisioningRules {
+            copy: vec![copy.into()],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn inherited_levels_follow_the_projet_owning_the_repository() {
+        let f = fixture();
+        f.projects.seed(Project::named("p1", "Front"));
+        let actor = Actor::LocalOperator;
+        f.workspace
+            .add_project_member(&actor, "p1", "/repo")
+            .await
+            .unwrap();
+        f.provisioning
+            .put(ProvisioningScope::Project, "p1", rules("project"));
+        let levels = f
+            .workspace
+            .scoped_provisioning_rules("/repo", rules("run"), ProvisioningRules::default())
+            .await
+            .unwrap();
+        let scopes: Vec<_> = levels.iter().map(|l| l.scope).collect();
+        assert_eq!(
+            scopes,
+            vec![
+                ProvisioningScope::Instance,
+                ProvisioningScope::Project,
+                ProvisioningScope::Run
+            ]
+        );
+        let elsewhere = f
+            .workspace
+            .scoped_provisioning_rules("/other", rules("run"), rules("node"))
+            .await
+            .unwrap();
+        let scopes: Vec<_> = elsewhere.iter().map(|l| l.scope).collect();
+        assert_eq!(
+            scopes,
+            vec![
+                ProvisioningScope::Instance,
+                ProvisioningScope::Run,
+                ProvisioningScope::IsolatedNode
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_preview_resolves_the_edited_rules_over_the_inherited_ones() {
+        let f = fixture();
+        f.provisioning.put(
+            ProvisioningScope::Instance,
+            INSTANCE_SCOPE_ID,
+            rules(".env"),
+        );
+        f.workspace
+            .preview_provisioning(PreviewRequest {
+                repository: " /repo ".into(),
+                git_ref: "HEAD".into(),
+                scope: ProvisioningScope::Project,
+                rules: rules("edited"),
+                inherited: None,
+            })
+            .await
+            .unwrap();
+        let (repo, levels, git_ref) = f.source_tree.last();
+        assert_eq!(repo, PathBuf::from("/repo"));
+        assert_eq!(git_ref, "HEAD");
+        assert_eq!(
+            levels,
+            vec![
+                ScopedRules {
+                    scope: ProvisioningScope::Instance,
+                    rules: rules(".env")
+                },
+                ScopedRules {
+                    scope: ProvisioningScope::Project,
+                    rules: rules("edited")
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_relative_repository_cannot_be_previewed() {
+        let f = fixture();
+        let err = f
+            .workspace
+            .preview_provisioning(PreviewRequest {
+                repository: "repo".into(),
+                git_ref: "HEAD".into(),
+                scope: ProvisioningScope::Run,
+                rules: ProvisioningRules::default(),
+                inherited: Some(vec![]),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            WorkspaceError::Invalid("repository must be an absolute path".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_recent_list_is_capped() {
+        let f = fixture();
+        f.recent.set((0..8).map(|i| format!("/r{i}")).collect());
+        assert_eq!(
+            f.workspace.recent_repositories().await.unwrap().len(),
+            RECENT_REPOSITORIES
+        );
+    }
+}

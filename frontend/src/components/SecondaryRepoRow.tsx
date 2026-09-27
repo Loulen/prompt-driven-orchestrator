@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { GitBranch, X } from "lucide-react";
-import { validateRepo } from "../api";
-import { pickDefaultBranch } from "../lib/branchSelect";
-import { useBranchList } from "../hooks/useBranchList";
-import RepoCombobox from "./RepoCombobox";
-import SourceBranchField from "./SourceBranchField";
+import { validateRepo } from "../workspace/api/repos";
+import { pickDefaultBranch } from "../workspace/model/branchSelect";
+import { useBranchList } from "../workspace/store/useBranchList";
+import RepoCombobox from "../workspace/components/RepoCombobox";
+import SourceBranchField from "../workspace/components/SourceBranchField";
 
 /** One secondary repo line of the multi-repo create modal (#465, ADR-0042/0047).
  *  `valid` is `null` while unknown/empty, so `canLaunch` can require every

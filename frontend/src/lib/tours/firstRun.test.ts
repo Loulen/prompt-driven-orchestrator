@@ -1159,19 +1159,23 @@ vi.mock("../../api", async () => {
   const actual = await vi.importActual<typeof import("../../api")>("../../api");
   return {
     ...actual,
-    createRepo: vi.fn(async () => ({ path: "/tmp/pdo-tutorial", created: true })),
     fetchPipelines: vi.fn(async () => [] as unknown[]),
     createPipeline: vi.fn(async () => ({ id: TUTORIAL_RUN_PIPELINE_ID, scope: "instance", path: "p" })),
     savePipeline: vi.fn(async () => ({ ok: true })),
   };
 });
 
+vi.mock("../../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/repos")>()),
+  createRepo: vi.fn(async () => ({ path: "/tmp/pdo-tutorial", created: true })),
+}));
+
 describe("what the intro card prepares", () => {
   it("creates the training repository under /tmp with a README and notes.txt", async () => {
-    const api = await import("../../api");
+    const repos = await import("../../workspace/api/repos");
     await TOUR.intro!.prepare[0].run();
 
-    expect(api.createRepo).toHaveBeenCalledWith("/tmp", "pdo-tutorial", [
+    expect(repos.createRepo).toHaveBeenCalledWith("/tmp", "pdo-tutorial", [
       expect.objectContaining({ path: "README.md" }),
       expect.objectContaining({ path: "notes.txt" }),
     ]);
@@ -1239,8 +1243,8 @@ describe("what the intro card prepares", () => {
   });
 
   it("lets a refusal through, so the card can quote it", async () => {
-    const api = await import("../../api");
-    vi.mocked(api.createRepo).mockRejectedValueOnce(
+    const repos = await import("../../workspace/api/repos");
+    vi.mocked(repos.createRepo).mockRejectedValueOnce(
       new Error("/tmp/pdo-tutorial exists and is not a git repository"),
     );
 

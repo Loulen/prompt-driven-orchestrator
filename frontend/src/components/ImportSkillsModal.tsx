@@ -11,7 +11,7 @@ import type { SkillScanResult } from "../skill/model/skill";
 import { timeAgo } from "../lib/skillMd";
 import { displaySourceUrl, parseSkillSource, shortCommit } from "../lib/skillSource";
 import { folderPathLabel } from "../lib/skillTree";
-import FsExplorerModal from "./FsExplorerModal";
+import FsExplorerModal from "../workspace/components/FsExplorerModal";
 import { tildify } from "../lib/homePath";
 
 interface Props {

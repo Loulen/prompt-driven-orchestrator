@@ -1,0 +1,387 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+// `File` is aliased: the bare name would shadow the DOM `File` global in this module.
+import { ArrowUp, File as FileIcon, Folder, FolderGit2, Link2 } from "lucide-react";
+import { browseFs } from "../api/browse";
+import type { BrowseEntry } from "../../shared/generated/BrowseEntry";
+import type { BrowseOptions } from "../api/browse";
+import { useDialogFocus } from "../store/useDialogFocus";
+
+interface Props {
+  /**
+   * What the user picks. `"dir"` (the default) is today's behaviour exactly:
+   * directories-only listing, and the pick is the folder you are standing in.
+   * `"file"` lists regular files alongside the navigable directories and the pick is
+   * a selected file. A TS union, not an enum (`erasableSyntaxOnly` is on).
+   *
+   * Note the singular: the value names what is *chosen*, not what is *listed* — in
+   * file mode directories stay listed, since you have to traverse them.
+   */
+  mode?: "dir" | "file";
+  /** Show dot-entries. A FIXED consumer decision, not a user toggle. */
+  showHidden?: boolean;
+  /** Directory to open at; omitted → the daemon's default chain. */
+  startPath?: string;
+  /** Optional title. Omitted → no title row, which keeps RepoCombobox pixel-identical. */
+  title?: string;
+  /** Confirm-button label. Omitted → "Select this folder" / "Select this file". */
+  confirmLabel?: string;
+  /**
+   * Called with the chosen absolute path. Invoked SYNCHRONOUSLY from the click
+   * handler (`RepoCombobox.test.tsx` asserts `onChange` with no `waitFor`), then
+   * `onClose`.
+   */
+  onPick: (path: string) => void;
+  /**
+   * File mode only (#671): several files at once. Rows toggle a selection
+   * (⇧-click extends a range), the confirm button reads "Add N files" and
+   * `onPickMany` receives the absolute paths in listing order. `onPick` is
+   * then never called.
+   */
+  multiple?: boolean;
+  onPickMany?: (paths: string[]) => void;
+  /**
+   * The backdrop's stacking class. Default `z-[60]`: above the `z-50` of every
+   * parent modal. The paste popup is itself at `z-[60]` and opens this explorer
+   * on top of it (#671 Browse…), so it passes `z-[70]`.
+   */
+  zIndexClass?: string;
+  onClose: () => void;
+  /**
+   * Testid namespace: `${testIdPrefix}-{backdrop,up,path,error,entry,git-dot,symlink,select}`.
+   * New consumers leave the default.
+   */
+  testIdPrefix?: string;
+  /**
+   * Escape hatch for the CONTAINER testid alone. It exists only because #131 shipped
+   * an irregular `repo-browser-modal` (`browser`, not `browse`) that is pinned by both
+   * `RepoCombobox.test.tsx` and `e2e/repo-explorer-pick.spec.ts`.
+   */
+  modalTestId?: string;
+}
+
+/**
+ * The generic filesystem explorer (#131, extracted from `RepoCombobox` in #431).
+ *
+ * A self-contained nested modal over `GET /fs/browse`: own full-screen backdrop at
+ * `z-[60]` (above the `z-50` of every parent modal), own Escape handler that closes
+ * this layer alone. Two consumers today — the New-Run repo picker (`mode="dir"`,
+ * unchanged to the pixel) and the settings Dockerfile picker (`mode="file"`,
+ * `showHidden`).
+ *
+ * Accessible dialog (#437): `role="dialog"` + `aria-modal`, a name via
+ * `aria-labelledby` (the title row) or an `aria-label` derived from `mode`, a
+ * Tab/Shift+Tab focus trap, initial focus on the card, and focus restored to the
+ * opener on close. First focus trap in the app; if a PARENT modal ever gains its
+ * own trap, the two `document` Tab listeners must be coordinated so only the
+ * topmost is active (mark the background `inert`, or a shared trap stack).
+ */
+export default function FsExplorerModal({
+  mode = "dir",
+  showHidden = false,
+  startPath,
+  title,
+  confirmLabel,
+  onPick,
+  multiple = false,
+  onPickMany,
+  zIndexClass = "z-[60]",
+  onClose,
+  testIdPrefix = "fs-browse",
+  modalTestId,
+}: Props) {
+  const [currentDir, setCurrentDir] = useState("");
+  const [parent, setParent] = useState<string | null>(null);
+  const [entries, setEntries] = useState<BrowseEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  /** File mode only: the selected file, `null` until one is clicked. */
+  const [picked, setPicked] = useState<string | null>(null);
+  /** Multi-pick (#671): selected absolute paths, across directories. */
+  const [pickedMany, setPickedMany] = useState<string[]>([]);
+  /** Anchor of a ⇧-click range, an index into `entries`. */
+  const lastToggled = useRef<number | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Navigate to `path` (omit → backend default root). Always lands on a 200 shape: an
+  // in-body `error` (e.g. permission denied) is surfaced inline while the breadcrumb is
+  // kept, so the user is never stranded on a blank pane.
+  const navigateTo = useCallback(
+    async (path?: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        // LOAD-BEARING ARITY: never `browseFs(path, {})` nor `browseFs(path, undefined)`
+        // in default mode — either would be a recorded SECOND argument and the frozen
+        // assertions in `RepoCombobox.test.tsx` (which pin one-argument calls) would break.
+        const extra: BrowseOptions | undefined =
+          mode === "file" || showHidden
+            ? { files: mode === "file", hidden: showHidden }
+            : undefined;
+        const data = extra ? await browseFs(path, extra) : await browseFs(path);
+        setCurrentDir(data.path);
+        setParent(data.parent);
+        setEntries(data.entries);
+        setTruncated(data.truncated);
+        setError(data.error);
+        // Leaving a directory drops a stale selection from the one we left.
+        setPicked(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to browse");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [mode, showHidden],
+  );
+
+  // Initial fetch on mount — the modal is mounted only when opened, so mounting IS
+  // "the user opened the explorer". StrictMode double-invokes this in dev → two
+  // identical `GET /fs/browse`. Harmless (an idempotent read); do NOT add a `useRef`
+  // guard, it would break legitimate re-opens.
+  //
+  // `navigateTo` flips `loading` synchronously (that IS the "Loading…" pane), which is
+  // exactly what `set-state-in-effect` warns about; same trade-off, same disable, as
+  // `NewRunModal`/`TriggerDetailPanel`. `[]` deps on purpose: `startPath` is an open-at
+  // value read once, and re-fetching when it changes mid-open would fight the user's
+  // own navigation.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see note above.
+    void navigateTo(startPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Escape closes THIS layer alone. `document` (not `window`) + `stopPropagation`,
+  // both load-bearing: sibling document listeners in a parent (e.g. RepoCombobox's
+  // recents dropdown) fire in registration order.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  // Initial focus, its restitution, and the Tab trap (#437).
+  useDialogFocus(dialogRef);
+
+  const handleRow = (entry: BrowseEntry, event?: React.MouseEvent) => {
+    // Dir mode: the listing is directories-only by contract, so a row is ALWAYS a
+    // navigation and `is_dir` is never consulted — which keeps the frozen
+    // `RepoCombobox` tests independent of a field their fixtures predate.
+    if (mode === "dir" || entry.is_dir) {
+      void navigateTo(entry.path);
+      return;
+    }
+    if (!multiple) {
+      setPicked(entry.path);
+      return;
+    }
+    const index = entries.findIndex((row) => row.path === entry.path);
+    const anchor = lastToggled.current;
+    if (event?.shiftKey && anchor !== null && anchor !== index) {
+      const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
+      const range = entries.slice(from, to + 1).filter((row) => !row.is_dir).map((row) => row.path);
+      setPickedMany((prev) => [...prev, ...range.filter((path) => !prev.includes(path))]);
+    } else {
+      setPickedMany((prev) =>
+        prev.includes(entry.path) ? prev.filter((path) => path !== entry.path) : [...prev, entry.path],
+      );
+    }
+    lastToggled.current = index;
+  };
+
+  // Dir mode picks the folder you are standing in (git-dotted or not — ADR-0001: any
+  // folder is pickable, the authoritative check gates it downstream). File mode is
+  // select-then-confirm: one path to `onPick`, and a misclick can never silently write
+  // a persisted setting and close the box.
+  const multi = mode === "file" && multiple;
+  const confirmTarget = multi ? (pickedMany.length > 0 ? pickedMany[0] : null) : mode === "file" ? picked : currentDir;
+  const confirm = () => {
+    if (!confirmTarget) return;
+    if (multi) onPickMany?.(pickedMany);
+    else onPick(confirmTarget);
+    onClose();
+  };
+
+  const modalId = modalTestId ?? `${testIdPrefix}-modal`;
+  const emptyLabel = mode === "file" ? "Nothing here" : "No subfolders here";
+
+  return (
+    <div
+      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-black/50`}
+      data-testid={`${testIdPrefix}-backdrop`}
+      onClick={(e) => {
+        // Unconditional `stopPropagation`: keeps a backdrop click from bubbling up the
+        // React tree to a parent modal's close handler.
+        e.stopPropagation();
+        onClose();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? `${modalId}-title` : undefined}
+        aria-label={title ? undefined : mode === "file" ? "Choose a file" : "Choose a folder"}
+        className="flex max-h-[70vh] w-[460px] flex-col rounded-lg border border-line bg-bg-4 shadow-xl focus:outline-none"
+        data-testid={modalId}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {title && (
+          <div className="border-b border-line px-3 py-2">
+            <span
+              id={`${modalId}-title`}
+              className="font-semibold text-fg"
+              style={{ fontSize: "12.5px" }}
+            >
+              {title}
+            </span>
+          </div>
+        )}
+
+        {/* Header: up affordance + breadcrumb */}
+        <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+          <button
+            type="button"
+            onClick={() => parent && void navigateTo(parent)}
+            disabled={parent == null}
+            className="flex shrink-0 items-center justify-center rounded p-1 text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
+            title="Up one level"
+            aria-label="Up one level"
+            data-testid={`${testIdPrefix}-up`}
+          >
+            <ArrowUp size={14} />
+          </button>
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-fg-2"
+            style={{ fontSize: "11.5px" }}
+            title={currentDir}
+            data-testid={`${testIdPrefix}-path`}
+          >
+            {currentDir || "…"}
+          </span>
+        </div>
+
+        {/* Body: entry list */}
+        <div className="min-h-[120px] flex-1 overflow-y-auto">
+          {error && (
+            <div
+              className="px-3 py-2 font-mono text-st-failed"
+              style={{ fontSize: "11px" }}
+              data-testid={`${testIdPrefix}-error`}
+            >
+              {error}
+            </div>
+          )}
+          {truncated && (
+            <div className="px-3 py-1 text-fg-4" style={{ fontSize: "10.5px" }}>
+              {/* FROZEN COPY: `RepoCombobox.test.tsx` asserts /Showing first 1000/. */}
+              Showing first 1000 {mode === "file" ? "entries" : "folders"}
+            </div>
+          )}
+          {loading && entries.length === 0 && (
+            <div className="px-3 py-2 text-fg-4" style={{ fontSize: "11.5px" }}>
+              Loading…
+            </div>
+          )}
+          {!loading && !error && entries.length === 0 && (
+            <div className="px-3 py-2 text-fg-4" style={{ fontSize: "11.5px" }}>
+              {emptyLabel}
+            </div>
+          )}
+          <ul>
+            {entries.map((entry) => (
+              <li key={entry.path}>
+                <button
+                  type="button"
+                  onClick={(event) => handleRow(entry, event)}
+                  aria-pressed={multi && !entry.is_dir ? pickedMany.includes(entry.path) : undefined}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-bg-5 ${
+                    picked === entry.path || pickedMany.includes(entry.path) ? "bg-bg-5" : ""
+                  }`}
+                  data-testid={`${testIdPrefix}-entry`}
+                  // #824: which entry this row is. Every row shares one testid,
+                  // so nothing outside could aim at a named folder — and a guided
+                  // tour that says "click pdo-tutorial" has to be able to ring
+                  // that row rather than whichever one happens to be first.
+                  data-entry-name={entry.name}
+                >
+                  {multi && !entry.is_dir && (
+                    <span
+                      aria-hidden
+                      className={`grid h-3 w-3 shrink-0 place-items-center rounded-sm border ${
+                        pickedMany.includes(entry.path) ? "border-acc bg-acc" : "border-line-strong"
+                      }`}
+                    />
+                  )}
+                  {entry.is_git_repo ? (
+                    <FolderGit2
+                      size={14}
+                      className="shrink-0 text-acc"
+                      data-testid={`${testIdPrefix}-git-dot`}
+                    />
+                  ) : entry.is_dir || mode === "dir" ? (
+                    <Folder size={14} className="shrink-0 text-fg-4" />
+                  ) : (
+                    <FileIcon size={14} className="shrink-0 text-fg-4" />
+                  )}
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-fg"
+                    style={{ fontSize: "12px" }}
+                  >
+                    {entry.name}
+                  </span>
+                  {entry.is_symlink && (
+                    <Link2
+                      size={12}
+                      className="shrink-0 text-fg-4"
+                      aria-label="symlink"
+                      data-testid={`${testIdPrefix}-symlink`}
+                    />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Footer: cancel + confirm */}
+        <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2">
+          {multi && (
+            <span className="mr-auto text-fg-4" style={{ fontSize: "10.5px" }} data-testid={`${testIdPrefix}-count`}>
+              {pickedMany.length} selected · click toggles, ⇧-click ranges
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-3 py-1.5 text-fg-3 transition-colors hover:text-fg"
+            style={{ fontSize: "11.5px" }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={!confirmTarget}
+            className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-1 transition-opacity hover:opacity-90 disabled:opacity-40"
+            style={{ fontSize: "11.5px" }}
+            data-testid={`${testIdPrefix}-select`}
+          >
+            {confirmLabel ??
+              (multi
+                ? `Add ${pickedMany.length} file${pickedMany.length === 1 ? "" : "s"}`
+                : mode === "file"
+                  ? "Select this file"
+                  : "Select this folder")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

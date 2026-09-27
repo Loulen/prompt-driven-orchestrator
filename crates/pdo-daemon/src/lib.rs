@@ -5,7 +5,6 @@
 
 pub mod admission;
 mod agent_profile;
-mod audit_log;
 mod auto_fail;
 mod blackboard;
 mod boot_recovery;
@@ -36,7 +35,6 @@ mod node_io_resolver;
 mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
-mod page_mount;
 mod pipeline;
 mod pipeline_migrator;
 #[cfg(test)]
@@ -44,13 +42,10 @@ mod pipeline_semantics;
 mod pipeline_watcher;
 mod portable_pipeline;
 mod price_table;
-mod project_store;
 mod prompt_augmenter;
-mod provisioning;
 mod reap_policy;
 pub(crate) mod recovery;
 pub(crate) mod repo_edit_refusal;
-mod repo_scaffold;
 pub(crate) mod restart_verdict;
 pub(crate) mod retry_verdict;
 mod review_comments;
@@ -67,7 +62,6 @@ mod sandbox_staging;
 mod scheduler;
 mod scheduler_dispatcher;
 mod scheduler_interpreter;
-mod service_unit;
 mod session_ports;
 mod skill_bank;
 mod skill_delivery;
@@ -85,15 +79,12 @@ mod transition_guard;
 mod trigger_scheduler;
 #[allow(dead_code)]
 mod trigger_store;
-pub mod update_check;
-pub mod update_executor;
 #[allow(dead_code)]
 mod variable_resolver;
 mod workflow_importer;
-mod worktree_ops;
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -104,13 +95,12 @@ use axum::extract::{
     FromRequest, Json, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade,
 };
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::Router;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
 use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{error, info, warn};
@@ -123,17 +113,34 @@ use crate::node_spawn::SpawnContext;
 use crate::node_spawn::{spawn_node, SpawnDeps, SpawnOutcome};
 use crate::run_command::run_command;
 use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
+pub use pdo_platform::adapters::cli::{PageAction, ServiceAction};
+use pdo_platform::adapters::http::OriginHint;
+pub use pdo_platform::domain::service_health::ServiceHealthOverride;
+use pdo_workspace::adapters::git::fetch::fetch_all_remotes;
+use pdo_workspace::adapters::git::repository::{
+    count_commits, last_fetch_at, ref_exists, upstream_of, validate_source_branch,
+    validate_target_repo,
+};
+
+// The workspace context's modules the rest of this crate reads, until each
+// context migrates onto the workspace's ports.
+pub(crate) use pdo_session::domain::pane::ReattachOutcome;
+pub(crate) use pdo_workspace::adapters::fs::provisioner;
+pub(crate) use pdo_workspace::adapters::git::manifest;
+pub(crate) use pdo_workspace::adapters::git::worktrees;
 #[cfg(test)]
-use crate::worktree_ops::{commit_and_merge_sub_worktree, create_sub_worktree};
-use crate::worktree_ops::{
+use pdo_workspace::adapters::git::worktrees::create_sub_worktree;
+use pdo_workspace::adapters::git::worktrees::{
     create_secondary_snapshot, create_worktree, remove_secondary_snapshot, rev_parse_verified,
     secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
     worktree_dir_for_run, worktree_has_tracked_changes,
 };
-pub(crate) use pdo_session::domain::pane::ReattachOutcome;
+pub(crate) use pdo_workspace::adapters::sqlite as workspace_db;
+use pdo_workspace::domain::branches::FetchError;
+pub(crate) use pdo_workspace::domain::provisioning;
 
-const DEFAULT_PORT: u16 = 5172;
-const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
+const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
+const DEFAULT_DAEMON_URL: &str = pdo_platform::domain::service_unit::DEFAULT_DAEMON_URL;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Embed)]
@@ -299,16 +306,6 @@ pub enum ReviewAction {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum PageAction {
-    /// Bind a name to a directory and serve it under `/pages/<name>/`.
-    Mount { name: String, directory: PathBuf },
-    /// List active page mounts.
-    List,
-    /// Remove a page mount.
-    Unmount { name: String },
-}
-
-#[derive(Subcommand, Debug)]
 // `Create` carries every creation flag, `Wait` two — a clap enum is parsed once
 // per process, so the size skew buys nothing to box away (it is already boxed
 // behind `Commands::Run`).
@@ -429,28 +426,9 @@ pub enum DocsAction {
     },
 }
 
-#[derive(Subcommand, Debug)]
-pub enum ServiceAction {
-    /// Generate + enable the service unit so the daemon starts at boot / survives logout.
-    Install {
-        /// Address the service daemon listens on. Omit to keep the default.
-        #[arg(long)]
-        bind: Option<IpAddr>,
-        #[arg(short, long, env = "PDO_PORT", default_value_t = DEFAULT_PORT)]
-        port: u16,
-        /// Print the unit file + the exact commands, make NO changes. Still
-        /// probes the port so the conflict guard is visible, but performs zero
-        /// writes and runs no `systemctl`.
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Stop, disable, and remove the service unit.
-    Uninstall,
-    /// Show the service unit's status (`systemctl --user status pdo` / launchd equivalent).
-    Status,
-}
-
 struct AppState {
+    /// The workspace context: Projets, repositories, provisioning, git.
+    workspace: Arc<pdo_workspace::application::Workspace>,
     db: sqlx::SqlitePool,
     event_tx: broadcast::Sender<event_log::Event>,
     pipeline_tx: broadcast::Sender<serde_json::Value>,
@@ -460,7 +438,6 @@ struct AppState {
     /// Serializes page-mount mutations with Run archival. The guard stays held
     /// until `RunArchived` lands, so a verified node session cannot insert a
     /// run-owned mount after cleanup removed that Run's mounts.
-    page_mount_lock: tokio::sync::Mutex<()>,
     /// Serializes admission so the slot check is atomic check-and-reserve. A
     /// spawn holds this from the moment it counts live sessions until it has
     /// appended the reservation event (`NodeStarted` / `NodeWaiting`). Without
@@ -529,9 +506,6 @@ struct AppState {
     node_done_tail_gate: Arc<tokio::sync::Notify>,
     /// Whether the tail gate is currently armed. See [`Self::node_done_tail_gate`].
     node_done_tail_gate_armed: Arc<std::sync::atomic::AtomicBool>,
-    /// Persistent-service health, computed once at boot and cached so the polled
-    /// `GET /sessions` pays zero subprocess cost per request.
-    service_health: Arc<ServiceHealth>,
     /// TTL cache (~10 s) of the Docker availability probe, surfaced as
     /// `sandbox_docker` on `GET /settings`. Lazily refreshed when stale — not
     /// boot-once (a user may start Docker mid-session) and not per-fetch (a `PUT`
@@ -559,35 +533,9 @@ struct AppState {
     /// Whether the boot pass may refresh the fetched tier. See
     /// [`DaemonConfig::price_refresh_at_boot`].
     price_refresh_at_boot: bool,
-    /// Release-source URL override (#697); `None` →
-    /// [`update_check::RELEASE_SOURCE_URL_DEFAULT`]. Seeded per-daemon so a layer-3
-    /// test points the check at its own fixture, never at GitHub.
-    update_source_url: Option<String>,
-    /// The last version-check result (#697), mirrored on disk at
-    /// [`update_check::cache_path`]. `None` = never checked. Every read of
-    /// `GET /update` and the status-bar badge comes from HERE, never from a live
-    /// request: a page load costs no egress.
-    update_cache: tokio::sync::Mutex<Option<update_check::UpdateCache>>,
-    /// Serialises version checks; a second concurrent "Check now" answers 409.
-    update_check_lock: tokio::sync::Mutex<()>,
-    /// The release list behind « What's new » (#698), memoised per latest version:
-    /// `(latest_version, releases)`. Opening the modal twice on the same latest
-    /// costs one request to the release source, not two.
-    update_releases: tokio::sync::Mutex<Option<(String, Vec<update_check::Release>)>>,
-    /// Executor command override (#699, [`update_executor::EXECUTOR_OVERRIDE_ENV`]):
-    /// `Some(cmd)` runs `<cmd> <script>` instead of `sh <script>`, so a layer-3 test
-    /// exercises the whole apply path against a fixture that never touches brew.
-    update_executor_override: Option<String>,
-    /// Forced installation method (#699, [`update_executor::INSTALL_METHOD_OVERRIDE_ENV`]).
-    /// `None` → detected from the binary path and the installer receipt.
-    install_method_override: Option<update_check::InstallMethod>,
-    /// Forced supervision (#699); `None` → detected from the supervisor's env.
-    supervision_override: Option<update_check::Supervision>,
-    /// The command line an unsupervised relaunch runs, argv form (#699). `pdo daemon`
-    /// records its stable exe + `daemon --port <port>`; `None` → derived at apply time.
-    relaunch_command: Option<Vec<String>>,
-    /// Serialises `POST /update/apply`: one executor at a time.
-    update_apply_lock: tokio::sync::Mutex<()>,
+    /// The `platform` context (page mounts, update, audit journal, service
+    /// health), wired by the composition root.
+    platform: Arc<pdo_platform::Platform>,
     /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`,
     /// parsed + normalised at boot. Shared by BOTH WS upgrades (`/ws` here and
     /// `/sessions/{id}/pty` in the session context) via
@@ -867,47 +815,6 @@ struct TriggerListEntry {
     #[serde(flatten)]
     trigger: trigger_store::Trigger,
     effective_repo: String,
-}
-
-/// Body of `POST /projects` — the only path that creates a `projects` row from a
-/// name. Membership and the harness are attached afterwards, so a Projet begins
-/// empty and harness-less.
-#[derive(Deserialize)]
-struct CreateProjectRequest {
-    name: String,
-}
-
-/// Body of `PATCH /projects/{id}` — rename the Projet and/or (re)set the harness
-/// it carries. `harness` is a double-`Option`: **absent** leaves it untouched,
-/// `null` clears it, a string sets it. An empty string clears it too — don't let
-/// `Some("")` through as a harness name.
-#[derive(Deserialize)]
-struct PatchProjectRequest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    harness: Option<Option<String>>,
-    /// The Projet's `AgentChoice` (ADR-0057), same double-`Option` shape as
-    /// `harness`. `null` clears it, falling through to the legacy `harness` field
-    /// and then to the instance tier.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    agent_choice: Option<Option<pdo_harness::agent_choice::AgentChoice>>,
-    /// The Projet's skills selection (#669), replaced wholesale: absent leaves it,
-    /// a list sets it, an empty list clears it (flat — the empty list IS the clear).
-    #[serde(default)]
-    skills: Option<Vec<crate::skill_selection::SkillRef>>,
-    /// The Projet's `auto_fail` (ADR-0049), same double-`Option` shape as
-    /// `harness`; `null` states no preference.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    auto_fail: Option<Option<bool>>,
-}
-
-/// Body of `POST` / `DELETE /projects/{id}/members` — one member path, compared
-/// **verbatim** (ADR-0033). The attach enforces at-most-one membership before any
-/// write; a path owned by another Projet is a 409 naming the owner.
-#[derive(Deserialize)]
-struct ProjectMemberRequest {
-    path: String,
 }
 
 #[derive(Serialize, TS)]
@@ -1792,7 +1699,7 @@ pub fn run_review(action: ReviewAction) -> Result<()> {
             )))
             .send()
             .context("failed to reach daemon")?;
-            let body: serde_json::Value = page_cli_response(response, "list review comments")?;
+            let body: serde_json::Value = daemon_cli_response(response, "list review comments")?;
             println!("{}", serde_json::to_string_pretty(&body)?);
         }
         ReviewAction::Reply {
@@ -1812,7 +1719,7 @@ pub fn run_review(action: ReviewAction) -> Result<()> {
             .json(&serde_json::json!({ "text": text, "resolved": resolved }))
             .send()
             .context("failed to reach daemon")?;
-            let body: serde_json::Value = page_cli_response(response, "reply to review comment")?;
+            let body: serde_json::Value = daemon_cli_response(response, "reply to review comment")?;
             let author = body["author"].as_str().unwrap_or("agent");
             let outcome = body["outcome"].as_str().unwrap_or("replied");
             let what = match outcome {
@@ -1826,60 +1733,7 @@ pub fn run_review(action: ReviewAction) -> Result<()> {
     Ok(())
 }
 
-pub fn run_page(action: PageAction) -> Result<()> {
-    let url = cli_daemon_url();
-    let client = reqwest::blocking::Client::new();
-    let session = session_env_claim();
-    let with_identity = |request: reqwest::blocking::RequestBuilder| {
-        let mut request = request.header("X-PDO-Actor", "cli");
-        if let Some((run_id, node_id)) = &session {
-            request = request
-                .header(SESSION_RUN_HEADER, run_id)
-                .header(SESSION_NODE_HEADER, node_id);
-        }
-        request
-    };
-
-    match action {
-        PageAction::Mount { name, directory } => {
-            let directory = directory
-                .canonicalize()
-                .with_context(|| format!("cannot resolve {}", directory.display()))?;
-            let response = with_identity(client.post(format!("{url}/pages")))
-                .json(&serde_json::json!({ "name": name, "directory": directory }))
-                .send()
-                .context("failed to reach daemon")?;
-            let mount: page_mount::PageMount = page_cli_response(response, "mount page")?;
-            println!(
-                "Mounted {} at /pages/{}/ from {}.",
-                mount.name, mount.name, mount.directory
-            );
-        }
-        PageAction::List => {
-            let response = with_identity(client.get(format!("{url}/pages")))
-                .send()
-                .context("failed to reach daemon")?;
-            let mounts: Vec<page_mount::PageMount> = page_cli_response(response, "list pages")?;
-            for mount in mounts {
-                let run = mount.run_id.as_deref().unwrap_or("-");
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    mount.name, mount.directory, run, mount.created_at
-                );
-            }
-        }
-        PageAction::Unmount { name } => {
-            let response = with_identity(client.delete(format!("{url}/pages/{name}")))
-                .send()
-                .context("failed to reach daemon")?;
-            let _: page_mount::PageMount = page_cli_response(response, "unmount page")?;
-            println!("Unmounted {name}.");
-        }
-    }
-    Ok(())
-}
-
-fn page_cli_response<T: serde::de::DeserializeOwned>(
+fn daemon_cli_response<T: serde::de::DeserializeOwned>(
     response: reqwest::blocking::Response,
     operation: &str,
 ) -> Result<T> {
@@ -2211,558 +2065,6 @@ pub fn run_reap(
     Ok(())
 }
 
-/// What the port-conflict pre-flight probe found on `127.0.0.1:<port>`.
-///
-/// Two daemons can never share a port (`pdo daemon` binds with no `SO_REUSEADDR`
-/// / retry — an `EADDRINUSE` propagates and the process exits), so an enabled unit
-/// colliding with an already-bound port would crash-loop under
-/// `Restart=on-failure`. Classify the port so `install` refuses loudly or degrades
-/// to idempotent instead of enabling a doomed unit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PortState {
-    /// Nothing is listening — safe to enable + start.
-    Free,
-    /// A PDO daemon already answers `GET /sessions` here. Treat idempotently:
-    /// ensure the unit is written + enabled for boot, but do NOT `--now` a
-    /// competing instance onto the bound port.
-    PdoDaemon,
-    /// Something else holds the port (a non-PDO process, or a bare `pdo daemon`
-    /// that isn't answering yet). Refuse: enabling would crash-loop.
-    Foreign,
-}
-
-/// Outcome of a spawned side-effect command (`systemctl` / `loginctl` / `launchctl`).
-struct CmdOutcome {
-    success: bool,
-    stdout: String,
-    stderr: String,
-}
-
-/// Injectable side-effect surface for `pdo service`.
-///
-/// Everything non-hermetic (exe/cwd/home/user lookup, port probe, file write,
-/// command spawn) must funnel through this trait, so the suite never runs a real
-/// `systemctl`/`launchctl` or touches `~/.config` (ADR-0004: host-mutating acts
-/// stay out of the automated suite).
-trait ServiceEnv {
-    /// Absolute path of the running `pdo` binary — the unit's `ExecStart`.
-    fn current_exe(&self) -> Result<PathBuf>;
-    /// Current working directory — the unit's `WorkingDirectory` (→ repo_root).
-    fn current_dir(&self) -> Result<PathBuf>;
-    /// Directory holding `node`, or `None` when it isn't on `$PATH`.
-    fn node_dir(&self) -> Option<PathBuf>;
-    /// `$XDG_CONFIG_HOME`-resolved config home (systemd unit lives under it).
-    fn config_home(&self) -> Result<PathBuf>;
-    /// `$HOME` — launchd plist location + the plist's `HOME` env var.
-    fn home(&self) -> Result<PathBuf>;
-    /// `$USER` — for `loginctl enable-linger $USER`.
-    fn user(&self) -> Result<String>;
-    /// Classify the address the service daemon would occupy.
-    fn probe_port(&self, addr: SocketAddr) -> PortState;
-    /// Write a unit/plist file, creating parent dirs.
-    fn write_file(&self, path: &Path, contents: &str) -> Result<()>;
-    /// Remove a unit/plist file (uninstall); Ok if already absent.
-    fn remove_file(&self, path: &Path) -> Result<()>;
-    /// Run a side-effect command, capturing its outcome.
-    fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome>;
-}
-
-/// Production [`ServiceEnv`]: real env lookups, real TCP probe, real
-/// `std::process::Command`.
-struct RealServiceEnv;
-
-impl ServiceEnv for RealServiceEnv {
-    fn current_exe(&self) -> Result<PathBuf> {
-        // #699: the unit points at the binary by the path the user INVOKED —
-        // Homebrew's stable `bin/pdo` symlink, never the `Cellar/pdo/<version>/`
-        // target it resolves to, which `brew upgrade` deletes (and with it the
-        // service's ability to restart). Resolved path only as a fallback.
-        if let Some(stable) = update_check::stable_exe_path_from_env() {
-            return Ok(stable);
-        }
-        let exe = std::env::current_exe().context("failed to determine current executable path")?;
-        Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
-    }
-
-    fn current_dir(&self) -> Result<PathBuf> {
-        std::env::current_dir().context("failed to determine current directory")
-    }
-
-    fn node_dir(&self) -> Option<PathBuf> {
-        service_unit::resolve_node_dir()
-    }
-
-    fn config_home(&self) -> Result<PathBuf> {
-        service_unit::resolve_config_home().context(
-            "neither $XDG_CONFIG_HOME nor $HOME is set: cannot locate the systemd user dir",
-        )
-    }
-
-    fn home(&self) -> Result<PathBuf> {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .context("$HOME is not set")
-    }
-
-    fn user(&self) -> Result<String> {
-        std::env::var("USER").context("$USER is not set")
-    }
-
-    fn probe_port(&self, addr: SocketAddr) -> PortState {
-        use std::net::TcpStream;
-        if std::net::TcpListener::bind(addr).is_ok() {
-            return PortState::Free;
-        }
-        let addr = connect_addr(addr);
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_err() {
-            return PortState::Foreign;
-        }
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(800))
-            .build()
-        {
-            Ok(c) => c,
-            Err(_) => return PortState::Foreign,
-        };
-        match client.get(format!("http://{addr}/sessions")).send() {
-            Ok(resp) if resp.status().is_success() => {
-                let body = resp.text().unwrap_or_default();
-                // The `/sessions` payload carries `cap` + `version` — markers no
-                // random service would emit together.
-                if body.contains("\"cap\"") && body.contains("\"version\"") {
-                    PortState::PdoDaemon
-                } else {
-                    PortState::Foreign
-                }
-            }
-            _ => PortState::Foreign,
-        }
-    }
-
-    fn write_file(&self, path: &Path, contents: &str) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        std::fs::write(path, contents)
-            .with_context(|| format!("failed to write {}", path.display()))
-    }
-
-    fn remove_file(&self, path: &Path) -> Result<()> {
-        match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
-        }
-    }
-
-    fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome> {
-        let output = std::process::Command::new(program)
-            .args(args)
-            .output()
-            .with_context(|| format!("failed to spawn `{program}`"))?;
-        Ok(CmdOutcome {
-            success: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
-    }
-}
-
-pub fn run_service(action: ServiceAction) -> Result<()> {
-    let mut out = std::io::stdout();
-    run_service_with(action, &RealServiceEnv, &mut out)
-}
-
-/// Core `pdo service` logic against an injected [`ServiceEnv`] and output sink —
-/// the seam that lets tests assert argv sequence and written bytes without
-/// touching real systemd or `~/.config`.
-fn run_service_with(
-    action: ServiceAction,
-    env: &dyn ServiceEnv,
-    out: &mut dyn std::io::Write,
-) -> Result<()> {
-    let is_macos = cfg!(target_os = "macos");
-    match action {
-        ServiceAction::Install {
-            bind,
-            port,
-            dry_run,
-        } => {
-            if is_macos {
-                service_install_launchd(env, out, bind, port, dry_run)
-            } else {
-                service_install_systemd(env, out, bind, port, dry_run)
-            }
-        }
-        ServiceAction::Uninstall => {
-            if is_macos {
-                service_uninstall_launchd(env, out)
-            } else {
-                service_uninstall_systemd(env, out)
-            }
-        }
-        ServiceAction::Status => {
-            if is_macos {
-                service_status_launchd(env, out)
-            } else {
-                service_status_systemd(env, out)
-            }
-        }
-    }
-}
-
-/// Human-readable description of a port-probe result, for the plan / guard output.
-fn service_addr(bind: Option<IpAddr>, port: u16) -> SocketAddr {
-    SocketAddr::new(bind.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), port)
-}
-
-fn connect_addr(listen_addr: SocketAddr) -> SocketAddr {
-    match listen_addr.ip() {
-        IpAddr::V4(ip) if ip.is_unspecified() => {
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), listen_addr.port())
-        }
-        IpAddr::V6(ip) if ip.is_unspecified() => {
-            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), listen_addr.port())
-        }
-        _ => listen_addr,
-    }
-}
-
-fn describe_port_state(addr: SocketAddr, state: &PortState) -> String {
-    match state {
-        PortState::Free => format!("{addr} is free"),
-        PortState::PdoDaemon => {
-            format!(
-                "a PDO daemon is already answering on {}",
-                connect_addr(addr)
-            )
-        }
-        PortState::Foreign => {
-            format!("{addr} is already bound by a non-PDO process (or a not-yet-ready daemon)")
-        }
-    }
-}
-
-/// `pdo service install` — Linux systemd `--user` path.
-fn service_install_systemd(
-    env: &dyn ServiceEnv,
-    out: &mut dyn std::io::Write,
-    bind: Option<IpAddr>,
-    port: u16,
-    dry_run: bool,
-) -> Result<()> {
-    let exe = env.current_exe()?;
-    let working_dir = env.current_dir()?;
-    let node_dir = env.node_dir();
-    let path_env = service_unit::build_path_env(&exe, node_dir.as_deref());
-    let user = env.user().unwrap_or_else(|_| "$USER".to_string());
-    let config_home = env.config_home()?;
-    let unit_path = service_unit::systemd_unit_path(&config_home);
-    let unit = service_unit::render_systemd_unit(&exe, port, bind, &working_dir, &path_env);
-    let service_addr = service_addr(bind, port);
-    let state = env.probe_port(service_addr);
-
-    // `--now` only when the port is free: never start a competitor onto a port a
-    // PDO daemon already owns.
-    let start_now = state == PortState::Free;
-    let enable_args: &[&str] = if start_now {
-        &["--user", "enable", "--now", "pdo"]
-    } else {
-        &["--user", "enable", "pdo"]
-    };
-
-    if node_dir.is_none() {
-        writeln!(
-            out,
-            "# WARNING: `node` was not found on $PATH — the unit's Environment=PATH \
-             will lack the node dir and the service daemon may fail to spawn claude/node."
-        )?;
-    }
-
-    if dry_run {
-        writeln!(out, "# pdo service install --dry-run (NO changes made)")?;
-        writeln!(out, "# {}", describe_port_state(service_addr, &state))?;
-        if state == PortState::Foreign {
-            writeln!(
-                out,
-                "# WARNING: a real install would REFUSE — enabling a unit here would \
-                 crash-loop on EADDRINUSE. Stop the process on port {port} or pass --port."
-            )?;
-        } else if state == PortState::PdoDaemon {
-            writeln!(
-                out,
-                "# NOTE: a PDO daemon already serves this port; a real install would enable \
-                 the unit for boot WITHOUT starting a competing instance (no --now)."
-            )?;
-        }
-        writeln!(out, "# --- unit file ({}) ---", unit_path.display())?;
-        write!(out, "{unit}")?;
-        writeln!(out, "# --- command plan ---")?;
-        writeln!(out, "#   write unit to {}", unit_path.display())?;
-        writeln!(out, "#   systemctl --user daemon-reload")?;
-        writeln!(out, "#   loginctl enable-linger {user}")?;
-        writeln!(out, "#   systemctl {}", enable_args.join(" "))?;
-        return Ok(());
-    }
-
-    if state == PortState::Foreign {
-        anyhow::bail!(
-            "refusing to install: {}. The enabled unit's daemon would crash-loop on \
-             EADDRINUSE (Restart=on-failure). Stop the process on port {port}, or install \
-             with a free --port.",
-            describe_port_state(service_addr, &state)
-        );
-    }
-    if state == PortState::PdoDaemon {
-        writeln!(
-            out,
-            "note: {} — enabling the unit for boot but NOT starting a competing instance.",
-            describe_port_state(service_addr, &state)
-        )?;
-    }
-
-    env.write_file(&unit_path, &unit)?;
-    writeln!(out, "wrote {}", unit_path.display())?;
-
-    run_checked(env, out, "systemctl", &["--user", "daemon-reload"])?;
-
-    // `enable-linger` lets the user's units run without a login. On a
-    // hardened/headless box it can fail — degrade with a hint, don't abort.
-    match env.run_cmd("loginctl", &["enable-linger", &user]) {
-        Ok(o) if o.success => writeln!(out, "loginctl enable-linger {user}: ok")?,
-        Ok(o) => writeln!(
-            out,
-            "warning: `loginctl enable-linger {user}` failed ({}). Run `sudo loginctl \
-             enable-linger {user}` so the daemon survives logout.",
-            o.stderr.trim()
-        )?,
-        Err(e) => writeln!(
-            out,
-            "warning: could not run loginctl ({e}). Run `sudo loginctl enable-linger {user}`."
-        )?,
-    }
-
-    run_checked(env, out, "systemctl", enable_args)?;
-
-    writeln!(
-        out,
-        "\nPDO service installed. The daemon will now start at boot and survive logout."
-    )?;
-    if !start_now {
-        writeln!(
-            out,
-            "It was enabled but not started (a daemon already owns port {port})."
-        )?;
-    }
-    Ok(())
-}
-
-/// `pdo service uninstall` — Linux systemd `--user` path. Leaves linger (it's
-/// user-global, not this unit's to revoke).
-fn service_uninstall_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
-    let config_home = env.config_home()?;
-    let unit_path = service_unit::systemd_unit_path(&config_home);
-
-    // Tolerate a non-zero exit (the unit may be absent) so uninstall is idempotent.
-    match env.run_cmd("systemctl", &["--user", "disable", "--now", "pdo"]) {
-        Ok(o) if o.success => writeln!(out, "systemctl --user disable --now pdo: ok")?,
-        Ok(o) => writeln!(
-            out,
-            "systemctl --user disable --now pdo: {} (continuing)",
-            o.stderr.trim()
-        )?,
-        Err(e) => writeln!(out, "warning: could not run systemctl ({e})")?,
-    }
-
-    env.remove_file(&unit_path)?;
-    writeln!(out, "removed {}", unit_path.display())?;
-
-    run_checked(env, out, "systemctl", &["--user", "daemon-reload"])?;
-    writeln!(
-        out,
-        "\nPDO service uninstalled (linger left intact — it is user-global)."
-    )?;
-    Ok(())
-}
-
-/// `pdo service status` — Linux. Read-only: prints the unit's status and never
-/// mutates state. A non-zero exit (inactive/missing unit) is not an error.
-fn service_status_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
-    match env.run_cmd("systemctl", &["--user", "--no-pager", "status", "pdo"]) {
-        Ok(o) => {
-            write!(out, "{}", o.stdout)?;
-            if !o.stderr.is_empty() {
-                write!(out, "{}", o.stderr)?;
-            }
-        }
-        Err(e) => writeln!(out, "could not run systemctl ({e})")?,
-    }
-    Ok(())
-}
-
-/// `pdo service install` — macOS launchd LaunchAgent path.
-/// **Best-effort / untested on the Linux CI box** (generation is golden-tested).
-fn service_install_launchd(
-    env: &dyn ServiceEnv,
-    out: &mut dyn std::io::Write,
-    bind: Option<IpAddr>,
-    port: u16,
-    dry_run: bool,
-) -> Result<()> {
-    let exe = env.current_exe()?;
-    let working_dir = env.current_dir()?;
-    let home = env.home()?;
-    let node_dir = env.node_dir();
-    let path_env = service_unit::build_path_env(&exe, node_dir.as_deref());
-    let plist_path = service_unit::launchd_plist_path(&home);
-    let plist =
-        service_unit::render_launchd_plist(&exe, port, bind, &working_dir, &home, &path_env);
-    let service_addr = service_addr(bind, port);
-    let state = env.probe_port(service_addr);
-    let label = service_unit::LAUNCHD_LABEL;
-
-    if node_dir.is_none() {
-        writeln!(
-            out,
-            "# WARNING: `node` was not found on $PATH — the plist's PATH will lack the \
-             node dir and the service daemon may fail to spawn claude/node."
-        )?;
-    }
-
-    if dry_run {
-        writeln!(out, "# pdo service install --dry-run (NO changes made)")?;
-        writeln!(out, "# {}", describe_port_state(service_addr, &state))?;
-        if state == PortState::Foreign {
-            writeln!(
-                out,
-                "# WARNING: a real install would REFUSE — the daemon would crash-loop on \
-                 EADDRINUSE. Free port {port} or pass --port."
-            )?;
-        }
-        writeln!(
-            out,
-            "# --- LaunchAgent plist ({}) ---",
-            plist_path.display()
-        )?;
-        write!(out, "{plist}")?;
-        writeln!(out, "# --- command plan ---")?;
-        writeln!(out, "#   write plist to {}", plist_path.display())?;
-        writeln!(
-            out,
-            "#   launchctl bootout gui/$(id -u)/{label}  (ignore error)"
-        )?;
-        writeln!(
-            out,
-            "#   launchctl bootstrap gui/$(id -u) {}",
-            plist_path.display()
-        )?;
-        writeln!(
-            out,
-            "# NOTE: LaunchAgents do NOT run while logged out (no linger equivalent); \
-             true headless needs a root LaunchDaemon (deferred, ADR-0019)."
-        )?;
-        return Ok(());
-    }
-
-    if state == PortState::Foreign {
-        anyhow::bail!(
-            "refusing to install: {}. Free the port or pass a free --port.",
-            describe_port_state(service_addr, &state)
-        );
-    }
-
-    env.write_file(&plist_path, &plist)?;
-    writeln!(out, "wrote {}", plist_path.display())?;
-
-    let uid = env
-        .run_cmd("id", &["-u"])
-        .map(|o| o.stdout.trim().to_string());
-    let uid = match uid {
-        Ok(u) if !u.is_empty() => u,
-        _ => anyhow::bail!("could not determine uid via `id -u`"),
-    };
-    let target = format!("gui/{uid}");
-    let bootout_target = format!("{target}/{label}");
-    // Bootstrap is not idempotent — bootout first (ignore error), then bootstrap.
-    let _ = env.run_cmd("launchctl", &["bootout", &bootout_target]);
-    run_checked(
-        env,
-        out,
-        "launchctl",
-        &["bootstrap", &target, &plist_path.to_string_lossy()],
-    )?;
-    writeln!(
-        out,
-        "\nPDO LaunchAgent installed (best-effort). Note: it will NOT run while logged out."
-    )?;
-    Ok(())
-}
-
-/// `pdo service uninstall` — macOS launchd path.
-fn service_uninstall_launchd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
-    let home = env.home()?;
-    let plist_path = service_unit::launchd_plist_path(&home);
-    let label = service_unit::LAUNCHD_LABEL;
-
-    let uid = env
-        .run_cmd("id", &["-u"])
-        .map(|o| o.stdout.trim().to_string())
-        .unwrap_or_default();
-    if !uid.is_empty() {
-        let _ = env.run_cmd("launchctl", &["bootout", &format!("gui/{uid}/{label}")]);
-    }
-    env.remove_file(&plist_path)?;
-    writeln!(out, "removed {}", plist_path.display())?;
-    writeln!(out, "\nPDO LaunchAgent uninstalled.")?;
-    Ok(())
-}
-
-/// `pdo service status` — macOS launchd path. Read-only.
-fn service_status_launchd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
-    let label = service_unit::LAUNCHD_LABEL;
-    let uid = env
-        .run_cmd("id", &["-u"])
-        .map(|o| o.stdout.trim().to_string())
-        .unwrap_or_default();
-    let target = format!("gui/{uid}/{label}");
-    match env.run_cmd("launchctl", &["print", &target]) {
-        Ok(o) => {
-            write!(out, "{}", o.stdout)?;
-            if !o.stderr.is_empty() {
-                write!(out, "{}", o.stderr)?;
-            }
-        }
-        Err(e) => writeln!(out, "could not run launchctl ({e})")?,
-    }
-    Ok(())
-}
-
-/// Run a side-effect command, printing a one-line trace, and fail the install if
-/// it returns non-zero (the steps that MUST succeed: `daemon-reload`,
-/// `enable`, `bootstrap`).
-fn run_checked(
-    env: &dyn ServiceEnv,
-    out: &mut dyn std::io::Write,
-    program: &str,
-    args: &[&str],
-) -> Result<()> {
-    let o = env
-        .run_cmd(program, args)
-        .with_context(|| format!("failed to run `{program} {}`", args.join(" ")))?;
-    if o.success {
-        writeln!(out, "{program} {}: ok", args.join(" "))?;
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "`{program} {}` failed: {}{}",
-            args.join(" "),
-            o.stdout.trim(),
-            o.stderr.trim()
-        )
-    }
-}
-
 pub struct DaemonHandle {
     pub addr: SocketAddr,
     pub task: tokio::task::JoinHandle<Result<()>>,
@@ -2802,8 +2104,7 @@ impl DaemonHandle {
     /// cache if not yet done, then checks ONLY if the setting is on and the cache is
     /// older than the interval — production's own gates, driven deterministically.
     pub async fn run_update_check_tick(&self) {
-        load_update_cache(&self.state).await;
-        periodic_update_check(&self.state).await;
+        self.state.platform.check_for_update().periodic().await;
     }
 
     /// Warm the harness-catalogue cache synchronously. Production spawns it
@@ -2935,125 +2236,6 @@ impl DaemonHandle {
     }
 }
 
-/// Persistent-service health for the status bar (ADR-0019).
-///
-/// Computed **once at daemon boot** and cached in [`AppState`], so the polled
-/// `GET /sessions` pays zero subprocess cost per request. Serialized as the
-/// `service` object on `/sessions`.
-///
-/// **Accepted staleness:** install happens out-of-process, so a daemon already
-/// running when the service is installed keeps a stale value until it restarts.
-/// The normal flow is install-then-run (ADR-0019).
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
-struct ServiceHealth {
-    /// How THIS process was launched, best-effort from env markers:
-    /// `"systemd"` | `"launchd"` | `"none"`. A diagnostic hint, not a guarantee
-    /// (the markers are inheritable).
-    supervisor: String,
-    /// Will a daemon come back after reboot? `Some(true)` when an enabled `pdo`
-    /// unit is present, `Some(false)` when reachable-but-ephemeral, `None`
-    /// (serialized `null`) when unknown/unsupported (non-Linux, no systemd,
-    /// spawn failure, or timeout). **Never** surfaced as an error — the UI
-    /// silences on `true`/`null` and shows an amber `ephemeral` pill only on
-    /// `false`.
-    persistent: Option<bool>,
-}
-
-/// Forced service-health observation, armed by `PDO_SERVICE_HEALTH`. Makes the
-/// `ephemeral` status-bar branch demonstrable in a real browser on a box where an
-/// enabled `pdo.service` already exists, without touching the real unit.
-#[derive(Debug, Clone, Copy)]
-pub enum ServiceHealthOverride {
-    Persistent,
-    Ephemeral,
-    Unknown,
-}
-
-impl ServiceHealthOverride {
-    fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "persistent" => Some(Self::Persistent),
-            "ephemeral" => Some(Self::Ephemeral),
-            "unknown" => Some(Self::Unknown),
-            _ => None,
-        }
-    }
-
-    fn into_health(self) -> ServiceHealth {
-        let persistent = match self {
-            Self::Persistent => Some(true),
-            Self::Ephemeral => Some(false),
-            Self::Unknown => None,
-        };
-        ServiceHealth {
-            supervisor: detect_supervisor().to_string(),
-            persistent,
-        }
-    }
-}
-
-fn compute_service_health() -> ServiceHealth {
-    ServiceHealth {
-        supervisor: detect_supervisor().to_string(),
-        persistent: detect_persistent(),
-    }
-}
-
-/// Best-effort detection of how this process was launched. Env markers only —
-/// treat as a hint, since they are inheritable.
-fn detect_supervisor() -> &'static str {
-    if std::env::var_os("XPC_SERVICE_NAME").is_some() {
-        "launchd"
-    } else if std::env::var_os("INVOCATION_ID").is_some()
-        || std::env::var_os("NOTIFY_SOCKET").is_some()
-        || std::env::var_os("JOURNAL_STREAM").is_some()
-    {
-        "systemd"
-    } else {
-        "none"
-    }
-}
-
-/// Is an enabled `pdo` service unit present — "will a daemon come back after
-/// reboot?" `None` when unknown/unsupported; never an error.
-fn detect_persistent() -> Option<bool> {
-    if cfg!(target_os = "macos") {
-        let home = std::env::var_os("HOME").map(PathBuf::from)?;
-        return Some(service_unit::launchd_plist_path(&home).exists());
-    }
-    detect_systemd_enabled()
-}
-
-/// `systemctl --user is-enabled pdo.service`, timeout-guarded.
-///
-/// Runs on a detached thread so a wedged systemctl can't block boot past ~1s; on
-/// timeout / spawn failure it degrades to `None`, never an error.
-fn detect_systemd_enabled() -> Option<bool> {
-    use std::sync::mpsc;
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let out = std::process::Command::new("systemctl")
-            .args(["--user", "is-enabled", service_unit::SYSTEMD_UNIT_NAME])
-            .output();
-        let _ = tx.send(out);
-    });
-    match rx.recv_timeout(Duration::from_secs(1)) {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            match stdout.trim() {
-                "enabled" | "enabled-runtime" => Some(true),
-                // Any other reported state (disabled/static/masked/not-found…)
-                // means it will NOT come back → ephemeral.
-                s if !s.is_empty() => Some(false),
-                _ => None,
-            }
-        }
-        // Systemctl absent (spawn error) or wedged (timeout) → unknown.
-        Ok(Err(_)) | Err(_) => None,
-    }
-}
-
 /// Boot-time configuration for a daemon instance.
 ///
 /// Carries the knobs that must be decided *per daemon* rather than read from
@@ -3101,7 +2283,7 @@ pub struct DaemonConfig {
     /// `PDO_PRICE_SYNC=off|0|""` disarms it.
     pub price_refresh_at_boot: bool,
     /// Release-source URL for the version check (#697); `None` →
-    /// [`update_check::RELEASE_SOURCE_URL_DEFAULT`]. `Some(url)` points the check at
+    /// the shipped GitHub Releases endpoint. `Some(url)` points the check at
     /// a local fixture, same seam as [`Self::price_source_url`].
     pub update_source_url: Option<String>,
     /// Run the boot check + 6 h periodic version-check loop. `true` in production;
@@ -3113,10 +2295,10 @@ pub struct DaemonConfig {
     /// Env: `PDO_UPDATE_EXECUTOR`. Tests point it at a fixture script.
     pub update_executor_override: Option<String>,
     /// Forced installation method (#699); `None` → detected. Env: `PDO_INSTALL_METHOD`.
-    pub install_method_override: Option<update_check::InstallMethod>,
+    pub install_method_override: Option<pdo_platform::domain::install::InstallMethod>,
     /// Forced supervision (#699); `None` → detected from `INVOCATION_ID` /
     /// `XPC_SERVICE_NAME`. No env seam: a test sets those variables on a real binary.
-    pub supervision_override: Option<update_check::Supervision>,
+    pub supervision_override: Option<pdo_platform::domain::install::Supervision>,
     /// The daemon's own command line for an unsupervised relaunch (#699), argv form.
     /// `daemon_cli_config` fills it; `None` → `<stable exe> daemon --port <bound port>`.
     pub relaunch_command: Option<Vec<String>>,
@@ -3167,6 +2349,27 @@ pub struct DaemonConfig {
     /// (`pdo::serve`) puts the `identify` middleware there, at the head of every
     /// request; `None` serves the router as built.
     pub router_layer: Option<RouterLayer>,
+    /// The Autorisation d'opération every use case of an extracted context asks
+    /// before a mutation. The composition root hands in its registered
+    /// extensions; the default has none, and allows everything.
+    pub extension_host: ExtensionHostHandle,
+}
+
+/// The extension host the daemon's use cases ask (see
+/// [`DaemonConfig::extension_host`]).
+#[derive(Clone)]
+pub struct ExtensionHostHandle(pub Arc<dyn pdo_kernel::extension_host::ExtensionHost>);
+
+impl Default for ExtensionHostHandle {
+    fn default() -> Self {
+        Self(Arc::new(pdo_kernel::extension_host::NoExtensions))
+    }
+}
+
+impl std::fmt::Debug for ExtensionHostHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExtensionHostHandle(..)")
+    }
 }
 
 /// What the composition root plugs into the legacy daemon at boot (see
@@ -3267,17 +2470,16 @@ impl DaemonConfig {
             // Core daemon behaviour; the `update_check` SETTING is the user's
             // off switch, not an env var. Only the layer-3 literals opt out.
             run_update_check_loop: true,
-            update_executor_override: std::env::var(update_executor::EXECUTOR_OVERRIDE_ENV)
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
-            install_method_override: std::env::var(update_executor::INSTALL_METHOD_OVERRIDE_ENV)
-                .ok()
-                .and_then(|v| match v.trim() {
-                    "homebrew" => Some(update_check::InstallMethod::Homebrew),
-                    "script" => Some(update_check::InstallMethod::Script),
-                    "unknown" => Some(update_check::InstallMethod::Unknown),
-                    _ => None,
-                }),
+            update_executor_override: std::env::var(
+                pdo_platform::adapters::detached_executor::EXECUTOR_OVERRIDE_ENV,
+            )
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
+            install_method_override: std::env::var(
+                pdo_platform::adapters::detached_executor::INSTALL_METHOD_OVERRIDE_ENV,
+            )
+            .ok()
+            .and_then(|v| pdo_platform::domain::install::InstallMethod::parse(&v)),
             supervision_override: None,
             relaunch_command: None,
             // No env seam: the loop is core daemon behaviour; only the layer-3
@@ -3296,6 +2498,7 @@ impl DaemonConfig {
                 .unwrap_or_default(),
 
             router_layer: None,
+            extension_host: ExtensionHostHandle::default(),
         }
     }
 }
@@ -3316,13 +2519,10 @@ pub fn advertised_url(bound_addr: std::net::SocketAddr) -> String {
     }
 }
 
-pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle> {
-    serve_with_config(addr, repo_root, DaemonConfig::from_env()).await
-}
-
-/// Like [`serve`], but takes an explicit [`DaemonConfig`] instead of reading the
-/// environment. Tests use this to seed a per-daemon `tmux_cmd_override` without
-/// mutating process-global env.
+/// Start the legacy daemon with an explicit [`DaemonConfig`]. Its
+/// [`DaemonConfig::router_layer`] must carry the context wiring of the
+/// composition root (`pdo::serve`, `pdo::composed_router_layer`). Tests use this
+/// to seed a per-daemon `tmux_cmd_override` without mutating process-global env.
 pub async fn serve_with_config(
     addr: SocketAddr,
     repo_root: PathBuf,
@@ -3416,18 +2616,12 @@ pub async fn serve_with_config(
         .local_addr()
         .context("failed to read bound local addr")?;
 
-    // Computed ONCE at boot and cached in `AppState`, so `GET /sessions` never
-    // shells out per poll.
-    let service_health = Arc::new(match config.service_health_override {
-        Some(o) => o.into_health(),
-        None => compute_service_health(),
-    });
-
     // Captured before `config` is consumed into `AppState` below.
     let run_trigger_scheduler_loop = config.run_trigger_scheduler_loop;
     let run_update_check_loop = config.run_update_check_loop;
     let nested_daemon = config.nested_daemon;
     let router_layer = config.router_layer.clone();
+    let workspace = workspace_context(&db, &pipeline_tx, &repo_root, config.extension_host.0);
     let wire_contexts = router_layer
         .as_ref()
         .and_then(RouterLayer::contexts)
@@ -3440,8 +2634,19 @@ pub async fn serve_with_config(
     // into the state being built — hence the cyclic construction.
     let mut contexts_router: Option<Router> = None;
     let resources = ContextResourcesSeed {
+        db: db.clone(),
         repo_root: repo_root.clone(),
         port: bound_addr.port(),
+        home_root: config
+            .sandbox_home_override
+            .clone()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from)),
+        update_source_url: config.update_source_url.clone(),
+        update_executor_override: config.update_executor_override.clone(),
+        install_method_override: config.install_method_override,
+        supervision_override: config.supervision_override,
+        relaunch_command: config.relaunch_command.clone(),
+        service_health_override: config.service_health_override,
         tmux_cmd_override: config.tmux_cmd_override.clone(),
         allowed_ws_origins: config.allowed_ws_origins.clone(),
     };
@@ -3450,13 +2655,14 @@ pub async fn serve_with_config(
         let wired = wire_contexts(resources.into_resources(weak.clone()));
         contexts_router = Some(wired.router);
         AppState {
+            workspace,
+            platform: wired.platform,
             db,
             event_tx,
             pipeline_tx,
             repo_root,
             port: bound_addr.port(),
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes,
@@ -3474,7 +2680,6 @@ pub async fn serve_with_config(
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            service_health,
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -3482,19 +2687,15 @@ pub async fn serve_with_config(
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: config.price_source_url,
             price_refresh_at_boot: config.price_refresh_at_boot,
-            update_source_url: config.update_source_url,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: config.update_executor_override,
-            install_method_override: config.install_method_override,
-            supervision_override: config.supervision_override,
-            relaunch_command: config.relaunch_command,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: config.allowed_ws_origins,
             session: wired.session,
         }
     });
+    state
+        .platform
+        .init()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to create the platform tables: {e}"))?;
 
     // A nested daemon suppresses every AUTOMATIC cleanup pathway, so a Tester or
     // Implementer that accidentally runs `pdo daemon` can't trigger reaper-based
@@ -3656,24 +2857,7 @@ pub async fn serve_with_config(
     // Version check (#697): load the on-disk cache so `GET /update` answers from
     // it immediately, then boot check + 6 h loop — detached, like the price
     // refresh, so a slow GitHub never delays the first `accept()`.
-    {
-        let update_state = state.clone();
-        tokio::spawn(async move {
-            load_update_cache(&update_state).await;
-            if !run_update_check_loop {
-                return;
-            }
-            let mut ticker = tokio::time::interval(update_check::UPDATE_CHECK_INTERVAL);
-            loop {
-                ticker.tick().await; // fires immediately: this IS the boot check
-                let s = update_state.clone();
-                run_isolated("update check", async move {
-                    periodic_update_check(&s).await;
-                })
-                .await;
-            }
-        });
-    }
+    state.platform.start_update_checks(run_update_check_loop);
 
     // Warm the harness-catalogue cache at boot, detached for the same reason as
     // the price refresh: probing every harness's `--help`/`--version` must not
@@ -3722,480 +2906,9 @@ pub fn daemon_cli_config(bind: Option<IpAddr>, port: u16) -> DaemonConfig {
     // #699: the command line an unsupervised update relaunches — the STABLE binary
     // path (Homebrew's `bin/pdo`, not the Cellar target `brew upgrade` deletes) and
     // the same port, whether it came from `--port` or `PDO_PORT`.
-    config.relaunch_command =
-        update_check::invoked_exe_path().map(|exe| daemon_relaunch_command(&exe, bind, port));
+    config.relaunch_command = pdo_platform::adapters::host_installation::invoked_exe_path()
+        .map(|exe| daemon_relaunch_command(&exe, bind, port));
     config
-}
-
-#[derive(Deserialize)]
-struct RepoPathQuery {
-    path: String,
-}
-
-async fn repos_branches(Query(q): Query<RepoPathQuery>) -> Response {
-    let repo = match validate_target_repo(&q.path) {
-        Ok(p) => p,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-    match branch_list(&repo) {
-        Ok(list) => Json(list).into_response(),
-        Err(msg) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response(),
-    }
-}
-
-/// Fetch every remote of the target repo, then answer the refreshed list (#802).
-///
-/// A failed fetch is **200 with `fetch_error` set**, not an HTTP error: the list is
-/// still the truth on disk, launching is still possible, and a 4xx/5xx would push the
-/// client into an error path for a repo that is merely offline (ADR-0070 §1). The only
-/// non-200 here is a target repo that is not a repo at all.
-async fn repos_fetch(Query(q): Query<RepoPathQuery>) -> Response {
-    let repo = match validate_target_repo(&q.path) {
-        Ok(p) => p,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-    let fetch_error = fetch_all_remotes(&repo).await;
-    match branch_list(&repo) {
-        Ok(mut list) => {
-            list.fetch_error = fetch_error;
-            Json(list).into_response()
-        }
-        Err(msg) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-struct FastForwardBody {
-    /// The LOCAL branch to advance. A remote-tracking ref is refused up front — it
-    /// is the upstream, there is nothing to move.
-    branch: String,
-}
-
-/// Fast-forward a local branch onto its tracking branch (#803, ADR-0070 §2).
-///
-/// **200** with what moved plus the refreshed list; **409** with the named refusal
-/// AND the same refreshed list, so the two benign races (`up_to_date`, `no_upstream`)
-/// let the client flip to the corresponding #802 state instead of painting an error.
-/// A 400 is reserved for a request that never made sense: a repo that is not a repo,
-/// an empty branch, a branch that is not a local one.
-async fn repos_fast_forward(
-    Query(q): Query<RepoPathQuery>,
-    Json(body): Json<FastForwardBody>,
-) -> Response {
-    let repo = match validate_target_repo(&q.path) {
-        Ok(p) => p,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-    let branch = body.branch.trim();
-    if branch.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "branch is required" })),
-        )
-            .into_response();
-    }
-    if !ref_exists(&repo, &format!("refs/heads/{branch}")) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": format!("'{branch}' is not a local branch of {}", repo.display())
-            })),
-        )
-            .into_response();
-    }
-
-    let outcome = fast_forward_branch(&repo, branch);
-    // Read the list AFTER the attempt, in both directions: a 200 must answer with
-    // the branch already moved, and a 409 with whatever the race actually left.
-    let list = match branch_list(&repo) {
-        Ok(list) => list,
-        Err(msg) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-    match outcome {
-        Ok(fast_forward) => Json(FastForwardOk { fast_forward, list }).into_response(),
-        Err(refusal) => (
-            StatusCode::CONFLICT,
-            Json(FastForwardRefusedBody { refusal, list }),
-        )
-            .into_response(),
-    }
-}
-
-async fn repos_validate(Query(q): Query<RepoPathQuery>) -> Response {
-    match validate_target_repo(&q.path) {
-        Ok(_) => Json(serde_json::json!({ "valid": true })).into_response(),
-        Err(msg) => Json(serde_json::json!({ "valid": false, "error": msg })).into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-struct CreateRepoRequest {
-    parent: String,
-    name: String,
-    #[serde(default)]
-    files: Vec<repo_scaffold::ScaffoldFile>,
-}
-
-/// POST /repos/create — make a git repository at `<parent>/<name>` (#824).
-///
-/// A generic verb with no tour vocabulary in it (ADR-0071 §3): the *First run*
-/// tour calls it with `/tmp` + `pdo-tutorial`, and that is the only thing tying
-/// the two together. Idempotent on an existing repository, refuses by name on an
-/// existing non-repository — see `repo_scaffold` for the three outcomes.
-///
-/// Deliberately **not** recorded in recent repositories: that list is built from
-/// `run_started` events, and a scaffolded repo has never run anything. The user
-/// browses to it once, and it joins the recents the moment a Run uses it.
-async fn repos_create(Json(req): Json<CreateRepoRequest>) -> Response {
-    match repo_scaffold::create_repo(&req.parent, &req.name, &req.files) {
-        Ok(outcome) => Json(serde_json::json!({
-            "path": outcome.path.to_string_lossy(),
-            "created": outcome.created,
-        }))
-        .into_response(),
-        Err(msg) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response(),
-    }
-}
-
-async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
-    let rows: Result<Vec<(String,)>, _> = sqlx::query_as(
-        "SELECT payload FROM events \
-         WHERE kind = 'run_started' AND payload IS NOT NULL \
-         ORDER BY ts DESC",
-    )
-    .fetch_all(&state.db)
-    .await;
-
-    match rows {
-        Ok(rows) => {
-            let mut seen = std::collections::HashSet::new();
-            let mut repos = Vec::new();
-            for (payload_str,) in &rows {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(payload_str) {
-                    if let Some(repo) = val["target_repo"].as_str() {
-                        if seen.insert(repo.to_string()) {
-                            repos.push(repo.to_string());
-                            if repos.len() >= 5 {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            Json(repos).into_response()
-        }
-        Err(e) => {
-            error!("failed to query recent repos: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to query recent repos" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-// GET /fs/browse — read-only, single-level filesystem explorer.
-//
-// Exposure, stated exactly: the daemon binds `0.0.0.0`, and the LAN reachability is
-// assumed by the owner, so this surface has no authentication and any LAN peer can
-// enumerate, one level per request, whatever the daemon's uid can traverse. It emits
-// names, a path and three booleans — never file CONTENTS, and it has no read path at
-// all. Don't invent a partial mitigation here: it would give a false sense of a
-// boundary and break the staging-profile picker, whose entries live in `$HOME`
-// dotfiles. The right boundary is authenticating the whole HTTP surface.
-
-/// Listing cap, applied **per genre** with directories claiming the budget first.
-/// Don't make it one shared budget: files would starve directories, and 50 000 files
-/// beside two subdirectories in `~/Downloads` would yield zero navigable rows.
-const BROWSE_CAP: usize = 1000;
-
-#[derive(Deserialize)]
-struct BrowseQuery {
-    /// Absolute directory to list. Omitted → the default chain (`$HOME → repo_root →
-    /// /`). The frontend only ever sends absolute paths; a relative one is a caller
-    /// bug (→ 400).
-    #[serde(default)]
-    path: Option<String>,
-    /// List regular files alongside the navigable directories.
-    ///
-    /// **Wire vocabulary is strict**: axum's `Query` goes through `serde_urlencoded` →
-    /// `str::parse::<bool>()`, so only the lowercase literals `true` / `false` are
-    /// accepted. A valueless `?files`, `?files=1` or `?files=TRUE` is a `400`, NOT a
-    /// silent `false`.
-    #[serde(default)]
-    files: bool,
-    /// Show dot-entries (`.claude`, `.pdo`, …). Needed by the Dockerfile picker, whose
-    /// default lives at `~/.pdo/sandbox/Dockerfile`. Same strict wire vocabulary as
-    /// [`BrowseQuery::files`].
-    #[serde(default)]
-    hidden: bool,
-}
-
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct BrowseEntry {
-    name: String,
-    /// `canonical_dir.join(name)` — NOT re-canonicalized, so a symlinked child keeps
-    /// the path the user clicked rather than collapsing to its target.
-    path: String,
-    /// Cheap `.git`-presence hint (NOT a `git rev-parse` subprocess). A hint, not a
-    /// gate: every folder stays pickable and the authoritative validation runs at
-    /// selection time via `/repos/validate` (ADR-0001 — sharp tool, not safe tool).
-    /// Hard `false` for a file, where it has no meaning.
-    is_git_repo: bool,
-    is_symlink: bool,
-    /// `true` for a directory (symlinks FOLLOWED), `false` for a regular file. Always
-    /// emitted, including under the dirs-only default where it is invariably `true`,
-    /// so an entry's shape never depends on the query.
-    is_dir: bool,
-}
-
-/// What a `read_dir` child is, for the purposes of this listing.
-#[derive(Debug, PartialEq, Eq)]
-enum EntryKind {
-    Dir,
-    File,
-    /// Not offered in either mode.
-    Skip,
-}
-
-/// Classify one child. `meta` is [`std::fs::metadata`] (which **follows** symlinks);
-/// `None` means unclassifiable (broken link, `ELOOP`) → `Skip`.
-///
-/// Special files (fifo / socket / device) `Skip` in both modes: nothing downstream can
-/// consume one — every consumer resolves the picked path, so the row would be
-/// unpickable by construction, and a fifo handed to `ensure_image` blocks forever.
-fn classify_browse_entry(meta: Option<&std::fs::Metadata>, include_files: bool) -> EntryKind {
-    match meta {
-        None => EntryKind::Skip,
-        Some(m) if m.is_dir() => EntryKind::Dir,
-        Some(m) if m.is_file() && include_files => EntryKind::File,
-        _ => EntryKind::Skip,
-    }
-}
-
-/// Merge the two genre buckets: each sorted case-insensitively, directories first,
-/// **directories claim the budget first**, total `<= cap`.
-///
-/// `truncated` is `total > cap`, which is why the caller collects at most `cap + 1` per
-/// genre — a `(cap + 1)`th survivor is all `truncated` needs.
-fn merge_browse_entries(
-    mut dirs: Vec<BrowseEntry>,
-    mut files: Vec<BrowseEntry>,
-    cap: usize,
-) -> (Vec<BrowseEntry>, bool) {
-    dirs.sort_by_key(|a| a.name.to_lowercase());
-    files.sort_by_key(|a| a.name.to_lowercase());
-    let truncated = dirs.len() + files.len() > cap;
-    dirs.truncate(cap);
-    files.truncate(cap - dirs.len());
-    dirs.extend(files);
-    (dirs, truncated)
-}
-
-/// Why the requested browse root could not be resolved into a listable directory.
-#[derive(Debug, PartialEq, Eq)]
-enum BrowseRootError {
-    /// `path` was provided but is not absolute (caller bug → 400).
-    Relative,
-    /// No directory in the default chain (`$HOME → repo_root → /`) exists (→ 500).
-    NoDefault,
-}
-
-/// First existing directory in `[home, repo_root, "/"]`. `None` only when none of the
-/// three is an existing directory.
-fn default_chain(home: Option<&Path>, repo_root: &Path) -> Option<PathBuf> {
-    if let Some(h) = home {
-        if h.is_dir() {
-            return Some(h.to_path_buf());
-        }
-    }
-    if repo_root.is_dir() {
-        return Some(repo_root.to_path_buf());
-    }
-    let root = Path::new("/");
-    if root.is_dir() {
-        return Some(root.to_path_buf());
-    }
-    None
-}
-
-/// Resolve the directory to list. `home`/`repo_root` are injected rather than read
-/// from the real env, so it stays deterministic under cargo's parallel test threads.
-fn resolve_browse_root(
-    path: Option<&str>,
-    home: Option<&Path>,
-    repo_root: &Path,
-) -> Result<PathBuf, BrowseRootError> {
-    match path {
-        Some(p) => {
-            let pb = PathBuf::from(p);
-            if !pb.is_absolute() {
-                return Err(BrowseRootError::Relative);
-            }
-            if pb.is_dir() {
-                Ok(pb)
-            } else if pb.is_file() {
-                Ok(pb.parent().map(Path::to_path_buf).unwrap_or(pb))
-            } else {
-                // Non-existent (e.g. a stale/half-typed combobox value) → clamp to the
-                // default so the explorer opens gracefully instead of erroring.
-                default_chain(home, repo_root).ok_or(BrowseRootError::NoDefault)
-            }
-        }
-        None => default_chain(home, repo_root).ok_or(BrowseRootError::NoDefault),
-    }
-}
-
-/// Human label for the in-body `error` when a navigable directory can't be listed.
-fn browse_io_label(e: &std::io::Error) -> &'static str {
-    match e.kind() {
-        std::io::ErrorKind::PermissionDenied => "permission denied",
-        std::io::ErrorKind::NotFound => "not found",
-        _ => "could not read directory",
-    }
-}
-
-async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQuery>) -> Response {
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
-    let resolved = match resolve_browse_root(q.path.as_deref(), home.as_deref(), &state.repo_root) {
-        Ok(p) => p,
-        Err(BrowseRootError::Relative) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "path must be an absolute path" })),
-            )
-                .into_response();
-        }
-        Err(BrowseRootError::NoDefault) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": "could not resolve a default browse directory"
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    // Canonicalize the requested dir ONLY. Don't re-canonicalize children: that
-    // collapses symlinks and shows a path the user didn't click. On failure fall back
-    // to the un-canonicalized path so `read_dir` below produces a clean in-body error
-    // rather than a 500.
-    let canonical_dir = std::fs::canonicalize(&resolved).unwrap_or(resolved);
-    let parent = canonical_dir
-        .parent()
-        .map(|p| p.to_string_lossy().into_owned());
-
-    let read = match std::fs::read_dir(&canonical_dir) {
-        Ok(rd) => rd,
-        Err(e) => {
-            // Navigable-but-unlistable (EACCES, etc.): 200 with an in-body error and
-            // the breadcrumb preserved, so the user is never stranded.
-            return Json(serde_json::json!({
-                "path": canonical_dir.to_string_lossy(),
-                "parent": parent,
-                "entries": Vec::<BrowseEntry>::new(),
-                "truncated": false,
-                "error": format!("{}: {}", browse_io_label(&e), canonical_dir.display()),
-            }))
-            .into_response();
-        }
-    };
-
-    // Each bucket collects at most `BROWSE_CAP + 1`: a (CAP+1)th survivor is all
-    // `truncated` needs.
-    let mut dirs: Vec<BrowseEntry> = Vec::new();
-    let mut files: Vec<BrowseEntry> = Vec::new();
-    for child in read {
-        let child = match child {
-            Ok(c) => c,
-            Err(_) => continue, // skip an entry that can't be stat'd mid-listing
-        };
-        let name = child.file_name().to_string_lossy().into_owned();
-        if !q.hidden && name.starts_with('.') {
-            continue; // dot-entries hidden unless `?hidden=true`; `.`/`..` never yielded
-        }
-        let is_symlink = child.file_type().map(|t| t.is_symlink()).unwrap_or(false);
-        // Don't use `DirEntry::metadata()`: it lstat's, so every symlinked dir would
-        // report as non-dir. The free `std::fs::metadata` FOLLOWS the link.
-        let meta = std::fs::metadata(child.path()).ok();
-        let kind = classify_browse_entry(meta.as_ref(), q.files);
-        if kind == EntryKind::Skip {
-            continue;
-        }
-        let is_dir = kind == EntryKind::Dir;
-        let entry_path = canonical_dir.join(&name);
-        let is_git_repo = is_dir && entry_path.join(".git").exists();
-        let entry = BrowseEntry {
-            name,
-            path: entry_path.to_string_lossy().into_owned(),
-            is_git_repo,
-            is_symlink,
-            is_dir,
-        };
-        let bucket = if is_dir { &mut dirs } else { &mut files };
-        if bucket.len() <= BROWSE_CAP {
-            bucket.push(entry);
-        }
-        // The `!q.files` arm is load-bearing: without it, `files` staying empty under
-        // the defaults means a directory with > CAP subdirectories is walked in full
-        // instead of stopping at CAP+1.
-        if dirs.len() > BROWSE_CAP && (!q.files || files.len() > BROWSE_CAP) {
-            break;
-        }
-    }
-
-    // Known limitation: when the early-stop fires, the collected CAP+1 entries are in
-    // arbitrary `read_dir` order, so the sort keeps the alphabetically-first CAP *of an
-    // arbitrary sample*. Inherent to capping without a global sort.
-    let (entries, truncated) = merge_browse_entries(dirs, files, BROWSE_CAP);
-
-    Json(serde_json::json!({
-        "path": canonical_dir.to_string_lossy(),
-        "parent": parent,
-        "entries": entries,
-        "truncated": truncated,
-        "error": serde_json::Value::Null,
-    }))
-    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -4413,7 +3126,7 @@ async fn guard_test(
 
 async fn create_trigger(
     State(state): State<Arc<AppState>>,
-    actor: audit_log::Actor,
+    actor: OriginHint,
     Json(req): Json<CreateTriggerRequest>,
 ) -> Response {
     if req.name.trim().is_empty() {
@@ -4565,18 +3278,18 @@ async fn create_trigger(
                 "trigger_id": trigger.id,
             }));
             // Audit AFTER the row committed (ADR-0044 §2·B — never over-report).
-            audit_log::record_best_effort(
-                &state.db,
-                audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "trigger.created".to_string(),
                     target_kind: Some("trigger".to_string()),
                     target_id: Some(trigger.id.clone()),
                     before: None,
                     after: serde_json::to_value(&trigger).ok(),
-                },
-            )
-            .await;
+                })
+                .await;
             (StatusCode::CREATED, Json(trigger)).into_response()
         }
         Err(e) => {
@@ -4626,7 +3339,7 @@ async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
 async fn delete_trigger(
     State(state): State<Arc<AppState>>,
     AxumPath(trigger_id): AxumPath<String>,
-    actor: audit_log::Actor,
+    actor: OriginHint,
 ) -> Response {
     // Read the "before" snapshot HERE, before the row is gone: `delete` returns
     // `bool`, never the row, so a later read would leave the audit a dead UUID.
@@ -4640,18 +3353,18 @@ async fn delete_trigger(
                 "type": "trigger_deleted",
                 "trigger_id": trigger_id,
             }));
-            audit_log::record_best_effort(
-                &state.db,
-                audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "trigger.deleted".to_string(),
                     target_kind: Some("trigger".to_string()),
                     target_id: Some(trigger_id.clone()),
                     before: before.as_ref().and_then(|t| serde_json::to_value(t).ok()),
                     after: None,
-                },
-            )
-            .await;
+                })
+                .await;
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => (
@@ -4760,7 +3473,7 @@ struct PatchTriggerRequest {
 async fn patch_trigger(
     State(state): State<Arc<AppState>>,
     AxumPath(trigger_id): AxumPath<String>,
-    actor: audit_log::Actor,
+    actor: OriginHint,
     Json(req): Json<PatchTriggerRequest>,
 ) -> Response {
     let existing = match trigger_store::get(&state.db, &trigger_id).await {
@@ -5005,18 +3718,18 @@ async fn patch_trigger(
             // Persist BOTH snapshots (ADR-0044 §2·D): "a patch happened" cannot tell
             // a manual `enabled:false` from a cron edit unless before→after is on the
             // row.
-            audit_log::record_best_effort(
-                &state.db,
-                audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "trigger.updated".to_string(),
                     target_kind: Some("trigger".to_string()),
                     target_id: Some(trigger_id.clone()),
                     before: serde_json::to_value(&existing).ok(),
                     after: serde_json::to_value(&updated).ok(),
-                },
-            )
-            .await;
+                })
+                .await;
             Json(updated).into_response()
         }
         _ => (
@@ -5041,47 +3754,6 @@ async fn list_trigger_fires(
             )
                 .into_response()
         }
-    }
-}
-
-/// `GET /audit` — the out-of-Run audit feed (ADR-0044). All filters are OPTIONAL;
-/// with none, a global newest-first feed. `from`/`to` bound a half-open
-/// `[from, to)` ISO-8601 window.
-#[derive(Debug, Deserialize)]
-struct AuditQuery {
-    #[serde(default)]
-    from: Option<String>,
-    #[serde(default)]
-    to: Option<String>,
-    #[serde(default)]
-    target_kind: Option<String>,
-    #[serde(default)]
-    target_id: Option<String>,
-    #[serde(default = "default_audit_limit")]
-    limit: i64,
-}
-
-fn default_audit_limit() -> i64 {
-    200
-}
-
-async fn get_audit(State(state): State<Arc<AppState>>, Query(q): Query<AuditQuery>) -> Response {
-    match audit_log::list(
-        &state.db,
-        q.from.as_deref(),
-        q.to.as_deref(),
-        q.target_kind.as_deref(),
-        q.target_id.as_deref(),
-        q.limit,
-    )
-    .await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("audit list: {e}") })),
-        )
-            .into_response(),
     }
 }
 
@@ -5220,14 +3892,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(create_run).route_layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .route("/runs", get(list_runs))
-        .route("/pages", get(list_page_mounts).post(create_page_mount))
-        .route("/pages/", get(list_page_mounts))
-        .route(
-            "/pages/{name}",
-            get(redirect_page_mount).delete(delete_page_mount),
-        )
-        .route("/pages/{name}/", get(serve_page_mount_root))
-        .route("/pages/{name}/{*path}", get(serve_page_mount_file))
         // Static path — must stay declared before `/runs/{run_id}`.
         .route("/runs/reapable", get(list_reapable_runs))
         .route("/runs/{run_id}", get(get_run).delete(forget_run))
@@ -5316,21 +3980,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Static segment beside `/library/pipelines`; the `/library` vite proxy
         // prefix already covers it (no vite proxy edit).
         .route("/library/import", post(import_library_pipeline))
-        .route("/repos/branches", get(repos_branches))
-        // #802/ADR-0070: the ONE place the daemon talks to a remote, and only on a
-        // human intention (form opened, repo changed, sync clicked). Read-only:
-        // fetch + prune, never a push, a merge or a rebase.
-        .route("/repos/fetch", post(repos_fetch))
-        .route("/repos/fast-forward", post(repos_fast_forward))
-        .route("/repos/validate", get(repos_validate))
-        // #824 — create a repository from a parent + a name + initial files. The
-        // only write-a-new-repo verb in the crate; knows nothing about tours.
-        .route("/repos/create", post(repos_create))
-        .route("/repos/recent", get(repos_recent))
-        .route("/repos/provisioning/preview", post(preview_provisioning))
-        // Filesystem explorer — not repo-specific (it also serves the settings
-        // Dockerfile picker), hence `/fs` rather than `/repos/browse`.
-        .route("/fs/browse", get(fs_browse))
         .route("/triggers", get(list_triggers).post(create_trigger))
         .route("/triggers/health", get(triggers_health))
         // Dry-run a guard command with no side effects — the opposite pole of "Run
@@ -5344,10 +3993,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         // {effective, source, stored, env, default} view; `PUT` writes the stored
         // tier, with fail-fast validation.
         .route("/settings", get(get_settings).put(put_settings))
-        .route(
-            "/settings/provisioning",
-            get(get_instance_provisioning).put(put_instance_provisioning),
-        )
         // Staging profiles (ADR-0031 §2-§7) sit UNDER `/settings` as a routing
         // decision only. It is NOT a claim about the schema: profiles are ROWS, not
         // an {effective, source, stored, env, default} knob, and they must NOT be
@@ -5355,11 +4000,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         //
         // Price sync (ADR-0034) — the ONLY route in the crate that reaches the network.
         .route("/settings/cost-prices/sync", post(sync_cost_prices))
-        .route("/update", get(get_update_status))
-        .route("/update/check", post(check_update_now))
-        .route("/update/changelog", get(get_update_changelog))
-        .route("/update/apply", post(apply_update))
-        .route("/update/attempts/{id}/log", get(get_update_attempt_log))
         .route(
             "/settings/agent-profiles",
             get(list_agent_profiles).post(create_agent_profile),
@@ -5461,23 +4101,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/stats/absorptions/member",
             axum::routing::delete(stats_absorption::delete_absorption_member),
         )
-        // Out-of-Run audit feed (ADR-0044).
-        .route("/audit", get(get_audit))
-        // Projets (ADR-0046) — the group-header pencil's CRUD and the middle tier of
-        // the harness axis.
-        .route("/projects", get(list_projects).post(create_project))
-        .route(
-            "/projects/{project_id}",
-            get(get_project).patch(patch_project).delete(delete_project),
-        )
-        .route(
-            "/projects/{project_id}/members",
-            post(add_project_member).delete(remove_project_member),
-        )
-        .route(
-            "/projects/{project_id}/provisioning",
-            get(get_project_provisioning).put(put_project_provisioning),
-        )
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -5486,728 +4109,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Manual "Run now" — a first-class fire.
         .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
-        .with_state(state)
-}
-
-#[derive(Deserialize)]
-struct ProvisioningPreviewRequest {
-    repository: String,
-    #[serde(default = "default_provisioning_git_ref")]
-    git_ref: String,
-    scope: provisioning::ProvisioningScope,
-    #[serde(default)]
-    rules: provisioning::ProvisioningRules,
-    #[serde(default)]
-    inherited: Option<Vec<provisioning::ScopedRules>>,
-}
-
-fn default_provisioning_git_ref() -> String {
-    "HEAD".to_string()
-}
-
-#[derive(Deserialize)]
-struct CreatePageMountRequest {
-    name: String,
-    directory: PathBuf,
-}
-
-async fn list_page_mounts(State(state): State<Arc<AppState>>) -> Response {
-    match page_mount::list(&state.db).await {
-        Ok(mounts) => Json(mounts).into_response(),
-        Err(error) => {
-            error!("failed to list page mounts: {error}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "page mount storage error" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-async fn create_page_mount(
-    State(state): State<Arc<AppState>>,
-    actor: audit_log::Actor,
-    headers: HeaderMap,
-    Json(request): Json<CreatePageMountRequest>,
-) -> Response {
-    let _guard = state.page_mount_lock.lock().await;
-    let session = session_claim_from_headers(&headers);
-    if let Some(claim) = &session {
-        if let Err((status, body)) = verify_session_claim(&state, claim).await {
-            return (status, Json(body)).into_response();
-        }
-    }
-
-    let mount = match page_mount::create(
-        &state.db,
-        &request.name,
-        &request.directory,
-        session.as_ref().map(|claim| claim.run_id.as_str()),
-    )
-    .await
-    {
-        Ok(mount) => mount,
-        Err(page_mount::MountError::Invalid(message)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": message })),
-            )
-                .into_response()
-        }
-        Err(page_mount::MountError::Duplicate(name)) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("page mount `{name}` is already mounted")
-                })),
-            )
-                .into_response()
-        }
-        Err(page_mount::MountError::Database(error)) => {
-            error!("failed to create page mount: {error}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "page mount storage error" })),
-            )
-                .into_response();
-        }
-    };
-
-    if let Err(error) = record_page_mount_mutation(
-        &state,
-        actor,
-        session.as_ref(),
-        "page_mount.mounted",
-        None,
-        Some(serde_json::json!(mount)),
-    )
-    .await
-    {
-        if let Err(rollback_error) = page_mount::remove(&state.db, &mount.name).await {
-            error!(
-                "failed to roll back page mount {} after event error: {rollback_error}",
-                mount.name
-            );
-        }
-        error!("failed to record page mount event: {error:#}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "page mount event log error" })),
+        .with_state(state.clone())
+        .merge(
+            pdo_workspace::adapters::http::router::<LegacyProjectSettings>(state.workspace.clone()),
         )
-            .into_response();
-    }
-    (StatusCode::CREATED, Json(mount)).into_response()
-}
-
-async fn delete_page_mount(
-    State(state): State<Arc<AppState>>,
-    actor: audit_log::Actor,
-    headers: HeaderMap,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    let _guard = state.page_mount_lock.lock().await;
-    let session = session_claim_from_headers(&headers);
-    if let Some(claim) = &session {
-        if let Err((status, body)) = verify_session_claim(&state, claim).await {
-            return (status, Json(body)).into_response();
-        }
-    }
-
-    let mount = match page_mount::remove(&state.db, &name).await {
-        Ok(Some(mount)) => mount,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("page mount `{name}` not found") })),
-            )
-                .into_response()
-        }
-        Err(error) => {
-            error!("failed to remove page mount: {error}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "page mount storage error" })),
-            )
-                .into_response();
-        }
-    };
-
-    if let Err(error) = record_page_mount_mutation(
-        &state,
-        actor,
-        session.as_ref(),
-        "page_mount.unmounted",
-        Some(serde_json::json!(mount)),
-        None,
-    )
-    .await
-    {
-        if let Err(rollback_error) = page_mount::restore(&state.db, &mount).await {
-            error!(
-                "failed to restore page mount {} after event error: {rollback_error}",
-                mount.name
-            );
-        }
-        error!("failed to record page unmount event: {error:#}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "page mount event log error" })),
-        )
-            .into_response();
-    }
-    Json(mount).into_response()
-}
-
-async fn record_page_mount_mutation(
-    state: &AppState,
-    actor: audit_log::Actor,
-    session: Option<&SessionClaim>,
-    action: &str,
-    before: Option<serde_json::Value>,
-    after: Option<serde_json::Value>,
-) -> Result<()> {
-    let mount = before.as_ref().or(after.as_ref());
-    let name = mount
-        .and_then(|value| value.get("name"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    if let Some(claim) = session {
-        append_event(
-            state,
-            &event_log::Event {
-                id: None,
-                run_id: claim.run_id.clone(),
-                ts: pdo_kernel::clock::now_iso(),
-                kind: event_log::EventKind::CommandIssued,
-                node_id: Some(claim.node_id.clone()),
-                iter: None,
-                payload: Some(serde_json::json!({
-                    "command": action,
-                    "page_mount": mount,
-                })),
-            },
-        )
-        .await?;
-    } else {
-        audit_log::record_best_effort(
-            &state.db,
-            audit_log::NewAuditEntry {
-                actor_hint: actor.as_hint().to_string(),
-                action: action.to_string(),
-                target_kind: Some("page_mount".to_string()),
-                target_id: Some(name.to_string()),
-                before,
-                after,
-            },
-        )
-        .await;
-    }
-    Ok(())
-}
-
-async fn redirect_page_mount(
-    State(state): State<Arc<AppState>>,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    match page_mount::get(&state.db, &name).await {
-        Ok(Some(_)) => Redirect::permanent(&format!("/pages/{name}/")).into_response(),
-        Ok(None) => page_not_found(),
-        Err(error) => {
-            error!("failed to resolve page mount: {error}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
-async fn serve_page_mount_root(
-    State(state): State<Arc<AppState>>,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    serve_page_mount(&state, &name, "").await
-}
-
-async fn serve_page_mount_file(
-    State(state): State<Arc<AppState>>,
-    AxumPath((name, path)): AxumPath<(String, String)>,
-) -> Response {
-    serve_page_mount(&state, &name, &path).await
-}
-
-async fn serve_page_mount(state: &AppState, name: &str, path: &str) -> Response {
-    let mount = match page_mount::get(&state.db, name).await {
-        Ok(Some(mount)) => mount,
-        Ok(None) => return page_not_found(),
-        Err(error) => {
-            error!("failed to resolve page mount: {error}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    let Some(opened) = page_mount::open_file(&mount, path) else {
-        return page_not_found();
-    };
-    let mime = mime_guess::from_path(&opened.mime_path).first_or_octet_stream();
-    let mut file = tokio::fs::File::from_std(opened.file);
-    let mut content = Vec::new();
-    if let Err(error) = file.read_to_end(&mut content).await {
-        error!("failed to read mounted page: {error}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, mime.as_ref())],
-        content,
-    )
-        .into_response()
-}
-
-fn page_not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        "page not found",
-    )
-        .into_response()
-}
-
-fn provisioning_rules_through_scope(
-    mut rules: Vec<provisioning::ScopedRules>,
-    scope: provisioning::ProvisioningScope,
-) -> Vec<provisioning::ScopedRules> {
-    rules.retain(|candidate| candidate.scope <= scope);
-    rules
-}
-
-async fn scoped_provisioning_rules(
-    db: &sqlx::SqlitePool,
-    repository: &str,
-    run: provisioning::ProvisioningRules,
-    node: provisioning::ProvisioningRules,
-) -> Result<Vec<provisioning::ScopedRules>, sqlx::Error> {
-    let mut rules = vec![provisioning::ScopedRules {
-        scope: provisioning::ProvisioningScope::Instance,
-        rules: provisioning::load(db, provisioning::ProvisioningScope::Instance, "instance")
-            .await?,
-    }];
-    if let Some(project) = project_store::owner_of(db, repository).await? {
-        rules.push(provisioning::ScopedRules {
-            scope: provisioning::ProvisioningScope::Project,
-            rules: provisioning::load(db, provisioning::ProvisioningScope::Project, &project.id)
-                .await?,
-        });
-    }
-    rules.push(provisioning::ScopedRules {
-        scope: provisioning::ProvisioningScope::Run,
-        rules: run,
-    });
-    if !node.is_empty() {
-        rules.push(provisioning::ScopedRules {
-            scope: provisioning::ProvisioningScope::IsolatedNode,
-            rules: node,
-        });
-    }
-    Ok(rules)
-}
-
-async fn preview_provisioning(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ProvisioningPreviewRequest>,
-) -> Response {
-    let repository = PathBuf::from(req.repository.trim());
-    if !repository.is_absolute() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "repository must be an absolute path" })),
-        )
-            .into_response();
-    }
-    let scoped = match req.inherited {
-        Some(rules) => rules,
-        None => match scoped_provisioning_rules(
-            &state.db,
-            req.repository.trim(),
-            provisioning::ProvisioningRules::default(),
-            provisioning::ProvisioningRules::default(),
-        )
-        .await
-        {
-            Ok(rules) => rules,
-            Err(e) => {
-                error!("failed to load provisioning rules: {e}");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "provisioning store unavailable" })),
-                )
-                    .into_response();
-            }
-        },
-    };
-    let mut scoped = provisioning_rules_through_scope(scoped, req.scope);
-    if let Some(current) = scoped.iter_mut().find(|rules| rules.scope == req.scope) {
-        current.rules = req.rules;
-    } else {
-        scoped.push(provisioning::ScopedRules {
-            scope: req.scope,
-            rules: req.rules,
-        });
-        scoped.sort_by_key(|rules| rules.scope);
-    }
-    match provisioning::resolve_at_git_ref(&repository, &scoped, &req.git_ref) {
-        Ok(plan) => (StatusCode::OK, Json(plan)).into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("{e:#}") })),
-        )
-            .into_response(),
-    }
-}
-
-async fn get_instance_provisioning(State(state): State<Arc<AppState>>) -> Response {
-    provisioning_response(
-        provisioning::load(
-            &state.db,
-            provisioning::ProvisioningScope::Instance,
-            "instance",
-        )
-        .await,
-    )
-}
-
-async fn put_instance_provisioning(
-    State(state): State<Arc<AppState>>,
-    Json(rules): Json<provisioning::ProvisioningRules>,
-) -> Response {
-    match provisioning::save(
-        &state.db,
-        provisioning::ProvisioningScope::Instance,
-        "instance",
-        &rules,
-    )
-    .await
-    {
-        Ok(()) => (StatusCode::OK, Json(rules)).into_response(),
-        Err(e) => {
-            error!("failed to save instance provisioning rules: {e}");
-            provisioning_store_error()
-        }
-    }
-}
-
-async fn get_project_provisioning(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-) -> Response {
-    provisioning_response(
-        provisioning::load(
-            &state.db,
-            provisioning::ProvisioningScope::Project,
-            &project_id,
-        )
-        .await,
-    )
-}
-
-async fn put_project_provisioning(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(rules): Json<provisioning::ProvisioningRules>,
-) -> Response {
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "project not found" })),
-            )
-                .into_response()
-        }
-        Err(_) => return provisioning_store_error(),
-    }
-    match provisioning::save(
-        &state.db,
-        provisioning::ProvisioningScope::Project,
-        &project_id,
-        &rules,
-    )
-    .await
-    {
-        Ok(()) => (StatusCode::OK, Json(rules)).into_response(),
-        Err(e) => {
-            error!("failed to save project provisioning rules: {e}");
-            provisioning_store_error()
-        }
-    }
-}
-
-fn provisioning_response(result: Result<provisioning::ProvisioningRules, sqlx::Error>) -> Response {
-    match result {
-        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
-        Err(e) => {
-            error!("failed to load provisioning rules: {e}");
-            provisioning_store_error()
-        }
-    }
-}
-
-fn provisioning_store_error() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": "provisioning store unavailable" })),
-    )
-        .into_response()
-}
-
-// A Projet is the middle tier of the harness axis and a named grouping of member
-// repo paths. Nothing is seeded: a row exists only once a human names a group or
-// attaches a setting (ADR-0046).
-
-fn project_list_error() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": "project store unavailable" })),
-    )
-        .into_response()
-}
-
-async fn list_projects(State(state): State<Arc<AppState>>) -> Response {
-    match project_store::list(&state.db).await {
-        Ok(projects) => Json(projects).into_response(),
-        Err(e) => {
-            error!("failed to list projects: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn get_project(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-) -> Response {
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(p)) => Json(p).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to load project {project_id}: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn create_project(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateProjectRequest>,
-) -> Response {
-    let name = req.name.trim();
-    if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "project name is required" })),
-        )
-            .into_response();
-    }
-    match project_store::create(&state.db, name).await {
-        Ok(project) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
-                "type": "project_changed",
-                "project_id": project.id,
-            }));
-            (StatusCode::CREATED, Json(project)).into_response()
-        }
-        Err(e) => {
-            error!("failed to create project: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn patch_project(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(req): Json<PatchProjectRequest>,
-) -> Response {
-    // A PATCH never materialises a Projet — only `POST /projects` does.
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to load project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    if let Some(name) = req.name.as_deref() {
-        let name = name.trim();
-        if name.is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "project name cannot be blank" })),
-            )
-                .into_response();
-        }
-        if let Err(e) = project_store::rename(&state.db, &project_id, name).await {
-            error!("failed to rename project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    // Double-`Option`: `Some(None)` and `Some(Some(""))` both clear; `Some(Some(h))`
-    // sets. `set_harness` normalises the empty string to NULL itself.
-    if let Some(harness) = req.harness {
-        let harness = harness.as_deref();
-        if let Err(e) = project_store::set_harness(&state.db, &project_id, harness).await {
-            error!("failed to set harness on project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    // Same double-`Option` semantics as `harness`: `Some(None)` clears the
-    // AgentChoice, falling through to the legacy `harness` field.
-    if let Some(agent_choice) = req.agent_choice {
-        if let Err(e) = project_store::set_agent_choice(&state.db, &project_id, agent_choice).await
-        {
-            error!("failed to set agent_choice on project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    // #669: replace the Projet's skills selection wholesale; an empty list clears.
-    if let Some(skills) = req.skills {
-        if let Err(e) = project_store::set_skills(&state.db, &project_id, skills).await {
-            error!("failed to set skills on project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    // Same double-`Option` semantics as `harness` (ADR-0049): `Some(None)` clears
-    // the preference, `Some(Some(b))` sets it.
-    if let Some(auto_fail) = req.auto_fail {
-        if let Err(e) = project_store::set_auto_fail(&state.db, &project_id, auto_fail).await {
-            error!("failed to set auto_fail on project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(p)) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
-                "type": "project_changed",
-                "project_id": project_id,
-            }));
-            Json(p).into_response()
-        }
-        Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to reload project {project_id}: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn delete_project(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-) -> Response {
-    match project_store::delete(&state.db, &project_id).await {
-        Ok(true) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
-                "type": "project_changed",
-                "project_id": project_id,
-            }));
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to delete project {project_id}: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn add_project_member(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(req): Json<ProjectMemberRequest>,
-) -> Response {
-    let path = req.path.trim();
-    if path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "member path is required" })),
-        )
-            .into_response();
-    }
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
-        Err(e) => {
-            error!("failed to load project {project_id}: {e}");
-            return project_list_error();
-        }
-    }
-    match project_store::add_member(&state.db, &project_id, path).await {
-        Ok(project_store::AddMember::Added) | Ok(project_store::AddMember::AlreadyMember) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
-                "type": "project_changed",
-                "project_id": project_id,
-            }));
-            match project_store::get(&state.db, &project_id).await {
-                Ok(Some(p)) => Json(p).into_response(),
-                _ => StatusCode::NO_CONTENT.into_response(),
-            }
-        }
-        // A path already owned by another Projet is refused BEFORE any effect, and
-        // the refusal NAMES the owner so the pencil can say which one.
-        Ok(project_store::AddMember::Refused {
-            owner_id,
-            owner_name,
-        }) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("path already belongs to project '{owner_name}'"),
-                "owner_id": owner_id,
-                "owner_name": owner_name,
-            })),
-        )
-            .into_response(),
-        Err(e) => {
-            error!("failed to add member to project {project_id}: {e}");
-            project_list_error()
-        }
-    }
-}
-
-async fn remove_project_member(
-    State(state): State<Arc<AppState>>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(req): Json<ProjectMemberRequest>,
-) -> Response {
-    let path = req.path.trim();
-    // Scope the detach to the named Projet: a path owned by a *different* Projet
-    // is left alone (idempotent no-op), so a stale client can't strip another
-    // Projet's member.
-    match project_store::owner_of(&state.db, path).await {
-        Ok(Some(owner)) if owner.id == project_id => {}
-        Ok(_) => {
-            return match project_store::get(&state.db, &project_id).await {
-                Ok(Some(p)) => Json(p).into_response(),
-                Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
-                Err(e) => {
-                    error!("failed to load project {project_id}: {e}");
-                    project_list_error()
-                }
-            };
-        }
-        Err(e) => {
-            error!("failed to resolve owner of {path}: {e}");
-            return project_list_error();
-        }
-    }
-    if let Err(e) = project_store::remove_member(&state.db, path).await {
-        error!("failed to remove member from project {project_id}: {e}");
-        return project_list_error();
-    }
-    let _ = state.pipeline_tx.send(serde_json::json!({
-        "type": "project_changed",
-        "project_id": project_id,
-    }));
-    match project_store::get(&state.db, &project_id).await {
-        Ok(Some(p)) => Json(p).into_response(),
-        _ => StatusCode::NO_CONTENT.into_response(),
-    }
 }
 
 async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
@@ -6265,23 +4170,13 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .await
         .context("failed to create sandbox_profiles table")?;
 
-    // The third journal (ADR-0044): out-of-Run config mutations, no `run_id`.
-    audit_log::init(db)
-        .await
-        .context("failed to create audit_log table")?;
-
-    page_mount::init(db)
-        .await
-        .context("failed to create page_mounts table")?;
+    // The audit journal (ADR-0044) and the page mounts belong to the platform
+    // context, which creates its own tables (`Platform::init`).
 
     // Materialised on demand — nothing seeded.
-    project_store::init(db)
+    pdo_workspace::adapters::sqlite::init(db)
         .await
-        .context("failed to create project tables")?;
-
-    provisioning::init(db)
-        .await
-        .context("failed to create provisioning rules table")?;
+        .context("failed to create project and provisioning rules tables")?;
 
     // Unlike `project_store`, this table IS seeded: the reserved `Default` profile
     // must exist on every instance, immediately.
@@ -10349,13 +8244,14 @@ async fn create_run_inner(
         return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
     }
 
-    let frozen_provisioning = match scoped_provisioning_rules(
-        &state.db,
-        &run_repo_root.to_string_lossy(),
-        req.provisioning.clone(),
-        provisioning::ProvisioningRules::default(),
-    )
-    .await
+    let frozen_provisioning = match state
+        .workspace
+        .scoped_provisioning_rules(
+            &run_repo_root.to_string_lossy(),
+            req.provisioning.clone(),
+            provisioning::ProvisioningRules::default(),
+        )
+        .await
     {
         Ok(rules) => rules,
         Err(e) => {
@@ -10366,28 +8262,31 @@ async fn create_run_inner(
             ));
         }
     };
-    let provisioning_plan =
-        match provisioning::resolve_at_git_ref(&run_repo_root, &frozen_provisioning, source_ref) {
-            Ok(plan) if plan.conflicts.is_empty() => plan,
-            Ok(plan) => {
-                let conflict = &plan.conflicts[0];
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    serde_json::json!({
-                        "error": format!(
-                            "mode conflict in {:?}: `{}` is declared in multiple modes",
-                            conflict.scope, conflict.relative_path
-                        )
-                    }),
-                ));
-            }
-            Err(e) => {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    serde_json::json!({ "error": format!("invalid provisioning recipe: {e:#}") }),
-                ))
-            }
-        };
+    let provisioning_plan = match pdo_workspace::adapters::fs::provisioner::resolve_at_git_ref(
+        &run_repo_root,
+        &frozen_provisioning,
+        source_ref,
+    ) {
+        Ok(plan) if plan.conflicts.is_empty() => plan,
+        Ok(plan) => {
+            let conflict = &plan.conflicts[0];
+            return Err((
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({
+                    "error": format!(
+                        "mode conflict in {:?}: `{}` is declared in multiple modes",
+                        conflict.scope, conflict.relative_path
+                    )
+                }),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({ "error": format!("invalid provisioning recipe: {e:#}") }),
+            ))
+        }
+    };
 
     let run_id = event_log::generate_run_id();
 
@@ -10396,7 +8295,10 @@ async fn create_run_inner(
     // displaces the LOC/diff base and sweeps in phantom line counts. A resolve
     // failure is non-fatal — it degrades to the `source_branch`/`HEAD` fallback
     // ladder at read time and must never block run creation.
-    let fork_sha = match crate::worktree_ops::rev_parse_verified(&run_repo_root, source_ref) {
+    let fork_sha = match pdo_workspace::adapters::git::worktrees::rev_parse_verified(
+        &run_repo_root,
+        source_ref,
+    ) {
         Ok(sha) => Some(sha),
         Err(e) => {
             warn!("could not resolve fork_sha for run {run_id} from {source_ref}: {e}");
@@ -10613,7 +8515,7 @@ async fn create_run_inner(
             .map(|c| c.skills)
             .unwrap_or_default();
         let project_skills =
-            crate::project_store::skills_for_path(&state.db, &run_repo_root.to_string_lossy())
+            crate::project_skills_for_path(&state.db, &run_repo_root.to_string_lossy())
                 .await
                 .unwrap_or_default();
         let bank = crate::skill_bank::snapshot_names(&state.db)
@@ -10756,10 +8658,12 @@ async fn create_run_inner(
         ));
     }
 
-    if let Err(e) =
-        provisioning::provision_missing(&run_repo_root, &worktree_dir, &provisioning_plan)
-    {
-        crate::worktree_ops::reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
+    if let Err(e) = pdo_workspace::adapters::fs::provisioner::provision_missing(
+        &run_repo_root,
+        &worktree_dir,
+        &provisioning_plan,
+    ) {
+        reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({
@@ -10811,11 +8715,7 @@ async fn create_run_inner(
         }
         Err(e) => {
             let _ = crate::skill_delivery::remove_exclusions(&run_repo_root, &run_id);
-            crate::worktree_ops::reap_orphan_run_worktree(
-                &run_repo_root,
-                &worktree_dir,
-                &branch_name,
-            );
+            reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 serde_json::json!({
@@ -10840,11 +8740,7 @@ async fn create_run_inner(
             for (repo, snapshot) in &created_secondary_snapshots {
                 remove_secondary_snapshot(Path::new(repo), snapshot);
             }
-            crate::worktree_ops::reap_orphan_run_worktree(
-                &run_repo_root,
-                &worktree_dir,
-                &branch_name,
-            );
+            reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 serde_json::json!({
@@ -10860,7 +8756,7 @@ async fn create_run_inner(
         for (repo, snapshot) in &created_secondary_snapshots {
             remove_secondary_snapshot(Path::new(repo), snapshot);
         }
-        crate::worktree_ops::reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
+        reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({ "error": "event log error" }),
@@ -11615,8 +9511,9 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     };
 
     let uc_stored = cfg.update_check.map(|v| v != 0);
-    let uc_env = update_check::env_update_check();
-    let uc_effective = update_check::update_check_with(cfg.update_check);
+    let uc_env = pdo_platform::adapters::env::env_update_check();
+    let uc_effective =
+        pdo_platform::domain::update_check::resolve_update_check(cfg.update_check, uc_env);
     let uc_source = if uc_stored.is_some() {
         "stored"
     } else if uc_env.is_some() {
@@ -11808,7 +9705,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             uc_source,
             uc_stored,
             uc_env,
-            update_check::UPDATE_CHECK_DEFAULT,
+            pdo_platform::domain::update_check::UPDATE_CHECK_DEFAULT,
         ),
         // #751: may an agent's `pdo review reply --resolved` resolve the comment
         // directly? Default OFF: the human resolves, the agent proposes (ADR-0067 §4).
@@ -12114,561 +10011,6 @@ async fn refresh_prices_at_boot(state: &Arc<AppState>) {
     }
 }
 
-/* ------------------------------------------------------------------------------------ */
-/* Version check (#697)                                                                  */
-/* ------------------------------------------------------------------------------------ */
-
-/// The release-source URL for this daemon: the per-daemon override (layer-3 seam)
-/// else the shipped GitHub Releases endpoint.
-fn update_source_url(state: &AppState) -> String {
-    state
-        .update_source_url
-        .clone()
-        .unwrap_or_else(|| update_check::RELEASE_SOURCE_URL_DEFAULT.to_string())
-}
-
-/// Is the version check on? `stored → env → default(true)`, read FRESH so a toggle
-/// takes effect on the next pass without a restart.
-async fn update_check_enabled(db: &sqlx::SqlitePool) -> bool {
-    let stored = instance_config::get(db)
-        .await
-        .ok()
-        .and_then(|c| c.update_check);
-    update_check::update_check_with(stored)
-}
-
-/// Load the on-disk cache into memory once (a no-op once something is loaded).
-async fn load_update_cache(state: &Arc<AppState>) {
-    let mut memo = state.update_cache.lock().await;
-    if memo.is_some() {
-        return;
-    }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(state) else {
-        return;
-    };
-    *memo = update_check::read_cache(&update_check::cache_path(&home));
-}
-
-/// One periodic pass: honours the setting and the interval, then checks.
-async fn periodic_update_check(state: &Arc<AppState>) {
-    if !update_check_enabled(&state.db).await {
-        return; // off: no request ever leaves the daemon
-    }
-    let fresh = state
-        .update_cache
-        .lock()
-        .await
-        .as_ref()
-        .is_some_and(|c| c.is_fresh(update_check::UPDATE_CHECK_INTERVAL));
-    if fresh {
-        return; // checked within the interval: the cache IS the answer
-    }
-    match perform_update_check(state).await {
-        Ok(_) => {}
-        Err(e) => warn!("update check: {e} — keeping the last known values"),
-    }
-}
-
-/// Hit the release source once and record the outcome — success or failure — in
-/// memory and on disk. `checked_at` moves either way; `latest_version` only on
-/// success (a failed check keeps the last good value, with the error beside it).
-///
-/// Returns the recorded cache on success, the error message on failure. Does NOT
-/// consult the setting: the callers do, each at its own edge.
-async fn perform_update_check(state: &Arc<AppState>) -> Result<update_check::UpdateCache, String> {
-    let Ok(_guard) = state.update_check_lock.try_lock() else {
-        return Err("a version check is already in flight".to_string());
-    };
-    let url = update_source_url(state);
-    let outcome = update_check::fetch_latest(&url).await;
-    let mut memo = state.update_cache.lock().await;
-    let mut cache = memo.clone().unwrap_or_default();
-    cache.schema = update_check::CACHE_SCHEMA.to_string();
-    cache.source = url.clone();
-    cache.checked_at = Some(pdo_kernel::clock::now_iso());
-    match &outcome {
-        Ok(latest) => {
-            cache.latest_version = Some(latest.clone());
-            cache.error = None;
-        }
-        Err(e) => {
-            cache.error = Some(format!("release source unreachable: {url}: {e}"));
-        }
-    }
-    if let Ok((home, _)) = sandbox_run::sandbox_home_roots(state) {
-        if let Err(e) = update_check::write_cache(&update_check::cache_path(&home), &cache) {
-            warn!("update check: cannot write the cache: {e}");
-        }
-    }
-    *memo = Some(cache.clone());
-    match outcome {
-        Ok(_) => Ok(cache),
-        Err(_) => Err(cache.error.clone().unwrap_or_default()),
-    }
-}
-
-/// Build the `GET /update` payload from the cache and the setting. When the check is
-/// off, `latest_version` is `null` whatever the cache holds — never a stale claim
-/// the user asked us not to make — and `reason` says why.
-async fn update_status_view(state: &Arc<AppState>) -> serde_json::Value {
-    let enabled = update_check_enabled(&state.db).await;
-    let cache = state.update_cache.lock().await.clone();
-    let installed = env!("CARGO_PKG_VERSION");
-    let url = update_source_url(state);
-    let method = effective_install_method(state);
-    let supervision = effective_supervision(state);
-    let active_runs = count_live_runs(state).await;
-    let last_attempt = read_last_attempt(state);
-    let (can_apply, apply_blocked_reason) = apply_gate(method, last_attempt.as_ref());
-
-    let (latest, checked_at, error, reason): (
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<&str>,
-    ) = match (&enabled, &cache) {
-        (false, c) => (
-            None,
-            c.as_ref().and_then(|c| c.checked_at.clone()),
-            None,
-            Some("Update check is off."),
-        ),
-        (true, None) => (None, None, None, Some("Not checked yet.")),
-        (true, Some(c)) => {
-            let reason = if c.latest_version.is_none() {
-                if c.error.is_some() {
-                    Some("Release source unreachable at last check.")
-                } else {
-                    Some("Not checked yet.")
-                }
-            } else {
-                None
-            };
-            (
-                c.latest_version.clone(),
-                c.checked_at.clone(),
-                c.error.clone(),
-                reason,
-            )
-        }
-    };
-    let newer = latest
-        .as_deref()
-        .is_some_and(|l| update_check::is_newer(installed, l));
-    serde_json::json!({
-        "installed_version": installed,
-        "latest_version": latest,
-        "newer_available": newer,
-        "checked_at": checked_at,
-        "source": update_check::source_label(&url),
-        "source_url": url,
-        "check_enabled": enabled,
-        "install_method": method,
-        "manual_command": method.manual_command(),
-        "supervision": supervision,
-        "reason": reason,
-        "last_error": error,
-        "active_runs": active_runs,
-        "can_apply": can_apply,
-        "apply_blocked_reason": apply_blocked_reason,
-        "last_attempt": last_attempt,
-    })
-}
-
-/* ------------------------------------------------------------------------------------ */
-/* Update executor (#699)                                                                */
-/* ------------------------------------------------------------------------------------ */
-
-/// The installation method this daemon delegates to: the per-daemon override (layer-3
-/// seam, FP container) else the detection over the binary path and the receipt.
-fn effective_install_method(state: &AppState) -> update_check::InstallMethod {
-    state
-        .install_method_override
-        .unwrap_or_else(update_check::detect_install_method_from_env)
-}
-
-/// Who restarts the daemon: override else the supervisor's env.
-fn effective_supervision(state: &AppState) -> update_check::Supervision {
-    state
-        .supervision_override
-        .unwrap_or_else(update_check::detect_supervision_from_env)
-}
-
-/// Live Runs (`Running` / `AwaitingUser` / `Paused`) — what the confirm dialog
-/// counts. Informational only: an update is never refused for active Runs (the
-/// daemon restarts, tmux sessions survive — `KillMode=process`).
-async fn count_live_runs(state: &AppState) -> usize {
-    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
-        return 0;
-    };
-    let mut live = 0;
-    for run_id in run_ids {
-        let Ok(events) = load_events(&state.db, &run_id).await else {
-            continue;
-        };
-        if let Some(run_state) = event_log::project(&events) {
-            if run_state.status.is_live() {
-                live += 1;
-            }
-        }
-    }
-    live
-}
-
-/// The last attempt record, from `<home>/.pdo/update/last-attempt.json`.
-fn read_last_attempt(state: &AppState) -> Option<update_executor::UpdateAttempt> {
-    let (home, _) = sandbox_run::sandbox_home_roots(state).ok()?;
-    update_executor::read_attempt(&update_executor::attempt_path(&home))
-}
-
-/// A `running` attempt is considered stale — the daemon it belonged to is gone or the
-/// executor crashed without recording — after this long. Past it, apply is allowed
-/// again and the record is shown as failed.
-const ATTEMPT_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
-
-fn attempt_is_running(attempt: &update_executor::UpdateAttempt) -> bool {
-    if attempt.status != update_executor::AttemptStatus::Running {
-        return false;
-    }
-    let started = chrono::DateTime::parse_from_rfc3339(&attempt.started_at)
-        .ok()
-        .map(|d| d.with_timezone(&chrono::Utc));
-    match started {
-        Some(at) => {
-            chrono::Utc::now().signed_duration_since(at)
-                < chrono::Duration::from_std(ATTEMPT_STALE_AFTER)
-                    .unwrap_or_else(|_| chrono::Duration::minutes(30))
-        }
-        None => false,
-    }
-}
-
-/// Can `POST /update/apply` run? `unknown` method → no, with the reason (ADR-0045:
-/// declared absence, never a guess); an attempt still running → no.
-fn apply_gate(
-    method: update_check::InstallMethod,
-    last: Option<&update_executor::UpdateAttempt>,
-) -> (bool, Option<String>) {
-    if method == update_check::InstallMethod::Unknown {
-        return (
-            false,
-            Some(
-                "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist \
-                 receipt): PDO will not guess how to replace its own binary. Update manually, \
-                 then restart the daemon."
-                    .to_string(),
-            ),
-        );
-    }
-    if let Some(a) = last {
-        if attempt_is_running(a) {
-            return (
-                false,
-                Some(format!(
-                    "An update attempt ({}) is already running.",
-                    a.attempt_id
-                )),
-            );
-        }
-    }
-    (true, None)
-}
-
-/// `POST /update/apply` (#699) — spawn the detached executor and answer at once with
-/// the attempt id. 409 with the reason when the method is `unknown` or an attempt is
-/// running; 500 when the script cannot be written or spawned (the record then says
-/// `failed` with the error in the log). Never refused for active Runs.
-async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
-    let _serial = state.update_apply_lock.lock().await;
-    let method = effective_install_method(&state);
-    let supervision = effective_supervision(&state);
-    let last = read_last_attempt(&state);
-    let (ok, reason) = apply_gate(method, last.as_ref());
-    if !ok {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": reason,
-                "install_method": method,
-                "manual_command": method.manual_command(),
-            })),
-        )
-            .into_response();
-    }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(
-                serde_json::json!({ "error": "HOME is not set; cannot place the update journal" }),
-            ),
-        )
-            .into_response();
-    };
-    let attempt_id = update_executor::new_attempt_id();
-    let exe = update_check::invoked_exe_path().unwrap_or_else(|| PathBuf::from("pdo"));
-    let relaunch = state.relaunch_command.clone().unwrap_or_else(|| {
-        vec![
-            exe.display().to_string(),
-            "daemon".to_string(),
-            "--port".to_string(),
-            state.port.to_string(),
-        ]
-    });
-    let plan = update_executor::UpdatePlan {
-        attempt_id: attempt_id.clone(),
-        method,
-        supervision,
-        exe,
-        port: state.port,
-        bind: update_executor::explicit_bind_from_relaunch(&relaunch),
-        working_dir: state.repo_root.clone(),
-        daemon_pid: std::process::id(),
-        relaunch,
-        log_path: update_executor::log_path(&home, &attempt_id),
-        attempt_path: update_executor::attempt_path(&home),
-        from_version: env!("CARGO_PKG_VERSION").to_string(),
-    };
-    let mut attempt = update_executor::UpdateAttempt {
-        schema: update_executor::ATTEMPT_SCHEMA.to_string(),
-        attempt_id: attempt_id.clone(),
-        status: update_executor::AttemptStatus::Running,
-        started_at: pdo_kernel::clock::now_iso(),
-        finished_at: None,
-        exit_code: None,
-        method,
-        command: plan.upgrade_command().to_string(),
-        supervision,
-        log_path: plan.log_path.clone(),
-        from_version: plan.from_version.clone(),
-    };
-    let script_path = update_executor::script_path(&home, &attempt_id);
-    let spawned = (|| -> Result<std::process::Child, String> {
-        if let Some(dir) = script_path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&script_path, update_executor::render_update_script(&plan))
-            .map_err(|e| format!("cannot write {}: {e}", script_path.display()))?;
-        update_executor::write_attempt(&plan.attempt_path, &attempt)?;
-        update_executor::spawn_detached(
-            &plan,
-            &script_path,
-            state.update_executor_override.as_deref(),
-        )
-        .map_err(|e| format!("cannot spawn the update executor: {e}"))
-    })();
-    match spawned {
-        Ok(mut child) => {
-            info!(
-                "update {attempt_id}: executor spawned (pid {}), method {method:?}, supervision {supervision:?}, log {}",
-                child.id(),
-                plan.log_path.display()
-            );
-            // Reap the child if we outlive it (fixture executor, failed upgrade):
-            // record the exit code so a non-zero exit is visible in Settings even
-            // when the script died before its own `record`.
-            let attempt_path = plan.attempt_path.clone();
-            let id_for_wait = attempt_id.clone();
-            tokio::task::spawn_blocking(move || {
-                let Ok(status) = child.wait() else {
-                    return;
-                };
-                let code = status.code().unwrap_or(-1);
-                if let Some(mut a) = update_executor::read_attempt(&attempt_path) {
-                    if a.attempt_id != id_for_wait {
-                        return; // a newer attempt owns the record
-                    }
-                    a.exit_code = Some(code);
-                    a.finished_at.get_or_insert_with(pdo_kernel::clock::now_iso);
-                    a.status = if code == 0 {
-                        update_executor::AttemptStatus::Succeeded
-                    } else {
-                        update_executor::AttemptStatus::Failed
-                    };
-                    if let Err(e) = update_executor::write_attempt(&attempt_path, &a) {
-                        warn!("update {id_for_wait}: cannot record the exit: {e}");
-                    }
-                }
-            });
-            (
-                StatusCode::ACCEPTED,
-                Json(serde_json::json!({
-                    "attempt_id": attempt_id,
-                    "status": "running",
-                    "method": method,
-                    "command": plan.upgrade_command(),
-                    "supervision": supervision,
-                    "log_path": plan.log_path,
-                    "started_at": attempt.started_at,
-                    "from_version": plan.from_version,
-                })),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("update {attempt_id}: {e}");
-            attempt.status = update_executor::AttemptStatus::Failed;
-            attempt.finished_at = Some(pdo_kernel::clock::now_iso());
-            let _ = update_executor::write_attempt(&plan.attempt_path, &attempt);
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&plan.log_path)
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    writeln!(f, "== pdo update {attempt_id}: {e}")
-                });
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e, "attempt_id": attempt_id })),
-            )
-                .into_response()
-        }
-    }
-}
-
-/// `GET /update/attempts/{id}/log` (#699) — the executor's journal, `text/plain`.
-/// 404 when no such attempt was journaled here. The id is filesystem-safe by
-/// construction; anything else is refused before touching the disk.
-async fn get_update_attempt_log(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    if id.is_empty()
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return (StatusCode::BAD_REQUEST, "invalid attempt id").into_response();
-    }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "HOME is not set").into_response();
-    };
-    match std::fs::read_to_string(update_executor::log_path(&home, &id)) {
-        Ok(text) => (
-            StatusCode::OK,
-            [("content-type", "text/plain; charset=utf-8")],
-            text,
-        )
-            .into_response(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            (StatusCode::NOT_FOUND, "no log for this attempt").into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `GET /update` — the cached version-check state (#697). Reads the cache, never the
-/// network: two page loads are zero requests.
-async fn get_update_status(State(state): State<Arc<AppState>>) -> Response {
-    load_update_cache(&state).await;
-    Json(update_status_view(&state).await).into_response()
-}
-
-/// `POST /update/check` — force a check now (#697). Refused with 409 when the setting
-/// is off (the UI disables the button, a stale client is told) or when a check is
-/// already in flight. A failed fetch answers 502 **with the refreshed state**: the
-/// date moved, the last good version is kept, the error is in `last_error`.
-async fn check_update_now(State(state): State<Arc<AppState>>) -> Response {
-    load_update_cache(&state).await;
-    if !update_check_enabled(&state.db).await {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "the update check is off — turn it on to check now"
-            })),
-        )
-            .into_response();
-    }
-    match perform_update_check(&state).await {
-        Ok(_) => Json(update_status_view(&state).await).into_response(),
-        Err(e) if e.contains("already in flight") => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
-        Err(e) => {
-            let mut view = update_status_view(&state).await;
-            view["error"] = serde_json::json!(e);
-            (StatusCode::BAD_GATEWAY, Json(view)).into_response()
-        }
-    }
-}
-
-/// `GET /update/changelog` — the « What's new » document (#698): the release notes
-/// of every version strictly newer than the installed one, newest first, one `##`
-/// heading per version. The release list is fetched from the source on demand (and
-/// memoised per latest version); the payload says where its body comes from:
-///
-/// - `source: "releases"` — assembled from the missed releases;
-/// - `source: "embedded"`, `fallback_reason: null` — up to date, the embedded
-///   `CHANGELOG.md` is the nominal body;
-/// - `source: "embedded"`, `fallback_reason: "…"` — the list was NOT available
-///   (check off, source unreachable at last check, list fetch failed).
-///
-/// Never an error to the caller: the embedded changelog always answers.
-async fn get_update_changelog(State(state): State<Arc<AppState>>) -> Response {
-    load_update_cache(&state).await;
-    let installed = env!("CARGO_PKG_VERSION");
-    let enabled = update_check_enabled(&state.db).await;
-    let cache = state.update_cache.lock().await.clone();
-
-    if !enabled {
-        return Json(update_check::embedded_changelog(
-            installed,
-            None,
-            "The update check is off.",
-        ))
-        .into_response();
-    }
-    let latest = cache.as_ref().and_then(|c| c.latest_version.clone());
-    let Some(latest) = latest else {
-        let reason = match cache.as_ref().and_then(|c| c.error.as_deref()) {
-            Some(_) => "The release source was unreachable at the last check.",
-            None => "The release source has not been checked yet.",
-        };
-        return Json(update_check::embedded_changelog(installed, None, reason)).into_response();
-    };
-    if !update_check::is_newer(installed, &latest) {
-        // Up to date: nothing to assemble, the embedded changelog is the body.
-        return Json(update_check::assemble_changelog(
-            installed,
-            Some(&latest),
-            &[],
-        ))
-        .into_response();
-    }
-
-    let memo = state.update_releases.lock().await.clone();
-    let releases = match memo {
-        Some((for_latest, rels)) if for_latest == latest => Ok(rels),
-        _ => {
-            let url = update_check::releases_list_url(&update_source_url(&state));
-            let fetched = update_check::fetch_releases(&url).await;
-            if let Ok(rels) = &fetched {
-                *state.update_releases.lock().await = Some((latest.clone(), rels.clone()));
-            }
-            fetched.map_err(|e| format!("release list unavailable: {url}: {e}"))
-        }
-    };
-    match releases {
-        Ok(rels) => Json(update_check::assemble_changelog(
-            installed,
-            Some(&latest),
-            &rels,
-        ))
-        .into_response(),
-        Err(e) => {
-            warn!("update changelog: {e} — falling back to the embedded changelog");
-            Json(update_check::embedded_changelog(
-                installed,
-                Some(&latest),
-                "The release source was unreachable when loading the release notes.",
-            ))
-            .into_response()
-        }
-    }
-}
-
 /// `GET /settings` — the instance-wide config, per knob, as
 /// `{effective, source, stored, env, default}` (ADR-0015). `GET /sessions` stays the
 /// lean status-bar view.
@@ -12878,13 +10220,7 @@ async fn put_settings(
             // reads "Not checked yet since re-enabling." until it lands. Turning it
             // off needs nothing: the read path already answers `null` when off.
             if update_check_edit == Some(true) {
-                let s = state.clone();
-                tokio::spawn(async move {
-                    run_isolated("update check (re-enabled)", async move {
-                        let _ = perform_update_check(&s).await;
-                    })
-                    .await;
-                });
+                state.platform.check_for_update_in_background();
             }
             match build_settings_view(&state).await {
                 Ok(view) => Json(view).into_response(),
@@ -13024,14 +10360,14 @@ async fn get_agent_profile_referents(
             matches!(choice, pdo_harness::agent_choice::AgentChoice::Profile { profile_id } if profile_id == id)
         });
 
-    let projects = project_store::list(&state.db)
+    let projects = pdo_workspace::adapters::sqlite::list(&state.db)
         .await
         .unwrap_or_default()
         .into_iter()
         .filter(|project| {
             matches!(
-                project.agent_choice.as_ref(),
-                Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
+                project_agent_choice(project),
+                Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == id
             )
         })
         .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
@@ -13346,11 +10682,11 @@ async fn get_skill_referents(
         .map(|config| skill_selection::selects(&config.skills, &id))
         .unwrap_or(false);
 
-    let projects = project_store::list(&state.db)
+    let projects = pdo_workspace::adapters::sqlite::list(&state.db)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|project| skill_selection::selects(&project.skills, &id))
+        .filter(|project| skill_selection::selects(&project_skills(project), &id))
         .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
         .collect::<Vec<_>>();
 
@@ -14411,7 +11747,7 @@ struct PauseTriggersRequest {
 /// orthogonal channels, which is what makes "restore the prior state on unpause" free.
 async fn pause_triggers(
     State(state): State<Arc<AppState>>,
-    actor: audit_log::Actor,
+    actor: OriginHint,
     Json(req): Json<PauseTriggersRequest>,
 ) -> Response {
     // This endpoint writes blind, so capture the "before" flag first or the audit
@@ -14423,18 +11759,18 @@ async fn pause_triggers(
                 "type": "triggers_paused",
                 "paused": req.paused,
             }));
-            audit_log::record_best_effort(
-                &state.db,
-                audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "triggers.pause_changed".to_string(),
                     target_kind: Some("instance".to_string()),
                     target_id: None,
                     before: Some(serde_json::json!({ "paused": before })),
                     after: Some(serde_json::json!({ "paused": req.paused })),
-                },
-            )
-            .await;
+                })
+                .await;
             Json(serde_json::json!({ "ok": true, "paused": req.paused })).into_response()
         }
         Err(e) => (
@@ -15288,8 +12624,8 @@ fn run_worktree_dir(
     run_state: &event_log::RunState,
     run_id: &str,
 ) -> Option<PathBuf> {
-    let dir = worktree_ops::worktree_dir_for_run(&effective_repo_root(state, run_state), run_id);
-    worktree_ops::is_git_worktree(&dir).then_some(dir)
+    let dir = worktrees::worktree_dir_for_run(&effective_repo_root(state, run_state), run_id);
+    worktrees::is_git_worktree(&dir).then_some(dir)
 }
 
 /// The id a `from`/`to`/`ref` query defaults to when absent: the working tree
@@ -17991,7 +15327,7 @@ pub(crate) async fn deliver_node_run(
     // cleanliness probe did. An ISOLATED NodeRun deliberately does not take this
     // exit: its merge-back must still fail loudly if either worktree is missing,
     // because that is #489's silent-loss guard.
-    if !isolated && !worktree_ops::is_git_worktree(worktree_dir) {
+    if !isolated && !worktrees::is_git_worktree(worktree_dir) {
         warn!(
             "Run {run_id}: {} is not a git worktree — nothing to deliver for {node_id} iter-{iter}",
             worktree_dir.display()
@@ -18014,7 +15350,7 @@ pub(crate) async fn deliver_node_run(
     // coin toss.
     let delivery = {
         let _lock = state.merge_lock.lock().await;
-        worktree_ops::deliver_node_work(
+        worktrees::deliver_node_work(
             worktree_dir,
             &node_worktree_dir,
             isolated,
@@ -18069,7 +15405,7 @@ pub(crate) async fn deliver_node_run(
         // the branch did not move. Either way the completion continues; only the
         // first case is worth an event, and that event is what makes the NodeRun's
         // diff answerable whatever its type or isolation.
-        worktree_ops::DeliveryOutcome::Delivered(delivered) => {
+        worktrees::DeliveryOutcome::Delivered(delivered) => {
             if delivered.changed() {
                 let event = event_log::Event {
                     id: None,
@@ -18093,7 +15429,7 @@ pub(crate) async fn deliver_node_run(
         // #503: not a failure — but PDO rewrote a branch, so it is logged with both
         // tips, the resolution commit and the blast radius. The completion
         // continues exactly as a clean merge would.
-        worktree_ops::DeliveryOutcome::ResolvedInNodeFavour(adoption) => {
+        worktrees::DeliveryOutcome::ResolvedInNodeFavour(adoption) => {
             let resolved = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
@@ -18107,7 +15443,7 @@ pub(crate) async fn deliver_node_run(
                          the node's favour",
                         adoption.conflicting_files.len(),
                     ),
-                    "rule": worktree_ops::ADOPTION_RULE,
+                    "rule": worktrees::ADOPTION_RULE,
                     "pipeline_tip": adoption.pipeline_tip,
                     "node_tip": adoption.node_tip,
                     "merge_commit": adoption.merge_commit,
@@ -18139,7 +15475,7 @@ pub(crate) async fn deliver_node_run(
             let _ = append_event(state, &delivered).await;
             None
         }
-        worktree_ops::DeliveryOutcome::Conflict(conflict) => {
+        worktrees::DeliveryOutcome::Conflict(conflict) => {
             let reason = format!(
                 "merge conflict on {node_id}: {} conflicting file(s) merging {} into the \
                  pipeline branch at {}",
@@ -18203,7 +15539,7 @@ pub(crate) async fn deliver_node_run(
                 node_id: node_id.to_string(),
             })
         }
-        worktree_ops::DeliveryOutcome::ConflictPendingResolution(conflict) => {
+        worktrees::DeliveryOutcome::ConflictPendingResolution(conflict) => {
             let conflict_event = event_log::Event {
                 id: None,
                 run_id: run_id.to_string(),
@@ -18608,7 +15944,7 @@ async fn resolve_run_auto_fail(
         .target_repo
         .clone()
         .unwrap_or_else(|| state.repo_root.to_string_lossy().to_string());
-    let project = project_store::auto_fail_for_path(&state.db, &primary_repo)
+    let project = pdo_workspace::adapters::sqlite::auto_fail_for_path(&state.db, &primary_repo)
         .await
         .unwrap_or(None);
 
@@ -19072,10 +16408,13 @@ async fn force_spawn_node(
         default_harness_models: stored_default_harness_models(&state.db).await,
         // The Projet tier, resolved fresh so a manual force-spawn honours a Projet
         // setting attached mid-Run. A DB error degrades to a transparent tier.
-        project_harness: project_store::harness_for_path(&state.db, &repo_root.to_string_lossy())
-            .await
-            .ok()
-            .flatten(),
+        project_harness: pdo_workspace::adapters::sqlite::harness_for_path(
+            &state.db,
+            &repo_root.to_string_lossy(),
+        )
+        .await
+        .ok()
+        .flatten(),
         // Same reasoning as `default_model`: resolve fresh, or a force-spawned node
         // silently misses the `Stop` hook on this seam alone.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,
@@ -19642,7 +16981,8 @@ async fn ensure_run_manager(
     // The manager works in the Run's worktree; an archived/cleaned Run has none
     // left, and a session spawned into a dead cwd would only fail at tmux.
     let repo_root = effective_repo_root(state, run_state);
-    let worktree_dir = crate::worktree_ops::worktree_dir_for_run(&repo_root, run_id);
+    let worktree_dir =
+        pdo_workspace::adapters::git::worktrees::worktree_dir_for_run(&repo_root, run_id);
     if !worktree_dir.exists() {
         return Err((
             StatusCode::CONFLICT,
@@ -19779,7 +17119,7 @@ async fn load_all_projected_runs(state: &AppState) -> Result<Vec<event_log::RunS
 /// skipped silently (idempotent): only the root itself being archived is a
 /// `409`, as before.
 async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
-    let _page_mount_guard = state.page_mount_lock.lock().await;
+    let _page_mount_guard = state.platform.release_run_pages().hold().await;
     let (_, run_state) = match load_projected(state, run_id).await {
         Ok(t) => t,
         Err(resp) => return *resp,
@@ -19862,7 +17202,7 @@ async fn archive_single_run(
 ) -> Result<(), Box<Response>> {
     let run_id = run_state.run_id.as_str();
 
-    if let Err(error) = page_mount::remove_for_run(&state.db, run_id).await {
+    if let Err(error) = state.platform.release_run_pages().execute(run_id).await {
         error!("cleanup_run: failed to remove page mounts for run {run_id}: {error}");
         return Err(Box::new(
             (
@@ -20234,57 +17574,6 @@ fn required_target_repo(field: Option<&str>) -> Result<PathBuf, String> {
     }
 }
 
-fn validate_target_repo(path: &str) -> Result<PathBuf, String> {
-    let p = PathBuf::from(path);
-    if !p.is_absolute() {
-        return Err("target_repo must be an absolute path".into());
-    }
-    if !p.is_dir() {
-        return Err(format!(
-            "target_repo does not exist or is not a directory: {path}"
-        ));
-    }
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .current_dir(&p)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => Ok(p),
-        _ => Err(format!("target_repo is not a git repository: {path}")),
-    }
-}
-
-/// Accept exactly a local branch OR a remote-tracking ref as a Run source, probing
-/// each namespace with an exact-ref lookup.
-///
-/// Don't go back to `git branch --list <b>`: it is blind to remote-tracking refs AND
-/// treats its argument as a glob (`mai*` matches `main`). `show-ref --verify` takes a
-/// full refname literally. Deliberately NOT widened to any commit-ish — `rev-parse`
-/// would accept SHAs and tags, and the contract is a *branch*.
-fn validate_source_branch(repo: &Path, branch: &str) -> Result<(), String> {
-    for fullref in [
-        format!("refs/heads/{branch}"),
-        format!("refs/remotes/{branch}"),
-    ] {
-        let output = std::process::Command::new("git")
-            .args(["show-ref", "--verify", "--quiet", &fullref])
-            .current_dir(repo)
-            .output();
-        match output {
-            Ok(o) if o.status.success() => return Ok(()),
-            // Ref absent in this namespace: try the next before giving up.
-            Ok(_) => {}
-            Err(e) => return Err(format!("failed to run git: {e}")),
-        }
-    }
-    Err(format!(
-        "branch '{branch}' does not exist in {} \
-         (looked for a local branch refs/heads/{branch} and a \
-         remote-tracking ref refs/remotes/{branch})",
-        repo.display()
-    ))
-}
-
 /// Validate and freeze the secondary repos of a multi-repo create (ADR-0042).
 ///
 /// `inputs` is the full `target_repos` list: `[0]` is the primary, `[1..]` the
@@ -20603,505 +17892,6 @@ async fn patch_run_repos(
     }
 }
 
-/// A branch offered as a Run source: a local branch or a remote-tracking ref. `name`
-/// is the exact string the client posts back as `source_branch`, so a remote-tracking
-/// ref keeps its `origin/` prefix. NEVER re-derive locality by string surgery: a
-/// *local* branch may legitimately be named `origin/x`, so `kind` — classified from
-/// the full refname — is the only authoritative signal.
-///
-/// #802/ADR-0070: the entry also carries what makes freshness *visible* at launch —
-/// the upstream branch, the écart amont (`ahead`/`behind`) **as of the last fetch**,
-/// and the tip commit's date and subject. Every extra field is optional on purpose:
-/// a branch with no upstream has no écart (not a zero one), and a repo git cannot
-/// read a date from is not an error.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "BranchRef")]
-struct BranchEntry {
-    name: String,
-    kind: BranchKind,
-    /// The tracking branch's short name (`origin/main`), when this local branch has
-    /// one. Always `None` for a remote-tracking ref — it *is* the upstream.
-    upstream: Option<String>,
-    /// Commits this branch has that its upstream does not, as of the last fetch.
-    /// `None` when there is no upstream, or when the upstream ref is gone.
-    ahead: Option<u32>,
-    /// Commits the upstream has that this branch does not, as of the last fetch.
-    behind: Option<u32>,
-    /// Tip commit date, ISO-8601 with offset (`git`'s `iso-strict`).
-    last_commit_at: Option<String>,
-    last_commit_subject: Option<String>,
-    /// #803: this branch is the repo's checked-out one. Decides one sentence in
-    /// the fast-forward popover — advancing HEAD walks the working tree forward,
-    /// advancing any other branch is a pure ref move that changes no file.
-    /// Always `false` for a remote-tracking ref.
-    head: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-#[serde(rename_all = "snake_case")]
-enum BranchKind {
-    Local,
-    Remote,
-}
-
-/// What `GET /repos/branches` and `POST /repos/fetch` both answer (#802).
-///
-/// One shape for the two verbs, so a refetch replaces the list in place instead of
-/// teaching the client a second format. `last_fetch_at` is **derived from the repo
-/// itself** (the mtime of `FETCH_HEAD`), never stored by PDO: a fetch anyone ran —
-/// from a terminal, from an IDE — dates the numbers just as well as ours.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-struct BranchList {
-    branches: Vec<BranchEntry>,
-    /// RFC-3339 timestamp of the last successful fetch, or `None` when the repo has
-    /// never fetched (fresh `git init`, or a clone that never refreshed).
-    last_fetch_at: Option<String>,
-    /// Only ever set by the fetch verb, and only when the fetch failed. The list
-    /// beside it is still the truth on disk — a failed fetch degrades the écart to
-    /// "unknown, as of `last_fetch_at`", it never empties the list (ADR-0070 §1).
-    fetch_error: Option<FetchError>,
-}
-
-/// Why a fetch did not happen, named rather than raw (#802). The client picks its
-/// wording from `kind`; `message` carries git's own stderr for the detail line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-#[serde(rename_all = "snake_case")]
-enum FetchErrorKind {
-    /// The repo has no remote at all — a legitimate, purely local repo.
-    NoRemote,
-    /// Exceeded `FETCH_TIMEOUT`.
-    Timeout,
-    /// Credentials missing or refused. Never a prompt: the fetch runs
-    /// non-interactive, so this is what a missing key looks like.
-    Auth,
-    /// Host unreachable / unresolvable.
-    Network,
-    /// Anything else git refused to do.
-    Failed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "BranchFetchError")]
-struct FetchError {
-    kind: FetchErrorKind,
-    message: String,
-}
-
-/// How long a fetch may take before it is abandoned (spec #801: "de l'ordre de vingt
-/// secondes"). The form fetches on open, so an unreachable remote must not keep a
-/// spinner alive for git's own (unbounded) patience.
-const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// The configured remote names, longest first so stripping a remote's `<name>/`
-/// prefix off a tracking ref is unambiguous even when a remote name itself
-/// contains `/` (or is a prefix of another). Empty on a repo with no remotes.
-fn git_remote_names(repo: &Path) -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("git")
-        .args(["remote"])
-        .current_dir(repo)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let mut names: Vec<String> = stdout
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect();
-            names.sort_by_key(|n| std::cmp::Reverse(n.len()));
-            Ok(names)
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            Err(format!("git remote failed: {stderr}"))
-        }
-        Err(e) => Err(format!("failed to run git: {e}")),
-    }
-}
-
-/// Strip the `<remote>/` prefix off a remote-tracking short name, yielding the
-/// bare branch name used for the dedup test. Falls back to the input unchanged
-/// when no configured remote prefixes it.
-fn strip_remote_prefix(short: &str, remotes: &[String]) -> String {
-    for r in remotes {
-        if let Some(rest) = short.strip_prefix(&format!("{r}/")) {
-            return rest.to_string();
-        }
-    }
-    short.to_string()
-}
-
-/// List the branches a Run can be cut from: local branches AND remote-tracking refs.
-/// Everything is resolved **locally, without a single `git fetch`** — freshness of
-/// the tracking refs is the operator's own concern.
-///
-/// Don't go back to `git branch -a`: it emits a `(HEAD detached at …)` pseudo-entry,
-/// obeys the operator's `branch.sort`, and is porcelain. The `%(symref)` column is the
-/// only robust discriminant of `origin/HEAD`, which otherwise appears as a bare
-/// `origin` entry.
-///
-/// A remote-tracking ref whose bare name already exists as a local branch is dropped
-/// unconditionally — no divergence test — on the convention that the local branch is
-/// what the user manipulates. Remote-vs-remote twins (`origin/foo` + `upstream/foo`)
-/// are BOTH kept: two remotes may point at different SHAs, so merging them would lie.
-///
-/// Locals before remotes via an EXPLICIT partition — never lean on
-/// `refs/heads` < `refs/remotes` lexical luck, since the first entry may become the
-/// client's default and a local `main` must win.
-fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
-    let remotes = git_remote_names(repo)?;
-
-    let output = std::process::Command::new("git")
-        .args([
-            "for-each-ref",
-            "--sort=refname",
-            // Subject LAST: it is the only field that may itself contain a tab, so a
-            // `splitn` on the count of the fields before it cannot be derailed by it.
-            "--format=%(refname)%09%(refname:short)%09%(symref)%09%(upstream:short)\
-             %09%(upstream:track)%09%(HEAD)%09%(committerdate:iso-strict)%09%(contents:subject)",
-            "refs/heads",
-            "refs/remotes",
-        ])
-        // Belt and braces on a guarantee we depend on but do not control: the
-        // `ahead %d` / `behind %d` / `gone` words of `%(upstream:track)` are git's
-        // UNTRANSLATED plumbing strings — `for-each-ref` never calls
-        // `setup_ref_filter_porcelain_msg()`, unlike `git branch -vv`, whose
-        // localized output must never be parsed. Pinning the locale costs nothing
-        // and keeps that distinction from becoming load-bearing by accident.
-        .env("LC_ALL", "C")
-        .current_dir(repo)
-        .output();
-    let stdout = match output {
-        Ok(o) if o.status.success() => o.stdout,
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            return Err(format!("git for-each-ref failed: {stderr}"));
-        }
-        Err(e) => return Err(format!("failed to run git: {e}")),
-    };
-    let stdout = String::from_utf8_lossy(&stdout);
-
-    let mut locals: Vec<BranchEntry> = Vec::new();
-    let mut remote_pairs: Vec<(String, BranchEntry)> = Vec::new();
-    let mut local_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for line in stdout.lines() {
-        let mut fields = line.splitn(8, '\t');
-        let refname = fields.next().unwrap_or("");
-        let short = fields.next().unwrap_or("");
-        let symref = fields.next().unwrap_or("");
-        let upstream = fields.next().unwrap_or("");
-        let track = fields.next().unwrap_or("");
-        // `%(HEAD)` is `*` for the checked-out branch, a space otherwise — git's
-        // own marker, so a detached HEAD marks nothing and no branch claims it.
-        let head = fields.next().unwrap_or("").trim() == "*";
-        let date = fields.next().unwrap_or("");
-        let subject = fields.next().unwrap_or("");
-        if !symref.is_empty() {
-            continue;
-        }
-        let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
-        // Classify by the FULL refname prefix, never the short name: a local branch
-        // literally named `origin/ambig` lives under refs/heads/ and must list local.
-        if refname.starts_with("refs/heads/") {
-            let (ahead, behind) = parse_upstream_track(track, !upstream.is_empty());
-            local_names.insert(short.to_string());
-            locals.push(BranchEntry {
-                name: short.to_string(),
-                kind: BranchKind::Local,
-                upstream: some(upstream),
-                ahead,
-                behind,
-                last_commit_at: some(date),
-                last_commit_subject: some(subject),
-                head,
-            });
-        } else if refname.starts_with("refs/remotes/") {
-            let bare = strip_remote_prefix(short, &remotes);
-            remote_pairs.push((
-                bare,
-                BranchEntry {
-                    name: short.to_string(),
-                    kind: BranchKind::Remote,
-                    // A remote-tracking ref IS the upstream; it has no écart of its own.
-                    upstream: None,
-                    ahead: None,
-                    behind: None,
-                    last_commit_at: some(date),
-                    last_commit_subject: some(subject),
-                    // A remote-tracking ref is never anyone's HEAD.
-                    head: false,
-                },
-            ));
-        }
-    }
-
-    let mut remotes_out: Vec<BranchEntry> = remote_pairs
-        .into_iter()
-        .filter(|(bare, _entry)| !local_names.contains(bare))
-        .map(|(_bare, entry)| entry)
-        .collect();
-
-    locals.sort_by(|a, b| a.name.cmp(&b.name));
-    remotes_out.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut out = locals;
-    out.extend(remotes_out);
-    Ok(out)
-}
-
-/// Read `git`'s `%(upstream:track)` column into the écart amont (#802).
-///
-/// git prints `[ahead 2]`, `[behind 3]`, `[ahead 2, behind 3]`, `[gone]`, or an
-/// EMPTY string when the branch is exactly level with its upstream. That last case
-/// is why `has_upstream` is a separate argument: empty-and-tracking means `0↑ 0↓`
-/// ("up to date"), empty-and-not-tracking means *there is no écart to speak of*, and
-/// collapsing the two would paint a ✓ on every branch that tracks nothing.
-///
-/// `[gone]` — the upstream was pruned away — keeps `upstream` set but leaves the
-/// counts unknown; there is nothing left to count against.
-fn parse_upstream_track(track: &str, has_upstream: bool) -> (Option<u32>, Option<u32>) {
-    if !has_upstream {
-        return (None, None);
-    }
-    let inner = track.trim().trim_start_matches('[').trim_end_matches(']');
-    if inner.is_empty() {
-        return (Some(0), Some(0));
-    }
-    if inner == "gone" {
-        return (None, None);
-    }
-    let mut ahead = Some(0);
-    let mut behind = Some(0);
-    for part in inner.split(',') {
-        let part = part.trim();
-        if let Some(n) = part.strip_prefix("ahead ") {
-            ahead = n.trim().parse().ok();
-        } else if let Some(n) = part.strip_prefix("behind ") {
-            behind = n.trim().parse().ok();
-        }
-    }
-    (ahead, behind)
-}
-
-/// The repo's common git dir — where `FETCH_HEAD` lives. `--git-common-dir` (not
-/// `--git-dir`) because a linked worktree has its own git dir but shares the common
-/// one, and PDO's own Runs live in linked worktrees: reading the per-worktree dir
-/// would report "never fetched" for every Run worktree.
-fn git_common_dir(repo: &Path) -> Option<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--git-common-dir"])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if raw.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(&raw);
-    Some(if path.is_absolute() {
-        path
-    } else {
-        repo.join(path)
-    })
-}
-
-/// When this repo last fetched successfully, read off `FETCH_HEAD`'s mtime (#802).
-///
-/// Derived, never stored (ADR-0070 §1): git rewrites `FETCH_HEAD` on every successful
-/// fetch, whoever ran it — a `git fetch` in a terminal dates the écart just as well as
-/// one of ours, and a PDO-owned timestamp would claim otherwise.
-///
-/// An EMPTY `FETCH_HEAD` reads as "never" rather than "just now": a fetch that reached
-/// no remote truncates the file to zero bytes and re-dates it, so its mtime dates a
-/// FAILURE. Trusting it would print "fetched 2 s ago" over numbers nobody refreshed —
-/// the precise lie this feature exists to remove. (PDO's own fetch restores the file
-/// when it fails, see `run_git_fetch`; this guard covers the failed fetches run
-/// outside PDO, from a terminal or an IDE.)
-fn last_fetch_at(repo: &Path) -> Option<String> {
-    let meta = std::fs::metadata(git_common_dir(repo)?.join("FETCH_HEAD")).ok()?;
-    if meta.len() == 0 {
-        return None;
-    }
-    Some(chrono::DateTime::<chrono::Utc>::from(meta.modified().ok()?).to_rfc3339())
-}
-
-/// `FETCH_HEAD` as it stood before a fetch attempt, so a failed attempt can put it
-/// back exactly as it was (#802).
-///
-/// git opens `FETCH_HEAD` for writing at the START of a fetch, so a fetch that reaches
-/// no remote leaves it truncated and freshly dated — which would wipe out the "dernier
-/// fetch réussi" the unknown state is supposed to report, and re-date it to the moment
-/// of the failure. Restoring is not a mutation of the repo: it leaves it byte- and
-/// mtime-identical to before PDO asked.
-struct FetchHeadSnapshot {
-    path: PathBuf,
-    /// `None` when the file did not exist at all (a repo that never fetched).
-    before: Option<(Vec<u8>, std::time::SystemTime)>,
-}
-
-impl FetchHeadSnapshot {
-    fn take(repo: &Path) -> Option<Self> {
-        let path = git_common_dir(repo)?.join("FETCH_HEAD");
-        let before = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|modified| Some((std::fs::read(&path).ok()?, modified)));
-        Some(Self { path, before })
-    }
-
-    /// Put `FETCH_HEAD` back. Best-effort throughout: a repo we cannot write to is a
-    /// reason to leave it alone, never a reason to fail a read-only fetch.
-    fn restore(&self) {
-        match &self.before {
-            Some((bytes, modified)) => {
-                if std::fs::write(&self.path, bytes).is_ok() {
-                    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&self.path) {
-                        let _ = file.set_modified(*modified);
-                    }
-                }
-            }
-            // Nothing was there before; the failed attempt's empty husk is the only
-            // trace, and `last_fetch_at` already reads it as "never".
-            None => {
-                let _ = std::fs::remove_file(&self.path);
-            }
-        }
-    }
-}
-
-/// The whole answer of `GET /repos/branches`: the list plus the date it is good as of.
-fn branch_list(repo: &Path) -> Result<BranchList, String> {
-    Ok(BranchList {
-        branches: list_branches(repo)?,
-        last_fetch_at: last_fetch_at(repo),
-        fetch_error: None,
-    })
-}
-
-/// Classify git's fetch stderr into a named reason (#802).
-///
-/// Matching on git's prose is unavoidable — `git fetch` exits 128 for everything —
-/// but the *consequence* of a mis-classification is only a slightly wrong sentence in
-/// the popover: the stderr line itself is always shown, and no branch of the UI
-/// behaves differently per kind. Hence substring matching rather than an exhaustive
-/// parser that would rot faster.
-fn classify_fetch_error(stderr: &str) -> FetchErrorKind {
-    let s = stderr.to_lowercase();
-    let network = [
-        "could not resolve host",
-        "could not resolve hostname",
-        "temporary failure in name resolution",
-        "connection refused",
-        "connection timed out",
-        "network is unreachable",
-        "no route to host",
-        "operation timed out",
-        "failed to connect",
-    ];
-    let auth = [
-        "permission denied",
-        "authentication failed",
-        "could not read username",
-        "could not read password",
-        "terminal prompts disabled",
-        "access denied",
-        "invalid username or password",
-        "publickey",
-    ];
-    if network.iter().any(|m| s.contains(m)) {
-        return FetchErrorKind::Network;
-    }
-    if auth.iter().any(|m| s.contains(m)) {
-        return FetchErrorKind::Auth;
-    }
-    FetchErrorKind::Failed
-}
-
-/// The in-flight fetch of each repo, so concurrent callers **join** the running one
-/// instead of starting a second (spec #801). The value is the outcome slot the leader
-/// publishes into; followers clone the receiver and await it.
-#[allow(clippy::type_complexity)]
-fn fetch_in_flight() -> &'static std::sync::Mutex<
-    std::collections::HashMap<PathBuf, tokio::sync::watch::Receiver<Option<Option<FetchError>>>>,
-> {
-    static FLIGHTS: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<
-                PathBuf,
-                tokio::sync::watch::Receiver<Option<Option<FetchError>>>,
-            >,
-        >,
-    > = std::sync::OnceLock::new();
-    FLIGHTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
-
-/// Fetch every remote of `repo`, pruning refs that vanished server-side. Returns
-/// `None` on success, or the named reason it did not happen (#802, ADR-0070 §1).
-///
-/// Read-only and **non-interactive by construction**: `GIT_TERMINAL_PROMPT=0` plus a
-/// batch-mode ssh, so a missing credential fails with git's own message instead of
-/// hanging on a prompt nobody can see (the `skill_import` clone precedent). Bounded by
-/// `FETCH_TIMEOUT`. Never pushes, merges or rebases — that is the whole of ADR-0070 §2.
-///
-/// Only ONE fetch per repo runs at a time: the form fetches on open and on repo
-/// change, and the sync popover refetches, so three overlapping asks on the same repo
-/// are routine. The second and third await the first's outcome.
-async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
-    enum Role {
-        Leader(tokio::sync::watch::Sender<Option<Option<FetchError>>>),
-        Follower(tokio::sync::watch::Receiver<Option<Option<FetchError>>>),
-    }
-    let role = {
-        let mut map = fetch_in_flight().lock().unwrap_or_else(|p| p.into_inner());
-        match map.get(repo) {
-            Some(rx) => Role::Follower(rx.clone()),
-            None => {
-                let (tx, rx) = tokio::sync::watch::channel(None);
-                map.insert(repo.to_path_buf(), rx);
-                Role::Leader(tx)
-            }
-        }
-    };
-
-    let mut rx = match role {
-        Role::Follower(rx) => rx,
-        Role::Leader(tx) => {
-            let outcome = run_git_fetch(repo).await;
-            // Leave the map BEFORE publishing, so a caller arriving after the result
-            // starts a fresh fetch rather than joining a finished one. Followers that
-            // already cloned the receiver still read the value: a watch receiver keeps
-            // the last value after the sender is dropped.
-            fetch_in_flight()
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(repo);
-            let _ = tx.send(Some(outcome.clone()));
-            return outcome;
-        }
-    };
-
-    loop {
-        if rx.borrow().is_some() {
-            break;
-        }
-        if rx.changed().await.is_err() {
-            break;
-        }
-    }
-    let published = rx.borrow().clone();
-    published.unwrap_or(Some(FetchError {
-        kind: FetchErrorKind::Failed,
-        message: "the in-flight fetch ended without a result".into(),
-    }))
-}
-
 /// Every repository a Trigger fire is about to cut from, **primary first** (#804).
 ///
 /// Takes the Trigger's two stored fields verbatim (the secondary list is raw JSON
@@ -21171,491 +17961,6 @@ async fn fetch_before_trigger_cut(targets: &[String]) -> Option<FetchError> {
         }
     }
     primary_error
-}
-
-/// The fetch itself, with no in-flight bookkeeping. Split out so the join logic above
-/// stays readable, and so tests can drive a real `git fetch` against a bare origin.
-async fn run_git_fetch(repo: &Path) -> Option<FetchError> {
-    match git_remote_names(repo) {
-        // A repo with no remote is a legitimate case, not a failure to report as one:
-        // named so the popover can say "no remote" instead of quoting git at the user.
-        Ok(remotes) if remotes.is_empty() => {
-            return Some(FetchError {
-                kind: FetchErrorKind::NoRemote,
-                message: "this repository has no remote".into(),
-            });
-        }
-        Ok(_) => {}
-        Err(e) => {
-            return Some(FetchError {
-                kind: FetchErrorKind::Failed,
-                message: e,
-            });
-        }
-    }
-
-    // Keep an operator's own `GIT_SSH_COMMAND` (a jump host, an identity file) and
-    // only append the batch flag — replacing it would break the very setups that need
-    // a custom command, in the name of not prompting.
-    let ssh_command = match std::env::var("GIT_SSH_COMMAND") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} -oBatchMode=yes"),
-        _ => "ssh -oBatchMode=yes".to_string(),
-    };
-
-    // Taken BEFORE the attempt: git truncates FETCH_HEAD on its way in, so by the time
-    // we know the fetch failed the previous date is already gone.
-    let snapshot = FetchHeadSnapshot::take(repo);
-    let failed = |error: FetchError| {
-        if let Some(snapshot) = &snapshot {
-            snapshot.restore();
-        }
-        Some(error)
-    };
-
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.args(["fetch", "--all", "--prune", "--quiet"])
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "true")
-        .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", ssh_command)
-        .env("LC_ALL", "C")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-
-    let spawned = match cmd.spawn() {
-        Ok(child) => child,
-        Err(e) => {
-            return failed(FetchError {
-                kind: FetchErrorKind::Failed,
-                message: format!("cannot run git: {e}"),
-            });
-        }
-    };
-
-    match tokio::time::timeout(FETCH_TIMEOUT, spawned.wait_with_output()).await {
-        Ok(Ok(output)) if output.status.success() => None,
-        Ok(Ok(output)) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let message = if stderr.is_empty() {
-                format!("git fetch exited with {}", output.status)
-            } else {
-                stderr.clone()
-            };
-            failed(FetchError {
-                kind: classify_fetch_error(&stderr),
-                message,
-            })
-        }
-        Ok(Err(e)) => failed(FetchError {
-            kind: FetchErrorKind::Failed,
-            message: format!("git fetch failed: {e}"),
-        }),
-        Err(_) => failed(FetchError {
-            kind: FetchErrorKind::Timeout,
-            message: format!(
-                "git fetch did not finish within {}s",
-                FETCH_TIMEOUT.as_secs()
-            ),
-        }),
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Fast-forward of a local branch (#803, ADR-0070 §2)
-//
-// The ONLY write PDO ever performs on a local branch, and only on an explicit
-// click. Never a merge commit, never a rebase, never a push: either the ref moves
-// on its own (`update-ref`, branch not checked out anywhere) or git's own
-// `merge --ff-only` walks the checkout forward. Both are reversible by reflog.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Why a fast-forward did not happen, named rather than raw (#803).
-///
-/// Three of these — `diverged`, `no_upstream`, `up_to_date` — are already knowable
-/// from the enriched list (#802), so the UI does not even offer the button for them;
-/// they are answered here only for the RACE between the list and the click. The other
-/// two need the checkout inspected at click time, which is precisely why they cannot
-/// be pre-computed: a tree can get dirty between a render and a click.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "FastForwardReason")]
-#[serde(rename_all = "snake_case")]
-enum FastForwardRefusal {
-    /// The branch is checked out HERE and tracked files are modified.
-    DirtyTree,
-    /// The branch is checked out in ANOTHER worktree — not ours to move.
-    CheckedOutElsewhere,
-    /// The branch has commits the upstream does not: a ff would drop them.
-    Diverged,
-    /// The branch tracks nothing, so there is nothing to fast-forward to.
-    NoUpstream,
-    /// The upstream has nothing this branch lacks.
-    UpToDate,
-}
-
-/// A refused fast-forward, with everything the popover needs to name it (#803).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "FastForwardRefusal")]
-struct FastForwardRefused {
-    reason: FastForwardRefusal,
-    message: String,
-    /// The checkout the branch sits in — ours for `dirty_tree`, someone else's for
-    /// `checked_out_elsewhere`. `None` for the three list-knowable reasons.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    checkout: Option<String>,
-    /// `M path` lines of the modified TRACKED files, capped (`dirty_tree` only).
-    /// Untracked files never appear: they do not block a fast-forward.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    #[ts(optional = nullable)]
-    dirty_files: Vec<String>,
-    /// How many tracked files are modified, uncapped — `dirty_files` may be shorter.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    dirty_count: Option<u32>,
-}
-
-/// How many `git status` lines travel in a refusal. The popover shows a short
-/// listing, not a diff: past a handful the count alone says it.
-const DIRTY_FILES_SHOWN: usize = 8;
-
-/// What a successful fast-forward moved (#803) — the S3 card's sentence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "FastForwardResult")]
-struct FastForwardDone {
-    branch: String,
-    upstream: String,
-    /// Short SHA the branch sat on before.
-    from: String,
-    /// Short SHA it sits on now.
-    to: String,
-    /// Commits gained — the number that was the `n↓` before the click.
-    commits: u32,
-    /// The new tip's commit subject, for the `from → to · subject` line.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    subject: Option<String>,
-    /// The checkout whose FILES moved with the ref, when the branch was checked
-    /// out in the repo we launch from. `None` = a pure ref move, nothing on disk
-    /// changed — a distinction the popover states out loud before and after.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    moved_checkout: Option<String>,
-}
-
-/// The 200 of `POST /repos/fast-forward`: what moved, plus the list refreshed from
-/// the same repo, so the client replaces its branches in place instead of asking
-/// again (and reading a list from between the two calls).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-struct FastForwardOk {
-    fast_forward: FastForwardDone,
-    #[serde(flatten)]
-    list: BranchList,
-}
-
-/// The 409 of `POST /repos/fast-forward`: the named refusal, plus the SAME refreshed
-/// list. The list travels with a refusal too, because two of the five reasons are
-/// races the client recovers from by simply re-reading the truth (`up_to_date`,
-/// `no_upstream`): it flips to the corresponding #802 state instead of painting an
-/// error for something benign.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
-struct FastForwardRefusedBody {
-    refusal: FastForwardRefused,
-    #[serde(flatten)]
-    list: BranchList,
-}
-
-/// One line of `git worktree list --porcelain`: which checkout holds which branch.
-///
-/// Parsed rather than `git branch --show-current`-ed per worktree: the porcelain
-/// format is stable, names every worktree of the repo in one call, and reports a
-/// detached HEAD as the ABSENCE of a `branch` line (so a detached checkout never
-/// claims a branch it does not hold).
-fn worktree_holding_branch(repo: &Path, branch: &str) -> Option<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let wanted = format!("refs/heads/{branch}");
-    let mut current: Option<&str> = None;
-    for line in stdout.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current = Some(path);
-        } else if let Some(r) = line.strip_prefix("branch ") {
-            if r == wanted {
-                return current.map(PathBuf::from);
-            }
-        }
-    }
-    None
-}
-
-/// The modified TRACKED files of a checkout, as `git status --porcelain` reports
-/// them (`XY path`). Untracked files are excluded on purpose: they survive a
-/// fast-forward untouched, so refusing over them would refuse the commonest tree
-/// there is (#803, spec #801).
-fn dirty_tracked_files(checkout: &Path) -> Vec<String> {
-    let output = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no"])
-        .current_dir(checkout)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(|l| l.trim_end().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// `git rev-list --left-right --count a...b` → `(ahead, behind)`, or `None` when
-/// either side does not resolve.
-fn ahead_behind(repo: &Path, branch: &str, upstream: &str) -> Option<(u32, u32)> {
-    let range = format!("refs/heads/{branch}...refs/remotes/{upstream}");
-    let output = std::process::Command::new("git")
-        .args(["rev-list", "--left-right", "--count", &range])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut parts = stdout.split_whitespace();
-    let ahead = parts.next()?.parse().ok()?;
-    let behind = parts.next()?.parse().ok()?;
-    Some((ahead, behind))
-}
-
-/// The tracking branch of a local branch, short form (`origin/main`), or `None`.
-fn upstream_of(repo: &Path, branch: &str) -> Option<String> {
-    let spec = format!("{branch}@{{upstream}}");
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", &spec])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!name.is_empty()).then_some(name)
-}
-
-/// Short SHA + subject of a ref, for the "a1b2c3d → e4f5a6b · subject" line.
-fn tip_summary(repo: &Path, r: &str) -> (String, Option<String>) {
-    let output = std::process::Command::new("git")
-        .args(["log", "-1", "--format=%h%x09%s", r])
-        .current_dir(repo)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let line = stdout.trim_end_matches('\n');
-            let mut fields = line.splitn(2, '\t');
-            let sha = fields.next().unwrap_or("").to_string();
-            let subject = fields
-                .next()
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty());
-            (sha, subject)
-        }
-        _ => (String::new(), None),
-    }
-}
-
-/// Fast-forward `branch` onto its tracking branch, if and only if it is lossless
-/// (#803, ADR-0070 §2).
-///
-/// The conditions are cumulative and checked in the order a person would read them:
-/// a tracking branch exists → the branch is strictly behind (no commit of its own to
-/// drop) → nobody else's checkout holds it → if OUR checkout holds it, its tracked
-/// files are unmodified. Only then does anything move, and what moves is decided by
-/// where the branch lives:
-///
-/// - checked out **here** → `git merge --ff-only` in that checkout, so the working
-///   tree walks forward with the ref (`update-ref` alone would leave every fetched
-///   commit staged as a deletion — the one way this could destroy work);
-/// - checked out **nowhere** → `git update-ref` with the old value as a guard, a pure
-///   ref move that touches no file at all.
-///
-/// Never a `git pull`: that is a fetch *and* a merge, and the merge is exactly the
-/// thing ADR-0070 forbids.
-fn fast_forward_branch(repo: &Path, branch: &str) -> Result<FastForwardDone, FastForwardRefused> {
-    let refused = |reason: FastForwardRefusal, message: String| FastForwardRefused {
-        reason,
-        message,
-        checkout: None,
-        dirty_files: Vec::new(),
-        dirty_count: None,
-    };
-
-    let Some(upstream) = upstream_of(repo, branch) else {
-        return Err(refused(
-            FastForwardRefusal::NoUpstream,
-            format!("'{branch}' tracks no branch, so there is nothing to fast-forward to"),
-        ));
-    };
-
-    let Some((ahead, behind)) = ahead_behind(repo, branch, &upstream) else {
-        return Err(refused(
-            FastForwardRefusal::NoUpstream,
-            format!("the gap between '{branch}' and '{upstream}' could not be read"),
-        ));
-    };
-
-    // Order matters: "behind 0" is `up_to_date` even when ahead > 0 — there is
-    // genuinely nothing upstream to take. Divergence is only a refusal when a
-    // fast-forward would have had somewhere to go and local commits in the way.
-    if behind == 0 {
-        return Err(refused(
-            FastForwardRefusal::UpToDate,
-            format!("'{branch}' already has everything '{upstream}' has"),
-        ));
-    }
-    if ahead > 0 {
-        return Err(refused(
-            FastForwardRefusal::Diverged,
-            format!(
-                "'{branch}' has {ahead} commit(s) '{upstream}' does not: a fast-forward \
-                 would drop them"
-            ),
-        ));
-    }
-
-    let holder = worktree_holding_branch(repo, branch);
-    let here = holder.as_deref().is_some_and(|h| same_checkout(h, repo));
-    if let Some(elsewhere) = holder.as_ref().filter(|_| !here) {
-        return Err(FastForwardRefused {
-            reason: FastForwardRefusal::CheckedOutElsewhere,
-            message: format!(
-                "'{branch}' is checked out in another worktree; PDO only fast-forwards a \
-                 branch in the repository you launch from"
-            ),
-            checkout: Some(elsewhere.display().to_string()),
-            dirty_files: Vec::new(),
-            dirty_count: None,
-        });
-    }
-
-    if here {
-        let dirty = dirty_tracked_files(repo);
-        if !dirty.is_empty() {
-            return Err(FastForwardRefused {
-                reason: FastForwardRefusal::DirtyTree,
-                message: format!(
-                    "'{branch}' is checked out here and {} tracked file(s) are modified; \
-                     PDO will not touch them",
-                    dirty.len()
-                ),
-                checkout: Some(repo.display().to_string()),
-                dirty_count: Some(dirty.len() as u32),
-                dirty_files: dirty.into_iter().take(DIRTY_FILES_SHOWN).collect(),
-            });
-        }
-    }
-
-    let from = rev_parse_short(repo, &format!("refs/heads/{branch}")).unwrap_or_default();
-    let target_full = format!("refs/remotes/{upstream}");
-    let Some(target_sha) = structured_diff::rev_parse(repo, &target_full) else {
-        return Err(refused(
-            FastForwardRefusal::NoUpstream,
-            format!("'{upstream}' does not resolve any more — fetch and try again"),
-        ));
-    };
-
-    let outcome = if here {
-        // `--ff-only` can only ever move the ref; it refuses rather than create a
-        // merge commit, which is the guarantee ADR-0070 §2 asks for in git's own
-        // words rather than in ours.
-        std::process::Command::new("git")
-            .args(["merge", "--ff-only", "--quiet", &target_full])
-            .current_dir(repo)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-    } else {
-        let old =
-            structured_diff::rev_parse(repo, &format!("refs/heads/{branch}")).unwrap_or_default();
-        // The old value is passed as a guard: if anything moved the branch between
-        // our check and this call, git refuses instead of overwriting the winner.
-        std::process::Command::new("git")
-            .args([
-                "update-ref",
-                &format!("refs/heads/{branch}"),
-                &target_sha,
-                &old,
-            ])
-            .current_dir(repo)
-            .output()
-    };
-
-    match outcome {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            return Err(refused(
-                FastForwardRefusal::Diverged,
-                if stderr.is_empty() {
-                    format!("git refused to fast-forward '{branch}'")
-                } else {
-                    stderr
-                },
-            ));
-        }
-        Err(e) => {
-            return Err(refused(
-                FastForwardRefusal::Diverged,
-                format!("failed to run git: {e}"),
-            ));
-        }
-    }
-
-    let (to, subject) = tip_summary(repo, &format!("refs/heads/{branch}"));
-    Ok(FastForwardDone {
-        branch: branch.to_string(),
-        upstream,
-        from,
-        to,
-        commits: behind,
-        subject,
-        moved_checkout: here.then(|| repo.display().to_string()),
-    })
-}
-
-/// Short SHA of a ref (`--short` leaves git to pick a unambiguous length).
-fn rev_parse_short(repo: &Path, r: &str) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--short", r])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!sha.is_empty()).then_some(sha)
-}
-
-/// Whether two paths name the same checkout. Canonicalised on BOTH sides — the
-/// target repo is stored verbatim (ADR-0033) while `git worktree list` prints
-/// resolved paths, so a `/tmp` that is a symlink to `/private/tmp` (macOS) would
-/// otherwise make our own checkout look like somebody else's and refuse every
-/// fast-forward on the platform.
-fn same_checkout(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -21755,28 +18060,6 @@ fn source_drift(repo: &Path, run_id: &str, run_state: &event_log::RunState) -> S
         upstream_behind,
         last_fetch_at: last_fetch_at(repo),
     }
-}
-
-/// `git rev-list --count from..to` — commits `to` has that `from` does not.
-fn count_commits(repo: &Path, from: &str, to: &str) -> Option<u32> {
-    let range = format!("{from}..{to}");
-    let output = std::process::Command::new("git")
-        .args(["rev-list", "--count", &range])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
-}
-
-fn ref_exists(repo: &Path, fullref: &str) -> bool {
-    std::process::Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", fullref])
-        .current_dir(repo)
-        .output()
-        .is_ok_and(|o| o.status.success())
 }
 
 /// The 7-char form every other PDO surface shows a SHA in.
@@ -22724,11 +19007,242 @@ const DEV_PLACEHOLDER: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The workspace context (crates/pdo-workspace), wired into this daemon
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The settings a Projet carries for the contexts still in this crate: the
+/// agentic profile (ADR-0057) and the skills selection (ADR-0062).
+pub(crate) struct LegacyProjectSettings;
+
+impl pdo_workspace::adapters::http::ProjectSettings for LegacyProjectSettings {
+    type AgentChoice = pdo_harness::agent_choice::AgentChoice;
+    type Skill = skill_selection::SkillRef;
+
+    fn encode_skills(skills: Vec<Self::Skill>) -> Option<String> {
+        skill_selection::to_stored_json(&skill_selection::normalise(skills))
+    }
+
+    fn decode_skills(stored: Option<&str>) -> Vec<Self::Skill> {
+        skill_selection::from_stored_json(stored.map(str::to_string))
+    }
+}
+
+/// The agentic profile a Projet carries, as this crate types it.
+fn project_agent_choice(
+    project: &pdo_workspace::domain::project::Project,
+) -> Option<pdo_harness::agent_choice::AgentChoice> {
+    use pdo_workspace::adapters::http::ProjectSettings;
+    project
+        .agent_choice
+        .as_ref()
+        .and_then(|stored| LegacyProjectSettings::decode_agent_choice(stored.as_str()))
+}
+
+/// The skills a Projet selects, as this crate types them.
+fn project_skills(
+    project: &pdo_workspace::domain::project::Project,
+) -> Vec<skill_selection::SkillRef> {
+    use pdo_workspace::adapters::http::ProjectSettings;
+    LegacyProjectSettings::decode_skills(project.skills.as_ref().map(|s| s.as_str()))
+}
+
+/// The Projet tier of [`agent_choice::resolve`]. `None` ⇒ transparent — the
+/// legacy `harness` signal then applies.
+pub(crate) async fn project_agent_choice_for_path(
+    db: &sqlx::SqlitePool,
+    path: &str,
+) -> Result<Option<pdo_harness::agent_choice::AgentChoice>, sqlx::Error> {
+    Ok(pdo_workspace::adapters::sqlite::owner_of(db, path)
+        .await?
+        .as_ref()
+        .and_then(project_agent_choice))
+}
+
+/// The Projet tier of `skill_selection::resolve`: the skills selected by the
+/// Projet owning `path`, or empty when no Projet owns it.
+pub(crate) async fn project_skills_for_path(
+    db: &sqlx::SqlitePool,
+    path: &str,
+) -> Result<Vec<skill_selection::SkillRef>, sqlx::Error> {
+    Ok(pdo_workspace::adapters::sqlite::owner_of(db, path)
+        .await?
+        .as_ref()
+        .map(project_skills)
+        .unwrap_or_default())
+}
+
+/// A Projet change, announced on the live pipeline stream the UI listens to.
+struct PipelineChannelEvents(broadcast::Sender<serde_json::Value>);
+
+impl pdo_workspace::application::ports::ProjectEvents for PipelineChannelEvents {
+    fn project_changed(&self, project_id: &str) {
+        let _ = self.0.send(serde_json::json!({
+            "type": "project_changed",
+            "project_id": project_id,
+        }));
+    }
+}
+
+/// The workspace context over this daemon's database, live stream and
+/// repository root, with `host` as the Autorisation d'opération.
+fn workspace_context(
+    db: &sqlx::SqlitePool,
+    pipeline_tx: &broadcast::Sender<serde_json::Value>,
+    repo_root: &Path,
+    host: Arc<dyn pdo_kernel::extension_host::ExtensionHost>,
+) -> Arc<pdo_workspace::application::Workspace> {
+    use pdo_workspace::adapters::{fs, git, sqlite};
+    Arc::new(pdo_workspace::application::Workspace::new(
+        pdo_workspace::application::WorkspacePorts {
+            projects: Arc::new(sqlite::SqliteProjects::new(db.clone())),
+            provisioning: Arc::new(sqlite::SqliteProvisioningRules::new(db.clone())),
+            recent: Arc::new(sqlite::SqliteRecentRepositories::new(db.clone())),
+            events: Arc::new(PipelineChannelEvents(pipeline_tx.clone())),
+            git: Arc::new(git::GitCli),
+            source_tree: Arc::new(fs::FsSourceTree),
+            files: Arc::new(fs::FsBrowser::new(repo_root)),
+        },
+        host,
+    ))
+}
+
+/// Reap the worktree of a Run aborted at create, and what it left beside it.
+///
+/// #672: a Run aborted at create may already have snapshotted skills beside the
+/// worktree and excluded their paths in the repo's `info/exclude`; take both back
+/// before the (then empty) Run directory goes.
+fn reap_orphan_run_worktree(repo_root: &Path, worktree_dir: &Path, branch: &str) {
+    worktrees::reap_orphan_sub_worktree(repo_root, worktree_dir, branch);
+    if let Some(run_id) = branch.strip_prefix("pdo/run-") {
+        let _ = skill_delivery::remove_exclusions(repo_root, run_id);
+        let _ = std::fs::remove_dir_all(skill_delivery::snapshot_root(repo_root, run_id));
+    }
+    if let Some(run_dir) = worktree_dir.parent() {
+        let _ = std::fs::remove_dir(run_dir);
+    }
+}
+
+/// The provisioning rules the `NodeStarted` of `node_id`/`iter` froze.
+pub(crate) fn frozen_node_rules(
+    events: &[event_log::Event],
+    node_id: &str,
+    iter: i64,
+) -> Option<provisioning::ProvisioningRules> {
+    events.iter().rev().find_map(|event| {
+        if event.kind != event_log::EventKind::NodeStarted
+            || event.node_id.as_deref() != Some(node_id)
+            || event.iter != Some(iter)
+        {
+            return None;
+        }
+        event
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("provisioning"))
+            .cloned()
+            .and_then(|rules| serde_json::from_value(rules).ok())
+    })
+}
+
+pub(crate) fn frozen_node_plan(
+    events: &[event_log::Event],
+    node_id: &str,
+    iter: i64,
+) -> Option<provisioning::ProvisioningPlan> {
+    events.iter().rev().find_map(|event| {
+        if event.kind != event_log::EventKind::NodeStarted
+            || event.node_id.as_deref() != Some(node_id)
+            || event.iter != Some(iter)
+        {
+            return None;
+        }
+        event
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("provisioning_plan"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+    })
+}
+
+/// Read the node extension directly from the frozen pipeline document. Keeping
+/// provisioning as an extension avoids widening the heavily shared NodeDef
+/// runtime shape while still preserving it through YAML authoring.
+pub(crate) fn node_rules_from_pipeline(
+    pipeline_path: &Path,
+    node_id: &str,
+) -> Result<provisioning::ProvisioningRules> {
+    let yaml = match std::fs::read_to_string(pipeline_path) {
+        Ok(yaml) => yaml,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(
+                "pipeline {} is absent; node {node_id} has no provisioning extension",
+                pipeline_path.display()
+            );
+            return Ok(provisioning::ProvisioningRules::default());
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read pipeline {}", pipeline_path.display()));
+        }
+    };
+    let document: serde_yaml::Value = serde_yaml::from_str(&yaml)
+        .with_context(|| format!("parse pipeline {}", pipeline_path.display()))?;
+    let Some(nodes) = document
+        .get("nodes")
+        .and_then(serde_yaml::Value::as_sequence)
+    else {
+        return Ok(provisioning::ProvisioningRules::default());
+    };
+    for node in nodes {
+        if node.get("id").and_then(serde_yaml::Value::as_str) == Some(node_id) {
+            return node
+                .get("provisioning")
+                .cloned()
+                .map(serde_yaml::from_value)
+                .transpose()
+                .context("parse node provisioning rules")
+                .map(Option::unwrap_or_default);
+        }
+    }
+    Ok(provisioning::ProvisioningRules::default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdo_workspace::adapters::git::branches::list_branches;
+    use pdo_workspace::domain::branches::BranchEntry;
+
+    fn branch_named<'a>(branches: &'a [BranchEntry], name: &str) -> &'a BranchEntry {
+        branches
+            .iter()
+            .find(|b| b.name == name)
+            .unwrap_or_else(|| panic!("no branch {name} in {branches:?}"))
+    }
+
+    /// The merge-back on its **conservative** arm: `keep_conflict` off and no
+    /// spawn base, so a conflict still reads `MergeResult::Conflict`.
+    fn commit_and_merge_sub_worktree(
+        sub_worktree_dir: &Path,
+        pipeline_worktree_dir: &Path,
+        sub_branch: &str,
+        node_id: &str,
+        iter: i64,
+    ) -> Result<worktrees::MergeResult> {
+        worktrees::commit_and_merge_sub_worktree_inner(
+            sub_worktree_dir,
+            pipeline_worktree_dir,
+            sub_branch,
+            node_id,
+            iter,
+            false,
+            None,
+        )
+    }
     use axum::body::Body;
     use axum::http::Request;
+    use pdo_platform::domain::service_health::ServiceHealth;
     use tower::util::ServiceExt;
 
     /// #541 — the startup banner must hand the user a URL the WS Origin guard
@@ -23414,6 +19928,81 @@ mod tests {
         );
     }
 
+    /// The platform context of a test state: its real SQLite and filesystem
+    /// adapters, no Run to verify a session against, no home to journal an
+    /// update in.
+    async fn test_platform(
+        db: &sqlx::SqlitePool,
+        health: Option<pdo_platform::domain::service_health::ServiceHealth>,
+    ) -> Arc<pdo_platform::Platform> {
+        use pdo_platform::adapters as a;
+        use pdo_platform::application::ports::{BoxFuture, Runs};
+
+        struct NoRuns;
+        impl Runs for NoRuns {
+            fn verify<'a>(
+                &'a self,
+                run_id: &'a str,
+                _: &'a str,
+            ) -> BoxFuture<'a, Result<(), String>> {
+                Box::pin(async move { Err(format!("no run `{run_id}` in a test state")) })
+            }
+            fn record_command<'a>(
+                &'a self,
+                _: &'a str,
+                _: &'a str,
+                _: &'a str,
+                _: serde_json::Value,
+            ) -> BoxFuture<'a, Result<(), String>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn count_live(&self) -> BoxFuture<'_, usize> {
+                Box::pin(async { 0 })
+            }
+        }
+
+        let platform = pdo_platform::Platform::new(
+            pdo_platform::PlatformPorts {
+                page_mounts: Arc::new(a::sqlite_page_mounts::SqlitePageMounts::new(db.clone())),
+                page_files: Arc::new(a::page_files::LocalPageFiles),
+                audit: Arc::new(a::sqlite_audit_log::SqliteAuditLog::new(db.clone())),
+                runs: Arc::new(NoRuns),
+                update_setting: Arc::new(contexts::LegacyUpdateSetting { db: db.clone() }),
+                release_source: Arc::new(a::github_releases::GithubReleases),
+                update_journal: Arc::new(a::fs_update_journal::FsUpdateJournal::new(None)),
+                installation: Arc::new(a::host_installation::HostInstallation::default()),
+                update_executor: Arc::new(a::detached_executor::DetachedExecutor::new(None)),
+                extensions: Arc::new(pdo_kernel::extension_host::NoExtensions),
+            },
+            pdo_platform::application::update_context::UpdateOptions::default(),
+            health.unwrap_or(pdo_platform::domain::service_health::ServiceHealth {
+                supervisor: "none".to_string(),
+                persistent: None,
+            }),
+        );
+        platform.init().await.unwrap();
+        platform
+    }
+
+    /// The audit rows of a test state, newest first, through the platform's
+    /// SQLite adapter.
+    async fn audit_rows(
+        state: &AppState,
+        target_kind: Option<&str>,
+        target_id: Option<&str>,
+    ) -> Vec<pdo_platform::domain::audit::AuditEntry> {
+        use pdo_platform::application::ports::AuditLog;
+        let filter = pdo_platform::domain::audit::AuditFilter {
+            target_kind: target_kind.map(str::to_string),
+            target_id: target_id.map(str::to_string),
+            ..Default::default()
+        };
+        pdo_platform::adapters::sqlite_audit_log::SqliteAuditLog::new(state.db.clone())
+            .list(&filter)
+            .await
+            .unwrap()
+    }
+
     async fn test_state() -> Arc<AppState> {
         test_state_with_tmux(None).await
     }
@@ -23496,16 +20085,24 @@ mod tests {
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
+        let workspace = workspace_context(
+            &db,
+            &pipeline_tx,
+            &std::env::current_dir().unwrap(),
+            Arc::new(pdo_kernel::extension_host::NoExtensions),
+        );
+        let platform = test_platform(&db, None).await;
         let test_repo_root: PathBuf = std::env::current_dir().unwrap();
         let test_port: u16 = next_test_daemon_port();
         Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
+            workspace,
+            platform,
             db,
             event_tx,
             pipeline_tx,
             repo_root: test_repo_root.clone(),
             port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -23524,12 +20121,6 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default: tests that assert the `/sessions` service
-            // field build their own state via `test_state_with_service_health`.
-            service_health: Arc::new(ServiceHealth {
-                supervisor: "none".to_string(),
-                persistent: None,
-            }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -23537,15 +20128,6 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, tmux),
         })
@@ -23878,12 +20460,14 @@ mod tests {
         )
         .await;
 
-        let claude_dir =
-            home.join(".claude").join("projects").join(
-                pdo_harness::claude_transcript::encode_working_dir(
-                    &worktree_ops::sub_worktree_path(&state.repo_root, run_ids[0], "worker", 1),
-                ),
-            );
+        let claude_dir = home.join(".claude").join("projects").join(
+            pdo_harness::claude_transcript::encode_working_dir(&worktrees::sub_worktree_path(
+                &state.repo_root,
+                run_ids[0],
+                "worker",
+                1,
+            )),
+        );
         std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
             claude_dir.join("claude-1.jsonl"),
@@ -23891,9 +20475,10 @@ mod tests {
         )
         .unwrap();
         let legacy_dir = home.join(".claude").join("projects").join(
-            pdo_harness::claude_transcript::encode_working_dir(
-                &worktree_ops::worktree_dir_for_run(&state.repo_root, run_ids[2]),
-            ),
+            pdo_harness::claude_transcript::encode_working_dir(&worktrees::worktree_dir_for_run(
+                &state.repo_root,
+                run_ids[2],
+            )),
         );
         std::fs::create_dir_all(&legacy_dir).unwrap();
         std::fs::write(
@@ -24157,11 +20742,12 @@ mod tests {
                 serde_json::json!({}),
             )
             .await;
-            let dir = home.join(".claude").join("projects").join(
-                pdo_harness::claude_transcript::encode_working_dir(
-                    &worktree_ops::sub_worktree_path(&state.repo_root, run, "worker", 1),
-                ),
-            );
+            let dir =
+                home.join(".claude").join("projects").join(
+                    pdo_harness::claude_transcript::encode_working_dir(
+                        &worktrees::sub_worktree_path(&state.repo_root, run, "worker", 1),
+                    ),
+                );
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join(format!("{run}-s.jsonl")),
@@ -24587,11 +21173,12 @@ mod tests {
                 serde_json::json!({}),
             )
             .await;
-            let dir = home.join(".claude").join("projects").join(
-                pdo_harness::claude_transcript::encode_working_dir(
-                    &worktree_ops::sub_worktree_path(&state.repo_root, run, node, 1),
-                ),
-            );
+            let dir =
+                home.join(".claude").join("projects").join(
+                    pdo_harness::claude_transcript::encode_working_dir(
+                        &worktrees::sub_worktree_path(&state.repo_root, run, node, 1),
+                    ),
+                );
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join(format!("{run}-s.jsonl")),
@@ -25072,7 +21659,7 @@ mod tests {
                 .await;
                 let dir = home.join(".claude").join("projects").join(
                     pdo_harness::claude_transcript::encode_working_dir(
-                        &worktree_ops::sub_worktree_path(&state.repo_root, &run, node, 1),
+                        &worktrees::sub_worktree_path(&state.repo_root, &run, node, 1),
                     ),
                 );
                 std::fs::create_dir_all(&dir).unwrap();
@@ -26279,7 +22866,7 @@ mod tests {
                                  session: &str,
                                  tokens: u64| {
             let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-                &worktree_ops::sub_worktree_path(&state.repo_root, run_id, node_id, iter),
+                &worktrees::sub_worktree_path(&state.repo_root, run_id, node_id, iter),
             ));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
@@ -26303,7 +22890,7 @@ mod tests {
         // iter-3 worktree, alongside (and excluded from) that Node's own
         // "claude-3b" session — resolved by exclusion, never by path alone.
         let pm_project_dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::worktree_dir_for_run(&state.repo_root, "perf-r1"),
+            &worktrees::worktree_dir_for_run(&state.repo_root, "perf-r1"),
         ));
         std::fs::create_dir_all(&pm_project_dir).unwrap();
         std::fs::write(
@@ -26721,7 +23308,7 @@ mod tests {
         // unknown.
         let claude_root = home.join(".claude").join("projects");
         let pm_project_dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::worktree_dir_for_run(&state.repo_root, "perf-amb"),
+            &worktrees::worktree_dir_for_run(&state.repo_root, "perf-amb"),
         ));
         std::fs::create_dir_all(&pm_project_dir).unwrap();
         std::fs::write(
@@ -26975,7 +23562,7 @@ mod tests {
 
         let claude_root = home.join(".claude").join("projects");
         let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-r1", "worker", 1),
+            &worktrees::sub_worktree_path(&state.repo_root, "cache-r1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -27117,7 +23704,7 @@ mod tests {
 
         let claude_root = home.join(".claude").join("projects");
         let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-i1", "worker", 1),
+            &worktrees::sub_worktree_path(&state.repo_root, "cache-i1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -27187,7 +23774,7 @@ mod tests {
         )
         .await;
         let dir2 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-i2", "worker", 1),
+            &worktrees::sub_worktree_path(&state.repo_root, "cache-i2", "worker", 1),
         ));
         std::fs::create_dir_all(&dir2).unwrap();
         std::fs::write(
@@ -27384,7 +23971,7 @@ mod tests {
         // (sonnet — its own bucket), iter 2's mute file (no model line).
         let claude_root = home.join(".claude").join("projects");
         let dir1 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 1),
+            &worktrees::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 1),
         ));
         std::fs::create_dir_all(&dir1).unwrap();
         std::fs::write(
@@ -27401,7 +23988,7 @@ mod tests {
         )
         .unwrap();
         let dir2 = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-            &worktree_ops::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 2),
+            &worktrees::sub_worktree_path(&state.repo_root, "perf-m1", "worker", 2),
         ));
         std::fs::create_dir_all(&dir2).unwrap();
         // A file that reads but says nothing: no model line, no readable peak.
@@ -27770,7 +24357,7 @@ mod tests {
         };
         let claude_dir = |iter: i64| {
             let dir = claude_root.join(pdo_harness::claude_transcript::encode_working_dir(
-                &worktree_ops::sub_worktree_path(&state.repo_root, run, "coder", iter),
+                &worktrees::sub_worktree_path(&state.repo_root, run, "coder", iter),
             ));
             std::fs::create_dir_all(&dir).unwrap();
             dir
@@ -27830,7 +24417,7 @@ mod tests {
 
         // --- pi: launch + two human turns — count 2.
         let pi_dir = home.join(".pi").join("agent").join("sessions").join(
-            pdo_harness::pi_session::session_dir_name(&worktree_ops::sub_worktree_path(
+            pdo_harness::pi_session::session_dir_name(&worktrees::sub_worktree_path(
                 &state.repo_root,
                 run,
                 "pi-node",
@@ -28724,16 +25311,24 @@ mod tests {
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
+        let workspace = workspace_context(
+            &db,
+            &pipeline_tx,
+            &std::env::current_dir().unwrap(),
+            Arc::new(pdo_kernel::extension_host::NoExtensions),
+        );
+        let platform = test_platform(&db, Some(service_health)).await;
         let test_repo_root: PathBuf = std::env::current_dir().unwrap();
         let test_port: u16 = next_test_daemon_port();
         Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
+            workspace,
+            platform,
             db,
             event_tx,
             pipeline_tx,
             repo_root: test_repo_root.clone(),
             port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -28749,7 +25344,6 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            service_health: Arc::new(service_health),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -28757,15 +25351,6 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
         })
@@ -29330,33 +25915,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn service_health_override_maps_to_persistence_bit() {
-        // The PDO_SERVICE_HEALTH observation seam (#156, D5).
-        assert_eq!(
-            ServiceHealthOverride::parse("ephemeral")
-                .unwrap()
-                .into_health()
-                .persistent,
-            Some(false)
-        );
-        assert_eq!(
-            ServiceHealthOverride::parse("PERSISTENT")
-                .unwrap()
-                .into_health()
-                .persistent,
-            Some(true)
-        );
-        assert_eq!(
-            ServiceHealthOverride::parse("unknown")
-                .unwrap()
-                .into_health()
-                .persistent,
-            None
-        );
-        assert!(ServiceHealthOverride::parse("garbage").is_none());
-    }
-
     #[tokio::test]
     async fn sessions_endpoint_excludes_session_holding_node_of_a_terminal_run() {
         // #215 repro at the HTTP boundary: a run fails (fail-fast) while a
@@ -29453,7 +26011,9 @@ mod tests {
     /// into "writing offered" — the A/B control of the whole feature.
     #[test]
     fn secondary_dirtied_guard_only_trips_on_read_only_pins() {
-        use crate::worktree_ops::{create_secondary_snapshot, secondary_snapshot_path};
+        use pdo_workspace::adapters::git::worktrees::{
+            create_secondary_snapshot, secondary_snapshot_path,
+        };
 
         fn git(dir: &std::path::Path, args: &[&str]) {
             let out = std::process::Command::new("git")
@@ -30561,7 +27121,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude/projects");
         let run_id = "node-cost";
-        let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
+        let working_dir = worktrees::worktree_dir_for_run(repo.path(), run_id);
         let project = projects.join(pdo_harness::claude_transcript::cc_project_dirname(
             &working_dir,
         ));
@@ -31560,7 +28120,7 @@ mod tests {
         std::fs::write(sub_wt_dir.join("foo.rs"), "fn main() {}\n").unwrap();
         let result =
             commit_and_merge_sub_worktree(&sub_wt_dir, &wt_dir, &sub_branch, "impl-1", 1).unwrap();
-        assert!(matches!(result, worktree_ops::MergeResult::Success));
+        assert!(matches!(result, worktrees::MergeResult::Success));
 
         // Sub-worktree must exist before cleanup (refs #32)
         assert!(sub_wt_dir.exists());
@@ -34332,32 +30892,6 @@ mod tests {
         (origin, work)
     }
 
-    /// Add a second remote `upstream` (from a fresh local origin) that also has a
-    /// `feature-remote-only` branch, then fetch it — no network, a filesystem
-    /// path. Leaves `work` with both `origin/feature-remote-only` and
-    /// `upstream/feature-remote-only`. Returns the upstream tempdir to keep alive.
-    fn add_upstream_with_same_branch(work: &std::path::Path) -> tempfile::TempDir {
-        let up = tempfile::tempdir().unwrap();
-        run_git(up.path(), &["init", "-b", "main"]);
-        run_git(up.path(), &["config", "user.email", "test@test.com"]);
-        run_git(up.path(), &["config", "user.name", "Test"]);
-        std::fs::write(up.path().join("README.md"), "# up\n").unwrap();
-        run_git(up.path(), &["add", "."]);
-        run_git(up.path(), &["commit", "-m", "init"]);
-        run_git(up.path(), &["checkout", "-b", "feature-remote-only"]);
-        std::fs::write(up.path().join("y.txt"), "y\n").unwrap();
-        run_git(up.path(), &["add", "."]);
-        run_git(up.path(), &["commit", "-m", "feat"]);
-        run_git(up.path(), &["checkout", "main"]);
-
-        run_git(
-            work,
-            &["remote", "add", "upstream", up.path().to_str().unwrap()],
-        );
-        run_git(work, &["fetch", "--quiet", "upstream"]);
-        up
-    }
-
     #[test]
     fn parse_numstat_sums_text_and_counts_binary_without_lines() {
         // Text rows sum +/- ; binary rows show `-` so contribute 0 lines
@@ -34631,16 +31165,24 @@ mod tests {
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
+        let workspace = workspace_context(
+            &db,
+            &pipeline_tx,
+            dir,
+            Arc::new(pdo_kernel::extension_host::NoExtensions),
+        );
+        let platform = test_platform(&db, None).await;
         let test_repo_root: PathBuf = dir.to_path_buf();
         let test_port: u16 = next_test_daemon_port();
         Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
+            workspace,
+            platform,
             db,
             event_tx,
             pipeline_tx,
             repo_root: test_repo_root.clone(),
             port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -34659,12 +31201,6 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default: tests that assert the `/sessions` service
-            // field build their own state via `test_state_with_service_health`.
-            service_health: Arc::new(ServiceHealth {
-                supervisor: "none".to_string(),
-                persistent: None,
-            }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -34672,15 +31208,6 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
         })
@@ -35006,9 +31533,7 @@ mod tests {
         let state = test_state_with_dir(tmp.path()).await;
         let id = create_trigger_ok(&state, tmp.path()).await;
 
-        let rows = audit_log::list(&state.db, None, None, None, None, 200)
-            .await
-            .unwrap();
+        let rows = audit_rows(&state, None, None).await;
         assert_eq!(rows.len(), 1, "create leaves exactly one audit row");
         let e = &rows[0];
         assert_eq!(e.action, "trigger.created");
@@ -35049,9 +31574,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-        let rows = audit_log::list(&state.db, None, None, Some("trigger"), Some(&id), 200)
-            .await
-            .unwrap();
+        let rows = audit_rows(&state, Some("trigger"), Some(&id)).await;
         let del = rows
             .iter()
             .find(|e| e.action == "trigger.deleted")
@@ -35097,9 +31620,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let rows = audit_log::list(&state.db, None, None, Some("trigger"), Some(&id), 200)
-            .await
-            .unwrap();
+        let rows = audit_rows(&state, Some("trigger"), Some(&id)).await;
         let upd = rows
             .iter()
             .find(|e| e.action == "trigger.updated")
@@ -35142,9 +31663,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let rows = audit_log::list(&state.db, None, None, Some("instance"), None, 200)
-            .await
-            .unwrap();
+        let rows = audit_rows(&state, Some("instance"), None).await;
         let p = rows
             .iter()
             .find(|e| e.action == "triggers.pause_changed")
@@ -35584,78 +32103,6 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    /// #824 — `POST /repos/create` over the real router: the three outcomes of
-    /// `repo_scaffold` as a client sees them (200 + created, 200 + reused, 400 +
-    /// the refusal sentence). The verb's own semantics are covered unit-side; this
-    /// is the wire contract the tour reads.
-    #[tokio::test]
-    async fn repos_create_creates_reuses_and_refuses() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = test_state_with_dir(tmp.path()).await;
-        let parent = tmp.path().join("parent");
-        std::fs::create_dir(&parent).unwrap();
-
-        let body = serde_json::json!({
-            "parent": parent.to_string_lossy(),
-            "name": "pdo-tutorial",
-            "files": [{ "path": "notes.txt", "content": "hello\n" }],
-        })
-        .to_string();
-
-        let post = |body: String| {
-            let app = build_router(state.clone());
-            async move {
-                app.oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/repos/create")
-                        .header("content-type", "application/json")
-                        .body(Body::from(body))
-                        .unwrap(),
-                )
-                .await
-                .unwrap()
-            }
-        };
-        let read = |resp: Response| async move {
-            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
-        };
-
-        let resp = post(body.clone()).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let created = read(resp).await;
-        assert_eq!(created["created"], true);
-        assert_eq!(
-            created["path"],
-            parent.join("pdo-tutorial").to_string_lossy().as_ref()
-        );
-        assert!(parent.join("pdo-tutorial").join("notes.txt").exists());
-
-        // Second call: same path, no second commit.
-        let resp = post(body).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(read(resp).await["created"], false);
-
-        // A folder that is not a repository is refused, by name.
-        std::fs::create_dir(parent.join("occupied")).unwrap();
-        let resp = post(
-            serde_json::json!({ "parent": parent.to_string_lossy(), "name": "occupied" })
-                .to_string(),
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            read(resp).await["error"],
-            format!(
-                "{} exists and is not a git repository",
-                parent.join("occupied").display()
-            )
-        );
     }
 
     #[tokio::test]
@@ -36964,29 +33411,6 @@ edges:
         );
     }
 
-    #[test]
-    fn provisioning_preview_drops_rules_narrower_than_the_requested_scope() {
-        let scoped = vec![
-            provisioning::ScopedRules {
-                scope: provisioning::ProvisioningScope::Instance,
-                rules: provisioning::ProvisioningRules::default(),
-            },
-            provisioning::ScopedRules {
-                scope: provisioning::ProvisioningScope::Project,
-                rules: provisioning::ProvisioningRules {
-                    copy: vec!["project.env".into()],
-                    ..Default::default()
-                },
-            },
-        ];
-
-        let visible =
-            provisioning_rules_through_scope(scoped, provisioning::ProvisioningScope::Instance);
-
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0].scope, provisioning::ProvisioningScope::Instance);
-    }
-
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn save_pipeline_ignores_retired_scope_and_writes_the_instance_copy() {
@@ -37728,350 +34152,6 @@ edges:
         );
     }
 
-    // --- Layer 3a: `run_service` against a recording fake env (#156, D4).
-    // No real systemctl/launchctl, no ~/.config touched.
-
-    /// A recording [`ServiceEnv`]: fixed identity, configurable port state, real
-    /// file writes into an injected (temp) config home, and a command log.
-    struct FakeServiceEnv {
-        exe: PathBuf,
-        cwd: PathBuf,
-        node_dir: Option<PathBuf>,
-        config_home: PathBuf,
-        home: PathBuf,
-        user: String,
-        port_state: PortState,
-        commands: std::cell::RefCell<Vec<(String, Vec<String>)>>,
-    }
-
-    impl FakeServiceEnv {
-        fn new(config_home: PathBuf, port_state: PortState) -> Self {
-            Self {
-                exe: PathBuf::from("/home/user/.local/bin/pdo"),
-                cwd: PathBuf::from("/home/user/.pdo/app"),
-                node_dir: Some(PathBuf::from("/opt/node/bin")),
-                config_home,
-                home: PathBuf::from("/home/user"),
-                user: "user".to_string(),
-                port_state,
-                commands: std::cell::RefCell::new(Vec::new()),
-            }
-        }
-
-        fn command_log(&self) -> Vec<(String, Vec<String>)> {
-            self.commands.borrow().clone()
-        }
-    }
-
-    impl ServiceEnv for FakeServiceEnv {
-        fn current_exe(&self) -> Result<PathBuf> {
-            Ok(self.exe.clone())
-        }
-        fn current_dir(&self) -> Result<PathBuf> {
-            Ok(self.cwd.clone())
-        }
-        fn node_dir(&self) -> Option<PathBuf> {
-            self.node_dir.clone()
-        }
-        fn config_home(&self) -> Result<PathBuf> {
-            Ok(self.config_home.clone())
-        }
-        fn home(&self) -> Result<PathBuf> {
-            Ok(self.home.clone())
-        }
-        fn user(&self) -> Result<String> {
-            Ok(self.user.clone())
-        }
-        fn probe_port(&self, _addr: SocketAddr) -> PortState {
-            self.port_state.clone()
-        }
-        fn write_file(&self, path: &Path, contents: &str) -> Result<()> {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(path, contents)?;
-            Ok(())
-        }
-        fn remove_file(&self, path: &Path) -> Result<()> {
-            match std::fs::remove_file(path) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(e.into()),
-            }
-        }
-        fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome> {
-            self.commands.borrow_mut().push((
-                program.to_string(),
-                args.iter().map(|s| s.to_string()).collect(),
-            ));
-            Ok(CmdOutcome {
-                success: true,
-                stdout: String::new(),
-                stderr: String::new(),
-            })
-        }
-    }
-
-    /// #699: the unit carries the path it was GIVEN — Homebrew's stable `bin/pdo`
-    /// symlink — verbatim, never the resolved `Cellar/pdo/<version>/` target that
-    /// `brew upgrade` deletes. `--dry-run` on such an install shows `bin/pdo`.
-    #[test]
-    fn service_install_writes_the_given_stable_path_verbatim() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let mut env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        env.exe = PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo");
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 5172,
-                dry_run: true,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-        let s = String::from_utf8(out).unwrap();
-        if cfg!(target_os = "macos") {
-            assert!(s.contains("<string>/home/linuxbrew/.linuxbrew/bin/pdo</string>"));
-        } else {
-            assert!(
-                s.contains("ExecStart=/home/linuxbrew/.linuxbrew/bin/pdo daemon"),
-                "the stable path, verbatim: {s}"
-            );
-            assert!(s.contains("Environment=PATH=/home/linuxbrew/.linuxbrew/bin:"));
-        }
-        assert!(!s.contains("Cellar"), "never the versioned target: {s}");
-    }
-
-    #[test]
-    fn service_dry_run_is_side_effect_free_and_prints_unit_and_plan() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 6183,
-                dry_run: true,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-        let s = String::from_utf8(out).unwrap();
-        // The systemd path prints on Linux CI; assert the load-bearing lines.
-        if !cfg!(target_os = "macos") {
-            assert!(s.contains("KillMode=process"), "unit missing KillMode: {s}");
-            assert!(s.contains("Environment=PDO_PORT=6183"));
-            assert!(!s.contains("Environment=PDO_BIND="));
-            assert!(s.contains("ExecStart=/home/user/.local/bin/pdo daemon"));
-            assert!(s.contains("WorkingDirectory=/home/user/.pdo/app"));
-            // Command plan, in order.
-            assert!(s.contains("systemctl --user daemon-reload"));
-            assert!(s.contains("loginctl enable-linger user"));
-            assert!(s.contains("systemctl --user enable --now pdo"));
-        }
-        // No command was run and no unit file was written (side-effect-free).
-        assert!(env.command_log().is_empty(), "dry-run ran commands!");
-        assert!(
-            !service_unit::systemd_unit_path(tmp.path()).exists(),
-            "dry-run wrote the unit file!"
-        );
-    }
-
-    #[test]
-    fn service_dry_run_carries_bind_and_the_harness_path_comment() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: Some("127.0.0.1".parse().unwrap()),
-                port: 6183,
-                dry_run: true,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-        let s = String::from_utf8(out).unwrap();
-        if cfg!(target_os = "macos") {
-            assert!(s.contains("<key>PDO_BIND</key><string>127.0.0.1</string>"));
-        } else {
-            assert!(s.contains("Environment=PDO_BIND=127.0.0.1"));
-        }
-        assert!(s.contains("interactive shell PATH (ADR-0055)"));
-    }
-
-    #[test]
-    fn service_conflict_probe_uses_the_effective_bind_address() {
-        assert_eq!(
-            service_addr(Some("192.0.2.10".parse().unwrap()), 6183),
-            "192.0.2.10:6183".parse().unwrap()
-        );
-        assert_eq!(
-            service_addr(Some("0.0.0.0".parse().unwrap()), 6183),
-            "0.0.0.0:6183".parse().unwrap()
-        );
-        assert_eq!(
-            connect_addr(service_addr(Some("::".parse().unwrap()), 6183)),
-            "[::1]:6183".parse().unwrap()
-        );
-    }
-
-    #[test]
-    fn wildcard_service_probe_detects_a_listener_on_another_local_address() {
-        let listener = std::net::TcpListener::bind("127.0.1.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let state = RealServiceEnv.probe_port(SocketAddr::from(([0, 0, 0, 0], port)));
-        assert_eq!(state, PortState::Foreign);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn service_install_writes_unit_and_runs_exact_systemctl_sequence() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 6183,
-                dry_run: false,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-
-        // The unit file was written with byte-identical content.
-        let unit_path = service_unit::systemd_unit_path(tmp.path());
-        let written = std::fs::read_to_string(&unit_path).unwrap();
-        let expected = service_unit::render_systemd_unit(
-            Path::new("/home/user/.local/bin/pdo"),
-            6183,
-            None,
-            Path::new("/home/user/.pdo/app"),
-            "/home/user/.local/bin:/opt/node/bin:/usr/local/bin:/usr/bin:/bin",
-        );
-        assert_eq!(written, expected);
-
-        // The exact command sequence, in order (D4 install flow).
-        let log = env.command_log();
-        assert_eq!(
-            log,
-            vec![
-                (
-                    "systemctl".into(),
-                    vec!["--user".into(), "daemon-reload".into()]
-                ),
-                (
-                    "loginctl".into(),
-                    vec!["enable-linger".into(), "user".into()]
-                ),
-                (
-                    "systemctl".into(),
-                    vec![
-                        "--user".into(),
-                        "enable".into(),
-                        "--now".into(),
-                        "pdo".into()
-                    ]
-                ),
-            ]
-        );
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn service_install_refuses_a_foreign_port_and_touches_nothing() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Foreign);
-        let mut out: Vec<u8> = Vec::new();
-        let err = run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 6183,
-                dry_run: false,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("refusing to install"),
-            "expected loud refusal, got: {err}"
-        );
-        // No systemctl ran and no unit was written.
-        assert!(env.command_log().is_empty());
-        assert!(!service_unit::systemd_unit_path(tmp.path()).exists());
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn service_install_is_idempotent_when_a_pdo_daemon_already_owns_the_port() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::PdoDaemon);
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 6183,
-                dry_run: false,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-        // Unit is still written + enabled, but WITHOUT `--now` (no competitor).
-        assert!(service_unit::systemd_unit_path(tmp.path()).exists());
-        let log = env.command_log();
-        let enable = log
-            .iter()
-            .find(|(p, a)| p == "systemctl" && a.contains(&"enable".to_string()))
-            .expect("expected an enable command");
-        assert!(
-            !enable.1.contains(&"--now".to_string()),
-            "enable must NOT carry --now when a daemon already owns the port: {enable:?}"
-        );
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn service_uninstall_disables_removes_and_reloads() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        // Seed a unit file so removal is observable.
-        let unit_path = service_unit::systemd_unit_path(tmp.path());
-        std::fs::create_dir_all(unit_path.parent().unwrap()).unwrap();
-        std::fs::write(&unit_path, "stub").unwrap();
-
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(ServiceAction::Uninstall, &env, &mut out).unwrap();
-
-        assert!(!unit_path.exists(), "unit file should be removed");
-        let log = env.command_log();
-        assert_eq!(
-            log,
-            vec![
-                (
-                    "systemctl".into(),
-                    vec![
-                        "--user".into(),
-                        "disable".into(),
-                        "--now".into(),
-                        "pdo".into()
-                    ]
-                ),
-                (
-                    "systemctl".into(),
-                    vec!["--user".into(), "daemon-reload".into()]
-                ),
-            ]
-        );
-    }
-
     #[test]
     fn cli_version_flag() {
         let result = Cli::try_parse_from(["pdo", "--version"]);
@@ -38418,7 +34498,7 @@ edges:
         std::fs::write(sub_wt_dir.join("foo.rs"), "fn main() {}\n").unwrap();
         let result =
             commit_and_merge_sub_worktree(&sub_wt_dir, &wt_dir, &sub_branch, "impl-1", 1).unwrap();
-        assert!(matches!(result, worktree_ops::MergeResult::Success));
+        assert!(matches!(result, worktrees::MergeResult::Success));
 
         // Prompt endpoint must return 200 for the completed iter
         let app = build_router(state);
@@ -40926,7 +37006,8 @@ edges:
         let wt_dir = worktree_dir_for_run(dir, run_id);
         create_worktree(dir, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
 
-        let sub_wt_dir = crate::worktree_ops::sub_worktree_path(dir, run_id, "worker", 1);
+        let sub_wt_dir =
+            pdo_workspace::adapters::git::worktrees::sub_worktree_path(dir, run_id, "worker", 1);
         let body = r#"{"kind":"restart_node","node_id":"worker","iter":1}"#;
 
         let (status, _, first) = command_triplet(&state, run_id, body).await;
@@ -41641,16 +37722,24 @@ edges: []
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
+        let workspace = workspace_context(
+            &db,
+            &pipeline_tx,
+            &repo.clone(),
+            Arc::new(pdo_kernel::extension_host::NoExtensions),
+        );
+        let platform = test_platform(&db, None).await;
         let test_repo_root: PathBuf = repo.clone();
         let test_port: u16 = next_test_daemon_port();
         let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
+            workspace,
+            platform,
             db,
             event_tx,
             pipeline_tx,
             repo_root: test_repo_root.clone(),
             port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -41669,12 +37758,6 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default: tests that assert the `/sessions` service
-            // field build their own state via `test_state_with_service_health`.
-            service_health: Arc::new(ServiceHealth {
-                supervisor: "none".to_string(),
-                persistent: None,
-            }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -41682,15 +37765,6 @@ edges: []
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
         });
@@ -41851,16 +37925,24 @@ edges: []
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
+        let workspace = workspace_context(
+            &db,
+            &pipeline_tx,
+            &repo.clone(),
+            Arc::new(pdo_kernel::extension_host::NoExtensions),
+        );
+        let platform = test_platform(&db, None).await;
         let test_repo_root: PathBuf = repo.clone();
         let test_port: u16 = next_test_daemon_port();
         let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
+            workspace,
+            platform,
             db,
             event_tx,
             pipeline_tx,
             repo_root: test_repo_root.clone(),
             port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -41879,12 +37961,6 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default: tests that assert the `/sessions` service
-            // field build their own state via `test_state_with_service_health`.
-            service_health: Arc::new(ServiceHealth {
-                supervisor: "none".to_string(),
-                persistent: None,
-            }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -41892,15 +37968,6 @@ edges: []
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
         });
@@ -42039,38 +38106,6 @@ edges: []
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    // --- Multi-repo run creation tests (issue #114) ---
-
-    #[test]
-    fn validate_target_repo_rejects_relative_path() {
-        let result = validate_target_repo("relative/path");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("absolute path"));
-    }
-
-    #[test]
-    fn validate_target_repo_rejects_nonexistent_path() {
-        let result = validate_target_repo("/nonexistent/path/that/does/not/exist");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("does not exist"));
-    }
-
-    #[test]
-    fn validate_target_repo_rejects_non_git_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let result = validate_target_repo(tmp.path().to_str().unwrap());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not a git repository"));
-    }
-
-    #[test]
-    fn validate_target_repo_accepts_git_repo() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        let result = validate_target_repo(tmp.path().to_str().unwrap());
-        assert!(result.is_ok());
-    }
-
     #[test]
     fn required_target_repo_rejects_absent() {
         let err = required_target_repo(None).unwrap_err();
@@ -42101,123 +38136,6 @@ edges: []
         assert_eq!(required_target_repo(Some(&padded)).unwrap(), tmp.path());
     }
 
-    #[test]
-    fn validate_source_branch_rejects_nonexistent() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        let result = validate_source_branch(tmp.path(), "nonexistent-branch");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("does not exist"));
-    }
-
-    #[test]
-    fn validate_source_branch_accepts_existing_branch() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        // init_test_repo creates a default branch, find its name
-        let output = std::process::Command::new("git")
-            .args(["branch", "--format=%(refname:short)"])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert!(!branch.is_empty());
-        let result = validate_source_branch(tmp.path(), &branch);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn list_branches_returns_branches() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        // Exactly one local branch (the default checked-out one, whatever the
-        // operator's `init.defaultBranch` names it) and no remotes — the shape,
-        // not just "non-empty".
-        let branches = list_branches(tmp.path()).unwrap();
-        assert_eq!(branches.len(), 1, "one local branch expected: {branches:?}");
-        assert_eq!(branches[0].kind, BranchKind::Local);
-    }
-
-    #[test]
-    fn list_branches_includes_remote_tracking_branches() {
-        let (_origin, work) = init_repo_with_remote();
-        let branches = list_branches(work.path()).unwrap();
-        assert!(
-            branches
-                .iter()
-                .any(|b| b.name == "origin/feature-remote-only" && b.kind == BranchKind::Remote),
-            "remote-only tracking ref must be listed: {branches:?}"
-        );
-    }
-
-    #[test]
-    fn list_branches_excludes_origin_head_symref() {
-        let (_origin, work) = init_repo_with_remote();
-        let branches = list_branches(work.path()).unwrap();
-        // Neither the symref itself nor its bare-`origin` shadow may appear.
-        assert!(
-            !branches.iter().any(|b| b.name == "origin/HEAD"),
-            "origin/HEAD symref must never be listed: {branches:?}"
-        );
-        assert!(
-            !branches.iter().any(|b| b.name == "origin"),
-            "bare 'origin' (the symref's short form) must never be listed: {branches:?}"
-        );
-    }
-
-    #[test]
-    fn list_branches_dedups_remote_twin_of_local_branch() {
-        let (_origin, work) = init_repo_with_remote();
-        let branches = list_branches(work.path()).unwrap();
-        // The clone created a local `main` tracking `origin/main`; the remote twin
-        // is dropped, the local kept.
-        assert!(
-            branches
-                .iter()
-                .any(|b| b.name == "main" && b.kind == BranchKind::Local),
-            "local main must be listed: {branches:?}"
-        );
-        assert!(
-            !branches.iter().any(|b| b.name == "origin/main"),
-            "origin/main (twin of local main) must be deduped away: {branches:?}"
-        );
-    }
-
-    #[test]
-    fn list_branches_keeps_both_remotes_for_same_name() {
-        let (_origin, work) = init_repo_with_remote();
-        let _upstream = add_upstream_with_same_branch(work.path());
-        let branches = list_branches(work.path()).unwrap();
-        // No local `feature-remote-only`, so BOTH tracking refs survive — two
-        // remotes may point at different SHAs; merging them would lie.
-        assert!(
-            branches
-                .iter()
-                .any(|b| b.name == "origin/feature-remote-only" && b.kind == BranchKind::Remote),
-            "origin twin must be listed: {branches:?}"
-        );
-        assert!(
-            branches
-                .iter()
-                .any(|b| b.name == "upstream/feature-remote-only" && b.kind == BranchKind::Remote),
-            "upstream twin must be listed: {branches:?}"
-        );
-    }
-
-    #[test]
-    fn list_branches_orders_locals_before_remotes() {
-        let (_origin, work) = init_repo_with_remote();
-        let branches = list_branches(work.path()).unwrap();
-        let first_remote = branches.iter().position(|b| b.kind == BranchKind::Remote);
-        let last_local = branches.iter().rposition(|b| b.kind == BranchKind::Local);
-        // Both partitions are non-empty here (local main + remote feature), so a
-        // strict last-local < first-remote proves the ordering, not luck.
-        let (Some(fr), Some(ll)) = (first_remote, last_local) else {
-            panic!("expected at least one local and one remote: {branches:?}");
-        };
-        assert!(ll < fr, "all locals must precede all remotes: {branches:?}");
-    }
-
     // ── #802 / ADR-0070: écart amont, dates, and the fetch verb ──────────────
     //
     // Every test below drives a REAL pair of repos (a clone of a filesystem
@@ -42234,246 +38152,6 @@ edges: []
             run_git(dir, &["add", "."]);
             run_git(dir, &["commit", "-m", &format!("{prefix} {i}")]);
         }
-    }
-
-    fn branch_named<'a>(branches: &'a [BranchEntry], name: &str) -> &'a BranchEntry {
-        branches
-            .iter()
-            .find(|b| b.name == name)
-            .unwrap_or_else(|| panic!("no branch {name} in {branches:?}"))
-    }
-
-    #[test]
-    fn list_branches_reports_the_gap_after_origin_moves_ahead() {
-        let (origin, work) = init_repo_with_remote();
-        commit_n(origin.path(), 3, "upstream-move");
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-
-        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(main.upstream.as_deref(), Some("origin/main"));
-        assert_eq!(main.behind, Some(3), "three commits arrived on origin");
-        assert_eq!(main.ahead, Some(0));
-    }
-
-    #[test]
-    fn list_branches_reports_a_diverged_gap_on_both_axes() {
-        let (origin, work) = init_repo_with_remote();
-        commit_n(origin.path(), 2, "theirs");
-        commit_n(work.path(), 1, "mine");
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-
-        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!((main.ahead, main.behind), (Some(1), Some(2)));
-    }
-
-    #[test]
-    fn list_branches_reports_a_zero_gap_when_level_with_upstream() {
-        let (_origin, work) = init_repo_with_remote();
-        // A tracking branch that is exactly level: `%(upstream:track)` is EMPTY here,
-        // which must read as `0↑ 0↓` ("up to date"), never as "no upstream".
-        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(main.upstream.as_deref(), Some("origin/main"));
-        assert_eq!((main.ahead, main.behind), (Some(0), Some(0)));
-    }
-
-    #[test]
-    fn list_branches_leaves_a_branch_without_upstream_without_a_gap() {
-        let (_origin, work) = init_repo_with_remote();
-        run_git(work.path(), &["checkout", "-q", "-b", "local-only"]);
-
-        let solo = branch_named(&list_branches(work.path()).unwrap(), "local-only").clone();
-        assert_eq!(solo.upstream, None);
-        assert_eq!(
-            (solo.ahead, solo.behind),
-            (None, None),
-            "a branch tracking nothing has no écart — not a zero one"
-        );
-    }
-
-    #[test]
-    fn list_branches_carries_the_tip_commit_date_and_subject() {
-        let (_origin, work) = init_repo_with_remote();
-        std::fs::write(work.path().join("z.txt"), "z\n").unwrap();
-        run_git(work.path(), &["add", "."]);
-        run_git(work.path(), &["commit", "-m", "a readable subject"]);
-
-        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(
-            main.last_commit_subject.as_deref(),
-            Some("a readable subject")
-        );
-        let date = main.last_commit_at.expect("a tip date");
-        assert!(
-            chrono::DateTime::parse_from_rfc3339(&date).is_ok(),
-            "the date must parse as RFC-3339 for the client: {date}"
-        );
-    }
-
-    #[test]
-    fn parse_upstream_track_reads_each_shape_git_prints() {
-        assert_eq!(parse_upstream_track("", true), (Some(0), Some(0)));
-        assert_eq!(parse_upstream_track("[ahead 2]", true), (Some(2), Some(0)));
-        assert_eq!(parse_upstream_track("[behind 3]", true), (Some(0), Some(3)));
-        assert_eq!(
-            parse_upstream_track("[ahead 2, behind 3]", true),
-            (Some(2), Some(3))
-        );
-        // Pruned upstream: still tracking something, but nothing left to count.
-        assert_eq!(parse_upstream_track("[gone]", true), (None, None));
-        // No upstream at all — the empty column must NOT read as "level".
-        assert_eq!(parse_upstream_track("", false), (None, None));
-    }
-
-    #[test]
-    fn classify_fetch_error_names_the_common_refusals() {
-        assert_eq!(
-            classify_fetch_error("ssh: Could not resolve hostname github.com"),
-            FetchErrorKind::Network
-        );
-        assert_eq!(
-            classify_fetch_error("git@github.com: Permission denied (publickey)."),
-            FetchErrorKind::Auth
-        );
-        assert_eq!(
-            classify_fetch_error("fatal: couldn't find remote ref"),
-            FetchErrorKind::Failed
-        );
-    }
-
-    #[test]
-    fn last_fetch_at_is_absent_before_any_fetch_and_set_after_one() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        assert_eq!(
-            last_fetch_at(tmp.path()),
-            None,
-            "a repo that never fetched has no date to show"
-        );
-
-        let (_origin, work) = init_repo_with_remote();
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-        let date = last_fetch_at(work.path()).expect("FETCH_HEAD dates the fetch");
-        assert!(
-            chrono::DateTime::parse_from_rfc3339(&date).is_ok(),
-            "{date}"
-        );
-    }
-
-    #[test]
-    fn last_fetch_at_reads_an_empty_fetch_head_as_never() {
-        // What a fetch that reached no remote leaves behind — freshly dated, but
-        // zero bytes. Reporting its mtime would print "fetched just now" over
-        // numbers nobody refreshed. Reproduced here as a plain truncation, which is
-        // exactly what a terminal `git fetch` does when it fails.
-        let (_origin, work) = init_repo_with_remote();
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-        std::fs::write(work.path().join(".git/FETCH_HEAD"), b"").unwrap();
-        assert_eq!(last_fetch_at(work.path()), None);
-    }
-
-    #[tokio::test]
-    async fn fetch_all_remotes_makes_a_new_origin_commit_visible() {
-        let (origin, work) = init_repo_with_remote();
-        // Origin moves ahead and the clone has NOT fetched: the gap is invisible.
-        commit_n(origin.path(), 3, "after-clone");
-        let before = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(before.behind, Some(0), "stale refs still look level");
-
-        assert_eq!(
-            fetch_all_remotes(work.path()).await,
-            None,
-            "fetch succeeded"
-        );
-
-        let after = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
-        assert_eq!(
-            after.behind,
-            Some(3),
-            "the fetch made the three commits visible"
-        );
-        assert!(last_fetch_at(work.path()).is_some());
-    }
-
-    #[tokio::test]
-    async fn fetch_all_remotes_prunes_a_branch_that_vanished_upstream() {
-        let (origin, work) = init_repo_with_remote();
-        run_git(origin.path(), &["branch", "-D", "feature-remote-only"]);
-
-        assert_eq!(fetch_all_remotes(work.path()).await, None);
-
-        let branches = list_branches(work.path()).unwrap();
-        assert!(
-            !branches
-                .iter()
-                .any(|b| b.name == "origin/feature-remote-only"),
-            "a ref deleted upstream must be pruned away: {branches:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn fetch_all_remotes_names_a_repo_with_no_remote() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        let error = fetch_all_remotes(tmp.path()).await.expect("a named reason");
-        assert_eq!(
-            error.kind,
-            FetchErrorKind::NoRemote,
-            "a purely local repo is a legitimate case with its own name"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_failed_fetch_leaves_the_list_and_the_previous_date_intact() {
-        let (_origin, work) = init_repo_with_remote();
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-        let dated_at = last_fetch_at(work.path()).expect("a first successful fetch");
-
-        // Break the remote the way an offline machine or a moved repo would.
-        run_git(
-            work.path(),
-            &["remote", "set-url", "origin", "/nonexistent/repo.git"],
-        );
-        let error = fetch_all_remotes(work.path()).await.expect("a failure");
-        assert!(
-            !error.message.is_empty(),
-            "git's own words reach the popover"
-        );
-
-        // ADR-0070 §1: the écart degrades to "unknown, as of the last successful
-        // fetch" — the list itself is untouched and launching stays possible.
-        let branches = list_branches(work.path()).unwrap();
-        assert!(branches.iter().any(|b| b.name == "main"));
-        // git truncates and re-dates FETCH_HEAD on its way into a doomed fetch, so
-        // without the restore this reads as "fetched just now" over refs nobody
-        // refreshed — and the popover's "last successful fetch 2 d ago" would be a
-        // fabrication. The date must be the one the LAST SUCCESS left.
-        assert_eq!(
-            last_fetch_at(work.path()).as_deref(),
-            Some(dated_at.as_str()),
-            "a failed fetch must leave the last successful fetch's date standing"
-        );
-    }
-
-    #[tokio::test]
-    async fn concurrent_fetches_of_one_repo_share_a_single_flight() {
-        let (_origin, work) = init_repo_with_remote();
-        let path = work.path().to_path_buf();
-        let outcomes = futures_util::future::join_all((0..4).map(|_| {
-            let path = path.clone();
-            async move { fetch_all_remotes(&path).await }
-        }))
-        .await;
-        assert!(
-            outcomes.iter().all(|o| o.is_none()),
-            "every joined caller reads the leader's outcome: {outcomes:?}"
-        );
-        assert!(
-            !fetch_in_flight()
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .contains_key(&path),
-            "the flight is released, so the next ask fetches for real"
-        );
     }
 
     // ── #804: the pre-cut fetch of a Trigger fire ───────────────────────────────
@@ -42594,330 +38272,8 @@ edges: []
         assert_eq!(fetch_before_trigger_cut(&targets).await, None);
     }
 
-    #[test]
-    fn validate_source_branch_accepts_remote_tracking_ref() {
-        let (_origin, work) = init_repo_with_remote();
-        // The remote-only branch has no local counterpart — this was the 400 the
-        // change fixes.
-        let result = validate_source_branch(work.path(), "origin/feature-remote-only");
-        assert!(
-            result.is_ok(),
-            "remote-tracking ref must validate: {result:?}"
-        );
-    }
-
-    #[test]
-    fn validate_source_branch_rejects_unknown_remote_ref() {
-        let (_origin, work) = init_repo_with_remote();
-        let err = validate_source_branch(work.path(), "origin/nope").unwrap_err();
-        assert!(err.contains("does not exist"), "message was: {err}");
-        assert!(
-            err.contains("origin/nope"),
-            "message must name the ref: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_source_branch_does_not_glob() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        // A default branch exists (main/master); a glob would match it. The exact
-        // `show-ref --verify` probe must NOT — `mai*` is not a real branch.
-        let err = validate_source_branch(tmp.path(), "mai*").unwrap_err();
-        assert!(err.contains("does not exist"), "message was: {err}");
-    }
-
-    // ── Fast-forward (#803, ADR-0070 §2) ────────────────────────────────────
-    //
-    // Every case is driven against a REAL repository with a real origin: the
-    // question "did the branch move, and did the files move with it?" has no
-    // meaningful answer over a mocked git.
-
-    /// A clone whose `main` is `n` commits behind `origin/main`, already fetched
-    /// so the gap is visible without any network.
-    fn clone_behind_origin(n: usize) -> (tempfile::TempDir, tempfile::TempDir) {
-        let (origin, work) = init_repo_with_remote();
-        commit_n(origin.path(), n, "upstream-move");
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-        (origin, work)
-    }
-
     fn head_sha(repo: &std::path::Path) -> String {
         structured_diff::rev_parse(repo, "HEAD").expect("HEAD resolves")
-    }
-
-    #[test]
-    fn fast_forward_moves_a_behind_branch_and_its_checkout() {
-        let (origin, work) = clone_behind_origin(3);
-        let before = head_sha(work.path());
-
-        let done = fast_forward_branch(work.path(), "main").expect("a lossless fast-forward");
-
-        assert_eq!(done.commits, 3, "the count is the écart that was shown");
-        assert_eq!(done.upstream, "origin/main");
-        assert_eq!(
-            head_sha(work.path()),
-            head_sha(origin.path()),
-            "the branch now sits on the upstream tip"
-        );
-        assert_ne!(head_sha(work.path()), before, "and it actually moved");
-        // `main` IS checked out here, so the working tree walked forward with the
-        // ref — the file the origin added must exist on disk.
-        assert_eq!(
-            done.moved_checkout.as_deref(),
-            Some(work.path().display().to_string().as_str()),
-            "the popover must be able to name the checkout that moved"
-        );
-        assert!(
-            work.path().join("upstream-move-2.txt").exists(),
-            "an `update-ref` alone would have left the fetched files missing"
-        );
-        // The gap is gone from the list the same response carries.
-        let branches = list_branches(work.path()).unwrap();
-        assert_eq!(branch_named(&branches, "main").behind, Some(0));
-    }
-
-    #[test]
-    fn fast_forward_of_an_unchecked_out_branch_is_a_pure_ref_move() {
-        let (origin, work) = init_repo_with_remote();
-        // `feature-remote-only` exists on origin only; give the clone a local
-        // branch tracking it, WITHOUT checking it out (main stays HEAD).
-        run_git(
-            work.path(),
-            &[
-                "branch",
-                "--track",
-                "feature-remote-only",
-                "origin/feature-remote-only",
-            ],
-        );
-        run_git(origin.path(), &["checkout", "feature-remote-only"]);
-        commit_n(origin.path(), 2, "remote-side");
-        run_git(origin.path(), &["checkout", "main"]);
-        run_git(work.path(), &["fetch", "--quiet", "origin"]);
-
-        let head_before = head_sha(work.path());
-        let done =
-            fast_forward_branch(work.path(), "feature-remote-only").expect("a pure ref move");
-
-        assert_eq!(done.commits, 2);
-        assert!(
-            done.moved_checkout.is_none(),
-            "no checkout holds the branch: none of the user's files change"
-        );
-        assert_eq!(
-            head_sha(work.path()),
-            head_before,
-            "the CHECKED-OUT branch must not budge when another branch is advanced"
-        );
-        assert!(
-            !work.path().join("remote-side-0.txt").exists(),
-            "a pure ref move touches no file in the working tree"
-        );
-        let branches = list_branches(work.path()).unwrap();
-        assert_eq!(
-            branch_named(&branches, "feature-remote-only").behind,
-            Some(0),
-            "the ref really moved, not just the report"
-        );
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_dirty_tree_and_names_the_files() {
-        let (_origin, work) = clone_behind_origin(2);
-        std::fs::write(work.path().join("README.md"), "# dirtied\n").unwrap();
-        let before = head_sha(work.path());
-
-        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
-
-        assert_eq!(refusal.reason, FastForwardRefusal::DirtyTree);
-        assert_eq!(refusal.dirty_count, Some(1));
-        assert!(
-            refusal.dirty_files.iter().any(|l| l.contains("README.md")),
-            "the popover lists what is in the way: {:?}",
-            refusal.dirty_files
-        );
-        assert!(refusal.checkout.is_some(), "and where to look");
-        assert_eq!(
-            head_sha(work.path()),
-            before,
-            "a refusal changes nothing at all"
-        );
-    }
-
-    #[test]
-    fn fast_forward_ignores_untracked_files() {
-        let (origin, work) = clone_behind_origin(1);
-        // Untracked files survive a fast-forward untouched: refusing over them
-        // would refuse the commonest working tree there is.
-        std::fs::write(work.path().join("scratch.txt"), "notes\n").unwrap();
-
-        fast_forward_branch(work.path(), "main").expect("untracked files never block");
-
-        assert_eq!(head_sha(work.path()), head_sha(origin.path()));
-        assert!(
-            work.path().join("scratch.txt").exists(),
-            "and they are still there afterwards"
-        );
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_diverged_branch() {
-        let (_origin, work) = clone_behind_origin(3);
-        commit_n(work.path(), 1, "local-work");
-        let before = head_sha(work.path());
-
-        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
-
-        assert_eq!(refusal.reason, FastForwardRefusal::Diverged);
-        assert_eq!(
-            head_sha(work.path()),
-            before,
-            "the local commit is exactly what must not be dropped"
-        );
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_branch_checked_out_in_another_worktree() {
-        let (_origin, work) = clone_behind_origin(2);
-        // Park `main` in a sibling worktree, the shape a PDO Run itself creates.
-        let elsewhere = tempfile::tempdir().unwrap();
-        let park = elsewhere.path().join("parked");
-        run_git(work.path(), &["checkout", "-q", "-b", "side"]);
-        run_git(
-            work.path(),
-            &["worktree", "add", park.to_str().unwrap(), "main"],
-        );
-        let before = structured_diff::rev_parse(work.path(), "refs/heads/main").unwrap();
-
-        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
-
-        assert_eq!(refusal.reason, FastForwardRefusal::CheckedOutElsewhere);
-        assert!(
-            refusal
-                .checkout
-                .as_deref()
-                .is_some_and(|c| c.contains("parked")),
-            "the worktree is named so the person knows where to look: {refusal:?}"
-        );
-        assert_eq!(
-            structured_diff::rev_parse(work.path(), "refs/heads/main").unwrap(),
-            before
-        );
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_branch_without_an_upstream() {
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        run_git(tmp.path(), &["checkout", "-q", "-b", "solo"]);
-
-        let refusal = fast_forward_branch(tmp.path(), "solo").expect_err("a named refusal");
-
-        assert_eq!(refusal.reason, FastForwardRefusal::NoUpstream);
-    }
-
-    #[test]
-    fn fast_forward_refuses_a_branch_already_up_to_date() {
-        let (_origin, work) = init_repo_with_remote();
-
-        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
-
-        assert_eq!(
-            refusal.reason,
-            FastForwardRefusal::UpToDate,
-            "the benign race: nothing to take, and nothing red about it"
-        );
-    }
-
-    #[tokio::test]
-    async fn fast_forward_endpoint_answers_200_with_the_refreshed_list() {
-        let (_origin, work) = clone_behind_origin(2);
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/repos/fast-forward?path={}",
-                        work.path().to_str().unwrap()
-                    ))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"branch":"main"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["fast_forward"]["commits"], 2);
-        assert_eq!(json["fast_forward"]["upstream"], "origin/main");
-        // The list travels in the SAME response: the client never has to make a
-        // second call and read a repo from between the two.
-        let main = json["branches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|b| b["name"] == "main")
-            .expect("main is listed");
-        assert_eq!(main["behind"], 0);
-    }
-
-    #[tokio::test]
-    async fn fast_forward_endpoint_answers_409_with_the_reason_and_the_list() {
-        let (_origin, work) = clone_behind_origin(2);
-        std::fs::write(work.path().join("README.md"), "# dirty\n").unwrap();
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/repos/fast-forward?path={}",
-                        work.path().to_str().unwrap()
-                    ))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"branch":"main"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["refusal"]["reason"], "dirty_tree");
-        assert!(
-            json["branches"].is_array(),
-            "the list is still there: {json}"
-        );
-    }
-
-    #[tokio::test]
-    async fn fast_forward_endpoint_rejects_a_remote_tracking_ref() {
-        let (_origin, work) = init_repo_with_remote();
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/repos/fast-forward?path={}",
-                        work.path().to_str().unwrap()
-                    ))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"branch":"origin/feature-remote-only"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        // Not a 409: a tracking ref IS the upstream, so asking to advance it is a
-        // malformed request, not a refusal with a reason to show.
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     // ── Dérive de la source (#803, ADR-0070 §4) ──────────────────────────────
@@ -43936,7 +39292,7 @@ edges: []
             .unwrap();
         }
         // impl-1 is still running and isolated: give it a live sub-worktree branch.
-        let live_branch = worktree_ops::sub_worktree_branch(run_id, "impl-1", 1);
+        let live_branch = worktrees::sub_worktree_branch(run_id, "impl-1", 1);
         git_in(target, &["branch", &live_branch, &c2]);
 
         let app = build_router(state);
@@ -46978,429 +42334,6 @@ edges:
         assert_eq!(json["affected_count"], 0);
     }
 
-    static SEED_TS_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-    async fn seed_run_started(state: &Arc<AppState>, run_id: &str, target_repo: Option<&str>) {
-        let seq = SEED_TS_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let ts = format!("2026-01-01T00:00:{:02}.000Z", seq);
-        let mut payload = serde_json::json!({
-            "pipeline_name": "test-pipe",
-            "input": "test",
-        });
-        if let Some(repo) = target_repo {
-            payload["target_repo"] = serde_json::json!(repo);
-        }
-        append_event(
-            state,
-            &event_log::Event {
-                id: None,
-                run_id: run_id.into(),
-                ts,
-                kind: event_log::EventKind::RunStarted,
-                node_id: None,
-                iter: None,
-                payload: Some(payload),
-            },
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn repos_recent_empty_when_no_events() {
-        let state = test_state().await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert!(repos.is_empty());
-    }
-
-    #[tokio::test]
-    async fn repos_recent_returns_single_repo() {
-        let state = test_state().await;
-        seed_run_started(&state, "run-1", Some("/home/user/project-a")).await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(repos, vec!["/home/user/project-a"]);
-    }
-
-    #[tokio::test]
-    async fn repos_recent_deduplicates_and_orders_by_most_recent() {
-        let state = test_state().await;
-        seed_run_started(&state, "run-1", Some("/repo/a")).await;
-        seed_run_started(&state, "run-2", Some("/repo/b")).await;
-        seed_run_started(&state, "run-3", Some("/repo/a")).await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(repos, vec!["/repo/a", "/repo/b"]);
-    }
-
-    #[tokio::test]
-    async fn repos_recent_limits_to_5() {
-        let state = test_state().await;
-        for i in 0..8 {
-            seed_run_started(&state, &format!("run-{i}"), Some(&format!("/repo/{i}"))).await;
-        }
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(repos.len(), 5);
-    }
-
-    #[tokio::test]
-    async fn repos_recent_ignores_events_without_target_repo() {
-        let state = test_state().await;
-        seed_run_started(&state, "run-1", None).await;
-        seed_run_started(&state, "run-2", Some("/repo/real")).await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/repos/recent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let repos: Vec<String> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(repos, vec!["/repo/real"]);
-    }
-
-    // GET /fs/browse default-root resolution (issue #131)
-    //
-    // `resolve_browse_root` is pure w.r.t. the environment (home/repo_root injected),
-    // so these never touch the real `$HOME` and are safe under cargo's parallel test
-    // threads. Each test seeds real temp dirs so the `is_dir`/`is_file` probes are
-    // deterministic.
-
-    #[test]
-    fn resolve_browse_root_explicit_existing_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(Some(tmp.path().to_str().unwrap()), None, repo_root.path())
-            .unwrap();
-        assert_eq!(got, tmp.path());
-    }
-
-    #[test]
-    fn resolve_browse_root_file_resolves_to_parent() {
-        let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("notes.txt");
-        std::fs::write(&file, "x").unwrap();
-        let repo_root = tempfile::tempdir().unwrap();
-        let got =
-            resolve_browse_root(Some(file.to_str().unwrap()), None, repo_root.path()).unwrap();
-        assert_eq!(got, tmp.path());
-    }
-
-    #[test]
-    fn resolve_browse_root_nonexistent_clamps_to_home() {
-        let home = tempfile::tempdir().unwrap();
-        let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(
-            Some("/this/path/definitely/does/not/exist/131"),
-            Some(home.path()),
-            repo_root.path(),
-        )
-        .unwrap();
-        assert_eq!(
-            got,
-            home.path(),
-            "non-existent path clamps to the default (home)"
-        );
-    }
-
-    #[test]
-    fn resolve_browse_root_relative_path_errors() {
-        let repo_root = tempfile::tempdir().unwrap();
-        let err = resolve_browse_root(Some("relative/path"), None, repo_root.path()).unwrap_err();
-        assert_eq!(err, BrowseRootError::Relative);
-    }
-
-    #[test]
-    fn resolve_browse_root_none_uses_home() {
-        let home = tempfile::tempdir().unwrap();
-        let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(None, Some(home.path()), repo_root.path()).unwrap();
-        assert_eq!(got, home.path());
-    }
-
-    #[test]
-    fn resolve_browse_root_none_without_home_uses_repo_root() {
-        let repo_root = tempfile::tempdir().unwrap();
-        let got = resolve_browse_root(None, None, repo_root.path()).unwrap();
-        assert_eq!(got, repo_root.path());
-    }
-
-    #[test]
-    fn resolve_browse_root_falls_through_to_filesystem_root() {
-        // No home, and a repo_root that does not exist → falls through to `/`
-        // (which always exists), so the chain never collapses in practice.
-        let got = resolve_browse_root(None, None, Path::new("/this/repo/root/does/not/exist/131"))
-            .unwrap();
-        assert_eq!(got, Path::new("/"));
-    }
-
-    /// Deserialise a query string through the PRODUCTION extractor (`Query`'s own
-    /// `try_from_uri`, public in axum 0.8) — no HTTP, no router, but the exact
-    /// `serde_urlencoded` path a real request takes.
-    fn browse_query(query: &str) -> Result<BrowseQuery, axum::extract::rejection::QueryRejection> {
-        let uri: axum::http::Uri = format!("/fs/browse{query}").parse().unwrap();
-        Query::<BrowseQuery>::try_from_uri(&uri).map(|Query(q)| q)
-    }
-
-    #[test]
-    fn browse_query_defaults_are_dirs_only_hidden_off() {
-        // The load-bearing default: no query string ⇒ the pre-#431 listing, bit for bit.
-        let q = browse_query("").unwrap();
-        assert_eq!(q.path, None);
-        assert!(!q.files, "files must default to false (dirs only)");
-        assert!(
-            !q.hidden,
-            "hidden must default to false (dot-entries filtered)"
-        );
-    }
-
-    #[test]
-    fn browse_query_accepts_true_and_false() {
-        let q = browse_query("?path=/tmp&files=true&hidden=true").unwrap();
-        assert_eq!(q.path.as_deref(), Some("/tmp"));
-        assert!(q.files);
-        assert!(q.hidden);
-
-        let q = browse_query("?files=false&hidden=false").unwrap();
-        assert!(!q.files);
-        assert!(!q.hidden);
-    }
-
-    #[test]
-    fn browse_query_rejects_valueless_and_non_literal_flags() {
-        // Pins the STRICT wire vocabulary: `serde_urlencoded` defers to
-        // `str::parse::<bool>()`, so anything but the lowercase literals is a 400 —
-        // never a silent `false`. Documented on `BrowseQuery` so nobody discovers this
-        // by hand.
-        for q in [
-            "?files",
-            "?files=1",
-            "?files=0",
-            "?files=yes",
-            "?files=TRUE",
-            "?hidden",
-            "?hidden=yes",
-        ] {
-            assert!(
-                browse_query(q).is_err(),
-                "`{q}` must be rejected, not coerced"
-            );
-        }
-    }
-
-    #[test]
-    fn classify_browse_entry_offers_dirs_always_and_files_only_on_demand() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("a-dir");
-        std::fs::create_dir(&dir).unwrap();
-        let file = tmp.path().join("a-file");
-        std::fs::write(&file, "x").unwrap();
-        // A REAL symlink → dir, so `std::fs::metadata` genuinely follows it (the
-        // `DirEntry::metadata` trap this guards against).
-        let link = tmp.path().join("a-link");
-        std::os::unix::fs::symlink(&dir, &link).unwrap();
-
-        let m = |p: &Path| std::fs::metadata(p).ok();
-
-        // Directories are offered in BOTH modes.
-        assert_eq!(
-            classify_browse_entry(m(&dir).as_ref(), false),
-            EntryKind::Dir
-        );
-        assert_eq!(
-            classify_browse_entry(m(&dir).as_ref(), true),
-            EntryKind::Dir
-        );
-        // A symlink to a dir is a dir (metadata follows).
-        assert_eq!(
-            classify_browse_entry(m(&link).as_ref(), false),
-            EntryKind::Dir
-        );
-        // A regular file only when asked for.
-        assert_eq!(
-            classify_browse_entry(m(&file).as_ref(), false),
-            EntryKind::Skip
-        );
-        assert_eq!(
-            classify_browse_entry(m(&file).as_ref(), true),
-            EntryKind::File
-        );
-    }
-
-    #[test]
-    fn classify_browse_entry_skips_broken_links_and_specials_in_every_mode() {
-        // Unclassifiable (broken link / ELOOP): `metadata` errs → None.
-        assert_eq!(classify_browse_entry(None, false), EntryKind::Skip);
-        assert_eq!(
-            classify_browse_entry(None, true),
-            EntryKind::Skip,
-            "a dangling link must stay invisible even with files=true"
-        );
-
-        // A special file: `Some(meta)` that is neither a dir nor a regular file.
-        let tmp = tempfile::tempdir().unwrap();
-        let sock = tmp.path().join("sock");
-        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        let meta = std::fs::metadata(&sock).unwrap();
-        assert!(!meta.is_dir() && !meta.is_file(), "fixture must be special");
-        assert_eq!(classify_browse_entry(Some(&meta), false), EntryKind::Skip);
-        assert_eq!(
-            classify_browse_entry(Some(&meta), true),
-            EntryKind::Skip,
-            "a socket/fifo must stay invisible: nothing downstream can consume one"
-        );
-    }
-
-    fn browse_entry(name: &str, is_dir: bool) -> BrowseEntry {
-        BrowseEntry {
-            name: name.to_string(),
-            path: format!("/x/{name}"),
-            is_git_repo: false,
-            is_symlink: false,
-            is_dir,
-        }
-    }
-
-    #[test]
-    fn merge_browse_entries_puts_dirs_before_files() {
-        let (entries, truncated) = merge_browse_entries(
-            vec![browse_entry("z-dir", true)],
-            vec![browse_entry("a-file", false)],
-            BROWSE_CAP,
-        );
-        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["z-dir", "a-file"],
-            "genre beats name: a navigable dir is never buried under files"
-        );
-        assert!(!truncated);
-    }
-
-    #[test]
-    fn merge_browse_entries_gives_dirs_first_claim() {
-        // 3 dirs + 2000 files: the dirs are never starved, files fill what's left.
-        let dirs: Vec<BrowseEntry> = (0..3)
-            .map(|i| browse_entry(&format!("d{i}"), true))
-            .collect();
-        let files: Vec<BrowseEntry> = (0..2000)
-            .map(|i| browse_entry(&format!("f{i:04}"), false))
-            .collect();
-        let (entries, truncated) = merge_browse_entries(dirs, files, 1000);
-        assert_eq!(entries.len(), 1000);
-        assert_eq!(entries.iter().filter(|e| e.is_dir).count(), 3);
-        assert_eq!(entries.iter().filter(|e| !e.is_dir).count(), 997);
-        assert!(entries[..3].iter().all(|e| e.is_dir), "dirs come first");
-        assert!(truncated);
-
-        // 1500 dirs + 10 files: dirs consume the whole budget, files get nothing.
-        let dirs: Vec<BrowseEntry> = (0..1500)
-            .map(|i| browse_entry(&format!("d{i:04}"), true))
-            .collect();
-        let files: Vec<BrowseEntry> = (0..10)
-            .map(|i| browse_entry(&format!("f{i}"), false))
-            .collect();
-        let (entries, truncated) = merge_browse_entries(dirs, files, 1000);
-        assert_eq!(entries.len(), 1000);
-        assert!(
-            entries.iter().all(|e| e.is_dir),
-            "dirs claim the budget first"
-        );
-        assert!(truncated);
-    }
-
-    #[test]
-    fn merge_browse_entries_dirs_only_matches_pre_431() {
-        // The default path: `files` empty ⇒ identical to the pre-#431
-        // `sort_by_key(name.to_lowercase()) + truncate(cap)`, and NOT truncated under
-        // the cap.
-        let dirs = vec![
-            browse_entry("Zeta", true),
-            browse_entry("alpha", true),
-            browse_entry("Beta", true),
-        ];
-        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), BROWSE_CAP);
-        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["alpha", "Beta", "Zeta"]);
-        assert!(!truncated);
-
-        // Exactly `cap` dirs is NOT truncated (the pre-#431 `len > cap` semantics).
-        let dirs: Vec<BrowseEntry> = (0..1000)
-            .map(|i| browse_entry(&format!("d{i:04}"), true))
-            .collect();
-        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), 1000);
-        assert_eq!(entries.len(), 1000);
-        assert!(!truncated, "exactly `cap` entries is not a truncation");
-    }
-
     #[test]
     fn prompt_required_pipeline_rejects_empty_input() {
         assert!(validate_run_input(true, "").is_err());
@@ -49572,5 +44505,127 @@ edges:
         assert!(dir.join("foo-bar.yaml").exists());
         let content = std::fs::read_to_string(dir.join("foo-bar.yaml")).unwrap();
         assert!(content.contains("name: Foo Bar"));
+    }
+
+    #[test]
+    fn frozen_node_provisioning_uses_the_started_iteration_recipe_and_plan() {
+        let event = event_log::Event {
+            id: None,
+            run_id: "run".into(),
+            ts: "2026-09-01T12:00:00Z".into(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some("worker".into()),
+            iter: Some(2),
+            payload: Some(serde_json::json!({
+                "provisioning": {
+                    "copy": [".env"],
+                    "hardlink": [],
+                    "symlink": []
+                },
+                "provisioning_plan": {
+                    "entries": [{
+                        "relative_path": ".env",
+                        "mode": "copy",
+                        "origin_scope": "isolated_node",
+                        "pattern": ".env",
+                        "provided_by_git": false
+                    }],
+                    "rules": [],
+                    "conflicts": []
+                }
+            })),
+        };
+
+        assert_eq!(
+            frozen_node_rules(std::slice::from_ref(&event), "worker", 2)
+                .unwrap()
+                .copy,
+            vec![".env"]
+        );
+        assert_eq!(
+            frozen_node_plan(&[event], "worker", 2).unwrap().entries[0].relative_path,
+            ".env"
+        );
+        assert!(frozen_node_rules(&[], "worker", 2).is_none());
+        assert!(frozen_node_plan(&[], "worker", 2).is_none());
+    }
+
+    #[test]
+    fn reap_orphan_run_worktree_removes_empty_run_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let worktree = worktree_dir_for_run(repo, "failed-run");
+        reap_orphan_run_worktree(repo, &worktree, "pdo/run-failed-run");
+
+        assert!(
+            !worktree.parent().unwrap().exists(),
+            "an aborted Run must not leave its empty directory behind"
+        );
+    }
+
+    /// The Projet's agentic profile and skills are stored opaque by the
+    /// workspace; this crate decodes them for the harness and skill tiers.
+    #[tokio::test]
+    async fn the_projet_tiers_decode_what_the_workspace_stores() {
+        use pdo_workspace::adapters::http::ProjectSettings;
+        use pdo_workspace::application::ports::ProjectRepository;
+        use pdo_workspace::domain::project::StoredSetting;
+
+        let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        pdo_workspace::adapters::sqlite::init(&db).await.unwrap();
+        let store = pdo_workspace::adapters::sqlite::SqliteProjects::new(db.clone());
+        let project = store.create("Alpha").await.unwrap();
+        store.add_member(&project.id, "/repos/front").await.unwrap();
+        assert_eq!(
+            project_agent_choice_for_path(&db, "/repos/front")
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(project_skills_for_path(&db, "/repos/front")
+            .await
+            .unwrap()
+            .is_empty());
+
+        let choice = pdo_harness::agent_choice::AgentChoice::Profile {
+            profile_id: "reviewer".to_string(),
+        };
+        let encoded = LegacyProjectSettings::encode_agent_choice(&choice);
+        store
+            .set_agent_choice(&project.id, Some(StoredSetting(encoded)))
+            .await
+            .unwrap();
+        let skills = LegacyProjectSettings::encode_skills(vec![
+            skill_selection::SkillRef {
+                id: " tdd ".into(),
+                name: "TDD".into(),
+            },
+            skill_selection::SkillRef {
+                id: "tdd".into(),
+                name: "dup".into(),
+            },
+        ]);
+        store
+            .set_skills(&project.id, skills.map(StoredSetting))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            project_agent_choice_for_path(&db, "/repos/front")
+                .await
+                .unwrap(),
+            Some(choice)
+        );
+        let selected = project_skills_for_path(&db, "/repos/front").await.unwrap();
+        assert_eq!(selected.len(), 1, "normalised on the way in: {selected:?}");
+        assert_eq!(selected[0].id, "tdd");
+        assert!(project_skills_for_path(&db, "/repos/other")
+            .await
+            .unwrap()
+            .is_empty());
+        // An empty selection is stored as none.
+        assert_eq!(LegacyProjectSettings::encode_skills(vec![]), None);
     }
 }

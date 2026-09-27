@@ -17,7 +17,7 @@ use tracing::{error, info, warn};
 
 use crate::node_spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
 use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
-use crate::worktree_ops::worktree_dir_for_run;
+use crate::worktrees::worktree_dir_for_run;
 use crate::{
     append_event, check_output_validation_with_retry, cleanup_run, completion_head_gate,
     completion_refusal, create_run_core, effective_repo_root, event_log, force_spawn_node,
@@ -1617,11 +1617,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 .unwrap_or(node.is_isolated());
             if owns_sub_worktree {
                 let sub_wt_dir =
-                    crate::worktree_ops::sub_worktree_path(&repo_root, &run_id, &node_id, iter);
-                let sub_branch = crate::worktree_ops::sub_worktree_branch(&run_id, &node_id, iter);
+                    crate::worktrees::sub_worktree_path(&repo_root, &run_id, &node_id, iter);
+                let sub_branch = crate::worktrees::sub_worktree_branch(&run_id, &node_id, iter);
                 let pipeline_branch = format!("pdo/run-{run_id}");
-                if let crate::worktree_ops::SubWorktreeState::Occupied { detail } =
-                    crate::worktree_ops::classify_sub_worktree(
+                if let crate::worktrees::SubWorktreeState::Occupied { detail } =
+                    crate::worktrees::classify_sub_worktree(
                         &repo_root,
                         &sub_wt_dir,
                         &sub_branch,

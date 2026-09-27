@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.111.2 — Contexte `session` extrait (#920, spec #913)
+## 1.111.4 — Contexte `session` extrait (#920, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques).
 
@@ -30,6 +30,37 @@ Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots id
   `pdo_session::adapters::pty`.
 - Front : le terminal, la modale du shell de Run et le panneau de l'assistant passent dans
   `frontend/src/session/`.
+
+## 1.111.3 — Contexte `workspace` extrait (#917, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les
+routes `/projects*`, `/repos*`, `/fs/browse` et `/settings/provisioning` répondent comme avant).
+
+- Nouveau crate `pdo-workspace` (domain / application / adapters) : projets, provisioning,
+  worktrees et création de dépôt quittent `pdo-legacy` (`project_store`, `provisioning`,
+  `worktree_ops`, `repo_scaffold`). Chaque mutation passe par un use case qui construit une
+  Opération et appelle l'autorisation.
+- Git passe derrière un port : un adaptateur unique (`adapters/git`), testé contre un vrai
+  dépôt temporaire, que les autres contextes appelleront à leur migration.
+- Le crate legacy monte le routeur du contexte et lui passe l'hôte d'extensions par
+  `DaemonConfig::extension_host` ; le passage par `contexts.rs`, comme `platform`, reste à faire.
+- Front : édition de projet, `SourceBranchField`, éditeurs de provisioning, explorateur de
+  dossiers et combobox de dépôt passent dans `frontend/src/workspace/`.
+
+## 1.111.2 — Contexte `platform` extrait (#916, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les
+routes `/pages*`, `/update*` et `/audit` répondent comme avant).
+
+- Nouveau crate `pdo-platform` (domain / application / adapters), premier contexte extrait et
+  gabarit des suivants : montage de pages, vérification et application des mises à jour,
+  changelog, unité de service et journal d'audit quittent `pdo-legacy`. Chaque mutation passe
+  par un use case qui construit une Opération et appelle l'autorisation.
+- La CLI `pdo page` et `pdo service` passe dans `adapters/cli` du contexte. Le crate legacy
+  câble les contextes extraits via `contexts.rs`, la seule couture que la composition root
+  utilise.
+- Front : pages montées, mise à jour, changelog et journal d'audit passent dans
+  `frontend/src/platform/`.
 
 ## 1.111.1 — Contexte `harness` extrait (#919, spec #913)
 

@@ -44,14 +44,17 @@ vi.mock("../api", async (importOriginal) => {
     fetchPipelineSkillsSidecar,
     startRunManager,
     stopRunManager,
-    fetchSourceDrift,
-    fetchRemotes,
-  };
+    fetchSourceDrift,};
 });
 
 vi.mock("../session/api/assistant", () => ({
   openLibraryAssistant,
   closeLibraryAssistant,
+}));
+
+vi.mock("../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/repos")>()),
+  fetchRemotes,
 }));
 
 import PipelineInfoPanel from "./PipelineInfoPanel";

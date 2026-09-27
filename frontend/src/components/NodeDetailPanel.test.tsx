@@ -46,9 +46,13 @@ vi.mock("../api", () => ({
   stopNode: (...args: unknown[]) => stopNodeMock(...args),
   retryNode: (...args: unknown[]) => retryNodeMock(...args),
   retryNodePreview: (...args: unknown[]) => retryNodePreviewMock(...args),
-  previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
   startNode: (...args: unknown[]) => startNodeMock(...args),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+  previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
 }));
 
 function MockTmuxTerminal({ session, expanded, onExpand, status, paneSource, onSpectatingChange }: {

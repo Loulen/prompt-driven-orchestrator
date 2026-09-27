@@ -1662,7 +1662,7 @@ async fn invalid_couple_scope(
 /// whole list, as it stands after the write.
 pub(crate) async fn create_absorption(
     State(state): State<Arc<AppState>>,
-    actor: crate::audit_log::Actor,
+    actor: pdo_platform::adapters::http::OriginHint,
     Json(body): Json<CombineRequest>,
 ) -> Response {
     if let Some(response) = unsupported_dimension(&body.dimension) {
@@ -1730,9 +1730,10 @@ pub(crate) async fn create_absorption(
             format!("stats absorption failed: {e}"),
         );
     }
-    crate::audit_log::record_best_effort(
-        &state.db,
-        crate::audit_log::NewAuditEntry {
+    state
+        .platform
+        .record_audit()
+        .execute(pdo_platform::domain::audit::NewAuditEntry {
             actor_hint: actor.as_hint().to_string(),
             action: "stats_absorption.combine".to_string(),
             target_kind: Some("stats_absorption".to_string()),
@@ -1744,9 +1745,8 @@ pub(crate) async fn create_absorption(
                 "absorbent": absorbent,
                 "members": members,
             })),
-        },
-    )
-    .await;
+        })
+        .await;
     current(&state.db).await
 }
 
@@ -1763,7 +1763,7 @@ pub(crate) struct UncombineQuery {
 /// file-name stem or a free name, never safe as a path segment.
 pub(crate) async fn delete_absorption_member(
     State(state): State<Arc<AppState>>,
-    actor: crate::audit_log::Actor,
+    actor: pdo_platform::adapters::http::OriginHint,
     Query(q): Query<UncombineQuery>,
 ) -> Response {
     if let Some(response) = unsupported_dimension(&q.dimension) {
@@ -1771,9 +1771,10 @@ pub(crate) async fn delete_absorption_member(
     }
     match remove_member(&state.db, &q.dimension, &q.scope, &q.member).await {
         Ok(true) => {
-            crate::audit_log::record_best_effort(
-                &state.db,
-                crate::audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "stats_absorption.uncombine".to_string(),
                     target_kind: Some("stats_absorption".to_string()),
@@ -1784,9 +1785,8 @@ pub(crate) async fn delete_absorption_member(
                         "member": q.member,
                     })),
                     after: None,
-                },
-            )
-            .await;
+                })
+                .await;
             current(&state.db).await
         }
         Ok(false) => error(StatusCode::NOT_FOUND, "this row is not combined"),

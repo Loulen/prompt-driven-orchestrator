@@ -11,7 +11,6 @@ import type { FrontmatterViolation } from "./shared/generated/FrontmatterViolati
 import type { Trigger } from "./shared/generated/Trigger";
 import type { TriggerListEntry } from "./shared/generated/TriggerListEntry";
 import type { TriggerFire } from "./shared/generated/TriggerFire";
-import type { UpdateStatus, UpdateApplyResponse } from "./platform/model/daemon";
 import type { InstanceSettings, SyncCostPricesReport, AgentProfileReferents } from "./settings/model/settings";
 import type { UpdateSettingsRequest } from "./shared/generated/UpdateSettingsRequest";
 import type { StatsOverview } from "./shared/generated/StatsOverview";
@@ -21,17 +20,10 @@ import type { StatsAbsorption } from "./shared/generated/StatsAbsorption";
 import type { StatsAbsorptionList } from "./shared/generated/StatsAbsorptionList";
 import type { SandboxProfile, SandboxProfileReferents } from "./sandbox/model/sandbox";
 import type { SandboxProfileImage } from "./shared/generated/SandboxProfileImage";
-import type { UpdateChangelog } from "./shared/generated/UpdateChangelog";
-import type { Project } from "./shared/generated/Project";
-import type { BranchList } from "./shared/generated/BranchList";
-import type { FastForwardOutcome } from "./workspace/model/branches";
-import type { FastForwardRefusal } from "./shared/generated/FastForwardRefusal";
-import type { FastForwardResult } from "./shared/generated/FastForwardResult";
 import type { SourceDrift } from "./shared/generated/SourceDrift";
 import type { AgentChoice } from "./shared/generated/AgentChoice";
 import type { AgentProfile } from "./shared/generated/AgentProfile";
 import type { AgentProfileInput } from "./shared/generated/AgentProfileInput";
-import type { ProvisioningPlan } from "./shared/generated/ProvisioningPlan";
 import type { ProvisioningRules } from "./shared/generated/ProvisioningRules";
 import type { Skill } from "./shared/generated/Skill";
 import type { SkillBank, SkillDetail, SkillFileContent, SkillFilesUpload, SkillReferents, SkillScanResult } from "./skill/model/skill";
@@ -51,48 +43,6 @@ import { ApiError, apiErrorMessage, BASE, request } from "./shared/http/client";
 
 export function fetchRuns(): Promise<RunListEntry[]> {
   return request<RunListEntry[]>("GET", "/runs");
-}
-
-/**
- * Version check (#697). `GET /update` reads the daemon's cache (zero egress);
- * `POST /update/check` forces one request to the release source and answers the
- * refreshed state — 502 with `error` + the refreshed state when the source is down,
- * 409 when the check is off or already in flight.
- */
-export function fetchUpdateStatus(): Promise<UpdateStatus> {
-  return request<UpdateStatus>("GET", "/update");
-}
-
-export function checkForUpdateNow(): Promise<UpdateStatus> {
-  return request<UpdateStatus>("POST", "/update/check", { label: "POST /update/check" });
-}
-
-/**
- * « What's new » (#698): the release notes of every version strictly newer than the
- * installed one, newest first — or the embedded `CHANGELOG.md` with an explicit
- * `fallback_reason` when the release list is unavailable. Always answers 200.
- */
-export function fetchUpdateChangelog(): Promise<UpdateChangelog> {
-  return request<UpdateChangelog>("GET", "/update/changelog");
-}
-
-/**
- * Update (#699): `POST /update/apply` spawns the detached executor and answers 202 at
- * once with the attempt id — 409 with `error` when the install method is unknown or
- * an attempt is already running. `GET /update/attempts/{id}/log` is the journal, text.
- */
-export function applyUpdate(): Promise<UpdateApplyResponse> {
-  return request<UpdateApplyResponse>("POST", "/update/apply", { label: "POST /update/apply" });
-}
-
-export async function fetchUpdateAttemptLog(attemptId: string): Promise<string> {
-  const res = await fetch(`/update/attempts/${encodeURIComponent(attemptId)}/log`);
-  if (!res.ok) {
-    throw new ApiError(`GET /update/attempts/${attemptId}/log failed: ${res.status}`, {
-      status: res.status,
-    });
-  }
-  return res.text();
 }
 
 export function fetchSettings(): Promise<InstanceSettings> {
@@ -730,41 +680,6 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
   return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "POST /runs" });
 }
 
-export function previewProvisioning(
-  repository: string,
-  scope: import("./shared/generated/ProvisioningScope").ProvisioningScope,
-  rules: ProvisioningRules,
-  inherited?: import("./shared/generated/ScopedProvisioningRules").ScopedProvisioningRules[],
-  gitRef = "HEAD",
-): Promise<ProvisioningPlan> {
-  return request("POST", "/repos/provisioning/preview", {
-    body: { repository, git_ref: gitRef, scope, rules, inherited },
-  });
-}
-
-export function fetchInstanceProvisioning(): Promise<ProvisioningRules> {
-  return request("GET", "/settings/provisioning");
-}
-
-export function saveInstanceProvisioning(
-  rules: ProvisioningRules,
-): Promise<ProvisioningRules> {
-  return request("PUT", "/settings/provisioning", { body: rules });
-}
-
-export function fetchProjectProvisioning(projectId: string): Promise<ProvisioningRules> {
-  return request("GET", `/projects/${encodeURIComponent(projectId)}/provisioning`);
-}
-
-export function saveProjectProvisioning(
-  projectId: string,
-  rules: ProvisioningRules,
-): Promise<ProvisioningRules> {
-  return request("PUT", `/projects/${encodeURIComponent(projectId)}/provisioning`, {
-    body: rules,
-  });
-}
-
 /** The body of a mid-run repo-list edit (#465 slice 2). `add` entries mirror the
  *  create-modal secondary rows; `remove` names aliases. Both optional — an empty
  *  body is a legal no-op. */
@@ -905,68 +820,6 @@ export function updateTrigger(
   );
 }
 
-export function fetchProjects(): Promise<Project[]> {
-  return request<Project[]>("GET", "/projects");
-}
-
-export function createProject(name: string): Promise<Project> {
-  return request<Project>("POST", "/projects", {
-    body: { name },
-    label: "POST /projects",
-  });
-}
-
-/**
- * Rename a Projet and/or (re)set the harness it carries (`PATCH /projects/{id}`).
- * `harness`: a string sets it, `null` clears it, `undefined` leaves it unchanged
- * (double-`Option` on the wire). `name` omitted leaves it unchanged.
- */
-export interface UpdateProjectRequest {
-  name?: string;
-  harness?: string | null;
-  agent_choice?: AgentChoice | null;
-  /** #669: replace the Projet's skills wholesale; `[]` clears. */
-  skills?: SkillRef[];
-}
-
-export function updateProject(
-  projectId: string,
-  req: UpdateProjectRequest,
-): Promise<Project> {
-  return request<Project>("PATCH", `/projects/${encodeURIComponent(projectId)}`, {
-    body: req,
-    label: `PATCH /projects/${projectId}`,
-  });
-}
-
-/**
- * Attach a member path to a Projet (`POST /projects/{id}/members`). Throws an
- * {@link ApiError} with `status: 409` whose message names the owning Projet when
- * the path already belongs to a different one (AC: refus nommant le propriétaire).
- */
-export function addProjectMember(projectId: string, path: string): Promise<Project> {
-  return request<Project>(
-    "POST",
-    `/projects/${encodeURIComponent(projectId)}/members`,
-    { body: { path }, label: `POST /projects/${projectId}/members` },
-  );
-}
-
-export function removeProjectMember(projectId: string, path: string): Promise<Project> {
-  return request<Project>(
-    "DELETE",
-    `/projects/${encodeURIComponent(projectId)}/members`,
-    { body: { path }, label: `DELETE /projects/${projectId}/members` },
-  );
-}
-
-export function deleteProject(projectId: string): Promise<void> {
-  return request<void>("DELETE", `/projects/${encodeURIComponent(projectId)}`, {
-    responseMode: "void",
-    label: `DELETE /projects/${projectId}`,
-  });
-}
-
 export async function deleteTrigger(triggerId: string): Promise<void> {
   // Status-inspecting: a 404 is a tolerated success (idempotent delete), so raw
   // mode keeps the bespoke guard rather than routing through the core's throw.
@@ -1055,139 +908,6 @@ export function testGuard(
   );
 }
 
-export interface ValidateRepoResponse {
-  valid: boolean;
-  error?: string;
-}
-
-export async function validateRepo(path: string): Promise<ValidateRepoResponse> {
-  // No `resp.ok` check by contract: the `{ valid, error }` body is authoritative
-  // even on a non-2xx, so raw mode reads the body unconditionally (never throws).
-  const resp = await request<Response>(
-    "GET",
-    `/repos/validate?path=${encodeURIComponent(path)}`,
-    { responseMode: "raw" },
-  );
-  return resp.json();
-}
-
-export interface CreateRepoFile {
-  /** Relative to the new repository; may name a subfolder. */
-  path: string;
-  content: string;
-}
-
-export interface CreateRepoResponse {
-  /** Absolute path of the repository, created or already there. */
-  path: string;
-  /** `false` when an existing repository was reused untouched. */
-  created: boolean;
-}
-
-/**
- * Create a git repository at `<parent>/<name>` with `files` and one commit on
- * `main` (#824) — a generic verb, not a tour one. Idempotent: an existing
- * repository at that path is handed back as is, with no second commit and no
- * write over what the user did in it. An existing *non*-repository is refused,
- * and the {@link ApiError} carries the daemon's sentence for quoting verbatim.
- *
- * The created path is deliberately NOT added to recent repositories — that list
- * is built from Runs, and nothing has run here yet.
- */
-export function createRepo(
-  parent: string,
-  name: string,
-  files: CreateRepoFile[] = [],
-): Promise<CreateRepoResponse> {
-  return request<CreateRepoResponse>("POST", "/repos/create", {
-    body: { parent, name, files },
-    label: "POST /repos/create",
-  });
-}
-
-export function listBranches(repoPath: string): Promise<BranchList> {
-  return request<BranchList>(
-    "GET",
-    `/repos/branches?path=${encodeURIComponent(repoPath)}`,
-    { label: "GET /repos/branches" },
-  );
-}
-
-/**
- * Fetch every remote of `repoPath` (pruning refs that vanished), then answer the
- * refreshed list (#802, ADR-0070 §1).
- *
- * Read-only on the remote side and never blocking on this side: a fetch that fails
- * still resolves, with `fetch_error` set and the on-disk list intact. Callers must
- * NOT treat a failure as a reason to clear branches or to refuse a launch — a repo
- * that is offline, has no remote, or has no key is a legitimate repo.
- *
- * Only one fetch per repo runs at a time daemon-side: overlapping asks (form opened,
- * repo changed, sync clicked) join the one in flight.
- */
-export function fetchRemotes(repoPath: string): Promise<BranchList> {
-  return request<BranchList>(
-    "POST",
-    `/repos/fetch?path=${encodeURIComponent(repoPath)}`,
-    { label: "POST /repos/fetch" },
-  );
-}
-
-/**
- * Fast-forward a local branch onto its tracking branch (#803, ADR-0070 §2).
- *
- * Raw mode: a 409 here is a **named refusal**, not a failed call — it carries the
- * reason to show AND the refreshed list, so letting `request` throw would lose both.
- * The only write PDO performs on a local branch; never a merge, rebase or push.
- *
- * Callers must treat every outcome as non-blocking: a refusal changes nothing in
- * the repo and never stops a launch (the shortcut to `origin/<branch>` is the exit
- * that always works).
- */
-export async function fastForwardBranch(
-  repoPath: string,
-  branch: string,
-): Promise<FastForwardOutcome> {
-  let resp: Response;
-  try {
-    resp = await request<Response>(
-      "POST",
-      `/repos/fast-forward?path=${encodeURIComponent(repoPath)}`,
-      { body: { branch }, responseMode: "raw", label: "POST /repos/fast-forward" },
-    );
-  } catch (e) {
-    return { kind: "error", message: e instanceof Error ? e.message : String(e) };
-  }
-  const parsed: unknown = await resp.json().catch(() => null);
-  if (resp.ok) {
-    const b = parsed as { fast_forward: FastForwardResult } & BranchList;
-    return { kind: "done", result: b.fast_forward, list: listOf(b) };
-  }
-  const b = parsed as ({ refusal?: FastForwardRefusal } & Partial<BranchList>) | null;
-  if (b?.refusal) {
-    // The list travels with the refusal: two of the five reasons are races the
-    // client heals by simply re-reading the truth.
-    return {
-      kind: "refused",
-      refusal: b.refusal,
-      list: Array.isArray(b.branches) ? listOf(b as BranchList) : null,
-    };
-  }
-  return {
-    kind: "error",
-    message: apiErrorMessage(parsed, `fast-forward refused: ${resp.status}`),
-  };
-}
-
-/** Lift the flattened `BranchList` out of a fast-forward response body. */
-function listOf(b: BranchList): BranchList {
-  return {
-    branches: b.branches,
-    last_fetch_at: b.last_fetch_at ?? null,
-    fetch_error: b.fetch_error ?? null,
-  };
-}
-
 /**
  * A Run's drift from its source branch since the fork (#803, ADR-0070 §4).
  *
@@ -1201,68 +921,6 @@ export function fetchSourceDrift(runId: string): Promise<SourceDrift> {
     `/runs/${encodeURIComponent(runId)}/source-drift`,
     { label: `GET /runs/${runId}/source-drift` },
   );
-}
-
-export function fetchRecentRepos(): Promise<string[]> {
-  return request<string[]>("GET", "/repos/recent");
-}
-
-export interface BrowseEntry {
-  name: string;
-  path: string;
-  /** `.git`-presence hint (never a `git rev-parse`); meaningless for a file. */
-  is_git_repo: boolean;
-  is_symlink: boolean;
-  /**
-   * #431: `true` for a directory (symlinks FOLLOWED), `false` for a regular file.
-   * Always emitted, including under the dirs-only default where it is invariably
-   * `true`, so an entry's shape never depends on the request.
-   */
-  is_dir: boolean;
-}
-
-export interface BrowseResponse {
-  /** The directory actually listed (canonicalized). */
-  path: string;
-  /** Parent directory, or null only at the filesystem root. */
-  parent: string | null;
-  entries: BrowseEntry[];
-  /** True iff the post-filter entry count exceeded the listing cap. */
-  truncated: boolean;
-  /** Non-null when the dir was navigable but unlistable (e.g. permission denied). */
-  error: string | null;
-}
-
-/**
- * Optional widening of the listing (#431). Both flags are **off** by default, which
- * is the pre-rename behaviour bit for bit: directories only, dot-entries filtered.
- * A flag only travels on the wire when `true`, so the default call's URL is exactly
- * `/fs/browse`, with no query string at all.
- */
-export interface BrowseOptions {
-  files?: boolean;
-  hidden?: boolean;
-}
-
-/**
- * List `path` (or the daemon's default chain `$HOME → repo_root → /` when omitted).
- * 200 always carries the {@link BrowseResponse} shape — including the in-body
- * `error` for navigable-but-unlistable dirs — so callers branch on `data.error`.
- * Only genuine caller/system bugs (relative path → 400, collapsed default → 500)
- * throw here.
- *
- * `path` stays the FIRST positional parameter, and in default mode callers must pass
- * it as the SOLE argument: `RepoCombobox.test.tsx` pins `browseFs(undefined)` /
- * `browseFs("/abs/repo/path")` and vitest compares arity strictly (a trailing
- * `undefined` is a recorded second argument and breaks `toHaveBeenCalledWith`).
- */
-export function browseFs(path?: string, opts: BrowseOptions = {}): Promise<BrowseResponse> {
-  return request<BrowseResponse>("GET", "/fs/browse", {
-    // `request` drops undefined-valued keys, so `|| undefined` keeps `files=false`
-    // off the wire instead of sending a redundant explicit default.
-    query: { path, files: opts.files || undefined, hidden: opts.hidden || undefined },
-    label: "GET /fs/browse",
-  });
 }
 
 export function killNode(

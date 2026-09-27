@@ -207,33 +207,10 @@ vi.mock("../api", () => {
         tick_interval_secs: 30,
         paused: false,
       }),
-      fetchProjects: vi.fn().mockResolvedValue([]),
       pauseTriggers: vi.fn().mockResolvedValue(undefined),
-      fetchUpdateStatus: vi.fn().mockResolvedValue({
-        installed_version: "9.9.9-test",
-        latest_version: null,
-        newer_available: false,
-        checked_at: null,
-        source: "GitHub Releases",
-        source_url: "https://example.invalid/releases/latest",
-        check_enabled: true,
-        install_method: "unknown",
-        manual_command: "Build from source, then restart the daemon.",
-        supervision: "none",
-        reason: "Not checked yet.",
-        last_error: null,
-        active_runs: 0,
-        can_apply: true,
-        apply_blocked_reason: null,
-        last_attempt: null,
-      }),
-      applyUpdate: vi.fn().mockResolvedValue({}),
-      fetchUpdateAttemptLog: vi.fn().mockResolvedValue(""),
-      checkForUpdateNow: vi.fn().mockResolvedValue({}),
       fetchLibrary: vi.fn().mockResolvedValue([]),
       fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
       fetchPipelines: vi.fn().mockResolvedValue([]),
-      listBranches: vi.fn().mockResolvedValue([]),
       fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
       createAgentProfile: vi.fn().mockResolvedValue({}),
       updateAgentProfile: vi.fn().mockResolvedValue(undefined),
@@ -252,13 +229,6 @@ vi.mock("../api", () => {
       uploadSkillFileFromPath: vi.fn().mockResolvedValue({}),
       uploadSkillFiles: vi.fn().mockResolvedValue({}),
       writeSkillFile: vi.fn().mockResolvedValue(undefined),
-      browseFs: vi.fn().mockResolvedValue({
-        path: "/home/user",
-        parent: null,
-        entries: [],
-        truncated: false,
-        error: null,
-      }),
       // A minimal but complete virtual profile — the editor renders `floor`,
       // `disabled`, `extras`, `env`… of the selected one.
       fetchSandboxProfile: vi.fn().mockImplementation((name: string) =>
@@ -267,17 +237,6 @@ vi.mock("../api", () => {
       saveSandboxProfile: vi.fn().mockResolvedValue(undefined),
       deleteSandboxProfile: vi.fn().mockResolvedValue(undefined),
       fetchSandboxProfileReferents: vi.fn().mockResolvedValue({ runs: [], triggers: [] }),
-      // Instance provisioning rules (Settings › Provisioning): the empty rule set.
-      fetchInstanceProvisioning: vi.fn().mockResolvedValue({
-        copy: [],
-        hardlink: [],
-        symlink: [],
-      }),
-      saveInstanceProvisioning: vi.fn().mockResolvedValue({
-        copy: [],
-        hardlink: [],
-        symlink: [],
-      }),
       fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
       fetchSandboxProfiles: vi.fn().mockResolvedValue({
         profiles: [virtualProfile("full"), virtualProfile("minimal")],
@@ -358,8 +317,68 @@ vi.mock("../session/api/assistant", () => ({
   putLibassistFocus: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/repos")>()),
+  listBranches: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+  browseFs: vi.fn().mockResolvedValue({
+    path: "/home/user",
+    parent: null,
+    entries: [],
+    truncated: false,
+    error: null,
+  }),
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+  // Instance provisioning rules (Settings › Provisioning): the empty rule set.
+  fetchInstanceProvisioning: vi.fn().mockResolvedValue({
+    copy: [],
+    hardlink: [],
+    symlink: [],
+  }),
+  saveInstanceProvisioning: vi.fn().mockResolvedValue({
+    copy: [],
+    hardlink: [],
+    symlink: [],
+  }),
+}));
+
 // The canvas is outside the paths under test; collapse it like the EditCanvas
 // tests do so no real ReactFlow measurement runs under jsdom.
+vi.mock("../platform/api/update", () => ({
+  fetchUpdateStatus: vi.fn().mockResolvedValue({
+    installed_version: "9.9.9-test",
+    latest_version: null,
+    newer_available: false,
+    checked_at: null,
+    source: "GitHub Releases",
+    source_url: "https://example.invalid/releases/latest",
+    check_enabled: true,
+    install_method: "unknown",
+    manual_command: "Build from source, then restart the daemon.",
+    supervision: "none",
+    reason: "Not checked yet.",
+    last_error: null,
+    active_runs: 0,
+    can_apply: true,
+    apply_blocked_reason: null,
+    last_attempt: null,
+  }),
+  applyUpdate: vi.fn().mockResolvedValue({}),
+  fetchUpdateAttemptLog: vi.fn().mockResolvedValue(""),
+  checkForUpdateNow: vi.fn().mockResolvedValue({}),
+}));
+
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
   return {

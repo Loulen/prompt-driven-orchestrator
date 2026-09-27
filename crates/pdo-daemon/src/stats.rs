@@ -288,7 +288,7 @@ fn finish_pipeline(
 fn project_identity(
     payload: &serde_json::Value,
     daemon_root: &Path,
-    projects: &[crate::project_store::Project],
+    projects: &[pdo_workspace::domain::project::Project],
 ) -> (String, String) {
     let root = cost_project_root(payload, daemon_root);
     let root_text = root.to_string_lossy().into_owned();
@@ -1859,7 +1859,7 @@ pub(crate) async fn stats_cost(
     // `copilot`'s store is always the host journal (no staging set); `pi`'s moves per
     // Run (#708) — the staged sink while a sandboxed Run lives, the host store after
     // merge-back — so `stores` is rebuilt inside the per-Run loop below, not here.
-    let stored_projects = match crate::project_store::list(&state.db).await {
+    let stored_projects = match crate::workspace_db::list(&state.db).await {
         Ok(projects) => projects,
         Err(error) => {
             return (

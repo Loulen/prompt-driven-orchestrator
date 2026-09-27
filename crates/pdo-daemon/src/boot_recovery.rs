@@ -123,9 +123,9 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
         // #432 (ADR-0031 §7): keep the two `Err` arms SPLIT — they fail for
         // categorically different reasons (see each arm).
         if !run_state.sandbox.is_off() {
-            match crate::sandbox_run::context_from_state(state, &run_state).await {
+            match crate::run_sandbox::context_from_state(state, &run_state).await {
                 Ok(ctx) => {
-                    match tokio::task::spawn_blocking(move || crate::sandbox_run::ensure_ready(&ctx))
+                    match tokio::task::spawn_blocking(move || ctx.ensure_ready())
                         .await
                     {
                         // #445: record the container as ready, or the spawn precondition

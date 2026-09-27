@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "1.111.4"
+version = "1.111.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2016,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "1.111.4"
+version = "1.111.5"
 dependencies = [
  "filetime",
  "pdo-kernel",
@@ -2032,7 +2032,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "1.111.4"
+version = "1.111.5"
 dependencies = [
  "chrono",
  "pdo-extension-api",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-legacy"
-version = "1.111.4"
+version = "1.111.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2065,6 +2065,7 @@ dependencies = [
  "pdo-harness",
  "pdo-kernel",
  "pdo-platform",
+ "pdo-sandbox",
  "pdo-session",
  "pdo-workspace",
  "portable-pty",
@@ -2091,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "1.111.4"
+version = "1.111.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2114,8 +2115,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdo-sandbox"
+version = "1.111.5"
+dependencies = [
+ "anyhow",
+ "axum",
+ "libc",
+ "pdo-extension-api",
+ "pdo-harness",
+ "pdo-kernel",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "ts-rs",
+]
+
+[[package]]
 name = "pdo-session"
-version = "1.111.4"
+version = "1.111.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2136,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "1.111.4"
+version = "1.111.5"
 dependencies = [
  "anyhow",
  "axum",

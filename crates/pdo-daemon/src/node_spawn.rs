@@ -96,13 +96,13 @@ impl<'a> SpawnDeps<'a> {
 
 /// The host home root the disk descriptor tier (#553) is read under: the per-daemon
 /// override when set (the layer-3 seam), else the real `$HOME`. Mirrors
-/// `sandbox_run::sandbox_home_roots` exactly, but reachable from the narrow
+/// `run_sandbox::sandbox_home_roots` exactly, but reachable from the narrow
 /// [`SpawnDeps`] bundle (which carries no `AppState`). An unresolved `$HOME`
 /// degrades to an empty root, i.e. the embedded floor — never a spawn failure.
 fn spawn_home_root(deps: &SpawnDeps<'_>) -> PathBuf {
     deps.home_override
         .map(PathBuf::from)
-        .or_else(|| crate::sandbox_staging::default_roots_from_env().map(|(home, _)| home))
+        .or_else(|| pdo_sandbox::adapters::host::default_roots_from_env().map(|(home, _)| home))
         .unwrap_or_default()
 }
 
@@ -717,16 +717,11 @@ pub(crate) async fn spawn_node(
             // failed) is not an absence: warn and let the spawn fail on its own terms.
             let docker_bin = deps.docker_cmd_override.unwrap_or("docker").to_string();
             let (rid, binary) = (run_id.to_string(), d.binary.clone());
-            let uid = crate::sandbox_container::host_uid();
-            let gid = crate::sandbox_container::host_gid();
+            let uid = pdo_sandbox::adapters::host::host_uid();
+            let gid = pdo_sandbox::adapters::host::host_gid();
             let probe = tokio::task::spawn_blocking(move || {
-                crate::sandbox_container::binary_present_in_container(
-                    &docker_bin,
-                    &rid,
-                    uid,
-                    gid,
-                    &binary,
-                )
+                pdo_sandbox::adapters::local_runtime(Some(&docker_bin))
+                    .binary_present(&rid, uid, gid, &binary)
             })
             .await
             .unwrap_or_else(|je| Err(anyhow::anyhow!("binary probe panicked: {je}")));
@@ -768,7 +763,7 @@ pub(crate) async fn spawn_node(
             // `repo_root`, the common ancestor of every worktree (claude's fixup).
             let home_root = spawn_home_root(&deps);
             let sandbox_root = home_root.join(".pdo").join("sandbox");
-            match crate::sandbox_staging::fill_staging_set(
+            match pdo_sandbox::adapters::staging::fill_staging_set(
                 &home_root,
                 &sandbox_root,
                 run_id,
@@ -1163,7 +1158,7 @@ pub(crate) async fn spawn_node(
             // `PDO_DAEMON_URL` — `run_sandboxed` is already projected above for the
             // spawn precondition. Defensive here: no node preamble consumes
             // `daemon_url` yet (see the note in `node_primitives::start_node`).
-            daemon_url: &crate::sandbox_container::daemon_url(deps.port, run_sandboxed),
+            daemon_url: &pdo_sandbox::domain::container::daemon_url(deps.port, run_sandboxed),
             foreach_context,
             source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
             // #654: the same section, from the other isolation. This site only

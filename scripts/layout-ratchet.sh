@@ -90,13 +90,19 @@ cd "$(git rev-parse --show-toplevel)"
 # frontend/src/components: 199 and crates/pdo-daemon/src: 81 (#919) ratchet down: the
 #   harness context moved out — HarnessSelect, ModelPicker, EffortPicker and their tests to
 #   frontend/src/harness/components/, the twelve harness modules to crates/pdo-harness.
+# frontend/src/components: 198 and crates/pdo-daemon/src: 77 (#921) ratchet down: the
+#   sandbox context moved out — StagingProfilesPanel to frontend/src/sandbox/components/, the
+#   five sandbox modules to crates/pdo-sandbox; run_sandbox.rs keeps the Run's side of it
+#   (building a Run's sandbox context from its state) until the run context moves.
 # frontend/src/components: 191 and crates/pdo-daemon/src: 79 — #916 and #919 combined.
+# frontend/src/components: 190 and crates/pdo-daemon/src: 73 — #916, #919 and #921 combined.
 # frontend/src/components: 194 and crates/pdo-daemon/src: 89 (#917, spec #913) ratchet down:
 #   the workspace context moved out — project_store.rs, provisioning.rs, worktree_ops.rs and
 #   repo_scaffold.rs to crates/pdo-workspace; ProjectEditModal, SourceBranchField,
 #   ProvisioningRulesEditor, PersistedProvisioningEditor, FsExplorerModal, RepoCombobox and
 #   their tests to frontend/src/workspace/components.
 # frontend/src/components: 180 and crates/pdo-daemon/src: 73 — #917, #916 and #919 combined.
+# frontend/src/components: 179 and crates/pdo-daemon/src: 69 — #916, #917, #919 and #921 combined.
 # frontend/src/components: 195 and crates/pdo-daemon/src: 78 (#920) ratchet down: the
 #   session context moved out — TmuxTerminal, RunShellModal and their tests to
 #   frontend/src/session/components/, tmux_session_manager, pty_bridge, shared_terminal and
@@ -104,9 +110,11 @@ cd "$(git rev-parse --show-toplevel)"
 #   contexts.rs, plus the session_ports/ directory (not a direct file).
 # frontend/src/components: 176 and crates/pdo-daemon/src: 69 — #920, #917, #916 and #919
 #   combined.
+# frontend/src/components: 175 and crates/pdo-daemon/src: 65 — #916, #917, #919, #920 and
+#   #921 combined.
 BASELINES='
-frontend/src/components 176
-crates/pdo-daemon/src 69
+frontend/src/components 175
+crates/pdo-daemon/src 65
 '
 
 fail=0

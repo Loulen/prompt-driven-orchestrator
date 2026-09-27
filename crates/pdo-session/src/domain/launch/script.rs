@@ -1163,7 +1163,7 @@ mod tests {
         );
     }
 
-    /// The sandbox context's `docker exec` argv (`sandbox_container::exec_prefix_with_env`),
+    /// The sandbox context's `docker exec` argv (`pdo_sandbox::domain::container::exec_prefix_with_env`),
     /// replicated for the goldens: the three base `-e`, the forwarded env (never
     /// `PDO_DAEMON_URL`), then `--user`, `-w` and the Run's container.
     struct TestExec<'a> {

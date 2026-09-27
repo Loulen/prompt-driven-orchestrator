@@ -101,7 +101,7 @@ impl AssistantHarness for LegacySessionPorts {
             let default_harness = crate::stored_default_harness(&state.db).await;
             let harness_name =
                 pdo_harness::resolver::resolve_infra_harness(None, default_harness.as_deref());
-            let home_root = crate::sandbox_run::sandbox_home_roots(&state)
+            let home_root = crate::run_sandbox::sandbox_home_roots(&state)
                 .map(|(home, _)| home)
                 .unwrap_or_default();
             pdo_harness::adapters::descriptor_file::load(&home_root)

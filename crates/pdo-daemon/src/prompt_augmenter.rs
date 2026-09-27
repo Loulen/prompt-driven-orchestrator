@@ -2498,7 +2498,7 @@ mod tests {
 
     #[test]
     fn manager_preamble_sandboxed_carries_the_container_side_url_only() {
-        let url = crate::sandbox_container::daemon_url(6193, true);
+        let url = pdo_sandbox::domain::container::daemon_url(6193, true);
         let preamble = build_manager_preamble("run-1", &url, RunNameHint::DeriveFromInput);
         assert!(
             preamble.contains("Daemon base URL: `http://host.docker.internal:6193`"),
@@ -2515,7 +2515,7 @@ mod tests {
 
     #[test]
     fn manager_preamble_host_path_is_unchanged() {
-        let url = crate::sandbox_container::daemon_url(6193, false);
+        let url = pdo_sandbox::domain::container::daemon_url(6193, false);
         let preamble = build_manager_preamble("run-1", &url, RunNameHint::DeriveFromInput);
         assert!(preamble.contains("Daemon base URL: `http://localhost:6193`"));
         assert!(

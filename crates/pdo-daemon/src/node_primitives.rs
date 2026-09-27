@@ -317,7 +317,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         iter: params.iter,
         artifacts_dir: params.artifacts_dir,
         variables: params.resolved_vars,
-        daemon_url: &crate::sandbox_container::daemon_url(params.daemon_port, sandboxed),
+        daemon_url: &pdo_sandbox::domain::container::daemon_url(params.daemon_port, sandboxed),
         foreach_context: None,
         source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
         // #654: the same section, from the other isolation. This site only
@@ -471,7 +471,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     ) {
         (true, Some(home), Some(d)) => {
             let sandbox_root = home.join(".pdo").join("sandbox");
-            match crate::sandbox_staging::fill_staging_set(
+            match pdo_sandbox::adapters::staging::fill_staging_set(
                 home,
                 &sandbox_root,
                 params.run_id,

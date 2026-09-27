@@ -20,11 +20,6 @@ crates/pdo-daemon/src/run_advance.rs 784
 crates/pdo-daemon/src/run_command.rs 2562
 crates/pdo-daemon/src/run_cost.rs 1426
 crates/pdo-daemon/src/run_refs.rs 434
-crates/pdo-daemon/src/sandbox_container.rs 857
-crates/pdo-daemon/src/sandbox_image.rs 822
-crates/pdo-daemon/src/sandbox_profile.rs 974
-crates/pdo-daemon/src/sandbox_run.rs 667
-crates/pdo-daemon/src/sandbox_staging.rs 1033
 crates/pdo-daemon/src/scheduler.rs 1547
 crates/pdo-daemon/src/skill_bank.rs 1806
 crates/pdo-daemon/src/skill_delivery.rs 429
@@ -54,7 +49,6 @@ frontend/src/components/SettingsSurface.tsx 2116
 frontend/src/components/SkillBankPanel.tsx 1729
 frontend/src/components/SkillFilesTab.tsx 438
 frontend/src/components/SkillTree.tsx 414
-frontend/src/components/StagingProfilesPanel.tsx 1039
 frontend/src/components/StatsAbsorption.tsx 544
 frontend/src/components/StatsCharts.tsx 3793
 frontend/src/components/StatsModal.tsx 478

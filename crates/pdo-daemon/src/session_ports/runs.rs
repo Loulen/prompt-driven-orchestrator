@@ -184,14 +184,12 @@ impl RunShells for LegacySessionPorts {
         Box::pin(async move {
             let (state, _, run_state) =
                 self.projected(run_id).await.map_err(|e| format!("{e:?}"))?;
-            let prep = match crate::sandbox_run::context_from_state(&state, &run_state).await {
-                Ok(ctx) => {
-                    tokio::task::spawn_blocking(move || crate::sandbox_run::ensure_ready(&ctx))
-                        .await
-                        .unwrap_or_else(|je| {
-                            Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
-                        })
-                }
+            let prep = match crate::run_sandbox::context_from_state(&state, &run_state).await {
+                Ok(prep) => tokio::task::spawn_blocking(move || prep.ensure_ready())
+                    .await
+                    .unwrap_or_else(|je| {
+                        Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
+                    }),
                 Err(e) => Err(e),
             };
             prep.map_err(|e| format!("{e:#}"))

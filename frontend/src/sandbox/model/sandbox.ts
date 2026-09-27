@@ -92,6 +92,18 @@ export interface SandboxProfile {
 }
 
 /**
+ * The body of `PUT /settings/sandbox-profiles/{name}`: the profile's **diff** —
+ * `disabled` / `extras`, never a snapshot (ADR-0031 §2) — plus its `env` map and its
+ * `image` source, neither of which is a diff at all. Every field is a FULL replacement.
+ */
+export interface SandboxProfileDiff {
+  disabled: string[];
+  extras: string[];
+  env: Record<string, string>;
+  image: SandboxProfileImage | null;
+}
+
+/**
  * Who still points at a profile (`GET …/{name}/referents`, #432). Server-side because the
  * frontend cannot derive the third class: `RunListEntry` carries no `sandbox`.
  *

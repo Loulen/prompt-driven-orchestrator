@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 /// composition root).
 const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("../pdo-daemon/src/lib.rs", "fn build_router("),
+    ("../pdo-sandbox/src/adapters/http/mod.rs", "pub fn router("),
     (
         "../pdo-workspace/src/adapters/http/mod.rs",
         "pub fn router<S: ProjectSettings>(",

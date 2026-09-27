@@ -24,7 +24,7 @@ use crate::{
     load_events, load_projected, loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session,
     reload_run_state, resolve_completed_frontmatter, resolve_pipeline_path,
     resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
-    retry_waiting_nodes, run_advance, run_is_forgotten, run_scoped_pipeline_path, sandbox_run,
+    retry_waiting_nodes, run_advance, run_is_forgotten, run_sandbox, run_scoped_pipeline_path,
     scheduler, scheduler_interpreter, transition_guard, AppState, CreateRunRequest,
     TargetRepoInput,
 };
@@ -1259,8 +1259,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // `spawn_blocking`, `ensure_ready` may `docker build`) or fail
             // EXPLICITLY — never a silent host fallback.
             if !run_state.sandbox.is_off() {
-                let prep = match sandbox_run::context_from_state(&state, &run_state).await {
-                    Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                let prep = match run_sandbox::context_from_state(&state, &run_state).await {
+                    Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready())
                         .await
                         .unwrap_or_else(|je| {
                             Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
@@ -1349,8 +1349,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // Re-arm a sandboxed Run's container before the scheduler `docker exec`s
             // into it (same guard as `resume_run`).
             if !run_state.sandbox.is_off() {
-                let prep = match sandbox_run::context_from_state(&state, &run_state).await {
-                    Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                let prep = match run_sandbox::context_from_state(&state, &run_state).await {
+                    Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready())
                         .await
                         .unwrap_or_else(|je| {
                             Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
@@ -1649,7 +1649,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // session's process lingers alongside the new one. `sandbox` is immutable
             // over a Run's life, so the pre-kill projection above answers it — no
             // post-kill `reload_run_state` needed.
-            sandbox_run::kill_session_best_effort(
+            run_sandbox::kill_session_best_effort(
                 state.docker_cmd_override.as_deref().unwrap_or("docker"),
                 !run_state.sandbox.is_off(),
                 &run_id,
@@ -1762,7 +1762,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // A name that WAS frozen but no longer resolves REFUSES — never a silent
             // `claude` relaunch in this node's worktree. A row with NO frozen harness
             // keeps the `claude` floor, which `can_resume`.
-            let harness_home_root = sandbox_run::sandbox_home_roots(&state)
+            let harness_home_root = run_sandbox::sandbox_home_roots(&state)
                 .map(|(home, _)| home)
                 .unwrap_or_default();
             let descriptor = match crate::find_launch_harness(&events, &node_id, iter).as_deref() {

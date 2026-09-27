@@ -81,6 +81,16 @@ Contexts already out of the legacy crate:
   live in its `domain/`; cost, stale detection, staging, tmux and stats read them from
   there. `RUST_LOG=pdo_daemon::harness_registry` becomes
   `RUST_LOG=pdo_harness::application::load_registry`.
+- `sandbox` (#921): `crates/pdo-sandbox`, `frontend/src/sandbox/`. Docker sits behind the
+  `DockerCli` port (`adapters/docker_cli.rs` runs the real binary; its stage-3 tests run
+  against a real daemon when one answers, and say they skipped otherwise). Editing and
+  deleting a staging profile are use cases that ask the Autorisation d'opération; preparing,
+  cleaning up and killing inside a Run's sandbox are Run transitions and never do. The
+  legacy `run_sandbox.rs` is the Run's side (it builds a Run's sandbox context from its
+  state) and leaves with the run context. `RUST_LOG=pdo_daemon::sandbox_staging` becomes
+  `RUST_LOG=pdo_sandbox::adapters::staging`, `pdo_daemon::sandbox_container` becomes
+  `pdo_sandbox::application::container`, `pdo_daemon::sandbox_run` becomes
+  `pdo_sandbox::application::prepare` (and `pdo_daemon::run_sandbox` for the Run's side).
 - `session` (#920): `crates/pdo-session`, `frontend/src/session/`. tmux sits behind the one
   `Tmux` port (`application/ports.rs`, adapter `adapters/tmux/`): the legacy crate, the PTY
   bridge and the shared terminal reach tmux through it, never through `Command::new("tmux")`.

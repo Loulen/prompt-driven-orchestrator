@@ -125,7 +125,7 @@ sandbox_entries?: Array<string>,
  *
  * The values are on the wire, like they are in SQLite and in `docker inspect`: the
  * sandbox is not a security boundary and this is not a secret store (ADR-0031 §8). What
- * is forbidden is the daemon **log** — see `sandbox_profile::env_names`.
+ * is forbidden is the daemon **log** — see the sandbox context's `env_names`.
  */
 sandbox_env?: { [key in string]: string }, 
 /**
@@ -135,7 +135,7 @@ sandbox_env?: { [key in string]: string },
  *
  * `None` means "this Run's profile posed no image source", indistinguishable from "a
  * pre-#467 daemon created this Run": in both cases the **profile default** decides
- * ([`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`]), overridable by two env vars read
+ * (`DEFAULT_PROFILE_IMAGE` of the sandbox context), overridable by two env vars read
  * fresh at each prep. That is the one place the freeze is deliberately *not* total, and
  * it is safe: a daemon's environment does not change under a running Run.
  *

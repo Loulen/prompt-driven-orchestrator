@@ -13,6 +13,14 @@ const fetchUpdateStatusMock = vi.fn();
 const fetchUpdateAttemptLogMock = vi.fn();
 const checkForUpdateNowMock = vi.fn();
 
+// The staging-profile panel reads the sandbox context's own API module.
+vi.mock("../sandbox/api/profiles", () => ({
+  fetchSandboxProfiles: vi.fn().mockResolvedValue({ profiles: [], home: "/home/user" }),
+  saveSandboxProfile: vi.fn(),
+  deleteSandboxProfile: vi.fn(),
+  fetchSandboxProfileReferents: vi.fn(),
+}));
+
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
@@ -23,10 +31,6 @@ vi.mock("../api", () => ({
   fetchAgentProfileReferents: vi.fn(),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  fetchSandboxProfiles: vi.fn().mockResolvedValue({ profiles: [], home: "/home/user" }),
-  saveSandboxProfile: vi.fn(),
-  deleteSandboxProfile: vi.fn(),
-  fetchSandboxProfileReferents: vi.fn(),
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
   createSkill: vi.fn(),
   fetchSkill: vi.fn(),

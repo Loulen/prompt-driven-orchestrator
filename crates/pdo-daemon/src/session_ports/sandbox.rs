@@ -49,10 +49,10 @@ impl SandboxExec {
 impl ContainerExec for SandboxExec {
     fn exec_argv(&self, env: &[(String, String)]) -> Vec<String> {
         let mut argv = vec![self.docker_bin.clone()];
-        argv.extend(crate::sandbox_container::exec_prefix_with_env(
+        argv.extend(pdo_sandbox::domain::container::exec_prefix_with_env(
             &self.run_id,
-            crate::sandbox_container::host_uid(),
-            crate::sandbox_container::host_gid(),
+            pdo_sandbox::adapters::host::host_uid(),
+            pdo_sandbox::adapters::host::host_gid(),
             &self.workdir,
             &self.marker,
             env,
@@ -70,10 +70,10 @@ mod tests {
         let exec = SandboxExec::new(None, "r1", "pdo-r1-solo-iter-1", Path::new("/wd"), &[]);
         let env = [("PDO_OUTPUT_out".to_string(), "/a".to_string())];
         let mut expected = vec!["docker".to_string()];
-        expected.extend(crate::sandbox_container::exec_prefix_with_env(
+        expected.extend(pdo_sandbox::domain::container::exec_prefix_with_env(
             "r1",
-            crate::sandbox_container::host_uid(),
-            crate::sandbox_container::host_gid(),
+            pdo_sandbox::adapters::host::host_uid(),
+            pdo_sandbox::adapters::host::host_gid(),
             Path::new("/wd"),
             "pdo-r1-solo-iter-1",
             &env,
@@ -87,7 +87,7 @@ mod tests {
     fn the_host_side_daemon_url_is_the_one_the_sandbox_resolver_gives() {
         assert_eq!(
             pdo_session::domain::launch::host_daemon_url(6193),
-            crate::sandbox_container::daemon_url(6193, false)
+            pdo_sandbox::domain::container::daemon_url(6193, false)
         );
     }
 }

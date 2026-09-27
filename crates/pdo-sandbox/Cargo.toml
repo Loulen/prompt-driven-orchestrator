@@ -1,0 +1,29 @@
+[package]
+name = "pdo-sandbox"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's sandbox context: staging profiles, the sandbox image, the per-Run container, the staged home, docker behind a port"
+publish = false
+
+[dependencies]
+pdo-extension-api.workspace = true
+pdo-kernel.workspace = true
+pdo-harness.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }

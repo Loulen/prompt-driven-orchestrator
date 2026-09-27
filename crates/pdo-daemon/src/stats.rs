@@ -1844,7 +1844,7 @@ pub(crate) async fn stats_cost(
     // #408: resolve the sandbox home roots once for the whole fold. HOME absent →
     // degrade to the host `~/.claude` root (never fail the aggregate).
     let (home_root, sandbox_root) =
-        crate::sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
+        crate::run_sandbox::sandbox_home_roots(&state).unwrap_or_else(|_| {
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let sandbox = home.join(".pdo").join("sandbox");
             (home, sandbox)
@@ -1902,9 +1902,9 @@ pub(crate) async fn stats_cost(
                 !t.is_empty() && !t.eq_ignore_ascii_case(crate::event_log::SandboxMode::OFF_WIRE)
             });
         let projects_root =
-            crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
+            crate::run_sandbox::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
         // #708: pi's store follows the same sandbox-aware seam as the Claude root.
-        let stores = crate::sandbox_run::HarnessStores::for_run(
+        let stores = crate::run_sandbox::HarnessStores::for_run(
             sandboxed,
             &run_id,
             &home_root,

@@ -11,7 +11,7 @@ import type { FrontmatterViolation } from "./shared/generated/FrontmatterViolati
 import type { Trigger } from "./shared/generated/Trigger";
 import type { TriggerListEntry } from "./shared/generated/TriggerListEntry";
 import type { TriggerFire } from "./shared/generated/TriggerFire";
-import type { DaemonStatus, UpdateStatus, UpdateApplyResponse } from "./platform/model/daemon";
+import type { UpdateStatus, UpdateApplyResponse } from "./platform/model/daemon";
 import type { InstanceSettings, SyncCostPricesReport, AgentProfileReferents } from "./settings/model/settings";
 import type { UpdateSettingsRequest } from "./shared/generated/UpdateSettingsRequest";
 import type { StatsOverview } from "./shared/generated/StatsOverview";
@@ -51,10 +51,6 @@ import { ApiError, apiErrorMessage, BASE, request } from "./shared/http/client";
 
 export function fetchRuns(): Promise<RunListEntry[]> {
   return request<RunListEntry[]>("GET", "/runs");
-}
-
-export function fetchSessions(): Promise<DaemonStatus> {
-  return request<DaemonStatus>("GET", "/sessions");
 }
 
 /**
@@ -580,107 +576,6 @@ export async function releaseNodeCompletion(
   return { kind: "released" };
 }
 
-export function attachSession(sessionId: string): Promise<void> {
-  return request<void>(
-    "POST",
-    `/sessions/${encodeURIComponent(sessionId)}/attach`,
-    { responseMode: "void", label: "attach" },
-  );
-}
-
-export function attachManager(runId: string): Promise<void> {
-  return request<void>(
-    "POST",
-    `/sessions/${encodeURIComponent(runId)}/manager/attach`,
-    { responseMode: "void", label: "manager attach" },
-  );
-}
-
-/**
- * Open (or re-attach) an ad-hoc bash shell in a terminal run's pipeline
- * worktree (#316 / ADR-0021). Create-if-absent; returns the tmux session name to
- * attach to via the existing `WS /sessions/<session>/pty` bridge (no OS spawn).
- * `created` distinguishes a fresh shell from a re-attach.
- */
-export function openRunShell(
-  runId: string,
-): Promise<{ session: string; created: boolean }> {
-  return request<{ session: string; created: boolean }>(
-    "POST",
-    `/sessions/${encodeURIComponent(runId)}/shell`,
-    { label: "open shell" },
-  );
-}
-
-/**
- * Open (or re-attach) the library pipeline authoring assistant (#302 / ADR-0048,
- * #594 / ADR-0051). Create-if-absent; returns the shared tmux session name to
- * attach to via the existing `WS /sessions/<session>/pty` bridge.
- *
- * No pipeline id: there is **one** assistant for the whole daemon, and which
- * template it works on travels through {@link putLibassistFocus} instead.
- */
-export function openLibraryAssistant(): Promise<{
-  session: string;
-  created: boolean;
-}> {
-  return request<{ session: string; created: boolean }>(
-    "POST",
-    "/sessions/libassist",
-    { label: "open assistant" },
-  );
-}
-
-/**
- * Reap the library authoring assistant (#302 / ADR-0048, #594 / ADR-0051).
- *
- * Called when the user leaves **every** pipeline edit view — not when they leave
- * the Assistant tab, which used to throw the conversation away on each round trip
- * between two templates. Best-effort: reaping an absent session is a no-op.
- *
- * `keepalive` lets the request survive the document, which is the only way the
- * `pagehide` path can send anything at all.
- */
-export function closeLibraryAssistant(
-  opts: { keepalive?: boolean } = {},
-): Promise<{ ok: boolean; reaped: boolean }> {
-  return request<{ ok: boolean; reaped: boolean }>(
-    "DELETE",
-    "/sessions/libassist",
-    { label: "close assistant", keepalive: opts.keepalive },
-  );
-}
-
-/**
- * Declare which template the UI is editing — or `null` to clear it (#594 /
- * ADR-0051). Sent on every edit-view change and repeated as a heartbeat.
- *
- * Two jobs in one call: it is how the assistant learns the open pipeline on its
- * next message, and it is how the daemon's reaper knows a human is still editing
- * even when no terminal is attached. The daemon resolves the instance-owned
- * pipeline path from its id.
- */
-export function putLibassistFocus(pipelineId: string | null): Promise<unknown> {
-  return request("PUT", "/sessions/libassist/focus", {
-    body: { pipeline_id: pipelineId },
-    label: "declare assistant focus",
-  });
-}
-
-export interface PaneResponse {
-  content: string;
-  session_name: string;
-  resumed: boolean;
-  stale: boolean;
-  /**
-   * Provenance of `content` (#205): "live" (captured from a running session),
-   * "resumed" (a dead latest-iter session was re-attached), "snapshot" (the
-   * persisted post-mortem pane of a reaped terminal node), or "unavailable"
-   * (no session and no snapshot).
-   */
-  source: "live" | "resumed" | "snapshot" | "unavailable";
-}
-
 export function fetchPrompt(
   runId: string,
   nodeId: string,
@@ -741,18 +636,6 @@ export function fetchArtifact(
 
 export function artifactUrl(runId: string, relativePath: string): string {
   return `${BASE}/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`;
-}
-
-export function fetchPane(
-  runId: string,
-  nodeId: string,
-  iter: number,
-): Promise<PaneResponse> {
-  return request<PaneResponse>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/pane`,
-    { query: { iter }, label: "GET pane" },
-  );
 }
 
 export function fetchPipelines(): Promise<PipelineListEntry[]> {

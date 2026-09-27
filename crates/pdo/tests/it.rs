@@ -50,6 +50,10 @@ mod file_size;
 #[path = "composition_root.rs"]
 mod composition_root;
 
+// The session context's Operations under a refusing extension (#920).
+#[path = "session_authorization.rs"]
+mod session_authorization;
+
 // The refactor net (#914): one file per bounded context, for the routes no
 // other test called.
 #[path = "routes_pipeline.rs"]

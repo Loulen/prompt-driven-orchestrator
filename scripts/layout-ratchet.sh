@@ -86,9 +86,14 @@ cd "$(git rev-parse --show-toplevel)"
 # frontend/src/components: 199 and crates/pdo-daemon/src: 81 (#919) ratchet down: the
 #   harness context moved out — HarnessSelect, ModelPicker, EffortPicker and their tests to
 #   frontend/src/harness/components/, the twelve harness modules to crates/pdo-harness.
+# frontend/src/components: 195 and crates/pdo-daemon/src: 78 (#920) ratchet down: the
+#   session context moved out — TmuxTerminal, RunShellModal and their tests to
+#   frontend/src/session/components/, tmux_session_manager, pty_bridge, shared_terminal and
+#   declared_wait to crates/pdo-session. The legacy side of its ports is one new module,
+#   contexts.rs, plus the session_ports/ directory (not a direct file).
 BASELINES='
-frontend/src/components 199
-crates/pdo-daemon/src 81
+frontend/src/components 195
+crates/pdo-daemon/src 78
 '
 
 fail=0

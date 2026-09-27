@@ -44,7 +44,7 @@ pub fn claude() -> HarnessDescriptor {
         resume_blind: "--continue".to_string(),
         // AC #4: the CCR suppression now comes from the descriptor for an agent
         // tail (byte-identical to the wrapper's old hard-coded export — see the
-        // `harness_env` handling in `tmux_session_manager::wrap_with_env`).
+        // `harness_env` handling in `pdo_session::domain::launch::wrap_with_env`).
         env: vec![(
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_string(),
             "1".to_string(),

@@ -1987,6 +1987,7 @@ dependencies = [
  "pdo-harness",
  "pdo-kernel",
  "pdo-legacy",
+ "pdo-session",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -2063,6 +2064,7 @@ dependencies = [
  "oxc_span",
  "pdo-harness",
  "pdo-kernel",
+ "pdo-session",
  "portable-pty",
  "pretty_assertions",
  "reqwest",
@@ -2083,6 +2085,27 @@ dependencies = [
  "ts-rs",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "pdo-session"
+version = "1.111.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "futures-util",
+ "pdo-extension-api",
+ "pdo-harness",
+ "pdo-kernel",
+ "portable-pty",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "ts-rs",
 ]
 
 [[package]]

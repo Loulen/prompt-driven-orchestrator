@@ -31,7 +31,7 @@ fn tmux_available() -> bool {
 }
 
 fn session_name() -> &'static str {
-    pdo_daemon::tmux_session_manager::libassist_session_name()
+    pdo_session::domain::names::libassist_session_name()
 }
 
 async fn post_assistant(daemon: &TestDaemon) -> reqwest::Response {
@@ -70,7 +70,8 @@ async fn get_focus(daemon: &TestDaemon) -> serde_json::Value {
 
 /// Number of `pdo-libassist-*` sessions on the daemon's socket.
 fn assistant_session_count(socket: &str) -> usize {
-    pdo_daemon::tmux_session_manager::list_pdo_sessions(socket)
+    crate::common::tmux(socket)
+        .list_pdo_sessions()
         .into_iter()
         .filter(|s| s.starts_with("pdo-libassist-"))
         .count()
@@ -103,7 +104,7 @@ async fn open_assistant_creates_session() {
 
     let socket = daemon.tmux_socket();
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, session_name()),
+        crate::common::tmux(&socket).session_exists(session_name()),
         "the tmux session must exist after opening the assistant"
     );
 
@@ -234,10 +235,7 @@ async fn close_assistant_reaps_the_session() {
     let socket = daemon.tmux_socket();
 
     post_assistant(&daemon).await;
-    assert!(pdo_daemon::tmux_session_manager::session_exists(
-        &socket,
-        session_name()
-    ));
+    assert!(crate::common::tmux(&socket).session_exists(session_name()));
 
     let resp = delete_assistant(&daemon).await;
     assert_eq!(resp.status(), 200);
@@ -249,7 +247,7 @@ async fn close_assistant_reaps_the_session() {
         "leaving every edit view reaps the live session"
     );
     assert!(
-        !pdo_daemon::tmux_session_manager::session_exists(&socket, session_name()),
+        !crate::common::tmux(&socket).session_exists(session_name()),
         "the tmux session is gone after leave"
     );
 
@@ -459,7 +457,7 @@ async fn the_sweep_keeps_an_assistant_with_a_fresh_focus() {
     daemon.run_orphan_sweep_tick().await;
 
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, session_name()),
+        crate::common::tmux(&socket).session_exists(session_name()),
         "an assistant whose user is still editing must not be reaped"
     );
 }
@@ -475,16 +473,13 @@ async fn the_sweep_reaps_an_assistant_nobody_is_using() {
     let socket = daemon.tmux_socket();
 
     post_assistant(&daemon).await;
-    assert!(pdo_daemon::tmux_session_manager::session_exists(
-        &socket,
-        session_name()
-    ));
+    assert!(crate::common::tmux(&socket).session_exists(session_name()));
 
     // No `PUT focus`, no attached terminal — exactly what a reload leaves behind.
     daemon.run_orphan_sweep_tick().await;
 
     assert!(
-        !pdo_daemon::tmux_session_manager::session_exists(&socket, session_name()),
+        !crate::common::tmux(&socket).session_exists(session_name()),
         "an assistant with nobody attached and no declared focus is reaped"
     );
 }
@@ -511,7 +506,7 @@ async fn the_sweep_keeps_an_attached_assistant_with_no_focus() {
     // Let the bridge's `tmux attach` land before observing `session_attached`.
     tokio::time::sleep(Duration::from_millis(800)).await;
     assert!(
-        pdo_daemon::tmux_session_manager::is_attached(&socket, session_name()),
+        crate::common::tmux(&socket).is_attached(session_name()),
         "precondition: the PTY bridge attached a real tmux client"
     );
 
@@ -519,7 +514,7 @@ async fn the_sweep_keeps_an_attached_assistant_with_no_focus() {
     daemon.run_orphan_sweep_tick().await;
 
     assert!(
-        pdo_daemon::tmux_session_manager::session_exists(&socket, session_name()),
+        crate::common::tmux(&socket).session_exists(session_name()),
         "an attached terminal is never yanked out from under its reader"
     );
 

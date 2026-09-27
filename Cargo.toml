@@ -8,6 +8,7 @@ members = [
   "crates/pdo-extension-api",
   "crates/pdo-kernel",
   "crates/pdo-harness",
+  "crates/pdo-session",
   "crates/pdo-daemon",
   "crates/pdo",
 ]
@@ -62,6 +63,7 @@ reqwest = { version = "0.12", default-features = false, features = ["charset", "
 pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.1.0" }
 pdo-kernel = { path = "crates/pdo-kernel" }
 pdo-harness = { path = "crates/pdo-harness" }
+pdo-session = { path = "crates/pdo-session" }
 # The legacy crate keeps its library name `pdo_daemon` (so `RUST_LOG=pdo_daemon::…`
 # targets and every `use pdo_daemon::` stay valid) under the package name
 # `pdo-legacy`: the package name `pdo-daemon` belongs to the composition root,

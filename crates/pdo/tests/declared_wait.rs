@@ -491,7 +491,7 @@ async fn wait_user_is_refused_when_the_tmux_session_is_gone() {
     let run_id = create_run(&daemon, PARENT, None).await;
     wait_node_status(&daemon, &run_id, "worker", "running").await;
 
-    let session = pdo_daemon::tmux_session_manager::node_session_name(&run_id, "worker", 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, "worker", 1);
     let killed = std::process::Command::new("tmux")
         .args(["-L", &daemon.tmux_socket(), "kill-session", "-t", &session])
         .status()

@@ -10,8 +10,7 @@
 use std::time::Duration;
 
 use crate::common::TestDaemon;
-use pdo_daemon::build_tmux_script;
-use pdo_daemon::tmux_session_manager::SessionTail;
+use pdo_session::domain::launch::{build_tmux_script, SessionTail};
 
 const PIPELINE_NAME: &str = "minimal-tmux";
 const NODE_ID: &str = "solo";

@@ -48,7 +48,6 @@ vi.mock("../api", () => ({
   retryNodePreview: (...args: unknown[]) => retryNodePreviewMock(...args),
   previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
   startNode: (...args: unknown[]) => startNodeMock(...args),
-  attachSession: vi.fn(),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 
@@ -82,7 +81,7 @@ function MockTmuxTerminal({ session, expanded, onExpand, status, paneSource, onS
   );
 }
 
-vi.mock("./TmuxTerminal", () => ({
+vi.mock("../session/components/TmuxTerminal", () => ({
   default: MockTmuxTerminal,
 }));
 

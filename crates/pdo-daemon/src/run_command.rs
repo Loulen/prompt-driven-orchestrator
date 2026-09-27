@@ -25,8 +25,8 @@ use crate::{
     reload_run_state, resolve_completed_frontmatter, resolve_pipeline_path,
     resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
     retry_waiting_nodes, run_advance, run_is_forgotten, run_scoped_pipeline_path, sandbox_run,
-    scheduler, scheduler_interpreter, tmux_session_manager, transition_guard, AppState,
-    CreateRunRequest, TargetRepoInput,
+    scheduler, scheduler_interpreter, transition_guard, AppState, CreateRunRequest,
+    TargetRepoInput,
 };
 
 /// The wire shape of a command. `pub(crate)` only because axum's extractor puts
@@ -1248,10 +1248,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // any open shell so its uncommitted edits can't race it. Refusing with a
             // 409 would deadlock: a shell only dies on archive, itself reachable only
             // from a terminal state.
-            tmux_session_manager::kill(
-                &state.tmux_socket(),
-                &tmux_session_manager::shell_session_name(&run_id),
-            );
+            state
+                .tmux()
+                .kill(&pdo_session::domain::names::shell_session_name(&run_id));
 
             // Re-arm a sandboxed Run's container before the scheduler `docker exec`s
             // into it. Containers are created without `--restart` and `boot_recovery`
@@ -1343,10 +1342,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             }
 
             // Kill any open shell before the re-drive re-arms the merge.
-            tmux_session_manager::kill(
-                &state.tmux_socket(),
-                &tmux_session_manager::shell_session_name(&run_id),
-            );
+            state
+                .tmux()
+                .kill(&pdo_session::domain::names::shell_session_name(&run_id));
 
             // Re-arm a sandboxed Run's container before the scheduler `docker exec`s
             // into it (same guard as `resume_run`).
@@ -1641,11 +1639,12 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
 
             // FROM HERE ON THERE ARE SIDE EFFECTS.
 
-            let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+            let session_name =
+                pdo_session::domain::names::node_session_name(&run_id, &node_id, iter);
             // Deliberately a BARE kill, not `reap_node_session`: the helper's pane
             // snapshot would never be served, since `GET …/pane` only serves one for a
             // TERMINAL iteration and a restart leaves the node non-terminal.
-            tmux_session_manager::kill(&state.tmux_socket(), &session_name);
+            state.tmux().kill(&session_name);
             // Also kill the in-container process tree before the re-spawn, or the old
             // session's process lingers alongside the new one. `sandbox` is immutable
             // over a Run's life, so the pre-kill projection above answers it — no
@@ -1852,7 +1851,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     };
                     let repo_root = effective_repo_root(&state, &run_state);
                     let session_name =
-                        tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+                        pdo_session::domain::names::node_session_name(&run_id, &node_id, iter);
                     let outcome = crate::reattach_node_session(
                         &state,
                         &events,

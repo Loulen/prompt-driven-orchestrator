@@ -9,7 +9,8 @@ import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { Project } from "../shared/generated/Project";
 import type { LibraryPipelineEntry } from "../api";
 import { ApiError } from "../shared/http/client";
-import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { useRunShell } from "../session/store/useRunShell";
 import { announceSkillsChanged } from "../hooks/useSkillBank";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -40,7 +41,7 @@ import ProjectEditModal from "./ProjectEditModal";
 import RunFilters from "./RunFilters";
 import { EMPTY_RUN_FILTER, isFilterActive, runMatchesFilter } from "./runFilter";
 import { ChildCountPills } from "./OrchestrationTab";
-import RunShellModal from "./RunShellModal";
+import RunShellModal from "../session/components/RunShellModal";
 import SelectControl from "./SelectControl";
 import TriggersListPanel from "./TriggersListPanel";
 
@@ -125,7 +126,7 @@ export default function UnifiedLeftPanel({
   const [confirmRetryAll, setConfirmRetryAll] = useState<string | null>(null);
   // Ad-hoc bash shell opened on a terminal run (#316). Holds the tmux session
   // name to attach the inline terminal to.
-  const [shellRun, setShellRun] = useState<{ runId: string; session: string } | null>(null);
+  const runShell = useRunShell();
   const [renamingRunId, setRenamingRunId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -547,15 +548,10 @@ export default function UnifiedLeftPanel({
             title="Open a bash shell in this run's worktree"
             data-testid="open-session-button"
             className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
-            onClick={async (e) => {
+            onClick={(e) => {
               e.stopPropagation();
-              try {
-                const { session } = await openRunShell(run.run_id);
-                setShellRun({ runId: run.run_id, session });
-              } catch {
-                // Silent, like handleCleanup — the server gate may 409 if the
-                // worktree vanished out-of-band; nothing actionable in the row.
-              }
+              // Silent on failure, like handleCleanup: nothing actionable in the row.
+              void runShell.open(run.run_id);
             }}
           >
             <SquareTerminal size={12} />
@@ -1325,11 +1321,8 @@ export default function UnifiedLeftPanel({
         />
       )}
 
-      {shellRun && (
-        <RunShellModal
-          session={shellRun.session}
-          onClose={() => setShellRun(null)}
-        />
+      {runShell.shell && (
+        <RunShellModal session={runShell.shell.session} onClose={runShell.close} />
       )}
 
       {projectEditor && (

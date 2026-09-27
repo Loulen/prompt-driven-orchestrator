@@ -21,7 +21,7 @@
 use tracing::{error, warn};
 
 use crate::worktree_ops::sub_worktree_branch;
-use crate::{admission, event_log, tmux_session_manager};
+use crate::{admission, event_log};
 use crate::{
     append_event, effective_repo_root, load_all_run_ids, load_events, reconcile_run_level_stall,
     retry_waiting_nodes, AppState,
@@ -40,7 +40,7 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
         }
     };
 
-    let socket = state.tmux_socket();
+    let tmux = state.tmux();
 
     for run_id in &run_ids {
         let events = match load_events(&state.db, run_id).await {
@@ -74,7 +74,7 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                 .map(|(id, ns)| (id.clone(), ns.iter, ns.status.clone()))
                 .collect();
             for (node_id, iter, node_status) in &dangling {
-                let session = tmux_session_manager::node_session_name(run_id, node_id, *iter);
+                let session = pdo_session::domain::names::node_session_name(run_id, node_id, *iter);
                 let interrupted = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
@@ -182,14 +182,13 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                 )
             })
             .filter_map(|(id, ns)| {
-                let session = tmux_session_manager::node_session_name(run_id, id, ns.iter);
-                (!tmux_session_manager::session_exists(&socket, &session))
-                    .then(|| (id.clone(), ns.iter))
+                let session = pdo_session::domain::names::node_session_name(run_id, id, ns.iter);
+                (!tmux.session_exists(&session)).then(|| (id.clone(), ns.iter))
             })
             .collect();
 
         for (node_id, iter) in &orphaned {
-            let session = tmux_session_manager::node_session_name(run_id, node_id, *iter);
+            let session = pdo_session::domain::names::node_session_name(run_id, node_id, *iter);
             let interrupted = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),

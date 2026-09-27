@@ -12,6 +12,7 @@
 //! During the migration, the bounded contexts still live in the legacy crate
 //! (`pdo_daemon`), which [`serve`] delegates to.
 
+mod contexts;
 mod identify;
 mod serve;
 

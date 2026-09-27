@@ -28,7 +28,10 @@ use std::path::{Path, PathBuf};
 
 /// The files holding the assembled router (relative to this crate), and the
 /// function that builds it. The router still lives in the legacy crate.
-const ROUTER_SOURCES: &[(&str, &str)] = &[("../pdo-daemon/src/lib.rs", "fn build_router(")];
+const ROUTER_SOURCES: &[(&str, &str)] = &[
+    ("../pdo-daemon/src/lib.rs", "fn build_router("),
+    ("../pdo-session/src/adapters/http/mod.rs", "pub fn router("),
+];
 
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
 

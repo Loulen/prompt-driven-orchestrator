@@ -10,7 +10,7 @@
 //! **Pure by contract — an AC, not advice.** No `$HOME`, no disk, no clock. Don't
 //! shell-quote here: the caller hands in already-quoted values (`'opus'`, or
 //! `"$(cat '/path')"` for the prompt) so the quoting discipline stays in
-//! `tmux_session_manager`, where the shell semantics live.
+//! `pdo_session::domain::launch`, where the shell semantics live.
 
 /// The values substituted into a descriptor's argv holes.
 ///

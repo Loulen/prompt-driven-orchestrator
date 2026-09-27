@@ -201,7 +201,6 @@ vi.mock("../api", () => {
     {
       fetchRuns: vi.fn().mockResolvedValue([]),
       fetchRun: vi.fn().mockResolvedValue({}),
-      fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
       fetchTriggers: vi.fn().mockResolvedValue([]),
       fetchTriggersHealth: vi.fn().mockResolvedValue({
         last_tick_at: null,
@@ -284,8 +283,6 @@ vi.mock("../api", () => {
         profiles: [virtualProfile("full"), virtualProfile("minimal")],
         home: "/home/user",
       }),
-      closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
-      putLibassistFocus: vi.fn().mockResolvedValue(undefined),
       fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
       uncombineStatsMember: vi.fn(),
       fetchStatsOverview: vi.fn().mockResolvedValue({
@@ -351,6 +348,15 @@ vi.mock("../api", () => {
     },
   );
 });
+
+vi.mock("../session/api/sessions", () => ({
+  fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
+}));
+
+vi.mock("../session/api/assistant", () => ({
+  closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
+  putLibassistFocus: vi.fn().mockResolvedValue(undefined),
+}));
 
 // The canvas is outside the paths under test; collapse it like the EditCanvas
 // tests do so no real ReactFlow measurement runs under jsdom.

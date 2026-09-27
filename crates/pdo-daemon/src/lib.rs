@@ -13,9 +13,9 @@ mod child_awaiting;
 pub(crate) mod completion_refusal;
 #[allow(dead_code)]
 mod condition;
+mod contexts;
 #[allow(dead_code)]
 mod cron_schedule;
-mod declared_wait;
 mod distribution;
 mod edge_router;
 mod event_log;
@@ -47,7 +47,6 @@ mod price_table;
 mod project_store;
 mod prompt_augmenter;
 mod provisioning;
-mod pty_bridge;
 mod reap_policy;
 pub(crate) mod recovery;
 pub(crate) mod repo_edit_refusal;
@@ -69,7 +68,7 @@ mod scheduler;
 mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
-mod shared_terminal;
+mod session_ports;
 mod skill_bank;
 mod skill_delivery;
 mod skill_import;
@@ -81,7 +80,6 @@ mod stats_absorption;
 mod stats_performance;
 mod structured_diff;
 mod switch_router;
-pub mod tmux_session_manager;
 mod transition_guard;
 #[allow(dead_code)]
 mod trigger_scheduler;
@@ -118,6 +116,8 @@ use tokio::time;
 use tracing::{error, info, warn};
 use ts_rs::TS;
 
+use crate::contexts::ContextResourcesSeed;
+pub use crate::contexts::{ContextResources, Contexts, SessionRunPorts};
 use crate::node_spawn::SpawnContext;
 #[cfg(test)]
 use crate::node_spawn::{spawn_node, SpawnDeps, SpawnOutcome};
@@ -130,6 +130,7 @@ use crate::worktree_ops::{
     secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
     worktree_dir_for_run, worktree_has_tracked_changes,
 };
+pub(crate) use pdo_session::domain::pane::ReattachOutcome;
 
 const DEFAULT_PORT: u16 = 5172;
 const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
@@ -508,32 +509,6 @@ struct AppState {
     /// live set is simply not recounted. Observability-only — the sweep never
     /// changes a flagged node's status.
     blocked_on_limit: Arc<std::sync::atomic::AtomicI64>,
-    /// Epoch-millis of the most recent orphan-sweep pass. Kept out of
-    /// `/stale/health` on purpose: that gauge is the stale detector's 30 s
-    /// heartbeat, the reaper is a separate 60 s loop. Surfaced by `GET /sessions`
-    /// as `reaper.last_sweep_at`.
-    reaper_last_sweep_ms: Arc<std::sync::atomic::AtomicI64>,
-    /// #588 / ADR-0069: node sessions whose PTY bridge received at least one
-    /// **typed** byte since the wait was declared. The Enter rule reads it: an
-    /// Enter on an empty line (a click to focus the pane) lifts nothing. Cleared
-    /// by the declaration and by the lift; in-memory only — a daemon restart
-    /// forgets it, and the next keystroke re-arms it.
-    pty_typed: std::sync::Mutex<std::collections::HashSet<String>>,
-    /// #867 / ADR-0075: who pilots each tmux session shown by several postes
-    /// (browsers). In-memory presence: a restart drops every socket anyway.
-    shared_terminals: shared_terminal::SharedTerminalRegistry,
-    /// Sessions killed by the orphan sweep **since this daemon booted** — a
-    /// cumulative counter, not a per-pass gauge. Don't reset it each pass: the
-    /// killing pass is followed within seconds by an idle one, so the surface
-    /// would read `0` whenever anyone asked. Contrast `blocked_on_limit`, a
-    /// genuine level.
-    reaper_killed: Arc<std::sync::atomic::AtomicI64>,
-    /// Of those, how many were killed on an **absence** verdict — absent run,
-    /// absent node, or an unparseable session name. Split out because a single
-    /// counter cannot carry reasons, and cumulative because that is what makes
-    /// "it must stay flat" checkable: flat means *never incremented*, not *idle
-    /// last pass*.
-    reaper_killed_for_absent_run: Arc<std::sync::atomic::AtomicI64>,
     /// Debug-only one-shot poison pill: the next stale sweep `panic!`s, then
     /// disarms itself, proving the *next* sweep recovers. Tests arm it
     /// *post-boot* via [`DaemonHandle::arm_stale_panic`] — the immediate startup
@@ -614,53 +589,22 @@ struct AppState {
     /// Serialises `POST /update/apply`: one executor at a time.
     update_apply_lock: tokio::sync::Mutex<()>,
     /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`,
-    /// parsed + normalised at boot. Shared by BOTH WS upgrades (`/ws` and
-    /// `/sessions/{id}/pty`) via [`pty_bridge::check_origin`]; the four localhost
+    /// parsed + normalised at boot. Shared by BOTH WS upgrades (`/ws` here and
+    /// `/sessions/{id}/pty` in the session context) via
+    /// [`pdo_session::adapters::http::origin::check_origin`]; the four localhost
     /// defaults are always added on top.
     allowed_ws_origins: Vec<String>,
-    /// Which pipeline template the UI currently has open for editing, and when it
-    /// last said so (ADR-0051 §2). `None` = no edit view open.
-    ///
-    /// Don't persist it: this is a **presence** signal, not a fact about the
-    /// project, so a persisted value would resurrect on the next boot a claim that
-    /// someone was editing. A restart forgets it, the UI re-declares within 20 s,
-    /// and in between the assistant is a session nobody is attached to — precisely
-    /// what the sweep should reap.
-    libassist_focus: Mutex<Option<LibassistFocus>>,
-}
-
-/// The library assistant's focus: the instance pipeline the UI is editing now.
-#[derive(Debug, Clone)]
-struct LibassistFocus {
-    pipeline_id: String,
-    /// Absolute path of the template's YAML, or `None` when the id resolves to no
-    /// file yet — an unsaved template is a legitimate focus, not an error.
-    path: Option<PathBuf>,
-    /// When the UI last declared this focus. Same clock as the sweep's `now`, so
-    /// the age comparison needs no conversion.
-    at: chrono::DateTime<chrono::Utc>,
+    /// The session context (#920): tmux behind its port, the terminals, the
+    /// declared wait, the reaper, the library assistant.
+    session: Arc<pdo_session::Session>,
 }
 
 impl AppState {
-    /// Tmux socket name (`-L <name>`) scoped to this daemon's port. Every tmux
-    /// call from this daemon must go through it, or parallel daemons collide.
-    fn tmux_socket(&self) -> String {
-        tmux_session_manager::tmux_socket_name(self.port)
-    }
-
-    /// Is this node session really up under the daemon's tmux socket? The
-    /// projection can lag behind a pane that died between two sweeps; the
-    /// callers that need the truth *now* (the declared wait, #588) ask here.
-    /// The crate's own unit tests drive the handlers without a tmux server and
-    /// answer `true`: the integration tests (`tests/`) exercise the real probe.
-    #[cfg(not(test))]
-    fn node_session_alive(&self, session: &str) -> bool {
-        tmux_session_manager::session_exists(&self.tmux_socket(), session)
-    }
-
-    #[cfg(test)]
-    fn node_session_alive(&self, _session: &str) -> bool {
-        true
+    /// tmux, on this daemon's private socket (`-L pdo-<port>`): the session
+    /// context's port. Every tmux call from this daemon goes through it, or
+    /// parallel daemons collide.
+    fn tmux(&self) -> &dyn pdo_session::application::ports::Tmux {
+        self.session.tmux().as_ref()
     }
 }
 
@@ -1045,7 +989,7 @@ pub const EXIT_REFUSED_RECOVERABLE: u8 = 3;
 /// has already ruled** (ADR-0035 §4). The daemon appended the terminal event
 /// itself; `pdo fail` would double it — and `RunFailed` is not guarded, so the
 /// second one lands with a false reason. Read by a `||` in a `script` node's bash
-/// tail (`tmux_session_manager::build_script_tail`).
+/// tail (`pdo_session::domain::launch::build_script_tail`).
 pub const EXIT_REFUSED_TERMINAL: u8 = 4;
 
 /// `pdo complete` — signal that this node iteration is done.
@@ -1184,7 +1128,7 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
     let iter = cli_node_iter();
     let message = message
         .as_deref()
-        .map(declared_wait::truncate_message)
+        .map(pdo_session::domain::declared_wait::truncate_message)
         .filter(|m| !m.is_empty());
     let resp = match reqwest::blocking::Client::new()
         .post(format!("{url}/runs/{rid}/nodes/{nid}/wait-user"))
@@ -1503,7 +1447,7 @@ pub fn run_skip(reason: String) -> Result<()> {
 
 /// The session identity this CLI process carries via the `PDO_RUN_ID` /
 /// `PDO_NODE_ID` env vars every node session is wrapped with
-/// (`tmux_session_manager::wrap_with_env`). Only a non-empty PAIR is a claim —
+/// (`pdo_session::domain::launch::wrap_with_env`). Only a non-empty PAIR is a claim —
 /// a lone var means out of session (mirror of the daemon's
 /// `session_claim_from_headers`): the created Run is then a root.
 fn session_env_claim() -> Option<(String, String)> {
@@ -2872,9 +2816,7 @@ impl DaemonHandle {
     /// the ~60 s background interval. Resolves the TTL exactly like the background
     /// loop (`stored → env → default`).
     pub async fn run_orphan_sweep_tick(&self) {
-        let socket = self.state.tmux_socket();
-        let ttls = resolve_sweep_ttls(&self.state.db).await;
-        if let Err(e) = run_orphan_sweep(&self.state, &socket, ttls).await {
+        if let Err(e) = self.state.session.sweep().run().await {
             warn!("Reaper sweep (test seam) failed: {e}");
         }
     }
@@ -3199,7 +3141,7 @@ pub struct DaemonConfig {
     /// config cannot interleave.
     pub nested_daemon: bool,
     /// Extra exact WebSocket Origin allowlist entries, parsed once at boot
-    /// from [`pty_bridge::ALLOWED_WS_ORIGINS_ENV`] (`PDO_ALLOWED_WS_ORIGINS`).
+    /// from [`pdo_session::adapters::env::ALLOWED_WS_ORIGINS_ENV`] (`PDO_ALLOWED_WS_ORIGINS`).
     ///
     /// Both WS upgrades — `/ws` and `/sessions/{id}/pty` — reject any browser
     /// `Origin` outside `localhost`/`127.0.0.1:<port>` as a DNS-rebinding / CSWSH
@@ -3227,18 +3169,42 @@ pub struct DaemonConfig {
     pub router_layer: Option<RouterLayer>,
 }
 
-/// A transformation of the daemon's router, applied once at boot (see
-/// [`DaemonConfig::router_layer`]).
+/// What the composition root plugs into the legacy daemon at boot (see
+/// [`DaemonConfig::router_layer`]): a transformation of the assembled router,
+/// and — for the daemon itself — the wiring of the bounded contexts already
+/// extracted from this crate.
 #[derive(Clone)]
-pub struct RouterLayer(Arc<dyn Fn(Router) -> Router + Send + Sync>);
+pub struct RouterLayer {
+    wrap: Arc<dyn Fn(Router) -> Router + Send + Sync>,
+    contexts: Option<WireContexts>,
+}
+
+/// Wire the extracted contexts over the daemon's resources.
+pub type WireContexts = Arc<dyn Fn(ContextResources) -> Contexts + Send + Sync>;
 
 impl RouterLayer {
     pub fn new(layer: impl Fn(Router) -> Router + Send + Sync + 'static) -> Self {
-        Self(Arc::new(layer))
+        Self {
+            wrap: Arc::new(layer),
+            contexts: None,
+        }
+    }
+
+    /// The same layer, wiring the extracted contexts with `wire`.
+    pub fn with_contexts(
+        mut self,
+        wire: impl Fn(ContextResources) -> Contexts + Send + Sync + 'static,
+    ) -> Self {
+        self.contexts = Some(Arc::new(wire));
+        self
     }
 
     pub fn apply(&self, router: Router) -> Router {
-        (self.0)(router)
+        (self.wrap)(router)
+    }
+
+    fn contexts(&self) -> Option<WireContexts> {
+        self.contexts.clone()
     }
 }
 
@@ -3325,8 +3291,8 @@ impl DaemonConfig {
             ),
             // The ONE read of PDO_ALLOWED_WS_ORIGINS. Unset or blank yields an
             // empty list, i.e. localhost-only.
-            allowed_ws_origins: std::env::var(pty_bridge::ALLOWED_WS_ORIGINS_ENV)
-                .map(|v| pty_bridge::parse_allowed_origins(&v))
+            allowed_ws_origins: std::env::var(pdo_session::adapters::env::ALLOWED_WS_ORIGINS_ENV)
+                .map(|v| pdo_session::domain::pty_protocol::parse_allowed_origins(&v))
                 .unwrap_or_default(),
 
             router_layer: None,
@@ -3462,56 +3428,72 @@ pub async fn serve_with_config(
     let run_update_check_loop = config.run_update_check_loop;
     let nested_daemon = config.nested_daemon;
     let router_layer = config.router_layer.clone();
-
-    let state = Arc::new(AppState {
-        db,
-        event_tx,
-        pipeline_tx,
-        repo_root,
+    let wire_contexts = router_layer
+        .as_ref()
+        .and_then(RouterLayer::contexts)
+        .context(
+            "the daemon runs under the composition root (`pdo::serve`), which wires its \
+             bounded contexts: no context wiring was given",
+        )?;
+    // The contexts are wired over the daemon's resources, and the ports they
+    // need from the legacy side (the Runs, the templates, the settings) reach back
+    // into the state being built — hence the cyclic construction.
+    let mut contexts_router: Option<Router> = None;
+    let resources = ContextResourcesSeed {
+        repo_root: repo_root.clone(),
         port: bound_addr.port(),
-        merge_lock: tokio::sync::Mutex::new(()),
-        page_mount_lock: tokio::sync::Mutex::new(()),
-        admission_lock: tokio::sync::Mutex::new(()),
-        trigger_tick_lock: tokio::sync::Mutex::new(()),
-        recent_writes,
-        run_watcher: run_watcher.clone(),
-        tmux_cmd_override: config.tmux_cmd_override,
-        docker_cmd_override: config.docker_cmd_override,
-        sandbox_home_override: config.sandbox_home_override,
-        last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        panic_on_trigger_name: config.panic_on_trigger_name,
-        last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
-        shared_terminals: Default::default(),
-        panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
-            config.panic_on_stale_sweep,
-        )),
-        panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
-        node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
-        node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        service_health,
-        docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-        harness_catalogue: Arc::new(
-            pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-        ),
-        price_sync_lock: tokio::sync::Mutex::new(()),
-        price_source_url: config.price_source_url,
-        price_refresh_at_boot: config.price_refresh_at_boot,
-        update_source_url: config.update_source_url,
-        update_cache: tokio::sync::Mutex::new(None),
-        update_check_lock: tokio::sync::Mutex::new(()),
-        update_releases: tokio::sync::Mutex::new(None),
-        update_executor_override: config.update_executor_override,
-        install_method_override: config.install_method_override,
-        supervision_override: config.supervision_override,
-        relaunch_command: config.relaunch_command,
-        update_apply_lock: tokio::sync::Mutex::new(()),
-        allowed_ws_origins: config.allowed_ws_origins,
-        libassist_focus: Mutex::new(None),
+        tmux_cmd_override: config.tmux_cmd_override.clone(),
+        allowed_ws_origins: config.allowed_ws_origins.clone(),
+    };
+
+    let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
+        let wired = wire_contexts(resources.into_resources(weak.clone()));
+        contexts_router = Some(wired.router);
+        AppState {
+            db,
+            event_tx,
+            pipeline_tx,
+            repo_root,
+            port: bound_addr.port(),
+            merge_lock: tokio::sync::Mutex::new(()),
+            page_mount_lock: tokio::sync::Mutex::new(()),
+            admission_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
+            recent_writes,
+            run_watcher: run_watcher.clone(),
+            tmux_cmd_override: config.tmux_cmd_override,
+            docker_cmd_override: config.docker_cmd_override,
+            sandbox_home_override: config.sandbox_home_override,
+            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_trigger_name: config.panic_on_trigger_name,
+            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
+                config.panic_on_stale_sweep,
+            )),
+            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
+            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            service_health,
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue: Arc::new(
+                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+            ),
+            price_sync_lock: tokio::sync::Mutex::new(()),
+            price_source_url: config.price_source_url,
+            price_refresh_at_boot: config.price_refresh_at_boot,
+            update_source_url: config.update_source_url,
+            update_cache: tokio::sync::Mutex::new(None),
+            update_check_lock: tokio::sync::Mutex::new(()),
+            update_releases: tokio::sync::Mutex::new(None),
+            update_executor_override: config.update_executor_override,
+            install_method_override: config.install_method_override,
+            supervision_override: config.supervision_override,
+            relaunch_command: config.relaunch_command,
+            update_apply_lock: tokio::sync::Mutex::new(()),
+            allowed_ws_origins: config.allowed_ws_origins,
+            session: wired.session,
+        }
     });
 
     // A nested daemon suppresses every AUTOMATIC cleanup pathway, so a Tester or
@@ -3524,8 +3506,7 @@ pub async fn serve_with_config(
              This daemon will not auto-reap any tmux sessions."
         );
     } else {
-        let boot_ttls = resolve_sweep_ttls(&state.db).await;
-        if let Err(e) = run_orphan_sweep(&state, &state.tmux_socket(), boot_ttls).await {
+        if let Err(e) = state.session.sweep().run().await {
             warn!("Orphan sweep at boot failed: {e}");
         }
 
@@ -3534,7 +3515,12 @@ pub async fn serve_with_config(
         boot_recovery::run_boot_recovery(&state).await;
     }
 
-    let app = build_router(state.clone());
+    // The router of each extracted context joins the legacy one before the
+    // composition root's layer (`identify`) wraps them all.
+    let mut app = build_router(state.clone());
+    if let Some(router) = contexts_router {
+        app = app.merge(router);
+    }
     let app = match &router_layer {
         Some(layer) => layer.apply(app),
         None => app,
@@ -3585,21 +3571,18 @@ pub async fn serve_with_config(
     } else {
         let reaper_state = state.clone();
         Some(tokio::spawn(async move {
-            let interval = tmux_session_manager::reaper_interval();
-            let socket = reaper_state.tmux_socket();
+            let interval = pdo_session::adapters::env::reaper_interval();
             let mut tick = time::interval(interval);
             loop {
                 tick.tick().await;
-                // Resolve the TTLs *inside* the loop, not once at boot: a
+                // The sweep resolves its TTLs at every pass, not once at boot: a
                 // `PUT /settings` must take effect on the next sweep without a
                 // restart (ADR-0015, `stored → env → default`).
-                let ttls = resolve_sweep_ttls(&reaper_state.db).await;
                 // Panic-isolated: a panic in one tick must not silently kill the
                 // loop and leave sessions un-reaped for the daemon's life.
                 let st = reaper_state.clone();
-                let socket = socket.clone();
                 run_isolated("reaper", async move {
-                    if let Err(e) = run_orphan_sweep(&st, &socket, ttls).await {
+                    if let Err(e) = st.session.sweep().run().await {
                         warn!("Reaper sweep failed: {e}");
                     }
                 })
@@ -5247,7 +5230,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/pages/{name}/{*path}", get(serve_page_mount_file))
         // Static path — must stay declared before `/runs/{run_id}`.
         .route("/runs/reapable", get(list_reapable_runs))
-        .route("/sessions", get(sessions))
         .route("/runs/{run_id}", get(get_run).delete(forget_run))
         .route("/runs/{run_id}/children", get(list_run_children))
         .route("/runs/{run_id}/events", get(get_run_events))
@@ -5257,16 +5239,11 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(node_release_completion),
         )
         .route(
-            "/runs/{run_id}/nodes/{node_id}/wait-user",
-            post(node_wait_user),
-        )
-        .route(
             "/runs/{run_id}/nodes/{node_id}/children/wait",
             get(node_children_wait),
         )
         .route("/runs/{run_id}/nodes/{node_id}/fail", post(node_fail))
         .route("/runs/{run_id}/nodes/{node_id}/skip", post(node_skip))
-        .route("/runs/{run_id}/nodes/{node_id}/pane", get(node_pane))
         .route("/runs/{run_id}/nodes/{node_id}/prompt", get(node_prompt))
         .route("/runs/{run_id}/nodes/{node_id}/io", get(node_io))
         .route("/runs/{run_id}/diff", get(run_diff))
@@ -5318,37 +5295,11 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/runs/{run_id}/nodes/{node_id}/retry/preview",
             get(node_retry_preview),
         )
-        .route(
-            "/sessions/{session_id}/pty",
-            get(pty_bridge::session_pty_handler),
-        )
-        .route("/sessions/{session_id}/attach", post(session_attach))
-        .route("/sessions/{run_id}/manager/attach", post(manager_attach))
         // Manager on demand: start/stop the Run's Pipeline Manager from the
         // Manager tab. Start is idempotent (a double-click is a benign
         // re-answer); stop on a dead session is a calm no-op.
         .route("/runs/{run_id}/manager/start", post(start_run_manager))
         .route("/runs/{run_id}/manager/stop", post(stop_run_manager))
-        .route("/sessions/{run_id}/shell", post(open_run_shell))
-        // The library pipeline authoring assistant (ADR-0051). No pipeline id in the
-        // path: there is ONE assistant for the whole daemon. `POST` is
-        // create-if-absent; `DELETE` reaps it when the user leaves every edit view.
-        .route(
-            "/sessions/libassist",
-            post(open_library_assistant).delete(close_library_assistant),
-        )
-        // Which template the UI has open (ADR-0051 §2). `PUT` doubles as the UI's
-        // liveness heartbeat — it is what tells the sweep a human is still editing —
-        // and `GET` is what the assistant's `UserPromptSubmit` hook reads.
-        .route(
-            "/sessions/libassist/focus",
-            axum::routing::put(put_libassist_focus).get(get_libassist_focus),
-        )
-        // The assistant's one write path. Deliberately takes no id and no scope: the
-        // focus already names the file, and "scope" means `.pdo/pipelines/` on an
-        // edit tab but `.pdo/library/pipelines/` in the library store, so any second
-        // naming is a way of naming the wrong file.
-        .route("/sessions/libassist/save", post(save_libassist_focused))
         .route("/library", get(list_library))
         .route("/library", post(save_to_library))
         // Parse a single node's YAML into a canvas-instantiable spec. Disk-free.
@@ -6650,7 +6601,7 @@ async fn stored_default_model(db: &sqlx::SqlitePool) -> Option<String> {
         .await
         .ok()
         .and_then(|c| c.default_model);
-    tmux_session_manager::default_model_with(stored)
+    pdo_session::adapters::env::default_model_with(stored)
 }
 
 /// The instance-wide default **harness**, the `instance` tier of
@@ -6661,7 +6612,7 @@ async fn stored_default_harness(db: &sqlx::SqlitePool) -> Option<String> {
         .await
         .ok()
         .and_then(|c| c.default_harness);
-    tmux_session_manager::default_harness_with(stored)
+    pdo_session::adapters::env::default_harness_with(stored)
 }
 
 /// The per-harness default model map for the resolver, from a *fresh* read. The
@@ -6677,7 +6628,7 @@ async fn stored_default_harness_models(
         .unwrap_or_default();
     if !map.contains_key(pdo_harness::registry::CLAUDE) {
         if let Some(legacy) =
-            tmux_session_manager::default_model_with(cfg.and_then(|c| c.default_model))
+            pdo_session::adapters::env::default_model_with(cfg.and_then(|c| c.default_model))
         {
             map.insert(pdo_harness::registry::CLAUDE.to_string(), legacy);
         }
@@ -10013,7 +9964,7 @@ async fn parse_multipart_create_run(
 /// The session identity a `POST /runs` caller carries via the
 /// `X-PDO-Session-Run-Id` / `X-PDO-Session-Node-Id` headers — the exact values
 /// of the `PDO_RUN_ID` / `PDO_NODE_ID` env vars every node session is wrapped
-/// with (`tmux_session_manager::wrap_with_env`). Never a body field: provenance
+/// with (`pdo_session::domain::launch::wrap_with_env`). Never a body field: provenance
 /// is mechanical (ADR-0064), so the daemon — not the caller — decides the
 /// parent, and any parent key in the body is refused as unknown.
 #[derive(Debug, Clone)]
@@ -11173,7 +11124,7 @@ async fn spawn_manager_session(
     let full_prompt =
         prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
 
-    let session_name = tmux_session_manager::manager_session_name(run_id);
+    let session_name = pdo_session::domain::names::manager_session_name(run_id);
     // The manager follows the harness OF THE RUN — `Run → instance → floor`, no node
     // tier and deliberately no model/effort — so "this Run runs on X" holds with no
     // exception … unless a stored `manager_profile` pin says otherwise (applied
@@ -11249,20 +11200,22 @@ async fn spawn_manager_session(
         _ => Vec::new(),
     };
     // The manager runs inside the Run's container too when sandboxed.
-    let sandbox_wrap = sandboxed.then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
-        marker: &session_name,
-        workdir: worktree_dir,
-        set_env: &manager_set_env,
+    let sandbox = sandboxed.then(|| {
+        crate::session_ports::SandboxExec::new(
+            state.docker_cmd_override.as_deref(),
+            run_id,
+            &session_name,
+            worktree_dir,
+            &manager_set_env,
+        )
     });
     // Reservation before spawn (ADR-0038, extended to every path): the durable
     // event lands FIRST, the tmux spawn after. The projection ignores this kind —
     // the wire's `has_manager` stays an observed tmux fact, so a spawn that fails
     // after the reservation reads `false`, not `true`.
     emit_run_event(state, run_id, event_log::EventKind::ManagerStarted, None).await;
-    if let Err(e) = tmux_session_manager::spawn(
+    if let Err(e) = pdo_session::application::launch::spawn(
+        state.tmux(),
         &session_name,
         &full_prompt,
         worktree_dir,
@@ -11275,13 +11228,16 @@ async fn spawn_manager_session(
         // probes it and it is never resumed. Resolving nodes by their own id is
         // precisely what stops the manager's transcript, which shares this cwd, from
         // being read as a node's.
-        tmux_session_manager::SessionTail::Agent {
+        pdo_session::domain::launch::SessionTail::Agent {
             harness: &manager_harness,
             model: manager_combo.model.as_deref(),
             effort: manager_combo.effort.as_deref(),
             session_id: None,
         },
-        sandbox_wrap.as_ref(),
+        sandbox
+            .as_ref()
+            .map(crate::session_ports::SandboxExec::wrap)
+            .as_ref(),
         // The manager is an infra session, not a pipeline node — it never calls
         // `pdo complete`, so it gets no turn-end `Stop` hook.
         false,
@@ -11355,38 +11311,6 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
         }
         serde_yaml::Value::Tagged(tagged) => yaml_value_to_json(&tagged.value),
     }
-}
-
-/// `GET /sessions` — live NodeRun-session count, configured cap, daemon version,
-/// persistent-service health and orphan-sweep gauge, for the bottom status bar.
-/// Manager sessions are excluded by construction (they are not nodes), and the
-/// `service` object is cached at boot so this polled endpoint stays subprocess-free.
-///
-/// The reaper counters are **cumulative since boot**, so "the reaper killed
-/// something" survives long enough to be read. The gauge deliberately does NOT
-/// answer "who killed *my* node": it is instance-wide, and a per-run answer needs an
-/// event plus an events UI that does not exist yet.
-async fn sessions(State(state): State<Arc<AppState>>) -> Response {
-    let live = count_global_live_sessions(&state.db).await;
-    let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
-    let ord = std::sync::atomic::Ordering::Relaxed;
-    let sweep_ms = state.reaper_last_sweep_ms.load(ord);
-    let last_sweep_at = (sweep_ms != 0)
-        .then(|| chrono::DateTime::from_timestamp_millis(sweep_ms))
-        .flatten()
-        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    Json(serde_json::json!({
-        "live": live,
-        "cap": cap,
-        "version": env!("CARGO_PKG_VERSION"),
-        "service": &*state.service_health,
-        "reaper": {
-            "last_sweep_at": last_sweep_at,
-            "killed": state.reaper_killed.load(ord),
-            "killed_for_absent_run": state.reaper_killed_for_absent_run.load(ord),
-        },
-    }))
-    .into_response()
 }
 
 /// One knob's `stored → env → default` disclosure for `GET /settings` (ADR-0015):
@@ -11517,11 +11441,13 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    let ttl_default = tmux_session_manager::DEFAULT_REAPER_TTL.as_secs() as i64;
+    let ttl_default = pdo_session::domain::settings::DEFAULT_REAPER_TTL.as_secs() as i64;
     let ttl_stored_wins = cfg.reaper_ttl_secs.filter(|&n| n >= 1);
-    let ttl_env = tmux_session_manager::env_reaper_ttl_secs().map(|n| n as i64);
-    let ttl_effective = tmux_session_manager::reaper_ttl_with(cfg.reaper_ttl_secs.map(|n| n as u64))
-        .as_secs() as i64;
+    let ttl_env = pdo_session::adapters::env::env_reaper_ttl_secs().map(|n| n as i64);
+    let ttl_effective = pdo_session::adapters::env::reaper_ttl_with(
+        cfg.reaper_ttl_secs.map(|n| n as u64),
+    )
+    .as_secs() as i64;
     let ttl_source = if ttl_stored_wins.is_some() {
         "stored"
     } else if ttl_env.is_some() {
@@ -11530,10 +11456,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    let lat_default = tmux_session_manager::DEFAULT_LIBASSIST_IDLE_TTL.as_secs() as i64;
+    let lat_default = pdo_session::domain::settings::DEFAULT_LIBASSIST_IDLE_TTL.as_secs() as i64;
     let lat_stored_wins = cfg.libassist_idle_ttl_secs.filter(|&n| n >= 1);
-    let lat_env = tmux_session_manager::env_libassist_idle_ttl_secs().map(|n| n as i64);
-    let lat_effective = tmux_session_manager::libassist_idle_ttl_with(
+    let lat_env = pdo_session::adapters::env::env_libassist_idle_ttl_secs().map(|n| n as i64);
+    let lat_effective = pdo_session::adapters::env::libassist_idle_ttl_with(
         cfg.libassist_idle_ttl_secs.map(|n| n as u64),
     )
     .as_secs() as i64;
@@ -11562,8 +11488,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // The empty-string filter mirrors the resolver: a `""` stored/env value is
     // treated as unset, so it never wins the tier or discloses a bogus value.
     let dm_stored = cfg.default_model.as_deref().filter(|s| !s.is_empty());
-    let dm_env = tmux_session_manager::env_default_model();
-    let dm_effective = tmux_session_manager::default_model_with(cfg.default_model.clone());
+    let dm_env = pdo_session::adapters::env::env_default_model();
+    let dm_effective = pdo_session::adapters::env::default_model_with(cfg.default_model.clone());
     let dm_source = if dm_stored.is_some() {
         "stored"
     } else if dm_env.is_some() {
@@ -11575,8 +11501,9 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
 
     // `effective`=null ⇒ the `claude` floor applies at resolve time.
     let dh_stored = cfg.default_harness.as_deref().filter(|s| !s.is_empty());
-    let dh_env = tmux_session_manager::env_default_harness();
-    let dh_effective = tmux_session_manager::default_harness_with(cfg.default_harness.clone());
+    let dh_env = pdo_session::adapters::env::env_default_harness();
+    let dh_effective =
+        pdo_session::adapters::env::default_harness_with(cfg.default_harness.clone());
     let dh_source = if dh_stored.is_some() {
         "stored"
     } else if dh_env.is_some() {
@@ -14831,11 +14758,9 @@ async fn get_run(
             // the orphan sweep, a manual stop or a daemon restart). One
             // `has-session` per detail fetch, the same cost class as the disk
             // reads above.
-            let socket = state.tmux_socket();
-            let has_manager = tmux_session_manager::session_exists(
-                &socket,
-                &tmux_session_manager::manager_session_name(&run_id),
-            );
+            let tmux = state.tmux();
+            let has_manager =
+                tmux.session_exists(&pdo_session::domain::names::manager_session_name(&run_id));
             response["has_manager"] = serde_json::Value::Bool(has_manager);
             Json(response).into_response()
         }
@@ -16262,8 +16187,8 @@ async fn send_review_comments(
         (label_of(&first.from_ref), label_of(&first.to_ref))
     };
     let message = review_comments::batch_message(&run_id, &from_label, &to_label, &prepared);
-    let socket = state.tmux_socket();
-    let session = tmux_session_manager::manager_session_name(&run_id);
+    let tmux = state.session.tmux().clone();
+    let session = pdo_session::domain::names::manager_session_name(&run_id);
     let delay = if created {
         REVIEW_PASTE_DELAY_AFTER_SPAWN
     } else {
@@ -16271,7 +16196,7 @@ async fn send_review_comments(
     };
     tokio::spawn(async move {
         time::sleep(delay).await;
-        tmux_session_manager::paste_message(&socket, &session, &message);
+        pdo_session::application::messages::paste_message(tmux.as_ref(), &session, &message);
     });
     info!(
         "run {run_id}: {} review comment(s) sent to the manager as one message (batch {batch_id}{})",
@@ -16676,13 +16601,13 @@ fn sync_run_pipeline_to_template(
 /// `tmux_server_alive`: a dead server means the whole socket collapsed and every
 /// session under it died at once, rather than this one node dying in isolation.
 fn gather_session_death_diagnostics(
-    socket: &str,
+    tmux: &dyn pdo_session::application::ports::Tmux,
     run_id: &str,
     node_id: &str,
     iter: i64,
     running: &[(String, i64)],
 ) -> stale_detector::SessionDeathDiagnostics {
-    let tmux_server_alive = tmux_session_manager::server_alive(socket);
+    let tmux_server_alive = tmux.server_alive();
 
     let (mem_available_kb, swap_free_kb) = std::fs::read_to_string("/proc/meminfo")
         .ok()
@@ -16691,8 +16616,8 @@ fn gather_session_death_diagnostics(
 
     let correlated_deaths =
         stale_detector::count_correlated_deaths(running, (node_id, iter), |id, it| {
-            let s = tmux_session_manager::node_session_name(run_id, id, it);
-            !tmux_session_manager::session_exists(socket, &s)
+            let s = pdo_session::domain::names::node_session_name(run_id, id, it);
+            !tmux.session_exists(&s)
         });
 
     stale_detector::SessionDeathDiagnostics {
@@ -16711,7 +16636,7 @@ fn gather_session_death_diagnostics(
 /// detection pipeline with real I/O injected. Every method MUST stay a
 /// side-effect-free read; the sweep performs the reap/spawn side effects itself.
 struct SweepNodeProbes<'a> {
-    socket: &'a str,
+    tmux: &'a dyn pdo_session::application::ports::Tmux,
     session_name: &'a str,
     working_dir: &'a Path,
     /// The transcript store root: the sandboxed Run's staged home while it is live,
@@ -16735,7 +16660,7 @@ struct SweepNodeProbes<'a> {
 
 impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     fn session_alive(&self) -> bool {
-        tmux_session_manager::session_exists(self.socket, self.session_name)
+        self.tmux.session_exists(self.session_name)
     }
 
     fn transcript_tail(&self) -> Option<stale_detector::TranscriptTail> {
@@ -16761,12 +16686,12 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 
     fn capture_pane(&self) -> Option<String> {
-        tmux_session_manager::capture(self.socket, self.session_name)
+        self.tmux.capture(self.session_name)
     }
 
     fn session_death_diagnostics(&self) -> stale_detector::SessionDeathDiagnostics {
         gather_session_death_diagnostics(
-            self.socket,
+            self.tmux,
             self.run_id,
             self.node_id,
             self.iter,
@@ -16804,7 +16729,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
         }
     };
 
-    let socket = state.tmux_socket();
+    let tmux = state.tmux();
     let now = std::time::SystemTime::now();
 
     // Resolved once for the whole sweep. HOME absent must NOT abort the sweep,
@@ -16886,7 +16811,8 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 worktree_dir.clone()
             };
 
-            let session_name = tmux_session_manager::node_session_name(run_id, node_id, *iter);
+            let session_name =
+                pdo_session::domain::names::node_session_name(run_id, node_id, *iter);
 
             // The session id this iteration was launched with, so the probe resolves
             // the transcript by identity. `None` ⇒ legacy newest-mtime pick.
@@ -16904,7 +16830,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             let node_store_root: &Path = stores.root_for(&node_harness, &projects_root);
 
             let probes = SweepNodeProbes {
-                socket: &socket,
+                tmux,
                 session_name: &session_name,
                 working_dir: &working_dir,
                 projects_root: node_store_root,
@@ -17023,261 +16949,6 @@ async fn run_stale_detection(state: &Arc<AppState>) {
         .store(blocked_on_limit_count, std::sync::atomic::Ordering::Relaxed);
 }
 
-// One orphan-sweep pass: inventory tmux, resolve owners, decide, kill.
-//
-// **THE ORDER OF THE FIRST TWO STEPS IS LOAD-BEARING (ADR-0038).** The sweep's
-// "absent" verdict is never true on its own — it is true *relative to two
-// observations*, the tmux inventory and the event-log read. Snapshot-then-list
-// killed a session born in between: live in tmux, missing from a snapshot that
-// predated it, so `nodes.get(node_id)` → `None` → killed, in one case 150 ms after
-// its own spawn.
-//
-// The correct order is sound because **the log only grows**: an absence
-// observed *after* the inventory implies absence *at* the inventory, so a
-// session missing from the log we read here cannot have existed when we listed
-// — it is simply not in `names`, and it gets judged on the next pass with its
-// reservation visible. Monotonicity works in this direction only; the reverse
-// order has no symmetric proof. Do not "tidy" this into snapshot-then-list.
-//
-// The window is not one instruction: it is one SQLite read per run, so it **grows
-// with the age of the instance**. The boot-time caller never sees it (it runs
-// before `build_router`, so no spawn is concurrent); only the periodic reaper races
-// live spawns.
-//
-// Finally, this function's correctness rests on a precondition it cannot enforce —
-// **no tmux session exists before the event that reserves it is durably appended**.
-// `node_spawn::spawn_node`, `node_primitives::start_node`'s callers and
-// `spawn_manager_session` all own that half; the reaper is only its consumer.
-
-/// Resolve both sweep TTLs at their `stored → env → default` precedence (ADR-0015).
-///
-/// The single point all three sweep callers go through — the boot pass, the 60 s
-/// reaper loop and the test seam — so a stored knob can never take effect on one path
-/// and not another. A failed DB read degrades to the env/default tiers rather than
-/// aborting the pass: a sweep that does not run reaps nothing at all.
-async fn resolve_sweep_ttls(db: &sqlx::SqlitePool) -> tmux_session_manager::SweepTtls {
-    let cfg = instance_config::get(db).await.ok();
-    tmux_session_manager::SweepTtls {
-        node_run: tmux_session_manager::reaper_ttl_with(
-            cfg.as_ref()
-                .and_then(|c| c.reaper_ttl_secs)
-                .map(|n| n as u64),
-        ),
-        libassist_idle: tmux_session_manager::libassist_idle_ttl_with(
-            cfg.as_ref()
-                .and_then(|c| c.libassist_idle_ttl_secs)
-                .map(|n| n as u64),
-        ),
-    }
-}
-
-async fn run_orphan_sweep(
-    state: &AppState,
-    socket: &str,
-    ttls: tmux_session_manager::SweepTtls,
-) -> Result<()> {
-    // (1) EDGE FIRST — the tmux inventory. Sorted so kill order and log order are
-    //     deterministic (`list_pdo_sessions` returns a `HashSet`).
-    let mut names: Vec<String> = tmux_session_manager::list_pdo_sessions(socket)
-        .into_iter()
-        .collect();
-    names.sort();
-
-    // (2) ONE clock for the whole pass, taken right after the inventory and before
-    //     any read, so the TTLs are not "a bit more aggressive because the reads
-    //     took 4 s".
-    let now = chrono::Utc::now();
-
-    // (3) EDGE SECOND — project ONLY the runs that actually hold a live session.
-    //     The lookup's domain is `{ run_id | ∃ live session }` by construction.
-    //
-    //     The `?` on `load_events` is load-bearing and must NOT be swallowed into
-    //     `None`: a pool timeout would read a live run as "absent" and kill its
-    //     session. Propagating is fail-closed — both production callers only `warn!`,
-    //     so an aborted pass reaps *nothing* and retries in 60 s. `load_events` never
-    //     errors on an unknown run_id (zero rows = `Ok(vec![])` → `project` → `None`
-    //     → absent → killed, which is the intended verdict).
-    //
-    //     The library assistant's presence facts are read in this same pass, against
-    //     the same `now` — the one-clock discipline above. `is_attached` is one tmux
-    //     call and only for the assistant; the other arms have an owning Run.
-    let focus_at = read_libassist_focus(state).map(|f| f.at);
-
-    let mut inputs: Vec<tmux_session_manager::SweepInput> = Vec::with_capacity(names.len());
-    let mut projected: HashMap<String, Option<event_log::RunState>> = HashMap::new();
-
-    for session_name in names {
-        let parsed = tmux_session_manager::parse_session_name(&session_name);
-        let mut attached = false;
-        let mut focus_age = None;
-        let info = match &parsed {
-            None => None,
-            // A library assistant owns no Run, so there is nothing to project. It is
-            // judged on human presence instead.
-            Some(tmux_session_manager::ParsedSession::LibAssist) => {
-                attached = tmux_session_manager::is_attached(socket, &session_name);
-                focus_age = focus_at.map(|at| {
-                    now.signed_duration_since(at)
-                        .to_std()
-                        .unwrap_or(Duration::ZERO)
-                });
-                None
-            }
-            Some(p) => {
-                let (run_id, node_id) = match p {
-                    tmux_session_manager::ParsedSession::Manager { run_id } => {
-                        (run_id.as_str(), "__manager__")
-                    }
-                    tmux_session_manager::ParsedSession::Shell { run_id } => {
-                        (run_id.as_str(), "__shell__")
-                    }
-                    tmux_session_manager::ParsedSession::NodeRun {
-                        run_id, node_id, ..
-                    } => (run_id.as_str(), node_id.as_str()),
-                    tmux_session_manager::ParsedSession::LibAssist => unreachable!(),
-                };
-                if !projected.contains_key(run_id) {
-                    let events = load_events(&state.db, run_id).await?;
-                    // Keep the `Option`: synthesising an empty `RunState` for a
-                    // fragmentary log (events with no `RunStarted`) would turn
-                    // "absent" into "keep".
-                    projected.insert(run_id.to_string(), event_log::project(&events));
-                }
-                projected
-                    .get(run_id)
-                    .and_then(|s| s.as_ref())
-                    .and_then(|rs| reaper_info_for(rs, node_id))
-            }
-        };
-        inputs.push(tmux_session_manager::SweepInput {
-            session_name,
-            parsed,
-            info,
-            attached,
-            focus_age,
-        });
-    }
-
-    // (4) PURE — no tmux, no DB, no clock inside.
-    let decisions = tmux_session_manager::decide_sweep(&inputs, ttls, now);
-
-    // (5) EDGE — log + kill. Nothing is killed before this point, so a DB error in
-    //     (3) aborts the pass having reaped nothing.
-    let tally = tmux_session_manager::apply_sweep(socket, &decisions);
-
-    // The counters ACCUMULATE (`fetch_add`, not `store`): a per-pass gauge answers
-    // "did the *last* pass kill?", which is ~always "no" — the killing pass is
-    // followed within seconds by an idle one that overwrites the count with 0.
-    // Contrast `blocked_on_limit`, a genuine *level*. Cumulative also makes the tally
-    // independent of *which* pass killed, which a per-pass store made racy to observe
-    // at all under load.
-    let ord = std::sync::atomic::Ordering::Relaxed;
-    state
-        .reaper_last_sweep_ms
-        .store(now.timestamp_millis(), ord);
-    state.reaper_killed.fetch_add(tally.killed, ord);
-    state
-        .reaper_killed_for_absent_run
-        .fetch_add(tally.killed_for_absent_run, ord);
-
-    Ok(())
-}
-
-/// The reaper's facts about one session's owner, resolved *after* the inventory.
-///
-/// Lives here rather than in `tmux_session_manager` so that deep module keeps its
-/// zero dependency on `event_log`; [`tmux_session_manager::NodeRunInfo`] exists
-/// precisely as the decoupled facts type. `None` = absent from the log, which is the
-/// sweep's kill arm.
-fn reaper_info_for(
-    run_state: &event_log::RunState,
-    node_id: &str,
-) -> Option<tmux_session_manager::NodeRunInfo> {
-    let is_archived = run_state.status == event_log::RunStatus::Archived;
-
-    if node_id == "__manager__" {
-        return Some(tmux_session_manager::NodeRunInfo {
-            completed_at: run_state
-                .completed_at
-                .as_deref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&chrono::Utc)),
-            is_archived,
-        });
-    }
-
-    // The run shell is not a projected node, so it resolves against the run itself.
-    // Without this branch `nodes.get("__shell__")` is None and the sweep kills the
-    // shell as "absent" on every pass. The Shell arm ignores `completed_at`, so only
-    // `is_archived` is load-bearing.
-    if node_id == "__shell__" {
-        return Some(tmux_session_manager::NodeRunInfo {
-            completed_at: run_state
-                .completed_at
-                .as_deref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&chrono::Utc)),
-            is_archived,
-        });
-    }
-
-    let node = run_state.nodes.get(node_id)?;
-    let completed_at = node
-        .completed_at
-        .as_deref()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
-
-    Some(tmux_session_manager::NodeRunInfo {
-        completed_at,
-        is_archived,
-    })
-}
-
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct PaneResponse {
-    content: String,
-    session_name: String,
-    resumed: bool,
-    stale: bool,
-    /// Provenance of `content`: `"live"`, `"resumed"` (a dead latest-iter session
-    /// was re-attached), or `"snapshot"` (the persisted post-mortem pane).
-    source: &'static str,
-}
-
-/// The outcome of an in-place session **re-attach** (ADR-0049 §3a): resume the SAME
-/// agent session in the node's existing sub-worktree on the harness's resume tail,
-/// without re-driving the run. Shared by [`node_pane`] and `recover_node`: the two
-/// renderings differ, but the resume mechanics — script exclusion, the
-/// `can_resume()` gate, the admission reservation, the resurrection `NodeStarted`
-/// trace — must not.
-pub(crate) enum ReattachOutcome {
-    /// A `script` node is deterministic bash, never an LLM session — not
-    /// re-attachable (ADR-0017).
-    ScriptNode,
-    /// The node's working directory is gone; nothing to re-enter.
-    WorkingDirMissing,
-    /// The frozen harness declares no resume tail (`can_resume() == false`,
-    /// ADR-0045). The optimal path is unavailable — the caller falls back
-    /// (`recover_node` → restart-with-artifacts, AC #9 / `node_pane` → snapshot).
-    CannotResume,
-    /// The harness FROZEN at spawn no longer resolves. PDO **refuses** rather than
-    /// relaunch `claude` in this node's worktree: a silent fallback would run a
-    /// different agent than the node was started on, corrupting its transcript and
-    /// its cost attribution.
-    FrozenHarnessGone { harness: String },
-    /// The session cap refused the re-attach — a re-attach IS a (re)spawn.
-    CapReached { live: usize, cap: usize },
-    /// The `NodeStarted` resurrection trace was refused (e.g. a terminal Run) — do
-    /// NOT launch a session the event log has no room for.
-    TraceRefused { error: String },
-    /// `tmux_session_manager::resume` itself failed.
-    ResumeFailed { error: String },
-    /// The session was re-launched on its resume tail. The caller captures/reports.
-    Resumed,
-}
-
 /// Re-attach a node's dead-but-non-terminal session in place (ADR-0049 §3(a)).
 ///
 /// Pure of the *response* shape: it performs the resume mechanics and returns a
@@ -17303,7 +16974,7 @@ pub(crate) async fn reattach_node_session(
 
     // #653: the FROZEN isolation of this iteration — re-attaching has to open the
     // directory the session actually runs in, not the one the document now names.
-    let working_dir = tmux_session_manager::working_dir_for_node(
+    let working_dir = pdo_session::domain::names::working_dir_for_node(
         repo_root,
         run_id,
         node_id,
@@ -17396,16 +17067,18 @@ pub(crate) async fn reattach_node_session(
             })
     };
     // A resumed sandboxed session re-enters its container.
-    let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
-        marker: session_name,
-        workdir: &working_dir,
-        set_env: &set_env,
+    let sandbox = (!run_state.sandbox.is_off()).then(|| {
+        crate::session_ports::SandboxExec::new(
+            state.docker_cmd_override.as_deref(),
+            run_id,
+            session_name,
+            &working_dir,
+            &set_env,
+        )
     });
 
-    if let Err(e) = tmux_session_manager::resume(
+    if let Err(e) = pdo_session::application::launch::resume(
+        state.tmux(),
         session_name,
         &working_dir,
         run_id,
@@ -17416,7 +17089,10 @@ pub(crate) async fn reattach_node_session(
         launch_effort.as_deref(),
         launch_session_id.as_deref(),
         state.tmux_cmd_override.as_deref(),
-        sandbox_wrap.as_ref(),
+        sandbox
+            .as_ref()
+            .map(crate::session_ports::SandboxExec::wrap)
+            .as_ref(),
         inject_hook,
     ) {
         return ReattachOutcome::ResumeFailed {
@@ -17424,207 +17100,6 @@ pub(crate) async fn reattach_node_session(
         };
     }
     ReattachOutcome::Resumed
-}
-
-async fn node_pane(
-    State(state): State<Arc<AppState>>,
-    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
-    Query(query): Query<IterQuery>,
-) -> Response {
-    let iter = query.iter;
-
-    let (events, run_state) = match load_projected(&state, &run_id).await {
-        Ok(t) => t,
-        Err(resp) => return *resp,
-    };
-
-    let node_state = match run_state.nodes.get(&node_id) {
-        Some(n) => n,
-        None => {
-            return (StatusCode::NOT_FOUND, "node not found in run").into_response();
-        }
-    };
-
-    let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
-    let is_latest_iter = node_state.iter == iter;
-    let socket = state.tmux_socket();
-    let repo_root = effective_repo_root(&state, &run_state);
-
-    if let Some(content) = tmux_session_manager::capture(&socket, &session_name) {
-        return Json(PaneResponse {
-            content,
-            session_name,
-            resumed: false,
-            stale: !is_latest_iter,
-            source: "live",
-        })
-        .into_response();
-    }
-
-    // Reaped terminal node: the session is gone but a pane snapshot was persisted on
-    // the terminal transition. Never resurrect the session for a terminal iteration —
-    // a pane request must not violate the one-live-iteration invariant.
-    let iter_is_terminal = node_state
-        .iterations
-        .iter()
-        .find(|i| i.iter == iter)
-        .map(|i| {
-            matches!(
-                i.status,
-                event_log::NodeStatus::Completed
-                    | event_log::NodeStatus::Skipped
-                    | event_log::NodeStatus::Failed
-                    | event_log::NodeStatus::Stopped
-                    | event_log::NodeStatus::Stale
-            )
-        })
-        .unwrap_or(false);
-    if iter_is_terminal {
-        let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
-        if let Ok(content) = std::fs::read_to_string(&snapshot_path) {
-            return Json(PaneResponse {
-                content,
-                session_name,
-                resumed: false,
-                stale: !is_latest_iter,
-                source: "snapshot",
-            })
-            .into_response();
-        }
-    }
-
-    if is_latest_iter && !iter_is_terminal && node_state.status != event_log::NodeStatus::Pending {
-        // The resume mechanics live in the shared `reattach_node_session`, which
-        // `recover_node` drives too. This handler only renders the outcome.
-        let snapshot_or = |msg: &str| -> (String, &'static str) {
-            let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
-            match std::fs::read_to_string(&snapshot_path) {
-                Ok(c) => (c, "snapshot"),
-                Err(_) => (msg.to_string(), "unavailable"),
-            }
-        };
-        let outcome = reattach_node_session(
-            &state,
-            &events,
-            &run_state,
-            &repo_root,
-            &run_id,
-            &node_id,
-            iter,
-            &session_name,
-        )
-        .await;
-        match outcome {
-            // A script session can't be "continued" — snapshot it.
-            ReattachOutcome::ScriptNode => {
-                let (content, source) = snapshot_or("Script session no longer available");
-                return Json(PaneResponse {
-                    content,
-                    session_name,
-                    resumed: false,
-                    stale: false,
-                    source,
-                })
-                .into_response();
-            }
-            // A harness with no resume mechanism serves its snapshot, never a resume
-            // error — the same branch as a `script` node.
-            ReattachOutcome::CannotResume => {
-                let (content, source) = snapshot_or("Session no longer available");
-                return Json(PaneResponse {
-                    content,
-                    session_name,
-                    resumed: false,
-                    stale: false,
-                    source,
-                })
-                .into_response();
-            }
-            // The frozen harness no longer resolves: refuse, naming it, rather than
-            // relaunch `claude` in this node's worktree.
-            ReattachOutcome::FrozenHarnessGone { harness } => {
-                warn!(
-                    "node_pane: refusing to resurrect {node_id} iter {iter} in {run_id} — its \
-                     frozen harness '{harness}' no longer resolves (embedded name dropped or disk \
-                     descriptor removed); not relaunching claude in its place"
-                );
-                return Json(PaneResponse {
-                    content: format!(
-                        "Session cannot be resumed: this node's harness '{harness}' no longer \
-                         resolves. Restore its descriptor, or retry the node to start fresh."
-                    ),
-                    session_name,
-                    resumed: false,
-                    stale: false,
-                    source: "unavailable",
-                })
-                .into_response();
-            }
-            ReattachOutcome::TraceRefused { error } => {
-                warn!("node_pane: not resurrecting {node_id} iter {iter} in {run_id}: {error}");
-                let (content, source) = snapshot_or("Session no longer available");
-                return Json(PaneResponse {
-                    content,
-                    session_name,
-                    resumed: false,
-                    stale: false,
-                    source,
-                })
-                .into_response();
-            }
-            ReattachOutcome::CapReached { live, cap } => {
-                info!(
-                    "node_pane: refusing to resurrect {node_id} iter {iter} in {run_id} \
-                     — session cap reached ({live}/{cap})"
-                );
-                return Json(PaneResponse {
-                    content: format!(
-                        "Session cannot be resumed: session cap reached ({live}/{cap})"
-                    ),
-                    session_name,
-                    resumed: false,
-                    stale: false,
-                    source: "unavailable",
-                })
-                .into_response();
-            }
-            ReattachOutcome::ResumeFailed { error } => {
-                warn!("Failed to resume session {session_name}: {error}");
-                return Json(PaneResponse {
-                    content: "Session no longer available".to_string(),
-                    session_name,
-                    resumed: false,
-                    stale: false,
-                    source: "unavailable",
-                })
-                .into_response();
-            }
-            // Working dir gone → fall through to the placeholder below.
-            ReattachOutcome::WorkingDirMissing => {}
-            ReattachOutcome::Resumed => {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                let content = tmux_session_manager::capture(&socket, &session_name)
-                    .unwrap_or_else(|| "Connecting...".to_string());
-                return Json(PaneResponse {
-                    content,
-                    session_name,
-                    resumed: true,
-                    stale: false,
-                    source: "resumed",
-                })
-                .into_response();
-            }
-        }
-    }
-
-    Json(PaneResponse {
-        content: "Session no longer available".to_string(),
-        session_name,
-        resumed: false,
-        stale: !is_latest_iter,
-        source: "unavailable",
-    })
-    .into_response()
 }
 
 /// The effort level a node's iteration was **launched** with, read back from its
@@ -17771,7 +17246,7 @@ async fn node_prompt(
     }
 
     let repo_root = effective_repo_root(&state, &run_state);
-    let working_dir = tmux_session_manager::working_dir_for_node(
+    let working_dir = pdo_session::domain::names::working_dir_for_node(
         &repo_root,
         &run_id,
         &node_id,
@@ -17933,7 +17408,8 @@ async fn spawn_merge_resolver(
     worktree_dir: &std::path::Path,
 ) -> completion_refusal::CompletionRefusal {
     let prompt = load_merge_resolver_prompt(&state.repo_root);
-    let session_name = tmux_session_manager::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
+    let session_name =
+        pdo_session::domain::names::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
 
     // The merge resolver runs inside the Run's container when sandboxed AND on the
     // harness OF THE RUN. Project both from the SAME reload.
@@ -17960,13 +17436,14 @@ async fn spawn_merge_resolver(
     // DEAD in production (ADR-0006); the resolver would follow the Run's harness, so
     // an empty set env is acceptable here — it never runs a real pi session.
     let resolver_set_env: Vec<(String, String)> = Vec::new();
-    let sandbox_wrap = (!sandbox_mode.is_off()).then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
-        marker: &session_name,
-        workdir: worktree_dir,
-        set_env: &resolver_set_env,
+    let sandbox = (!sandbox_mode.is_off()).then(|| {
+        crate::session_ports::SandboxExec::new(
+            state.docker_cmd_override.as_deref(),
+            run_id,
+            &session_name,
+            worktree_dir,
+            &resolver_set_env,
+        )
     });
     // Follows the harness OF THE RUN, exactly like the manager: `Run → instance →
     // floor`, no node tier, no model/effort. An unknown name falls back to `claude`
@@ -17997,7 +17474,8 @@ async fn spawn_merge_resolver(
             );
             pdo_harness::registry::claude()
         });
-    if let Err(e) = tmux_session_manager::spawn(
+    if let Err(e) = pdo_session::application::launch::spawn(
+        state.tmux(),
         &session_name,
         &prompt,
         worktree_dir,
@@ -18009,13 +17487,16 @@ async fn spawn_merge_resolver(
         // No pinned session id: `__merge_resolver__` owns no `NodeStarted` and is
         // neither probed nor resumed. NOT to be confused with a `merge` NODE, which is
         // a regular NodeDef routed through `spawn_node` and DOES carry a pinned id.
-        tmux_session_manager::SessionTail::Agent {
+        pdo_session::domain::launch::SessionTail::Agent {
             harness: &resolver_harness,
             model: resolver_agent.combo.model.as_deref(),
             effort: resolver_agent.combo.effort.as_deref(),
             session_id: None,
         },
-        sandbox_wrap.as_ref(),
+        sandbox
+            .as_ref()
+            .map(crate::session_ports::SandboxExec::wrap)
+            .as_ref(),
         // An infra session: its `…/done` is handled by a distinct branch, not
         // `complete_node_iteration`, so it gets no turn-end hook.
         false,
@@ -18342,54 +17823,6 @@ impl CompletionAttempt {
 /// forgotten-run refusal (#328), the completion guard (#212/#354), the
 /// sub-worktree commit+merge, the non-isolated cleanliness check, output validation,
 /// the terminal append, then the detached reap+advance tail (#304/ADR-0023).
-#[derive(Deserialize, Default)]
-struct WaitUserRequest {
-    #[serde(default)]
-    iter: Option<i64>,
-    #[serde(default)]
-    message: Option<String>,
-}
-
-/// `POST /runs/{run_id}/nodes/{node_id}/wait-user` — the declared wait (#588 /
-/// ADR-0069): the agent says it is waiting on its user. Accepted on any node
-/// holding a live session; named `409` on a `script` node or without a live
-/// session; `noop` on a repeat with the same message.
-async fn node_wait_user(
-    State(state): State<Arc<AppState>>,
-    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
-    body: Option<Json<WaitUserRequest>>,
-) -> Response {
-    let Json(body) = body.unwrap_or_default();
-    let iter = body.iter.unwrap_or(1);
-    match declared_wait::declare_wait(
-        &state,
-        &run_id,
-        &node_id,
-        iter,
-        event_log::AWAITING_CAUSE_DECLARED,
-        body.message.as_deref(),
-        |session| state.node_session_alive(session),
-    )
-    .await
-    {
-        Ok(outcome) => {
-            let noop = outcome == declared_wait::DeclareOutcome::Noop;
-            let refreshed = outcome == declared_wait::DeclareOutcome::Refreshed;
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "ok": true,
-                    "awaiting": true,
-                    "noop": noop,
-                    "refreshed": refreshed,
-                })),
-            )
-                .into_response()
-        }
-        Err(refusal) => refusal.into_response(&run_id, &node_id, iter),
-    }
-}
-
 async fn node_done(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -18874,7 +18307,11 @@ pub(crate) async fn complete_node_iteration(
         // #588 / ADR-0069 §1: the agent is done and genuinely waits for the
         // click — the daemon declares the wait for it, so the run turns amber
         // with the reason on the banner (A3). Best-effort; the refusal stands.
-        declared_wait::declare_completion_not_released(state, &run_id, &node_id, iter).await;
+        state
+            .session
+            .declare_wait()
+            .on_completion_not_released(&run_id, &node_id, iter)
+            .await;
         return CompletionAttempt::refused(refusal);
     }
 
@@ -19680,7 +19117,7 @@ async fn force_spawn_node(
     // first also means a rejected append leaves no orphan session; the residual risk
     // (append landed, spawn failed) is what `spawn_node` has always carried.
     if let Some(spawn) = &result.spawn {
-        if let Err(e) = spawn.execute() {
+        if let Err(e) = spawn.execute(state.tmux()) {
             error!("failed to spawn tmux session: {e}");
         }
     }
@@ -19764,7 +19201,7 @@ async fn node_stop(
         run_id: &run_id,
         node_id: &node_id,
         iter,
-        tmux_socket: &state.tmux_socket(),
+        tmux: state.tmux(),
     };
 
     let result = node_primitives::stop_node(&params);
@@ -19919,7 +19356,7 @@ async fn node_retry(
             run_id: &run_id,
             node_id: &node_id,
             iter: current_iter,
-            tmux_socket: &state.tmux_socket(),
+            tmux: state.tmux(),
         };
         let stop_result = node_primitives::stop_node(&stop_params);
         for ev in &stop_result.events {
@@ -20133,41 +19570,6 @@ async fn node_retry_preview(
         .into_response()
 }
 
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct AttachResponse {
-    ok: bool,
-    session: String,
-    terminal: String,
-}
-
-async fn session_attach(
-    State(state): State<Arc<AppState>>,
-    AxumPath(session_id): AxumPath<String>,
-) -> Response {
-    let terminal = detect_terminal();
-
-    match spawn_terminal_attach(&terminal, &state.tmux_socket(), &session_id) {
-        Ok(()) => {
-            info!("Attached terminal {terminal} to session {session_id}");
-            (
-                StatusCode::OK,
-                Json(AttachResponse {
-                    ok: true,
-                    session: session_id,
-                    terminal,
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("failed to attach: {e}") })),
-        )
-            .into_response(),
-    }
-}
-
 /// Response of `POST /runs/{run_id}/manager/start` (manager on demand).
 #[derive(Serialize, TS)]
 #[ts(export)]
@@ -20205,7 +19607,7 @@ async fn start_run_manager(
             StatusCode::OK,
             Json(ManagerStartResponse {
                 ok: true,
-                session: tmux_session_manager::manager_session_name(&run_id),
+                session: pdo_session::domain::names::manager_session_name(&run_id),
                 created,
             }),
         )
@@ -20231,9 +19633,9 @@ async fn ensure_run_manager(
     run_id: &str,
     run_state: &event_log::RunState,
 ) -> Result<bool, (StatusCode, serde_json::Value)> {
-    let session_name = tmux_session_manager::manager_session_name(run_id);
-    let socket = state.tmux_socket();
-    if tmux_session_manager::session_exists(&socket, &session_name) {
+    let session_name = pdo_session::domain::names::manager_session_name(run_id);
+    let tmux = state.tmux();
+    if tmux.session_exists(&session_name) {
         return Ok(false);
     }
 
@@ -20277,7 +19679,7 @@ async fn ensure_run_manager(
     .await;
 
     // Create-then-verify (the run shell's benign-race rule).
-    if !tmux_session_manager::session_exists(&socket, &session_name) {
+    if !tmux.session_exists(&session_name) {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({
@@ -20302,737 +19704,22 @@ async fn stop_run_manager(
     // Durable first, kill after — the same order the start path keeps.
     emit_run_event(&state, &run_id, event_log::EventKind::ManagerStopped, None).await;
 
-    let session_name = tmux_session_manager::manager_session_name(&run_id);
-    let socket = state.tmux_socket();
-    if !tmux_session_manager::session_exists(&socket, &session_name) {
+    let session_name = pdo_session::domain::names::manager_session_name(&run_id);
+    let tmux = state.tmux();
+    if !tmux.session_exists(&session_name) {
         return (
             StatusCode::OK,
             Json(serde_json::json!({ "ok": true, "stopped": false })),
         )
             .into_response();
     }
-    tmux_session_manager::kill(&socket, &session_name);
+    tmux.kill(&session_name);
     info!("Stopped manager session: {session_name}");
     (
         StatusCode::OK,
         Json(serde_json::json!({ "ok": true, "stopped": true })),
     )
         .into_response()
-}
-
-async fn manager_attach(
-    State(state): State<Arc<AppState>>,
-    AxumPath(run_id): AxumPath<String>,
-) -> Response {
-    let session_name = tmux_session_manager::manager_session_name(&run_id);
-    let socket = state.tmux_socket();
-
-    if !tmux_session_manager::session_exists(&socket, &session_name) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({ "error": format!("manager session {session_name} not found") }),
-            ),
-        )
-            .into_response();
-    }
-
-    let terminal = detect_terminal();
-    match spawn_terminal_attach(&terminal, &socket, &session_name) {
-        Ok(()) => {
-            info!("Attached terminal {terminal} to manager session {session_name}");
-            (
-                StatusCode::OK,
-                Json(AttachResponse {
-                    ok: true,
-                    session: session_name,
-                    terminal,
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("failed to attach: {e}") })),
-        )
-            .into_response(),
-    }
-}
-
-/// Response of `POST /sessions/{run_id}/shell` (ADR-0021).
-///
-/// `created` distinguishes a freshly-spawned shell from a re-attach. The client
-/// attaches via the `WS /sessions/<session>/pty` bridge — this endpoint never spawns
-/// an OS terminal (ADR-0005: inline xterm.js is primary).
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct ShellResponse {
-    ok: bool,
-    session: String,
-    created: bool,
-}
-
-/// Open (or re-attach) an ad-hoc bash shell in a terminal run's pipeline worktree.
-///
-/// Create-if-absent, one shell per Run. The SERVER is the source of truth for
-/// eligibility, because the client cannot see the worktree path: `409` unless the run
-/// is terminal, non-archived, and its pipeline worktree still exists on disk.
-async fn open_run_shell(
-    State(state): State<Arc<AppState>>,
-    AxumPath(run_id): AxumPath<String>,
-) -> Response {
-    let (_, run_state) = match load_projected(&state, &run_id).await {
-        Ok(t) => t,
-        Err(resp) => return *resp,
-    };
-
-    // A live run is refused because a stray edit in its worktree would break the
-    // daemon's `git merge` on node completion; an archived run has no worktree left.
-    let repo_root = effective_repo_root(&state, &run_state);
-    let worktree = worktree_dir_for_run(&repo_root, &run_id);
-    let eligible = run_state.status.is_terminal()
-        && run_state.status != event_log::RunStatus::Archived
-        && worktree.exists();
-    if !eligible {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "run is not shell-eligible (must be terminal, non-archived, worktree present)"
-            })),
-        )
-            .into_response();
-    }
-
-    let session = tmux_session_manager::shell_session_name(&run_id);
-    let socket = state.tmux_socket();
-
-    // Create-then-verify-on-failure: a concurrent POST may win the `new-session`
-    // (tmux rejects the duplicate), so on a spawn failure re-test existence — if the
-    // session is now there, this is a benign re-attach.
-    if tmux_session_manager::session_exists(&socket, &session) {
-        return (
-            StatusCode::OK,
-            Json(ShellResponse {
-                ok: true,
-                session,
-                created: false,
-            }),
-        )
-            .into_response();
-    }
-
-    // A sandboxed run's shell must enter its container. The container's lifetime is
-    // coextensive with shell eligibility EXCEPT after a host reboot, where boot
-    // recovery skips terminal runs. Resurrect it here, or fail EXPLICITLY — never
-    // fall back to a silent host bash.
-    if !run_state.sandbox.is_off() {
-        let prep = match sandbox_run::context_from_state(&state, &run_state).await {
-            Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
-                .await
-                .unwrap_or_else(|je| Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))),
-            Err(e) => Err(e),
-        };
-        if let Err(e) = prep {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("sandbox container unavailable: {e:#}")
-                })),
-            )
-                .into_response();
-        }
-    }
-
-    // A run shell runs bash, not a harness tail: no staging-set env to forward. A
-    // hand-typed `pi` inside it still reads the staged `.pi/agent` home (mounted),
-    // and can export the two vars itself; PDO does not pre-pose them for a shell.
-    const NO_SET_ENV: &[(String, String)] = &[];
-    let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
-        marker: &session,
-        workdir: &worktree,
-        set_env: NO_SET_ENV,
-    });
-    match tmux_session_manager::spawn_shell(
-        &session,
-        &worktree,
-        &run_id,
-        state.port,
-        sandbox_wrap.as_ref(),
-    ) {
-        Ok(()) => {
-            info!("Opened run shell {session} in {}", worktree.display());
-            (
-                StatusCode::OK,
-                Json(ShellResponse {
-                    ok: true,
-                    session,
-                    created: true,
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            if tmux_session_manager::session_exists(&socket, &session) {
-                // A concurrent POST won the race — re-attach, not an error.
-                (
-                    StatusCode::OK,
-                    Json(ShellResponse {
-                        ok: true,
-                        session,
-                        created: false,
-                    }),
-                )
-                    .into_response()
-            } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("failed to open shell: {e}") })),
-                )
-                    .into_response()
-            }
-        }
-    }
-}
-
-/// Response of `POST /sessions/libassist`. Same shape as [`ShellResponse`].
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct LibassistResponse {
-    ok: bool,
-    session: String,
-    created: bool,
-}
-
-/// The assistant's cwd: the repo's template directory (ADR-0051 §1).
-///
-/// NOT the library store: an edit tab of scope `repo`/`user` edits a file under
-/// `.pdo/pipelines/`, while `library_store::pipelines::scope_dir` answers
-/// `.pdo/library/pipelines/`. Confusing the two words launched the assistant in a
-/// directory where the file its primer named did not exist. The file actually being
-/// edited arrives by absolute path through the focus.
-fn libassist_cwd(repo_root: &std::path::Path) -> PathBuf {
-    repo_root.join(".pdo").join("pipelines")
-}
-
-/// Where the assistant's primer and hook settings live: a sibling `.libassist/`
-/// of the cwd, so the user-facing templates directory stays clean.
-fn libassist_state_dir(repo_root: &std::path::Path) -> PathBuf {
-    repo_root.join(".pdo").join(".libassist")
-}
-
-/// Open (or re-attach) the library pipeline authoring assistant (ADR-0051).
-///
-/// Create-if-absent, **one assistant for the whole daemon**. Unlike the run shell
-/// there is no run to gate on — the assistant acts outside any Run. Nothing about
-/// *which* template is being edited is frozen at spawn time: the `UserPromptSubmit`
-/// hook re-injects the open template on every message.
-///
-/// The session persists across a PTY/tab close. The sibling `DELETE` reaps it when
-/// the user leaves every edit view; the orphan sweep's idle arm is the backstop for
-/// the case no `DELETE` can cover, a browser reload.
-async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response {
-    let cwd = libassist_cwd(&state.repo_root);
-    // The cwd must exist for `tmux new-session -c` to succeed, and a repo with no
-    // templates yet has no `pipelines/` dir.
-    if let Err(e) = std::fs::create_dir_all(&cwd) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("failed to create pipelines dir: {e}") })),
-        )
-            .into_response();
-    }
-
-    let session = tmux_session_manager::libassist_session_name().to_string();
-    let socket = state.tmux_socket();
-
-    // Create-then-verify-on-failure, mirroring `open_run_shell`.
-    if tmux_session_manager::session_exists(&socket, &session) {
-        return (
-            StatusCode::OK,
-            Json(LibassistResponse {
-                ok: true,
-                session,
-                created: false,
-            }),
-        )
-            .into_response();
-    }
-
-    // Never sandboxed: authoring is design-time work on the host.
-    let daemon_url = sandbox_container::daemon_url(state.port, false);
-    let static_prompt = std::fs::read_to_string(
-        state
-            .repo_root
-            .join("prompts")
-            .join("builtin")
-            .join("library-assistant.md"),
-    )
-    .unwrap_or_default();
-    let full_prompt = prompt_augmenter::build_library_assistant_prompt(&daemon_url, &static_prompt);
-
-    // Infra harness — no Run to follow: instance default, else the `claude` floor.
-    let default_harness = stored_default_harness(&state.db).await;
-    let harness_name =
-        pdo_harness::resolver::resolve_infra_harness(None, default_harness.as_deref());
-    // Resolve against the DISK TIER, like the manager/resolver.
-    let libassist_home_root = sandbox_run::sandbox_home_roots(&state)
-        .map(|(home, _)| home)
-        .unwrap_or_default();
-    let harness = pdo_harness::adapters::descriptor_file::load(&libassist_home_root)
-        .resolve(&harness_name)
-        .unwrap_or_else(|| {
-            warn!(
-                "library assistant: unknown harness '{harness_name}' — launching on the claude floor"
-            );
-            pdo_harness::registry::claude()
-        });
-    // The per-message focus hook rides on `--settings`, a hole only the `claude`
-    // launch template has. On another harness the token is dropped silently and the
-    // primer's fetch-the-focus instruction becomes the only mechanism — say so once,
-    // at spawn, rather than let it be discovered from an assistant guessing wrong.
-    if !harness.can_inject_hooks()
-        || !pdo_harness::probes::settings_hole_takes_claude_file(&harness.name)
-    {
-        warn!(
-            "library assistant on harness '{}': its launch template has no {{settings}} hole \
-             that takes the claude-format hook file, so the UserPromptSubmit focus hook is NOT armed. The assistant will know the open \
-             pipeline only if it follows its primer's instruction to fetch \
-             GET /sessions/libassist/focus before acting (ADR-0051 §3).",
-            harness.name
-        );
-    }
-
-    // Keep the primer OUT of the user-facing templates dir: it and the hook settings
-    // live in a sibling `.libassist/`.
-    let prompt_path = libassist_state_dir(&state.repo_root).join("assistant.md");
-
-    match tmux_session_manager::spawn_libassist(
-        &session,
-        &full_prompt,
-        &cwd,
-        &prompt_path,
-        state.port,
-        &harness,
-        state.tmux_cmd_override.as_deref(),
-    ) {
-        Ok(()) => {
-            info!("Opened library assistant {session} in {}", cwd.display());
-            (
-                StatusCode::OK,
-                Json(LibassistResponse {
-                    ok: true,
-                    session,
-                    created: true,
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            if tmux_session_manager::session_exists(&socket, &session) {
-                // A concurrent POST won the race — re-attach, not an error.
-                (
-                    StatusCode::OK,
-                    Json(LibassistResponse {
-                        ok: true,
-                        session,
-                        created: false,
-                    }),
-                )
-                    .into_response()
-            } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "error": format!("failed to open library assistant: {e}")
-                    })),
-                )
-                    .into_response()
-            }
-        }
-    }
-}
-
-/// Reap the library pipeline authoring assistant.
-///
-/// Fired when the user leaves **every** pipeline edit view — NOT when they leave the
-/// Assistant *tab*: the info panel closes by itself on each edit-tab switch, so
-/// tab-leave would reap the conversation on every round trip between two templates.
-///
-/// Best-effort — killing an absent session is a no-op. Deliberately not the only
-/// reap path: a browser reload runs no React cleanup and sends no `DELETE`, which is
-/// what the sweep's idle arm covers.
-///
-/// **Clears the focus by the same gesture.** "No edit view is open" is one fact, and
-/// splitting it across two calls made them diverge: the `pagehide` path can only
-/// afford a single `keepalive` request, so it reaped the session and left the focus
-/// behind, naming a template nobody had open with an age growing without bound.
-async fn close_library_assistant(State(state): State<Arc<AppState>>) -> Response {
-    let session = tmux_session_manager::libassist_session_name();
-    let socket = state.tmux_socket();
-    set_libassist_focus(&state, None);
-    let existed = tmux_session_manager::session_exists(&socket, session);
-    tmux_session_manager::kill(&socket, session);
-    if existed {
-        // `kill` swallows tmux's exit code, so corroborate rather than claim: a
-        // "Reaped" line for a session still alive misdirects the next investigation.
-        if tmux_session_manager::session_exists(&socket, session) {
-            warn!("Failed to reap library assistant {session}: the tmux session is still alive");
-        } else {
-            info!("Reaped library assistant {session}");
-        }
-    }
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "ok": true, "reaped": existed })),
-    )
-        .into_response()
-}
-
-/// Body of `PUT /sessions/libassist/focus` (ADR-0051 §2).
-#[derive(Deserialize)]
-struct LibassistFocusRequest {
-    /// The template being edited, or `null` to clear the focus (the user left
-    /// every edit view).
-    pipeline_id: Option<String>,
-}
-
-/// Resolve the absolute YAML path of a focused template — **the daemon's job, not
-/// the client's**.
-///
-/// "scope" means two different things here: an edit tab's `repo`/`user` point at
-/// `.pdo/pipelines/`, the library store's [`library_store::pipelines::Scope`] at
-/// `.pdo/library/pipelines/`. A frontend building the path itself has to know which
-/// vocabulary applies where, and getting that wrong is what gave the assistant a cwd
-/// where the file it was told to read did not exist.
-///
-/// `None` for a template that has no file yet (never saved) and for a path that
-/// does not exist: a legitimate state, not an error.
-fn resolve_focus_path(repo_root: &std::path::Path, pipeline_id: &str) -> Option<PathBuf> {
-    let path = resolve_pipeline_path(repo_root, pipeline_id);
-    path.exists().then_some(path)
-}
-
-/// Declare (or clear) which template the UI is editing — and, by the same token,
-/// that a human is still there (ADR-0051 §2).
-///
-/// The UI repeats this every 20 s while an edit view is open, and the repetition is
-/// load-bearing twice over: it is how the assistant learns the current template on
-/// the next message, and how the orphan sweep knows not to reap a session out from
-/// under someone editing with the Assistant tab hidden.
-///
-/// **Never spawns the assistant.** Declaring a focus is not asking for a REPL;
-/// auto-spawn was ruled out by ADR-0048.
-async fn put_libassist_focus(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<LibassistFocusRequest>,
-) -> Response {
-    let Some(pipeline_id) = req.pipeline_id.filter(|id| !id.is_empty()) else {
-        set_libassist_focus(&state, None);
-        return Json(serde_json::json!({ "ok": true, "pipeline_id": null })).into_response();
-    };
-
-    // An id that resolves to no file is NOT an error: a template can be open in the
-    // canvas and not yet saved.
-    let path = resolve_focus_path(&state.repo_root, &pipeline_id);
-    let focus = LibassistFocus {
-        pipeline_id,
-        path,
-        at: chrono::Utc::now(),
-    };
-    let body = libassist_focus_json(Some(&focus), focus.at);
-    set_libassist_focus(&state, Some(focus));
-    Json(body).into_response()
-}
-
-/// Read the current focus — the endpoint the assistant's `UserPromptSubmit` hook
-/// curls before every message (ADR-0051 §3).
-///
-/// `?format=text` renders one plain sentence instead of JSON, for the hook: its
-/// stdout is appended verbatim to the turn's context, and requiring `jq` on the
-/// session's PATH would be a dependency we do not control.
-async fn get_libassist_focus(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<FormatQuery>,
-) -> Response {
-    let now = chrono::Utc::now();
-    let focus = read_libassist_focus(&state);
-    if q.format.as_deref() == Some("text") {
-        return (
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/plain; charset=utf-8",
-            )],
-            libassist_focus_text(focus.as_ref()),
-        )
-            .into_response();
-    }
-    Json(libassist_focus_json(focus.as_ref(), now)).into_response()
-}
-
-#[derive(Deserialize)]
-struct FormatQuery {
-    format: Option<String>,
-}
-
-/// Lock-poisoning-tolerant, mirroring [`mark_self_write`]: a panic while holding
-/// this lock must not make the assistant permanently un-reapable.
-fn read_libassist_focus(state: &AppState) -> Option<LibassistFocus> {
-    match state.libassist_focus.lock() {
-        Ok(g) => g.clone(),
-        Err(p) => p.into_inner().clone(),
-    }
-}
-
-fn set_libassist_focus(state: &AppState, focus: Option<LibassistFocus>) {
-    let mut guard = match state.libassist_focus.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    *guard = focus;
-}
-
-fn libassist_focus_json(
-    focus: Option<&LibassistFocus>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> serde_json::Value {
-    match focus {
-        None => serde_json::json!({
-            "pipeline_id": null,
-            "scope": null,
-            "path": null,
-            "age_secs": null,
-        }),
-        Some(f) => serde_json::json!({
-            "pipeline_id": f.pipeline_id,
-            "path": f.path.as_ref().map(|p| p.to_string_lossy()),
-            "age_secs": now.signed_duration_since(f.at).num_seconds().max(0),
-        }),
-    }
-}
-
-/// The one-line rendering injected into the assistant's context on every message.
-///
-/// Names the save endpoint, and names it as the *only* one. Echoing the focus scope
-/// back to `POST /library/pipelines` reads that word in the library store's
-/// vocabulary, so a `repo` template "saved" that way lands in
-/// `.pdo/library/pipelines/` as a duplicate while the edited file never moves — and
-/// the assistant announces success.
-fn libassist_focus_text(focus: Option<&LibassistFocus>) -> String {
-    match focus {
-        None => "PDO — aucune pipeline ouverte dans l'UI pour l'instant. Ne devine pas de \
-                 template : demande à l'utilisateur laquelle il veut travailler.\n"
-            .to_string(),
-        Some(f) => {
-            let path = match &f.path {
-                Some(p) => p.to_string_lossy().to_string(),
-                None => "(pas encore de fichier sur le disque — template non sauvée)".to_string(),
-            };
-            format!(
-                "PDO — pipeline actuellement ouverte dans l'UI : `{}`, fichier : {}\n\
-                 Travaille sur celle-là, sans la deviner ni la redemander. Pour écrire, un seul \
-                 endpoint : POST /sessions/libassist/save avec `{{\"yaml\": …, \"prompts\": …}}` — \
-                 il écrit dans CE fichier, sans id ni scope à fournir.\n",
-                f.pipeline_id, path
-            )
-        }
-    }
-}
-
-/// Body of `POST /sessions/libassist/save`: the whole template, and nothing that
-/// says *where*.
-#[derive(Deserialize)]
-struct LibassistSaveRequest {
-    yaml: String,
-    #[serde(default)]
-    prompts: HashMap<String, String>,
-}
-
-/// Persist the template the UI has open — **the focus names the target, the
-/// assistant does not** (ADR-0051).
-///
-/// Don't reintroduce a scope argument. `POST /library/pipelines` reads `scope` in the
-/// *library store's* vocabulary (`.pdo/library/pipelines/`) while an edit tab's
-/// `repo`/`user` mean `.pdo/pipelines/`: the two words look identical and point at
-/// different trees, so a faithful assistant wrote a duplicate into the wrong store,
-/// left the edited file untouched, and reported success. Taking no argument removes
-/// the class of bug — the daemon already resolved the absolute path at focus time,
-/// and it is the only party that knows both vocabularies.
-///
-/// `409` when no template is open: saving into a guess is what this mechanism exists
-/// to prevent.
-async fn save_libassist_focused(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<LibassistSaveRequest>,
-) -> Response {
-    let Some(focus) = read_libassist_focus(&state) else {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "no pipeline template is open in the UI — ask the user which one to \
-                          work on instead of guessing a file"
-            })),
-        )
-            .into_response();
-    };
-
-    // Same gate as `PUT /pipelines/{id}`: a template that does not parse must not
-    // reach disk, where it breaks the canvas the user is looking at.
-    if let Err(e) = pipeline::parse_pipeline(&req.yaml) {
-        let (message, line) = parse_error_to_structured(&e);
-        let mut body =
-            serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
-        if let Some(l) = line {
-            body["line"] = serde_json::json!(l);
-        }
-        return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-    }
-
-    let id = focus.pipeline_id.clone();
-    let path = resolve_pipeline_path(&state.repo_root, &id);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    mark_self_write(&state.recent_writes, &path);
-    if let Err(e) = std::fs::write(&path, &req.yaml) {
-        let msg = format!("write failed: {e}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
-        )
-            .into_response();
-    }
-    for (node_id, content) in &req.prompts {
-        let prompt_path = pipeline::canonical_prompt_path(&path, node_id);
-        if let Some(parent) = prompt_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        mark_self_write(&state.recent_writes, &prompt_path);
-        if let Err(e) = std::fs::write(&prompt_path, content) {
-            warn!("failed to write prompt for {node_id}: {e}");
-        }
-    }
-
-    // Announce the write ourselves because self-writes are suppressed by the
-    // watcher; otherwise the canvas would remain stale until reopened.
-    let _ = state.pipeline_tx.send(serde_json::json!({
-        "type": "pipeline_changed",
-        "pipeline_id": id,
-        "path": path.to_string_lossy(),
-    }));
-
-    info!(
-        "Library assistant saved template {id} at {}",
-        path.display()
-    );
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "ok": true,
-            "id": id,
-            "path": path.to_string_lossy(),
-        })),
-    )
-        .into_response()
-}
-
-fn detect_terminal() -> String {
-    if let Ok(t) = std::env::var("PDO_TERMINAL") {
-        if !t.is_empty() {
-            return t;
-        }
-    }
-
-    if let Ok(tp) = std::env::var("TERM_PROGRAM") {
-        let tp_lower = tp.to_lowercase();
-        if tp_lower.contains("kitty") {
-            return "kitty".into();
-        }
-        if tp_lower.contains("alacritty") {
-            return "alacritty".into();
-        }
-        if tp_lower.contains("iterm") {
-            return "open -a iTerm".into();
-        }
-    }
-
-    if cfg!(target_os = "macos") {
-        return "open -a Terminal".into();
-    }
-
-    for candidate in &["kitty", "alacritty", "gnome-terminal", "konsole", "xterm"] {
-        if which_exists(candidate) {
-            return (*candidate).into();
-        }
-    }
-
-    "xterm".into()
-}
-
-fn which_exists(cmd: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(cmd)
-        .output()
-        .is_ok_and(|o| o.status.success())
-}
-
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Result<()> {
-    let parts: Vec<&str> = terminal.split_whitespace().collect();
-    let (cmd, prefix_args) = parts
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("empty terminal command"))?;
-
-    let escaped_name = shell_escape(session_name);
-    let escaped_socket = shell_escape(socket);
-    // Always attach via the daemon's private socket, or the pop-out reaches another
-    // daemon's tmux server.
-    let tmux_cmd = format!("tmux -L {escaped_socket} attach -t {escaped_name}");
-
-    let mut command = std::process::Command::new(cmd);
-    command.args(prefix_args);
-
-    match *cmd {
-        "gnome-terminal" => {
-            command.args(["--", "bash", "-c", &tmux_cmd]);
-        }
-        "konsole" => {
-            command.args(["-e", "bash", "-c", &tmux_cmd]);
-        }
-        "kitty" => {
-            command.args(["bash", "-c", &tmux_cmd]);
-        }
-        "alacritty" => {
-            command.args(["-e", "bash", "-c", &tmux_cmd]);
-        }
-        "xterm" => {
-            command.args(["-e", &tmux_cmd]);
-        }
-        "open" => {
-            let script = format!("#!/bin/bash\n{tmux_cmd}\n");
-            let script_path = std::env::temp_dir().join(format!("pdo-attach-{session_name}.sh"));
-            std::fs::write(&script_path, &script)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
-            }
-            command.arg(script_path);
-        }
-        _ => {
-            command.args(["-e", "bash", "-c", &tmux_cmd]);
-        }
-    }
-
-    let child = command.spawn().context("failed to spawn terminal")?;
-    std::mem::forget(child);
-
-    Ok(())
 }
 
 /// Every descendant of `run_id` (children, grandchildren, …) resolved through
@@ -21186,17 +19873,17 @@ async fn archive_single_run(
         ));
     }
 
-    let socket = state.tmux_socket();
+    let tmux = state.tmux();
     for node in run_state.nodes.values() {
         let session_name =
-            tmux_session_manager::node_session_name(run_id, &node.node_id, node.iter);
-        tmux_session_manager::kill(&socket, &session_name);
+            pdo_session::domain::names::node_session_name(run_id, &node.node_id, node.iter);
+        tmux.kill(&session_name);
     }
-    let mgr_session = tmux_session_manager::manager_session_name(run_id);
-    tmux_session_manager::kill(&socket, &mgr_session);
+    let mgr_session = pdo_session::domain::names::manager_session_name(run_id);
+    tmux.kill(&mgr_session);
     // Kill any ad-hoc run shell before the worktree is torn down.
-    let shell_session = tmux_session_manager::shell_session_name(run_id);
-    tmux_session_manager::kill(&socket, &shell_session);
+    let shell_session = pdo_session::domain::names::shell_session_name(run_id);
+    tmux.kill(&shell_session);
 
     // Merge the transcripts back, then destroy the container and purge its staging,
     // all BEFORE any `git worktree remove` below: the container bind-mounts the repo,
@@ -21399,12 +20086,12 @@ async fn forget_run(
 
     // A forgotten run has nothing left to recover: reap its manager/shell sessions so
     // they can't keep POSTing commands.
-    let socket = state.tmux_socket();
+    let tmux = state.tmux();
     for session in [
-        tmux_session_manager::manager_session_name(&run_id),
-        tmux_session_manager::shell_session_name(&run_id),
+        pdo_session::domain::names::manager_session_name(&run_id),
+        pdo_session::domain::names::shell_session_name(&run_id),
     ] {
-        tmux_session_manager::kill(&socket, &session);
+        tmux.kill(&session);
     }
 
     // Forget also reclaims the durable output store, or the outputs preserved on
@@ -21446,10 +20133,14 @@ async fn ws_handler(
     // any web page open in the operator's browser could subscribe and exfiltrate
     // repos/prompts/verdicts. `headers` MUST precede `ws`: the upgrade extractor
     // consumes the request, so it stays last (axum 0.8).
-    if !pty_bridge::check_origin(&headers, state.port, &state.allowed_ws_origins) {
+    if !pdo_session::adapters::http::origin::check_origin(
+        &headers,
+        state.port,
+        &state.allowed_ws_origins,
+    ) {
         warn!(
             "Rejected /ws WebSocket upgrade: Origin not allowed ({})",
-            pty_bridge::origin_for_log(&headers)
+            pdo_session::adapters::http::origin::origin_for_log(&headers)
         );
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
@@ -23851,8 +22542,9 @@ pub(crate) async fn check_output_validation_with_retry(
                 )
             } else {
                 let msg = outputs_validator::corrective_message(&violations);
-                let session_name = tmux_session_manager::node_session_name(run_id, node_id, iter);
-                tmux_session_manager::send_message(&state.tmux_socket(), &session_name, &msg);
+                let session_name =
+                    pdo_session::domain::names::node_session_name(run_id, node_id, iter);
+                pdo_session::application::messages::send_message(state.tmux(), &session_name, &msg);
 
                 let retry_event = event_log::Event {
                     id: None,
@@ -23889,31 +22581,8 @@ fn durable_run_dir(run_id: &str) -> Option<PathBuf> {
     dirs_next_home().map(|home| home.join(".pdo").join("runs").join(run_id))
 }
 
-/// Path to the persisted pane snapshot for a terminal NodeRun iteration.
-///
-/// Lives in the run's node dir — NOT inside the per-iter sub-worktree — so the
-/// post-mortem pane survives worktree removal and the session reap.
-fn pane_snapshot_path(
-    repo_root: &std::path::Path,
-    run_id: &str,
-    node_id: &str,
-    iter: i64,
-) -> PathBuf {
-    repo_root
-        .join(".pdo")
-        .join("runs")
-        .join(run_id)
-        .join("nodes")
-        .join(node_id)
-        .join(format!("pane-iter-{iter}.snapshot"))
-}
-
-/// Reap a NodeRun's tmux session on its terminal transition.
-///
-/// Persists a pane snapshot under the run's node dir — so post-mortem inspection
-/// keeps working after the session is gone — then kills the session. A capture/write
-/// failure MUST still proceed to the kill, or a terminal node leaks a live session
-/// toward the tmux-collapse point.
+/// Reap a NodeRun's tmux session on its terminal transition: the session
+/// context snapshots its pane then kills it.
 pub(crate) fn reap_node_session(
     state: &AppState,
     repo_root: &std::path::Path,
@@ -23922,20 +22591,13 @@ pub(crate) fn reap_node_session(
     iter: i64,
     sandboxed: bool,
 ) {
-    let socket = state.tmux_socket();
-    let session = tmux_session_manager::node_session_name(run_id, node_id, iter);
-
-    if let Some(content) = tmux_session_manager::capture(&socket, &session) {
-        let snapshot_path = pane_snapshot_path(repo_root, run_id, node_id, iter);
-        if let Some(parent) = snapshot_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Err(e) = std::fs::write(&snapshot_path, content) {
-            warn!("reap: failed to persist pane snapshot for {session}: {e}");
-        }
-    }
-
-    tmux_session_manager::kill(&socket, &session);
+    let session = pdo_session::application::reap::snapshot_and_kill(
+        state.tmux(),
+        repo_root,
+        run_id,
+        node_id,
+        iter,
+    );
     // Killing the tmux-side `docker exec` client leaves the container process
     // (reparented onto PID 1) alive, so double it with a targeted in-container kill
     // that scans `/proc` for this session's marker. No-op for `off`.
@@ -24010,7 +22672,6 @@ fn load_merge_resolver_prompt(repo_root: &std::path::Path) -> String {
 
 pub use guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV;
 pub use pdo_kernel::env::TMUX_CMD_OVERRIDE_ENV;
-pub use tmux_session_manager::build_tmux_script;
 
 // --- Static file serving ---
 
@@ -24754,6 +23415,79 @@ mod tests {
     }
 
     async fn test_state() -> Arc<AppState> {
+        test_state_with_tmux(None).await
+    }
+
+    /// A tmux for the unit tests of the run side: every session "exists", nothing
+    /// runs. The declared wait asks tmux whether the node's session is up, and the
+    /// runs these tests seed have no real session behind them.
+    struct AliveTmux;
+
+    impl pdo_session::application::ports::Tmux for AliveTmux {
+        fn socket(&self) -> &str {
+            "pdo-test-alive"
+        }
+        fn session_path(&self) -> String {
+            String::new()
+        }
+        fn new_session(
+            &self,
+            _name: &str,
+            _working_dir: &Path,
+            _script: &str,
+            _what: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn kill(&self, _name: &str) {}
+        fn session_exists(&self, _name: &str) -> bool {
+            true
+        }
+        fn server_alive(&self) -> Option<bool> {
+            Some(true)
+        }
+        fn list_pdo_sessions(&self) -> std::collections::HashSet<String> {
+            Default::default()
+        }
+        fn is_attached(&self, _name: &str) -> bool {
+            false
+        }
+        fn capture(&self, _name: &str) -> Option<String> {
+            None
+        }
+        fn send_keys(&self, _name: &str, _text: &str) {}
+        fn paste(&self, _name: &str, _text: &str) {}
+        fn attach_argv(&self, _name: &str, _ignore_size: bool) -> Vec<String> {
+            Vec::new()
+        }
+        fn attach_command(&self, _name: &str) -> String {
+            String::new()
+        }
+        fn set_client_ignore_size(&self, _client_pid: u32, _ignore_size: bool) -> bool {
+            false
+        }
+    }
+
+    /// The same unit-test state with a sandbox home override. The session
+    /// context's ports hold a `Weak` on the state, so it is rebuilt around them
+    /// rather than mutated through `Arc::get_mut`.
+    fn with_home_override(state: Arc<AppState>, home: PathBuf) -> Arc<AppState> {
+        let mut inner = Arc::try_unwrap(state).ok().expect("an unshared test state");
+        inner.sandbox_home_override = Some(home);
+        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
+            inner.session =
+                contexts::test_session(weak.clone(), inner.repo_root.clone(), inner.port, None);
+            inner
+        })
+    }
+
+    async fn test_state_with_alive_sessions() -> Arc<AppState> {
+        test_state_with_tmux(Some(Arc::new(AliveTmux))).await
+    }
+
+    async fn test_state_with_tmux(
+        tmux: Option<Arc<dyn pdo_session::application::ports::Tmux>>,
+    ) -> Arc<AppState> {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -24762,12 +23496,14 @@ mod tests {
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
-        Arc::new(AppState {
+        let test_repo_root: PathBuf = std::env::current_dir().unwrap();
+        let test_port: u16 = next_test_daemon_port();
+        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
             db,
             event_tx,
             pipeline_tx,
-            repo_root: std::env::current_dir().unwrap(),
-            port: next_test_daemon_port(),
+            repo_root: test_repo_root.clone(),
+            port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
             page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
@@ -24784,11 +23520,6 @@ mod tests {
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
-            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -24816,7 +23547,7 @@ mod tests {
             relaunch_command: None,
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
-            libassist_focus: Mutex::new(None),
+            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, tmux),
         })
     }
 
@@ -25035,7 +23766,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
         sqlx::query(
             "INSERT INTO projects (id, name, harness, created_at) VALUES \
@@ -25327,7 +24058,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -25742,7 +24473,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -26244,7 +24975,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -26991,7 +25722,7 @@ mod tests {
         let mut state = test_state_with_dir(tmp.path()).await;
         let home = tmp.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home);
+        state = with_home_override(state, home);
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn send(
@@ -27243,7 +25974,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -27911,7 +26642,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -28070,7 +26801,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         sqlx::query(
@@ -28185,7 +26916,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -28327,7 +27058,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -28544,7 +27275,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -28927,7 +27658,7 @@ mod tests {
             .join(uuid::Uuid::new_v4().to_string());
         let _cleanup = Cleanup(home.clone());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         async fn insert_event(
@@ -29914,7 +28645,7 @@ mod tests {
             .join("test-stats-performance-unreadable")
             .join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&home).unwrap();
-        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        state = with_home_override(state, home.clone());
         let repo = state.repo_root.to_string_lossy().into_owned();
 
         sqlx::query(
@@ -29993,12 +28724,14 @@ mod tests {
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
-        Arc::new(AppState {
+        let test_repo_root: PathBuf = std::env::current_dir().unwrap();
+        let test_port: u16 = next_test_daemon_port();
+        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
             db,
             event_tx,
             pipeline_tx,
-            repo_root: std::env::current_dir().unwrap(),
-            port: next_test_daemon_port(),
+            repo_root: test_repo_root.clone(),
+            port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
             page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
@@ -30012,11 +28745,6 @@ mod tests {
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
-            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -30039,7 +28767,7 @@ mod tests {
             relaunch_command: None,
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
-            libassist_focus: Mutex::new(None),
+            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
         })
     }
 
@@ -30491,19 +29219,18 @@ mod tests {
             .join("worktree");
         assert!(worktree.exists(), "precondition: worktree on disk");
 
-        // Run the reaper with maximum aggression (ttl=0) against an isolated,
-        // non-existent tmux socket (no sessions to kill — we only care that the
-        // sweep leaves the disk and run status untouched).
-        run_orphan_sweep(
-            &state,
-            "pdo-test-doctrine-nonexistent",
-            tmux_session_manager::SweepTtls {
+        // Run the reaper with maximum aggression (ttl=0) against the test daemon's
+        // tmux socket, where no server runs (no sessions to kill — we only care that
+        // the sweep leaves the disk and run status untouched).
+        state
+            .session
+            .sweep()
+            .run_with(pdo_session::domain::reaper::SweepTtls {
                 node_run: std::time::Duration::ZERO,
                 libassist_idle: std::time::Duration::ZERO,
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
 
         assert!(
             worktree.exists(),
@@ -30554,44 +29281,16 @@ mod tests {
         .await
         .unwrap();
 
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["live"], 1, "one running node = one live session");
-        assert!(
-            json["cap"].as_u64().unwrap() >= 1,
-            "cap should be a positive integer"
-        );
-        assert_eq!(
-            json["version"],
-            env!("CARGO_PKG_VERSION"),
-            "the status-bar payload carries the daemon version (#139)"
-        );
+        let status = state.session.read_status().execute().await;
+        assert_eq!(status.live, 1, "one running node = one live session");
+        assert!(status.cap >= 1, "cap should be a positive integer");
         // #485 / ADR-0038: the orphan-sweep gauge rides the same payload. This
         // daemon has never swept, so the timestamp is null and both counters are
-        // zero — the shape is what matters here (the moving parts are pinned by
-        // `tests/tmux_lifecycle.rs::genuine_orphans_are_still_reaped_and_counted`).
-        assert_eq!(
-            json["reaper"],
-            serde_json::json!({
-                "last_sweep_at": serde_json::Value::Null,
-                "killed": 0,
-                "killed_for_absent_run": 0,
-            }),
-            "the status-bar payload carries the reaper gauge (#485)"
-        );
+        // zero (the moving parts are pinned by
+        // `tests/tmux_lifecycle.rs::genuine_orphans_are_still_reaped_and_counted`,
+        // the payload's version and shape by `tests/snapshots_temporary`).
+        assert_eq!(status.last_sweep_at, None);
+        assert_eq!((status.killed, status.killed_for_absent_run), (0, 0));
     }
 
     #[tokio::test]
@@ -30604,27 +29303,13 @@ mod tests {
             persistent: Some(false),
         })
         .await;
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let json = state.session.read_status().execute().await;
         assert_eq!(
-            json["service"]["supervisor"], "systemd",
+            json.service["supervisor"], "systemd",
             "the service supervisor hint is surfaced verbatim from AppState"
         );
         assert_eq!(
-            json["service"]["persistent"], false,
+            json.service["persistent"], false,
             "persistent:false is the reachable-but-ephemeral signal the pill consumes"
         );
     }
@@ -30638,22 +29323,9 @@ mod tests {
             persistent: None,
         })
         .await;
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let json = state.session.read_status().execute().await;
         assert!(
-            json["service"]["persistent"].is_null(),
+            json.service["persistent"].is_null(),
             "unknown persistence must serialize as null, not an error or false"
         );
     }
@@ -30725,22 +29397,9 @@ mod tests {
             append_event(&state, &event).await.unwrap();
         }
 
-        let resp = build_router(state)
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let status = state.session.read_status().execute().await;
         assert_eq!(
-            json["live"], 0,
+            status.live, 0,
             "a session-holding node in a terminal run must not count (#215)"
         );
     }
@@ -33502,25 +32161,51 @@ mod tests {
         }
     }
 
+    /// Declare the wait through the session context's use case, over this
+    /// crate's Run ports — what `POST …/wait-user` runs.
     async fn post_wait_user(
         state: &Arc<AppState>,
         run_id: &str,
         node_id: &str,
         body: serde_json::Value,
-    ) -> (StatusCode, serde_json::Value) {
-        let response = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/runs/{run_id}/nodes/{node_id}/wait-user"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
+    ) -> Result<
+        pdo_session::domain::declared_wait::DeclareOutcome,
+        pdo_session::application::declared_wait::DeclareWaitError,
+    > {
+        state
+            .session
+            .declare_wait()
+            .execute(
+                &pdo_kernel::Actor::LocalOperator,
+                pdo_session::application::declared_wait::DeclareWaitCommand {
+                    run_id: run_id.into(),
+                    node_id: node_id.into(),
+                    iter: body["iter"].as_i64().unwrap_or(1),
+                    message: body["message"].as_str().map(str::to_string),
+                },
             )
             .await
-            .unwrap();
-        let status = response.status();
-        (status, response_json(response).await)
+    }
+
+    /// The bytes a browser typed into `session`, as the PTY bridge hands them over.
+    async fn note_pty_input(state: &Arc<AppState>, session: &str, bytes: &[u8]) {
+        state
+            .session
+            .terminals()
+            .note_input(&pdo_kernel::Actor::LocalOperator, session, bytes)
+            .await;
+    }
+
+    fn wait_refusal(
+        result: Result<
+            pdo_session::domain::declared_wait::DeclareOutcome,
+            pdo_session::application::declared_wait::DeclareWaitError,
+        >,
+    ) -> &'static str {
+        match result {
+            Err(pdo_session::application::declared_wait::DeclareWaitError::Wait(r)) => r.slug(),
+            other => panic!("expected a named refusal, got {other:?}"),
+        }
     }
 
     async fn projected(state: &Arc<AppState>, run_id: &str) -> event_log::RunState {
@@ -33529,7 +32214,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_user_declares_the_wait_with_the_message_as_run_reason_and_no_code() {
-        let state = test_state().await;
+        let state = test_state_with_alive_sessions().await;
         let run_id = "declared-wait-message";
         seed_started_node(&state, run_id, true).await;
         // A fresh interactive node is NOT awaiting (ADR-0069: nothing at spawn).
@@ -33540,15 +32225,17 @@ mod tests {
             event_log::NodeStatus::Running
         );
 
-        let (status, body) = post_wait_user(
+        let outcome = post_wait_user(
             &state,
             run_id,
             "griller",
             serde_json::json!({ "iter": 1, "message": "Which layout: strip or card?" }),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["noop"], false);
+        assert_eq!(
+            outcome,
+            Ok(pdo_session::domain::declared_wait::DeclareOutcome::Declared)
+        );
 
         let after = projected(&state, run_id).await;
         assert_eq!(after.status, event_log::RunStatus::AwaitingUser);
@@ -33572,30 +32259,34 @@ mod tests {
 
         // Same message again: a legal no-op, nothing appended.
         let events_before = load_events(&state.db, run_id).await.unwrap().len();
-        let (status, body) = post_wait_user(
+        let outcome = post_wait_user(
             &state,
             run_id,
             "griller",
             serde_json::json!({ "iter": 1, "message": "Which layout: strip or card?" }),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["noop"], true);
+        assert_eq!(
+            outcome,
+            Ok(pdo_session::domain::declared_wait::DeclareOutcome::Noop)
+        );
         assert_eq!(
             load_events(&state.db, run_id).await.unwrap().len(),
             events_before
         );
 
         // A new message refreshes the banner.
-        let (status, body) = post_wait_user(
+        let outcome = post_wait_user(
             &state,
             run_id,
             "griller",
             serde_json::json!({ "iter": 1, "message": "Dark theme too?" }),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["refreshed"], true);
+        assert_eq!(
+            outcome,
+            Ok(pdo_session::domain::declared_wait::DeclareOutcome::Refreshed)
+        );
         let refreshed = projected(&state, run_id).await;
         assert_eq!(
             refreshed.awaiting_reason.as_deref(),
@@ -33604,7 +32295,7 @@ mod tests {
 
         // A message over the cap is truncated by the daemon too.
         let long = "z".repeat(300);
-        post_wait_user(
+        let _ = post_wait_user(
             &state,
             run_id,
             "griller",
@@ -33614,20 +32305,23 @@ mod tests {
         let capped = projected(&state, run_id).await;
         assert_eq!(
             capped.awaiting_reason.as_deref().unwrap().chars().count(),
-            declared_wait::MESSAGE_MAX_CHARS
+            pdo_session::domain::declared_wait::MESSAGE_MAX_CHARS
         );
     }
 
     #[tokio::test]
     async fn wait_user_bare_is_accepted_on_a_non_interactive_node_and_refused_by_name() {
-        let state = test_state().await;
+        let state = test_state_with_alive_sessions().await;
         let run_id = "declared-wait-refusals";
         seed_started_node(&state, run_id, false).await;
 
         // Bare, on a plain (non-interactive) agent node: accepted, no message.
-        let (status, _) =
+        let outcome =
             post_wait_user(&state, run_id, "griller", serde_json::json!({ "iter": 1 })).await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            outcome,
+            Ok(pdo_session::domain::declared_wait::DeclareOutcome::Declared)
+        );
         let rs = projected(&state, run_id).await;
         assert_eq!(rs.status, event_log::RunStatus::AwaitingUser);
         assert!(rs.awaiting_reason.is_none(), "no message ⇒ no prose reason");
@@ -33640,72 +32334,19 @@ mod tests {
             .is_none());
 
         // A script node runs no agent: named refusal, still the caller's turn.
-        let (status, body) =
+        let refusal =
             post_wait_user(&state, run_id, "runner", serde_json::json!({ "iter": 1 })).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["error"], "node_is_script");
-        assert_eq!(body["recoverable"], true);
+        assert_eq!(wait_refusal(refusal), "node_is_script");
 
         // A defined node that never spawned has no session.
-        let (status, body) =
+        let refusal =
             post_wait_user(&state, run_id, "later", serde_json::json!({ "iter": 1 })).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["error"], "node_session_not_live");
+        assert_eq!(wait_refusal(refusal), "node_session_not_live");
 
         // An unknown node.
-        let (status, body) =
+        let refusal =
             post_wait_user(&state, run_id, "ghost", serde_json::json!({ "iter": 1 })).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body["error"], "node_not_found");
-    }
-
-    #[tokio::test]
-    async fn wait_user_is_refused_by_name_when_tmux_no_longer_has_the_session() {
-        // The projection still says `running`, tmux says the pane is gone (FP
-        // #793, finding 3): the refusal is `node_session_not_live`, nothing is
-        // written, and the node stays `running` for the sweep to judge.
-        let state = test_state().await;
-        let run_id = "declared-wait-dead-pane";
-        seed_started_node(&state, run_id, true).await;
-        let asked = std::sync::Mutex::new(None);
-        let refusal = declared_wait::declare_wait(
-            &state,
-            run_id,
-            "griller",
-            1,
-            event_log::AWAITING_CAUSE_DECLARED,
-            Some("anyone there?"),
-            |session| {
-                *asked.lock().unwrap() = Some(session.to_string());
-                false
-            },
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(refusal.slug(), "node_session_not_live");
-        assert_eq!(
-            asked.lock().unwrap().as_deref(),
-            Some(tmux_session_manager::node_session_name(run_id, "griller", 1).as_str()),
-            "the probe is asked about the node's own session"
-        );
-        let rs = projected(&state, run_id).await;
-        assert_eq!(rs.status, event_log::RunStatus::Running);
-        assert_eq!(rs.nodes["griller"].status, event_log::NodeStatus::Running);
-        assert!(rs.nodes["griller"].awaiting.is_none());
-
-        // The same declaration with a live session goes through.
-        let outcome = declared_wait::declare_wait(
-            &state,
-            run_id,
-            "griller",
-            1,
-            event_log::AWAITING_CAUSE_DECLARED,
-            Some("anyone there?"),
-            |_| true,
-        )
-        .await
-        .unwrap();
-        assert_eq!(outcome, declared_wait::DeclareOutcome::Declared);
+        assert_eq!(wait_refusal(refusal), "node_not_found");
     }
 
     #[test]
@@ -33785,34 +32426,34 @@ mod tests {
 
     #[tokio::test]
     async fn a_human_enter_after_typed_bytes_lifts_the_wait_but_nothing_else_does() {
-        let state = test_state().await;
+        let state = test_state_with_alive_sessions().await;
         let run_id = "20260912-100000-a11ce01";
         seed_started_node(&state, run_id, true).await;
-        post_wait_user(
+        let _ = post_wait_user(
             &state,
             run_id,
             "griller",
             serde_json::json!({ "iter": 1, "message": "q?" }),
         )
         .await;
-        let session = tmux_session_manager::node_session_name(run_id, "griller", 1);
+        let session = pdo_session::domain::names::node_session_name(run_id, "griller", 1);
 
         // An Enter on an empty line (a click to focus the pane): nothing.
-        declared_wait::note_pty_input(&state, &session, b"\r").await;
+        note_pty_input(&state, &session, b"\r").await;
         assert_eq!(
             projected(&state, run_id).await.status,
             event_log::RunStatus::AwaitingUser
         );
         // Arrows, scroll, mouse: nothing, and they do not arm the rule either.
-        declared_wait::note_pty_input(&state, &session, b"\x1b[A\x1b[B\x1b[<65;3;4M").await;
-        declared_wait::note_pty_input(&state, &session, b"\r").await;
+        note_pty_input(&state, &session, b"\x1b[A\x1b[B\x1b[<65;3;4M").await;
+        note_pty_input(&state, &session, b"\r").await;
         assert_eq!(
             projected(&state, run_id).await.status,
             event_log::RunStatus::AwaitingUser
         );
         // Typed bytes, then Enter: the wait lifts, node and run back to running.
-        declared_wait::note_pty_input(&state, &session, b"the strip").await;
-        declared_wait::note_pty_input(&state, &session, b"\r").await;
+        note_pty_input(&state, &session, b"the strip").await;
+        note_pty_input(&state, &session, b"\r").await;
         let lifted = projected(&state, run_id).await;
         assert_eq!(lifted.status, event_log::RunStatus::Running);
         assert_eq!(
@@ -33828,10 +32469,10 @@ mod tests {
             .any(|e| e.kind == event_log::EventKind::NodeResumed));
 
         // The manager / shell sessions never lift anything.
-        post_wait_user(&state, run_id, "griller", serde_json::json!({ "iter": 1 })).await;
-        declared_wait::note_pty_input(
+        let _ = post_wait_user(&state, run_id, "griller", serde_json::json!({ "iter": 1 })).await;
+        note_pty_input(
             &state,
-            &tmux_session_manager::manager_session_name(run_id),
+            &pdo_session::domain::names::manager_session_name(run_id),
             b"hello\r",
         )
         .await;
@@ -33841,15 +32482,15 @@ mod tests {
         );
 
         // Typed bytes BEFORE a re-declaration do not count: the rule restarts.
-        declared_wait::note_pty_input(&state, &session, b"typed before").await;
-        post_wait_user(
+        note_pty_input(&state, &session, b"typed before").await;
+        let _ = post_wait_user(
             &state,
             run_id,
             "griller",
             serde_json::json!({ "iter": 1, "message": "another?" }),
         )
         .await;
-        declared_wait::note_pty_input(&state, &session, b"\r").await;
+        note_pty_input(&state, &session, b"\r").await;
         assert_eq!(
             projected(&state, run_id).await.status,
             event_log::RunStatus::AwaitingUser
@@ -33858,7 +32499,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_unreleased_completion_declares_the_wait_and_release_lifts_it() {
-        let state = test_state().await;
+        let state = test_state_with_alive_sessions().await;
         let run_id = "declared-wait-refused-completion";
         seed_started_node(&state, run_id, true).await;
 
@@ -33888,7 +32529,7 @@ mod tests {
         );
         assert_eq!(
             rs.awaiting_reason.as_deref(),
-            Some(declared_wait::COMPLETION_NOT_RELEASED_MESSAGE)
+            Some(pdo_session::domain::declared_wait::COMPLETION_NOT_RELEASED_MESSAGE)
         );
         assert!(rs.awaiting_reason_code.is_none());
 
@@ -33919,7 +32560,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_children_pending_marker_is_not_lifted_by_enter() {
-        let state = test_state().await;
+        let state = test_state_with_alive_sessions().await;
         let run_id = "20260912-100000-b1nd1e2";
         seed_started_node(&state, run_id, false).await;
         append_event(
@@ -33944,8 +32585,8 @@ mod tests {
             run_advance::BINDING_MARKER_REASON
         );
         assert!(rs.awaiting_reason.is_none(), "the marker carries no prose");
-        let session = tmux_session_manager::node_session_name(run_id, "griller", 1);
-        declared_wait::note_pty_input(&state, &session, b"hi\r").await;
+        let session = pdo_session::domain::names::node_session_name(run_id, "griller", 1);
+        note_pty_input(&state, &session, b"hi\r").await;
         assert_eq!(
             projected(&state, run_id).await.nodes["griller"].status,
             event_log::NodeStatus::AwaitingUser
@@ -33954,10 +32595,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_declared_wait_is_not_an_incident_for_the_reopen_embedding() {
-        let state = test_state().await;
+        let state = test_state_with_alive_sessions().await;
         let run_id = "declared-wait-no-reopen";
         seed_started_node(&state, run_id, true).await;
-        post_wait_user(
+        let _ = post_wait_user(
             &state,
             run_id,
             "griller",
@@ -34688,20 +33329,6 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[test]
-    fn detect_terminal_respects_env_override() {
-        // Save and set PDO_TERMINAL
-        let prev = std::env::var("PDO_TERMINAL").ok();
-        std::env::set_var("PDO_TERMINAL", "my-custom-terminal");
-        let result = detect_terminal();
-        // Restore
-        match prev {
-            Some(v) => std::env::set_var("PDO_TERMINAL", v),
-            None => std::env::remove_var("PDO_TERMINAL"),
-        }
-        assert_eq!(result, "my-custom-terminal");
-    }
-
     #[tokio::test]
     async fn halted_run_appears_in_list_with_correct_status() {
         let state = test_state().await;
@@ -34865,23 +33492,6 @@ mod tests {
             },
         );
         rs
-    }
-
-    #[test]
-    fn pane_snapshot_path_lives_outside_the_iter_worktree() {
-        // The snapshot must survive worktree removal (it is the post-mortem
-        // pane for a reaped terminal node, #205), so it lives in the node dir,
-        // NOT inside the per-iter sub-worktree.
-        let path = pane_snapshot_path(
-            std::path::Path::new("/repo"),
-            "20260101-120000-abc",
-            "impl-1",
-            2,
-        );
-        assert_eq!(
-            path,
-            PathBuf::from("/repo/.pdo/runs/20260101-120000-abc/nodes/impl-1/pane-iter-2.snapshot")
-        );
     }
 
     fn doc_node_def(id: &str) -> pipeline::NodeDef {
@@ -36021,12 +34631,14 @@ mod tests {
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
-        Arc::new(AppState {
+        let test_repo_root: PathBuf = dir.to_path_buf();
+        let test_port: u16 = next_test_daemon_port();
+        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
             db,
             event_tx,
             pipeline_tx,
-            repo_root: dir.to_path_buf(),
-            port: next_test_daemon_port(),
+            repo_root: test_repo_root.clone(),
+            port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
             page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
@@ -36043,11 +34655,6 @@ mod tests {
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
-            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -36075,7 +34682,7 @@ mod tests {
             relaunch_command: None,
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
-            libassist_focus: Mutex::new(None),
+            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
         })
     }
 
@@ -39499,91 +38106,57 @@ edges:
         }
     }
 
+    /// A node's pane, through the session context's use case over this crate's
+    /// Run ports — what `GET …/pane` runs.
+    async fn read_pane(
+        state: &Arc<AppState>,
+        run_id: &str,
+        node_id: &str,
+        iter: i64,
+    ) -> Result<
+        (String, pdo_session::domain::pane::Pane),
+        pdo_session::application::read_pane::ReadPaneError,
+    > {
+        state
+            .session
+            .read_pane()
+            .execute(&pdo_kernel::Actor::LocalOperator, run_id, node_id, iter)
+            .await
+    }
+
     #[tokio::test]
     async fn pane_returns_404_for_nonexistent_run() {
         let state = test_state().await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/runs/nonexistent/nodes/worker/pane?iter=1")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            read_pane(&state, "nonexistent", "worker", 1).await,
+            Err(pdo_session::application::read_pane::ReadPaneError::Run(
+                pdo_session::application::ports::RunLookup::NotFound
+            ))
+        );
     }
 
     #[tokio::test]
     async fn pane_returns_404_for_nonexistent_node() {
         let state = test_state().await;
         seed_running_run(&state, "pane-404-node", "worker").await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/runs/pane-404-node/nodes/bogus/pane?iter=1")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            read_pane(&state, "pane-404-node", "bogus", 1).await,
+            Err(pdo_session::application::read_pane::ReadPaneError::NodeNotFound)
+        );
     }
 
     #[tokio::test]
     async fn pane_returns_200_with_placeholder_when_no_tmux() {
         let state = test_state().await;
         seed_running_run(&state, "pane-no-tmux", "worker").await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/runs/pane-no-tmux/nodes/worker/pane?iter=1")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+        let (session_name, pane) = read_pane(&state, "pane-no-tmux", "worker", 1)
             .await
             .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["content"].is_string());
-        assert!(json["session_name"].is_string());
-        assert!(json["resumed"].is_boolean());
-    }
-
-    #[tokio::test]
-    async fn pane_defaults_iter_to_1() {
-        let state = test_state().await;
-        seed_running_run(&state, "pane-default-iter", "worker").await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/runs/pane-default-iter/nodes/worker/pane")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["session_name"].as_str().unwrap().contains("iter-1"));
+        assert_eq!(
+            session_name,
+            pdo_session::domain::names::node_session_name("pane-no-tmux", "worker", 1)
+        );
+        assert!(!pane.content.is_empty());
     }
 
     #[tokio::test]
@@ -39616,52 +38189,20 @@ edges:
         }
 
         // Request iter=1 (not latest, which is 3)
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/runs/{run_id}/nodes/reviewer/pane?iter=1"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["content"], "Session no longer available");
-        assert_eq!(json["resumed"], false);
-        assert_eq!(
-            json["stale"], true,
-            "non-latest iter should be marked stale"
-        );
+        let (_, pane) = read_pane(&state, run_id, "reviewer", 1).await.unwrap();
+        assert_eq!(pane.content, "Session no longer available");
+        assert!(!pane.resumed);
+        assert!(pane.stale, "non-latest iter should be marked stale");
     }
 
     #[tokio::test]
     async fn pane_latest_iter_is_not_stale() {
         let state = test_state().await;
         seed_running_run(&state, "pane-latest-stale", "worker").await;
-
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/runs/pane-latest-stale/nodes/worker/pane?iter=1")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+        let (_, pane) = read_pane(&state, "pane-latest-stale", "worker", 1)
             .await
             .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["stale"], false, "latest iter should not be stale");
+        assert!(!pane.stale, "latest iter should not be stale");
     }
 
     // -----------------------------------------------------------------------
@@ -43100,12 +41641,14 @@ edges: []
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
-        let state = Arc::new(AppState {
+        let test_repo_root: PathBuf = repo.clone();
+        let test_port: u16 = next_test_daemon_port();
+        let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
             db,
             event_tx,
             pipeline_tx,
-            repo_root: repo.clone(),
-            port: next_test_daemon_port(),
+            repo_root: test_repo_root.clone(),
+            port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
             page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
@@ -43122,11 +41665,6 @@ edges: []
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
-            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -43154,7 +41692,7 @@ edges: []
             relaunch_command: None,
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
-            libassist_focus: Mutex::new(None),
+            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
         });
         let app = build_router(state);
 
@@ -43313,12 +41851,14 @@ edges: []
         init_db(&db).await.unwrap();
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
-        let state = Arc::new(AppState {
+        let test_repo_root: PathBuf = repo.clone();
+        let test_port: u16 = next_test_daemon_port();
+        let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
             db,
             event_tx,
             pipeline_tx,
-            repo_root: repo.clone(),
-            port: next_test_daemon_port(),
+            repo_root: test_repo_root.clone(),
+            port: test_port,
             merge_lock: tokio::sync::Mutex::new(()),
             page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
@@ -43335,11 +41875,6 @@ edges: []
             panic_on_trigger_name: None,
             last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
-            shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -43367,7 +41902,7 @@ edges: []
             relaunch_command: None,
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
-            libassist_focus: Mutex::new(None),
+            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
         });
         let app = build_router(state);
 
@@ -48242,30 +46777,15 @@ edges:
             })
             .count();
 
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri(format!("/runs/{run_id}/nodes/worker/pane?iter=1"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let (_, pane) = read_pane(&state, run_id, "worker", 1).await.unwrap();
         assert_eq!(
-            json["source"], "unavailable",
-            "a resurrection blocked by the cap serves no live session: {json}"
+            pane.source,
+            pdo_session::domain::pane::PaneSource::Unavailable,
+            "a resurrection blocked by the cap serves no live session: {pane:?}"
         );
         assert!(
-            json["content"].as_str().unwrap().contains("session cap"),
-            "the operator is told why: {json}"
+            pane.content.contains("session cap"),
+            "the operator is told why: {pane:?}"
         );
 
         let started_after = load_events(&state.db, run_id)

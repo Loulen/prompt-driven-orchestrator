@@ -20,6 +20,9 @@ use pdo_platform::adapters::sqlite_audit_log::SqliteAuditLog;
 use pdo_platform::adapters::sqlite_page_mounts::SqlitePageMounts;
 use pdo_platform::application::update_context::UpdateOptions;
 use pdo_platform::{Platform, PlatformPorts};
+use pdo_run::adapters::manager_sessions::TmuxManagerSessions;
+use pdo_run::adapters::sqlite_event_store::SqliteEventStore;
+use pdo_run::{Runs, RunsOptions, RunsPorts};
 use pdo_session::adapters::terminal_window::OsTerminalWindow;
 use pdo_session::adapters::tmux::TmuxCli;
 use pdo_session::{Session, SessionOptions, SessionPorts};
@@ -27,6 +30,7 @@ use pdo_session::{Session, SessionOptions, SessionPorts};
 /// Wire every extracted context. Called once per daemon, at boot.
 pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) -> Contexts {
     let session = session(&resources, host.clone());
+    let run = run(&resources, &session);
     let pipelines = pipelines(&resources, host.clone());
     let platform = platform(resources, host);
     Contexts {
@@ -35,7 +39,26 @@ pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) ->
             .merge(pdo_pipeline::adapters::http::router(pipelines)),
         platform,
         session,
+        run,
     }
+}
+
+/// The `run` context: the event log over SQLite, the kernel's bus the daemon
+/// opened, the manager probe over the session's tmux, and what the legacy
+/// daemon still reads from disk for a Run's detail.
+fn run(r: &ContextResources, session: &Session) -> Arc<Runs> {
+    Runs::new(
+        RunsPorts {
+            store: Arc::new(SqliteEventStore::new(r.db.clone())),
+            bus: r.run.bus.clone(),
+            live_facts: r.run.live_facts.clone(),
+            managers: Arc::new(TmuxManagerSessions(session.tmux().clone())),
+        },
+        RunsOptions {
+            daemon_port: r.port,
+            allowed_ws_origins: r.allowed_ws_origins.clone(),
+        },
+    )
 }
 
 /// The `session` context: tmux on the daemon's private socket, the OS terminal

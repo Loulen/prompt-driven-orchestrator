@@ -25,7 +25,7 @@ impl DaemonGauges for LegacySessionPorts {
                 Ok(state) => crate::stored_session_cap(&state.db).await,
                 Err(_) => None,
             };
-            crate::admission::configured_cap_with(stored)
+            pdo_run::adapters::env::configured_cap_with(stored)
         })
     }
 
@@ -81,7 +81,7 @@ impl Templates for LegacySessionPorts {
         }
         // Announce the write ourselves because self-writes are suppressed by the
         // watcher; otherwise the canvas would remain stale until reopened.
-        let _ = state.pipeline_tx.send(serde_json::json!({
+        let _ = state.bus_tx.send(serde_json::json!({
             "type": "pipeline_changed",
             "pipeline_id": pipeline_id,
             "path": path.to_string_lossy(),

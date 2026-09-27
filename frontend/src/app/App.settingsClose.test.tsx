@@ -200,7 +200,6 @@ vi.mock("../api", () => {
   return new Proxy(
     {
       fetchRuns: vi.fn().mockResolvedValue([]),
-      fetchRun: vi.fn().mockResolvedValue({}),
       fetchTriggers: vi.fn().mockResolvedValue([]),
       fetchTriggersHealth: vi.fn().mockResolvedValue({
         last_tick_at: null,
@@ -334,6 +333,10 @@ vi.mock("../sandbox/api/profiles", () => {
   };
 });
 
+vi.mock("../run/api/runs", () => ({
+  fetchRun: vi.fn().mockResolvedValue({}),
+  fetchRunEvents: vi.fn().mockResolvedValue([]),
+}));
 vi.mock("../session/api/sessions", () => ({
   fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
 }));

@@ -2,17 +2,15 @@
 # their size when the rule landed (#915). This list may only shrink: remove a
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.
-crates/pdo-daemon/src/event_log.rs 3310
 crates/pdo-daemon/src/instance_config.rs 910
-crates/pdo-daemon/src/lib.rs 16134
+crates/pdo-daemon/src/lib.rs 15738
 crates/pdo-daemon/src/node_io_resolver.rs 435
 crates/pdo-daemon/src/node_primitives.rs 893
 crates/pdo-daemon/src/node_spawn.rs 1560
 crates/pdo-daemon/src/price_table.rs 760
 crates/pdo-daemon/src/prompt_augmenter.rs 1192
-crates/pdo-daemon/src/review_comments.rs 564
 crates/pdo-daemon/src/run_advance.rs 784
-crates/pdo-daemon/src/run_command.rs 2562
+crates/pdo-daemon/src/run_command.rs 2561
 crates/pdo-daemon/src/run_cost.rs 1426
 crates/pdo-daemon/src/run_refs.rs 434
 crates/pdo-daemon/src/scheduler.rs 1534
@@ -21,7 +19,6 @@ crates/pdo-daemon/src/stats.rs 1945
 crates/pdo-daemon/src/stats_absorption.rs 1799
 crates/pdo-daemon/src/stats_performance.rs 2386
 crates/pdo-daemon/src/structured_diff.rs 671
-crates/pdo-daemon/src/transition_guard.rs 469
 crates/pdo-daemon/src/trigger_store.rs 806
 frontend/src/api.ts 1125
 frontend/src/app/App.tsx 1276

@@ -218,7 +218,7 @@ skills?: Array<SkillRef>,
 /**
  * The Run's `auto_fail` preference (ADR-0049), **frozen** here from the
  * `RunStarted` payload — the **run** tier of
- * [`crate::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
+ * [`crate::domain::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
  * instance`). `None` ⇒ the Run stated no preference (every historical Run,
  * and any Run created without an explicit choice — the payload omits the
  * key), so a node `pdo fail` resolves through the project/instance tiers.

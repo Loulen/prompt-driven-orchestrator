@@ -83,7 +83,7 @@ delivery?: NodeDelivery,
 /**
  * #588 / ADR-0069: why this node is `AwaitingUser` — the declared wait's
  * cause and message, or the derived « a child run is awaiting you » overlay
- * ([`crate::child_awaiting`]). Present only while `status == AwaitingUser`;
+ * ([`crate::domain::child_awaiting`]). Present only while `status == AwaitingUser`;
  * cleared by `NodeResumed`, `NodeCompletionReleased` and every re-spawn.
  */
 awaiting?: AwaitingInfo, };

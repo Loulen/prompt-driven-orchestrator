@@ -48,6 +48,7 @@ pdo-legacy.workspace = true
 pdo-platform.workspace = true
 pdo-session.workspace = true
 pdo-pipeline.workspace = true
+pdo-run.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true

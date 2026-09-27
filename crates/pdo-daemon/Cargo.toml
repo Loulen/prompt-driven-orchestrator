@@ -31,6 +31,7 @@ pdo-harness.workspace = true
 pdo-sandbox.workspace = true
 pdo-session.workspace = true
 pdo-pipeline.workspace = true
+pdo-run.workspace = true
 ts-rs.workspace = true
 tokio.workspace = true
 axum.workspace = true

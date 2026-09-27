@@ -123,9 +123,16 @@ cd "$(git rev-parse --show-toplevel)"
 #   workflow_importer, mutation_validator and frontmatter_parser to crates/pdo-pipeline;
 #   EditCanvas, PipelineInfoPanel and their tests to frontend/src/pipeline/components/.
 #   pipeline_ports.rs is admitted: the legacy side of the context's ports (the Runs, Stats).
+# frontend/src/components: 152 and crates/pdo-daemon/src: 36 (#923, spec #913) ratchet down:
+#   the run context's foundation moved out — event_log, graph_resolver, loop_region,
+#   edge_router, switch_router, condition, variable_resolver, transition_guard, admission,
+#   blackboard, input_resolution, retry_verdict, restart_verdict, reap_policy, auto_fail,
+#   completion_refusal and child_awaiting to crates/pdo-run; SessionCounter and its test to
+#   frontend/src/run/components/. run_ports.rs is admitted: the legacy side of the context's
+#   ports (what a Run's detail reads from disk).
 BASELINES='
-frontend/src/components 154
-crates/pdo-daemon/src 52
+frontend/src/components 152
+crates/pdo-daemon/src 36
 '
 
 fail=0

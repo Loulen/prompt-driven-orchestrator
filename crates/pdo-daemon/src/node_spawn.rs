@@ -55,7 +55,7 @@ pub(crate) struct SpawnContext<'a> {
 #[derive(Clone, Copy)]
 pub(crate) struct SpawnDeps<'a> {
     pub(crate) db: &'a sqlx::SqlitePool,
-    pub(crate) event_tx: &'a tokio::sync::broadcast::Sender<event_log::Event>,
+    pub(crate) run: &'a pdo_run::Runs,
     pub(crate) admission_lock: &'a tokio::sync::Mutex<()>,
     pub(crate) panic_on_spawn: &'a std::sync::atomic::AtomicBool,
     pub(crate) port: u16,
@@ -80,7 +80,7 @@ impl<'a> SpawnDeps<'a> {
     pub(crate) fn from_state(state: &'a AppState) -> Self {
         Self {
             db: &state.db,
-            event_tx: &state.event_tx,
+            run: &state.run,
             admission_lock: &state.admission_lock,
             panic_on_spawn: &state.panic_on_spawn,
             port: state.port,
@@ -464,7 +464,7 @@ pub(crate) async fn spawn_node(
     // reusing the pre-lock projection above would reopen the check-and-reserve race
     // the lock exists to close.
     let admission_guard = deps.admission_lock.lock().await;
-    let cap = admission::configured_cap_with(stored_session_cap(deps.db).await);
+    let cap = pdo_run::adapters::env::configured_cap_with(stored_session_cap(deps.db).await);
     let live = count_global_live_sessions_excluding(
         deps.db,
         Some(admission::SlotExclusion {
@@ -484,7 +484,7 @@ pub(crate) async fn spawn_node(
             iter: Some(iter),
             payload: Some(serde_json::json!({ "live_sessions": live, "cap": cap })),
         };
-        if let Err(e) = append_event_with(deps.db, deps.event_tx, &waiting).await {
+        if let Err(e) = append_event_with(deps.run, &waiting).await {
             error!("failed to append node_waiting for {}: {e}", node.id);
         }
         info!(
@@ -1263,7 +1263,7 @@ pub(crate) async fn spawn_node(
         // the one spawn path that already got it right, and it is why the sweep
         // never killed a scheduler-spawned node once its snapshot was correctly
         // ordered. Do not reorder this for readability.
-        append_event_with(deps.db, deps.event_tx, &node_started)
+        append_event_with(deps.run, &node_started)
             .await
             .context("failed to append node_started")?;
         Ok::<(String, Vec<(String, String)>), anyhow::Error>((full_prompt, script_env))
@@ -1507,7 +1507,7 @@ async fn interrupt_spawn_before_start_with_code(
             "source": "spawn",
         })),
     };
-    if let Err(e) = append_event_with(deps.db, deps.event_tx, &interrupted).await {
+    if let Err(e) = append_event_with(deps.run, &interrupted).await {
         error!("Run {run_id}: failed to append NodeInterrupted after spawn abort: {e}");
     }
 }
@@ -1548,7 +1548,7 @@ async fn interrupt_spawn_after_start(
             "source": "spawn",
         })),
     };
-    if let Err(e) = append_event_with(deps.db, deps.event_tx, &interrupted).await {
+    if let Err(e) = append_event_with(deps.run, &interrupted).await {
         error!("Run {run_id}: failed to append NodeInterrupted after spawn failure: {e}");
     }
 

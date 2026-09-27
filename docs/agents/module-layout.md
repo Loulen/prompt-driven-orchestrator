@@ -115,6 +115,29 @@ Contexts already out of the legacy crate:
   `crate::pipeline`). `RUST_LOG=pdo_daemon::pipeline_watcher` becomes
   `RUST_LOG=pdo_pipeline::adapters::watcher`, `pdo_daemon::pipeline_migrator` becomes
   `pdo_pipeline::adapters::fs_migration`.
+- `run`, first slice (#923): `crates/pdo-run`, `frontend/src/run/`. A Run's events
+  (`domain/event/`), its state (`domain/state/`) and the pure projection that folds one into the
+  other (`domain/projection/`, one file per family of events) live in its `domain/`, with the
+  rules a Run follows: the graph it walks (`graph_resolver`, `loop_region`, `edge_router`,
+  `switch_router`, `condition`, `variable_resolver`, `input_resolution`, `blackboard`), what it
+  allows (`transition_guard`, `admission`, `completion_refusal`, `retry_verdict`,
+  `restart_verdict`, `reap_policy`, `auto_fail`, `child_awaiting`) and the review comments it
+  folds. The event log sits behind the `EventStore` port (`adapters/sqlite_event_store.rs`).
+  Every event enters it through one use case, `AppendEvent` (transition guard, store, then
+  publication on the kernel's bus). It is a transition, so it never asks the Autorisation
+  d'opération (D10). The bus carries exactly what `/ws` sends (D20): a Run event as
+  `{"type": "event", "event": …}`, and the announcements other contexts still send on the bus's raw
+  channel (`AppState::bus_tx`). `/ws` relays the bus and nothing else. The context serves `/ws`,
+  `GET /runs/{run_id}` and `GET /runs/{run_id}/events`; the verdicts' HTTP projection
+  (`refusal_response`, `retry_response`, `restart_response`) is its `adapters/http/verdicts/`.
+  What a Run's detail reads from disk (LOC, cost, the run-scoped pipeline) is the `LiveFacts`
+  port the legacy crate implements in `run_ports.rs`. The composition root wires the context;
+  the legacy router merges its `router()` so the legacy crate's in-crate tests keep driving it.
+  The rest of the Run (scheduler, node lifecycle, the other surfaces) still lives in the legacy
+  crate and reads this one through `crate::event_log` (a re-export of the three domain modules)
+  and the re-exported rule modules. `RUST_LOG=pdo_daemon` (append, `/ws`) becomes
+  `RUST_LOG=pdo_run::application::append_event` and `pdo_run::adapters::http::ws`;
+  `pdo_daemon::event_log` becomes `pdo_run::domain::projection`.
 While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package

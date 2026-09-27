@@ -1032,7 +1032,7 @@ pub fn lock_terminal(value: impl AsRef<str>) -> EnvVarGuard {
 pub fn lock_session_cap(value: impl AsRef<str>) -> EnvVarGuard {
     EnvVarGuard::acquire(
         &SESSION_CAP_LOCK,
-        pdo_daemon::admission::SESSION_CAP_ENV,
+        pdo_run::domain::admission::SESSION_CAP_ENV,
         value.as_ref(),
     )
 }

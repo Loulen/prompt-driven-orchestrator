@@ -10,6 +10,35 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.9 — Contexte `run`, 1/3 : domaine et event store (#923, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots HTTP et WS
+identiques ; `/ws`, `GET /runs/{id}` et `GET /runs/{id}/events` répondent comme avant).
+
+- Nouveau crate `pdo-run` (domain / application / adapters), socle des deux tickets suivants du
+  contexte : les événements d'un Run, son état et la projection (fonction pure, découpée par
+  famille d'événements) quittent `pdo-legacy` (`event_log`), avec les règles du Run
+  (`graph_resolver`, `loop_region`, `edge_router`, `switch_router`, `condition`,
+  `variable_resolver`, `transition_guard`, `admission`, `blackboard`, `input_resolution`,
+  `retry_verdict`, `restart_verdict`, `reap_policy`, `auto_fail`, `completion_refusal`,
+  `child_awaiting`) et la partie repliée des commentaires de review.
+- L'event log passe derrière le port `EventStore` (adaptateur SQLite). Un seul use case,
+  `AppendEvent`, y fait entrer un événement : garde de transition, écriture, puis publication
+  sur le bus du noyau. C'est une transition : elle ne consulte pas l'autorisation (D10).
+- Le bus du noyau porte exactement le JSON de `/ws` (D20) ; `/ws` ne lit plus que lui. Les deux
+  canaux internes (événements de Run, annonces) n'en font plus qu'un, dimensionné pour les deux.
+- La projection HTTP des verdicts (complétion, retry, restart) passe dans
+  `adapters/http/verdicts/`, et la lecture de `PDO_SESSION_CAP` dans `adapters/env.rs` : le
+  domaine ne lit plus ni HTTP ni l'environnement.
+- Ce que le détail d'un Run lit sur disque (LOC, coût, pipeline du Run) est un port que le crate
+  legacy implémente tant que ces contextes y vivent (`run_ports.rs`).
+- Les cibles `RUST_LOG` changent : `pdo_daemon` (append, `/ws`) devient
+  `pdo_run::application::append_event` et `pdo_run::adapters::http::ws`, `pdo_daemon::event_log`
+  devient `pdo_run::domain::projection`.
+- Front : l'API d'un Run (`fetchRun`, `fetchRunEvents`), le flux `/ws` (`useDaemonSocket`, ses
+  trames), la sélection d'un Run, le choix du node vivant et le compteur de sessions passent dans
+  `frontend/src/run/`.
+
 ## 1.111.8 — Contexte `pipeline` extrait (#922, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les

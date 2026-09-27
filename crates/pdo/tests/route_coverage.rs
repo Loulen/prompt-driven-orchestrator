@@ -42,6 +42,7 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("../pdo-skill/src/adapters/http/mod.rs", "pub fn router("),
     ("../pdo-session/src/adapters/http/mod.rs", "pub fn router("),
     ("../pdo-pipeline/src/adapters/http/mod.rs", "pub fn router("),
+    ("../pdo-run/src/adapters/http/mod.rs", "pub fn router("),
 ];
 
 /// The legacy crate's router, which the migration empties context by context.

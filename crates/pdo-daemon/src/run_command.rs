@@ -20,13 +20,12 @@ use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
 use crate::worktrees::worktree_dir_for_run;
 use crate::{
     append_event, check_output_validation_with_retry, cleanup_run, completion_head_gate,
-    completion_refusal, create_run_core, effective_repo_root, event_log, force_spawn_node,
-    load_events, load_projected, loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session,
-    reload_run_state, resolve_completed_frontmatter, resolve_pipeline_path,
-    resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
-    retry_waiting_nodes, run_advance, run_is_forgotten, run_sandbox, run_scoped_pipeline_path,
-    scheduler, scheduler_interpreter, transition_guard, AppState, CreateRunRequest,
-    TargetRepoInput,
+    create_run_core, effective_repo_root, event_log, force_spawn_node, load_events, load_projected,
+    loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session, reload_run_state,
+    resolve_completed_frontmatter, resolve_pipeline_path, resolve_run_pipeline_path,
+    resolve_run_variables, resolve_source_frontmatter, restart_verdict, retry_waiting_nodes,
+    run_advance, run_is_forgotten, run_sandbox, run_scoped_pipeline_path, scheduler,
+    scheduler_interpreter, transition_guard, AppState, CreateRunRequest, TargetRepoInput,
 };
 
 /// The wire shape of a command. `pub(crate)` only because axum's extractor puts
@@ -591,7 +590,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             )
             .await
             {
-                return completion_refusal::refusal_response(&refusal);
+                return pdo_run::adapters::http::verdicts::refusal_response(&refusal);
             }
 
             // The shared chokepoint (#490). Both surfaces project the refusal
@@ -608,7 +607,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             )
             .await
             {
-                return completion_refusal::refusal_response(&refusal);
+                return pdo_run::adapters::http::verdicts::refusal_response(&refusal);
             }
 
             let event = event_log::Event {
@@ -1529,7 +1528,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                         "restart_node rejected for {node_id} iter {iter} in {run_id}: {}",
                         refusal.reason()
                     );
-                    return restart_verdict::restart_response(
+                    return pdo_run::adapters::http::verdicts::restart_response(
                         &restart_verdict::RestartVerdict::Refused(refusal),
                     );
                 }
@@ -1539,7 +1538,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // no layer-3 test claims to reach it.
                 transition_guard::Verdict::NoOp { reason } => {
                     info!("restart_node no-op for {node_id} iter {iter} in {run_id}: {reason}");
-                    return restart_verdict::restart_response(
+                    return pdo_run::adapters::http::verdicts::restart_response(
                         &restart_verdict::RestartVerdict::NoOp { reason },
                     );
                 }
@@ -1584,7 +1583,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     node_id: node_id.clone(),
                 };
                 warn!("restart_node refused in {run_id}: {}", refusal.reason());
-                return restart_verdict::restart_response(
+                return pdo_run::adapters::http::verdicts::restart_response(
                     &restart_verdict::RestartVerdict::Refused(refusal),
                 );
             };
@@ -1598,7 +1597,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     session_killed: false,
                 };
                 info!("restart_node deferred in {run_id}: {}", refusal.reason());
-                return restart_verdict::restart_response(
+                return pdo_run::adapters::http::verdicts::restart_response(
                     &restart_verdict::RestartVerdict::Refused(refusal),
                 );
             }
@@ -1631,7 +1630,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     let refusal =
                         restart_verdict::RestartRefusal::SubWorktreeOccupied { message: detail };
                     warn!("restart_node refused in {run_id}: {}", refusal.reason());
-                    return restart_verdict::restart_response(
+                    return pdo_run::adapters::http::verdicts::restart_response(
                         &restart_verdict::RestartVerdict::Refused(refusal),
                     );
                 }
@@ -1742,7 +1741,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             };
 
             info!("restart_node: node {node_id} iter {iter} in run {run_id} -> {verdict:?}");
-            restart_verdict::restart_response(&verdict)
+            pdo_run::adapters::http::verdicts::restart_response(&verdict)
         }
         RunCommand::RecoverNode { node_id, iter } => {
             // ADR-0049 §3: the mechanism is chosen off the node's FROZEN harness,

@@ -19,7 +19,7 @@ import type { BoolSettingField, EnumSettingFieldWithReason, InstanceSettings, Se
 import type { SkillRef } from "../shared/generated/SkillRef";
 import type { UpdateSettingsRequest } from "../shared/generated/UpdateSettingsRequest";
 import ModelPicker from "../harness/components/ModelPicker";
-import SessionCounter from "./SessionCounter";
+import SessionCounter from "../run/components/SessionCounter";
 import HarnessSelect from "../harness/components/HarnessSelect";
 import ThemeSelect from "./ThemeSelect";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../lib/uiPrefs";

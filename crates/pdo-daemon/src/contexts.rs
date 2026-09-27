@@ -5,18 +5,22 @@
 //! root wires each extracted context over these [`ContextResources`] and hands
 //! back the [`Contexts`]. The ports a context needs from what is still legacy
 //! (the Runs, the templates, the instance settings) are implemented here for
-//! `platform` and in `session_ports` for `session`, and move to their own crates
-//! when those contexts are extracted.
+//! `platform`, in `session_ports` for `session`, in `pipeline_ports` for
+//! `pipeline` and in `run_ports` for `run`, and move to their own crates when
+//! those contexts are extracted.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
 use axum::Router;
+use pdo_kernel::event_bus::EventBus;
 use pdo_pipeline::application::ports::{ActiveRuns, RenameLedger};
 use pdo_platform::application::ports::{BoxFuture, Runs, UpdateCheckSetting};
 use pdo_platform::domain::install::{InstallMethod, Supervision};
 use pdo_platform::domain::service_health::ServiceHealthOverride;
 use pdo_platform::Platform;
+use pdo_run::application::ports::LiveFacts;
+
 use pdo_session::application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunShells, SessionOwners, Templates,
 };
@@ -24,6 +28,7 @@ use pdo_session::Session;
 use tokio::sync::broadcast;
 
 use crate::pipeline_ports::{LegacyActiveRuns, LegacyRenameLedger};
+use crate::run_ports::LegacyLiveFacts;
 use crate::session_ports::LegacySessionPorts;
 use crate::SelfWrites;
 use crate::{event_log, instance_config, AppState, SessionClaim};
@@ -57,6 +62,16 @@ pub struct ContextResources {
     pub session: SessionRunPorts,
     /// What the pipeline context needs from this daemon.
     pub pipeline: PipelineResources,
+    /// What the run context needs from this daemon.
+    pub run: RunResources,
+}
+
+/// The run context's resources: the kernel's bus the daemon opened, and what a
+/// Run's detail reads from disk, which the legacy side still implements.
+#[derive(Clone)]
+pub struct RunResources {
+    pub bus: Arc<dyn EventBus>,
+    pub live_facts: Arc<dyn LiveFacts>,
 }
 
 /// The pipeline context's resources: the ports the Runs and the Stats
@@ -104,6 +119,9 @@ impl SessionRunPorts {
 pub struct Contexts {
     pub platform: Arc<Platform>,
     pub session: Arc<Session>,
+    /// The run context. Its routes are merged by the legacy router, which the
+    /// daemon's in-crate tests drive as is.
+    pub run: Arc<pdo_run::Runs>,
     pub router: Router,
 }
 
@@ -125,6 +143,7 @@ pub(crate) struct ContextResourcesSeed {
     pub skills: Arc<pdo_skill::Skills>,
     pub pipeline_events: broadcast::Sender<serde_json::Value>,
     pub self_writes: SelfWrites,
+    pub bus: Arc<dyn EventBus>,
 }
 
 impl ContextResourcesSeed {
@@ -136,6 +155,12 @@ impl ContextResourcesSeed {
             runs: Arc::new(LegacyRuns {
                 state: state.clone(),
             }),
+            run: RunResources {
+                bus: self.bus,
+                live_facts: Arc::new(LegacyLiveFacts {
+                    state: state.clone(),
+                }),
+            },
             session: SessionRunPorts::over(state),
             pipeline: PipelineResources {
                 runs: Arc::new(LegacyActiveRuns {
@@ -302,6 +327,37 @@ pub(crate) fn test_session(
             daemon_port: port,
             repo_root,
             tmux_cmd_override: Some("exec true".to_string()),
+            allowed_ws_origins: Vec::new(),
+        },
+    )
+}
+
+/// The run context of a unit-test state: the SQLite log of the test
+/// database, the state's bus, the legacy live facts, and the session's tmux
+/// for the manager probe.
+#[cfg(test)]
+pub(crate) fn test_run(
+    state: Weak<AppState>,
+    db: &sqlx::SqlitePool,
+    bus_tx: &broadcast::Sender<serde_json::Value>,
+    session: &Session,
+    port: u16,
+) -> Arc<pdo_run::Runs> {
+    pdo_run::Runs::new(
+        pdo_run::RunsPorts {
+            store: Arc::new(
+                pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone()),
+            ),
+            bus: Arc::new(pdo_kernel::event_bus::BroadcastEventBus::from_sender(
+                bus_tx.clone(),
+            )),
+            live_facts: Arc::new(LegacyLiveFacts { state }),
+            managers: Arc::new(pdo_run::adapters::manager_sessions::TmuxManagerSessions(
+                session.tmux().clone(),
+            )),
+        },
+        pdo_run::RunsOptions {
+            daemon_port: port,
             allowed_ws_origins: Vec::new(),
         },
     )

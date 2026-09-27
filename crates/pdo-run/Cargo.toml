@@ -1,0 +1,49 @@
+[package]
+# The `run` bounded context (ADR-0079), first slice (#923): a Run's events and
+# their projection, the rules a Run follows (graph, loops, routing, conditions,
+# transitions, admission, verdicts), the event store behind a port, and the
+# routes that read a Run and stream its events (`/ws`). Hexagonal inside:
+# `domain/`, `application/` (ports + one use case per file), `adapters/`.
+name = "pdo-run"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's run context: a Run's events, their projection, the rules a Run follows, and its event store"
+publish = false
+autotests = false
+
+[lib]
+name = "pdo_run"
+path = "src/lib.rs"
+
+[dependencies]
+pdo-kernel.workspace = true
+pdo-harness.workspace = true
+pdo-pipeline.workspace = true
+pdo-sandbox.workspace = true
+pdo-session.workspace = true
+pdo-skill.workspace = true
+pdo-workspace.workspace = true
+anyhow.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+axum.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+
+[[test]]
+name = "use_cases"
+path = "tests/use_cases/main.rs"
+
+[dev-dependencies]
+pdo-extension-api.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true

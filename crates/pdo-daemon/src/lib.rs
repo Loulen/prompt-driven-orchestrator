@@ -3,29 +3,16 @@
 // (with `clippy -D warnings`) keeps the crate surface from re-widening.
 #![warn(unreachable_pub)]
 
-pub mod admission;
 mod agent_profile;
-mod auto_fail;
-mod blackboard;
 mod boot_recovery;
-mod child_awaiting;
-pub(crate) mod completion_refusal;
-#[allow(dead_code)]
-mod condition;
 mod contexts;
 #[allow(dead_code)]
 mod cron_schedule;
 mod distribution;
-mod edge_router;
-mod event_log;
 #[allow(dead_code)]
 mod fire_decision;
-mod graph_resolver;
 mod guard_runner;
-mod input_resolution;
 mod instance_config;
-#[allow(dead_code)]
-mod loop_region;
 #[allow(dead_code)]
 mod merge_action;
 mod node_io_resolver;
@@ -35,15 +22,13 @@ mod outputs_validator;
 mod pipeline_ports;
 mod price_table;
 mod prompt_augmenter;
-mod reap_policy;
 pub(crate) mod recovery;
 pub(crate) mod repo_edit_refusal;
-pub(crate) mod restart_verdict;
-pub(crate) mod retry_verdict;
 mod review_comments;
 mod run_advance;
 mod run_command;
 mod run_cost;
+mod run_ports;
 mod run_refs;
 mod run_sandbox;
 #[allow(dead_code)]
@@ -56,14 +41,10 @@ mod stats;
 mod stats_absorption;
 mod stats_performance;
 mod structured_diff;
-mod switch_router;
-mod transition_guard;
 #[allow(dead_code)]
 mod trigger_scheduler;
 #[allow(dead_code)]
 mod trigger_store;
-#[allow(dead_code)]
-mod variable_resolver;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -72,10 +53,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{
-    FromRequest, Json, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade,
-};
+use axum::extract::{FromRequest, Json, Multipart, Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -89,7 +67,9 @@ use tracing::{error, info, warn};
 use ts_rs::TS;
 
 use crate::contexts::ContextResourcesSeed;
-pub use crate::contexts::{ContextResources, Contexts, PipelineResources, SessionRunPorts};
+pub use crate::contexts::{
+    ContextResources, Contexts, PipelineResources, RunResources, SessionRunPorts,
+};
 use crate::node_spawn::SpawnContext;
 #[cfg(test)]
 use crate::node_spawn::{spawn_node, SpawnDeps, SpawnOutcome};
@@ -133,11 +113,29 @@ pub(crate) use pdo_pipeline::adapters::self_writes::SelfWrites;
 pub(crate) use pdo_pipeline::adapters::watcher as pipeline_watcher;
 pub(crate) use pdo_pipeline::domain::migration as pipeline_migrator;
 pub(crate) use pdo_pipeline::domain::pipeline;
+
+// The run context's rules the rest of this crate reads (#923): the graph a Run
+// walks, what it allows, its verdicts. The rest of the Run (the scheduler, the
+// node lifecycle, the Run's other surfaces) still lives here and calls them.
+pub(crate) use pdo_run::domain::{
+    admission, auto_fail, blackboard, child_awaiting, completion_refusal, condition, edge_router,
+    graph_resolver, input_resolution, loop_region, reap_policy, restart_verdict, retry_verdict,
+    switch_router, transition_guard,
+};
+
+/// A Run's events, its state and their projection, from the run context
+/// (#923), under the one name the rest of this crate reads them by. Every
+/// event enters the log through `AppState::run` ([`append_event`]).
+pub(crate) mod event_log {
+    pub(crate) use pdo_run::application::run_id::generate_run_id;
+    pub(crate) use pdo_run::domain::event::*;
+    pub(crate) use pdo_run::domain::projection::*;
+    pub(crate) use pdo_run::domain::state::*;
+}
 pub(crate) use pdo_pipeline::domain::portable as portable_pipeline;
 
 const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
 const DEFAULT_DAEMON_URL: &str = pdo_platform::domain::service_unit::DEFAULT_DAEMON_URL;
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Embed)]
 #[folder = "../../frontend/dist"]
@@ -428,8 +426,13 @@ struct AppState {
     /// The skill context: the Banque de skills, its import, the delivery.
     skills: Arc<pdo_skill::Skills>,
     db: sqlx::SqlitePool,
-    event_tx: broadcast::Sender<event_log::Event>,
-    pipeline_tx: broadcast::Sender<serde_json::Value>,
+    /// The run context (#923): the event log, the one way an event enters it,
+    /// and the reads of a Run.
+    run: Arc<pdo_run::Runs>,
+    /// The raw channel of the kernel's event bus, for the producers that still
+    /// send on it (Projet, pipeline, Trigger and Run-list announcements). `/ws`
+    /// relays the bus.
+    bus_tx: broadcast::Sender<serde_json::Value>,
     repo_root: PathBuf,
     port: u16,
     merge_lock: tokio::sync::Mutex<()>,
@@ -2567,8 +2570,13 @@ pub async fn serve_with_config(
     pdo_pipeline::adapters::registry::unify_legacy_registries(&repo_root)
         .map_err(|error| anyhow::anyhow!("pipeline registry migration failed: {error}"))?;
 
-    let (event_tx, _) = broadcast::channel::<event_log::Event>(256);
-    let (pipeline_tx, _) = broadcast::channel::<serde_json::Value>(64);
+    // The kernel's event bus (D20): every Run event and every announcement `/ws`
+    // relays, as `/ws` relays it. One channel, sized for the two it replaced
+    // (256 Run events + 64 announcements).
+    let (bus_tx, _) = broadcast::channel::<serde_json::Value>(320);
+    let bus: Arc<dyn pdo_kernel::event_bus::EventBus> = Arc::new(
+        pdo_kernel::event_bus::BroadcastEventBus::from_sender(bus_tx.clone()),
+    );
 
     let recent_writes = SelfWrites::new();
 
@@ -2578,7 +2586,7 @@ pub async fn serve_with_config(
     let watcher = pipeline_watcher::spawn_watcher(
         repo_root.clone(),
         instance_pipeline_dir(&repo_root),
-        pipeline_tx.clone(),
+        bus_tx.clone(),
         recent_writes.clone(),
         run_modified_tx,
     );
@@ -2597,7 +2605,7 @@ pub async fn serve_with_config(
     let nested_daemon = config.nested_daemon;
     let router_layer = config.router_layer.clone();
     let extension_host = config.extension_host.0.clone();
-    let workspace = workspace_context(&db, &pipeline_tx, &repo_root, extension_host.clone());
+    let workspace = workspace_context(&db, &bus_tx, &repo_root, extension_host.clone());
     let skills = skill_context(&db, &repo_root, extension_host.clone());
     let wire_contexts = router_layer
         .as_ref()
@@ -2627,7 +2635,8 @@ pub async fn serve_with_config(
         tmux_cmd_override: config.tmux_cmd_override.clone(),
         allowed_ws_origins: config.allowed_ws_origins.clone(),
         skills: skills.clone(),
-        pipeline_events: pipeline_tx.clone(),
+        pipeline_events: bus_tx.clone(),
+        bus,
         self_writes: recent_writes.clone(),
     };
 
@@ -2639,8 +2648,8 @@ pub async fn serve_with_config(
             skills,
             platform: wired.platform,
             db,
-            event_tx,
-            pipeline_tx,
+            run: wired.run,
+            bus_tx,
             repo_root,
             port: bound_addr.port(),
             merge_lock: tokio::sync::Mutex::new(()),
@@ -3254,7 +3263,7 @@ async fn create_trigger(
 
     match trigger_store::create(&state.db, new).await {
         Ok(trigger) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
+            let _ = state.bus_tx.send(serde_json::json!({
                 "type": "trigger_created",
                 "trigger_id": trigger.id,
             }));
@@ -3330,7 +3339,7 @@ async fn delete_trigger(
         .flatten();
     match trigger_store::delete(&state.db, &trigger_id).await {
         Ok(true) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
+            let _ = state.bus_tx.send(serde_json::json!({
                 "type": "trigger_deleted",
                 "trigger_id": trigger_id,
             }));
@@ -3692,7 +3701,7 @@ async fn patch_trigger(
 
     match trigger_store::get(&state.db, &trigger_id).await {
         Ok(Some(updated)) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
+            let _ = state.bus_tx.send(serde_json::json!({
                 "type": "trigger_updated",
                 "trigger_id": trigger_id,
             }));
@@ -3833,7 +3842,6 @@ async fn fire_trigger_now(
 /// same subtree is fine — axum 0.8 prefers the static one.
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/ws", get(ws_handler))
         // #779: the multipart body of `POST /runs` is bounded by the
         // `max_attachments_mb` setting, enforced IN the handler on the attachment
         // parts (read fresh per request) — not by a static limit frozen at
@@ -3845,9 +3853,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs", get(list_runs))
         // Static path — must stay declared before `/runs/{run_id}`.
         .route("/runs/reapable", get(list_reapable_runs))
-        .route("/runs/{run_id}", get(get_run).delete(forget_run))
+        .route("/runs/{run_id}", axum::routing::delete(forget_run))
         .route("/runs/{run_id}/children", get(list_run_children))
-        .route("/runs/{run_id}/events", get(get_run_events))
         .route("/runs/{run_id}/nodes/{node_id}/done", post(node_done))
         .route(
             "/runs/{run_id}/nodes/{node_id}/release",
@@ -3981,48 +3988,13 @@ fn build_router(state: Arc<AppState>) -> Router {
             pdo_workspace::adapters::http::router::<LegacyProjectSettings>(state.workspace.clone()),
         )
         .merge(pdo_skill::adapters::http::router(state.skills.clone()))
+        // `/ws`, `GET /runs/{run_id}` and `GET /runs/{run_id}/events` (#923).
+        .merge(pdo_run::router(state.run.clone()))
 }
 
 async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            ts TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            node_id TEXT,
-            iter INTEGER,
-            payload JSON
-        )",
-    )
-    .execute(db)
-    .await
-    .context("failed to create events table")?;
-
-    // `GET /stats/overview` runs `WHERE kind = ? AND ts >= ? AND ts < ? GROUP BY
-    // strftime(...)`; the composite `(kind, ts)` is leftmost-prefix optimal for it.
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts)")
-        .execute(db)
-        .await
-        .context("failed to create idx_events_kind_ts")?;
-    // After the indexed `run_started` cohort lookup, Sessions joins only each
-    // selected Run's `node_started` rows in append order.
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_run_kind_id ON events(run_id, kind, id)")
-        .execute(db)
-        .await
-        .context("failed to create idx_events_run_kind_id")?;
-
-    // Tombstones for forgotten runs (ADR-0024): a run_id present here can never
-    // receive events again — the guard is in `append_event`.
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS forgotten_runs (
-            run_id TEXT PRIMARY KEY,
-            forgotten_at TEXT NOT NULL
-        )",
-    )
-    .execute(db)
-    .await
-    .context("failed to create forgotten_runs table")?;
+    // The event log and the tombstones of the forgotten Runs (ADR-0024).
+    pdo_run::adapters::sqlite_event_store::init(db).await?;
 
     trigger_store::init(db)
         .await
@@ -4066,72 +4038,11 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Append an event, taking only the two side-effects the append touches — the DB
-/// pool and the broadcast sink — instead of the whole `AppState`, so `spawn_node`
-/// can append through its narrow `SpawnDeps`.
-pub(crate) async fn append_event_with(
-    db: &sqlx::SqlitePool,
-    event_tx: &broadcast::Sender<event_log::Event>,
-    event: &event_log::Event,
-) -> Result<()> {
-    // Transition-guard BACKSTOP: every lifecycle append is validated against the
-    // freshly projected state, so no emitter can bypass the guard. It protects only
-    // the log — emitters with side effects (spawn, merge) must ALSO pre-validate.
-    if matches!(
-        event.kind,
-        event_log::EventKind::NodeStarted
-            | event_log::EventKind::NodeWaiting
-            | event_log::EventKind::NodeCompleted
-            | event_log::EventKind::NodeAutoCompleted
-            | event_log::EventKind::NodeStale
-            | event_log::EventKind::NodeFailed
-            | event_log::EventKind::NodeInterrupted
-    ) {
-        let events = load_events(db, &event.run_id).await?;
-        let run_state = event_log::project(&events);
-        match transition_guard::validate_transition(run_state.as_ref(), event) {
-            transition_guard::Verdict::Allow => {}
-            transition_guard::Verdict::NoOp { reason } => {
-                info!("append_event no-op ({:?}): {reason}", event.kind);
-                return Ok(());
-            }
-            transition_guard::Verdict::Reject { reason } => {
-                anyhow::bail!("transition rejected ({:?}): {reason}", event.kind);
-            }
-        }
-    }
-
-    let kind_str = serde_json::to_value(&event.kind)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
-    let payload_str = event.payload.as_ref().map(|p| p.to_string());
-
-    // Refuse a tombstoned run in the SAME statement as the insert, or a concurrent
-    // forget opens a TOCTOU window (ADR-0024).
-    let result = sqlx::query(
-        "INSERT INTO events (run_id, ts, kind, node_id, iter, payload)
-         SELECT ?, ?, ?, ?, ?, ?
-         WHERE NOT EXISTS (SELECT 1 FROM forgotten_runs WHERE run_id = ?)",
-    )
-    .bind(&event.run_id)
-    .bind(&event.ts)
-    .bind(&kind_str)
-    .bind(&event.node_id)
-    .bind(event.iter)
-    .bind(&payload_str)
-    .bind(&event.run_id)
-    .execute(db)
-    .await
-    .context("failed to append event")?;
-    if result.rows_affected() == 0 {
-        anyhow::bail!("run {} has been forgotten", event.run_id);
-    }
-
-    let _ = event_tx.send(event.clone());
-
-    Ok(())
+/// Append an event through the run context's use case (guarded, stored, then
+/// published on the bus), taking only the context instead of the whole
+/// `AppState`, so `spawn_node` can append through its narrow `SpawnDeps`.
+pub(crate) async fn append_event_with(run: &pdo_run::Runs, event: &event_log::Event) -> Result<()> {
+    run.append_event().execute(event).await
 }
 
 /// Thin `AppState` wrapper over [`append_event_with`] — the name every in-process
@@ -4145,7 +4056,7 @@ pub(crate) async fn append_event_with(
 /// or a failure mode to the terminal transition; it is idempotent, so a double-fire
 /// is safe.
 pub(crate) async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
-    append_event_with(&state.db, &state.event_tx, event).await?;
+    append_event_with(&state.run, event).await?;
     if matches!(
         event.kind,
         event_log::EventKind::RunCompleted
@@ -4160,13 +4071,7 @@ pub(crate) async fn append_event(state: &AppState, event: &event_log::Event) -> 
 
 /// Whether a run_id has been tombstoned by forget (ADR-0024).
 pub(crate) async fn run_is_forgotten(db: &sqlx::SqlitePool, run_id: &str) -> Result<bool> {
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT 1 FROM forgotten_runs WHERE run_id = ? LIMIT 1")
-            .bind(run_id)
-            .fetch_optional(db)
-            .await
-            .context("failed to query forgotten_runs")?;
-    Ok(row.is_some())
+    pdo_run::adapters::sqlite_event_store::is_forgotten(db, run_id).await
 }
 
 async fn emit_run_event(
@@ -4291,25 +4196,11 @@ async fn emit_collection_action(
 }
 
 async fn load_events(db: &sqlx::SqlitePool, run_id: &str) -> Result<Vec<event_log::Event>> {
-    let rows = sqlx::query_as::<_, EventRow>(
-        "SELECT id, run_id, ts, kind, node_id, iter, payload FROM events WHERE run_id = ? ORDER BY id",
-    )
-    .bind(run_id)
-    .fetch_all(db)
-    .await
-    .context("failed to load events")?;
-
-    Ok(rows.into_iter().map(|r| r.into_event()).collect())
+    pdo_run::adapters::sqlite_event_store::load(db, run_id).await
 }
 
 pub(crate) async fn load_all_run_ids(db: &sqlx::SqlitePool) -> Result<Vec<String>> {
-    let rows: Vec<(String,)> =
-        sqlx::query_as("SELECT DISTINCT run_id FROM events ORDER BY run_id DESC")
-            .fetch_all(db)
-            .await
-            .context("failed to load run ids")?;
-
-    Ok(rows.into_iter().map(|r| r.0).collect())
+    pdo_run::adapters::sqlite_event_store::run_ids(db).await
 }
 
 /// Count the live NodeRun sessions across *all* runs (admission control). Pipeline
@@ -4858,46 +4749,12 @@ async fn record_and_broadcast_fire(
     if let Err(e) = trigger_store::record_fire(&state.db, trigger_id, record).await {
         warn!("trigger scheduler: record_fire failed for {trigger_id}: {e}");
     }
-    let _ = state.pipeline_tx.send(serde_json::json!({
+    let _ = state.bus_tx.send(serde_json::json!({
         "type": "trigger_fired",
         "trigger_id": trigger_id,
         "outcome": record.outcome,
         "run_id": record.run_id,
     }));
-}
-
-#[derive(sqlx::FromRow)]
-struct EventRow {
-    id: i64,
-    run_id: String,
-    ts: String,
-    kind: String,
-    node_id: Option<String>,
-    iter: Option<i64>,
-    payload: Option<String>,
-}
-
-impl EventRow {
-    fn into_event(self) -> event_log::Event {
-        let kind: event_log::EventKind =
-            serde_json::from_value(serde_json::Value::String(self.kind.clone()))
-                .unwrap_or(event_log::EventKind::RunStarted);
-
-        let payload = self
-            .payload
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
-
-        event_log::Event {
-            id: Some(self.id),
-            run_id: self.run_id,
-            ts: self.ts,
-            kind,
-            node_id: self.node_id,
-            iter: self.iter,
-            payload,
-        }
-    }
 }
 
 // --- API handlers ---
@@ -7496,8 +7353,9 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
 
     let cap_default = admission::DEFAULT_SESSION_CAP as i64;
     let cap_stored_wins = cfg.session_cap.filter(|&n| n >= 1);
-    let cap_env = admission::env_cap().map(|n| n as i64);
-    let cap_effective = admission::configured_cap_with(cfg.session_cap.map(|n| n as usize)) as i64;
+    let cap_env = pdo_run::adapters::env::env_cap().map(|n| n as i64);
+    let cap_effective =
+        pdo_run::adapters::env::configured_cap_with(cfg.session_cap.map(|n| n as usize)) as i64;
     let cap_source = if cap_stored_wins.is_some() {
         "stored"
     } else if cap_env.is_some() {
@@ -8096,7 +7954,7 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
 
     // Tell every connected client the table moved, so an open Stats modal is not the
     // only thing that knows.
-    let _ = state.pipeline_tx.send(serde_json::json!({
+    let _ = state.bus_tx.send(serde_json::json!({
         "type": "cost_prices_synced",
         "rows": outcome.rows,
     }));
@@ -8637,7 +8495,7 @@ async fn pause_triggers(
     let before = instance_config::triggers_paused(&state.db).await.ok();
     match instance_config::set_triggers_paused(&state.db, req.paused).await {
         Ok(()) => {
-            let _ = state.pipeline_tx.send(serde_json::json!({
+            let _ = state.bus_tx.send(serde_json::json!({
                 "type": "triggers_paused",
                 "paused": req.paused,
             }));
@@ -8912,163 +8770,10 @@ async fn list_reapable_runs(
     Json(entries).into_response()
 }
 
-async fn get_run(
-    State(state): State<Arc<AppState>>,
-    AxumPath(run_id): AxumPath<String>,
-) -> Response {
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    match event_log::project(&events) {
-        Some(mut run_state) => {
-            // #588 / ADR-0069 §4: derived awaiting from the run's descendants,
-            // computed on read (like `stalled`) and never written.
-            apply_child_awaiting_overlay(&state, &mut run_state).await;
-            let repo_root = effective_repo_root(&state, &run_state);
-            // Read the cost transcripts from the sandboxed Run's staged home while
-            // it is live, `~/.claude/projects/` otherwise. HOME absent → degrade to
-            // the host root; never fail a read.
-            let (home_root, sandbox_root) =
-                run_sandbox::sandbox_home_roots(&state).unwrap_or_else(|_| {
-                    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
-                    let sandbox = home.join(".pdo").join("sandbox");
-                    (home, sandbox)
-                });
-            let projects_root = pdo_sandbox::adapters::staging::stores::transcripts_root(
-                !run_state.sandbox.is_off(),
-                &run_state.run_id,
-                &home_root,
-                &sandbox_root,
-            );
-            // Resolve the three price tiers ONCE, here at the edge. Deliberately NOT
-            // an `AppState` cache and never a `OnceLock`: either would make a daemon
-            // restart mandatory to change a price, annulling ADR-0034. Note the seam
-            // asymmetry — prices come from `home_root` (the HOST home, since prices
-            // are an instance concept) while transcripts come from `projects_root`,
-            // which moves for a sandboxed Run.
-            let prices = price_table::PriceTable::load(&home_root);
-            // `copilot`'s journal is on the host; `pi`'s moves per Run (#708) — the
-            // staged sink while this sandboxed Run lives, the host store after
-            // merge-back — mirroring the Claude root's sandbox-aware seam above.
-            let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::for_run(
-                !run_state.sandbox.is_off(),
-                &run_state.run_id,
-                &home_root,
-                &sandbox_root,
-            );
-            augment_run_state_from_disk(
-                &mut run_state,
-                &events,
-                &projects_root,
-                &stores,
-                &repo_root,
-                &prices,
-            );
-            let mut response = serde_json::to_value(run_state).expect("RunState serializes");
-            inject_frozen_node_provisioning(&mut response, &events);
-            // Manager on demand: an OBSERVED fact, not a projected one — the
-            // panel must know whether the session really exists, and a live tmux
-            // probe is the only honest source (a projected flag would drift from
-            // the orphan sweep, a manual stop or a daemon restart). One
-            // `has-session` per detail fetch, the same cost class as the disk
-            // reads above.
-            let tmux = state.tmux();
-            let has_manager =
-                tmux.session_exists(&pdo_session::domain::names::manager_session_name(&run_id));
-            response["has_manager"] = serde_json::Value::Bool(has_manager);
-            Json(response).into_response()
-        }
-
-        None => (StatusCode::NOT_FOUND, "run not found").into_response(),
-    }
-}
-
 /// Project every run of the store and hand back the projections with the
 /// child-awaiting overlay applied ([`child_awaiting::overlay`]).
 async fn project_all_runs_overlaid(state: &AppState) -> Vec<event_log::RunState> {
-    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
-        return Vec::new();
-    };
-    let mut states = Vec::new();
-    for run_id in run_ids {
-        let Ok(events) = load_events(&state.db, &run_id).await else {
-            continue;
-        };
-        if let Some(run_state) = event_log::project(&events) {
-            states.push(run_state);
-        }
-    }
-    child_awaiting::overlay(&mut states);
-    states
-}
-
-/// Replace `run_state` by its overlaid twin when the run has a descendant
-/// awaiting its user. A run with no child at all is left untouched without
-/// projecting the store — the common case stays as cheap as before #588.
-async fn apply_child_awaiting_overlay(state: &AppState, run_state: &mut event_log::RunState) {
-    if run_state.status != event_log::RunStatus::Running {
-        return;
-    }
-    let has_children: bool = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM events WHERE kind = 'run_started' \
-         AND json_extract(payload, '$.parent_run_id') = ?",
-    )
-    .bind(&run_state.run_id)
-    .fetch_one(&state.db)
-    .await
-    .map(|n| n > 0)
-    .unwrap_or(true);
-    if !has_children {
-        return;
-    }
-    let overlaid = project_all_runs_overlaid(state).await;
-    if let Some(found) = overlaid.into_iter().find(|r| r.run_id == run_state.run_id) {
-        *run_state = found;
-    }
-}
-
-fn inject_frozen_node_provisioning(response: &mut serde_json::Value, events: &[event_log::Event]) {
-    let Some(nodes) = response
-        .get_mut("nodes")
-        .and_then(serde_json::Value::as_object_mut)
-    else {
-        return;
-    };
-    for event in events {
-        if event.kind != event_log::EventKind::NodeStarted {
-            continue;
-        }
-        let (Some(node_id), Some(iter), Some(rules)) = (
-            event.node_id.as_deref(),
-            event.iter,
-            event
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("provisioning")),
-        ) else {
-            continue;
-        };
-        let Some(node) = nodes.get_mut(node_id) else {
-            continue;
-        };
-        if node.get("iter").and_then(serde_json::Value::as_i64) == Some(iter) {
-            node["provisioning"] = rules.clone();
-            if let Some(plan) = event
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("provisioning_plan"))
-            {
-                node["provisioning_plan"] = plan.clone();
-            }
-            if node.get("provisioning_frozen_at").is_none() {
-                node["provisioning_frozen_at"] = serde_json::Value::String(event.ts.clone());
-            }
-        }
-    }
+    pdo_run::application::projections::project_all_overlaid(state.run.store().as_ref()).await
 }
 
 /// One child Run of `GET /runs/{run_id}/children` — the read model the
@@ -9415,20 +9120,6 @@ fn derive_run_cost(
         &prices,
     )
     .cost
-}
-
-async fn get_run_events(
-    State(state): State<Arc<AppState>>,
-    AxumPath(run_id): AxumPath<String>,
-) -> Response {
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    Json(events).into_response()
 }
 
 async fn run_diff(
@@ -11298,7 +10989,7 @@ pub(crate) async fn reattach_node_session(
     // `NodeStarted` trace, holding the lock across check-and-reserve then dropping it
     // before the slower tmux relaunch, exactly as `spawn_node` orders it.
     let admission_guard = state.admission_lock.lock().await;
-    let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
+    let cap = pdo_run::adapters::env::configured_cap_with(stored_session_cap(&state.db).await);
     let live = count_global_live_sessions_excluding(
         &state.db,
         Some(admission::SlotExclusion {
@@ -11861,7 +11552,7 @@ async fn handle_merge_resolver_done(
 
         warn!("Merge resolver failed for run {run_id}: {reason}");
         // `409` with the slug, never a `200`: the resolution was refused (ADR-0035).
-        return completion_refusal::refusal_response(
+        return pdo_run::adapters::http::verdicts::refusal_response(
             &completion_refusal::CompletionRefusal::MergeResolutionFailed { reason },
         );
     }
@@ -11936,7 +11627,7 @@ impl CompletionHeadStop {
             )
                 .into_response(),
             CompletionHeadStop::Refused { refusal } => {
-                completion_refusal::refusal_response(&refusal)
+                pdo_run::adapters::http::verdicts::refusal_response(&refusal)
             }
         }
     }
@@ -12086,7 +11777,7 @@ impl CompletionAttempt {
             )
                 .into_response(),
             CompletionAttempt::Refused { refusal } => {
-                completion_refusal::refusal_response(&refusal)
+                pdo_run::adapters::http::verdicts::refusal_response(&refusal)
             }
         }
     }
@@ -12140,7 +11831,7 @@ async fn node_done(
 async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
     match run_is_forgotten(&state.db, run_id).await {
         Ok(true) => {
-            return completion_refusal::refusal_response(
+            return pdo_run::adapters::http::verdicts::refusal_response(
                 &completion_refusal::CompletionRefusal::RunForgotten {
                     run_id: run_id.to_string(),
                 },
@@ -12148,7 +11839,7 @@ async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
         }
         Ok(false) => {}
         Err(e) => {
-            return completion_refusal::refusal_response(
+            return pdo_run::adapters::http::verdicts::refusal_response(
                 &completion_refusal::CompletionRefusal::Internal {
                     error: format!("forgotten-run check failed: {e}"),
                 },
@@ -12157,7 +11848,7 @@ async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
     }
 
     let Some((_, pre_run_state)) = reload_run_state(state, run_id).await else {
-        return completion_refusal::refusal_response(
+        return pdo_run::adapters::http::verdicts::refusal_response(
             &completion_refusal::CompletionRefusal::RunNotFound,
         );
     };
@@ -13370,7 +13061,7 @@ async fn force_spawn_node(
     // as `spawn_node` does — or concurrent force-spawns both claim the same free slot
     // and overshoot the cap toward the tmux-server collapse point.
     let _admission_guard = state.admission_lock.lock().await;
-    let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
+    let cap = pdo_run::adapters::env::configured_cap_with(stored_session_cap(&state.db).await);
     let live = count_global_live_sessions(&state.db).await;
     if !admission::can_admit(live, cap) {
         return (
@@ -13567,7 +13258,9 @@ async fn node_retry(
             "node_retry refused for {node_id} in run {run_id}: {}",
             refusal.reason()
         );
-        return retry_verdict::retry_response(&retry_verdict::RetryVerdict::Refused(refusal));
+        return pdo_run::adapters::http::verdicts::retry_response(
+            &retry_verdict::RetryVerdict::Refused(refusal),
+        );
     }
 
     // HEAD PROBE 2 — the sandbox precondition, also before any side effect: a
@@ -13582,7 +13275,9 @@ async fn node_retry(
             "node_retry deferred for {node_id} in run {run_id}: {}",
             refusal.reason()
         );
-        return retry_verdict::retry_response(&retry_verdict::RetryVerdict::Refused(refusal));
+        return pdo_run::adapters::http::verdicts::retry_response(
+            &retry_verdict::RetryVerdict::Refused(refusal),
+        );
     }
 
     let repo_root = effective_repo_root(&state, &run_state);
@@ -13618,7 +13313,9 @@ async fn node_retry(
             node_id: node_id.clone(),
         };
         info!("node_retry refused in run {run_id}: {}", refusal.reason());
-        return retry_verdict::retry_response(&retry_verdict::RetryVerdict::Refused(refusal));
+        return pdo_run::adapters::http::verdicts::retry_response(
+            &retry_verdict::RetryVerdict::Refused(refusal),
+        );
     };
 
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
@@ -13773,7 +13470,7 @@ async fn node_retry(
     };
 
     info!("node_retry: {node_id} iter {next_iter} in run {run_id} -> {verdict:?}");
-    retry_verdict::retry_response(&verdict)
+    pdo_run::adapters::http::verdicts::retry_response(&verdict)
 }
 
 async fn node_retry_preview(
@@ -14393,7 +14090,7 @@ async fn forget_run(
 
     // Piggy-back on the pipeline-broadcast channel: the event channel only carries
     // typed `event_log::Event` records, and every event for this run was just deleted.
-    let _ = state.pipeline_tx.send(serde_json::json!({
+    let _ = state.bus_tx.send(serde_json::json!({
         "type": "run_forgotten",
         "run_id": run_id,
     }));
@@ -14403,99 +14100,6 @@ async fn forget_run(
         Json(serde_json::json!({ "status": "forgotten" })),
     )
         .into_response()
-}
-
-async fn ws_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    ws: WebSocketUpgrade,
-) -> Response {
-    // `/ws` streams every event of every Run to any subscriber, so without this guard
-    // any web page open in the operator's browser could subscribe and exfiltrate
-    // repos/prompts/verdicts. `headers` MUST precede `ws`: the upgrade extractor
-    // consumes the request, so it stays last (axum 0.8).
-    if !pdo_session::adapters::http::origin::check_origin(
-        &headers,
-        state.port,
-        &state.allowed_ws_origins,
-    ) {
-        warn!(
-            "Rejected /ws WebSocket upgrade: Origin not allowed ({})",
-            pdo_session::adapters::http::origin::origin_for_log(&headers)
-        );
-        return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
-    }
-    ws.on_upgrade(move |socket| handle_ws(socket, state))
-}
-
-async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
-    info!("WebSocket client connected");
-    let ready = serde_json::json!({ "type": "ready" });
-    if socket
-        .send(Message::Text(ready.to_string().into()))
-        .await
-        .is_err()
-    {
-        return;
-    }
-
-    let mut event_rx = state.event_tx.subscribe();
-    let mut pipeline_rx = state.pipeline_tx.subscribe();
-    let mut heartbeat = time::interval(HEARTBEAT_INTERVAL);
-
-    loop {
-        tokio::select! {
-            _ = heartbeat.tick() => {
-                let msg = serde_json::json!({
-                    "type": "heartbeat",
-                    "ts": unix_timestamp_secs(),
-                });
-                if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
-                    break;
-                }
-            }
-            event = event_rx.recv() => {
-                match event {
-                    Ok(ev) => {
-                        let msg = serde_json::json!({
-                            "type": "event",
-                            "event": ev,
-                        });
-                        if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("WebSocket client lagged by {n} events");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-            pipeline_event = pipeline_rx.recv() => {
-                match pipeline_event {
-                    Ok(msg) => {
-                        if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        }
-    }
-
-    info!("WebSocket client disconnected");
-}
-
-fn unix_timestamp_secs() -> String {
-    use std::time::SystemTime;
-    let d = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = d.as_secs();
-    let millis = d.subsec_millis();
-    format!("{secs}.{millis:03}")
 }
 
 /// The message every write boundary returns when no target repo was named.
@@ -15861,7 +15465,7 @@ impl pdo_workspace::application::ports::ProjectEvents for PipelineChannelEvents 
 /// repository root, with `host` as the Autorisation d'opération.
 fn workspace_context(
     db: &sqlx::SqlitePool,
-    pipeline_tx: &broadcast::Sender<serde_json::Value>,
+    bus_tx: &broadcast::Sender<serde_json::Value>,
     repo_root: &Path,
     host: Arc<dyn pdo_kernel::extension_host::ExtensionHost>,
 ) -> Arc<pdo_workspace::application::Workspace> {
@@ -15871,7 +15475,7 @@ fn workspace_context(
             projects: Arc::new(sqlite::SqliteProjects::new(db.clone())),
             provisioning: Arc::new(sqlite::SqliteProvisioningRules::new(db.clone())),
             recent: Arc::new(sqlite::SqliteRecentRepositories::new(db.clone())),
-            events: Arc::new(PipelineChannelEvents(pipeline_tx.clone())),
+            events: Arc::new(PipelineChannelEvents(bus_tx.clone())),
             git: Arc::new(git::GitCli),
             source_tree: Arc::new(fs::FsSourceTree),
             files: Arc::new(fs::FsBrowser::new(repo_root)),
@@ -16658,11 +16262,10 @@ mod tests {
             .await
             .unwrap();
         init_db(&db).await.unwrap();
-        let (event_tx, _) = broadcast::channel(64);
-        let (pipeline_tx, _) = broadcast::channel(16);
+        let (bus_tx, _) = broadcast::channel(80);
         let workspace = workspace_context(
             &db,
-            &pipeline_tx,
+            &bus_tx,
             &std::env::current_dir().unwrap(),
             Arc::new(pdo_kernel::extension_host::NoExtensions),
         );
@@ -16674,43 +16277,48 @@ mod tests {
         let platform = test_platform(&db, None).await;
         let test_repo_root: PathBuf = std::env::current_dir().unwrap();
         let test_port: u16 = next_test_daemon_port();
-        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
-            workspace,
-            skills,
-            platform,
-            db,
-            event_tx,
-            pipeline_tx,
-            repo_root: test_repo_root.clone(),
-            port: test_port,
-            merge_lock: tokio::sync::Mutex::new(()),
-            admission_lock: tokio::sync::Mutex::new(()),
-            trigger_tick_lock: tokio::sync::Mutex::new(()),
-            recent_writes: SelfWrites::new(),
-            run_watcher: Arc::new(Mutex::new(None)),
-            // Self-destructing no-op: should any test POST /runs and reach the
-            // spawn path, the node session runs `true` and exits immediately —
-            // never real claude, never a lingering session.
-            tmux_cmd_override: Some("exec true".to_string()),
-            docker_cmd_override: None,
-            sandbox_home_override: None,
-            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_trigger_name: None,
-            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
-            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue: Arc::new(
-                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-            ),
-            price_sync_lock: tokio::sync::Mutex::new(()),
-            price_source_url: None,
-            price_refresh_at_boot: false,
-            allowed_ws_origins: Vec::new(),
-            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, tmux),
+        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
+            let session =
+                contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, tmux);
+            let run = contexts::test_run(weak.clone(), &db, &bus_tx, &session, test_port);
+            AppState {
+                workspace,
+                skills,
+                platform,
+                db,
+                run,
+                bus_tx,
+                repo_root: test_repo_root.clone(),
+                port: test_port,
+                merge_lock: tokio::sync::Mutex::new(()),
+                admission_lock: tokio::sync::Mutex::new(()),
+                trigger_tick_lock: tokio::sync::Mutex::new(()),
+                recent_writes: SelfWrites::new(),
+                run_watcher: Arc::new(Mutex::new(None)),
+                // Self-destructing no-op: should any test POST /runs and reach the
+                // spawn path, the node session runs `true` and exits immediately —
+                // never real claude, never a lingering session.
+                tmux_cmd_override: Some("exec true".to_string()),
+                docker_cmd_override: None,
+                sandbox_home_override: None,
+                last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                panic_on_trigger_name: None,
+                last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+                node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+                harness_catalogue: Arc::new(
+                    pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+                ),
+                price_sync_lock: tokio::sync::Mutex::new(()),
+                price_source_url: None,
+                price_refresh_at_boot: false,
+                allowed_ws_origins: Vec::new(),
+                session,
+            }
         })
     }
 
@@ -21568,11 +21176,10 @@ mod tests {
             .await
             .unwrap();
         init_db(&db).await.unwrap();
-        let (event_tx, _) = broadcast::channel(64);
-        let (pipeline_tx, _) = broadcast::channel(16);
+        let (bus_tx, _) = broadcast::channel(80);
         let workspace = workspace_context(
             &db,
-            &pipeline_tx,
+            &bus_tx,
             &std::env::current_dir().unwrap(),
             Arc::new(pdo_kernel::extension_host::NoExtensions),
         );
@@ -21584,40 +21191,45 @@ mod tests {
         let platform = test_platform(&db, Some(service_health)).await;
         let test_repo_root: PathBuf = std::env::current_dir().unwrap();
         let test_port: u16 = next_test_daemon_port();
-        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
-            workspace,
-            skills,
-            platform,
-            db,
-            event_tx,
-            pipeline_tx,
-            repo_root: test_repo_root.clone(),
-            port: test_port,
-            merge_lock: tokio::sync::Mutex::new(()),
-            admission_lock: tokio::sync::Mutex::new(()),
-            trigger_tick_lock: tokio::sync::Mutex::new(()),
-            recent_writes: SelfWrites::new(),
-            run_watcher: Arc::new(Mutex::new(None)),
-            tmux_cmd_override: Some("exec true".to_string()),
-            docker_cmd_override: None,
-            sandbox_home_override: None,
-            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_trigger_name: None,
-            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
-            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue: Arc::new(
-                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-            ),
-            price_sync_lock: tokio::sync::Mutex::new(()),
-            price_source_url: None,
-            price_refresh_at_boot: false,
-            allowed_ws_origins: Vec::new(),
-            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
+        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
+            let session =
+                contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None);
+            let run = contexts::test_run(weak.clone(), &db, &bus_tx, &session, test_port);
+            AppState {
+                workspace,
+                skills,
+                platform,
+                db,
+                run,
+                bus_tx,
+                repo_root: test_repo_root.clone(),
+                port: test_port,
+                merge_lock: tokio::sync::Mutex::new(()),
+                admission_lock: tokio::sync::Mutex::new(()),
+                trigger_tick_lock: tokio::sync::Mutex::new(()),
+                recent_writes: SelfWrites::new(),
+                run_watcher: Arc::new(Mutex::new(None)),
+                tmux_cmd_override: Some("exec true".to_string()),
+                docker_cmd_override: None,
+                sandbox_home_override: None,
+                last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                panic_on_trigger_name: None,
+                last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+                node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+                harness_catalogue: Arc::new(
+                    pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+                ),
+                price_sync_lock: tokio::sync::Mutex::new(()),
+                price_source_url: None,
+                price_refresh_at_boot: false,
+                allowed_ws_origins: Vec::new(),
+                session,
+            }
         })
     }
 
@@ -21648,7 +21260,7 @@ mod tests {
         Router::new()
             .route(
                 "/ws",
-                get(|ws: WebSocketUpgrade| async { ws.on_upgrade(|_| async {}) }),
+                get(|ws: axum::extract::WebSocketUpgrade| async { ws.on_upgrade(|_| async {}) }),
             )
             .fallback(static_handler)
     }
@@ -24542,8 +24154,7 @@ mod tests {
 
         // Seed a sandboxed (`full`) run: RunStarted projects `sandbox=full`.
         append_event_with(
-            &state.db,
-            &state.event_tx,
+            &state.run,
             &event_log::Event {
                 id: None,
                 run_id: run_id.into(),
@@ -27428,11 +27039,10 @@ mod tests {
             .await
             .unwrap();
         init_db(&db).await.unwrap();
-        let (event_tx, _) = broadcast::channel(64);
-        let (pipeline_tx, _) = broadcast::channel(16);
+        let (bus_tx, _) = broadcast::channel(80);
         let workspace = workspace_context(
             &db,
-            &pipeline_tx,
+            &bus_tx,
             dir,
             Arc::new(pdo_kernel::extension_host::NoExtensions),
         );
@@ -27440,43 +27050,48 @@ mod tests {
         let platform = test_platform(&db, None).await;
         let test_repo_root: PathBuf = dir.to_path_buf();
         let test_port: u16 = next_test_daemon_port();
-        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| AppState {
-            workspace,
-            skills,
-            platform,
-            db,
-            event_tx,
-            pipeline_tx,
-            repo_root: test_repo_root.clone(),
-            port: test_port,
-            merge_lock: tokio::sync::Mutex::new(()),
-            admission_lock: tokio::sync::Mutex::new(()),
-            trigger_tick_lock: tokio::sync::Mutex::new(()),
-            recent_writes: SelfWrites::new(),
-            run_watcher: Arc::new(Mutex::new(None)),
-            // Self-destructing no-op: should any test POST /runs and reach the
-            // spawn path, the node session runs `true` and exits immediately —
-            // never real claude, never a lingering session.
-            tmux_cmd_override: Some("exec true".to_string()),
-            docker_cmd_override,
-            sandbox_home_override: None,
-            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_trigger_name: None,
-            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
-            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue: Arc::new(
-                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-            ),
-            price_sync_lock: tokio::sync::Mutex::new(()),
-            price_source_url: None,
-            price_refresh_at_boot: false,
-            allowed_ws_origins: Vec::new(),
-            session: contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None),
+        Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
+            let session =
+                contexts::test_session(weak.clone(), test_repo_root.clone(), test_port, None);
+            let run = contexts::test_run(weak.clone(), &db, &bus_tx, &session, test_port);
+            AppState {
+                workspace,
+                skills,
+                platform,
+                db,
+                run,
+                bus_tx,
+                repo_root: test_repo_root.clone(),
+                port: test_port,
+                merge_lock: tokio::sync::Mutex::new(()),
+                admission_lock: tokio::sync::Mutex::new(()),
+                trigger_tick_lock: tokio::sync::Mutex::new(()),
+                recent_writes: SelfWrites::new(),
+                run_watcher: Arc::new(Mutex::new(None)),
+                // Self-destructing no-op: should any test POST /runs and reach the
+                // spawn path, the node session runs `true` and exits immediately —
+                // never real claude, never a lingering session.
+                tmux_cmd_override: Some("exec true".to_string()),
+                docker_cmd_override,
+                sandbox_home_override: None,
+                last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                panic_on_trigger_name: None,
+                last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+                node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+                harness_catalogue: Arc::new(
+                    pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+                ),
+                price_sync_lock: tokio::sync::Mutex::new(()),
+                price_source_url: None,
+                price_refresh_at_boot: false,
+                allowed_ws_origins: Vec::new(),
+                session,
+            }
         })
     }
 
@@ -28053,76 +27668,6 @@ mod tests {
             after.target_repo.as_deref(),
             tmp.path().to_str(),
             "an absent target_repo leaves the stored value alone"
-        );
-    }
-
-    #[test]
-    fn run_response_uses_the_current_iterations_frozen_node_provisioning() {
-        let mut response = serde_json::json!({
-            "nodes": {
-                "worker": { "iter": 2 }
-            }
-        });
-        let events = vec![
-            event_log::Event {
-                id: None,
-                run_id: "run".into(),
-                ts: "2026-09-01T12:00:00Z".into(),
-                kind: event_log::EventKind::NodeStarted,
-                node_id: Some("worker".into()),
-                iter: Some(1),
-                payload: Some(serde_json::json!({
-                    "provisioning": { "copy": ["old"], "hardlink": [], "symlink": [] }
-                })),
-            },
-            event_log::Event {
-                id: None,
-                run_id: "run".into(),
-                ts: "2026-09-01T12:01:00Z".into(),
-                kind: event_log::EventKind::NodeStarted,
-                node_id: Some("worker".into()),
-                iter: Some(2),
-                payload: Some(serde_json::json!({
-                    "provisioning": { "copy": ["frozen"], "hardlink": [], "symlink": [] },
-                    "provisioning_plan": {
-                        "entries": [{
-                            "relative_path": "frozen",
-                            "mode": "copy",
-                            "origin_scope": "isolated_node",
-                            "pattern": "frozen",
-                            "provided_by_git": false
-                        }],
-                        "rules": [],
-                        "conflicts": []
-                    }
-                })),
-            },
-            event_log::Event {
-                id: None,
-                run_id: "run".into(),
-                ts: "2026-09-01T12:02:00Z".into(),
-                kind: event_log::EventKind::NodeStarted,
-                node_id: Some("worker".into()),
-                iter: Some(2),
-                payload: Some(serde_json::json!({
-                    "provisioning": { "copy": ["frozen"], "hardlink": [], "symlink": [] }
-                })),
-            },
-        ];
-
-        inject_frozen_node_provisioning(&mut response, &events);
-
-        assert_eq!(
-            response["nodes"]["worker"]["provisioning"]["copy"],
-            serde_json::json!(["frozen"])
-        );
-        assert_eq!(
-            response["nodes"]["worker"]["provisioning_frozen_at"],
-            serde_json::json!("2026-09-01T12:01:00Z")
-        );
-        assert_eq!(
-            response["nodes"]["worker"]["provisioning_plan"]["entries"][0]["relative_path"],
-            serde_json::json!("frozen")
         );
     }
 

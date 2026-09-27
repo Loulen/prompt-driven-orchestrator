@@ -17,14 +17,14 @@ import {
 import "@git-diff-view/react/styles/diff-view.css";
 import {
   fetchReviewComments,
-  fetchRun,
   fetchRunRefs,
   fetchRunStructuredDiff,
   reopenReviewComment,
   resolveReviewComment,
   sendReviewComments,
 } from "../api";
-import { useDaemonSocket } from "../hooks/useDaemonSocket";
+import { fetchRun } from "../run/api/runs";
+import { useDaemonSocket } from "../run/store/useDaemonSocket";
 import type { ReviewComment } from "../shared/generated/ReviewComment";
 import type { RunRefs } from "../shared/generated/RunRefs";
 import type { RunState } from "../shared/generated/RunState";

@@ -1,22 +1,22 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ArrowLeft, GitFork, Settings, BarChart3 } from "lucide-react";
-import { useDaemonSocket, type ConnectionStatus } from "../hooks/useDaemonSocket";
+import { useDaemonSocket, type ConnectionStatus } from "../run/store/useDaemonSocket";
 import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
-import { fetchRuns, fetchRun, fetchTriggers, fetchTriggersHealth, pauseTriggers } from "../api";
+import { fetchRuns, fetchTriggers, fetchTriggersHealth, pauseTriggers } from "../api";
+import { useSelectedRun } from "../run/store/useSelectedRun";
 import { useDaemonSessions } from "../session/store/useDaemonSessions";
 import { fetchProjects } from "../workspace/api/projects";
-import { pickLatestLiveNode } from "../lib/pickLatestLiveNode";
+import { pickLatestLiveNode } from "../run/model/pickLatestLiveNode";
 import { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import { useLibassistLifecycle } from "../session/store/useLibassistLifecycle";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
-import type { RunState } from "../shared/generated/RunState";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { Project } from "../workspace/model/project";
 import type { DaemonStatus } from "../platform/model/daemon";
 import { shouldAutoSnapToLiveNode } from "../lib/autoSnap";
-import SessionCounter from "../components/SessionCounter";
+import SessionCounter from "../run/components/SessionCounter";
 import ServiceHealthIndicator from "../components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "../components/UnifiedLeftPanel";
 import NodeDetailPanel from "../components/NodeDetailPanel";
@@ -117,40 +117,6 @@ function useProjects() {
   }, []);
 
   return { projects, refresh };
-}
-
-function useSelectedRun() {
-  const [run, setRun] = useState<RunState | null>(null);
-  const currentIdRef = useRef<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    const id = currentIdRef.current;
-    if (!id) return;
-    try {
-      const data = await fetchRun(id);
-      if (currentIdRef.current === id) setRun(data);
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const select = useCallback(
-    (newId: string | null) => {
-      currentIdRef.current = newId;
-      if (!newId) {
-        setRun(null);
-        return;
-      }
-      fetchRun(newId)
-        .then((data) => {
-          if (currentIdRef.current === newId) setRun(data);
-        })
-        .catch(() => {});
-    },
-    [],
-  );
-
-  return { run, select, refresh };
 }
 
 export default function App() {

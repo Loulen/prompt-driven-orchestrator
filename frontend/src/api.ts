@@ -208,14 +208,6 @@ export function uncombineStatsMember(
   });
 }
 
-export function fetchRun(runId: string): Promise<RunState> {
-  return request<RunState>("GET", `/runs/${encodeURIComponent(runId)}`);
-}
-
-export function fetchRunEvents(runId: string): Promise<unknown[]> {
-  return request<unknown[]>("GET", `/runs/${encodeURIComponent(runId)}/events`);
-}
-
 /**
  * #750: the Run's sent review comments, on their own endpoint. With a `pair`
  * (#752, ADR-0067 §5) the daemon re-maps every anchor onto it **on read**: each

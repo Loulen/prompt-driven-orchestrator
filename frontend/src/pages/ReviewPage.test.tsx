@@ -11,8 +11,11 @@ import type { DiffFile } from "../shared/generated/DiffFile";
 // structured diff, the third-party body mocked to a marker (its own rendering is
 // the library's business; the e2e FP exercises the real one).
 
-vi.mock("../api", () => ({
+vi.mock("../run/api/runs", () => ({
   fetchRun: vi.fn(),
+}));
+
+vi.mock("../api", () => ({
   fetchReviewComments: vi.fn(),
   fetchRunRefs: vi.fn(),
   fetchRunStructuredDiff: vi.fn(),
@@ -25,7 +28,7 @@ vi.mock("../api", () => ({
 // The socket mock hands the test the subscriber, so a `review_comment_replied`
 // push can be simulated (#751).
 const socketSubscribers: ((msg: unknown) => void)[] = [];
-vi.mock("../hooks/useDaemonSocket", () => ({
+vi.mock("../run/store/useDaemonSocket", () => ({
   useDaemonSocket: () => ({
     status: "connected",
     subscribe: (fn: (msg: unknown) => void) => {
@@ -86,8 +89,8 @@ vi.mock("@git-diff-view/react", async () => {
   return { DiffModeEnum: { Split: "split", Unified: "unified" }, SplitSide, DiffView };
 });
 
+import { fetchRun } from "../run/api/runs";
 import {
-  fetchRun,
   fetchReviewComments,
   fetchRunRefs,
   fetchRunStructuredDiff,

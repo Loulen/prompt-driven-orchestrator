@@ -25,6 +25,12 @@ impl BroadcastEventBus {
         let (tx, _) = broadcast::channel(capacity);
         Self { tx }
     }
+
+    /// The bus over an existing channel: what the producers that still send on
+    /// the raw channel send is published on the bus.
+    pub fn from_sender(tx: broadcast::Sender<Value>) -> Self {
+        Self { tx }
+    }
 }
 
 impl EventBus for BroadcastEventBus {
@@ -49,5 +55,17 @@ mod tests {
         let mut rx = bus.subscribe();
         bus.publish(serde_json::json!({ "kind": "RunCreated" }));
         assert_eq!(rx.recv().await.unwrap()["kind"], "RunCreated");
+    }
+
+    #[tokio::test]
+    async fn what_is_sent_on_the_channel_reaches_the_bus_subscribers() {
+        let (tx, _) = broadcast::channel(8);
+        let bus = BroadcastEventBus::from_sender(tx.clone());
+        let mut rx = bus.subscribe();
+        tx.send(serde_json::json!({ "type": "pipeline_changed" }))
+            .unwrap();
+        bus.publish(serde_json::json!({ "type": "event" }));
+        assert_eq!(rx.recv().await.unwrap()["type"], "pipeline_changed");
+        assert_eq!(rx.recv().await.unwrap()["type"], "event");
     }
 }

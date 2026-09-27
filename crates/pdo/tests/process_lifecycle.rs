@@ -13,7 +13,6 @@
 use std::time::Duration;
 
 use crate::common::TestDaemon;
-use pdo_daemon::tmux_session_manager;
 
 const PIPELINE_NAME: &str = "lifecycle-c";
 const NODE_ID: &str = "worker";
@@ -189,7 +188,7 @@ async fn dead_session_marks_node_failed_with_session_cause() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -200,7 +199,7 @@ async fn dead_session_marks_node_failed_with_session_cause() {
     assert_eq!(status.as_deref(), Some("running"));
 
     // Kill the session out-of-band (tmux server crash / OOM / manual kill).
-    tmux_session_manager::kill(&socket, &session);
+    crate::common::tmux(&socket).kill(&session);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
         !tmux_has_session(&socket, &session),
@@ -235,7 +234,7 @@ async fn live_session_node_is_not_failed_by_detector() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -283,7 +282,7 @@ async fn run_with_no_live_node_and_nothing_schedulable_is_reconciled_terminal() 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -298,7 +297,7 @@ async fn run_with_no_live_node_and_nothing_schedulable_is_reconciled_terminal() 
     // Kill the only node's session: the next sweep fails the node. With
     // `worker` Failed, `end` can never receive its input — no live node, nothing
     // schedulable. The run is wedged.
-    tmux_session_manager::kill(&socket, &session);
+    crate::common::tmux(&socket).kill(&session);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // One sweep fails the node AND reconciles the now-wedged run.
@@ -335,7 +334,7 @@ async fn boot_recovery_reconciles_a_run_level_stall() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -343,7 +342,7 @@ async fn boot_recovery_reconciles_a_run_level_stall() {
     );
 
     // Simulate the crash: the session vanishes while the node is still Running.
-    tmux_session_manager::kill(&socket, &session);
+    crate::common::tmux(&socket).kill(&session);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Boot reconciliation: orphaned node Failed, THEN the run-level stall it
@@ -380,7 +379,7 @@ async fn boot_recovery_fails_orphaned_running_node() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -389,7 +388,7 @@ async fn boot_recovery_fails_orphaned_running_node() {
 
     // Simulate the crash: the session vanishes (tmux server died) while the
     // event log still says the node is Running.
-    tmux_session_manager::kill(&socket, &session);
+    crate::common::tmux(&socket).kill(&session);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!tmux_has_session(&socket, &session));
 
@@ -423,7 +422,7 @@ async fn completed_node_session_is_reaped_and_pane_serves_snapshot() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -515,14 +514,15 @@ async fn run_with_marked_pane() -> (TestDaemon, String, String) {
     .unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
         "node session should appear after POST /runs"
     );
     assert!(
-        wait_until(|| tmux_session_manager::capture(&socket, &session)
+        wait_until(|| crate::common::tmux(&socket)
+            .capture(&session)
             .is_some_and(|p| p.contains(KILL_MARKER)))
         .await,
         "the marker must be painted in the LIVE pane before the kill"
@@ -673,14 +673,15 @@ async fn kill_node_writes_the_snapshot_under_the_runs_target_repo() {
         .as_str()
         .unwrap()
         .to_string();
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
         "node session should appear after POST /runs"
     );
     assert!(
-        wait_until(|| tmux_session_manager::capture(&socket, &session)
+        wait_until(|| crate::common::tmux(&socket)
+            .capture(&session)
             .is_some_and(|p| p.contains(KILL_MARKER)))
         .await,
         "the marker must be painted in the LIVE pane before the kill"
@@ -736,7 +737,7 @@ async fn a_panicking_stale_sweep_is_isolated_and_the_next_sweep_recovers() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -744,7 +745,7 @@ async fn a_panicking_stale_sweep_is_isolated_and_the_next_sweep_recovers() {
     );
 
     // Kill the session out-of-band so a *working* sweep would mark the node Failed.
-    tmux_session_manager::kill(&socket, &session);
+    crate::common::tmux(&socket).kill(&session);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
         !tmux_has_session(&socket, &session),
@@ -880,7 +881,7 @@ async fn usage_limit_menu_is_flagged_and_node_stays_running() {
     .unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -957,7 +958,7 @@ async fn usage_limit_detector_does_not_flag_a_normal_running_node() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,

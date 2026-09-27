@@ -35,7 +35,7 @@ import SkillSelector from "../skill/components/SkillSelector";
 import { announceSkillTiersChanged } from "../skill/store/useSkillTiers";
 import { useScrollSpy } from "../hooks/useScrollSpy";
 import AgentProfilesPanel from "./AgentProfilesPanel";
-import StagingProfilesPanel from "./StagingProfilesPanel";
+import StagingProfilesPanel from "../sandbox/components/StagingProfilesPanel";
 import StatsAbsorptionsPanel from "./StatsAbsorptionsPanel";
 import TutorialsSection from "./tour/TutorialsSection";
 import {

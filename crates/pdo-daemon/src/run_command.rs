@@ -24,9 +24,9 @@ use crate::{
     load_events, load_projected, loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session,
     reload_run_state, resolve_completed_frontmatter, resolve_pipeline_path,
     resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
-    retry_waiting_nodes, run_advance, run_is_forgotten, run_scoped_pipeline_path, sandbox_run,
-    scheduler, scheduler_interpreter, tmux_session_manager, transition_guard, AppState,
-    CreateRunRequest, TargetRepoInput,
+    retry_waiting_nodes, run_advance, run_is_forgotten, run_sandbox, run_scoped_pipeline_path,
+    scheduler, scheduler_interpreter, transition_guard, AppState, CreateRunRequest,
+    TargetRepoInput,
 };
 
 /// The wire shape of a command. `pub(crate)` only because axum's extractor puts
@@ -1248,10 +1248,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // any open shell so its uncommitted edits can't race it. Refusing with a
             // 409 would deadlock: a shell only dies on archive, itself reachable only
             // from a terminal state.
-            tmux_session_manager::kill(
-                &state.tmux_socket(),
-                &tmux_session_manager::shell_session_name(&run_id),
-            );
+            state
+                .tmux()
+                .kill(&pdo_session::domain::names::shell_session_name(&run_id));
 
             // Re-arm a sandboxed Run's container before the scheduler `docker exec`s
             // into it. Containers are created without `--restart` and `boot_recovery`
@@ -1260,8 +1259,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // `spawn_blocking`, `ensure_ready` may `docker build`) or fail
             // EXPLICITLY — never a silent host fallback.
             if !run_state.sandbox.is_off() {
-                let prep = match sandbox_run::context_from_state(&state, &run_state).await {
-                    Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                let prep = match run_sandbox::context_from_state(&state, &run_state).await {
+                    Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready())
                         .await
                         .unwrap_or_else(|je| {
                             Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
@@ -1343,16 +1342,15 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             }
 
             // Kill any open shell before the re-drive re-arms the merge.
-            tmux_session_manager::kill(
-                &state.tmux_socket(),
-                &tmux_session_manager::shell_session_name(&run_id),
-            );
+            state
+                .tmux()
+                .kill(&pdo_session::domain::names::shell_session_name(&run_id));
 
             // Re-arm a sandboxed Run's container before the scheduler `docker exec`s
             // into it (same guard as `resume_run`).
             if !run_state.sandbox.is_off() {
-                let prep = match sandbox_run::context_from_state(&state, &run_state).await {
-                    Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                let prep = match run_sandbox::context_from_state(&state, &run_state).await {
+                    Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready())
                         .await
                         .unwrap_or_else(|je| {
                             Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
@@ -1641,16 +1639,17 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
 
             // FROM HERE ON THERE ARE SIDE EFFECTS.
 
-            let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+            let session_name =
+                pdo_session::domain::names::node_session_name(&run_id, &node_id, iter);
             // Deliberately a BARE kill, not `reap_node_session`: the helper's pane
             // snapshot would never be served, since `GET …/pane` only serves one for a
             // TERMINAL iteration and a restart leaves the node non-terminal.
-            tmux_session_manager::kill(&state.tmux_socket(), &session_name);
+            state.tmux().kill(&session_name);
             // Also kill the in-container process tree before the re-spawn, or the old
             // session's process lingers alongside the new one. `sandbox` is immutable
             // over a Run's life, so the pre-kill projection above answers it — no
             // post-kill `reload_run_state` needed.
-            sandbox_run::kill_session_best_effort(
+            run_sandbox::kill_session_best_effort(
                 state.docker_cmd_override.as_deref().unwrap_or("docker"),
                 !run_state.sandbox.is_off(),
                 &run_id,
@@ -1763,7 +1762,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // A name that WAS frozen but no longer resolves REFUSES — never a silent
             // `claude` relaunch in this node's worktree. A row with NO frozen harness
             // keeps the `claude` floor, which `can_resume`.
-            let harness_home_root = sandbox_run::sandbox_home_roots(&state)
+            let harness_home_root = run_sandbox::sandbox_home_roots(&state)
                 .map(|(home, _)| home)
                 .unwrap_or_default();
             let descriptor = match crate::find_launch_harness(&events, &node_id, iter).as_deref() {
@@ -1852,7 +1851,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     };
                     let repo_root = effective_repo_root(&state, &run_state);
                     let session_name =
-                        tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+                        pdo_session::domain::names::node_session_name(&run_id, &node_id, iter);
                     let outcome = crate::reattach_node_session(
                         &state,
                         &events,

@@ -181,26 +181,6 @@ vi.mock("../api", () => {
   };
   fetchSettingsMock.mockResolvedValue(settings);
 
-  // Minimal but complete virtual staging profile (#432): the editor renders
-  // `floor`, `disabled`, `extras`, `env`… of the selected one.
-  const virtualProfile = (name: string) => ({
-    name,
-    virtual: true,
-    materialised: false,
-    disabled: [],
-    extras: [],
-    resolved: [],
-    entries: [],
-    redundant_extras: [],
-    inactive_disabled: [],
-    floor: [],
-    sensitive_prefixes: [],
-    env: {},
-    reserved_env_keys: ["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"],
-    image: null,
-    updated_at: null,
-  });
-
   // Empty Stats payloads (a fresh daemon): the shapes only need to satisfy the
   // rendering paths — no buckets, no rows, no harnesses.
   const emptyAggregate = {
@@ -221,7 +201,6 @@ vi.mock("../api", () => {
     {
       fetchRuns: vi.fn().mockResolvedValue([]),
       fetchRun: vi.fn().mockResolvedValue({}),
-      fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
       fetchTriggers: vi.fn().mockResolvedValue([]),
       fetchTriggersHealth: vi.fn().mockResolvedValue({
         last_tick_at: null,
@@ -237,21 +216,7 @@ vi.mock("../api", () => {
       updateAgentProfile: vi.fn().mockResolvedValue(undefined),
       deleteAgentProfile: vi.fn().mockResolvedValue(undefined),
       fetchAgentProfileReferents: vi.fn().mockResolvedValue([]),
-      // A minimal but complete virtual profile — the editor renders `floor`,
-      // `disabled`, `extras`, `env`… of the selected one.
-      fetchSandboxProfile: vi.fn().mockImplementation((name: string) =>
-        Promise.resolve(virtualProfile(name)),
-      ),
-      saveSandboxProfile: vi.fn().mockResolvedValue(undefined),
-      deleteSandboxProfile: vi.fn().mockResolvedValue(undefined),
-      fetchSandboxProfileReferents: vi.fn().mockResolvedValue({ runs: [], triggers: [] }),
       fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
-      fetchSandboxProfiles: vi.fn().mockResolvedValue({
-        profiles: [virtualProfile("full"), virtualProfile("minimal")],
-        home: "/home/user",
-      }),
-      closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
-      putLibassistFocus: vi.fn().mockResolvedValue(undefined),
       fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
       uncombineStatsMember: vi.fn(),
       fetchStatsOverview: vi.fn().mockResolvedValue({
@@ -317,6 +282,53 @@ vi.mock("../api", () => {
     },
   );
 });
+
+// The staging-profile panel reads the sandbox context's own API module (#432).
+vi.mock("../sandbox/api/profiles", () => {
+  // Minimal but complete virtual staging profile (#432): the editor renders
+  // `floor`, `disabled`, `extras`, `env`… of the selected one.
+  const virtualProfile = (name: string) => ({
+    name,
+    virtual: true,
+    materialised: false,
+    disabled: [],
+    extras: [],
+    resolved: [],
+    entries: [],
+    redundant_extras: [],
+    inactive_disabled: [],
+    floor: [],
+    sensitive_prefixes: [],
+    env: {},
+    reserved_env_keys: ["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"],
+    image: null,
+    updated_at: null,
+  });
+
+  return {
+    // A minimal but complete virtual profile — the editor renders `floor`,
+    // `disabled`, `extras`, `env`… of the selected one.
+    fetchSandboxProfile: vi.fn().mockImplementation((name: string) =>
+      Promise.resolve(virtualProfile(name)),
+    ),
+    fetchSandboxProfiles: vi.fn().mockResolvedValue({
+      profiles: [virtualProfile("full"), virtualProfile("minimal")],
+      home: "/home/user",
+    }),
+    saveSandboxProfile: vi.fn().mockResolvedValue(undefined),
+    deleteSandboxProfile: vi.fn().mockResolvedValue(undefined),
+    fetchSandboxProfileReferents: vi.fn().mockResolvedValue({ runs: [], triggers: [] }),
+  };
+});
+
+vi.mock("../session/api/sessions", () => ({
+  fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
+}));
+
+vi.mock("../session/api/assistant", () => ({
+  closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
+  putLibassistFocus: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspace/api/projects")>()),

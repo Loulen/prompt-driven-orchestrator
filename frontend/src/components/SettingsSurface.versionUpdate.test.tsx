@@ -25,6 +25,14 @@ vi.mock("../skill/api/bank", () => ({
   deleteSkillFolder: vi.fn(),
 }));
 
+// The staging-profile panel reads the sandbox context's own API module.
+vi.mock("../sandbox/api/profiles", () => ({
+  fetchSandboxProfiles: vi.fn().mockResolvedValue({ profiles: [], home: "/home/user" }),
+  saveSandboxProfile: vi.fn(),
+  deleteSandboxProfile: vi.fn(),
+  fetchSandboxProfileReferents: vi.fn(),
+}));
+
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
@@ -35,10 +43,6 @@ vi.mock("../api", () => ({
   fetchAgentProfileReferents: vi.fn(),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  fetchSandboxProfiles: vi.fn().mockResolvedValue({ profiles: [], home: "/home/user" }),
-  saveSandboxProfile: vi.fn(),
-  deleteSandboxProfile: vi.fn(),
-  fetchSandboxProfileReferents: vi.fn(),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;

@@ -11,7 +11,6 @@ import type { FrontmatterViolation } from "./shared/generated/FrontmatterViolati
 import type { Trigger } from "./shared/generated/Trigger";
 import type { TriggerListEntry } from "./shared/generated/TriggerListEntry";
 import type { TriggerFire } from "./shared/generated/TriggerFire";
-import type { DaemonStatus } from "./platform/model/daemon";
 import type { InstanceSettings, SyncCostPricesReport, AgentProfileReferents } from "./settings/model/settings";
 import type { UpdateSettingsRequest } from "./shared/generated/UpdateSettingsRequest";
 import type { StatsOverview } from "./shared/generated/StatsOverview";
@@ -19,8 +18,6 @@ import type { StatsCost } from "./shared/generated/StatsCost";
 import type { StatsPerformance } from "./shared/generated/StatsPerformance";
 import type { StatsAbsorption } from "./shared/generated/StatsAbsorption";
 import type { StatsAbsorptionList } from "./shared/generated/StatsAbsorptionList";
-import type { SandboxProfile, SandboxProfileReferents } from "./sandbox/model/sandbox";
-import type { SandboxProfileImage } from "./shared/generated/SandboxProfileImage";
 import type { SourceDrift } from "./shared/generated/SourceDrift";
 import type { AgentChoice } from "./shared/generated/AgentChoice";
 import type { AgentProfile } from "./shared/generated/AgentProfile";
@@ -36,10 +33,6 @@ import { ApiError, apiErrorMessage, BASE, request } from "./shared/http/client";
 
 export function fetchRuns(): Promise<RunListEntry[]> {
   return request<RunListEntry[]>("GET", "/runs");
-}
-
-export function fetchSessions(): Promise<DaemonStatus> {
-  return request<DaemonStatus>("GET", "/sessions");
 }
 
 export function fetchSettings(): Promise<InstanceSettings> {
@@ -90,82 +83,6 @@ export function fetchAgentProfileReferents(id: string): Promise<AgentProfileRefe
 }
 
 //
-// A separate REST resource, NOT part of the grouped `PUT /settings`: a profile is a ROW,
-// not a `{effective, source, stored, env, default}` knob. That is exactly why the editor's
-// footer says "Done" rather than "Save" — nothing is batched behind it.
-//
-// The routes sit under `/settings/…` purely for ROUTING: the vite proxy key is a prefix,
-// so `'/settings'` already covers every sub-path (no proxy edit, none of the "dev GET
-// answers 200 with the SPA" traps that `/nodes`, `/stats` and `/fs` each paid).
-
-/** Every staging profile, each fully resolved (`+ home`, the host `$HOME`). */
-export function fetchSandboxProfiles(): Promise<{
-  profiles: SandboxProfile[];
-  home: string | null;
-}> {
-  return request("GET", "/settings/sandbox-profiles");
-}
-
-/** One resolved profile; throws `ApiError` with status 404 when the name is unknown. */
-export function fetchSandboxProfile(name: string): Promise<SandboxProfile> {
-  return request<SandboxProfile>(
-    "GET",
-    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
-  );
-}
-
-/**
- * Upsert a profile's **diff** — `disabled` / `extras`, never a snapshot (ADR-0031 §2) —
- * plus its `env` map (#468, ADR-0031 §8) and its `image` source (#467, ADR-0031 §9), neither
- * of which is a diff at all.
- * Upsert, because the caller cannot know whether `full` already has a row, and editing it
- * IS what materialises one. Returns the recomputed view so the editor needs no refetch.
- *
- * Every field is a FULL replacement, `env` and `image` included: omitting a variable is how you
- * remove it, and `image: null` is how you go back to the instance-wide setting. So every caller
- * passes the fields it is NOT changing verbatim — which is why the editor threads them through one
- * `write` helper rather than per-control.
- */
-export function saveSandboxProfile(
-  name: string,
-  diff: {
-    disabled: string[];
-    extras: string[];
-    env: Record<string, string>;
-    image: SandboxProfileImage | null;
-  },
-): Promise<SandboxProfile> {
-  return request<SandboxProfile>(
-    "PUT",
-    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
-    { body: diff },
-  );
-}
-
-/**
- * Delete the materialised row. Unconditional (ADR-0031 §7 — a *soft* guard-rail, no
- * referential integrity in the DB): deleting an edited `full`/`minimal` reverts it to its
- * virtual default, deleting a user profile makes its referents' next Run fail loud.
- * Neither repoints anything, which is what {@link fetchSandboxProfileReferents} is for.
- */
-export function deleteSandboxProfile(name: string): Promise<void> {
-  return request<void>(
-    "DELETE",
-    `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
-    { responseMode: "void" },
-  );
-}
-
-/** Who still points at a profile — server-side, because `RunListEntry` carries no `sandbox`. */
-export function fetchSandboxProfileReferents(
-  name: string,
-): Promise<SandboxProfileReferents> {
-  return request<SandboxProfileReferents>(
-    "GET",
-    `/settings/sandbox-profiles/${encodeURIComponent(name)}/referents`,
-  );
-}
-
 /**
  * Fetch the remote price source and rewrite the fetched price tier (#427,
  * ADR-0034). The daemon's only outbound call from a user gesture.
@@ -523,107 +440,6 @@ export async function releaseNodeCompletion(
   return { kind: "released" };
 }
 
-export function attachSession(sessionId: string): Promise<void> {
-  return request<void>(
-    "POST",
-    `/sessions/${encodeURIComponent(sessionId)}/attach`,
-    { responseMode: "void", label: "attach" },
-  );
-}
-
-export function attachManager(runId: string): Promise<void> {
-  return request<void>(
-    "POST",
-    `/sessions/${encodeURIComponent(runId)}/manager/attach`,
-    { responseMode: "void", label: "manager attach" },
-  );
-}
-
-/**
- * Open (or re-attach) an ad-hoc bash shell in a terminal run's pipeline
- * worktree (#316 / ADR-0021). Create-if-absent; returns the tmux session name to
- * attach to via the existing `WS /sessions/<session>/pty` bridge (no OS spawn).
- * `created` distinguishes a fresh shell from a re-attach.
- */
-export function openRunShell(
-  runId: string,
-): Promise<{ session: string; created: boolean }> {
-  return request<{ session: string; created: boolean }>(
-    "POST",
-    `/sessions/${encodeURIComponent(runId)}/shell`,
-    { label: "open shell" },
-  );
-}
-
-/**
- * Open (or re-attach) the library pipeline authoring assistant (#302 / ADR-0048,
- * #594 / ADR-0051). Create-if-absent; returns the shared tmux session name to
- * attach to via the existing `WS /sessions/<session>/pty` bridge.
- *
- * No pipeline id: there is **one** assistant for the whole daemon, and which
- * template it works on travels through {@link putLibassistFocus} instead.
- */
-export function openLibraryAssistant(): Promise<{
-  session: string;
-  created: boolean;
-}> {
-  return request<{ session: string; created: boolean }>(
-    "POST",
-    "/sessions/libassist",
-    { label: "open assistant" },
-  );
-}
-
-/**
- * Reap the library authoring assistant (#302 / ADR-0048, #594 / ADR-0051).
- *
- * Called when the user leaves **every** pipeline edit view — not when they leave
- * the Assistant tab, which used to throw the conversation away on each round trip
- * between two templates. Best-effort: reaping an absent session is a no-op.
- *
- * `keepalive` lets the request survive the document, which is the only way the
- * `pagehide` path can send anything at all.
- */
-export function closeLibraryAssistant(
-  opts: { keepalive?: boolean } = {},
-): Promise<{ ok: boolean; reaped: boolean }> {
-  return request<{ ok: boolean; reaped: boolean }>(
-    "DELETE",
-    "/sessions/libassist",
-    { label: "close assistant", keepalive: opts.keepalive },
-  );
-}
-
-/**
- * Declare which template the UI is editing — or `null` to clear it (#594 /
- * ADR-0051). Sent on every edit-view change and repeated as a heartbeat.
- *
- * Two jobs in one call: it is how the assistant learns the open pipeline on its
- * next message, and it is how the daemon's reaper knows a human is still editing
- * even when no terminal is attached. The daemon resolves the instance-owned
- * pipeline path from its id.
- */
-export function putLibassistFocus(pipelineId: string | null): Promise<unknown> {
-  return request("PUT", "/sessions/libassist/focus", {
-    body: { pipeline_id: pipelineId },
-    label: "declare assistant focus",
-  });
-}
-
-export interface PaneResponse {
-  content: string;
-  session_name: string;
-  resumed: boolean;
-  stale: boolean;
-  /**
-   * Provenance of `content` (#205): "live" (captured from a running session),
-   * "resumed" (a dead latest-iter session was re-attached), "snapshot" (the
-   * persisted post-mortem pane of a reaped terminal node), or "unavailable"
-   * (no session and no snapshot).
-   */
-  source: "live" | "resumed" | "snapshot" | "unavailable";
-}
-
 export function fetchPrompt(
   runId: string,
   nodeId: string,
@@ -684,18 +500,6 @@ export function fetchArtifact(
 
 export function artifactUrl(runId: string, relativePath: string): string {
   return `${BASE}/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`;
-}
-
-export function fetchPane(
-  runId: string,
-  nodeId: string,
-  iter: number,
-): Promise<PaneResponse> {
-  return request<PaneResponse>(
-    "GET",
-    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/pane`,
-    { query: { iter }, label: "GET pane" },
-  );
 }
 
 export function fetchPipelines(): Promise<PipelineListEntry[]> {

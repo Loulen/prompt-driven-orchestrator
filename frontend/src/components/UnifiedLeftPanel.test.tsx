@@ -8,7 +8,8 @@ import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { LibraryPipelineEntry } from "../api";
 import { ApiError } from "../shared/http/client";
-import { cleanupRun, createPipeline, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, createPipeline, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
+import { openRunShell } from "../session/api/sessions";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
@@ -64,9 +65,6 @@ vi.mock("../api", () => ({
     .mockResolvedValue({ id: "x-copy", scope: "user", entry: null }),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
   deleteTrigger: vi.fn().mockResolvedValue(undefined),
-  openRunShell: vi
-    .fn()
-    .mockResolvedValue({ session: "pdo-shell-run-term-1", created: true }),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   fetchPipeline: vi.fn().mockResolvedValue({
     scope: "library",
@@ -81,6 +79,12 @@ vi.mock("../api", () => ({
 vi.mock("../workspace/api/projects", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspace/api/projects")>()),
   fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../session/api/sessions", () => ({
+  openRunShell: vi
+    .fn()
+    .mockResolvedValue({ session: "pdo-shell-run-term-1", created: true }),
 }));
 
 describe("portable pipeline import", () => {
@@ -296,7 +300,7 @@ describe("portable pipeline import", () => {
 
 // Stub the shell modal so a click that mounts it doesn't drag in xterm.js / a
 // real PTY WebSocket. It echoes the `session` prop for assertions (#316).
-vi.mock("./RunShellModal", () => ({
+vi.mock("../session/components/RunShellModal", () => ({
   default: ({ session }: { session: string }) => (
     <div data-testid="run-shell-modal" data-session={session} />
   ),

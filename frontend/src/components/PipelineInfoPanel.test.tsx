@@ -7,7 +7,7 @@ import type { RunState } from "../shared/generated/RunState";
 // children (network-fetching diff, tmux terminal) so the test stays focused on the
 // #410 sandbox surface and never touches the network.
 vi.mock("./DiffTab", () => ({ default: () => null }));
-vi.mock("./TmuxTerminal", () => ({ default: vi.fn(() => null) }));
+vi.mock("../session/components/TmuxTerminal", () => ({ default: vi.fn(() => null) }));
 
 // #302 / ADR-0048: the Assistant tab drives create-if-absent / reap-on-leave
 // against the daemon. Mock those two api helpers so the tests can assert the
@@ -39,8 +39,6 @@ vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
   return {
     ...actual,
-    openLibraryAssistant,
-    closeLibraryAssistant,
     fetchPipelineDocument,
     fetchRunPipelineDocument,
     fetchPipelineSkillsSidecar,
@@ -49,13 +47,18 @@ vi.mock("../api", async (importOriginal) => {
     fetchSourceDrift,};
 });
 
+vi.mock("../session/api/assistant", () => ({
+  openLibraryAssistant,
+  closeLibraryAssistant,
+}));
+
 vi.mock("../workspace/api/repos", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspace/api/repos")>()),
   fetchRemotes,
 }));
 
 import PipelineInfoPanel from "./PipelineInfoPanel";
-import TmuxTerminal from "./TmuxTerminal";
+import TmuxTerminal from "../session/components/TmuxTerminal";
 import type { TabId } from "./PipelineInfoPanel";
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 

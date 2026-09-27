@@ -1988,6 +1988,7 @@ dependencies = [
  "pdo-kernel",
  "pdo-legacy",
  "pdo-platform",
+ "pdo-session",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -2064,6 +2065,8 @@ dependencies = [
  "pdo-harness",
  "pdo-kernel",
  "pdo-platform",
+ "pdo-sandbox",
+ "pdo-session",
  "pdo-skill",
  "pdo-workspace",
  "portable-pty",
@@ -2109,6 +2112,49 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "pdo-sandbox"
+version = "1.111.5"
+dependencies = [
+ "anyhow",
+ "axum",
+ "libc",
+ "pdo-extension-api",
+ "pdo-harness",
+ "pdo-kernel",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "ts-rs",
+]
+
+[[package]]
+name = "pdo-session"
+version = "1.111.5"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "futures-util",
+ "pdo-extension-api",
+ "pdo-harness",
+ "pdo-kernel",
+ "portable-pty",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "ts-rs",
 ]
 
 [[package]]

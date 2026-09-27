@@ -80,7 +80,28 @@ Contexts already out of the legacy crate:
   harness's own artefacts (transcripts, turn state, reported cost, context peak, steering)
   live in its `domain/`; cost, stale detection, staging, tmux and stats read them from
   there. `RUST_LOG=pdo_daemon::harness_registry` becomes
-  `RUST_LOG=pdo_harness::application::load_registry`. While it still exists,
+  `RUST_LOG=pdo_harness::application::load_registry`.
+- `sandbox` (#921): `crates/pdo-sandbox`, `frontend/src/sandbox/`. Docker sits behind the
+  `DockerCli` port (`adapters/docker_cli.rs` runs the real binary; its stage-3 tests run
+  against a real daemon when one answers, and say they skipped otherwise). Editing and
+  deleting a staging profile are use cases that ask the Autorisation d'opération; preparing,
+  cleaning up and killing inside a Run's sandbox are Run transitions and never do. The
+  legacy `run_sandbox.rs` is the Run's side (it builds a Run's sandbox context from its
+  state) and leaves with the run context. `RUST_LOG=pdo_daemon::sandbox_staging` becomes
+  `RUST_LOG=pdo_sandbox::adapters::staging`, `pdo_daemon::sandbox_container` becomes
+  `pdo_sandbox::application::container`, `pdo_daemon::sandbox_run` becomes
+  `pdo_sandbox::application::prepare` (and `pdo_daemon::run_sandbox` for the Run's side).
+- `session` (#920): `crates/pdo-session`, `frontend/src/session/`. tmux sits behind the one
+  `Tmux` port (`application/ports.rs`, adapter `adapters/tmux/`): the legacy crate, the PTY
+  bridge and the shared terminal reach tmux through it, never through `Command::new("tmux")`.
+  What the context reads of the Runs (the declared wait's facts, a pane's iteration, the run
+  shell's worktree, the sweep's owners) are ports the legacy crate implements in
+  `session_ports/`, wired by the composition root (`crates/pdo/src/contexts.rs`) over the
+  `ContextResources` the legacy daemon opens (`contexts.rs`). `RUST_LOG=pdo_daemon::tmux_session_manager`
+  becomes `RUST_LOG=pdo_session::adapters::tmux` (and `…::application::launch` for the
+  spawns), `pdo_daemon::pty_bridge` becomes `pdo_session::adapters::pty`.
+
+While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package
 `pdo-daemon`: dist names the installer after it), which exposes `serve(config, extensions)` and

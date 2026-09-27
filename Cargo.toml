@@ -11,6 +11,8 @@ members = [
   "crates/pdo-skill",
   "crates/pdo-platform",
   "crates/pdo-harness",
+  "crates/pdo-sandbox",
+  "crates/pdo-session",
   "crates/pdo-daemon",
   "crates/pdo",
 ]
@@ -68,6 +70,8 @@ pdo-workspace = { path = "crates/pdo-workspace" }
 pdo-skill = { path = "crates/pdo-skill" }
 pdo-platform = { path = "crates/pdo-platform" }
 pdo-harness = { path = "crates/pdo-harness" }
+pdo-sandbox = { path = "crates/pdo-sandbox" }
+pdo-session = { path = "crates/pdo-session" }
 # The legacy crate keeps its library name `pdo_daemon` (so `RUST_LOG=pdo_daemon::…`
 # targets and every `use pdo_daemon::` stay valid) under the package name
 # `pdo-legacy`: the package name `pdo-daemon` belongs to the composition root,

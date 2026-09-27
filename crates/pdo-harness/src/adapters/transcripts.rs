@@ -112,7 +112,7 @@ pub fn session_jsonl_by_id(
 ///
 /// `projects_root` is the seam that lets a sandboxed Run's transcripts be read
 /// from its staged home while it is live (#408): the caller resolves it via
-/// [`crate::sandbox_run::transcripts_root`] (staging for a live sandboxed Run,
+/// `pdo_sandbox::adapters::staging::stores::transcripts_root` (staging for a live sandboxed Run,
 /// `~/.claude/projects/` otherwise). The cwd encoding stays here, the single
 /// source of truth (#373) — the seam only swaps the base root.
 pub fn find_session_jsonl(projects_root: &Path, working_dir: &Path) -> Option<PathBuf> {

@@ -17,8 +17,11 @@ use std::path::PathBuf;
 use anyhow::Context;
 use pdo_harness::adapters::binary_path::{binary_available, harness_probe_path};
 use pdo_harness::agent_choice;
+use pdo_session::domain::launch::{SessionTail, SCRIPT_TIMEOUT_SECS};
+use pdo_session::domain::names::node_session_name;
 use tracing::{error, info, warn};
 
+use crate::session_ports::SandboxExec;
 use crate::worktrees::{
     ensure_sub_worktree, reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path,
 };
@@ -26,8 +29,7 @@ use crate::{
     admission, agent_profile, append_event_with, count_global_live_sessions_excluding, event_log,
     input_resolution, merge_action, panic_payload_message, pipeline, prompt_augmenter,
     reload_run_state_with, stored_autocomplete_turn_end, stored_default_harness,
-    stored_default_harness_models, stored_session_cap, tmux_session_manager, transition_guard,
-    AppState,
+    stored_default_harness_models, stored_session_cap, transition_guard, AppState,
 };
 
 pub(crate) struct SpawnContext<'a> {
@@ -57,6 +59,7 @@ pub(crate) struct SpawnDeps<'a> {
     pub(crate) admission_lock: &'a tokio::sync::Mutex<()>,
     pub(crate) panic_on_spawn: &'a std::sync::atomic::AtomicBool,
     pub(crate) port: u16,
+    pub(crate) tmux: &'a dyn pdo_session::application::ports::Tmux,
     pub(crate) tmux_cmd_override: Option<&'a str>,
     /// Per-daemon `docker` binary override for the sandbox wiring (#407), `Copy`
     /// like the rest of the bundle. `None` in production (real `docker`).
@@ -81,6 +84,7 @@ impl<'a> SpawnDeps<'a> {
             admission_lock: &state.admission_lock,
             panic_on_spawn: &state.panic_on_spawn,
             port: state.port,
+            tmux: state.tmux(),
             tmux_cmd_override: state.tmux_cmd_override.as_deref(),
             docker_cmd_override: state.docker_cmd_override.as_deref(),
             home_override: state.sandbox_home_override.as_deref(),
@@ -91,13 +95,13 @@ impl<'a> SpawnDeps<'a> {
 
 /// The host home root the disk descriptor tier (#553) is read under: the per-daemon
 /// override when set (the layer-3 seam), else the real `$HOME`. Mirrors
-/// `sandbox_run::sandbox_home_roots` exactly, but reachable from the narrow
+/// `run_sandbox::sandbox_home_roots` exactly, but reachable from the narrow
 /// [`SpawnDeps`] bundle (which carries no `AppState`). An unresolved `$HOME`
 /// degrades to an empty root, i.e. the embedded floor — never a spawn failure.
 fn spawn_home_root(deps: &SpawnDeps<'_>) -> PathBuf {
     deps.home_override
         .map(PathBuf::from)
-        .or_else(|| crate::sandbox_staging::default_roots_from_env().map(|(home, _)| home))
+        .or_else(|| pdo_sandbox::adapters::host::default_roots_from_env().map(|(home, _)| home))
         .unwrap_or_default()
 }
 
@@ -357,9 +361,8 @@ pub(crate) async fn spawn_node(
     // probe before either creates its session.
     if let Some(state) = projected {
         if transition_guard::live_iteration(state, &node.id) == Some(iter) {
-            let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
-            let socket = tmux_session_manager::tmux_socket_name(deps.port);
-            if tmux_session_manager::session_exists(&socket, &session_name) {
+            let session_name = node_session_name(run_id, &node.id, iter);
+            if deps.tmux.session_exists(&session_name) {
                 let reason = format!(
                     "node {} iter {iter} already has a live session {session_name}: \
                      duplicate spawn is a benign no-op (ADR-0050 §2)",
@@ -715,16 +718,11 @@ pub(crate) async fn spawn_node(
             // failed) is not an absence: warn and let the spawn fail on its own terms.
             let docker_bin = deps.docker_cmd_override.unwrap_or("docker").to_string();
             let (rid, binary) = (run_id.to_string(), d.binary.clone());
-            let uid = crate::sandbox_container::host_uid();
-            let gid = crate::sandbox_container::host_gid();
+            let uid = pdo_sandbox::adapters::host::host_uid();
+            let gid = pdo_sandbox::adapters::host::host_gid();
             let probe = tokio::task::spawn_blocking(move || {
-                crate::sandbox_container::binary_present_in_container(
-                    &docker_bin,
-                    &rid,
-                    uid,
-                    gid,
-                    &binary,
-                )
+                pdo_sandbox::adapters::local_runtime(Some(&docker_bin))
+                    .binary_present(&rid, uid, gid, &binary)
             })
             .await
             .unwrap_or_else(|je| Err(anyhow::anyhow!("binary probe panicked: {je}")));
@@ -766,7 +764,7 @@ pub(crate) async fn spawn_node(
             // `repo_root`, the common ancestor of every worktree (claude's fixup).
             let home_root = spawn_home_root(&deps);
             let sandbox_root = home_root.join(".pdo").join("sandbox");
-            match crate::sandbox_staging::fill_staging_set(
+            match pdo_sandbox::adapters::staging::fill_staging_set(
                 &home_root,
                 &sandbox_root,
                 run_id,
@@ -1148,7 +1146,7 @@ pub(crate) async fn spawn_node(
             // `PDO_DAEMON_URL` — `run_sandboxed` is already projected above for the
             // spawn precondition. Defensive here: no node preamble consumes
             // `daemon_url` yet (see the note in `node_primitives::start_node`).
-            daemon_url: &crate::sandbox_container::daemon_url(deps.port, run_sandboxed),
+            daemon_url: &pdo_sandbox::domain::container::daemon_url(deps.port, run_sandboxed),
             foreach_context,
             source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
             // #654: the same section, from the other isolation. This site only
@@ -1315,11 +1313,11 @@ pub(crate) async fn spawn_node(
         }
     };
 
-    let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
+    let session_name = node_session_name(run_id, &node.id, iter);
     let is_script = node.node_type == pipeline::NodeType::Script;
     let tail = if is_script {
-        tmux_session_manager::SessionTail::Script {
-            timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
+        SessionTail::Script {
+            timeout_secs: SCRIPT_TIMEOUT_SECS,
             env: &script_env,
         }
     } else {
@@ -1329,7 +1327,7 @@ pub(crate) async fn spawn_node(
         let descriptor = harness_descriptor
             .as_ref()
             .expect("a non-script node resolved a harness descriptor");
-        tmux_session_manager::SessionTail::Agent {
+        SessionTail::Agent {
             harness: descriptor,
             model: resolved_model.as_deref(),
             effort: resolved_effort.as_deref(),
@@ -1343,16 +1341,15 @@ pub(crate) async fn spawn_node(
     } else {
         &full_prompt
     };
-    // #407: wrap the tail in `docker exec … pdo-sbx-<run>` when sandboxed. The
-    // marker MUST equal the session name (the kill path scans `/proc` for it), and
-    // the workdir is the node's own working dir.
-    let sandbox_wrap = run_sandboxed.then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: deps.docker_cmd_override.unwrap_or("docker"),
-        uid: crate::sandbox_container::host_uid(),
-        gid: crate::sandbox_container::host_gid(),
-        marker: &session_name,
-        workdir: &working_dir,
-        set_env: &set_env,
+    // #407: when sandboxed, the tail runs in `docker exec … pdo-sbx-<run>`.
+    let sandbox = run_sandboxed.then(|| {
+        SandboxExec::new(
+            deps.docker_cmd_override,
+            run_id,
+            &session_name,
+            &working_dir,
+            &set_env,
+        )
     });
     // #433 / ADR-0043: arm the turn-end `Stop` hook only when the operator has
     // opted into turn-end auto-completion (the SAME setting as the daemon sweep,
@@ -1369,7 +1366,8 @@ pub(crate) async fn spawn_node(
             warn_turn_end_unsupported_once(run_id, &r.harness);
         }
     }
-    if let Err(e) = tmux_session_manager::spawn(
+    if let Err(e) = pdo_session::application::launch::spawn(
+        deps.tmux,
         &session_name,
         spawn_prompt,
         &working_dir,
@@ -1379,7 +1377,7 @@ pub(crate) async fn spawn_node(
         deps.port,
         deps.tmux_cmd_override,
         tail,
-        sandbox_wrap.as_ref(),
+        sandbox.as_ref().map(SandboxExec::wrap).as_ref(),
         inject_hook,
     ) {
         // #785 / ADR-0050 §2: `duplicate session` while the session of this very
@@ -1393,17 +1391,14 @@ pub(crate) async fn spawn_node(
         // live row rather than opening a phantom one. Nothing is reaped either —
         // the sub-worktree, if any, is the winner's.
         let msg = format!("{e:#}");
-        if msg.contains("duplicate session") {
-            let socket = tmux_session_manager::tmux_socket_name(deps.port);
-            if tmux_session_manager::session_exists(&socket, &session_name) {
-                let reason = format!(
-                    "node {} iter {iter}: tmux reported duplicate session {session_name} \
-                     and it is alive — losing spawn is a benign no-op (ADR-0050 §2)",
-                    node.id
-                );
-                warn!("Run {run_id}: {reason}");
-                return SpawnOutcome::Refused { reason };
-            }
+        if msg.contains("duplicate session") && deps.tmux.session_exists(&session_name) {
+            let reason = format!(
+                "node {} iter {iter}: tmux reported duplicate session {session_name} \
+                 and it is alive — losing spawn is a benign no-op (ADR-0050 §2)",
+                node.id
+            );
+            warn!("Run {run_id}: {reason}");
+            return SpawnOutcome::Refused { reason };
         }
         // #508: the tmux spawn itself failed *after* `NodeStarted` is durable. It
         // used to be swallowed (`error!` + fall through), leaving the node

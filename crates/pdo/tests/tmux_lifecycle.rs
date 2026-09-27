@@ -4,7 +4,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::common::TestDaemon;
-use pdo_daemon::tmux_session_manager;
 
 /// Tests in this file mutate process-wide env vars (PDO_REAPER_*_SECS) and assert
 /// on timing-sensitive reaper behaviour. They MUST run serially or one test will
@@ -174,7 +173,7 @@ async fn completed_node_session_is_reaped_on_terminal_transition() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -334,14 +333,14 @@ async fn dead_session_respawn_via_pane_endpoint() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
         "session should appear after POST /runs"
     );
 
-    tmux_session_manager::kill(&socket, &session);
+    crate::common::tmux(&socket).kill(&session);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
         !tmux_has_session(&socket, &session),
@@ -367,7 +366,7 @@ async fn dead_session_respawn_via_pane_endpoint() {
         "session should be re-spawned after /pane request"
     );
 
-    tmux_session_manager::kill(&socket, &session);
+    crate::common::tmux(&socket).kill(&session);
     std::env::remove_var(pdo_kernel::env::REAPER_TTL_SECS_ENV);
     std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
 }
@@ -534,7 +533,7 @@ async fn live_node_session_survives_an_immediate_sweep_tick() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
 
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
@@ -558,7 +557,7 @@ async fn live_node_session_survives_an_immediate_sweep_tick() {
         "no absence verdict may be reached in steady state, got {gauge}"
     );
 
-    tmux_session_manager::kill(&socket, &session);
+    crate::common::tmux(&socket).kill(&session);
     std::env::remove_var(pdo_kernel::env::REAPER_TTL_SECS_ENV);
     std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
 }
@@ -597,7 +596,7 @@ async fn an_idle_sweep_does_not_reset_the_kill_tally() {
     // would be asserting the OS's port allocation.
     let baseline = settle_reaper(&daemon).await["killed"].as_i64().unwrap();
 
-    let orphan = tmux_session_manager::manager_session_name("20200101-000000-deadbee");
+    let orphan = pdo_session::domain::names::manager_session_name("20200101-000000-deadbee");
     create_fake_tmux_session(&socket, &orphan);
     daemon.run_orphan_sweep_tick().await;
     assert!(
@@ -674,9 +673,9 @@ async fn genuine_orphans_are_still_reaped_and_counted() {
     // A syntactically valid run_id that exists in no event log, on all four arms.
     let ghost = "20200101-000000-deadbee";
     let orphans = [
-        tmux_session_manager::node_session_name(ghost, "zzTESTzz", 1),
-        tmux_session_manager::manager_session_name(ghost),
-        tmux_session_manager::shell_session_name(ghost),
+        pdo_session::domain::names::node_session_name(ghost, "zzTESTzz", 1),
+        pdo_session::domain::names::manager_session_name(ghost),
+        pdo_session::domain::names::shell_session_name(ghost),
         "pdo-ceci-nest-pas-un-nom".to_string(),
     ];
     for name in &orphans {
@@ -755,7 +754,7 @@ async fn force_spawn_reserves_before_it_spawns() {
     assert!(
         wait_for_session(
             &socket,
-            &tmux_session_manager::node_session_name(&run_id, "worker", 1),
+            &pdo_session::domain::names::node_session_name(&run_id, "worker", 1),
             Duration::from_secs(5)
         )
         .await,
@@ -773,7 +772,7 @@ async fn force_spawn_reserves_before_it_spawns() {
         .unwrap();
     assert_eq!(resp.status(), 200, "Start should be accepted");
 
-    let session = tmux_session_manager::node_session_name(&run_id, "second", 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, "second", 1);
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
         "Start should spawn the session"
@@ -791,11 +790,10 @@ async fn force_spawn_reserves_before_it_spawns() {
         "#485 REGRESSION: the sweep killed a force-spawned session"
     );
 
-    tmux_session_manager::kill(&socket, &session);
-    tmux_session_manager::kill(
-        &socket,
-        &tmux_session_manager::node_session_name(&run_id, "worker", 1),
-    );
+    crate::common::tmux(&socket).kill(&session);
+    crate::common::tmux(&socket).kill(&pdo_session::domain::names::node_session_name(
+        &run_id, "worker", 1,
+    ));
     std::env::remove_var(pdo_kernel::env::REAPER_TTL_SECS_ENV);
     std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
 }
@@ -825,7 +823,7 @@ async fn duplicate_session_loser_is_a_benign_no_op() {
     let daemon = TestDaemon::spawn(seed_two_node).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run_of(&daemon, TWO_NODE_PIPELINE).await;
-    let worker = tmux_session_manager::node_session_name(&run_id, "worker", 1);
+    let worker = pdo_session::domain::names::node_session_name(&run_id, "worker", 1);
     assert!(
         wait_for_session(&socket, &worker, Duration::from_secs(5)).await,
         "pre-condition: the entry node should be running"
@@ -835,7 +833,7 @@ async fn duplicate_session_loser_is_a_benign_no_op() {
     // `second` iter 1 will claim. Its `NodeStarted` is not on the log yet, so the
     // pre-`NodeStarted` probe cannot catch this — it exercises the post-failure
     // `duplicate session` branch, the residual-race net.
-    let second = tmux_session_manager::node_session_name(&run_id, "second", 1);
+    let second = pdo_session::domain::names::node_session_name(&run_id, "second", 1);
     create_fake_tmux_session(&socket, &second);
     assert!(
         tmux_has_session(&socket, &second),
@@ -904,8 +902,8 @@ async fn duplicate_session_loser_is_a_benign_no_op() {
     );
     assert_eq!(iterations[0]["status"], "running");
 
-    tmux_session_manager::kill(&socket, &second);
-    tmux_session_manager::kill(&socket, &worker);
+    crate::common::tmux(&socket).kill(&second);
+    crate::common::tmux(&socket).kill(&worker);
     std::env::remove_var(pdo_kernel::env::REAPER_TTL_SECS_ENV);
     std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
 }
@@ -932,7 +930,7 @@ async fn retry_reserves_before_it_spawns() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
     let run_id = create_run(&daemon).await;
-    let iter1 = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let iter1 = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(
         wait_for_session(&socket, &iter1, Duration::from_secs(5)).await,
         "pre-condition: iter 1 should be running"
@@ -948,7 +946,7 @@ async fn retry_reserves_before_it_spawns() {
         .unwrap();
     assert_eq!(resp.status(), 200, "Retry should be accepted");
 
-    let iter2 = tmux_session_manager::node_session_name(&run_id, NODE_ID, 2);
+    let iter2 = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 2);
     assert!(
         wait_for_session(&socket, &iter2, Duration::from_secs(5)).await,
         "Retry should spawn iter 2"
@@ -967,7 +965,7 @@ async fn retry_reserves_before_it_spawns() {
         "#485 REGRESSION: the sweep killed a retried session"
     );
 
-    tmux_session_manager::kill(&socket, &iter2);
+    crate::common::tmux(&socket).kill(&iter2);
     std::env::remove_var(pdo_kernel::env::REAPER_TTL_SECS_ENV);
     std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
 }

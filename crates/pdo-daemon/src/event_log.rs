@@ -323,33 +323,9 @@ impl RunStatus {
     }
 }
 
-/// How a Run is isolated (#403 / #407 / #432). A **per-Run, immutable** property
-/// carried on `RunStarted`, projected once into [`RunState::sandbox`], never mutated
-/// for the Run's whole life — a resumed session matches its transcript by working-dir
-/// path, so flipping the mode mid-life would break `claude --continue`.
-///
-/// `full` and `minimal` are *virtual defaults* (no DB row until edited), so they keep
-/// round-tripping byte-identically through every historical payload.
-///
-/// The wire form is a **bare string**: `off`, or the profile name verbatim. Serde is
-/// hand-written for exactly that reason — `untagged` would emit `null` for the unit
-/// variant, and `#[serde(from = "String")]` would demand an infallible conversion
-/// while a blank token must fail.
-///
-/// [`SandboxMode::parse`] is purely **syntactic**: `None` means *blank*, not
-/// *unknown*. Whether a profile **exists** is a database question, answered at the
-/// edge (create-run, `PUT /settings`, trigger create/patch) and never here — this
-/// module is pure and its projection runs inside `append_event`.
-/// On the wire it is a plain string (`off` or the profile name), hence the
-/// TypeScript override.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, TS)]
-#[ts(type = "string")]
-pub enum SandboxMode {
-    #[default]
-    Off,
-    /// Canonicalised by [`SandboxMode::parse`]: trimmed, never empty, never `off`.
-    Profile(String),
-}
+/// How a Run is isolated — owned by the sandbox context, carried on `RunStarted` and
+/// projected into [`RunState::sandbox`].
+pub(crate) use pdo_sandbox::domain::mode::SandboxMode;
 
 /// Wire tokens of a dropped two-position switch. Don't remove this mapping: `parse`
 /// accepts any non-blank token as a profile name, so a historical payload carrying
@@ -357,125 +333,6 @@ pub enum SandboxMode {
 /// hard. NOT consulted anywhere the user can still type a value: a stored `copy`
 /// fails loud at the create chokepoint (ADR-0031 §7).
 const LEGACY_SANDBOX_TOKENS: &[&str] = &["copy", "pure"];
-
-impl SandboxMode {
-    /// The default tier (never `None`), surfaced by `GET /settings` and used as the
-    /// precedence floor: an install with no `default_sandbox` set runs `Off`, so the
-    /// legacy host path stays byte-identical (#410). Mirror of [`crate::sandbox_image::ImageSource::DEFAULT`].
-    pub const DEFAULT: SandboxMode = SandboxMode::Off;
-
-    /// The wire token of [`SandboxMode::Off`]. A `const &str` rather than
-    /// `DEFAULT.as_str()` because `as_str` now borrows from `self` (the profile name
-    /// is owned), which no `const fn` can do.
-    pub const OFF_WIRE: &'static str = "off";
-
-    /// Whether this Run runs on the host (the legacy, no-Docker path). The whole
-    /// sandbox wiring is gated on `!is_off()`, so the `off` parcours never touches
-    /// a single new line.
-    pub fn is_off(&self) -> bool {
-        matches!(self, SandboxMode::Off)
-    }
-
-    /// The exact wire form: `off`, or the profile name verbatim. Consumed by
-    /// `build_settings_view` and the enum validators (#410).
-    pub fn as_str(&self) -> &str {
-        match self {
-            SandboxMode::Off => Self::OFF_WIRE,
-            SandboxMode::Profile(name) => name.as_str(),
-        }
-    }
-
-    /// The staging profile this Run uses, or `None` for `off`. The ONE consumer that
-    /// needs the name rather than the off-ness (#432 D2) is the sandbox context
-    /// assembly, which resolves it to a frozen entry list.
-    pub fn profile(&self) -> Option<&str> {
-        match self {
-            SandboxMode::Off => None,
-            SandboxMode::Profile(name) => Some(name.as_str()),
-        }
-    }
-
-    /// Parse the wire form. **Purely syntactic** (#432): `off` (case/whitespace
-    /// tolerant, the three closed tokens of the old enum are gone) yields `Off`, a
-    /// blank string yields `None`, and anything else is a profile name — trimmed but
-    /// otherwise **verbatim**, never lowercased.
-    ///
-    /// The asymmetry with [`crate::sandbox_profile::validate_profile_name`] (which
-    /// rejects an uppercase name outright instead of folding it) is deliberate and
-    /// load-bearing: `off` is a closed token whose spelling nobody owns, while a
-    /// profile name is a user namespace where accepting `Foo` and silently storing
-    /// `foo` would make the UI search a list it does not display. Do not "fix" it.
-    pub fn parse(s: &str) -> Option<SandboxMode> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if trimmed.eq_ignore_ascii_case(Self::OFF_WIRE) {
-            return Some(SandboxMode::Off);
-        }
-        Some(SandboxMode::Profile(trimmed.to_string()))
-    }
-}
-
-impl Serialize for SandboxMode {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for SandboxMode {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(d)?;
-        SandboxMode::parse(&raw).ok_or_else(|| {
-            serde::de::Error::custom(
-                "sandbox must be `off` or the name of a staging profile, not blank",
-            )
-        })
-    }
-}
-
-/// Env var overriding the stored instance default (optional tier). Read ONCE at the
-/// edge (create-run chokepoint + `build_settings_view` disclosure), never in the
-/// resolver core — mirror of [`crate::sandbox_image::IMAGE_SOURCE_ENV`] (#410).
-pub(crate) const DEFAULT_SANDBOX_ENV: &str = "PDO_DEFAULT_SANDBOX";
-
-/// Env tier for the settings disclosure / resolver: `Some(mode)` if a valid
-/// `PDO_DEFAULT_SANDBOX` is set, else `None` (unset/invalid).
-fn env_default_sandbox() -> Option<SandboxMode> {
-    std::env::var(DEFAULT_SANDBOX_ENV)
-        .ok()
-        .as_deref()
-        .and_then(SandboxMode::parse)
-}
-
-/// Instance default, precedence `stored → env → default(Off)`. A stored empty value is
-/// treated as unset. SINGLE source shared by `create_run_inner` AND
-/// `build_settings_view`.
-///
-/// A stored profile name that does not *exist* is deliberately NOT demoted to `off`
-/// here: it wins the tier and the create-run chokepoint 400s on it by name (ADR-0031
-/// §7 — never a silent fallback toward less isolation).
-pub(crate) fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
-    stored
-        .filter(|s| !s.is_empty())
-        .as_deref()
-        .and_then(SandboxMode::parse)
-        .or_else(env_default_sandbox)
-        .unwrap_or(SandboxMode::DEFAULT)
-}
-
-/// Precedence resolver (#410): `explicit → trigger → instance_default` (first `Some`
-/// wins, `instance_default` is the floor). Pure — no `AppState`/DB/Docker in scope;
-/// this is the layer-1 unit the "précédence testée" AC pins. `explicit` and `trigger`
-/// are mutually exclusive in production (a Run has one origin), but the 3-arg form is
-/// the canonical statement of the chain and keeps every arm exercised by the test.
-pub(crate) fn effective_sandbox(
-    explicit: Option<SandboxMode>,
-    trigger: Option<SandboxMode>,
-    instance_default: SandboxMode,
-) -> SandboxMode {
-    explicit.or(trigger).unwrap_or(instance_default)
-}
 
 /// Visibility of a sandboxed Run's one-time image preparation (#410). Additive to
 /// [`RunState`]: `status` is untouched (stays `Running`), so no status consumer is
@@ -1209,7 +1066,7 @@ pub struct RunState {
     ///
     /// The values are on the wire, like they are in SQLite and in `docker inspect`: the
     /// sandbox is not a security boundary and this is not a secret store (ADR-0031 §8). What
-    /// is forbidden is the daemon **log** — see `sandbox_profile::env_names`.
+    /// is forbidden is the daemon **log** — see the sandbox context's `env_names`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sandbox_env: Option<std::collections::BTreeMap<String, String>>,
@@ -1225,7 +1082,7 @@ pub struct RunState {
     ///
     /// `None` means "this Run's profile posed no image source", indistinguishable from "a
     /// pre-#467 daemon created this Run": in both cases the **profile default** decides
-    /// ([`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`]), overridable by two env vars read
+    /// (`DEFAULT_PROFILE_IMAGE` of the sandbox context), overridable by two env vars read
     /// fresh at each prep. That is the one place the freeze is deliberately *not* total, and
     /// it is safe: a daemon's environment does not change under a running Run.
     ///
@@ -1238,7 +1095,7 @@ pub struct RunState {
     /// reader has to accept `String | Object` for ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub sandbox_image: Option<crate::sandbox_image::ProfileImage>,
+    pub sandbox_image: Option<pdo_sandbox::domain::image::ProfileImage>,
     /// The raw `sandbox_image` payload value when the key was **present but unreadable** (#467).
     /// Same role, and same `skip`, as its two twins: the sandbox prep fails LOUD with the
     /// offending value rather than silently starting a container in a *different image* than the
@@ -2014,7 +1871,7 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 match payload.get("sandbox_image") {
                     None => {}
                     Some(raw) => {
-                        match serde_json::from_value::<crate::sandbox_image::ProfileImage>(
+                        match serde_json::from_value::<pdo_sandbox::domain::image::ProfileImage>(
                             raw.clone(),
                         ) {
                             Ok(image) => state.sandbox_image = Some(image),
@@ -3484,127 +3341,6 @@ mod tests {
         }
     }
 
-    fn full() -> SandboxMode {
-        SandboxMode::Profile("full".into())
-    }
-    fn minimal() -> SandboxMode {
-        SandboxMode::Profile("minimal".into())
-    }
-
-    #[test]
-    fn explicit_off_beats_full_default() {
-        // The bug #410 exists to fix: an explicit `off` must survive a `full`/`minimal`
-        // instance default — otherwise the default could never be overridden downward.
-        assert_eq!(
-            effective_sandbox(Some(SandboxMode::Off), None, full()),
-            SandboxMode::Off
-        );
-    }
-
-    #[test]
-    fn explicit_wins_over_trigger_and_default() {
-        assert_eq!(
-            effective_sandbox(Some(minimal()), Some(full()), SandboxMode::Off),
-            minimal()
-        );
-    }
-
-    #[test]
-    fn trigger_used_when_no_explicit() {
-        assert_eq!(
-            effective_sandbox(None, Some(minimal()), SandboxMode::Off),
-            minimal()
-        );
-        // A trigger's explicit `off` also stands over a `full` instance default.
-        assert_eq!(
-            effective_sandbox(None, Some(SandboxMode::Off), full()),
-            SandboxMode::Off
-        );
-    }
-
-    #[test]
-    fn all_none_falls_to_instance_default() {
-        assert_eq!(effective_sandbox(None, None, full()), full());
-        assert_eq!(
-            effective_sandbox(None, None, SandboxMode::DEFAULT),
-            SandboxMode::Off
-        );
-    }
-
-    #[test]
-    fn default_sandbox_with_precedence() {
-        // stored valid wins.
-        assert_eq!(default_sandbox_with(Some("minimal".into())), minimal());
-        assert_eq!(default_sandbox_with(Some("full".into())), full());
-        // empty sentinel → unset → default (Off) (env not set in this harness).
-        assert_eq!(default_sandbox_with(Some(String::new())), SandboxMode::Off);
-        // absent → default.
-        assert_eq!(default_sandbox_with(None), SandboxMode::Off);
-    }
-
-    /// #432, the behaviour change worth pinning: an unrecognised stored token is NO
-    /// LONGER demoted to `off`. It is a PROFILE NAME, it wins the tier, and the
-    /// create-run chokepoint 400s on it by name (ADR-0031 §7 — never a silent fallback
-    /// toward less isolation). `default_sandbox_with` is pure and cannot know whether
-    /// the profile exists; that is the edge's job.
-    #[test]
-    fn a_stored_unknown_name_stays_the_winning_tier() {
-        assert_eq!(
-            default_sandbox_with(Some("full-no-mcp".into())),
-            SandboxMode::Profile("full-no-mcp".into())
-        );
-        // Even the two pre-#426 tokens: they are just names now, and they will fail loud
-        // at launch instead of quietly demoting the whole instance to the host path.
-        assert_eq!(
-            default_sandbox_with(Some("copy".into())),
-            SandboxMode::Profile("copy".into())
-        );
-    }
-
-    #[test]
-    fn sandbox_mode_parse_and_as_str_round_trip() {
-        for mode in [SandboxMode::Off, full(), minimal()] {
-            assert_eq!(SandboxMode::parse(mode.as_str()), Some(mode));
-        }
-        // `off` is case / whitespace tolerant (a closed token nobody owns the spelling of).
-        assert_eq!(SandboxMode::parse("  OFF "), Some(SandboxMode::Off));
-        // A profile name is trimmed but NEVER lowercased — see the asymmetry documented on
-        // `parse` and on `sandbox_profile::validate_profile_name`.
-        assert_eq!(
-            SandboxMode::parse("  Full-No-MCP "),
-            Some(SandboxMode::Profile("Full-No-MCP".into()))
-        );
-        // Blank is the ONLY `None`: `parse` is syntactic since #432, existence is a
-        // database question answered at the edge.
-        assert_eq!(SandboxMode::parse(""), None);
-        assert_eq!(SandboxMode::parse("   "), None);
-        assert_eq!(
-            SandboxMode::parse("nope"),
-            Some(SandboxMode::Profile("nope".into()))
-        );
-    }
-
-    /// The wire form is a BARE STRING, byte-identical to the pre-#432 enum for the two
-    /// names that existed. Every historical `RunStarted` payload must round-trip
-    /// unchanged, which is what makes this a type change and not a data migration.
-    #[test]
-    fn sandbox_mode_serialises_as_a_bare_string() {
-        for wire in ["off", "full", "minimal", "full-no-mcp"] {
-            let parsed = SandboxMode::parse(wire).unwrap();
-            let json = serde_json::to_value(&parsed).unwrap();
-            assert_eq!(json, serde_json::json!(wire), "{wire} must round-trip");
-            assert_eq!(
-                serde_json::from_value::<SandboxMode>(json).unwrap(),
-                parsed,
-                "{wire} must deserialise back"
-            );
-        }
-        // A blank / non-string value fails deserialisation rather than becoming `Off`.
-        assert!(serde_json::from_value::<SandboxMode>(serde_json::json!("")).is_err());
-        assert!(serde_json::from_value::<SandboxMode>(serde_json::json!(null)).is_err());
-        assert!(serde_json::from_value::<SandboxMode>(serde_json::json!(3)).is_err());
-    }
-
     /// #426: a pre-rename `copy`/`pure` in a persisted `RunStarted` degrades to
     /// `Off` — the host path. The degradation is DELIBERATE (no alias, ADR-0031 §1)
     /// but it goes toward LESS isolation, so `apply_run_event` logs it. This test
@@ -3829,13 +3565,13 @@ mod tests {
         for (payload, expected) in [
             (
                 serde_json::json!({ "kind": "registry", "ref": "ghcr.io/acme/agent:1.4" }),
-                crate::sandbox_image::ProfileImage::Registry {
+                pdo_sandbox::domain::image::ProfileImage::Registry {
                     image_ref: "ghcr.io/acme/agent:1.4".to_string(),
                 },
             ),
             (
                 serde_json::json!({ "kind": "dockerfile", "path": "/repo/Dockerfile.chrome-dev" }),
-                crate::sandbox_image::ProfileImage::Dockerfile {
+                pdo_sandbox::domain::image::ProfileImage::Dockerfile {
                     path: "/repo/Dockerfile.chrome-dev".to_string(),
                 },
             ),
@@ -3947,7 +3683,7 @@ mod tests {
         );
         assert_eq!(
             state.sandbox_image,
-            Some(crate::sandbox_image::ProfileImage::Registry {
+            Some(pdo_sandbox::domain::image::ProfileImage::Registry {
                 image_ref: "ghcr.io/acme/agent:1.4".to_string(),
             }),
             "the frozen source still reads: an unknown sibling key changes nothing"

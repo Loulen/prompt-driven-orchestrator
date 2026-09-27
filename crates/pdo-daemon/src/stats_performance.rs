@@ -141,7 +141,7 @@
 //! path or timing alone (issue: "Une session historique sans identité fiable
 //! n'est jamais attribuée par proximité temporelle ou par chemin").
 
-use crate::sandbox_run::HarnessStores;
+use crate::run_sandbox::HarnessStores;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -1958,7 +1958,7 @@ async fn compute_performance(
     .map_err(|e| PerformanceError::Db(e.to_string()))?;
 
     let (home_root, sandbox_root) =
-        crate::sandbox_run::sandbox_home_roots(state).unwrap_or_else(|_| {
+        crate::run_sandbox::sandbox_home_roots(state).unwrap_or_else(|_| {
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let sandbox = home.join(".pdo").join("sandbox");
             (home, sandbox)
@@ -1993,7 +1993,7 @@ async fn compute_performance(
                 !t.is_empty() && !t.eq_ignore_ascii_case(crate::event_log::SandboxMode::OFF_WIRE)
             });
         let claude_root =
-            crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
+            crate::run_sandbox::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
         // #708: pi's store follows the same sandbox-aware seam as the Claude root.
         let stores = HarnessStores::for_run(sandboxed, &run_id, &home_root, &sandbox_root);
 

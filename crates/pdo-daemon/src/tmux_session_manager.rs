@@ -13,6 +13,7 @@ use pdo_kernel::env::{
     DEFAULT_HARNESS_ENV, DEFAULT_MODEL_ENV, LIBASSIST_IDLE_TTL_SECS_ENV, REAPER_INTERVAL_SECS_ENV,
     REAPER_TTL_SECS_ENV,
 };
+use pdo_sandbox::domain::container::{daemon_url, exec_prefix_with_env};
 use tracing::{info, warn};
 
 /// Compute the per-daemon tmux socket name (`tmux -L <name>`) for a daemon
@@ -191,10 +192,9 @@ pub struct SandboxWrap<'a> {
     pub set_env: &'a [(String, String)],
 }
 
-/// Splice the container-exec prefix (from [`crate::sandbox_container`]) around a
-/// base tail: `docker <exec argv incl. -e K=V> pdo-sbx-<run> bash -lc '<tail>'`.
-/// The base tail is single-quoted as one `bash -lc` argument; `wrap_with_env`
-/// then single-quotes the whole thing again for its outer `bash -c` (the same
+/// Splice the sandbox's container-exec prefix around a base tail: `docker <exec argv incl.
+/// -e K=V> pdo-sbx-<run> bash -lc '<tail>'`. The base tail is single-quoted as one `bash -lc`
+/// argument; `wrap_with_env` single-quotes the whole again for its outer `bash -c` (the same
 /// double-quoting the `--model` path already relies on).
 fn wrap_tail_in_docker_exec(
     run_id: &str,
@@ -211,7 +211,7 @@ fn wrap_tail_in_docker_exec(
         .chain(extra_env.iter().cloned())
         .collect();
     let mut argv = vec![wrap.docker_bin.to_string()];
-    argv.extend(crate::sandbox_container::exec_prefix_with_env(
+    argv.extend(exec_prefix_with_env(
         run_id,
         wrap.uid,
         wrap.gid,
@@ -324,7 +324,7 @@ fn wrap_with_env(
         // posted the container-side value, which the exec deliberately never
         // clobbers (ADR-0030 §5). Routed through the resolver anyway so the literal
         // lives in exactly one module.
-        daemon_url_q = sh_single_quote(&crate::sandbox_container::daemon_url(daemon_port, false)),
+        daemon_url_q = sh_single_quote(&daemon_url(daemon_port, false)),
     );
 
     format!("exec bash -c {}", sh_single_quote(&inner))

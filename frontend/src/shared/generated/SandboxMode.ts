@@ -2,7 +2,7 @@
 
 /**
  * How a Run is isolated (#403 / #407 / #432). A **per-Run, immutable** property
- * carried on `RunStarted`, projected once into [`RunState::sandbox`], never mutated
+ * carried on `RunStarted`, projected once into the Run's state (`RunState::sandbox`), never mutated
  * for the Run's whole life — a resumed session matches its transcript by working-dir
  * path, so flipping the mode mid-life would break `claude --continue`.
  *

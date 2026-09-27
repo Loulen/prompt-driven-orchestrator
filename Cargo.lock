@@ -2063,6 +2063,7 @@ dependencies = [
  "oxc_span",
  "pdo-harness",
  "pdo-kernel",
+ "pdo-sandbox",
  "portable-pty",
  "pretty_assertions",
  "reqwest",
@@ -2083,6 +2084,28 @@ dependencies = [
  "ts-rs",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "pdo-sandbox"
+version = "1.111.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "libc",
+ "pdo-extension-api",
+ "pdo-harness",
+ "pdo-kernel",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "ts-rs",
 ]
 
 [[package]]

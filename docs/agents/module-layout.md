@@ -74,7 +74,19 @@ Contexts already out of the legacy crate:
   harness's own artefacts (transcripts, turn state, reported cost, context peak, steering)
   live in its `domain/`; cost, stale detection, staging, tmux and stats read them from
   there. `RUST_LOG=pdo_daemon::harness_registry` becomes
-  `RUST_LOG=pdo_harness::application::load_registry`. While it still exists,
+  `RUST_LOG=pdo_harness::application::load_registry`.
+- `sandbox` (#921): `crates/pdo-sandbox`, `frontend/src/sandbox/`. Docker sits behind the
+  `DockerCli` port (`adapters/docker_cli.rs` runs the real binary; its stage-3 tests run
+  against a real daemon when one answers, and say they skipped otherwise). Editing and
+  deleting a staging profile are use cases that ask the Autorisation d'opération; preparing,
+  cleaning up and killing inside a Run's sandbox are Run transitions and never do. The
+  legacy `run_sandbox.rs` is the Run's side (it builds a Run's sandbox context from its
+  state) and leaves with the run context. `RUST_LOG=pdo_daemon::sandbox_staging` becomes
+  `RUST_LOG=pdo_sandbox::adapters::staging`, `pdo_daemon::sandbox_container` becomes
+  `pdo_sandbox::application::container`, `pdo_daemon::sandbox_run` becomes
+  `pdo_sandbox::application::prepare` (and `pdo_daemon::run_sandbox` for the Run's side).
+
+While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package
 `pdo-daemon`: dist names the installer after it), which exposes `serve(config, extensions)` and

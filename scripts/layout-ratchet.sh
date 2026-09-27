@@ -86,9 +86,13 @@ cd "$(git rev-parse --show-toplevel)"
 # frontend/src/components: 199 and crates/pdo-daemon/src: 81 (#919) ratchet down: the
 #   harness context moved out — HarnessSelect, ModelPicker, EffortPicker and their tests to
 #   frontend/src/harness/components/, the twelve harness modules to crates/pdo-harness.
+# frontend/src/components: 198 and crates/pdo-daemon/src: 77 (#921) ratchet down: the
+#   sandbox context moved out — StagingProfilesPanel to frontend/src/sandbox/components/, the
+#   five sandbox modules to crates/pdo-sandbox; run_sandbox.rs keeps the Run's side of it
+#   (building a Run's sandbox context from its state) until the run context moves.
 BASELINES='
-frontend/src/components 199
-crates/pdo-daemon/src 81
+frontend/src/components 198
+crates/pdo-daemon/src 77
 '
 
 fail=0

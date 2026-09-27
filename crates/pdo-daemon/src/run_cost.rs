@@ -28,7 +28,7 @@
 //! call site added would silently ignore both disk tiers, uncatchable by test.
 //!
 //! The `projects_root` is injected by the caller (the #408 observability seam,
-//! [`crate::sandbox_run::transcripts_root`]): `~/.claude/projects/` for an
+//! [`pdo_sandbox::adapters::staging::stores::transcripts_root`]): `~/.claude/projects/` for an
 //! `off`/archived run, the staged home while a sandboxed run is live. This
 //! module never reads `$HOME` — one root in, path-math + `std::fs` out. The
 //! host-home stores of the reported-cost harnesses travel together as a
@@ -53,8 +53,8 @@
 
 use crate::event_log::{CostForm, CostStat, HarnessCost};
 use crate::price_table::{strip_date_suffix, PriceTable};
-use crate::sandbox_run::HarnessStores;
 use pdo_harness::claude_transcript::cc_project_dirname;
+use pdo_sandbox::adapters::staging::stores::HarnessStores;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -1903,7 +1903,7 @@ mod tests {
         // and names the harness.
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         std::fs::create_dir_all(&projects).unwrap();
         let repo = tempfile::tempdir().unwrap();
         let events = vec![node_started("n", Some("opencode"))];
@@ -1971,7 +1971,7 @@ mod tests {
         // dollars, now ventilated as a single `claude` derived slice.
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "claude-run";
         seed_transcript(
@@ -2002,7 +2002,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "mixed-run";
         seed_transcript(
@@ -2051,7 +2051,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "trio-run";
         seed_transcript(
@@ -2099,7 +2099,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "trio-run-cached";
         seed_transcript(
@@ -2136,7 +2136,7 @@ mod tests {
         let projects = home.path().join(".claude").join("projects");
         std::fs::create_dir_all(&projects).unwrap();
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         seed_copilot_journal(&copilot, "sid-live", 100_000_000_000); // $1.00
         let events = vec![node_started_sid("p", "copilot", "sid-live")];
@@ -2166,7 +2166,7 @@ mod tests {
         let projects = home.path().join(".claude").join("projects");
         std::fs::create_dir_all(&projects).unwrap();
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         seed_copilot_journal(&copilot, "sid-mine", 100_000_000_000); // $1.00, this run
         seed_copilot_journal(&copilot, "sid-stranger", 900_000_000_000); // $9.00, NOT this run
@@ -2201,7 +2201,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(&claude).unwrap();
 
@@ -2257,7 +2257,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "resurrected-pane";
 
@@ -2318,7 +2318,7 @@ mod tests {
     fn legacy_starts_without_session_identity_remain_distinct() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let start = Event {
             id: None,
@@ -2352,7 +2352,7 @@ mod tests {
     fn claude_adapter_attaches_subagent_cost_to_its_parent_execution() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "r";
         let working_dir = repo
@@ -2413,7 +2413,7 @@ mod tests {
     fn claude_fold_deduplicates_replayed_parent_and_subagent_messages_run_wide() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "dedup";
         let working_dir = crate::worktree_ops::sub_worktree_path(repo.path(), run_id, "worker", 1);
@@ -2457,7 +2457,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         seed_copilot_journal(&copilot, "known", 100_000_000_000);
         let events = vec![
@@ -2479,7 +2479,7 @@ mod tests {
     fn claude_cost_outside_node_sessions_is_infrastructure() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "infra-run";
         let worktree = repo.path().join(".pdo/runs").join(run_id).join("worktree");
@@ -2530,7 +2530,7 @@ mod tests {
     fn non_claude_infrastructure_keeps_run_harness_and_unknown_session_cost() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let event = |kind| Event {
             id: None,
@@ -2573,7 +2573,7 @@ mod tests {
     fn legacy_agent_is_claude_script_is_excluded_and_ambiguous_cost_is_unassigned() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "legacy-run";
         let worktree = repo.path().join(".pdo/runs").join(run_id).join("worktree");
@@ -2652,7 +2652,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "mixed";
 
@@ -2722,7 +2722,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let journal = copilot.join("memo-session").join("events.jsonl");
         std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
@@ -2803,7 +2803,7 @@ mod tests {
     fn a_two_model_transcript_ventilates_cost_and_executions_per_model() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "two-models";
         // opus-4-8 5/25 and sonnet-5 3/15: two observed models in one session.
@@ -2856,7 +2856,7 @@ mod tests {
     fn an_unpriced_observed_model_is_its_own_marked_slice() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "unpriced-slice";
         seed_session_transcript(
@@ -2888,7 +2888,7 @@ mod tests {
     fn a_mute_source_falls_back_to_the_requested_model_and_marks_it() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "mute-source";
         // No transcript for the claude node → the startup event's id in fallback,
@@ -2919,7 +2919,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         seed_copilot_journal(&copilot, "s1", 100_000_000_000);
         let events = vec![Event {
@@ -2977,7 +2977,7 @@ mod tests {
     fn a_pi_session_ventilates_its_reported_cost_by_observed_model_provider_and_effort() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "pi-observed";
         // Two priced messages on the same model/level, then a level change and a
@@ -3041,7 +3041,7 @@ mod tests {
         // dollars unavailable, but the models are still observed (#736).
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "pi-unpriced";
         seed_pi_session(
@@ -3078,7 +3078,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let dir = copilot.join("s1");
         std::fs::create_dir_all(&dir).unwrap();
@@ -3141,7 +3141,7 @@ mod tests {
     fn a_harness_without_cost_source_has_no_model_slices() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         // opencode pinned to a model: absent from « By model », never a
         // "default of X" bucket (#735 AC).
@@ -3178,7 +3178,7 @@ mod tests {
     fn unattributable_leftover_ventilates_by_observed_model_with_no_effort() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "orphan-models";
         // A transcript with no attributable node (no session id, non-isolated):

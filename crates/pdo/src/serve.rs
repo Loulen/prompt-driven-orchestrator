@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::Router;
-use pdo_daemon::{DaemonConfig, DaemonHandle, RouterLayer};
+use pdo_daemon::{DaemonConfig, DaemonHandle, ExtensionHostHandle, RouterLayer};
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::{ExtensionHost, Extensions};
 
@@ -96,7 +96,9 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
         mut daemon,
         inner_layer,
     } = config;
-    daemon.router_layer = Some(composed_router_layer(extensions, inner_layer));
+    let host: Arc<dyn ExtensionHost> = Arc::new(Extensions::new(extensions));
+    daemon.extension_host = ExtensionHostHandle(host.clone());
+    daemon.router_layer = Some(identify_layer(host, inner_layer));
     let handle = pdo_daemon::serve_with_config(addr, repo_root, daemon).await?;
     Ok(Daemon { handle })
 }
@@ -109,7 +111,11 @@ pub fn composed_router_layer(
     extensions: Vec<Box<dyn Extension>>,
     inner: Option<RouterLayer>,
 ) -> RouterLayer {
-    let host: Arc<dyn ExtensionHost> = Arc::new(Extensions::new(extensions));
+    identify_layer(Arc::new(Extensions::new(extensions)), inner)
+}
+
+/// `inner` (if any), then `identify` asking `host`, in front of everything.
+fn identify_layer(host: Arc<dyn ExtensionHost>, inner: Option<RouterLayer>) -> RouterLayer {
     RouterLayer::new(move |router| {
         let router = match &inner {
             Some(inner) => inner.apply(router),

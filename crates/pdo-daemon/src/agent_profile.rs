@@ -75,7 +75,7 @@ impl AgentProfile {
 
 /// Why a create/update/delete was refused — named so the HTTP layer can turn
 /// each variant into the right status code and an actionable message, the same
-/// split `sandbox_profile::validate_*` uses (message strings) but as a proper
+/// split the sandbox profile validators uses (message strings) but as a proper
 /// enum here because the caller (delete) also needs to branch on *which* refusal
 /// happened, not just render it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,7 +119,7 @@ impl std::error::Error for AgentProfileError {}
 
 /// Create the `agent_profiles` table if absent and seed the reserved
 /// [`DEFAULT_PROFILE_ID`] row if it is missing. Idempotent — safe on every boot,
-/// same idiom as `sandbox_profile::init` / `project_store::init`.
+/// same idiom as the sandbox profile store's `init` / `project_store::init`.
 pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS agent_profiles (
@@ -361,7 +361,7 @@ pub(crate) async fn update(
 /// Delete a profile. [`DEFAULT_PROFILE_ID`] is refused unconditionally
 /// (ADR-0057 ¶3 / #563 AC10) — checked BEFORE any query, so the reserved
 /// profile is never even looked up. Otherwise **unconditional**, same posture as
-/// `sandbox_profile::delete` (ADR-0031 §7): no referential integrity in the
+/// deleting a sandbox profile (ADR-0031 §7): no referential integrity in the
 /// database, the referents dialog is what informs the confirmation, not a
 /// database-level refusal.
 pub(crate) async fn delete(db: &SqlitePool, id: &str) -> Result<bool, AgentProfileError> {

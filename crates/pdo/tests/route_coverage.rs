@@ -27,8 +27,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The files holding the assembled router (relative to this crate), and the
-/// function that builds it. The router still lives in the legacy crate.
-const ROUTER_SOURCES: &[(&str, &str)] = &[("../pdo-daemon/src/lib.rs", "fn build_router(")];
+/// function that builds each part: the legacy crate's router, and the routes of
+/// each context already extracted from it.
+const ROUTER_SOURCES: &[(&str, &str)] = &[
+    ("../pdo-daemon/src/lib.rs", "fn build_router("),
+    ("../pdo-sandbox/src/adapters/http/mod.rs", "pub fn router("),
+];
 
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
 

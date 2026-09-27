@@ -59,11 +59,7 @@ mod run_advance;
 mod run_command;
 mod run_cost;
 mod run_refs;
-mod sandbox_container;
-mod sandbox_image;
-mod sandbox_profile;
-mod sandbox_run;
-mod sandbox_staging;
+mod run_sandbox;
 #[allow(dead_code)]
 mod scheduler;
 mod scheduler_dispatcher;
@@ -563,7 +559,7 @@ struct AppState {
     /// of an unrelated knob would pay a docker round-trip). The refresh runs under
     /// `spawn_blocking` + a short `timeout`, so a cold Docker daemon never hangs
     /// the `/settings` response.
-    docker_probe_cache: Arc<tokio::sync::Mutex<Option<(Instant, sandbox_image::DockerProbe)>>>,
+    docker_probe_cache: Arc<pdo_sandbox::application::docker_probe::DockerProbeCache>,
     /// Per-harness offered-catalogue cache (ADR-0053 §3), keyed by harness name.
     /// Freshness contract: at most one `--version` re-check per harness per
     /// version window, and a full `--help` re-probe only when that version
@@ -712,7 +708,7 @@ struct CreateRunRequest {
     /// Isolation mode for this Run. Don't collapse to `SandboxMode`: `None` must
     /// stay distinguishable from an explicit `"off"` (omitted defers to the
     /// trigger/instance default; explicit `off` may not be overridden upward) —
-    /// see [`event_log::effective_sandbox`]. `create_run_inner` resolves it once
+    /// see [`pdo_sandbox::domain::mode::effective_sandbox`]. `create_run_inner` resolves it once
     /// against the fresh instance default.
     #[serde(default)]
     sandbox: Option<event_log::SandboxMode>,
@@ -3225,6 +3221,27 @@ pub struct DaemonConfig {
     /// (`pdo::serve`) puts the `identify` middleware there, at the head of every
     /// request; `None` serves the router as built.
     pub router_layer: Option<RouterLayer>,
+    /// The Autorisation d'opération every use case of an extracted context asks
+    /// before a mutation. The composition root hands in its registered
+    /// extensions; the default has none, and allows everything.
+    pub extension_host: ExtensionHostHandle,
+}
+
+/// The extension host the daemon's use cases ask (see
+/// [`DaemonConfig::extension_host`]).
+#[derive(Clone)]
+pub struct ExtensionHostHandle(pub Arc<dyn pdo_kernel::extension_host::ExtensionHost>);
+
+impl Default for ExtensionHostHandle {
+    fn default() -> Self {
+        Self(Arc::new(pdo_kernel::extension_host::NoExtensions))
+    }
+}
+
+impl std::fmt::Debug for ExtensionHostHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExtensionHostHandle(..)")
+    }
 }
 
 /// A transformation of the daemon's router, applied once at boot (see
@@ -3330,6 +3347,7 @@ impl DaemonConfig {
                 .unwrap_or_default(),
 
             router_layer: None,
+            extension_host: ExtensionHostHandle::default(),
         }
     }
 }
@@ -3462,6 +3480,7 @@ pub async fn serve_with_config(
     let run_update_check_loop = config.run_update_check_loop;
     let nested_daemon = config.nested_daemon;
     let router_layer = config.router_layer.clone();
+    let extension_host = config.extension_host.0.clone();
 
     let state = Arc::new(AppState {
         db,
@@ -3534,7 +3553,8 @@ pub async fn serve_with_config(
         boot_recovery::run_boot_recovery(&state).await;
     }
 
-    let app = build_router(state.clone());
+    // The legacy router, and the routes of the contexts already extracted from it.
+    let app = build_router(state.clone()).merge(run_sandbox::router(&state, extension_host));
     let app = match &router_layer {
         Some(layer) => layer.apply(app),
         None => app,
@@ -4293,13 +4313,13 @@ async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), St
     let Some(name) = mode.profile() else {
         return Ok(()); // `off`
     };
-    match sandbox_profile::exists(db, name).await {
+    match pdo_sandbox::application::profiles::exists(&run_sandbox::profile_store(db), name).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(format!(
             "unknown sandbox profile `{name}`: use `off`, `{}`, `{}`, or a profile you \
              created under Settings → Staging profiles",
-            sandbox_profile::MINIMAL_PROFILE,
-            sandbox_profile::FULL_PROFILE,
+            pdo_sandbox::domain::profile::MINIMAL_PROFILE,
+            pdo_sandbox::domain::profile::FULL_PROFILE,
         )),
         Err(e) => Err(format!("sandbox profile store error: {e}")),
     }
@@ -5480,17 +5500,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/settings/skill-folders/{id}",
             put(update_skill_folder).delete(delete_skill_folder),
         )
-        .route("/settings/sandbox-profiles", get(list_sandbox_profiles))
-        .route(
-            "/settings/sandbox-profiles/{name}",
-            get(get_sandbox_profile)
-                .put(put_sandbox_profile)
-                .delete(delete_sandbox_profile),
-        )
-        .route(
-            "/settings/sandbox-profiles/{name}/referents",
-            get(get_sandbox_profile_referents),
-        )
         // Instance stats cockpit (ADR-0029). `overview` is cheap indexed SQL; `cost`
         // fans the memoized per-run cost over the visible period, so it is fetched
         // lazily, only when the cost tab is shown.
@@ -6310,7 +6319,7 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
 
     // NO seed row: `minimal` and `full` are virtual defaults (ADR-0031 §2), so an
     // untouched install has zero rows here and still resolves both names.
-    sandbox_profile::init(db)
+    pdo_sandbox::adapters::sqlite_profiles::init(db)
         .await
         .context("failed to create sandbox_profiles table")?;
 
@@ -6439,7 +6448,7 @@ pub(crate) async fn append_event(state: &AppState, event: &event_log::Event) -> 
             | event_log::EventKind::RunSkipped
             | event_log::EventKind::RunHalted
     ) {
-        sandbox_run::merge_back_best_effort(state, &event.run_id).await;
+        run_sandbox::merge_back_best_effort(state, &event.run_id).await;
     }
     Ok(())
 }
@@ -10464,10 +10473,10 @@ async fn create_run_inner(
         .ok()
         .and_then(|c| c.default_sandbox);
     let explicit_tier = req.sandbox.is_some();
-    let sandbox = event_log::effective_sandbox(
+    let sandbox = pdo_sandbox::domain::mode::effective_sandbox(
         req.sandbox.clone(),
         None,
-        event_log::default_sandbox_with(stored_default),
+        pdo_sandbox::adapters::env::default_sandbox_with(stored_default),
     );
 
     // #432 (ADR-0031 §6 + §7): resolve the winning tier's staging profile to its entry
@@ -10491,10 +10500,15 @@ async fn create_run_inner(
     // not have its image swapped under it by a profile edit, or two of its nodes land
     // in two different images (ADR-0031 §6/§9).
     let mut sandbox_env: std::collections::BTreeMap<String, String> = Default::default();
-    let mut sandbox_image_src: Option<sandbox_image::ProfileImage> = None;
+    let mut sandbox_image_src: Option<pdo_sandbox::domain::image::ProfileImage> = None;
     let sandbox_entries: Option<Vec<String>> = match sandbox.profile() {
         None => None,
-        Some(name) => match sandbox_profile::resolve(&state.db, name).await {
+        Some(name) => match pdo_sandbox::application::profiles::resolve(
+            &run_sandbox::profile_store(&state.db),
+            name,
+        )
+        .await
+        {
             Ok(Some(resolved)) => {
                 sandbox_env = resolved.env;
                 sandbox_image_src = resolved.image;
@@ -10586,7 +10600,7 @@ async fn create_run_inner(
         }
         // Same asymmetry as `sandbox_env`: an absent key means "the profile posed
         // none", indistinguishable from an older daemon precisely because both resolve
-        // the same way, to `sandbox_profile::DEFAULT_PROFILE_IMAGE`.
+        // the same way, to the sandbox context's `DEFAULT_PROFILE_IMAGE`.
         if let Some(image) = &sandbox_image_src {
             run_payload["sandbox_image"] = serde_json::json!(image);
         }
@@ -10989,7 +11003,7 @@ async fn create_run_inner(
             .await;
             // A vanished/half-projected state → fail loud.
             let ctx = match reload_run_state(&task_state, &task_run_id).await {
-                Some((_, rs)) => match sandbox_run::context_from_state(&task_state, &rs).await {
+                Some((_, rs)) => match run_sandbox::context_from_state(&task_state, &rs).await {
                     Ok(ctx) => ctx,
                     Err(e) => {
                         fail_run_sandbox_prep(
@@ -11013,7 +11027,7 @@ async fn create_run_inner(
             };
             // `ensure_ready` blocks on docker build/probe, so it must run under
             // `spawn_blocking` — which also isolates its panic into a `JoinError`.
-            match tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx)).await {
+            match tokio::task::spawn_blocking(move || ctx.ensure_ready()).await {
                 Ok(Ok(())) => {
                     // The Run may have gone terminal WHILE the prep ran. Emitting
                     // `SandboxPrepReady` and spawning into a dead Run would leave a
@@ -11086,7 +11100,7 @@ pub(crate) async fn mark_sandbox_prep_ready(state: &AppState, run_id: &str) {
 /// Removes the container but deliberately KEEPS the staging: staging is purged by
 /// `cleanup_run` at archive, and destroying it here would also destroy the
 /// transcripts `merge_back` harvests. The in-flight filesystem walk is not
-/// interrupted — `sandbox_staging::prepare` is a sync walk with no cancellation seam.
+/// interrupted — the staging's `prepare` is a sync walk with no cancellation seam.
 async fn abandon_prep_if_run_is_terminal(state: &AppState, run_id: &str) -> bool {
     let Some((_, run_state)) = reload_run_state(state, run_id).await else {
         // No projection at all: the Run was forgotten under the prep. Same verdict —
@@ -11115,7 +11129,9 @@ fn remove_sandbox_container_best_effort(state: &AppState, run_id: &str) {
         .unwrap_or_else(|| "docker".to_string());
     let rid = run_id.to_string();
     tokio::task::spawn_blocking(move || {
-        if let Err(e) = sandbox_container::remove(&docker_bin, &rid) {
+        if let Err(e) =
+            pdo_sandbox::adapters::local_runtime(Some(&docker_bin)).remove_container(&rid)
+        {
             warn!(
                 "Run {rid}: failed to remove the abandoned sandbox container (best-effort): {e:#}"
             );
@@ -11159,7 +11175,7 @@ async fn spawn_manager_session(
     // manager execs into the Run's container, where `localhost` is the container, so a
     // host URL makes every `curl` of its own preamble hit nothing and the manager
     // report the daemon dead.
-    let daemon_url = sandbox_container::daemon_url(state.port, sandboxed);
+    let daemon_url = pdo_sandbox::domain::container::daemon_url(state.port, sandboxed);
 
     let static_prompt = std::fs::read_to_string(
         state
@@ -11220,7 +11236,7 @@ async fn spawn_manager_session(
     let manager_harness_name = manager_combo.harness.clone();
     // Resolve against the DISK TIER, through the same registry the node spawns use,
     // so "this Run runs on X" holds even when X is a user-declared harness.
-    let harness_home_root = sandbox_run::sandbox_home_roots(state)
+    let harness_home_root = run_sandbox::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
     let manager_harness = pdo_harness::adapters::descriptor_file::load(&harness_home_root)
@@ -11240,7 +11256,7 @@ async fn spawn_manager_session(
     let manager_set_env: Vec<(String, String)> = match (sandboxed, run_state.as_ref()) {
         (true, Some(rs)) => {
             let trusted = effective_repo_root(state, rs);
-            sandbox_run::stage_harness_set(state, rs, &manager_harness_name, &trusted)
+            run_sandbox::stage_harness_set(state, rs, &manager_harness_name, &trusted)
                 .unwrap_or_else(|e| {
                     warn!("manager for run {run_id}: staging `{manager_harness_name}` set failed (best-effort): {e:#}");
                     Vec::new()
@@ -11251,8 +11267,8 @@ async fn spawn_manager_session(
     // The manager runs inside the Run's container too when sandboxed.
     let sandbox_wrap = sandboxed.then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
+        uid: pdo_sandbox::adapters::host::host_uid(),
+        gid: pdo_sandbox::adapters::host::host_gid(),
         marker: &session_name,
         workdir: worktree_dir,
         set_env: &manager_set_env,
@@ -11446,52 +11462,20 @@ fn settings_field_bool(
     })
 }
 
-/// TTL of the Docker availability probe cache: long enough that a burst of
-/// `/settings` fetches pays at most one docker round-trip, short enough that a user
-/// who starts Docker mid-session sees `full`/`minimal` un-gray within seconds.
-const DOCKER_PROBE_TTL: Duration = Duration::from_secs(10);
-/// Hard cap on how long the probe may block the `/settings` response: a cold or
-/// wedged Docker daemon must never hang the settings page.
-const DOCKER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Return the cached Docker availability probe, refreshing it under `spawn_blocking`
-/// with a short `timeout` when stale. Never shells out on the runtime thread. The
-/// result is advisory only — the run-advance fail-fast stays the authoritative gate.
-async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
-    let mut guard = state.docker_probe_cache.lock().await;
-    if let Some((at, probe)) = guard.as_ref() {
-        if at.elapsed() < DOCKER_PROBE_TTL {
-            return probe.clone();
-        }
-    }
-    let docker_bin = state
-        .docker_cmd_override
-        .as_deref()
-        .unwrap_or("docker")
-        .to_string();
-    let probe = match tokio::time::timeout(
-        DOCKER_PROBE_TIMEOUT,
-        tokio::task::spawn_blocking(move || sandbox_image::probe_docker(&docker_bin)),
+/// The cached Docker availability probe (advisory: the run-advance fail-fast stays the
+/// authoritative gate).
+async fn docker_probe_cached(state: &AppState) -> pdo_sandbox::domain::image::DockerProbe {
+    pdo_sandbox::application::docker_probe::probe_cached(
+        &state.docker_probe_cache,
+        run_sandbox::runtime(state).docker,
     )
     .await
-    {
-        Ok(Ok(p)) => p,
-        // Timed out or the blocking task panicked/joined-error: treat as unavailable
-        // for this fetch (advisory), and don't cache the transient failure long — a
-        // fresh probe runs next time the TTL check sees an entry we still stamp now.
-        _ => sandbox_image::DockerProbe {
-            available: false,
-            reason: Some(sandbox_image::DOCKER_DAEMON_UNREACHABLE_MSG.to_string()),
-        },
-    };
-    *guard = Some((Instant::now(), probe.clone()));
-    probe
 }
 
 /// Probe every installed harness's catalogue once, populating the cache, so the
 /// first `/settings` fetch answers warm.
 async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
-    let home = sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h);
+    let home = run_sandbox::sandbox_home_roots(state).ok().map(|(h, _)| h);
     let registry = pdo_harness::adapters::descriptor_file::load_or_builtin(home.as_deref());
     pdo_harness::application::harness_offers::warm_catalogues(&state.harness_catalogue, &registry)
         .await;
@@ -11599,13 +11583,14 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // screen: what a sandboxed Run *is* — image, home content, env — belongs to the
     // staging profile.
     let sbx_stored = cfg.default_sandbox.as_deref().filter(|s| !s.is_empty());
-    let sbx_env = event_log::DEFAULT_SANDBOX_ENV;
+    let sbx_env = pdo_sandbox::adapters::env::DEFAULT_SANDBOX_ENV;
     let sbx_env_val = std::env::var(sbx_env)
         .ok()
         .as_deref()
         .and_then(event_log::SandboxMode::parse)
         .map(|m| m.as_str().to_string());
-    let sbx_effective = event_log::default_sandbox_with(cfg.default_sandbox.clone());
+    let sbx_effective =
+        pdo_sandbox::adapters::env::default_sandbox_with(cfg.default_sandbox.clone());
     let sbx_source = if sbx_stored.is_some() {
         "stored"
     } else if sbx_env_val.is_some() {
@@ -11619,14 +11604,18 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // place to surface it is here, as an advisory `reason` beside the value.
     let sbx_reason = match sbx_effective.profile() {
         None => None,
-        Some(name) => match sandbox_profile::exists(db, name).await {
-            Ok(true) => None,
-            Ok(false) => Some(format!(
-                "no staging profile named `{name}` — every Run that falls back to this \
+        Some(name) => {
+            match pdo_sandbox::application::profiles::exists(&run_sandbox::profile_store(db), name)
+                .await
+            {
+                Ok(true) => None,
+                Ok(false) => Some(format!(
+                    "no staging profile named `{name}` — every Run that falls back to this \
                  default will fail at launch (tier: {sbx_source})"
-            )),
-            Err(e) => Some(format!("cannot check staging profile `{name}`: {e}")),
-        },
+                )),
+                Err(e) => Some(format!("cannot check staging profile `{name}`: {e}")),
+            }
+        }
     };
 
     // `effective` comes from the SAME resolver the sweep consumes. Stored is `0`/`1`;
@@ -11755,12 +11744,14 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // paths while a profile entry is RELATIVE to `$HOME`. It MUST honour
     // `sandbox_home_override`, or the layer-3 harness and the daemon disagree about
     // what "under $HOME" means.
-    let profile_names = sandbox_profile::list_names(db).await?;
+    let profile_names = pdo_sandbox::application::profiles::names(&run_sandbox::profile_store(db))
+        .await
+        .map_err(|e| sqlx::Error::Protocol(e.0))?;
     let sandbox_profiles: Vec<serde_json::Value> = profile_names
         .iter()
         .map(|(name, is_virtual)| serde_json::json!({ "name": name, "virtual": is_virtual }))
         .collect();
-    let host_home_path = sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h);
+    let host_home_path = run_sandbox::sandbox_home_roots(state).ok().map(|(h, _)| h);
     let host_home = host_home_path
         .as_ref()
         .map(|h| h.to_string_lossy().into_owned());
@@ -11936,7 +11927,7 @@ fn price_source_url(state: &AppState) -> String {
 /// Returns the *message*, not a `Response`: `Result<_, Response>` trips
 /// `clippy::result_large_err` and CI is `-D warnings`.
 fn price_home_root(state: &AppState) -> Result<PathBuf, String> {
-    sandbox_run::sandbox_home_roots(state)
+    run_sandbox::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .map_err(|e| format!("cannot resolve the home root for the price files: {e}"))
 }
@@ -12131,7 +12122,7 @@ async fn refresh_prices_at_boot(state: &Arc<AppState>) {
     if !state.price_refresh_at_boot {
         return;
     }
-    let Ok(home_root) = sandbox_run::sandbox_home_roots(state).map(|(h, _)| h) else {
+    let Ok(home_root) = run_sandbox::sandbox_home_roots(state).map(|(h, _)| h) else {
         return; // no HOME → no path → nothing to refresh, silently
     };
     let (_, fetched_path) = price_table::PriceTable::paths(&home_root);
@@ -12216,7 +12207,7 @@ async fn load_update_cache(state: &Arc<AppState>) {
     if memo.is_some() {
         return;
     }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(state) else {
+    let Ok((home, _)) = run_sandbox::sandbox_home_roots(state) else {
         return;
     };
     *memo = update_check::read_cache(&update_check::cache_path(&home));
@@ -12268,7 +12259,7 @@ async fn perform_update_check(state: &Arc<AppState>) -> Result<update_check::Upd
             cache.error = Some(format!("release source unreachable: {url}: {e}"));
         }
     }
-    if let Ok((home, _)) = sandbox_run::sandbox_home_roots(state) {
+    if let Ok((home, _)) = run_sandbox::sandbox_home_roots(state) {
         if let Err(e) = update_check::write_cache(&update_check::cache_path(&home), &cache) {
             warn!("update check: cannot write the cache: {e}");
         }
@@ -12390,7 +12381,7 @@ async fn count_live_runs(state: &AppState) -> usize {
 
 /// The last attempt record, from `<home>/.pdo/update/last-attempt.json`.
 fn read_last_attempt(state: &AppState) -> Option<update_executor::UpdateAttempt> {
-    let (home, _) = sandbox_run::sandbox_home_roots(state).ok()?;
+    let (home, _) = run_sandbox::sandbox_home_roots(state).ok()?;
     update_executor::read_attempt(&update_executor::attempt_path(&home))
 }
 
@@ -12468,7 +12459,7 @@ async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
         )
             .into_response();
     }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
+    let Ok((home, _)) = run_sandbox::sandbox_home_roots(&state) else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(
@@ -12613,7 +12604,7 @@ async fn get_update_attempt_log(
     {
         return (StatusCode::BAD_REQUEST, "invalid attempt id").into_response();
     }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
+    let Ok((home, _)) = run_sandbox::sandbox_home_roots(&state) else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "HOME is not set").into_response();
     };
     match std::fs::read_to_string(update_executor::log_path(&home, &id)) {
@@ -12807,7 +12798,7 @@ async fn warn_about_retired_sandbox_settings(db: &sqlx::SqlitePool) {
         }
     };
     let hint = instance_config::get(db).await.ok().and_then(|cfg| {
-        event_log::default_sandbox_with(cfg.default_sandbox)
+        pdo_sandbox::adapters::env::default_sandbox_with(cfg.default_sandbox)
             .profile()
             .map(String::from)
     });
@@ -12929,7 +12920,7 @@ async fn put_settings(
         // default harness that resolves to nothing would break EVERY spawn that falls
         // through to it, so it is refused at registration.
         if !h.is_empty() {
-            let home_root = sandbox_run::sandbox_home_roots(&state)
+            let home_root = run_sandbox::sandbox_home_roots(&state)
                 .map(|(home, _)| home)
                 .unwrap_or_default();
             let registry = pdo_harness::adapters::descriptor_file::load(&home_root);
@@ -14007,468 +13998,6 @@ async fn update_skill_folder_from_source(
     }
 }
 
-/// Serialise one resolved entry for the editor.
-///
-/// Advisories are computed **server-side** deliberately: deriving the size warning or
-/// the sensitivity flag in the client would re-open the drift this codebase has paid
-/// for before, and the size figure is a measurement recorded in `sandbox_staging`,
-/// not something a browser can know. `exists` is one `symlink_metadata` per entry.
-fn sandbox_entry_view(
-    home_root: Option<&std::path::Path>,
-    path: &str,
-    default_entry: Option<&sandbox_profile::DefaultEntry>,
-    enabled: bool,
-) -> serde_json::Value {
-    let sensitive = sandbox_profile::SENSITIVE_PREFIXES
-        .iter()
-        .any(|p| path == *p || path.starts_with(&format!("{p}/")));
-    let is_glob = default_entry.is_some_and(|d| d.kind == sandbox_profile::EntryKind::Glob);
-    let on_disk = match (home_root, is_glob) {
-        (Some(home), false) => Some(home.join(path)),
-        _ => None,
-    };
-    let exists = on_disk
-        .as_ref()
-        .map(|p| std::fs::symlink_metadata(p).is_ok());
-    let kind = match default_entry.map(|d| d.kind) {
-        Some(k) => k,
-        // An extra's kind is an OBSERVED fact: the stored diff does not carry it, and
-        // re-deriving it here keeps the row honest after a `rm -rf`.
-        None => match on_disk.as_ref().map(|p| p.is_dir()) {
-            Some(true) => sandbox_profile::EntryKind::Dir,
-            _ => sandbox_profile::EntryKind::File,
-        },
-    };
-    serde_json::json!({
-        "path": path,
-        "kind": kind,
-        "from_default": default_entry.is_some(),
-        "enabled": enabled,
-        "resynthesised": default_entry.is_some_and(|d| d.resynthesised),
-        "note": default_entry.and_then(|d| d.note),
-        "sensitive": sensitive,
-        "exists": exists,
-    })
-}
-
-/// The full editor view of one resolved profile.
-fn sandbox_profile_view(
-    home_root: Option<&std::path::Path>,
-    profile: &sandbox_profile::ResolvedProfile,
-) -> serde_json::Value {
-    let base = sandbox_profile::base_entries(&profile.name);
-    // Default entries first, in the constant's own reading order — NOT sorted, or the
-    // editor's checklist reorders on every edit.
-    let mut entries: Vec<serde_json::Value> = sandbox_profile::DEFAULT_FULL_ENTRIES
-        .iter()
-        .filter(|d| base.contains(&d.path))
-        .map(|d| {
-            let enabled = profile.resolved.entries.iter().any(|e| e == d.path);
-            sandbox_entry_view(home_root, d.path, Some(d), enabled)
-        })
-        .collect();
-    for extra in &profile.extras {
-        let enabled = profile.resolved.entries.iter().any(|e| e == extra);
-        entries.push(sandbox_entry_view(home_root, extra, None, enabled));
-    }
-    let floor: Vec<serde_json::Value> = sandbox_profile::STAGING_GUARANTEES
-        .iter()
-        .map(|g| serde_json::json!({ "id": g.id, "label": g.label, "path": g.path }))
-        .collect();
-    serde_json::json!({
-        "name": profile.name,
-        "virtual": profile.is_virtual,
-        "materialised": profile.materialised,
-        "disabled": profile.disabled,
-        "extras": profile.extras,
-        // Exactly what a Run created now would stage.
-        "resolved": profile.resolved.entries,
-        "entries": entries,
-        // Signalled no-ops, never errors (ADR-0031 §2): the default may lose an entry
-        // tomorrow, and a `disabled` for an entry this version lacks must be remembered.
-        "redundant_extras": profile.resolved.redundant_extras,
-        "inactive_disabled": profile.resolved.inactive_disabled,
-        "floor": floor,
-        "sensitive_prefixes": sandbox_profile::SENSITIVE_PREFIXES,
-        // The env posed at `docker create`, VALUES INCLUDED. This is not a secret store
-        // and the UI says so: the values already sit in clear in SQLite, in the Run's
-        // frozen `run_started` payload and in `docker inspect`. Masking them here would
-        // be theatre that let someone believe PDO is protecting them. The one place
-        // they must NOT appear is the daemon log (`sandbox_profile::env_names`),
-        // because the journal outlives the Run and the profile.
-        "env": profile.env,
-        // The keys PDO poses itself and therefore refuses. Server-owned, so the editor
-        // greys them out instead of hard-coding a parallel list that would drift the
-        // day a fourth run-constant appears.
-        "reserved_env_keys": sandbox_container::RUN_CONSTANT_ENV_KEYS,
-        // Where this profile's container image comes from, or `null` when it poses
-        // nothing and the profile default decides. `null` and absent are the same
-        // answer here; the editor renders both as "default".
-        "image": profile.image,
-        "updated_at": profile.updated_at,
-    })
-}
-
-/// `GET /settings/sandbox-profiles` — every profile the instance can serve: the two
-/// virtual defaults ∪ the materialised rows, each fully resolved.
-async fn list_sandbox_profiles(State(state): State<Arc<AppState>>) -> Response {
-    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
-    let names = match sandbox_profile::list_names(&state.db).await {
-        Ok(n) => n,
-        Err(e) => {
-            error!("failed to list sandbox profiles: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-    let mut out = Vec::with_capacity(names.len());
-    for (name, _) in &names {
-        match sandbox_profile::resolve(&state.db, name).await {
-            Ok(Some(p)) => out.push(sandbox_profile_view(home_root.as_deref(), &p)),
-            Ok(None) => warn!("sandbox profile `{name}` vanished mid-list"),
-            Err(e) => {
-                error!("failed to resolve sandbox profile `{name}`: {e}");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-                    .into_response();
-            }
-        }
-    }
-    Json(serde_json::json!({
-        "profiles": out,
-        "home": home_root.map(|h| h.to_string_lossy().into_owned()),
-    }))
-    .into_response()
-}
-
-/// `GET /settings/sandbox-profiles/{name}` — one resolved profile, or 404.
-async fn get_sandbox_profile(
-    State(state): State<Arc<AppState>>,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
-    match sandbox_profile::resolve(&state.db, &name).await {
-        Ok(Some(p)) => Json(sandbox_profile_view(home_root.as_deref(), &p)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("no staging profile named `{name}`") })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// The body of `PUT /settings/sandbox-profiles/{name}` — the **diff**, never a snapshot
-/// (ADR-0031 §2). Every field defaults to empty so a bare `{}` means "materialise this
-/// profile exactly as the current default, with no environment".
-#[derive(Deserialize)]
-struct UpsertSandboxProfileRequest {
-    #[serde(default)]
-    disabled: Vec<String>,
-    #[serde(default)]
-    extras: Vec<String>,
-    /// Environment variables posed at `docker create` (ADR-0031 §8). A FULL
-    /// replacement like the two lists above — an absent key CLEARS the env rather than
-    /// leaving it alone, which is what makes "remove a variable" expressible at all.
-    #[serde(default)]
-    env: std::collections::BTreeMap<String, String>,
-    /// Where this profile's image comes from (ADR-0031 §9), or absent/`null` to pose
-    /// nothing and let the profile default decide. A FULL replacement like every other
-    /// field: omitting it CLEARS the image source, which is what makes "go back to the
-    /// default image" expressible at all.
-    ///
-    /// Typed rather than a `serde_json::Value`, so an unknown `kind` is rejected by
-    /// serde itself — naming the offending token and the two it expects — before this
-    /// handler runs at all.
-    #[serde(default)]
-    image: Option<sandbox_image::ProfileImage>,
-}
-
-/// `PUT /settings/sandbox-profiles/{name}` — upsert the diff.
-///
-/// `upsert` and not create-then-update: the caller cannot know whether `full` already
-/// has a row, and ADR-0031 §2 says editing it *is* what materialises one.
-///
-/// Validation, all fail-fast before anything is written:
-/// - the name against the grammar (`off` and `""` reserved, no case folding);
-/// - each `extras` path through [`sandbox_profile::validate_entry`], and it must
-///   **exist under `$HOME` right now** — an early UX gate, necessary but never
-///   sufficient, since `prepare` warns-and-skips a path that vanishes later;
-/// - each `disabled` name by **membership in the built-in default**, which is also
-///   what makes the default's `.claude/*.md` glob unauthorable by hand;
-/// - `extras ∩ disabled = ∅`. A contradictory intention resolved silently would
-///   freeze into `RunStarted` a winner the user never picked;
-/// - each `env` key and value, including the run-constant keys PDO poses itself,
-///   which are a **400 naming the key**, never a silent skip: silently dropping
-///   `HOME` would leave an editor that shows it set and a container where it is not,
-///   and a `HOME` that DID land would break the `.claude` mounts at once;
-/// - the `image` source — an absolute path for `kind: dockerfile`, **which must
-///   exist**, and a pullable-looking ref for `kind: registry`, deliberately NOT
-///   probed (see the comment at the check).
-async fn put_sandbox_profile(
-    State(state): State<Arc<AppState>>,
-    AxumPath(name): AxumPath<String>,
-    Json(req): Json<UpsertSandboxProfileRequest>,
-) -> Response {
-    let bad = |msg: String| -> Response {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response()
-    };
-
-    let name = match sandbox_profile::validate_profile_name(&name) {
-        Ok(n) => n,
-        Err(msg) => return bad(msg),
-    };
-
-    let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
-
-    let mut extras: Vec<String> = Vec::with_capacity(req.extras.len());
-    for raw in &req.extras {
-        let norm = match sandbox_profile::validate_entry(raw) {
-            Ok(n) => n,
-            Err(msg) => return bad(msg),
-        };
-        if let Some(home) = home_root.as_deref() {
-            let abs = home.join(&norm);
-            if std::fs::symlink_metadata(&abs).is_err() {
-                return bad(format!(
-                    "`{norm}`: nothing at {} — pick a file or folder that exists under \
-                     your home directory",
-                    abs.display()
-                ));
-            }
-        }
-        if !extras.contains(&norm) {
-            extras.push(norm);
-        }
-    }
-    extras.sort();
-
-    // Validated by MEMBERSHIP in the authored default, not by `validate_entry`. Two
-    // consequences, both wanted: the default's `.claude/*.md` glob is uncheckable but
-    // never hand-writable, and an *extra* can only be removed by dropping it from
-    // `extras` — unchecking is for defaults only, which keeps the diff unambiguous.
-    let mut disabled: Vec<String> = Vec::with_capacity(req.disabled.len());
-    for raw in &req.disabled {
-        let candidate = raw.trim().to_string();
-        if candidate.is_empty() {
-            return bad("a `disabled` entry cannot be blank".to_string());
-        }
-        if !sandbox_profile::DEFAULT_FULL_ENTRIES
-            .iter()
-            .any(|d| d.path == candidate)
-        {
-            return bad(format!(
-                "`{candidate}` is not a built-in default entry, so it cannot be unchecked \
-                 — remove it from the extras instead"
-            ));
-        }
-        if !disabled.contains(&candidate) {
-            disabled.push(candidate);
-        }
-    }
-    disabled.sort();
-
-    if let Some(clash) = disabled.iter().find(|d| extras.contains(d)) {
-        return bad(format!(
-            "`{clash}` is both unchecked and added as an extra — pick one"
-        ));
-    }
-
-    // The NORMALISED key is what gets stored, so `  FOO  ` and `FOO` cannot become two
-    // rows that render identically. A collision after trimming is a 400 for the same
-    // reason the `extras ∩ disabled` clash is: resolving it silently would freeze a
-    // winner the user never picked.
-    let mut env: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
-    for (raw_key, raw_value) in &req.env {
-        let key = match sandbox_profile::validate_env_key(raw_key) {
-            Ok(k) => k,
-            Err(msg) => return bad(msg),
-        };
-        let value = match sandbox_profile::validate_env_value(&key, raw_value) {
-            Ok(v) => v,
-            Err(msg) => return bad(msg),
-        };
-        if env.insert(key.clone(), value).is_some() {
-            return bad(format!(
-                "`{key}` is set twice (once as `{raw_key}`) — an environment variable can \
-                 only carry one value, and picking one for you would drop the other in silence"
-            ));
-        }
-    }
-
-    // The grammar first, then — for a Dockerfile — an early existence gate. Necessary,
-    // never sufficient: the authoritative check is `ensure_image`'s `is_file()` bail at
-    // prep time, since the file can vanish or sit on an unmounted volume. Catching it
-    // here turns "the Run died three minutes in" into "the form said no".
-    //
-    // A registry ref gets NO such gate, and the asymmetry is the point: PDO cannot check
-    // that a ref resolves without a network round-trip inside a PUT handler, nor that
-    // the image contains an agent at all. Whoever supplies the ref owns that (ADR-0030
-    // pt 7) — which is also why a failed pull is a hard error rather than a silent build.
-    let image = match req.image.as_ref() {
-        None => None,
-        Some(raw) => match sandbox_profile::validate_profile_image(raw) {
-            Err(msg) => return bad(msg),
-            Ok(sandbox_image::ProfileImage::Dockerfile { path }) => {
-                if !std::path::Path::new(&path).is_file() {
-                    return bad(format!(
-                        "`{path}`: nothing at that path, or it is not a regular file — pick the \
-                         Dockerfile this profile should build its image from"
-                    ));
-                }
-                Some(sandbox_image::ProfileImage::Dockerfile { path })
-            }
-            Ok(other) => Some(other),
-        },
-    };
-
-    match sandbox_profile::upsert(&state.db, &name, &disabled, &extras, &env, image.as_ref()).await
-    {
-        Ok(_) => match sandbox_profile::resolve(&state.db, &name).await {
-            Ok(Some(p)) => Json(sandbox_profile_view(home_root.as_deref(), &p)).into_response(),
-            Ok(None) | Err(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "profile written but not readable back" })),
-            )
-                .into_response(),
-        },
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// `DELETE /settings/sandbox-profiles/{name}` — drop the materialised row.
-///
-/// **Unconditional** (ADR-0031 §7: a *soft* guard-rail, no referential integrity in
-/// the database). Deleting an edited `full`/`minimal` reverts it to its virtual
-/// default; deleting a user profile makes every future Run referencing it fail loud.
-/// Neither repoints anything — which the referents dialog must say before confirming.
-async fn delete_sandbox_profile(
-    State(state): State<Arc<AppState>>,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    match sandbox_profile::delete(&state.db, &name).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!(
-                    "no materialised staging profile named `{name}` \
-                     (an unedited built-in default has no row to delete)"
-                )
-            })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// `GET /settings/sandbox-profiles/{name}/referents` — who still points at this profile.
-///
-/// Server-side because the frontend **cannot** derive the third class: `RunListEntry`
-/// does not carry `sandbox` (only the full `RunState` does), so a client would need N
-/// requests. The distinction between the first two classes and the third is the whole
-/// point of the dialog:
-/// - `instance_default` / `triggers` — deleting will NOT repoint them, and the next Run
-///   they produce **fails**; it does not fall back to a default;
-/// - `runs` — live Runs that already froze their entry list at start (ADR-0031 §6) and
-///   are therefore **unaffected**.
-async fn get_sandbox_profile_referents(
-    State(state): State<Arc<AppState>>,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    // The RESOLVED tier, so a stored value shadowed by the env is not reported as a
-    // referent when it is not the one that wins.
-    let stored_default = instance_config::get(&state.db)
-        .await
-        .ok()
-        .and_then(|c| c.default_sandbox);
-    let instance_default =
-        event_log::default_sandbox_with(stored_default).profile() == Some(name.as_str());
-
-    let triggers: Vec<serde_json::Value> = match trigger_store::list(&state.db).await {
-        Ok(list) => list
-            .iter()
-            .filter(|t| {
-                t.sandbox
-                    .as_deref()
-                    .and_then(event_log::SandboxMode::parse)
-                    .as_ref()
-                    .and_then(event_log::SandboxMode::profile)
-                    == Some(name.as_str())
-            })
-            .map(|t| serde_json::json!({ "id": t.id, "name": t.name, "enabled": t.enabled }))
-            .collect(),
-        Err(e) => {
-            error!("failed to list triggers for profile referents: {e}");
-            Vec::new()
-        }
-    };
-
-    // One indexed pass over `run_started` payloads, excluding any run that already
-    // emitted a terminal event. Cheaper than projecting each run, and terminality is
-    // exactly "a terminal event exists" for this purpose.
-    let rows: Result<Vec<(String, String)>, _> = sqlx::query_as(
-        "SELECT e.run_id, e.payload FROM events e \
-         WHERE e.kind = 'run_started' AND e.payload IS NOT NULL \
-           AND NOT EXISTS ( \
-             SELECT 1 FROM events t WHERE t.run_id = e.run_id AND t.kind IN \
-               ('run_completed', 'run_failed', 'run_skipped', 'run_halted', 'run_archived') \
-           ) \
-         ORDER BY e.ts DESC",
-    )
-    .fetch_all(&state.db)
-    .await;
-    let runs: Vec<serde_json::Value> = match rows {
-        Ok(rows) => rows
-            .iter()
-            .filter_map(|(run_id, payload)| {
-                let val = serde_json::from_str::<serde_json::Value>(payload).ok()?;
-                if val.get("sandbox")?.as_str()? != name {
-                    return None;
-                }
-                Some(serde_json::json!({
-                    "run_id": run_id,
-                    "pipeline_name": val.get("pipeline_name").and_then(|v| v.as_str()),
-                    "name": val.get("name").and_then(|v| v.as_str()),
-                }))
-            })
-            .collect(),
-        Err(e) => {
-            error!("failed to query runs for profile referents: {e}");
-            Vec::new()
-        }
-    };
-
-    Json(serde_json::json!({
-        "name": name,
-        "instance_default": instance_default,
-        "triggers": triggers,
-        "runs": runs,
-    }))
-    .into_response()
-}
-
 #[derive(Deserialize)]
 struct PauseTriggersRequest {
     paused: bool,
@@ -14788,12 +14317,12 @@ async fn get_run(
             // it is live, `~/.claude/projects/` otherwise. HOME absent → degrade to
             // the host root; never fail a read.
             let (home_root, sandbox_root) =
-                sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
+                run_sandbox::sandbox_home_roots(&state).unwrap_or_else(|_| {
                     let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
                     let sandbox = home.join(".pdo").join("sandbox");
                     (home, sandbox)
                 });
-            let projects_root = sandbox_run::transcripts_root(
+            let projects_root = pdo_sandbox::adapters::staging::stores::transcripts_root(
                 !run_state.sandbox.is_off(),
                 &run_state.run_id,
                 &home_root,
@@ -14809,7 +14338,7 @@ async fn get_run(
             // `copilot`'s journal is on the host; `pi`'s moves per Run (#708) — the
             // staged sink while this sandboxed Run lives, the host store after
             // merge-back — mirroring the Claude root's sandbox-aware seam above.
-            let stores = sandbox_run::HarnessStores::for_run(
+            let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::for_run(
                 !run_state.sandbox.is_off(),
                 &run_state.run_id,
                 &home_root,
@@ -15245,19 +14774,19 @@ fn derive_run_cost(
     run_state: &event_log::RunState,
     events: &[event_log::Event],
 ) -> Option<event_log::CostStat> {
-    let (home_root, sandbox_root) = sandbox_run::sandbox_home_roots(state).unwrap_or_else(|_| {
+    let (home_root, sandbox_root) = run_sandbox::sandbox_home_roots(state).unwrap_or_else(|_| {
         let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
         let sandbox = home.join(".pdo").join("sandbox");
         (home, sandbox)
     });
-    let projects_root = sandbox_run::transcripts_root(
+    let projects_root = pdo_sandbox::adapters::staging::stores::transcripts_root(
         !run_state.sandbox.is_off(),
         &run_state.run_id,
         &home_root,
         &sandbox_root,
     );
     let prices = price_table::PriceTable::load(&home_root);
-    let stores = sandbox_run::HarnessStores::for_run(
+    let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::for_run(
         !run_state.sandbox.is_off(),
         &run_state.run_id,
         &home_root,
@@ -16809,7 +16338,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
 
     // Resolved once for the whole sweep. HOME absent must NOT abort the sweep,
     // unlike `context_from_state` at create — degrade to the host root and log.
-    let (home_root, sandbox_root) = match sandbox_run::sandbox_home_roots(state) {
+    let (home_root, sandbox_root) = match run_sandbox::sandbox_home_roots(state) {
         Ok(r) => r,
         Err(e) => {
             warn!(
@@ -16860,7 +16389,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
         // The staged home while a sandboxed Run is live, the host root otherwise.
         // The per-node encoded dirname is still derived from the node's
         // `working_dir` inside the probe; this seam only swaps the base.
-        let projects_root = sandbox_run::transcripts_root(
+        let projects_root = pdo_sandbox::adapters::staging::stores::transcripts_root(
             !run_state.sandbox.is_off(),
             run_id,
             &home_root,
@@ -16869,7 +16398,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
         // `copilot` resolves from the host journal; `pi` from the sandbox-aware store
         // (#708). Picked per node below by the frozen harness
         // (`HarnessStores::root_for`).
-        let stores = sandbox_run::HarnessStores::for_run(
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::for_run(
             !run_state.sandbox.is_off(),
             run_id,
             &home_root,
@@ -17323,7 +16852,7 @@ pub(crate) async fn reattach_node_session(
     // REFUSES — never a silent `claude` relaunch, which would run a different agent in
     // this node's worktree. A row with NO frozen harness keeps the `claude` floor.
     let launch_harness = find_launch_harness(events, node_id, iter);
-    let harness_home_root = sandbox_run::sandbox_home_roots(state)
+    let harness_home_root = run_sandbox::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
     let descriptor = match launch_harness.as_deref() {
@@ -17389,7 +16918,7 @@ pub(crate) async fn reattach_node_session(
     let set_env = if run_state.sandbox.is_off() {
         Vec::new()
     } else {
-        sandbox_run::stage_harness_set(state, run_state, &descriptor.name, repo_root)
+        run_sandbox::stage_harness_set(state, run_state, &descriptor.name, repo_root)
             .unwrap_or_else(|e| {
                 warn!("reattach run {run_id} node {node_id}: staging `{}` set failed (best-effort): {e:#}", descriptor.name);
                 Vec::new()
@@ -17398,8 +16927,8 @@ pub(crate) async fn reattach_node_session(
     // A resumed sandboxed session re-enters its container.
     let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
+        uid: pdo_sandbox::adapters::host::host_uid(),
+        gid: pdo_sandbox::adapters::host::host_gid(),
         marker: session_name,
         workdir: &working_dir,
         set_env: &set_env,
@@ -17962,8 +17491,8 @@ async fn spawn_merge_resolver(
     let resolver_set_env: Vec<(String, String)> = Vec::new();
     let sandbox_wrap = (!sandbox_mode.is_off()).then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
+        uid: pdo_sandbox::adapters::host::host_uid(),
+        gid: pdo_sandbox::adapters::host::host_gid(),
         marker: &session_name,
         workdir: worktree_dir,
         set_env: &resolver_set_env,
@@ -17985,7 +17514,7 @@ async fn spawn_merge_resolver(
     );
     let resolver_harness_name = resolver_agent.combo.harness.clone();
     // Resolve against the DISK TIER, like the manager.
-    let resolver_home_root = sandbox_run::sandbox_home_roots(state)
+    let resolver_home_root = run_sandbox::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
     let resolver_harness = pdo_harness::adapters::descriptor_file::load(&resolver_home_root)
@@ -19607,7 +19136,7 @@ async fn force_spawn_node(
     // Resolve against the DISK TIER, so a manual Start reaches a user-declared
     // harness exactly like the scheduler's `spawn_node` does. Bound before `params`
     // so the borrow outlives `start_node`. Absent HOME degrades to the embedded floor.
-    let harness_home_root = sandbox_run::sandbox_home_roots(state)
+    let harness_home_root = run_sandbox::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
     let harness_registry = pdo_harness::adapters::descriptor_file::load(&harness_home_root);
@@ -20426,8 +19955,8 @@ async fn open_run_shell(
     // recovery skips terminal runs. Resurrect it here, or fail EXPLICITLY — never
     // fall back to a silent host bash.
     if !run_state.sandbox.is_off() {
-        let prep = match sandbox_run::context_from_state(&state, &run_state).await {
-            Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+        let prep = match run_sandbox::context_from_state(&state, &run_state).await {
+            Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready())
                 .await
                 .unwrap_or_else(|je| Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))),
             Err(e) => Err(e),
@@ -20449,8 +19978,8 @@ async fn open_run_shell(
     const NO_SET_ENV: &[(String, String)] = &[];
     let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
+        uid: pdo_sandbox::adapters::host::host_uid(),
+        gid: pdo_sandbox::adapters::host::host_gid(),
         marker: &session,
         workdir: &worktree,
         set_env: NO_SET_ENV,
@@ -20562,7 +20091,7 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
     }
 
     // Never sandboxed: authoring is design-time work on the host.
-    let daemon_url = sandbox_container::daemon_url(state.port, false);
+    let daemon_url = pdo_sandbox::domain::container::daemon_url(state.port, false);
     let static_prompt = std::fs::read_to_string(
         state
             .repo_root
@@ -20578,7 +20107,7 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
     let harness_name =
         pdo_harness::resolver::resolve_infra_harness(None, default_harness.as_deref());
     // Resolve against the DISK TIER, like the manager/resolver.
-    let libassist_home_root = sandbox_run::sandbox_home_roots(&state)
+    let libassist_home_root = run_sandbox::sandbox_home_roots(&state)
         .map(|(home, _)| home)
         .unwrap_or_default();
     let harness = pdo_harness::adapters::descriptor_file::load(&libassist_home_root)
@@ -21205,8 +20734,8 @@ async fn archive_single_run(
     // harvest before purge — capturing post-terminal growth the detached terminal
     // merge missed; idempotent, so the double-merge is safe.
     if !run_state.sandbox.is_off() {
-        match sandbox_run::sandbox_home_roots(state) {
-            Ok((home_root, sandbox_root)) => sandbox_run::cleanup(
+        match run_sandbox::sandbox_home_roots(state) {
+            Ok((home_root, sandbox_root)) => run_sandbox::cleanup(
                 state.docker_cmd_override.as_deref().unwrap_or("docker"),
                 &home_root,
                 &sandbox_root,
@@ -23386,7 +22915,7 @@ fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
     events: &[event_log::Event],
     projects_root: &std::path::Path,
-    stores: &sandbox_run::HarnessStores,
+    stores: &pdo_sandbox::adapters::staging::stores::HarnessStores,
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
 ) {
@@ -23939,7 +23468,7 @@ pub(crate) fn reap_node_session(
     // Killing the tmux-side `docker exec` client leaves the container process
     // (reparented onto PID 1) alive, so double it with a targeted in-container kill
     // that scans `/proc` for this session's marker. No-op for `off`.
-    sandbox_run::kill_session_best_effort(
+    run_sandbox::kill_session_best_effort(
         state.docker_cmd_override.as_deref().unwrap_or("docker"),
         sandboxed,
         run_id,
@@ -31942,7 +31471,7 @@ mod tests {
             &mut run_state,
             &events,
             &projects,
-            &sandbox_run::HarnessStores::from_home(home.path()),
+            &pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path()),
             repo.path(),
             &price_table::PriceTable::load(home.path()),
         );
@@ -33045,7 +32574,7 @@ mod tests {
     /// #408 (F4): `cleanup_run` merges a sandboxed Run's staged transcripts into
     /// `~/.claude/projects/` (recursively — subagent jsonl included, non-jsonl
     /// siblings excluded) BEFORE the staging is purged, via the real route. This
-    /// is the tmux-independent proof that `cleanup_run` → `sandbox_run::cleanup` →
+    /// is the tmux-independent proof that `cleanup_run` → `run_sandbox::cleanup` →
     /// `merge_back` is wired; the synchronous cleanup merge means no waiting.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
@@ -50021,8 +49550,14 @@ edges:
         // It says the values are ignored, names the profile to edit, and the env escape hatch.
         assert!(msg.contains("IGNORED"), "{msg}");
         assert!(msg.contains("`chrome`"), "the profile to edit: {msg}");
-        assert!(msg.contains(sandbox_image::IMAGE_SOURCE_ENV), "{msg}");
-        assert!(msg.contains(sandbox_image::DOCKERFILE_PATH_ENV), "{msg}");
+        assert!(
+            msg.contains(pdo_sandbox::domain::image::IMAGE_SOURCE_ENV),
+            "{msg}"
+        );
+        assert!(
+            msg.contains(pdo_sandbox::domain::image::DOCKERFILE_PATH_ENV),
+            "{msg}"
+        );
         // And that no Run is affected — the whole point of it being a warning, not an error.
         assert!(msg.contains("No Run is affected"), "{msg}");
 

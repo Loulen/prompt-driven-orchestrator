@@ -75,15 +75,6 @@ vi.mock("../api", () => ({
     fetchUpdateAttemptLogMock(...args),
   checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   browseFs: (...args: unknown[]) => browseFsMock(...args),
-  // #432: same Proxy trap as `browseFs` above — a missing key here throws the moment the
-  // staging-profile panel mounts, not at import.
-  fetchSandboxProfiles: (...args: unknown[]) =>
-    fetchSandboxProfilesMock(...args),
-  saveSandboxProfile: (...args: unknown[]) => saveSandboxProfileMock(...args),
-  deleteSandboxProfile: (...args: unknown[]) =>
-    deleteSandboxProfileMock(...args),
-  fetchSandboxProfileReferents: (...args: unknown[]) =>
-    fetchSandboxProfileReferentsMock(...args),
   fetchInstanceProvisioning: (...args: unknown[]) =>
     fetchInstanceProvisioningMock(...args),
   // #668: the skill bank drill-down. Same Proxy trap: every function `SkillBankPanel`
@@ -113,8 +104,19 @@ vi.mock("../api", () => ({
   },
 }));
 
+// #432: the staging-profile panel reads the sandbox context's own API module. Same Proxy
+// trap as `browseFs` above — a missing key here throws the moment the panel mounts.
+vi.mock("../sandbox/api/profiles", () => ({
+  fetchSandboxProfiles: (...args: unknown[]) =>
+    fetchSandboxProfilesMock(...args),
+  saveSandboxProfile: (...args: unknown[]) => saveSandboxProfileMock(...args),
+  deleteSandboxProfile: (...args: unknown[]) =>
+    deleteSandboxProfileMock(...args),
+  fetchSandboxProfileReferents: (...args: unknown[]) =>
+    fetchSandboxProfileReferentsMock(...args),
+}));
+
 import SettingsSurface from "./SettingsSurface";
-import { relativiseToHome } from "./StagingProfilesPanel";
 import { useEditStore } from "../stores/editStore";
 import { useWiringStore } from "../stores/wiringStore";
 import type { InstanceSettings } from "../settings/model/settings";
@@ -1568,29 +1570,6 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
     render(<SettingsSurface open onClose={() => {}} />);
     const toggle = await screen.findByTestId("setting-tabs-disabled");
     expect(toggle).toHaveAttribute("aria-checked", "true");
-  });
-});
-
-describe("relativiseToHome (#432)", () => {
-  // The pure half of "an explorer pick becomes an entry": `onPick` yields an ABSOLUTE
-  // path, an entry is RELATIVE to `$HOME`. Returning `null` (instead of guessing) is what
-  // lets the panel say "must live under $HOME" inline rather than firing a doomed PUT.
-  it("relativises a path under $HOME and refuses anything else", () => {
-    expect(relativiseToHome("/home/user/.gitconfig", "/home/user")).toBe(
-      ".gitconfig",
-    );
-    expect(relativiseToHome("/home/user/.config/gh", "/home/user")).toBe(
-      ".config/gh",
-    );
-    // A trailing slash on either side must not leak into the entry.
-    expect(relativiseToHome("/home/user/.config/gh/", "/home/user/")).toBe(
-      ".config/gh",
-    );
-    // Outside $HOME, $HOME itself, and an unknown $HOME are all `null`.
-    expect(relativiseToHome("/etc/passwd", "/home/user")).toBeNull();
-    expect(relativiseToHome("/home/user", "/home/user")).toBeNull();
-    expect(relativiseToHome("/home/user2/.gitconfig", "/home/user")).toBeNull();
-    expect(relativiseToHome("/home/user/.gitconfig", null)).toBeNull();
   });
 });
 

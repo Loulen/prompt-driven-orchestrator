@@ -161,26 +161,6 @@ vi.mock("../api", () => {
   };
   fetchSettingsMock.mockResolvedValue(settings);
 
-  // Minimal but complete virtual staging profile (#432): the editor renders
-  // `floor`, `disabled`, `extras`, `env`… of the selected one.
-  const virtualProfile = (name: string) => ({
-    name,
-    virtual: true,
-    materialised: false,
-    disabled: [],
-    extras: [],
-    resolved: [],
-    entries: [],
-    redundant_extras: [],
-    inactive_disabled: [],
-    floor: [],
-    sensitive_prefixes: [],
-    env: {},
-    reserved_env_keys: ["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"],
-    image: null,
-    updated_at: null,
-  });
-
   // Empty Stats payloads (a fresh daemon): the shapes only need to satisfy the
   // rendering paths — no buckets, no rows, no harnesses.
   const emptyAggregate = {
@@ -260,14 +240,6 @@ vi.mock("../api", () => {
         truncated: false,
         error: null,
       }),
-      // A minimal but complete virtual profile — the editor renders `floor`,
-      // `disabled`, `extras`, `env`… of the selected one.
-      fetchSandboxProfile: vi.fn().mockImplementation((name: string) =>
-        Promise.resolve(virtualProfile(name)),
-      ),
-      saveSandboxProfile: vi.fn().mockResolvedValue(undefined),
-      deleteSandboxProfile: vi.fn().mockResolvedValue(undefined),
-      fetchSandboxProfileReferents: vi.fn().mockResolvedValue({ runs: [], triggers: [] }),
       // Instance provisioning rules (Settings › Provisioning): the empty rule set.
       fetchInstanceProvisioning: vi.fn().mockResolvedValue({
         copy: [],
@@ -280,10 +252,6 @@ vi.mock("../api", () => {
         symlink: [],
       }),
       fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
-      fetchSandboxProfiles: vi.fn().mockResolvedValue({
-        profiles: [virtualProfile("full"), virtualProfile("minimal")],
-        home: "/home/user",
-      }),
       closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
       putLibassistFocus: vi.fn().mockResolvedValue(undefined),
       fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
@@ -350,6 +318,44 @@ vi.mock("../api", () => {
       },
     },
   );
+});
+
+// The staging-profile panel reads the sandbox context's own API module (#432).
+vi.mock("../sandbox/api/profiles", () => {
+  // Minimal but complete virtual staging profile (#432): the editor renders
+  // `floor`, `disabled`, `extras`, `env`… of the selected one.
+  const virtualProfile = (name: string) => ({
+    name,
+    virtual: true,
+    materialised: false,
+    disabled: [],
+    extras: [],
+    resolved: [],
+    entries: [],
+    redundant_extras: [],
+    inactive_disabled: [],
+    floor: [],
+    sensitive_prefixes: [],
+    env: {},
+    reserved_env_keys: ["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"],
+    image: null,
+    updated_at: null,
+  });
+
+  return {
+    // A minimal but complete virtual profile — the editor renders `floor`,
+    // `disabled`, `extras`, `env`… of the selected one.
+    fetchSandboxProfile: vi.fn().mockImplementation((name: string) =>
+      Promise.resolve(virtualProfile(name)),
+    ),
+    fetchSandboxProfiles: vi.fn().mockResolvedValue({
+      profiles: [virtualProfile("full"), virtualProfile("minimal")],
+      home: "/home/user",
+    }),
+    saveSandboxProfile: vi.fn().mockResolvedValue(undefined),
+    deleteSandboxProfile: vi.fn().mockResolvedValue(undefined),
+    fetchSandboxProfileReferents: vi.fn().mockResolvedValue({ runs: [], triggers: [] }),
+  };
 });
 
 // The canvas is outside the paths under test; collapse it like the EditCanvas

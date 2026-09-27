@@ -1,9 +1,9 @@
-//! Pure per-run sandbox home-staging (#404, slice A du PRD #403).
+//! Per-run sandbox home-staging on the local filesystem (#404, slice A du PRD #403) —
+//! the one implementation of [`HomeStaging`].
 //!
-//! Zéro Docker. Miroir de [`crate::worktree_ops`] : pas d'`AppState`, pas
-//! d'async, pas de lecture d'env dans le cœur — seulement `&Path` / `&str` in,
-//! path-math ou `std::fs` out. `HOME` n'est lu QUE par le résolveur de bord
-//! [`default_roots_from_env`].
+//! Zéro Docker. Pas d'`AppState`, pas d'async, pas de lecture d'env — seulement
+//! `&Path` / `&str` in, `std::fs` out ; la path-math vit dans
+//! [`crate::domain::staging`].
 //!
 //! Ce module gère le cycle de vie du *staged Claude home* d'un Run sandboxé :
 //! [`prepare`] (seeder), [`merge_back`] (récupérer les transcripts), [`teardown`]
@@ -14,7 +14,7 @@
 //!   embarquerait tout l'état hôte transitoire (`history.jsonl`, `session-env/`,
 //!   `file-history/`…) — fuite d'isolation + fragile aux futures versions de Claude
 //!   Code. On copie une liste explicite. Depuis #432 cette liste est **nommée et
-//!   éditable** : c'est le *profil de staging* ([`crate::sandbox_profile`]), résolu et
+//!   éditable** : c'est le *profil de staging* ([`crate::domain::profile`]), résolu et
 //!   **gelé** dans `RunStarted`. Ce module ne connaît plus de « mode » — il reçoit une
 //!   liste d'entrées, et la vide (`minimal`) est un no-op de phase 1.
 //! - **Volume assumé ~1 Go/run** (#409, mesuré ; dominé par `plugins/*/node_modules`,
@@ -24,18 +24,18 @@
 //! - **Symlinks échappants déréférencés** (#409). Une part notable des skills sont
 //!   des liens relatifs vers `~/.agents` (hors `~/.claude`, ni copié ni monté) :
 //!   recréés verbatim ils dangleraient dans le conteneur (skills invisibles).
-//!   [`copy_tree_preserving`] copie donc le CONTENU réel des liens qui **sortent** de
+//!   `copy_tree_preserving` copie donc le CONTENU réel des liens qui **sortent** de
 //!   l'arbre `~/.claude` ; les liens **intra-arbre** (cycles `node_modules/.bin`)
 //!   restent des liens. Walk **best-effort par entrée** : un `~/.claude` volumineux
 //!   que d'autres process Claude mutent ne doit jamais faire échouer le Run.
 //! - **`merge_back` récurse.** ~42 % des transcripts vivent dans
 //!   `projects/<enc>/<uuid>/subagents/*.jsonl` (profondeur 9). Le copy-set doit
-//!   *égaler* le read-set de [`crate::run_cost`] (`collect_jsonl_recursive`),
+//!   *égaler* le read-set du coût (`collect_jsonl_recursive`),
 //!   sinon le coût des runs sandboxés est sous-estimé (régression silencieuse).
 //! - **Le staging set d'un harnais est profil-agnostique et se remplit au spawn**
 //!   (#426, ADR-0031 §1 ; #708, ADR-0063 §3). [`prepare`] matérialise les entrées du
 //!   profil et **ancre** les mounts ([`ensure_mount_anchors`]) : la racine de home de
-//!   chaque harnais first-party ([`StagingSet::home_root`]) existe **vide**, le
+//!   chaque harnais first-party (`StagingSet::home_root`) existe **vide**, le
 //!   `.claude.json` sibling existe (objet vide) — un mount dont la source manque
 //!   ferait créer par Docker un répertoire root-owned. Le set lui-même —
 //!   [`fill_staging_set`] : entrées copiées de l'hôte, puits de transcripts créés
@@ -53,95 +53,67 @@
 //!   fichier hôte. Un `git config --global` du conteneur touche la copie, pas le
 //!   `~/.gitconfig` de l'utilisateur. Une entrée **sous** `.claude/` ne reçoit aucun
 //!   `-v` propre — conséquence du classificateur unique
-//!   [`crate::sandbox_profile::landing`], partagé par [`prepare`] et [`extra_mounts`].
+//!   [`crate::domain::profile::landing`], partagé par [`prepare`] et [`extra_mounts`].
+
+mod copy;
+mod set;
+pub mod stores;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::info;
 
-use pdo_harness::probes::{AutonomyFixup, StagingSet};
+use crate::application::ports::HomeStaging;
+use crate::domain::profile::{landing, Landing};
+use crate::domain::staging::{
+    staged_claude_home, staged_claude_json, staged_home_extras, staged_path, staging_dir_for_run,
+    staging_set_marker, StagedMount, StagingFill, CLAUDE_HOME_REL,
+};
 
-/// Baseline de managed settings poussée par l'organisation, cachée par Claude Code
-/// dans `~/.claude/`. Garantie G2 : recopiée dans les **deux** modes, jamais via
-/// le profil. Sans elle, la session bute sur le dialogue « managed settings require
-/// approval » (le consentement est comparé au contenu de ce fichier) et un Run
-/// autonome reste planté. Depuis ADR-0063 le chemin runtime est une **entrée du
-/// staging set de `claude`** ([`pdo_harness::probes::CLAUDE_STAGING_SET`]) ; le
-/// nom court ne sert plus qu'aux fixtures de test, qui le pinnent contre le set.
-#[cfg(test)]
-const REMOTE_SETTINGS_FILE: &str = "remote-settings.json";
+use copy::{copy_jsonl_tree, materialise_entries};
+use set::{apply_staging_set, set_mode_0600};
 
-/// La racine de home de `claude` : servie par le mount fixe `claude-home`, jamais un
-/// anchor ni un mount de home de harnais séparé (ADR-0063 §3). Bare `.claude` n'est
-/// pas classé `ClaudeHome` par [`crate::sandbox_profile::landing`] (qui ne strippe que
-/// `.claude/`), d'où ce littéral de garde.
-const CLAUDE_HOME_REL: &str = ".claude";
+/// The staged homes under a sandbox root, on the local filesystem.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FsStaging;
 
-/// Le `settings.json` du home stagé — porteur de la garantie G3
-/// ([`pdo_harness::probes::AutonomyFixup::ClaudeBypassPermissions`]).
-const SETTINGS_FILE: &str = "settings.json";
-
-/// Clé top-level qui désarme le prompt de confirmation du
-/// `--dangerously-skip-permissions`. Garantie G3 : un agent non surveillé s'y
-/// bloque. Résolue par un **OU monotone** sur les tiers de settings, donc un
-/// `true` dans le `settings.json` stagé suffit — et un `false` hôte doit être
-/// **écrasé** (d'où `insert` et non `entry().or_insert()`).
-const BYPASS_PERMISSIONS_KEY: &str = "skipDangerousModePermissionPrompt";
-
-/// `<sandbox_root>/<run_id>` — racine du staging d'un Run (les 2 sources de mount
-/// + le `.claude.json`).
-pub(crate) fn staging_dir_for_run(sandbox_root: &Path, run_id: &str) -> PathBuf {
-    sandbox_root.join(run_id)
-}
-
-/// `<staging_dir>/claude-home` — le *staged Claude home* (→ `$HOME/.claude` côté
-/// conteneur, monté tel quel par #406).
-pub(crate) fn staged_claude_home(sandbox_root: &Path, run_id: &str) -> PathBuf {
-    staging_dir_for_run(sandbox_root, run_id).join("claude-home")
-}
-
-/// `<staging_dir>/.claude.json` — sibling de `claude-home/` (→ `$HOME/.claude.json`
-/// côté conteneur, monté séparément par #406). **Caché + hors `claude-home/`** :
-/// s'il vivait dans `claude-home/` il atterrirait à `$HOME/.claude/.claude.json`,
-/// invisible pour Claude Code.
-pub(crate) fn staged_claude_json(sandbox_root: &Path, run_id: &str) -> PathBuf {
-    staging_dir_for_run(sandbox_root, run_id).join(".claude.json")
-}
-
-/// `<staging_dir>/home` — racine des **entrées d'exception `$HOME`** (#432,
-/// ADR-0031 §4). Une entrée hors `.claude` y est *copiée* (`<staging>/home/<rel>`)
-/// puis bind-montée rw à `$HOME/<rel>` : **jamais** un bind direct du fichier hôte,
-/// sinon un agent en `--dangerously-skip-permissions` qui bute sur
-/// `unable to auto-detect email address` réécrirait le `~/.gitconfig` de
-/// l'utilisateur.
-pub(crate) fn staged_home_extras(sandbox_root: &Path, run_id: &str) -> PathBuf {
-    staging_dir_for_run(sandbox_root, run_id).join("home")
-}
-
-/// Où une entrée `$HOME`-relative atterrit dans le staging d'un Run — **la** vue
-/// chemin du classificateur [`crate::sandbox_profile::landing`], partagée par le
-/// profil et par les staging sets (ADR-0063) : `.claude/<rel>` →
-/// `claude-home/<rel>`, `.claude.json` → le sibling, tout le reste → `home/<rel>`.
-/// Un glob n'a pas de chemin unique : il dégrade en son motif littéral (aucun set
-/// n'en déclare ; le profil les expanse lui-même).
-pub(crate) fn staged_path(sandbox_root: &Path, run_id: &str, rel: &str) -> PathBuf {
-    use crate::sandbox_profile::Landing;
-    match crate::sandbox_profile::landing(rel) {
-        Landing::ClaudeHome { rel, .. } => staged_claude_home(sandbox_root, run_id).join(rel),
-        Landing::ClaudeJson => staged_claude_json(sandbox_root, run_id),
-        Landing::HomeExtra { rel } => staged_home_extras(sandbox_root, run_id).join(rel),
+impl HomeStaging for FsStaging {
+    fn exists(&self, sandbox_root: &Path, run_id: &str) -> bool {
+        staging_dir_for_run(sandbox_root, run_id).exists()
     }
-}
 
-/// Un bind-mount d'exception `$HOME` : `source` (dans le staging) → `target` (dans
-/// le conteneur). Calculé par [`extra_mounts`], consommé par
-/// [`crate::sandbox_container::ContainerSpec::extra_mounts`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StagedMount {
-    pub(crate) source: PathBuf,
-    pub(crate) target: PathBuf,
+    fn prepare(
+        &self,
+        home_root: &Path,
+        sandbox_root: &Path,
+        entries: &[String],
+        run_id: &str,
+    ) -> Result<PathBuf> {
+        prepare(home_root, sandbox_root, entries, run_id)
+    }
+
+    fn ensure_mount_anchors(&self, sandbox_root: &Path, run_id: &str) -> Result<()> {
+        ensure_mount_anchors(sandbox_root, run_id)
+    }
+
+    fn extra_mounts(
+        &self,
+        sandbox_root: &Path,
+        run_id: &str,
+        host_home: &Path,
+        entries: &[String],
+    ) -> Vec<StagedMount> {
+        extra_mounts(sandbox_root, run_id, host_home, entries)
+    }
+
+    fn merge_back(&self, home_root: &Path, sandbox_root: &Path, run_id: &str) -> Result<()> {
+        merge_back(home_root, sandbox_root, run_id)
+    }
+
+    fn teardown(&self, sandbox_root: &Path, run_id: &str) -> Result<()> {
+        teardown(sandbox_root, run_id)
+    }
 }
 
 /// La queue variable de `-v` qu'une liste d'entrées gelée produit (#432).
@@ -152,7 +124,7 @@ pub(crate) struct StagedMount {
 /// non.
 ///
 /// Deux filtres, dans cet ordre :
-/// 1. `landing()` == [`crate::sandbox_profile::Landing::HomeExtra`] — une entrée sous
+/// 1. `landing()` == [`crate::domain::profile::Landing::HomeExtra`] — une entrée sous
 ///    `.claude/` est déjà servie par le mount fixe `.claude` et ne reçoit **aucun**
 ///    `-v` propre (dédup obligatoire d'ADR-0031 §4) ;
 /// 2. **règle M1** — la source doit exister sur disque. Un `-v` dont la source hôte
@@ -166,7 +138,7 @@ pub(crate) struct StagedMount {
 ///
 /// Tri par chemin relatif (déterministe pour le golden) ; les imbriqués sont déjà
 /// collapsés à la résolution, la dédup ici est ceinture-bretelles.
-pub(crate) fn extra_mounts(
+pub fn extra_mounts(
     sandbox_root: &Path,
     run_id: &str,
     host_home: &Path,
@@ -175,8 +147,8 @@ pub(crate) fn extra_mounts(
     let extras_root = staged_home_extras(sandbox_root, run_id);
     let mut rels: Vec<&str> = entries
         .iter()
-        .filter_map(|entry| match crate::sandbox_profile::landing(entry) {
-            crate::sandbox_profile::Landing::HomeExtra { rel } => Some(rel),
+        .filter_map(|entry| match landing(entry) {
+            Landing::HomeExtra { rel } => Some(rel),
             _ => None,
         })
         .collect();
@@ -213,12 +185,12 @@ pub(crate) fn extra_mounts(
 /// et le fixup la merge au spawn — ce double write est **voulu**.
 ///
 /// `entries` (#432) occupe le slot de l'ancien `mode` : c'est la liste **résolue et
-/// gelée** dans `RunStarted`, jamais le réglage vivant (ADR-0031 §6). `sandbox_staging::Mode`
+/// gelée** dans `RunStarted`, jamais le réglage vivant (ADR-0031 §6). l'ancien `Mode`
 /// a disparu — les défauts virtuels sont des listes nommées, `minimal` étant la vide.
 ///
 /// Idempotent (`create_dir_all` ; copy-or-overwrite) et **additif** — jamais de
 /// suppression (ADR-0031 §6).
-pub(crate) fn prepare(
+pub fn prepare(
     home_root: &Path,
     sandbox_root: &Path,
     entries: &[String],
@@ -249,7 +221,7 @@ pub(crate) fn prepare(
 /// (un staging préparé par un daemon d'avant #708 n'a pas la racine `pi` : la créer
 /// avant le `docker create` évite le répertoire root-owned de la règle M1 de
 /// [`extra_mounts`]).
-pub(crate) fn ensure_mount_anchors(sandbox_root: &Path, run_id: &str) -> Result<()> {
+pub fn ensure_mount_anchors(sandbox_root: &Path, run_id: &str) -> Result<()> {
     for (harness, set) in pdo_harness::probes::staging_sets() {
         // `claude`'s `.claude` home is the fixed `claude-home` mount, seeded whole by
         // the profile — it needs no separate anchor. `landing(".claude")` classifies
@@ -275,83 +247,6 @@ pub(crate) fn ensure_mount_anchors(sandbox_root: &Path, run_id: &str) -> Result<
     Ok(())
 }
 
-/// Les mounts des **racines de home des harnais first-party** (#708, ADR-0063 §3) :
-/// un `-v <staging>/home/<home_root>:<host_home>/<home_root>:rw` par staging set dont
-/// la racine n'est **pas** déjà servie par un mount fixe (`.claude` l'est —
-/// `claude-home` —, `.pi/agent` ne l'est pas). Montées **vides** à la création du
-/// conteneur, remplies par [`fill_staging_set`] au spawn.
-///
-/// Total (aucun test de disque, contrairement à [`extra_mounts`]) : la source est
-/// créée par [`ensure_mount_anchors`] sur tous les chemins qui mènent au `docker
-/// create`. Ordre = ordre du registre, déterministe pour le golden.
-pub(crate) fn harness_home_mounts(
-    sandbox_root: &Path,
-    run_id: &str,
-    host_home: &Path,
-) -> Vec<StagedMount> {
-    use crate::sandbox_profile::Landing;
-    pdo_harness::probes::staging_sets()
-        .into_iter()
-        .filter(|(_, set)| set.home_root != CLAUDE_HOME_REL)
-        .filter_map(
-            |(_, set)| match crate::sandbox_profile::landing(set.home_root) {
-                Landing::HomeExtra { rel } => Some(StagedMount {
-                    source: staged_home_extras(sandbox_root, run_id).join(rel),
-                    target: host_home.join(rel),
-                }),
-                // `.claude.json`, or `.claude/<sub>` : servis par les mounts fixes.
-                Landing::ClaudeHome { .. } | Landing::ClaudeJson => None,
-            },
-        )
-        .collect()
-}
-
-/// Ce qu'a produit [`fill_staging_set`] pour un `(Run, harnais)`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StagingFill {
-    /// Le harnais ne déclare aucun set (ADR-0051 : valeur déclarée, dite une fois
-    /// par l'appelant).
-    NoSet,
-    /// Le set vient d'être copié — c'est le premier spawn du Run qui résout ce
-    /// harnais.
-    Filled(StagingSet),
-    /// Le marqueur existait : un spawn antérieur du Run a déjà posé ce set (nœud
-    /// repris, second nœud du même harnais, manager puis nœud).
-    AlreadyFilled(StagingSet),
-}
-
-impl StagingFill {
-    /// Le set résolu, quel que soit le moment de sa copie ; `None` sans set.
-    pub(crate) fn set(&self) -> Option<&StagingSet> {
-        match self {
-            StagingFill::NoSet => None,
-            StagingFill::Filled(set) | StagingFill::AlreadyFilled(set) => Some(set),
-        }
-    }
-
-    /// L'env du set, prêt pour le `docker exec` (vide sans set — `claude` n'en a pas,
-    /// donc l'argv de ses nœuds reste byte-identique).
-    pub(crate) fn env(&self) -> Vec<(String, String)> {
-        self.set()
-            .map(|set| {
-                set.env
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-}
-
-/// `<staging_dir>/sets/<harness>` — le **marqueur** « le set de ce harnais est posé
-/// dans ce Run ». Écrit **après** la copie : un crash entre les deux fait recopier
-/// (additif, idempotent), jamais sauter.
-fn staging_set_marker(sandbox_root: &Path, run_id: &str, harness: &str) -> PathBuf {
-    staging_dir_for_run(sandbox_root, run_id)
-        .join("sets")
-        .join(harness)
-}
-
 /// Pose le staging set de `harness` dans le staging du Run **si ce Run ne l'a pas
 /// encore** (#708, ADR-0063 §3) : la première session du Run qui résout ce harnais
 /// copie le set ([`apply_staging_set`]) puis écrit le marqueur ; toute session
@@ -366,7 +261,7 @@ fn staging_set_marker(sandbox_root: &Path, run_id: &str, harness: &str) -> PathB
 ///
 /// **Fail-fast** : une garantie intenable doit échouer au spawn (le nœud passe
 /// `Interrupted`, ADR-0049), pas produire une session qui pend sur un dialogue.
-pub(crate) fn fill_staging_set(
+pub fn fill_staging_set(
     home_root: &Path,
     sandbox_root: &Path,
     run_id: &str,
@@ -408,269 +303,6 @@ pub(crate) fn fill_staging_set(
     Ok(StagingFill::Filled(set))
 }
 
-/// Phase 1 : une passe unique sur la liste gelée, chaque entrée routée par le
-/// classificateur **unique** [`crate::sandbox_profile::landing`] — le même que
-/// [`extra_mounts`] consulte, donc la vue *copie* et la vue *mount* ne peuvent pas
-/// diverger.
-///
-/// N'inclut **aucune** entrée d'un staging set : ceux-ci tournent juste après, quelle
-/// que soit la liste. Une liste vide (`minimal`) est un no-op exact — la traduction
-/// littérale de l'ancien bras `Mode::Minimal => {}`.
-///
-/// Politique manquant-sur-l'hôte : `warn!` + skip, pour les entrées du **défaut**
-/// comme pour les **extras**. L'échec dur a été écarté (plan #432 D5) : il ferait
-/// dépendre la politique de *qui a tapé le chemin* plutôt que de ce dont le conteneur
-/// a besoin — sur une instance à Triggers horaires, désinstaller `gh` tuerait chaque
-/// tir jusqu'à édition d'un profil. Et la règle M1 d'[`extra_mounts`] supprime le
-/// danger réel (le répertoire root-owned), qui était la vraie justification du
-/// fail-fast.
-fn materialise_entries(
-    home_root: &Path,
-    src: &Path,
-    home: &Path,
-    staged_json: &Path,
-    staging: &Path,
-    entries: &[String],
-) -> Result<()> {
-    use crate::sandbox_profile::Landing;
-
-    // `copy_root` du bloc `.claude` : la racine canonique `~/.claude`. Tout symlink
-    // dont la cible sort de CET arbre est copié déréférencé (sa cible réelle n'est ni
-    // copiée ni montée → danglerait, #409). Résolue une fois, partagée par toutes les
-    // entrées `ClaudeHome` — c'est ce qui garde un lien `skills/x → ../agents/y` un
-    // lien.
-    let claude_copy_root = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
-
-    for entry in entries {
-        match crate::sandbox_profile::landing(entry) {
-            // Glob à un niveau (seul `.claude/*.md` en livre un) : capte CLAUDE.md et
-            // ses imports siblings type RTK.md. Le motif est porté **tel quel** dans la
-            // liste gelée, jamais expansé à la résolution — pas d'IO au chokepoint de
-            // création, et la liste gelée reste byte-identique à ce que l'éditeur montre.
-            Landing::ClaudeHome { rel, glob: true } => {
-                copy_glob_one_level(src, home, rel)?;
-            }
-            Landing::ClaudeHome { rel, glob: false } => {
-                let from = src.join(rel);
-                let to = home.join(rel);
-                stage_path(&from, &to, &claude_copy_root, &[], entry)?;
-            }
-            // `.claude.json` sibling, verbatim (mode préservé). La confiance et
-            // l'onboarding y sont mergés ensuite par le fixup `ClaudeJsonBaseline` (G4).
-            Landing::ClaudeJson => {
-                let from = home_root.join(".claude.json");
-                if !from.exists() {
-                    warn!(
-                        "sandbox staging: profile entry `{entry}` is absent on the host \
-                         ({}) — skipped",
-                        from.display()
-                    );
-                } else {
-                    copy_file_if_present(&from, staged_json)?;
-                }
-            }
-            // Exception `$HOME` : copiée sous `<staging>/home/<rel>`, jamais bind-montée
-            // depuis l'hôte (ADR-0031 §4). `copy_root` = la racine canonique de
-            // **cette** entrée, pas `~/.claude` — sinon tout symlink interne à
-            // `.config/gh` serait classé « échappant » et déréférencé.
-            Landing::HomeExtra { rel } => {
-                let from = home_root.join(rel);
-                let to = staging.join("home").join(rel);
-                let copy_root = std::fs::canonicalize(&from).unwrap_or_else(|_| from.clone());
-                stage_path(&from, &to, &copy_root, &[], entry)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Stage une entrée dont on ne sait pas a priori si c'est un fichier ou un dossier.
-/// Dossier → walk préservant symlinks + bits exécutables ([`copy_tree_preserving`],
-/// best-effort par entrée, `skip` = sous-chemins hôte absolus à ne pas copier) ;
-/// fichier → [`std::fs::copy`] (mode préservé, dont 0600) ; absent → `warn!` + skip.
-fn stage_path(
-    from: &Path,
-    to: &Path,
-    copy_root: &Path,
-    skip: &[PathBuf],
-    entry: &str,
-) -> Result<()> {
-    let Ok(md) = std::fs::symlink_metadata(from) else {
-        warn!(
-            "sandbox staging: profile entry `{entry}` is absent on the host ({}) — skipped",
-            from.display()
-        );
-        return Ok(());
-    };
-    // Un symlink top-level est suivi via `is_dir()`/`copy_file_if_present` : la cible
-    // est ce que l'utilisateur a désigné.
-    if md.file_type().is_symlink() || md.file_type().is_dir() {
-        if from.is_dir() {
-            copy_tree_preserving(from, to, copy_root, skip, 0);
-            return Ok(());
-        }
-        if !from.exists() {
-            warn!(
-                "sandbox staging: profile entry `{entry}` is a broken symlink ({}) — skipped",
-                from.display()
-            );
-            return Ok(());
-        }
-    }
-    copy_file_if_present(from, to)
-}
-
-/// Copie les entrées top-level de `src_dir` dont le nom matche `pattern` (un `*`
-/// unique, ex. `*.md`) vers `dst_dir`. Glob **à un niveau**, sans dotglob implicite —
-/// c'est exactement la sémantique de l'ancien `copy_top_level_md`. Un motif sans `*`
-/// dégrade en égalité de nom. `src_dir` absent = no-op.
-fn copy_glob_one_level(src_dir: &Path, dst_dir: &Path, pattern: &str) -> Result<()> {
-    // Le motif ne porte qu'un segment (les entrées multi-segment à glob n'existent
-    // pas dans le défaut) ; un motif imbriqué serait ignoré plutôt que mal interprété.
-    if pattern.contains('/') {
-        warn!("sandbox staging: nested glob entry `{pattern}` is not supported — skipped");
-        return Ok(());
-    }
-    let (prefix, suffix) = match pattern.split_once('*') {
-        Some((p, s)) => (p, s),
-        None => (pattern, ""),
-    };
-    let Ok(entries) = std::fs::read_dir(src_dir) else {
-        return Ok(());
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.len() < prefix.len() + suffix.len()
-            || !name.starts_with(prefix)
-            || !name.ends_with(suffix)
-        {
-            continue;
-        }
-        let from = entry.path();
-        if from.is_file() {
-            let to = dst_dir.join(entry.file_name());
-            std::fs::copy(&from, &to).with_context(|| {
-                format!("copy glob match {} -> {}", from.display(), to.display())
-            })?;
-        }
-    }
-    Ok(())
-}
-
-/// Applique **un staging set** (ADR-0063) au staging d'un Run : les garanties que
-/// `prepare` tient quel que soit le profil. Écrit exclusivement dans le staging ; ne
-/// touche jamais l'hôte. Trois gestes, dans cet ordre, sur des chemins disjoints :
-///
-/// 1. **Entrées** — chaque `rel` copié de `$HOME/<rel>` vers [`staged_path`]. Un
-///    fichier via [`std::fs::copy`] (mode préservé, dont 0600 des credentials) ; un
-///    répertoire via [`copy_tree_preserving`] en sautant `excludes` et les puits de
-///    transcripts. Absent hôte → no-op, avec la ligne `info!` de l'entrée si elle en
-///    porte une (un `warn!` par Run entraînerait à ignorer les warnings). Présent
-///    mais copie en échec → erreur **dure** : c'est une surprise de conformité, pas
-///    un détail.
-/// 2. **Puits de transcripts** — créés **vides** (jamais copiés : ni le puits hôte ni
-///    le sous-dir encodé n'existent pour un Run frais ; les copier casserait
-///    l'idempotence du merge-back et le calcul de coût).
-/// 3. **Autonomy fixups** — les écritures qui désarment un dialogue bloquant
-///    ([`AutonomyFixup`]), chacune un merge non destructif dans ce que la phase 1 a
-///    posé, ou une synthèse quand elle n'a rien posé.
-///
-/// Pour `claude`, c'est ADR-0031 §1 mot pour mot : G1 credentials, G2 managed
-/// settings de l'org (entrées) ; G5 `projects/` vide (puits) ; G3 bypass permissions,
-/// G4 baseline `.claude.json` (fixups). L'`env` du set n'est pas posé ici : il part
-/// sur le `docker exec` de la session ([`StagingFill::env`]) ; `claude` n'en a pas.
-///
-/// Politique d'écriture : **fail-fast**. Une garantie intenable doit échouer au
-/// spawn, pas produire une session qui pend sur un dialogue sans personne devant. Ni le best-effort de
-/// [`copy_tree_preserving`] (arbre de 1 Go volatil) ni l'avalage de
-/// [`copy_jsonl_tree`] (transition terminale, ADR-0023) ne s'appliquent ici.
-fn apply_staging_set(
-    home_root: &Path,
-    sandbox_root: &Path,
-    run_id: &str,
-    harness: &str,
-    set: &StagingSet,
-    trusted_root: Option<&Path>,
-) -> Result<()> {
-    // 1 — entrées. `skip` = exclusions + puits de transcripts, en chemins hôte absolus
-    // (c'est ce que le walk compare).
-    let skip: Vec<PathBuf> = set
-        .excludes
-        .iter()
-        .chain(set.transcripts.iter())
-        .map(|rel| home_root.join(rel))
-        .collect();
-    for entry in set.entries {
-        let from = home_root.join(entry.rel);
-        let to = staged_path(sandbox_root, run_id, entry.rel);
-        if !from.exists() {
-            if let Some(note) = entry.absent_note {
-                // `info!` et non `debug!` : le filtre par défaut du daemon est
-                // `pdo_daemon=info,info` (`main.rs`).
-                info!(
-                    "sandbox staging: no {} at {} — {note}",
-                    entry.rel,
-                    from.display()
-                );
-            }
-            continue;
-        }
-        if from.is_dir() {
-            let copy_root = std::fs::canonicalize(&from).unwrap_or_else(|_| from.clone());
-            copy_tree_preserving(&from, &to, &copy_root, &skip, 0);
-        } else {
-            if let Some(parent) = to.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("create parent {}", parent.display()))?;
-            }
-            std::fs::copy(&from, &to).with_context(|| {
-                format!(
-                    "stage {harness} set entry {} -> {}",
-                    from.display(),
-                    to.display()
-                )
-            })?;
-        }
-    }
-
-    // 2 — puits de transcripts, créés VIDES.
-    for rel in set.transcripts {
-        let sink = staged_path(sandbox_root, run_id, rel);
-        std::fs::create_dir_all(&sink).with_context(|| {
-            format!(
-                "create staged {harness} transcripts sink {}",
-                sink.display()
-            )
-        })?;
-    }
-
-    // 3 — autonomy fixups.
-    for fixup in set.fixups {
-        match fixup {
-            // G3 — bypass permissions. `insert` (pas `entry().or_insert()`) : un
-            // `false` hôte doit être écrasé, sinon l'agent se bloque sur le prompt.
-            // Pas de `chmod` (ce n'est pas un secret ; `fs::write` tronque en place et
-            // préserve donc le mode hôte en `full`) et pas de tmp+rename : aucun
-            // lecteur concurrent n'existe avant le conteneur — contrairement à
-            // `merge_back`/`atomic_copy_into`.
-            AutonomyFixup::ClaudeBypassPermissions => {
-                let settings = staged_claude_home(sandbox_root, run_id).join(SETTINGS_FILE);
-                edit_json_object(&settings, "staged settings.json", |obj| {
-                    obj.insert(BYPASS_PERMISSIONS_KEY.to_string(), serde_json::json!(true));
-                })?;
-            }
-            // G4 — baseline du `.claude.json` stagé (onboarding + confiance).
-            AutonomyFixup::ClaudeJsonBaseline => {
-                let staged_json = staged_path(sandbox_root, run_id, ".claude.json");
-                ensure_claude_json_baseline(&staged_json, trusted_root)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
 /// Récupère les transcripts (`**/*.jsonl`) de **chaque puits déclaré par un staging
 /// set** ([`pdo_harness::probes::staging_sets`] ; `claude` : `.claude/projects`,
 /// `pi` : `.pi/agent/sessions`) du staging vers `<home_root>/<puits>/`,
@@ -688,7 +320,7 @@ fn apply_staging_set(
 /// **Best-effort** : tolère tout échec `read_dir`/`copy` sans jamais faire échouer
 /// l'appelant (la transition terminale du Run ne doit pas dépendre de ce merge).
 /// `projects/` staging absent (run sans session) = no-op propre.
-pub(crate) fn merge_back(home_root: &Path, sandbox_root: &Path, run_id: &str) -> Result<()> {
+pub fn merge_back(home_root: &Path, sandbox_root: &Path, run_id: &str) -> Result<()> {
     for (_, set) in pdo_harness::probes::staging_sets() {
         for rel in set.transcripts {
             let src = staged_path(sandbox_root, run_id, rel);
@@ -713,330 +345,23 @@ pub(crate) fn merge_back(home_root: &Path, sandbox_root: &Path, run_id: &str) ->
 }
 
 /// Supprime `<sandbox_root>/<run_id>/`. No-op si absent (best-effort, miroir de
-/// [`crate::worktree_ops::reap_orphan_sub_worktree`]).
-pub(crate) fn teardown(sandbox_root: &Path, run_id: &str) -> Result<()> {
+/// `worktree_ops::reap_orphan_sub_worktree`).
+pub fn teardown(sandbox_root: &Path, run_id: &str) -> Result<()> {
     let _ = std::fs::remove_dir_all(staging_dir_for_run(sandbox_root, run_id));
     Ok(())
 }
 
-/// `(home_root, sandbox_root)` = `($HOME, $HOME/.pdo/sandbox)`. `None` si `HOME`
-/// est absent. Câblé par le daemon (#407) ; les unit tests injectent des temp
-/// dirs et bypassent ce résolveur (pas de swap `HOME` → pas de mutex global).
-pub(crate) fn default_roots_from_env() -> Option<(PathBuf, PathBuf)> {
-    let home = PathBuf::from(std::env::var("HOME").ok()?);
-    let sandbox = home.join(".pdo").join("sandbox");
-    Some((home, sandbox))
-}
-
-/// Copie `src` → `dst` s'il existe (fichier de l'allowlist absent = no-op).
-/// [`std::fs::copy`] préserve le mode sous Unix (dont 0600 des credentials), même
-/// en écrasant une destination existante.
-fn copy_file_if_present(src: &Path, dst: &Path) -> Result<()> {
-    if !src.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create parent {}", parent.display()))?;
-    }
-    std::fs::copy(src, dst)
-        .with_context(|| format!("copy {} -> {}", src.display(), dst.display()))?;
-    Ok(())
-}
-
-/// *Lire-comme-objet-ou-dégrader → muter → écrire pretty.* La **politique de
-/// dégradation unique** du module (#426) : fichier absent ou illisible → objet vide
-/// (synthèse) ; objet → merge ; JSON valide mais **pas** un objet, ou corrompu →
-/// `warn!` + objet vide. `what` nomme le fichier dans les logs et les erreurs.
-///
-/// Volontairement sans paramètre de mode de fichier : la confidentialité reste au
-/// callsite (0600 pour le `.claude.json`, rien pour le `settings.json`), là où
-/// l'asymétrie est décidée.
-fn edit_json_object(
-    path: &Path,
-    what: &str,
-    mutate: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
-) -> Result<()> {
-    let mut value = match std::fs::read_to_string(path) {
-        Ok(body) => serde_json::from_str(&body).unwrap_or_else(|e| {
-            warn!(
-                "sandbox staging: {what} at {} is not valid JSON ({e}); replacing with a synthesised object",
-                path.display()
-            );
-            serde_json::json!({})
-        }),
-        Err(_) => serde_json::json!({}),
-    };
-    if !value.is_object() {
-        warn!(
-            "sandbox staging: {what} at {} is not a JSON object; replacing with a synthesised object",
-            path.display()
-        );
-        value = serde_json::json!({});
-    }
-    let obj = value.as_object_mut().expect("value forced to object above");
-    mutate(obj);
-
-    let body = serde_json::to_string_pretty(&value).with_context(|| format!("serialize {what}"))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create parent {}", parent.display()))?;
-    }
-    std::fs::write(path, body).with_context(|| format!("write {what} {}", path.display()))?;
-    Ok(())
-}
-
-/// Garantie **G4** du set de `claude` ([`AutonomyFixup::ClaudeJsonBaseline`]) : le `.claude.json` stagé porte
-/// `hasCompletedOnboarding` et, si `trusted_root` est fournie, la confiance de cette
-/// racine (héritée par les descendants → couvre les worktrees de nodes). Merge non
-/// destructif dans le fichier hôte copié en `full` (profil `oauthAccount`, autres
-/// repos trustés… préservés) ; synthèse en `minimal`. 0600 réappliqué (le fichier
-/// peut porter un token).
-///
-/// `hasCompletedOnboarding` en `or_insert` (**défaut défensif** : une valeur hôte
-/// existante est respectée) mais les deux drapeaux de confiance en `insert` (ce sont
-/// des **garanties** : un `false` bloquerait un Run autonome).
-fn ensure_claude_json_baseline(path: &Path, trusted_root: Option<&Path>) -> Result<()> {
-    edit_json_object(path, "staged .claude.json", |obj| {
-        obj.entry("hasCompletedOnboarding")
-            .or_insert_with(|| serde_json::json!(true));
-        let Some(root) = trusted_root else {
-            return; // pas de bloc `projects` — objet nu (hors `full`, où l'hôte le porte)
-        };
-        let projects = obj
-            .entry("projects")
-            .or_insert_with(|| serde_json::json!({}));
-        if !projects.is_object() {
-            *projects = serde_json::json!({});
-        }
-        let projects = projects.as_object_mut().expect("projects forced to object");
-        let key = root.to_string_lossy().into_owned();
-        let entry = projects.entry(key).or_insert_with(|| serde_json::json!({}));
-        if !entry.is_object() {
-            *entry = serde_json::json!({});
-        }
-        let entry = entry
-            .as_object_mut()
-            .expect("project entry forced to object");
-        entry.insert(
-            "hasTrustDialogAccepted".to_string(),
-            serde_json::json!(true),
-        );
-        entry.insert(
-            "hasCompletedProjectOnboarding".to_string(),
-            serde_json::json!(true),
-        );
-    })?;
-    set_mode_0600(path)
-}
-
-/// `chmod 0600` (le `.claude.json` généré contient un token potentiel côté
-/// conteneur ; [`std::fs::write`] laisserait 0644 par défaut).
-fn set_mode_0600(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("chmod 0600 {}", path.display()))
-}
-
-/// Profondeur de récursion max du walk `copy` — garde-fou défensif contre un cycle
-/// pathologique de symlinks **échappants** (les liens intra-arbre sont recréés,
-/// jamais suivis, donc ne peuvent pas boucler ; seuls les échappants déréférencés
-/// récursent dans un arbre étranger). Un vrai `~/.claude` fait quelques niveaux.
-const MAX_COPY_DEPTH: u32 = 64;
-
-/// Walk `src` → `dst` en **préservant les bits exécutables** et en traitant les
-/// symlinks selon qu'ils **restent dans** l'arbre copié ou en **sortent** (voir
-/// [`stage_symlink`]). Marche par entrée via [`std::fs::symlink_metadata`] (ne suit
-/// PAS les liens) :
-/// - symlink → [`stage_symlink`] (verbatim si intra-`copy_root`, déréférencé sinon) ;
-/// - dir → `create_dir_all` + récursion ;
-/// - file → [`std::fs::copy`] (préserve le mode/exec bit gratis sous Unix) ;
-/// - autre (socket/fifo/device) → skip.
-///
-/// **Best-effort par entrée** (#409, D3) : toute op ratée (`create_dir`, `read_dir`,
-/// `stat`, `copy`, `symlink`) est loggée en `warn!` et **sautée** — la fonction ne
-/// remonte jamais d'erreur. Un `~/.claude` volumineux et volatil (autres process
-/// Claude qui mutent `node_modules`) ne doit pas faire échouer le Run.
-///
-/// `copy_root` = racine (canonique) au-delà de laquelle une cible de symlink est
-/// jugée « échappante ». `skip` = chemins hôte absolus **non copiés** (exclusions et
-/// puits de transcripts d'un staging set, ADR-0063 ; vide pour le profil). `depth` =
-/// profondeur courante ([`MAX_COPY_DEPTH`]).
-///
-/// N.B. : ne PAS réutiliser `copy_dir_all` de `lib.rs` — il n'est pas
-/// symlink-aware (`std::fs::copy` déréférence).
-fn copy_tree_preserving(src: &Path, dst: &Path, copy_root: &Path, skip: &[PathBuf], depth: u32) {
-    if depth > MAX_COPY_DEPTH {
-        warn!(
-            "sandbox copy: max depth {MAX_COPY_DEPTH} exceeded at {}, skipping subtree",
-            src.display()
-        );
-        return;
-    }
-    if let Err(e) = std::fs::create_dir_all(dst) {
-        warn!(
-            "sandbox copy: cannot create {} ({e:#}); skipping subtree",
-            dst.display()
-        );
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(src) else {
-        warn!(
-            "sandbox copy: cannot read dir {}; skipping subtree",
-            src.display()
-        );
-        return;
-    };
-    for entry in entries.flatten() {
-        let from = entry.path();
-        if skip.contains(&from) {
-            continue;
-        }
-        let to = dst.join(entry.file_name());
-        let Ok(md) = std::fs::symlink_metadata(&from) else {
-            warn!(
-                "sandbox copy: cannot stat {}; skipping entry",
-                from.display()
-            );
-            continue;
-        };
-        let ft = md.file_type();
-        if ft.is_symlink() {
-            stage_symlink(&from, &to, copy_root, depth);
-        } else if ft.is_dir() {
-            copy_tree_preserving(&from, &to, copy_root, skip, depth + 1);
-        } else if ft.is_file() {
-            if let Err(e) = std::fs::copy(&from, &to) {
-                warn!(
-                    "sandbox copy: skip file {} -> {} ({e:#})",
-                    from.display(),
-                    to.display()
-                );
-            }
-        }
-    }
-}
-
-/// Traite une entrée symlink d'un walk `copy`. Une cible **intra-arbre** (toujours
-/// sous `copy_root`, ex. `../semver/bin/x` ou un sibling) est recréée **verbatim** —
-/// préserve les cycles `node_modules/.bin` et les liens relatifs. Une cible qui
-/// **échappe** `copy_root` (ex. un skill lié à `~/.agents/…`, ou un lien absolu)
-/// **danglerait** dans le conteneur (sa cible réelle n'est ni copiée ni montée) →
-/// on **déréférence** : le contenu réel est copié à la place. La cible déréférencée
-/// devient son propre `copy_root` pour que ses liens internes qui y restent restent
-/// des liens. Cible cassée / illisible → skip (best-effort, jamais d'échec).
-fn stage_symlink(from: &Path, to: &Path, copy_root: &Path, depth: u32) {
-    let Ok(link_target) = std::fs::read_link(from) else {
-        warn!("sandbox copy: skip unreadable symlink {}", from.display());
-        return;
-    };
-    // Résoudre la cible en chemin absolu (relatif → joint au parent du lien) puis
-    // canonicaliser : sert à tester l'échappement ET à atteindre le contenu réel.
-    // Un lien cassé/bouclant fait échouer `canonicalize` → skip (jamais d'échec).
-    let resolved = if link_target.is_absolute() {
-        link_target.clone()
-    } else {
-        match from.parent() {
-            Some(parent) => parent.join(&link_target),
-            None => link_target.clone(),
-        }
-    };
-    let Ok(canonical) = std::fs::canonicalize(&resolved) else {
-        warn!(
-            "sandbox copy: skip broken symlink {} -> {}",
-            from.display(),
-            link_target.display()
-        );
-        return;
-    };
-    if canonical.starts_with(copy_root) {
-        let _ = std::fs::remove_file(to);
-        if let Err(e) = std::os::unix::fs::symlink(&link_target, to) {
-            warn!(
-                "sandbox copy: skip symlink {} -> {} ({e:#})",
-                to.display(),
-                link_target.display()
-            );
-        }
-    } else if canonical.is_dir() {
-        copy_tree_preserving(&canonical, to, &canonical, &[], depth + 1);
-    } else if canonical.is_file() {
-        let _ = std::fs::remove_file(to);
-        if let Err(e) = std::fs::copy(&canonical, to) {
-            warn!(
-                "sandbox copy: skip deref file {} -> {} ({e:#})",
-                canonical.display(),
-                to.display()
-            );
-        }
-    }
-}
-
-/// Recopie récursivement les `*.jsonl` de `src_dir` vers `dest_dir`, copy-if-
-/// absent-or-larger, atomiquement. Miroir de
-/// [`crate::run_cost`]'s `collect_jsonl_recursive` (même prédicat `is_dir` +
-/// extension `jsonl`) pour que le copy-set égale le read-set du coût.
-/// Best-effort : tout échec est avalé (jamais de propagation vers l'appelant).
-fn copy_jsonl_tree(src_dir: &Path, dest_dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(src_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let from = entry.path();
-        if from.is_dir() {
-            // Préserve le sous-arbre relatif (`<uuid>/subagents/agent-X.jsonl`),
-            // jamais un aplatissement par basename (sinon collisions de sessions).
-            copy_jsonl_tree(&from, &dest_dir.join(entry.file_name()));
-        } else if from.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-            // `create_dir_all` paresseux : seulement quand un `.jsonl` existe.
-            if std::fs::create_dir_all(dest_dir).is_err() {
-                continue;
-            }
-            let dst = dest_dir.join(entry.file_name());
-            let should_copy = match std::fs::metadata(&dst) {
-                Err(_) => true, // absent côté hôte
-                Ok(dst_md) => {
-                    let src_len = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                    src_len > dst_md.len() // append-only ⇒ plus grand = contenu nouveau
-                }
-            };
-            if should_copy {
-                let _ = atomic_copy_into(&from, &dst, dest_dir);
-            }
-        }
-    }
-}
-
-/// Compteur monotone pour des noms de fichiers temporaires uniques (évite qu'un
-/// merge concurrent — modal Stats calculant le coût, resume — collisionne).
-static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// Copie atomique de `src` vers `dst` : `tmp` dans `dest_dir` (même filesystem)
-/// puis `rename`. Un `compute_run_cost` concurrent ne doit jamais lire une ligne
-/// à moitié écrite — `fs::copy` seul n'est pas atomique. Le `tmp` ne finit pas en
-/// `.jsonl` → le lecteur de coût l'ignore même s'il apparaît transitoirement.
-fn atomic_copy_into(src: &Path, dst: &Path, dest_dir: &Path) -> Result<()> {
-    let base = dst
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "transcript".to_string());
-    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = dest_dir.join(format!("{base}.pdo-merge-tmp.{}.{seq}", std::process::id()));
-    std::fs::copy(src, &tmp)
-        .with_context(|| format!("copy {} -> {}", src.display(), tmp.display()))?;
-    match std::fs::rename(&tmp, dst) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp); // ne pas laisser d'orphelin
-            Err(e).with_context(|| format!("rename {} -> {}", tmp.display(), dst.display()))
-        }
-    }
-}
-
+/// Stage 3 (ADR-0080): the adapter against a real temporary home.
 #[cfg(test)]
 mod tests {
+    use super::set::{BYPASS_PERMISSIONS_KEY, SETTINGS_FILE};
     use super::*;
 
+    /// Baseline de managed settings poussée par l'organisation, cachée par Claude Code
+    /// dans `~/.claude/`. Depuis ADR-0063 le chemin runtime est une **entrée du staging set
+    /// de `claude`** ([`pdo_harness::probes::CLAUDE_STAGING_SET`]) ; le nom court ne sert plus
+    /// qu'à ces fixtures, qui le pinnent contre le set.
+    const REMOTE_SETTINGS_FILE: &str = "remote-settings.json";
     /// The pre-#708 shape of `prepare`, for the tests that pin `claude`'s five
     /// guarantees: stage the profile, then fill `claude`'s set as the first claude
     /// spawn of the Run would. New tests that care about the *moment* of the copy
@@ -1107,8 +432,8 @@ mod tests {
     /// `Mode::Full` dans ces tests. Passe par le vrai résolveur (et non par une copie
     /// de la constante) pour qu'un changement du défaut casse ces tests, pas les mente.
     fn full_entries() -> Vec<String> {
-        let base = crate::sandbox_profile::base_entries(crate::sandbox_profile::FULL_PROFILE);
-        crate::sandbox_profile::resolve_entry_list(&base, &[], &[]).entries
+        let base = crate::domain::profile::base_entries(crate::domain::profile::FULL_PROFILE);
+        crate::domain::profile::resolve_entry_list(&base, &[], &[]).entries
     }
 
     fn fabricate_home(home: &Path) {
@@ -1178,23 +503,6 @@ mod tests {
     /// Contenu du `~/.gitconfig` fabriqué (comparé octet pour octet par les tests
     /// « l'hôte n'est jamais muté »).
     const HOST_GITCONFIG: &str = "[user]\n\tname = Host User\n\temail = host@example.com\n";
-
-    #[test]
-    fn staging_dir_for_run_follows_canonical_schema() {
-        let sandbox = Path::new("/home/u/.pdo/sandbox");
-        assert_eq!(
-            staging_dir_for_run(sandbox, "run-x"),
-            PathBuf::from("/home/u/.pdo/sandbox/run-x")
-        );
-        assert_eq!(
-            staged_claude_home(sandbox, "run-x"),
-            PathBuf::from("/home/u/.pdo/sandbox/run-x/claude-home")
-        );
-        assert_eq!(
-            staged_claude_json(sandbox, "run-x"),
-            PathBuf::from("/home/u/.pdo/sandbox/run-x/.claude.json")
-        );
-    }
 
     #[test]
     fn prepare_full_reproduces_allowlist_and_excludes_projects() {
@@ -2379,5 +1687,75 @@ mod tests {
         assert!(host_projects(home)
             .join(format!("{ENC}/sess.jsonl"))
             .is_file());
+    }
+
+    /// #708: filling `pi`'s set copies `.pi/agent` (minus `sessions/`) into the staged
+    /// pi home, creates the empty `sessions/` sink, and reports pi's two env vars — no
+    /// fixup, no `.claude` write. A second fill is a marker no-op.
+    #[test]
+    fn filling_pi_set_stages_the_agent_home_and_reports_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join(".pi/agent/extensions")).unwrap();
+        std::fs::write(home.join(".pi/agent/auth.json"), "{\"token\":1}").unwrap();
+        std::fs::write(home.join(".pi/agent/models.json"), "[]").unwrap();
+        // A host session file that must NOT be copied on the way in.
+        std::fs::create_dir_all(home.join(".pi/agent/sessions/enc")).unwrap();
+        std::fs::write(home.join(".pi/agent/sessions/enc/s.jsonl"), "x\n").unwrap();
+        let sandbox_root = tmp.path().join("sandbox");
+
+        let fill =
+            fill_staging_set(&home, &sandbox_root, "r1", pdo_harness::registry::PI, None).unwrap();
+        assert_eq!(
+            fill.env(),
+            vec![
+                ("PI_SKIP_VERSION_CHECK".to_string(), "1".to_string()),
+                ("PI_TELEMETRY".to_string(), "0".to_string()),
+            ]
+        );
+        let staged = staged_path(&sandbox_root, "r1", ".pi/agent");
+        assert!(staged.join("auth.json").is_file(), "auth copied");
+        assert!(staged.join("models.json").is_file(), "catalogue copied");
+        assert!(staged.join("extensions").is_dir(), "extensions copied");
+        let sink = staged.join("sessions");
+        assert!(sink.is_dir(), "sessions sink created");
+        assert!(
+            !sink.join("enc/s.jsonl").exists(),
+            "host sessions are NOT copied in (transcripts sink is empty)"
+        );
+
+        // Idempotent: second fill is a marker no-op (AlreadyFilled), env still reported.
+        let again =
+            fill_staging_set(&home, &sandbox_root, "r1", pdo_harness::registry::PI, None).unwrap();
+        assert!(!again.env().is_empty());
+    }
+
+    /// A claude-only Run never carries pi's auth: filling only `claude` leaves the
+    /// staged pi home empty (it exists as a mount anchor, but nothing was copied).
+    #[test]
+    fn a_claude_only_run_has_no_pi_auth_in_its_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
+        std::fs::create_dir_all(home.join(".pi/agent")).unwrap();
+        std::fs::write(home.join(".pi/agent/auth.json"), "{}").unwrap();
+        let sandbox_root = tmp.path().join("sandbox");
+
+        prepare(&home, &sandbox_root, &[], "r1").unwrap();
+        fill_staging_set(
+            &home,
+            &sandbox_root,
+            "r1",
+            pdo_harness::registry::CLAUDE,
+            None,
+        )
+        .unwrap();
+
+        let pi_home = staged_path(&sandbox_root, "r1", ".pi/agent");
+        assert!(
+            !pi_home.join("auth.json").exists(),
+            "a claude-only Run must not have pi's auth in its staging"
+        );
     }
 }

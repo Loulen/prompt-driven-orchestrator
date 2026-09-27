@@ -21,6 +21,7 @@
 //! `tmux_session_manager::reaper_ttl_with`, `guard_runner::guard_timeout_with`);
 //! this module only persists the `stored` tier.
 
+use pdo_sandbox::domain::image::{DOCKERFILE_PATH_ENV, IMAGE_SOURCE_ENV};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use ts_rs::TS;
@@ -52,13 +53,12 @@ pub(crate) struct InstanceConfig {
     /// then the account default (no `--model`). Free-text pass-through, no enum
     /// (ADR-0001): an invalid id fails loud in `claude`.
     pub default_model: Option<String>,
-    /// Stored instance-wide default sandbox mode (`"off"` | `"full"` | `"minimal"`), or
-    /// `None` when unset (#410). `None` falls through to the env seam
-    /// ([`crate::event_log::DEFAULT_SANDBOX_ENV`]) then the built-in default (`off`,
-    /// the byte-identical host path). `Some("")` is the clear sentinel — [`update`]
-    /// normalises it to SQL `NULL` so it never wins precedence. The resolver
-    /// ([`crate::event_log::default_sandbox_with`]) owns the precedence; the create-run
-    /// chokepoint then feeds it through [`crate::event_log::effective_sandbox`].
+    /// Stored instance-wide default sandbox mode (`"off"` | `"full"` | `"minimal"`), or `None`
+    /// when unset (#410), which falls through to the env seam (`PDO_DEFAULT_SANDBOX`) then the
+    /// built-in default (`off`, the byte-identical host path). `Some("")` is the clear sentinel
+    /// — [`update`] normalises it to SQL `NULL` so it never wins precedence. The resolver
+    /// ([`pdo_sandbox::adapters::env::default_sandbox_with`]) owns the precedence; the
+    /// create-run chokepoint then feeds it through [`pdo_sandbox::domain::mode::effective_sandbox`].
     pub default_sandbox: Option<String>,
     /// Stored turn-end auto-completion flag as `0`/`1`, or `None` when unset (#469).
     /// `None` falls through to the env seam
@@ -861,8 +861,8 @@ pub(crate) fn resolve_instance_auto_fail(stored: Option<i64>) -> bool {
 /// Ordered as the boot warning should read them, and paired with the env var that survived — the
 /// only remaining instance-wide way to move that same knob.
 pub(crate) const RETIRED_SANDBOX_IMAGE_COLUMNS: &[(&str, &str)] = &[
-    ("image_source", crate::sandbox_image::IMAGE_SOURCE_ENV),
-    ("dockerfile_path", crate::sandbox_image::DOCKERFILE_PATH_ENV),
+    ("image_source", IMAGE_SOURCE_ENV),
+    ("dockerfile_path", DOCKERFILE_PATH_ENV),
 ];
 
 /// Read whatever is left in the columns [`RETIRED_SANDBOX_IMAGE_COLUMNS`] names, so the boot can

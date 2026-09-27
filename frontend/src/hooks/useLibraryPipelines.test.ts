@@ -4,7 +4,7 @@ import {
   computePipelineSyncState,
   shouldPromptLibraryUpdate,
 } from "./useLibraryPipelines";
-import type { LibraryPipelineEntry } from "../api";
+import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 function node(id: string, over: Partial<EditorNodeDef> = {}): EditorNodeDef {

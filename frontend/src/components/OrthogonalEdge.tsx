@@ -30,7 +30,7 @@ import {
 import { mergeAlignedSegments, snapPolyline } from "../lib/wiringGrid";
 import { useWiringGridStep } from "../hooks/useWiringGrid";
 import { useWiringStore } from "../stores/wiringStore";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EdgeWaypoint } from "../shared/generated/EdgeWaypoint";

@@ -2,7 +2,7 @@ import { render, act, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import OrthogonalEdge, { type OrthogonalEdgeData } from "./OrthogonalEdge";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 
 // EdgeLabelRenderer portals into the `.react-flow__edgelabel-renderer` div of a
 // mounted <ReactFlow>, which doesn't exist under a bare provider. Render its

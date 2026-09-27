@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import PipelineStar from "./PipelineStar";
-import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
-import type { LibraryPipelineEntry } from "../api";
-import { useEditStore } from "../stores/editStore";
+import { saveLibraryPipeline, deleteLibraryPipeline } from "../pipeline/api/libraryPipelines";
+import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
+import { useEditStore } from "../pipeline/store/editStore";
 import { TooltipProvider } from "../shared/ui/tooltip";
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
@@ -18,6 +18,19 @@ vi.mock("../api", () => ({
   fetchRunPipeline: vi.fn(),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 const mockSaveLib = vi.mocked(saveLibraryPipeline);

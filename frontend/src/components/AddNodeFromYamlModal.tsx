@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { NodeType } from "../shared/generated/NodeType";
-import { parseNodeYaml, libraryPortToPortDef } from "../api";
-import { useEditStore } from "../stores/editStore";
+import { parseNodeYaml } from "../pipeline/api/library";
+import { libraryPortToPortDef } from "../pipeline/model/library";
+import { useEditStore } from "../pipeline/store/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { foldHarnessOntoNode } from "../harness/model/nodeHarness";
 import type { EditorNodeDef } from "../pipeline/model/pipeline";

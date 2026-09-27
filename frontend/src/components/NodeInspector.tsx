@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { GitFork, Lock, Star, TriangleAlert } from "lucide-react";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { NodeState } from "../shared/generated/NodeState";
 import type { NodeType } from "../shared/generated/NodeType";
 import type { PortDef } from "../shared/generated/PortDef";
@@ -33,8 +33,8 @@ import { carriedPorts, withCarriedPorts } from "../lib/edgePorts";
 import { requalifyWhen } from "../lib/whenClause";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import { Tooltip } from "../shared/ui/tooltip";
-import type { LibraryEntry } from "../api";
-import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
+import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../pipeline/api/library";
+import { libraryPortToPortDef, type LibraryEntry } from "../pipeline/model/library";
 import { useLibraryState } from "../hooks/useLibrary";
 import type { LibrarySyncState } from "../hooks/useLibrary";
 import ProvisioningRulesEditor from "../workspace/components/ProvisioningRulesEditor";

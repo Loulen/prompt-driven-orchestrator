@@ -1,0 +1,204 @@
+/**
+ * The YAML tab: the document as the daemon would save it, copy and portable export.
+ */
+
+import { useState, useMemo, useRef, useEffect } from "react";
+import { Copy, Download, ChevronDown, ChevronRight } from "lucide-react";
+import { fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar } from "../../api";
+import { fetchPipelineDocument, fetchPipelineSkillsSidecar } from "../api/document";
+import { serializePipeline } from "../../lib/serializePipeline";
+import { highlightYaml } from "../../components/yamlHighlight";
+import type { EditorPipelineDef } from "../model/pipeline";
+
+export function YamlTab({
+  pipeline,
+  pipelineId,
+  runId,
+  scrollToLine,
+}: {
+  pipeline: EditorPipelineDef | null;
+  pipelineId: string | null;
+  runId: string | null;
+  scrollToLine?: number;
+}) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const fallbackYaml = useMemo(
+    () => (pipeline ? serializePipeline(pipeline) : ""),
+    [pipeline],
+  );
+  const [yaml, setYaml] = useState(fallbackYaml);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const [showExcluded, setShowExcluded] = useState(false);
+  const [sidecarError, setSidecarError] = useState<string | null>(null);
+  // #673 / ADR-0062: the skills the nodes select travel beside the YAML, in a
+  // sidecar `<pipeline>.skills/<id>/…` — content, not instance configuration.
+  const skillCount = useMemo(() => {
+    const ids = new Set<string>();
+    for (const node of pipeline?.nodes ?? []) {
+      for (const skill of node.skills ?? []) ids.add(skill.id);
+    }
+    return ids.size;
+  }, [pipeline]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const request = runId
+      ? fetchRunPipelineDocument(runId)
+      : pipelineId
+        ? fetchPipelineDocument(pipelineId)
+        : Promise.resolve(fallbackYaml);
+    request
+      .then((document) => {
+        if (!cancelled) setYaml(document);
+      })
+      .catch(() => {
+        if (!cancelled) setYaml(fallbackYaml);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackYaml, pipelineId, runId]);
+
+  useEffect(() => {
+    if (scrollToLine == null || !preRef.current) return;
+    const lineHeight = 11 * 1.6;
+    const scrollTop = Math.max(0, (scrollToLine - 3) * lineHeight);
+    preRef.current.scrollTop = scrollTop;
+  }, [scrollToLine]);
+
+  if (!pipeline) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-fg-4" style={{ fontSize: "12px" }}>
+        No pipeline loaded.
+      </div>
+    );
+  }
+
+  async function copyDocument() {
+    setCopyError(false);
+    try {
+      await navigator.clipboard.writeText(yaml);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopyError(true);
+    }
+  }
+
+  const pipelineName = pipeline.name || "pipeline";
+
+  function saveBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadDocument() {
+    saveBlob(new Blob([yaml], { type: "application/yaml" }), `${pipelineName}.pdo.yaml`);
+  }
+
+  async function downloadSkillsSidecar() {
+    setSidecarError(null);
+    try {
+      const blob = runId
+        ? await fetchRunPipelineSkillsSidecar(runId)
+        : pipelineId
+          ? await fetchPipelineSkillsSidecar(pipelineId)
+          : null;
+      if (!blob) {
+        setSidecarError("No skill of this pipeline is in the bank: nothing to export.");
+        return;
+      }
+      saveBlob(blob, `${pipelineName}.skills.zip`);
+    } catch (e) {
+      setSidecarError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+      <div className="border-b border-line bg-bg-3 px-3 py-2" data-testid="portable-document-bar">
+        <div className="flex items-center gap-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-acc" />
+          <span className="font-medium text-fg-2" style={{ fontSize: "11px" }}>
+            Portable document · v1
+          </span>
+          <button
+            className="ml-auto flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+            onClick={copyDocument}
+          >
+            <Copy size={11} />
+            {copied ? "✓ Copied" : "Copy"}
+          </button>
+          <button
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+            onClick={downloadDocument}
+          >
+            <Download size={11} />
+            Download
+          </button>
+          {skillCount > 0 && (
+            <button
+              className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+              onClick={() => void downloadSkillsSidecar()}
+              title={`The ${skillCount} skill${skillCount === 1 ? "" : "s"} this pipeline selects, as ${pipelineName}.skills/<id>/… to unpack next to the YAML`}
+              data-testid="download-skills-sidecar"
+            >
+              <Download size={11} />
+              Skills ({skillCount})
+            </button>
+          )}
+        </div>
+        {copyError && (
+          <div className="mt-1 text-st-failed" role="alert">
+            Clipboard access was denied. Use Download instead.
+          </div>
+        )}
+        {sidecarError && (
+          <div className="mt-1 text-st-failed" role="alert" data-testid="skills-sidecar-error">
+            {sidecarError}
+          </div>
+        )}
+        {skillCount > 0 && (
+          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }} data-testid="skills-sidecar-note">
+            {skillCount} skill{skillCount === 1 ? "" : "s"} referenced by id. Their content travels in
+            the sidecar <code>{pipelineName}.skills/</code>; import both so the bank recreates them.
+          </p>
+        )}
+        {runId && (
+          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+            This is the pipeline that ran, not the Run. Runtime values are not included.
+          </p>
+        )}
+        <button
+          className="mt-1.5 flex items-center gap-1 text-fg-4 hover:text-fg-2"
+          style={{ fontSize: "10.5px" }}
+          onClick={() => setShowExcluded((value) => !value)}
+        >
+          {showExcluded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          Not included
+        </button>
+        {showExcluded && (
+          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+            Secrets, environment, runtime values, and instance configuration. Named agent
+            profiles become Inherit; shared nodes become ordinary nodes. Skills are content,
+            not configuration: they travel in the separate skills sidecar.
+          </p>
+        )}
+      </div>
+      <pre
+        ref={preRef}
+        className="flex-1 overflow-auto p-3 font-mono text-fg-3 select-text"
+        style={{ fontSize: "11px", lineHeight: "1.6", tabSize: 2 }}
+        data-testid="info-yaml-content"
+      >
+        {highlightYaml(yaml, scrollToLine)}
+      </pre>
+    </div>
+  );
+}
+

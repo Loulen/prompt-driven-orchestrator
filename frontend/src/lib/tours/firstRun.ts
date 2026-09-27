@@ -21,7 +21,7 @@
  */
 
 import { ApiError } from "../../shared/http/client";
-import { createPipeline, fetchPipelines, savePipeline } from "../../api";
+import { createPipeline, fetchPipelines, savePipeline } from "../../pipeline/api/pipelines";
 import { createRepo } from "../../workspace/api/repos";
 import { isNodeFinished } from "../tour";
 import type { TourAppState, TourDef, TourObservation, TourRunNode, TourStep } from "../tour";

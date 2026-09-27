@@ -6,11 +6,15 @@ import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
-import type { LibraryPipelineEntry } from "../api";
+import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
 import { ApiError } from "../shared/http/client";
-import { cleanupRun, createPipeline, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { createPipeline, deletePipeline, fetchPipelines, renamePipeline } from "../pipeline/api/pipelines";
+import { deleteLibraryPipeline, duplicateLibraryPipeline } from "../pipeline/api/libraryPipelines";
+import { importPipelineDocument } from "../pipeline/api/document";
+import { importWorkflow } from "../pipeline/api/library";
 import { openRunShell } from "../session/api/sessions";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import { legacyScope } from "../test/legacy";
@@ -74,6 +78,23 @@ vi.mock("../api", () => ({
   }),
   fetchSettings: vi.fn().mockResolvedValue({}),
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/document", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({

@@ -1,12 +1,7 @@
-import type { PipelineListEntry } from "./shared/generated/PipelineListEntry";
 import type { PipelineDetail } from "./pipeline/model/pipeline";
-import type { EditorPipelineDef } from "./pipeline/model/pipeline";
 import type { RunListEntry } from "./shared/generated/RunListEntry";
 import type { RunState } from "./shared/generated/RunState";
-import type { PortDef } from "./shared/generated/PortDef";
-import type { PortSide } from "./shared/generated/PortSide";
 import type { PortType } from "./shared/generated/PortType";
-import type { FrontmatterFieldDecl } from "./shared/generated/FrontmatterFieldDecl";
 import type { FrontmatterViolation } from "./shared/generated/FrontmatterViolation";
 import type { Trigger } from "./shared/generated/Trigger";
 import type { TriggerListEntry } from "./shared/generated/TriggerListEntry";
@@ -28,7 +23,8 @@ import type { StructuredDiff } from "./shared/generated/StructuredDiff";
 import type { RunRefs } from "./shared/generated/RunRefs";
 import type { ReviewCommentsListResponse, ReviewDecisionResponse, SendReviewCommentsResponse } from "./review/model/review";
 import type { SendReviewCommentInput } from "./shared/generated/SendReviewCommentInput";
-import { foldHarnessOntoNode } from "./harness/model/nodeHarness";
+import { sidecarBlob } from "./shared/http/sidecar";
+import { foldPipelineDetail } from "./pipeline/model/pipelineDetail";
 import { ApiError, apiErrorMessage, BASE, request } from "./shared/http/client";
 
 export function fetchRuns(): Promise<RunListEntry[]> {
@@ -500,10 +496,6 @@ export function fetchArtifact(
 
 export function artifactUrl(runId: string, relativePath: string): string {
   return `${BASE}/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`;
-}
-
-export function fetchPipelines(): Promise<PipelineListEntry[]> {
-  return request<PipelineListEntry[]>("GET", "/pipelines");
 }
 
 /** One repo line of a multi-repo create (#465, ADR-0042/0047): a path, an optional
@@ -1041,21 +1033,6 @@ export function forgetRun(runId: string): Promise<void> {
   );
 }
 
-// #550/ADR-0046: the daemon returns each node's per-harness `harnesses` map; the
-// editor's pickers edit a flat `model`/`effort` view of the RESOLVED harness. Fold
-// on the way in so the existing UI + library sync keep working; `serializePipeline`
-// folds back on save. Applied at every pipeline-load boundary.
-function foldPipelineDetail(detail: PipelineDetail): PipelineDetail {
-  if (!detail?.pipeline?.nodes) return detail;
-  return {
-    ...detail,
-    pipeline: {
-      ...detail.pipeline,
-      nodes: detail.pipeline.nodes.map(foldHarnessOntoNode),
-    },
-  };
-}
-
 export function fetchRunPipeline(runId: string): Promise<PipelineDetail> {
   return request<PipelineDetail>(
     "GET",
@@ -1076,98 +1053,11 @@ export function saveRunPipeline(
   );
 }
 
-// Pin an operation to a single store. Without it the daemon resolves a bare id
-// repo-then-user, so a `library` (or `user`) entry colliding with a same-named
-// repo pipeline routes to the wrong file (#216). `repo`/`user`/`run` map to the
-// historical default and are only forwarded when explicitly known.
-export function fetchPipeline(id: string, scope?: string): Promise<PipelineDetail> {
-  void scope;
-  return request<PipelineDetail>(
-    "GET",
-    `/pipelines/${encodeURIComponent(id)}`,
-    { label: `GET /pipelines/${id}` },
-  ).then(foldPipelineDetail);
-}
-
-export function savePipeline(
-  id: string,
-  yaml: string,
-  prompts: Record<string, string>,
-  scope?: string,
-): Promise<{ ok: boolean; id?: string; renamed?: boolean }> {
-  void scope;
-  // #774 — the daemon answers with the FINAL id: a save whose `name:` field
-  // changed moves the registry entry (`<old>.yaml` + sidecar) and returns the
-  // new stem, so the caller can rekey the open tab in the same gesture.
-  return request<{ ok: boolean; id?: string; renamed?: boolean }>(
-    "PUT",
-    `/pipelines/${encodeURIComponent(id)}`,
-    { body: { yaml, prompts }, label: `PUT /pipelines/${id}` },
-  );
-}
-
-/**
- * #774 — rename a pipeline: the visible name and the backing `.yaml` file move
- * together (visible name 1:1 with the file stem, so two distinct pipelines can
- * never share a name). 409 when the target stem or visible name is already
- * taken, or when active runs reference the pipeline.
- */
-export function renamePipeline(
-  id: string,
-  name: string,
-): Promise<{ ok: boolean; id: string; name?: string; renamed?: boolean }> {
-  return request<{ ok: boolean; id: string; name?: string; renamed?: boolean }>(
-    "PUT",
-    `/pipelines/${encodeURIComponent(id)}/rename`,
-    { body: { name }, label: `PUT /pipelines/${id}/rename` },
-  );
-}
-
-export function createPipeline(
-  name: string,
-  scope?: string,
-): Promise<{ id: string; scope: string; path: string }> {
-  void scope;
-  return request<{ id: string; scope: string; path: string }>(
-    "POST",
-    "/pipelines",
-    { body: { name }, label: "POST /pipelines" },
-  );
-}
-
-export function duplicatePipeline(
-  id: string,
-): Promise<{ id: string; scope: string; path: string }> {
-  return request("POST", `/pipelines/${encodeURIComponent(id)}/duplicate`, {
-    label: `POST /pipelines/${id}/duplicate`,
-  });
-}
-
-export function fetchPipelineDocument(id: string): Promise<string> {
-  return request("GET", `/pipelines/${encodeURIComponent(id)}/document`, {
-    responseMode: "text",
-    label: `GET /pipelines/${id}/document`,
-  });
-}
-
 export function fetchRunPipelineDocument(runId: string): Promise<string> {
   return request("GET", `/runs/${encodeURIComponent(runId)}/pipeline/document`, {
     responseMode: "text",
     label: `GET /runs/${runId}/pipeline/document`,
   });
-}
-
-/// The skills sidecar of a pipeline's portable document (#673 / ADR-0062): a zip
-/// of `<pipeline>.skills/<id>/…` to unpack next to the YAML. `null` when the
-/// pipeline references no skill (the daemon answers 204: the YAML is the whole
-/// document).
-export async function fetchPipelineSkillsSidecar(id: string): Promise<Blob | null> {
-  const resp = await request<Response>(
-    "GET",
-    `/pipelines/${encodeURIComponent(id)}/document/skills`,
-    { responseMode: "raw", label: `GET /pipelines/${id}/document/skills` },
-  );
-  return sidecarBlob(resp, `GET /pipelines/${id}/document/skills`);
 }
 
 export async function fetchRunPipelineSkillsSidecar(runId: string): Promise<Blob | null> {
@@ -1177,294 +1067,6 @@ export async function fetchRunPipelineSkillsSidecar(runId: string): Promise<Blob
     { responseMode: "raw", label: `GET /runs/${runId}/pipeline/document/skills` },
   );
   return sidecarBlob(resp, `GET /runs/${runId}/pipeline/document/skills`);
-}
-
-async function sidecarBlob(resp: Response, label: string): Promise<Blob | null> {
-  if (resp.status === 204) return null;
-  if (!resp.ok) {
-    const errBody = await resp.json().catch(() => null);
-    throw new ApiError(apiErrorMessage(errBody, `${label} failed: ${resp.status}`), {
-      status: resp.status,
-      body: errBody,
-    });
-  }
-  return resp.blob();
-}
-
-/// What the import did to the Banque de skills (#673): created ids (same ids as
-/// the document), ids the bank already knew (untouched), labels that had to be
-/// suffixed, and ids found neither in the bank nor in the sidecar.
-export interface SkillSidecarImportReport {
-  created: SkillRef[];
-  kept: SkillRef[];
-  renamed: { id: string; from: string; to: string }[];
-  missing: SkillRef[];
-  folder?: { id: string; name: string };
-  warnings: string[];
-}
-
-export interface ImportPipelineDocumentResult {
-  id: string;
-  scope: string;
-  path: string;
-  /// Non-fatal diagnostics: prompts dropped because they name a node the
-  /// document does not define, and the skills the import renamed or could not
-  /// find (#673).
-  warnings: string[];
-  skills?: SkillSidecarImportReport;
-}
-
-/// `skillsSidecar` is the base64 of the sidecar zip PDO exported (or of the
-/// `<pipeline>.skills/` folder re-zipped). Without it, unknown skill ids import
-/// with a "skill absent" warning — never a failure.
-export function importPipelineDocument(
-  document: string,
-  skillsSidecar?: string,
-): Promise<ImportPipelineDocumentResult> {
-  return request("POST", "/pipelines/import", {
-    body: skillsSidecar ? { document, skills_sidecar: skillsSidecar } : { document },
-    label: "POST /pipelines/import",
-  });
-}
-
-export interface LibraryPort {
-  name: string;
-  repeated: boolean;
-  side?: string | null;
-  port_type?: PortType;
-  frontmatter?: Record<string, FrontmatterFieldDecl> | null;
-  when?: Record<string, unknown> | null;
-  instructions?: string | null;
-}
-
-export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): PortDef {
-  return {
-    name: port.name,
-    repeated: port.repeated,
-    side: (port.side as PortSide) ?? defaultSide,
-    ...(port.port_type ? { port_type: port.port_type } : {}),
-    ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
-    ...(port.when ? { when: port.when } : {}),
-    ...(port.instructions?.trim() ? { instructions: port.instructions } : {}),
-  };
-}
-
-export interface LibraryEntry {
-  name: string;
-  type: string;
-  inputs: LibraryPort[];
-  outputs: LibraryPort[];
-  interactive: boolean;
-  /** Per-node model override (#296/#345) — the node library is model-aware.
-   * Absent/null ⇒ account default. */
-  model?: string | null;
-  /** Per-node effort override (#424) — the node library is effort-aware too.
-   * Absent/null ⇒ account default. */
-  effort?: string | null;
-  max_iter?: number | null;
-  branches?: number | null;
-  prompt: string;
-  /** #655/ADR-0060: where an instance of this entry works. Always stated by the
-   * daemon for `agent`/`script` (stamped at the type's default when the entry
-   * predates #655); `null` for the types that carry no isolation. */
-  isolated_worktree?: boolean | null;
-}
-
-export function fetchLibrary(): Promise<LibraryEntry[]> {
-  return request<LibraryEntry[]>("GET", "/library");
-}
-
-export interface LibrarySaveSpec {
-  name: string;
-  type: string;
-  inputs: LibraryPort[];
-  outputs: LibraryPort[];
-  interactive: boolean;
-  /** Per-node model override (#296/#345). Omit/undefined ⇒ account default. */
-  model?: string | null;
-  /** Per-node effort override (#424). Omit/undefined ⇒ account default. */
-  effort?: string | null;
-  prompt: string;
-  /** #655/ADR-0060: where the starred node works. Omitted ⇒ the daemon stamps
-   * the type's default; `null` for a type that carries no isolation. */
-  isolated_worktree?: boolean | null;
-}
-
-export function saveToLibrary(spec: LibrarySaveSpec): Promise<LibraryEntry> {
-  return request<LibraryEntry>("POST", "/library", { body: spec, label: "POST /library" });
-}
-
-export function deleteFromLibrary(name: string): Promise<void> {
-  return request<void>(
-    "DELETE",
-    `/library/${encodeURIComponent(name)}`,
-    { responseMode: "void", label: `DELETE /library/${name}` },
-  );
-}
-
-export interface InstantiateResult {
-  spec: {
-    name: string;
-    type: string;
-    inputs: LibraryPort[];
-    outputs: LibraryPort[];
-    interactive: boolean;
-    /** Per-node model override (#296/#345). Null ⇒ account default. */
-    model?: string | null;
-    /** Per-node effort override (#424). Null ⇒ account default. */
-    effort?: string | null;
-    /** #655/ADR-0060: the entry's workspace, restored verbatim onto the new
-     * node. Dropping it would fall back to the type default and silently fork a
-     * worktree for an Agent starred in the Run's. */
-    isolated_worktree?: boolean | null;
-  };
-  prompt: string;
-}
-
-export function instantiateFromLibrary(name: string): Promise<InstantiateResult> {
-  return request<InstantiateResult>(
-    "POST",
-    `/library/${encodeURIComponent(name)}/instantiate`,
-    { label: `POST /library/${name}/instantiate` },
-  );
-}
-
-/**
- * Parsed form of a single node's YAML (#345): the `POST /nodes/parse` 200 body.
- * `spec` is `LibraryEntry`-shaped (same as {@link InstantiateResult}) plus the
- * legacy `max_iter`/`branches`; `warnings` carries soft losses (coerced/unknown
- * fields) with the node still created. A hard failure throws (400 `{error}`).
- */
-export interface ParseNodeResult {
-  spec: {
-    name: string;
-    type: string;
-    inputs: LibraryPort[];
-    outputs: LibraryPort[];
-    interactive: boolean;
-    model?: string | null;
-    effort?: string | null;
-    /** #616 (correctif 7): the pinned harness and per-harness settings map, so a
-     *  node exported with a harness axis round-trips through reimport without its
-     *  model/effort re-homing onto `claude`. */
-    pin_harness?: string | null;
-    harnesses?: Record<string, { model?: string; effort?: string }> | null;
-    /** #653/ADR-0060: where the node works. `null` for the types that carry no
-     *  isolation (`merge`, `start`, `end`). */
-    isolated_worktree?: boolean | null;
-    max_iter?: number | string | null;
-    branches?: number | null;
-  };
-  prompt: string;
-  warnings: string[];
-}
-
-/**
- * Validate a single node's YAML on the daemon (#345 / ADR-0016) and get back a
- * canvas-instantiable spec. The front holds no YAML parser: it POSTs the raw
- * text (paste OR uploaded `.yaml`) and the daemon parses with the same serde
- * structs the pipeline parser uses. Mirror of {@link importWorkflow}: a 400
- * body carries a verbatim `error`; a 200 carries `{spec, prompt, warnings}`.
- */
-export function parseNodeYaml(yaml: string): Promise<ParseNodeResult> {
-  return request<ParseNodeResult>("POST", "/nodes/parse", { body: { yaml }, label: "POST /nodes/parse" });
-}
-
-export async function deletePipeline(id: string, scope?: string): Promise<void> {
-  void scope;
-  // Status-inspecting: a 409 (active runs) carries the reason in the body, so
-  // raw mode keeps the bespoke branch (incl. the deliberately UNGUARDED 409
-  // json). The old `{ conflict }` field had no reader — folded into status 409.
-  const resp = await request<Response>(
-    "DELETE",
-    `/pipelines/${encodeURIComponent(id)}`,
-    { responseMode: "raw" },
-  );
-  if (resp.status === 409) {
-    const body = await resp.json();
-    throw new ApiError(body.error ?? "Pipeline has active runs", { status: 409, body });
-  }
-  if (!resp.ok) throw new ApiError(`DELETE /pipelines/${id} failed: ${resp.status}`, { status: resp.status });
-}
-
-export type LibraryPipelineScope = "repo" | "user";
-
-export interface LibraryPipelineEntry {
-  id: string;
-  name: string;
-  scope: LibraryPipelineScope;
-  node_count: number;
-  modified: string | null;
-  yaml: string;
-  /// Parsed form of `yaml`, normalized by the daemon's pipeline parser.
-  /// Divergence checks compare against this — never against the raw text,
-  /// whose formatting (key order, parser-filled defaults, serializer drift)
-  /// does not survive a round-trip.
-  pipeline: EditorPipelineDef;
-  prompts: Record<string, string>;
-}
-
-export function fetchLibraryPipelines(): Promise<LibraryPipelineEntry[]> {
-  return request<LibraryPipelineEntry[]>("GET", "/library/pipelines");
-}
-
-export interface SaveLibraryPipelineOptions {
-  /// When set, save in-place at this id even if `name` changed. Required for
-  /// rename-in-place: without it the daemon falls back to slug(name), which
-  /// would orphan the previous entry.
-  id?: string;
-  scope?: LibraryPipelineScope;
-}
-
-export function saveLibraryPipeline(
-  name: string,
-  yaml: string,
-  prompts: Record<string, string> = {},
-  options: SaveLibraryPipelineOptions = {},
-): Promise<{ id: string; scope: LibraryPipelineScope }> {
-  return request<{ id: string; scope: LibraryPipelineScope }>(
-    "POST",
-    "/library/pipelines",
-    {
-      body: {
-        name,
-        yaml,
-        prompts,
-        ...(options.id ? { id: options.id } : {}),
-        ...(options.scope ? { scope: options.scope } : {}),
-      },
-      label: "POST /library/pipelines",
-    },
-  );
-}
-
-/// Import a Claude Code workflow `.js` as a draft library pipeline (#155). The
-/// `content` is the raw file text (read client-side via `File.text()` — the
-/// daemon never reads `~/.claude/workflows` off disk). `filename` seeds the
-/// fallback pipeline name. Returns the new id, scope, and any lossy-translation
-/// warnings; a 400 body carries a verbatim `error` a real `.js` can trigger.
-export function importWorkflow(
-  filename: string,
-  content: string,
-): Promise<{ id: string; scope: string; warnings?: string[] }> {
-  return request<{ id: string; scope: string; warnings?: string[] }>(
-    "POST",
-    "/library/import",
-    { body: { filename, content }, label: "POST /library/import" },
-  );
-}
-
-/// Duplicate a library pipeline template into an unlinked clone: fresh id, name
-/// suffixed `(copy)` / `(copy N)`, no promotion metadata (#224). Returns the new
-/// id, its scope, and the freshly-listed library entry (or null if the list
-/// race-loses the just-created file).
-export function duplicateLibraryPipeline(
-  id: string,
-): Promise<{ id: string; scope: LibraryPipelineScope; entry: LibraryPipelineEntry | null }> {
-  return request<{ id: string; scope: LibraryPipelineScope; entry: LibraryPipelineEntry | null }>(
-    "POST",
-    `/library/pipelines/${encodeURIComponent(id)}/duplicate`,
-  );
 }
 
 export function fetchRunDiff(runId: string): Promise<string> {
@@ -1521,23 +1123,3 @@ export function fetchRunRefs(runId: string): Promise<RunRefs> {
   });
 }
 
-export function deleteLibraryPipeline(id: string): Promise<void> {
-  return request<void>(
-    "DELETE",
-    `/library/pipelines/${encodeURIComponent(id)}`,
-    { responseMode: "void", label: `DELETE /library/pipelines/${id}` },
-  );
-}
-
-export interface PromoteResult {
-  id: string;
-  drifted: boolean;
-}
-
-export function promotePipeline(pipelineId: string): Promise<PromoteResult> {
-  return request<PromoteResult>(
-    "POST",
-    `/pipelines/${encodeURIComponent(pipelineId)}/promote`,
-    { label: `POST /pipelines/${pipelineId}/promote` },
-  );
-}

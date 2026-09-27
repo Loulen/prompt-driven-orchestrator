@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import MergeInspector from "./MergeInspector";
 import { fetchSettings } from "../api";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 // #616: the merge inspector now offers the SAME harness picker as any agent node

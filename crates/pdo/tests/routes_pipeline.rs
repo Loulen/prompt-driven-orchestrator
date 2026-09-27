@@ -332,3 +332,162 @@ async fn run_pipeline_document_exports_the_runs_snapshot_as_portable_yaml() {
     .unwrap();
     assert_eq!(resp.status(), 404);
 }
+
+/// #922 — the wire of the pipeline context once extracted, as the editor reads
+/// it: the list's metadata, one pipeline with its prompts and its nodes'
+/// provisioning, a save refused with the line of the broken YAML.
+#[tokio::test]
+async fn the_list_and_the_detail_carry_what_the_editor_reads() {
+    let daemon = TestDaemon::spawn(|repo| {
+        flow::git_init(repo)?;
+        flow::write_pipeline(
+            repo,
+            "provisioned",
+            "name: Provisioned\nversion: \"1.0\"\nprompt_required: false\nvariables:\n  retries: 3\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: agent\n    provisioning:\n      copy: [\".env\"]\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: in }\n  - source: { node: worker, port: out }\n    target: { node: end, port: result }\n",
+        )
+    })
+    .await
+    .unwrap();
+
+    let list = daemon.get_json("/pipelines").await;
+    let entry = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "provisioned")
+        .unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(entry["name"], "Provisioned");
+    assert_eq!(entry["scope"], "instance");
+    assert_eq!(entry["node_count"], 3);
+    assert_eq!(entry["prompt_required"], false);
+    assert_eq!(entry["variables"]["retries"]["var_type"], "int");
+    assert_eq!(entry["variables"]["retries"]["default"], 3);
+    assert!(entry["modified"].is_string());
+
+    let detail = daemon.get_json("/pipelines/provisioned").await;
+    assert_eq!(detail["id"], "provisioned");
+    assert_eq!(detail["scope"], "instance");
+    assert_eq!(detail["prompts"]["worker"], "Do the work.\n");
+    assert!(detail["yaml"]
+        .as_str()
+        .unwrap()
+        .contains("name: Provisioned"));
+    assert!(
+        detail["diagnostics"].as_array().unwrap().is_empty(),
+        "{detail}"
+    );
+    let worker = detail["pipeline"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "worker")
+        .unwrap();
+    assert!(worker["provisioning"].is_object(), "{worker}");
+
+    let missing = reqwest::get(format!("{}/pipelines/nonexistent", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    assert_eq!(missing.text().await.unwrap(), "pipeline not found");
+}
+
+#[tokio::test]
+async fn a_save_is_refused_with_the_line_of_the_broken_yaml_and_the_file_is_kept() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .put(format!("{}/pipelines/{SOLO}", daemon.url()))
+        .json(
+            &serde_json::json!({ "yaml": "name: solo\nnodes:\n  - id: [broken\n", "prompts": {} }),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().starts_with("invalid YAML:"),
+        "{body}"
+    );
+    assert!(body["message"].is_string(), "{body}");
+    assert!(body["line"].is_number(), "{body}");
+
+    let resp = client
+        .put(format!("{}/pipelines/{SOLO}", daemon.url()))
+        .json(&serde_json::json!({ "yaml": "version: \"1.0\"\nnodes: []\n", "prompts": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["message"], "missing required field: name", "{body}");
+    assert!(body.get("line").is_none(), "{body}");
+
+    let detail = daemon.get_json(&format!("/pipelines/{SOLO}")).await;
+    assert_eq!(detail["pipeline"]["name"], SOLO);
+}
+
+/// The retired scopes (`?scope=library`, the promote/duplicate routes of the
+/// old pipeline library) never reach anything but the instance registry.
+#[tokio::test]
+async fn the_retired_pipeline_library_is_gone_and_its_scope_is_ignored() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let client = reqwest::Client::new();
+    for (method, path) in [
+        ("GET", "/library/pipelines".to_string()),
+        ("POST", format!("/pipelines/{SOLO}/promote")),
+        ("POST", format!("/library/pipelines/{SOLO}/duplicate")),
+        ("DELETE", format!("/library/pipelines/{SOLO}")),
+    ] {
+        let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap();
+        let resp = client
+            .request(method.clone(), format!("{}{path}", daemon.url()))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_client_error(),
+            "{method} {path}: {}",
+            resp.status()
+        );
+    }
+
+    let scoped = daemon
+        .get_json(&format!("/pipelines/{SOLO}?scope=library"))
+        .await;
+    assert_eq!(scoped["id"], SOLO);
+    let resp = client
+        .delete(format!("{}/pipelines/{SOLO}?scope=user", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(!daemon
+        .repo_root()
+        .join(format!(".pdo/pipelines/{SOLO}.yaml"))
+        .exists());
+}
+
+#[tokio::test]
+async fn a_pasted_node_parses_into_a_canvas_spec_or_names_what_is_missing() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let (status, body) = flow::post_json(
+        &daemon,
+        "/nodes/parse",
+        serde_json::json!({ "yaml": "name: n\ntype: agent\nisolated_worktree: false\nprompt: |\n  hi\n" }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["spec"]["type"], "agent");
+    assert_eq!(body["spec"]["isolated_worktree"], false);
+    assert_eq!(body["prompt"], "hi\n");
+
+    let (status, body) = flow::post_json(
+        &daemon,
+        "/nodes/parse",
+        serde_json::json!({ "yaml": "type: agent\n" }),
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"], "missing required field: name");
+}

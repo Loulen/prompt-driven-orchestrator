@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
 use axum::Router;
+use pdo_pipeline::application::ports::{ActiveRuns, RenameLedger};
 use pdo_platform::application::ports::{BoxFuture, Runs, UpdateCheckSetting};
 use pdo_platform::domain::install::{InstallMethod, Supervision};
 use pdo_platform::domain::service_health::ServiceHealthOverride;
@@ -20,8 +21,11 @@ use pdo_session::application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunShells, SessionOwners, Templates,
 };
 use pdo_session::Session;
+use tokio::sync::broadcast;
 
+use crate::pipeline_ports::{LegacyActiveRuns, LegacyRenameLedger};
 use crate::session_ports::LegacySessionPorts;
+use crate::SelfWrites;
 use crate::{event_log, instance_config, AppState, SessionClaim};
 
 /// What the legacy daemon offers the contexts it hosts.
@@ -51,6 +55,20 @@ pub struct ContextResources {
     pub allowed_ws_origins: Vec<String>,
     /// The session context's Run-side ports.
     pub session: SessionRunPorts,
+    /// What the pipeline context needs from this daemon.
+    pub pipeline: PipelineResources,
+}
+
+/// The pipeline context's resources: the ports the Runs and the Stats
+/// implement, the skill bank, the live stream and the record of the daemon's
+/// own writes the watcher reads.
+#[derive(Clone)]
+pub struct PipelineResources {
+    pub runs: Arc<dyn ActiveRuns>,
+    pub renames: Arc<dyn RenameLedger>,
+    pub skills: Arc<pdo_skill::Skills>,
+    pub events: broadcast::Sender<serde_json::Value>,
+    pub self_writes: SelfWrites,
 }
 
 /// The ports of the session context that the Runs, the templates and the
@@ -104,6 +122,9 @@ pub(crate) struct ContextResourcesSeed {
     pub service_health_override: Option<ServiceHealthOverride>,
     pub tmux_cmd_override: Option<String>,
     pub allowed_ws_origins: Vec<String>,
+    pub skills: Arc<pdo_skill::Skills>,
+    pub pipeline_events: broadcast::Sender<serde_json::Value>,
+    pub self_writes: SelfWrites,
 }
 
 impl ContextResourcesSeed {
@@ -116,6 +137,17 @@ impl ContextResourcesSeed {
                 state: state.clone(),
             }),
             session: SessionRunPorts::over(state),
+            pipeline: PipelineResources {
+                runs: Arc::new(LegacyActiveRuns {
+                    db: self.db.clone(),
+                }),
+                renames: Arc::new(LegacyRenameLedger {
+                    db: self.db.clone(),
+                }),
+                skills: self.skills,
+                events: self.pipeline_events,
+                self_writes: self.self_writes,
+            },
             db: self.db,
             repo_root: self.repo_root,
             port: self.port,

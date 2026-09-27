@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { BookOpen, Plus, Trash2, FilePlus } from "lucide-react";
-import type { LibraryEntry } from "../api";
-import { instantiateFromLibrary, libraryPortToPortDef } from "../api";
-import { useEditStore } from "../stores/editStore";
+import type { LibraryEntry } from "../pipeline/model/library";
+import { instantiateFromLibrary } from "../pipeline/api/library";
+import { libraryPortToPortDef } from "../pipeline/model/library";
+import { useEditStore } from "../pipeline/store/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { resolveIsolation, workspaceLabel } from "../lib/nodeIsolation";
 import { NodeTypeIcon } from "./NodeTypeIcon";

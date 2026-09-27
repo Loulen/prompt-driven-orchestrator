@@ -1164,6 +1164,11 @@ vi.mock("../../api", async () => {
     savePipeline: vi.fn(async () => ({ ok: true })),
   };
 });
+// The pipeline context's API answers with the mock of `../../api` above.
+vi.mock("../../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
 
 vi.mock("../../workspace/api/repos", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../workspace/api/repos")>()),
@@ -1182,7 +1187,7 @@ describe("what the intro card prepares", () => {
   });
 
   it("writes the tutorial pipeline when the Library does not have it", async () => {
-    const api = await import("../../api");
+    const api = await import("../../pipeline/api/pipelines");
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([]);
 
     await TOUR.intro!.prepare[1].run();
@@ -1204,7 +1209,7 @@ describe("what the intro card prepares", () => {
    * Start and End out itself, in a column that ran straight under it.
    */
   it("gives every node of the tutorial pipeline a place of its own", async () => {
-    const api = await import("../../api");
+    const api = await import("../../pipeline/api/pipelines");
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([]);
     await TOUR.intro!.prepare[1].run();
     const [, yaml] = vi.mocked(api.savePipeline).mock.calls.at(-1)!;
@@ -1229,7 +1234,7 @@ describe("what the intro card prepares", () => {
    * free, and a user who edited the tutorial pipeline keeps their edit.
    */
   it("leaves an existing tutorial pipeline exactly as the user left it", async () => {
-    const api = await import("../../api");
+    const api = await import("../../pipeline/api/pipelines");
     vi.mocked(api.createPipeline).mockClear();
     vi.mocked(api.savePipeline).mockClear();
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { cascadableTwin, isStarred, libraryOnly, libraryTwins } from "./libraryTwins";
-import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";
+import type { LibraryPipelineEntry, LibraryPipelineScope } from "../pipeline/api/libraryPipelines";
 import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { PipelineScope } from "../pipeline/model/pipeline";
 import { legacyScope } from "../test/legacy";

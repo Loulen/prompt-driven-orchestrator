@@ -13,7 +13,7 @@
  * the rule separately; they now agree by construction rather than by two copies
  * staying in step.
  */
-import type { LibraryPipelineEntry } from "../api";
+import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
 import type { PipelineScope } from "../pipeline/model/pipeline";
 
 /**

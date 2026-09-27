@@ -55,7 +55,7 @@ impl Templates for LegacySessionPorts {
         // Same gate as `PUT /pipelines/{id}`: a template that does not parse must
         // not reach disk, where it breaks the canvas the user is looking at.
         if let Err(e) = crate::pipeline::parse_pipeline(yaml) {
-            let (message, line) = crate::parse_error_to_structured(&e);
+            let (message, line) = pdo_pipeline::adapters::http::parse_error_to_structured(&e);
             return Err(TemplateSaveError::Invalid {
                 error: format!("invalid YAML: {e}"),
                 message,
@@ -66,7 +66,7 @@ impl Templates for LegacySessionPorts {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        crate::mark_self_write(&state.recent_writes, &path);
+        state.recent_writes.mark(&path);
         std::fs::write(&path, yaml)
             .map_err(|e| TemplateSaveError::Write(format!("write failed: {e}")))?;
         for (node_id, content) in prompts {
@@ -74,7 +74,7 @@ impl Templates for LegacySessionPorts {
             if let Some(parent) = prompt_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            crate::mark_self_write(&state.recent_writes, &prompt_path);
+            state.recent_writes.mark(&prompt_path);
             if let Err(e) = std::fs::write(&prompt_path, content) {
                 tracing::warn!("failed to write prompt for {node_id}: {e}");
             }

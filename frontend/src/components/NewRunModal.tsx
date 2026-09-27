@@ -5,7 +5,7 @@ import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { TestGuardResponse } from "../api";
 import { createRun, createTrigger, updateTrigger, fetchSettings, testGuard } from "../api";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "../workspace/components/RepoCombobox";
 import SecondaryRepoRow, {

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import type { Node, NodeProps } from "@xyflow/react";
 import { LoopRegionNode, type LoopRegionNodeData } from "./LoopRegionNode";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { endRegion, bumpRegion } from "../api";
 import type { LoopRegion } from "../shared/generated/LoopRegion";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";

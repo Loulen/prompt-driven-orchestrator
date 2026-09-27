@@ -101,6 +101,20 @@ Contexts already out of the legacy crate:
   becomes `RUST_LOG=pdo_session::adapters::tmux` (and `…::application::launch` for the
   spawns), `pdo_daemon::pty_bridge` becomes `pdo_session::adapters::pty`.
 
+- `pipeline` (#922): `crates/pdo-pipeline`, `frontend/src/pipeline/`. The pipeline document
+  (model, the one `parse_pipeline`, its references, loop regions and cycles), the migrator, the
+  portable document, the workflow import, the node library entry, a pipeline's identity (name ⇄
+  stem) and what a Run in flight forbids an edit to touch (`domain/mutation.rs`, over the
+  `RunProgress` the Run hands over) live in its `domain/`. The instance registry
+  (`adapters/registry/`), the library (`adapters/library_fs.rs`) and the watcher
+  (`adapters/watcher/`) are adapters; every daemon write marks its path in `SelfWrites` so the
+  watcher does not announce it. The Runs a pipeline has in flight (`ActiveRuns`) and the Stats
+  absorption of a rename (`RenameLedger`) are ports the legacy crate implements in
+  `pipeline_ports.rs`; the composition root wires the context (`crates/pdo/src/contexts.rs`).
+  The legacy crate reads the document through `pdo_pipeline::domain::pipeline` (re-exported as
+  `crate::pipeline`). `RUST_LOG=pdo_daemon::pipeline_watcher` becomes
+  `RUST_LOG=pdo_pipeline::adapters::watcher`, `pdo_daemon::pipeline_migrator` becomes
+  `pdo_pipeline::adapters::fs_migration`.
 While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package

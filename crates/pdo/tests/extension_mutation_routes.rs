@@ -20,11 +20,23 @@ use crate::test_extension::{Refusal, TestExtension};
 const MUTATIONS: [&str; 4] = ["POST", "PUT", "PATCH", "DELETE"];
 
 /// The `POST`s that mutate nothing, with why.
-const NOT_MUTATIONS: &[(&str, &str, &str)] = &[(
-    "POST",
-    "/repos/provisioning/preview",
-    "computes the plan of a worktree provisioning; stores nothing",
-)];
+const NOT_MUTATIONS: &[(&str, &str, &str)] = &[
+    (
+        "POST",
+        "/repos/provisioning/preview",
+        "computes the plan of a worktree provisioning; stores nothing",
+    ),
+    (
+        "POST",
+        "/library/{name}/instantiate",
+        "reads a library entry to drop onto a canvas; stores nothing",
+    ),
+    (
+        "POST",
+        "/nodes/parse",
+        "parses a pasted node into a canvas spec; stores nothing",
+    ),
+];
 
 /// One request aimed at a route: its method, its template, the concrete path
 /// and the body that gets it past extraction.
@@ -53,7 +65,63 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
     let site = fixtures.site.to_string_lossy().to_string();
     let skill = &fixtures.skill;
     let folder = &fixtures.folder;
+    let pipeline = &fixtures.pipeline;
+    let entry = &fixtures.library_entry;
     vec![
+        call(
+            "POST",
+            "/pipelines",
+            "/pipelines".into(),
+            Some(json!({ "name": "another" })),
+        ),
+        call(
+            "PUT",
+            "/pipelines/{pipeline_id}",
+            format!("/pipelines/{pipeline}"),
+            Some(json!({ "yaml": PIPELINE_EDIT, "prompts": {} })),
+        ),
+        call(
+            "DELETE",
+            "/pipelines/{pipeline_id}",
+            format!("/pipelines/{pipeline}"),
+            None,
+        ),
+        call(
+            "POST",
+            "/pipelines/{pipeline_id}/duplicate",
+            format!("/pipelines/{pipeline}/duplicate"),
+            None,
+        ),
+        call(
+            "PUT",
+            "/pipelines/{pipeline_id}/rename",
+            format!("/pipelines/{pipeline}/rename"),
+            Some(json!({ "name": "renamed" })),
+        ),
+        call(
+            "POST",
+            "/pipelines/import",
+            "/pipelines/import".into(),
+            Some(json!({ "document": "pdo_pipeline: 1\npipeline: {}\n" })),
+        ),
+        call(
+            "POST",
+            "/library",
+            "/library".into(),
+            Some(json!({ "name": "another", "type": "agent", "prompt": "p" })),
+        ),
+        call(
+            "DELETE",
+            "/library/{name}",
+            format!("/library/{entry}"),
+            None,
+        ),
+        call(
+            "POST",
+            "/library/import",
+            "/library/import".into(),
+            Some(json!({ "filename": "flow.js", "content": "agent(`x`, { label: 'a' })" })),
+        ),
         call(
             "POST",
             "/pages",
@@ -281,7 +349,12 @@ fn skill_md(name: &str) -> String {
     format!("---\nname: {name}\ndescription: The {name} method.\n---\n\n# {name}\n")
 }
 
+/// The pipeline the save route would write, had it been allowed.
+const PIPELINE_EDIT: &str = "name: fixture-pipe\nversion: \"2.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n";
+
 struct Fixtures {
+    pipeline: String,
+    library_entry: String,
     project: String,
     site: std::path::PathBuf,
     scratch: String,
@@ -361,7 +434,29 @@ async fn seed(daemon: &TestDaemon, scratch: &Path) -> Fixtures {
         .unwrap();
     assert_eq!(file.status(), 201);
 
+    let pipeline: Value = client
+        .post(format!("{url}/pipelines"))
+        .json(&json!({ "name": "fixture-pipe" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // The node library lives under the real `$HOME`: a unique name, taken out
+    // again by the test itself.
+    let library_entry = format!("ext-922-{}", uuid::Uuid::new_v4().simple());
+    let starred = client
+        .post(format!("{url}/library"))
+        .json(&json!({ "name": library_entry, "type": "agent", "prompt": "p" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(starred.status(), 201);
+
     Fixtures {
+        pipeline: pipeline["id"].as_str().unwrap().to_string(),
+        library_entry,
         project,
         site,
         scratch: scratch.to_string_lossy().to_string(),
@@ -457,6 +552,42 @@ async fn an_extension_refusing_everything_refuses_every_mutation_route() {
             .any(|(_, name)| name == "another"),
         "{bank}"
     );
+    let pipelines = daemon.get_json("/pipelines").await;
+    let ids: Vec<&str> = pipelines
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&fixtures.pipeline.as_str()), "{pipelines}");
+    for created in ["another", "renamed", "fixture-pipe-copy", "flow"] {
+        assert!(!ids.contains(&created), "{created}: {pipelines}");
+    }
+    let pipeline = daemon
+        .get_json(&format!("/pipelines/{}", fixtures.pipeline))
+        .await;
+    assert_eq!(pipeline["pipeline"]["version"], "1.0", "{pipeline}");
+    let library = daemon.get_json("/library").await;
+    assert!(
+        library
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == fixtures.library_entry.as_str()),
+        "{library}"
+    );
+    control.set(Refusal::Nothing);
+    let unstarred = reqwest::Client::new()
+        .delete(format!(
+            "{}/library/{}",
+            daemon.url(),
+            fixtures.library_entry
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unstarred.status(), 204);
+
     let file = daemon
         .get_json(&format!(
             "/settings/skills/{}/files/{SKILL_FILE}",

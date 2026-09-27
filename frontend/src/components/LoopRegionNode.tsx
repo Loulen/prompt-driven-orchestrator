@@ -1,6 +1,6 @@
 import { type Node, type NodeProps } from "@xyflow/react";
 import type { LoopKind } from "../shared/generated/LoopKind";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { endRegion } from "../api";
 
 /**

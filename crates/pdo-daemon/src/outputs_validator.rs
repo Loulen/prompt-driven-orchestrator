@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::frontmatter_parser;
 use crate::pipeline::{self, FrontmatterFieldDecl, PipelineDef, Port, PortType};
 
 fn iter_dirs_containing(node_dir: &Path, port_name: &str) -> usize {
@@ -147,19 +146,20 @@ fn validate_frontmatter_schemas(
 
         let path = crate::blackboard::artifact_path(artifacts_dir, node_id, iter, &port.name);
 
-        let fields = match frontmatter_parser::parse_frontmatter_from_file(&path) {
-            Ok(f) => f,
-            Err(_) => {
-                for field_name in schema.keys() {
-                    violations.push(FieldViolation {
-                        port: port.name.clone(),
-                        field: field_name.clone(),
-                        reason: "frontmatter could not be parsed".into(),
-                    });
+        let fields =
+            match pdo_pipeline::adapters::frontmatter_file::parse_frontmatter_from_file(&path) {
+                Ok(f) => f,
+                Err(_) => {
+                    for field_name in schema.keys() {
+                        violations.push(FieldViolation {
+                            port: port.name.clone(),
+                            field: field_name.clone(),
+                            reason: "frontmatter could not be parsed".into(),
+                        });
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
 
         for (field_name, decl) in schema {
             validate_field(&port.name, field_name, decl, &fields, &mut violations);

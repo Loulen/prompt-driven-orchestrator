@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { dismissTransientOverlays } from "../lib/overlays";
 import { canvasNodeIdOf, revealCanvasNode } from "../lib/canvasReveal";
 import {

@@ -1,6 +1,6 @@
 import { type Node, type NodeProps } from "@xyflow/react";
 import { StickyNote } from "lucide-react";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { SELECTION_RING_STYLE } from "../nodeStyles";
 
 /**

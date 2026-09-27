@@ -1,0 +1,135 @@
+//! What the pipeline context needs from the outside world. The composition
+//! root plugs an adapter into each port; the use cases only ever see the
+//! traits.
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
+
+use pdo_kernel::Actor;
+use pdo_skill::domain::error::SkillError;
+use pdo_skill::domain::selection::SkillRef;
+use pdo_skill::domain::sidecar::{SidecarImportReport, SidecarSkill};
+
+use crate::domain::library::LibraryEntry;
+use crate::domain::pipeline::PipelineDef;
+
+/// The future an async port method returns (the ports are `dyn`, D23).
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// One pipeline file of the registry, as the registry holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryFile {
+    /// The file stem, which is the pipeline's id.
+    pub id: String,
+    pub path: PathBuf,
+    /// The file's modification time, RFC 3339 to the second.
+    pub modified: Option<String>,
+    /// The YAML, `None` when the file cannot be read.
+    pub yaml: Option<String>,
+}
+
+/// Why the registry could not create a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateFailure {
+    /// A file already sits under that id.
+    Exists,
+    /// Any other failure, as the filesystem words it.
+    Io(String),
+}
+
+/// The instance registry: one `<id>.yaml` per pipeline, and its prompts in
+/// `<id>.prompts/<node>.md`. Every write it makes on its own behalf is known
+/// to the registry's watcher, which does not announce it as an outside edit.
+pub trait PipelineRegistry: Send + Sync {
+    /// The registry's directory; `None` when it cannot be determined.
+    fn dir(&self) -> Option<PathBuf>;
+    /// Where the pipeline `id` lives (or would live).
+    fn path_of(&self, id: &str) -> PathBuf;
+    /// Fold the retired registries into this one, once. A transition of the
+    /// daemon: no actor asks for it.
+    fn unify_legacy(&self) -> Result<(), String>;
+    /// Every `.yaml` file of the registry, in directory order.
+    fn files(&self) -> Vec<RegistryFile>;
+    /// Whether a file sits under `id`.
+    fn exists(&self, id: &str) -> bool;
+    /// The YAML of `id`; `None` when it cannot be read.
+    fn read(&self, id: &str) -> Option<String>;
+    /// The prompts of `id`, by node id.
+    fn prompts(&self, id: &str) -> HashMap<String, String>;
+    /// Overwrite the YAML of `id`.
+    fn write(&self, id: &str, yaml: &str) -> Result<(), String>;
+    /// Write each prompt of `id`. A prompt that fails is logged, not fatal.
+    fn write_prompts(&self, id: &str, prompts: &HashMap<String, String>);
+    /// Delete the prompts of `id` whose node `saved` no longer defines.
+    fn prune_prompts(&self, id: &str, saved: &PipelineDef);
+    /// Create `id` with `yaml`, refusing to replace an existing file.
+    fn create(&self, id: &str, yaml: &str) -> Result<PathBuf, CreateFailure>;
+    /// Move `from` to `to`, its prompts with it, writing `yaml` as the new
+    /// file. All or nothing: a failure leaves `from` as it was.
+    fn relocate(&self, from: &str, to: &str, yaml: &str) -> Result<PathBuf, String>;
+    /// Publish a new entry `id`: `pipeline` serialized, and the prompts of its
+    /// live nodes. All or nothing.
+    fn publish(
+        &self,
+        id: &str,
+        pipeline: &PipelineDef,
+        prompts: &HashMap<String, String>,
+    ) -> Result<PathBuf, String>;
+    /// Remove the prompts of `id` (logged on failure), then its file.
+    fn remove(&self, id: &str) -> Result<(), String>;
+}
+
+/// The node library.
+pub trait NodeLibrary: Send + Sync {
+    /// Every entry, by name, case-insensitively.
+    fn list(&self) -> Vec<LibraryEntry>;
+    fn get(&self, name: &str) -> Option<LibraryEntry>;
+    /// Create the entry, or overwrite the one of the same name.
+    fn save(&self, entry: &LibraryEntry) -> Result<(), String>;
+    /// `false` when no entry carries `name`.
+    fn delete(&self, name: &str) -> Result<bool, String>;
+}
+
+/// The live stream the clients listen to.
+pub trait PipelineEvents: Send + Sync {
+    /// `pipeline_changed`: the list and any open editor refresh `id`.
+    fn changed(&self, id: &str, path: &str);
+}
+
+/// The Runs, as the pipeline context sees them.
+pub trait ActiveRuns: Send + Sync {
+    /// How many Runs not yet completed nor archived run the pipeline `id`.
+    fn using<'a>(&'a self, pipeline_id: &'a str) -> BoxFuture<'a, usize>;
+}
+
+/// A pipeline's identity before and after a rename.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Renamed {
+    pub old_id: String,
+    pub old_name: String,
+    pub new_id: String,
+    pub new_name: String,
+}
+
+/// Stats, as the pipeline context sees them: the new id carries the old id's
+/// series (ADR-0077 §4).
+pub trait RenameLedger: Send + Sync {
+    /// Best effort: a failure is logged, never refused.
+    fn record<'a>(&'a self, rename: &'a Renamed) -> BoxFuture<'a, ()>;
+}
+
+/// The skill context's bank, as the portable document reads and fills it.
+pub trait SkillBank: Send + Sync {
+    /// The referenced skills the bank holds, and the ids it does not.
+    fn sidecar_of(&self, references: &[SkillRef]) -> (Vec<SidecarSkill>, Vec<String>);
+    /// Bring the skills a document references into the bank.
+    fn import_sidecar<'a>(
+        &'a self,
+        actor: &'a Actor,
+        pipeline_name: &'a str,
+        references: Vec<SkillRef>,
+        sidecar: &'a [SidecarSkill],
+    ) -> BoxFuture<'a, Result<SidecarImportReport, SkillError>>;
+}

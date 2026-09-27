@@ -131,7 +131,7 @@ vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
 }));
 
 import SettingsSurface from "./SettingsSurface";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { useWiringStore } from "../stores/wiringStore";
 import type { InstanceSettings } from "../settings/model/settings";
 import type { SandboxProfile } from "../sandbox/model/sandbox";

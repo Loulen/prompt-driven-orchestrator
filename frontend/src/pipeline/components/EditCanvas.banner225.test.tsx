@@ -1,0 +1,313 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import EditCanvas from "./EditCanvas";
+import { useEditStore } from "../store/editStore";
+import { type OpenPipeline } from "../store/editState";
+import { TooltipProvider } from "../../shared/ui/tooltip";
+
+// jsdom has no ResizeObserver; ReactFlow's container measurement needs it
+// (mirrors LintBannerDuplication.test.tsx).
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
+// Stub only the heavy <ReactFlow> canvas to a passthrough <div>. The diagnostics
+// overlay banner and the star container are rendered OUTSIDE <ReactFlow> in
+// EditCanvas, so collapsing the canvas body does not hide what's under test.
+vi.mock("@xyflow/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@xyflow/react")>();
+  return {
+    ...actual,
+    ReactFlow: ({ children }: { children?: React.ReactNode }) => (
+      <div data-testid="reactflow-stub">{children}</div>
+    ),
+  };
+});
+
+vi.mock("../../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+}));
+
+// EditCanvas (via usePipelineLibraryState) imports the API client; stub the
+// network so nothing fetches on mount.
+vi.mock("../../api", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  fetchLibrary: vi.fn().mockResolvedValue([]),
+  fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
+  saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline", scope: "repo" }),
+  deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
+  saveToLibrary: vi.fn().mockResolvedValue({}),
+  deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
+vi.mock("../api/libraryPipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
+
+vi.mock("../../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+const PIPELINE = {
+  name: "My Pipeline",
+  version: "1.0",
+  variables: {},
+  nodes: [
+    {
+      id: "start",
+      name: "Start",
+      type: "start" as const,
+      interactive: false,
+      inputs: [],
+      outputs: [{ name: "user_prompt", repeated: false, side: "right" as const }],
+    },
+    {
+      id: "end",
+      name: "End",
+      type: "end" as const,
+      interactive: false,
+      inputs: [{ name: "result", repeated: false, side: "left" as const }],
+      outputs: [],
+    },
+  ],
+  edges: [
+    {
+      source: { node: "start", port: "user_prompt" },
+      target: { node: "end", port: "result" },
+    },
+  ],
+};
+
+const DIAGNOSTIC = "unknown field 'auto_merge_resolver' (ignored)";
+
+// An edit tab: `runId` unset, `scope` is a normal pipeline scope. This is the
+// state in which the lint banner is a legitimate edit-mode affordance.
+function editTab(): OpenPipeline {
+  return {
+    id: "p1",
+    scope: "repo",
+    pipeline: PIPELINE,
+    prompts: {},
+    diagnostics: [DIAGNOSTIC],
+    dirty: false,
+    externalDirty: false,
+    libraryId: null,
+    libraryScope: null,
+  };
+}
+
+// A run tab: shaped exactly as `openRunPipeline` produces it — tabId prefixed
+// `__run__`, `scope: "run"`, `runId` set. Carries the SAME diagnostics as the
+// edit tab (run snapshots inherit them via fetchRunPipeline), which is precisely
+// why the banner leaked into the run view before #225.
+function runTab(): OpenPipeline {
+  return {
+    id: "__run__r1",
+    scope: "run",
+    pipeline: PIPELINE,
+    prompts: {},
+    diagnostics: [DIAGNOSTIC],
+    dirty: false,
+    externalDirty: false,
+    runId: "r1",
+    libraryId: null,
+    libraryScope: null,
+  };
+}
+
+function seedTab(tab: OpenPipeline) {
+  useEditStore.setState({
+    openTabs: [tab],
+    activeTabId: tab.id,
+    selection: { kind: "none", id: null },
+  });
+}
+
+function renderCanvas() {
+  return render(
+    <TooltipProvider>
+      <EditCanvas
+        libraryEntries={[]}
+        libraryPipelines={[]}
+        onLibraryDelete={() => {}}
+        onLibraryPipelinesChanged={() => {}}
+      />
+    </TooltipProvider>,
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  localStorage.clear();
+});
+
+afterEach(() => {
+  useEditStore.setState({ selection: { kind: "none", id: null } });
+});
+
+describe("#225 Part 1 — lint banner is gated to non-run tabs", () => {
+  it("shows the lint banner on an edit tab (runId unset) with diagnostics", () => {
+    seedTab(editTab());
+    renderCanvas();
+
+    const banners = screen.getAllByTestId("lint-banner");
+    expect(banners).toHaveLength(1);
+    expect(banners[0].textContent).toContain(DIAGNOSTIC);
+  });
+
+  it("suppresses the lint banner on a run tab even though the snapshot carries the same diagnostics", () => {
+    seedTab(runTab());
+    renderCanvas();
+
+    expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument();
+  });
+});
+
+// A pipeline whose `triage` node emits a list-typed output into `fixer`, which
+// is not a collection member — exactly the shape that produces a fan-out nudge
+// (`collectionFanoutNudges` → id `fanout:fixer`).
+const NUDGE_PIPELINE = {
+  name: "Nudge Pipeline",
+  version: "1.0",
+  variables: {},
+  nodes: [
+    {
+      id: "triage",
+      name: "Triage",
+      type: "agent" as const,
+      interactive: false,
+      inputs: [],
+      outputs: [
+        {
+          name: "issues",
+          repeated: false,
+          side: "right" as const,
+          frontmatter: { issues: { type: "list" as const } },
+        },
+      ],
+    },
+    {
+      id: "fixer",
+      name: "Fixer",
+      type: "agent" as const,
+      interactive: false,
+      inputs: [{ name: "in", repeated: false, side: "left" as const }],
+      outputs: [],
+    },
+  ],
+  edges: [
+    {
+      source: { node: "triage", port: "issues" },
+      target: { node: "fixer", port: "in" },
+    },
+  ],
+};
+
+// An edit tab carrying a nudge AND a correctness lint row.
+function nudgeAndLintTab(): OpenPipeline {
+  return {
+    id: "p1",
+    scope: "repo",
+    pipeline: NUDGE_PIPELINE,
+    prompts: {},
+    diagnostics: [DIAGNOSTIC],
+    dirty: false,
+    externalDirty: false,
+    libraryId: null,
+    libraryScope: null,
+  };
+}
+
+// An edit tab carrying ONLY a nudge (no lint) — used to prove the whole overlay
+// collapses when the last visible row is dismissed.
+function nudgeOnlyTab(): OpenPipeline {
+  return {
+    id: "p1",
+    scope: "repo",
+    pipeline: NUDGE_PIPELINE,
+    prompts: {},
+    diagnostics: [],
+    dirty: false,
+    externalDirty: false,
+    libraryId: null,
+    libraryScope: null,
+  };
+}
+
+describe("#268 — dismissible fan-out nudges", () => {
+  it("renders a fan-out nudge with a dismiss × on an edit tab", () => {
+    seedTab(nudgeAndLintTab());
+    renderCanvas();
+
+    expect(screen.getByTestId("lint-banner")).toBeInTheDocument();
+    expect(screen.getByTestId("lint-banner-dismiss-fanout:fixer")).toBeInTheDocument();
+  });
+
+  it("correctness lint rows have no dismiss × (only the nudge does)", () => {
+    seedTab(nudgeAndLintTab());
+    renderCanvas();
+
+    // The lint message is present…
+    expect(screen.getByText(DIAGNOSTIC)).toBeInTheDocument();
+    // …but the only dismiss affordance in the banner is the nudge's.
+    expect(screen.getAllByLabelText("Dismiss suggestion")).toHaveLength(1);
+  });
+
+  it("clicking × hides the nudge row and persists the dismissal per pipeline", () => {
+    seedTab(nudgeAndLintTab());
+    renderCanvas();
+
+    const nudgeText = screen.getByText(/emits a list into/);
+    expect(nudgeText).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("lint-banner-dismiss-fanout:fixer"));
+
+    // Row gone; the lint row (always-visible) keeps the banner alive.
+    expect(screen.queryByText(/emits a list into/)).not.toBeInTheDocument();
+    expect(screen.getByText(DIAGNOSTIC)).toBeInTheDocument();
+
+    // Persisted under the per-pipeline key.
+    const stored = JSON.parse(
+      localStorage.getItem("pdo.banner.dismissed.p1") ?? "null",
+    );
+    expect(stored).toContain("fanout:fixer");
+  });
+
+  it("dismissing the only nudge on a nudge-only tab collapses the whole banner", () => {
+    seedTab(nudgeOnlyTab());
+    renderCanvas();
+
+    expect(screen.getByTestId("lint-banner")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("lint-banner-dismiss-fanout:fixer"));
+    expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument();
+  });
+
+  it("a persisted dismissal keeps the nudge hidden on a fresh mount", () => {
+    localStorage.setItem(
+      "pdo.banner.dismissed.p1",
+      JSON.stringify(["fanout:fixer"]),
+    );
+    seedTab(nudgeOnlyTab());
+    renderCanvas();
+
+    // Already dismissed → no nudge → overlay never renders.
+    expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument();
+  });
+});
+
+describe("instance-owned pipeline canvas", () => {
+  it("does not render the obsolete promote-to-library star", () => {
+    seedTab(editTab());
+    renderCanvas();
+
+    expect(screen.queryByTestId("canvas-pipeline-star-container")).not.toBeInTheDocument();
+  });
+});

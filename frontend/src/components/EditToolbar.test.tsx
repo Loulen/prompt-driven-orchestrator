@@ -4,8 +4,8 @@ import type { ComponentProps } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import EditToolbar from "./EditToolbar";
 import { TooltipProvider } from "../shared/ui/tooltip";
-import { useEditStore } from "../stores/editStore";
-import type { TabHistory } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
+import type { TabHistory } from "../pipeline/store/editState";
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 describe("EditToolbar", () => {

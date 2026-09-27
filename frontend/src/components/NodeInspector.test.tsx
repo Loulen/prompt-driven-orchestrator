@@ -2,14 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import NodeInspector from "./NodeInspector";
-import type { LibraryEntry } from "../api";
-import {
-  saveToLibrary,
-  deleteFromLibrary,
-  fetchSettings,
-  instantiateFromLibrary,
-} from "../api";
-import { useEditStore } from "../stores/editStore";
+import type { LibraryEntry } from "../pipeline/model/library";
+import { fetchSettings } from "../api";
+import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../pipeline/api/library";
+import { useEditStore } from "../pipeline/store/editStore";
 import { TooltipProvider } from "../shared/ui/tooltip";
 
 function renderInspector(props: Parameters<typeof NodeInspector>[0]) {
@@ -89,6 +85,11 @@ vi.mock("../api", () => ({
     },
     prompt: "stub",
   }),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({

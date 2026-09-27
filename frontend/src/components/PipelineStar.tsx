@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Star } from "lucide-react";
-import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";
-import { saveLibraryPipeline, deleteLibraryPipeline } from "../api";
-import { useEditStore } from "../stores/editStore";
+import type { LibraryPipelineEntry, LibraryPipelineScope } from "../pipeline/api/libraryPipelines";
+import { saveLibraryPipeline, deleteLibraryPipeline } from "../pipeline/api/libraryPipelines";
+import { useEditStore } from "../pipeline/store/editStore";
 import { serializePipeline } from "../lib/serializePipeline";
 import type { PipelineLibrarySyncState } from "../hooks/useLibraryPipelines";
 import { Tooltip } from "../shared/ui/tooltip";

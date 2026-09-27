@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useLaunchTargets } from "./useLaunchTargets";
-import * as api from "../api";
+import * as pipelinesApi from "../pipeline/api/pipelines";
 import * as repos from "../workspace/api/repos";
 import type { BranchList } from "../shared/generated/BranchList";
 import type { BranchRef } from "../shared/generated/BranchRef";
@@ -10,6 +10,11 @@ import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn(),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
 }));
 
 vi.mock("../workspace/api/repos", async (importOriginal) => ({
@@ -53,7 +58,7 @@ function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
 }
 
 beforeEach(() => {
-  vi.mocked(api.fetchPipelines).mockReset().mockResolvedValue([]);
+  vi.mocked(pipelinesApi.fetchPipelines).mockReset().mockResolvedValue([]);
   vi.mocked(repos.listBranches).mockReset();
   vi.mocked(repos.fetchRemotes).mockReset();
   vi.mocked(repos.fastForwardBranch).mockReset();
@@ -68,16 +73,16 @@ function setup(open = true) {
 
 describe("useLaunchTargets — the pipelines", () => {
   it("fetches the list on open", async () => {
-    vi.mocked(api.fetchPipelines).mockResolvedValue([pipeline()]);
+    vi.mocked(pipelinesApi.fetchPipelines).mockResolvedValue([pipeline()]);
     const { result } = setup();
     await waitFor(() => expect(result.current.pipelines).toHaveLength(1));
-    expect(api.fetchPipelines).toHaveBeenCalledTimes(1);
+    expect(pipelinesApi.fetchPipelines).toHaveBeenCalledTimes(1);
   });
 
   it("fetches nothing while the dialog is closed", async () => {
     const { result } = setup(false);
     await act(async () => {});
-    expect(api.fetchPipelines).not.toHaveBeenCalled();
+    expect(pipelinesApi.fetchPipelines).not.toHaveBeenCalled();
     expect(result.current.pipelines).toEqual([]);
   });
 
@@ -85,14 +90,14 @@ describe("useLaunchTargets — the pipelines", () => {
   // have been added, promoted or edited while it was closed.
   it("re-reads the list on every reopen", async () => {
     const { rerender } = setup();
-    await waitFor(() => expect(api.fetchPipelines).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(pipelinesApi.fetchPipelines).toHaveBeenCalledTimes(1));
     rerender({ open: false });
     rerender({ open: true });
-    await waitFor(() => expect(api.fetchPipelines).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(pipelinesApi.fetchPipelines).toHaveBeenCalledTimes(2));
   });
 
   it("keeps the daemon's instance pipeline list flat", async () => {
-    vi.mocked(api.fetchPipelines).mockResolvedValue([
+    vi.mocked(pipelinesApi.fetchPipelines).mockResolvedValue([
       pipeline({ id: "first", name: "First" }),
       pipeline({ id: "second", name: "Second" }),
     ]);
@@ -105,7 +110,7 @@ describe("useLaunchTargets — the pipelines", () => {
   });
 
   it("resolves the selected pipeline by id, and nothing while the id is unknown", async () => {
-    vi.mocked(api.fetchPipelines).mockResolvedValue([pipeline({ id: "p1" }), pipeline({ id: "p2" })]);
+    vi.mocked(pipelinesApi.fetchPipelines).mockResolvedValue([pipeline({ id: "p1" }), pipeline({ id: "p2" })]);
     const { result } = setup();
     await waitFor(() => expect(result.current.pipelines).toHaveLength(2));
     expect(result.current.selectedPipeline).toBeUndefined();
@@ -121,7 +126,7 @@ describe("useLaunchTargets — the pipelines", () => {
   // A failed listing is not worth a dialog: the picker simply stays empty, which the modal
   // already renders as "No pipelines found".
   it("swallows a failed listing and leaves the picker empty", async () => {
-    vi.mocked(api.fetchPipelines).mockRejectedValue(new Error("daemon unreachable"));
+    vi.mocked(pipelinesApi.fetchPipelines).mockRejectedValue(new Error("daemon unreachable"));
     const { result } = setup();
     await act(async () => {});
     expect(result.current.pipelines).toEqual([]);
@@ -129,8 +134,8 @@ describe("useLaunchTargets — the pipelines", () => {
 
   it("re-reads the list on demand", async () => {
     const { result } = setup();
-    await waitFor(() => expect(api.fetchPipelines).toHaveBeenCalledTimes(1));
-    vi.mocked(api.fetchPipelines).mockResolvedValue([pipeline()]);
+    await waitFor(() => expect(pipelinesApi.fetchPipelines).toHaveBeenCalledTimes(1));
+    vi.mocked(pipelinesApi.fetchPipelines).mockResolvedValue([pipeline()]);
     await act(async () => {
       result.current.loadPipelines();
     });

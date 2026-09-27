@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { fetchLibrary } from "../api";
-import type { LibraryEntry } from "../api";
+import { fetchLibrary } from "../pipeline/api/library";
+import type { LibraryEntry } from "../pipeline/model/library";
 import type { PortDef } from "../shared/generated/PortDef";
 import { deepEqual } from "../lib/deepEqual";
 import { nodeIsolation, resolveIsolation } from "../lib/nodeIsolation";

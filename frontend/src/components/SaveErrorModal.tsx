@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { SaveErrorData } from "../stores/editStore";
+import type { SaveErrorData } from "../pipeline/store/editState";
 
 interface Props {
   open: boolean;

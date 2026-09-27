@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 import EdgeDetailPanel from "./EdgeDetailPanel";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import { pipelineToYamlObject } from "../lib/serializePipeline";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";

@@ -2,7 +2,7 @@ import { render, act, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { Position, ReactFlowProvider } from "@xyflow/react";
 import OrthogonalEdge, { type OrthogonalEdgeData } from "./OrthogonalEdge";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 

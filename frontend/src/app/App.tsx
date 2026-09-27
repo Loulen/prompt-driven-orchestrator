@@ -35,13 +35,13 @@ import ConflictModal from "../components/ConflictModal";
 import SaveErrorModal from "../components/SaveErrorModal";
 import ConfirmCloseTabsModal from "../components/ConfirmCloseTabsModal";
 import { useRecentReposStore } from "../stores/recentReposStore";
-import type { TabId } from "../components/PipelineInfoPanel";
-import EditCanvas from "../components/EditCanvas";
+import type { TabId } from "../pipeline/components/PipelineInfoPanel";
+import EditCanvas from "../pipeline/components/EditCanvas";
 import TabBar from "../components/TabBar";
 import NodeInspector from "../components/NodeInspector";
 import MergeInspector from "../components/MergeInspector";
 import PipelineInspector from "../components/PipelineInspector";
-import PipelineInfoPanel from "../components/PipelineInfoPanel";
+import PipelineInfoPanel from "../pipeline/components/PipelineInfoPanel";
 import StartInspector from "../components/StartInspector";
 import EndInspector from "../components/EndInspector";
 import MarkerInspector from "../components/MarkerInspector";
@@ -56,7 +56,7 @@ import { handleUndoRedoKeydown } from "../lib/undoRedoHotkeys";
 import InspectorTabs from "../components/InspectorTabs";
 import { useInspectorTab } from "../hooks/useInspectorTab";
 import { TooltipProvider } from "../shared/ui/tooltip";
-import { useEditStore } from "../stores/editStore";
+import { useEditStore } from "../pipeline/store/editStore";
 import TourHost from "../components/tour/TourHost";
 import { useTour } from "../hooks/useTour";
 import { loadTourOffered, markTourOffered, shouldOfferWelcome } from "../lib/tourMemory";
@@ -875,7 +875,7 @@ export default function App() {
                 <EditCanvas
                   libraryEntries={libraryEntries}
                   onLibraryDelete={async (name) => {
-                    const { deleteFromLibrary: delLib } = await import("../api");
+                    const { deleteFromLibrary: delLib } = await import("../pipeline/api/library");
                     await delLib(name);
                     refreshLibrary();
                   }}

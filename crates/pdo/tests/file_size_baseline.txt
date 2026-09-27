@@ -3,29 +3,21 @@
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.
 crates/pdo-daemon/src/instance_config.rs 910
-crates/pdo-daemon/src/lib.rs 5404
-crates/pdo-daemon/src/stats.rs 1945
-crates/pdo-daemon/src/stats_absorption.rs 1799
-crates/pdo-daemon/src/stats_performance.rs 2386
+crates/pdo-daemon/src/lib.rs 5100
 crates/pdo-daemon/src/structured_diff.rs 521
 crates/pdo-daemon/src/trigger_store.rs 806
-frontend/src/api.ts 448
 frontend/src/app/App.tsx 1242
 frontend/src/components/DiffTab.tsx 747
 frontend/src/components/EdgeDetailPanel.tsx 777
 frontend/src/components/NodeInspector.tsx 958
 frontend/src/components/OrthogonalEdge.tsx 577
 frontend/src/components/SettingsSurface.tsx 2116
-frontend/src/components/StatsAbsorption.tsx 544
-frontend/src/components/StatsCharts.tsx 3793
-frontend/src/components/StatsModal.tsx 478
 frontend/src/components/TriggerDetailPanel.tsx 428
 frontend/src/components/TriggersListPanel.tsx 553
 frontend/src/components/editNodeDerivation.ts 675
 frontend/src/components/review/CommentCard.tsx 656
 frontend/src/components/review/ReviewFileCard.tsx 584
 frontend/src/components/tour/TourCards.tsx 464
-frontend/src/hooks/useStatsAbsorption.tsx 429
 frontend/src/hooks/useTour.ts 658
 frontend/src/lib/anchorSide.ts 781
 frontend/src/lib/reviewComments.ts 539

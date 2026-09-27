@@ -94,6 +94,8 @@ const RESOURCES: &[ResourceKind] = &[
     ResourceKind::Session,
     ResourceKind::Update,
     ResourceKind::Service,
+    ResourceKind::StatsAbsorption,
+    ResourceKind::PriceTable,
 ];
 
 fn resource_name(resource: ResourceKind) -> String {

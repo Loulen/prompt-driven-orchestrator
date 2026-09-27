@@ -141,9 +141,14 @@ cd "$(git rev-parse --show-toplevel)"
 #   only the price sync); NewRunModal, NodeDetailPanel, MarkdownArtifactModal,
 #   OrchestrationTab, RunFilters, runFilter, ForgetRunModal, CleanupConfirmModal,
 #   RepositoriesSection, SecondaryRepoRow and their tests to frontend/src/run/.
+# frontend/src/components: 124 and crates/pdo-daemon/src: 15 (#928, spec #913) ratchet down:
+#   the stats context moved out — stats, stats_performance, stats_absorption, distribution
+#   and price_table to crates/pdo-stats; StatsCharts (split by tab), StatsAbsorption,
+#   StatsAbsorptionsPanel, StatsModal and their tests to frontend/src/stats/. stats_ports.rs
+#   is admitted: the legacy side of the context's ports (the Triggers' fires).
 BASELINES='
-frontend/src/components 131
-crates/pdo-daemon/src 19
+frontend/src/components 124
+crates/pdo-daemon/src 15
 '
 
 fail=0

@@ -413,6 +413,30 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             format!("/settings/skill-folders/{folder}/update"),
             Some(json!({ "scan_id": "scan-1", "items": [] })),
         ),
+        // The stats context (#928): the absorptions and the price sync ask
+        // before they read anything, let alone reach the network.
+        call(
+            "POST",
+            "/stats/absorptions",
+            "/stats/absorptions".into(),
+            Some(json!({
+                "dimension": "pipeline",
+                "absorbent": { "key": "keeper", "name": "Keeper" },
+                "members": [{ "key": "other", "name": "Other" }],
+            })),
+        ),
+        call(
+            "DELETE",
+            "/stats/absorptions/member",
+            "/stats/absorptions/member?dimension=pipeline&member=other".into(),
+            None,
+        ),
+        call(
+            "POST",
+            "/settings/cost-prices/sync",
+            "/settings/cost-prices/sync".into(),
+            None,
+        ),
     ]
 }
 
@@ -613,6 +637,12 @@ async fn an_extension_refusing_everything_refuses_every_mutation_route() {
     assert_eq!(pages.as_array().map(Vec::len), Some(1), "{pages}");
     let focus = daemon.get_json("/sessions/libassist/focus").await;
     assert_eq!(focus["pipeline_id"], "review", "{focus}");
+    let absorptions = daemon.get_json("/stats/absorptions").await;
+    assert_eq!(
+        absorptions["absorptions"],
+        json!([]),
+        "no absorption was written"
+    );
     let bank = daemon.get_json("/settings/skills").await;
     let entries = |key: &str| -> Vec<(Value, Value)> {
         bank[key]

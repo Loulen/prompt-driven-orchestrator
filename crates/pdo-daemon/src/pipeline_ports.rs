@@ -1,10 +1,10 @@
-//! The ports of the pipeline context that the Runs and the Stats implement,
-//! while both still live in this crate: how many Runs use a pipeline, and the
-//! Stats absorption a rename records (ADR-0077 §4).
+//! The port of the pipeline context that the Runs implement, while they still
+//! live in this crate: how many Runs use a pipeline. (The Stats absorption a
+//! rename records is the stats context's `StatsRenames`, #928.)
 
-use pdo_pipeline::application::ports::{ActiveRuns, BoxFuture, RenameLedger, Renamed};
+use pdo_pipeline::application::ports::{ActiveRuns, BoxFuture};
 
-use crate::{event_log, load_all_run_ids, load_events, stats_absorption};
+use crate::{event_log, load_all_run_ids, load_events};
 
 /// The Runs of the daemon's database.
 pub(crate) struct LegacyActiveRuns {
@@ -38,26 +38,5 @@ impl ActiveRuns for LegacyActiveRuns {
             }
             active_count
         })
-    }
-}
-
-/// The Stats absorptions of the daemon's database.
-pub(crate) struct LegacyRenameLedger {
-    pub(crate) db: sqlx::SqlitePool,
-}
-
-impl RenameLedger for LegacyRenameLedger {
-    fn record<'a>(&'a self, rename: &'a Renamed) -> BoxFuture<'a, ()> {
-        Box::pin(stats_absorption::record_rename_best_effort(
-            &self.db,
-            stats_absorption::Named {
-                key: rename.old_id.clone(),
-                name: rename.old_name.clone(),
-            },
-            stats_absorption::Named {
-                key: rename.new_id.clone(),
-                name: rename.new_name.clone(),
-            },
-        ))
     }
 }

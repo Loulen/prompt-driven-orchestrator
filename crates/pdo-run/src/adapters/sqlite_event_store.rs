@@ -193,6 +193,10 @@ impl SqliteEventStore {
     pub fn new(db: sqlx::SqlitePool) -> Self {
         Self { db }
     }
+
+    pub(crate) fn pool(&self) -> &sqlx::SqlitePool {
+        &self.db
+    }
 }
 
 impl EventStore for SqliteEventStore {

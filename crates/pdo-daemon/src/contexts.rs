@@ -6,20 +6,21 @@
 //! back the [`Contexts`]. The ports a context needs from what is still legacy
 //! (the Runs, the templates, the instance settings) are implemented here for
 //! `platform`, in `session_ports` for `session`, in `pipeline_ports` for
-//! `pipeline` and in `run_ports` for `run`, and move to their own crates when
-//! those contexts are extracted.
+//! `pipeline`, in `run_ports` for `run` and in `stats_ports` for `stats`, and
+//! move to their own crates when those contexts are extracted.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
 use axum::Router;
 use pdo_kernel::event_bus::EventBus;
-use pdo_pipeline::application::ports::{ActiveRuns, RenameLedger};
+use pdo_pipeline::application::ports::ActiveRuns;
 use pdo_platform::application::ports::{BoxFuture, Runs, UpdateCheckSetting};
 use pdo_platform::domain::install::{InstallMethod, Supervision};
 use pdo_platform::domain::service_health::ServiceHealthOverride;
 use pdo_platform::Platform;
 use pdo_run::application::ports::{InstanceSettings, RunDirWatch, RunPages};
+use pdo_stats::application::ports::TriggerFires;
 
 use pdo_session::application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunShells, SessionOwners, Templates,
@@ -27,9 +28,10 @@ use pdo_session::application::ports::{
 use pdo_session::Session;
 use tokio::sync::broadcast;
 
-use crate::pipeline_ports::{LegacyActiveRuns, LegacyRenameLedger};
+use crate::pipeline_ports::LegacyActiveRuns;
 use crate::run_ports::{LegacyInstanceSettings, LegacyRunPages};
 use crate::session_ports::LegacySessionPorts;
+use crate::stats_ports::LegacyTriggerFires;
 use crate::SelfWrites;
 use crate::{event_log, instance_config, AppState, SessionClaim};
 
@@ -64,6 +66,17 @@ pub struct ContextResources {
     pub pipeline: PipelineResources,
     /// What the run context needs from this daemon.
     pub run: RunResources,
+    /// What the stats context needs from this daemon.
+    pub stats: StatsResources,
+}
+
+/// The stats context's resources: the Triggers' fires the legacy side still
+/// holds, and the daemon's price-sync knobs.
+#[derive(Clone)]
+pub struct StatsResources {
+    pub triggers: Arc<dyn TriggerFires>,
+    pub price_source_url: Option<String>,
+    pub price_refresh_at_boot: bool,
 }
 
 /// The run context's resources: the kernel's bus the daemon opened, the
@@ -86,13 +99,12 @@ pub struct RunResources {
     pub panic_on_spawn: bool,
 }
 
-/// The pipeline context's resources: the ports the Runs and the Stats
-/// implement, the skill bank, the live stream and the record of the daemon's
-/// own writes the watcher reads.
+/// The pipeline context's resources: the port the Runs implement, the skill
+/// bank, the live stream and the record of the daemon's own writes the watcher
+/// reads. (The Stats' ledger of a rename is wired by the composition root.)
 #[derive(Clone)]
 pub struct PipelineResources {
     pub runs: Arc<dyn ActiveRuns>,
-    pub renames: Arc<dyn RenameLedger>,
     pub skills: Arc<pdo_skill::Skills>,
     pub events: broadcast::Sender<serde_json::Value>,
     pub self_writes: SelfWrites,
@@ -134,6 +146,8 @@ pub struct Contexts {
     /// The run context. Its routes are merged by the legacy router, which the
     /// daemon's in-crate tests drive as is.
     pub run: Arc<pdo_run::Runs>,
+    /// The stats context. The daemon drives its boot refresh.
+    pub stats: Arc<pdo_stats::Stats>,
     pub router: Router,
 }
 
@@ -162,6 +176,8 @@ pub(crate) struct ContextResourcesSeed {
     pub sandbox_home_override: Option<PathBuf>,
     pub panic_on_stale_sweep: bool,
     pub panic_on_spawn: bool,
+    pub price_source_url: Option<String>,
+    pub price_refresh_at_boot: bool,
 }
 
 impl ContextResourcesSeed {
@@ -195,12 +211,16 @@ impl ContextResourcesSeed {
                 runs: Arc::new(LegacyActiveRuns {
                     db: self.db.clone(),
                 }),
-                renames: Arc::new(LegacyRenameLedger {
-                    db: self.db.clone(),
-                }),
                 skills: self.skills,
                 events: self.pipeline_events,
                 self_writes: self.self_writes,
+            },
+            stats: StatsResources {
+                triggers: Arc::new(LegacyTriggerFires {
+                    db: self.db.clone(),
+                }),
+                price_source_url: self.price_source_url,
+                price_refresh_at_boot: self.price_refresh_at_boot,
             },
             db: self.db,
             repo_root: self.repo_root,
@@ -427,6 +447,65 @@ pub(crate) fn test_run(t: TestRun<'_>) -> Arc<pdo_run::Runs> {
             panic_on_spawn: false,
         },
     )
+}
+
+#[cfg(test)]
+pub(crate) use stats_testing::test_stats;
+
+#[cfg(test)]
+mod stats_testing {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pdo_platform::Platform;
+    use tokio::sync::broadcast;
+
+    use crate::stats_ports::LegacyTriggerFires;
+
+    /// The stats context of a unit-test state: the SQLite log and absorptions of
+    /// the test database, the disk of the test repo, the legacy Triggers, and no
+    /// price source (a test never reaches the network).
+    pub(crate) fn test_stats(
+        db: &sqlx::SqlitePool,
+        repo_root: PathBuf,
+        platform: Arc<Platform>,
+        bus_tx: &broadcast::Sender<serde_json::Value>,
+        workspace: Arc<pdo_workspace::application::Workspace>,
+    ) -> Arc<pdo_stats::Stats> {
+        use pdo_stats::adapters::contexts::{BusAnnouncements, PlatformAudit, WorkspaceProjects};
+        let store =
+            Arc::new(pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone()));
+        pdo_stats::Stats::new(
+            pdo_stats::StatsPorts {
+                events: Arc::new(pdo_stats::adapters::run_events::RunContextEvents::new(
+                    store.clone(),
+                    store,
+                )),
+                triggers: Arc::new(LegacyTriggerFires { db: db.clone() }),
+                projects: Arc::new(WorkspaceProjects(workspace)),
+                absorptions: Arc::new(
+                    pdo_stats::adapters::sqlite_absorptions::SqliteAbsorptions::new(db.clone()),
+                ),
+                run_files: Arc::new(pdo_stats::adapters::run_files::DiskRunFiles::new(
+                    repo_root.clone(),
+                    None,
+                )),
+                transcripts: Arc::new(pdo_stats::adapters::transcripts::HarnessTranscripts),
+                price_files: Arc::new(pdo_stats::adapters::price_files::HomePriceFiles::new(None)),
+                price_source: Arc::new(pdo_stats::adapters::models_dev::HttpPriceSource),
+                audit: Arc::new(PlatformAudit(platform)),
+                announcements: Arc::new(BusAnnouncements(Arc::new(
+                    pdo_kernel::event_bus::BroadcastEventBus::from_sender(bus_tx.clone()),
+                ))),
+                extensions: Arc::new(pdo_kernel::extension_host::NoExtensions),
+            },
+            pdo_stats::StatsOptions {
+                repo_root,
+                price_source_url: None,
+                price_refresh_at_boot: false,
+            },
+        )
+    }
 }
 
 #[cfg(test)]

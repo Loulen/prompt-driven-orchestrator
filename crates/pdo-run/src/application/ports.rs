@@ -38,6 +38,87 @@ pub trait EventStore: Send + Sync {
     fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>>;
 }
 
+/// The reads across every Run's log that the downstream contexts aggregate
+/// (the Stats cockpit): counts per period, the cohort of Runs started in a
+/// window, the Node starts of that cohort, and what a Pipeline's history ran.
+/// A window is `[from, to)` on the event's `ts`; under `completed_only` only
+/// the Runs that reached `RunCompleted` count (#810). A period label is the
+/// event's `ts` formatted with `bucket_format` (a SQLite `strftime` format).
+pub trait EventWindows: Send + Sync {
+    /// How many events of `kind` fall in each period of the window, periods in
+    /// ascending order.
+    fn count_by_period<'a>(
+        &'a self,
+        kind: &'a str,
+        bucket_format: &'a str,
+        window: EventWindow<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<Vec<(String, i64)>>>;
+    /// The `run_started` events of the window, oldest first, with their period
+    /// when `bucket_format` is given.
+    fn run_starts<'a>(
+        &'a self,
+        bucket_format: Option<&'a str>,
+        window: EventWindow<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<Vec<RunStart>>>;
+    /// Every `node_started` of the Runs started in the window, by the Run's
+    /// start then the event's id, each beside its Run's `run_started`.
+    fn node_starts<'a>(
+        &'a self,
+        bucket_format: &'a str,
+        window: EventWindow<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<Vec<NodeStart>>>;
+    /// The Node ids that ever started under a Run of Pipeline `pipeline`, the
+    /// whole history. A Run's Pipeline is its `pipeline_id`, else its
+    /// `pipeline_name`, else `unknown`.
+    fn nodes_started_under<'a>(
+        &'a self,
+        pipeline: &'a str,
+        unknown: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<std::collections::BTreeSet<String>>>;
+    /// The `run_started` payload of the most recent Run of Pipeline `pipeline`
+    /// (same Pipeline rule as [`Self::nodes_started_under`]).
+    fn latest_run_start<'a>(
+        &'a self,
+        pipeline: &'a str,
+        unknown: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<Option<serde_json::Value>>>;
+}
+
+/// A `[from, to)` window over the events' `ts`.
+#[derive(Debug, Clone, Copy)]
+pub struct EventWindow<'a> {
+    pub from: &'a str,
+    pub to: &'a str,
+    /// Only the Runs that reached `RunCompleted` (#810).
+    pub completed_only: bool,
+}
+
+/// One `run_started` of a window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunStart {
+    pub run_id: String,
+    pub ts: String,
+    /// The period label, when one was asked for.
+    pub bucket: Option<String>,
+    /// The payload as stored (`Null` when absent or unreadable).
+    pub payload: serde_json::Value,
+}
+
+/// One `node_started` of a Run started in a window, beside that Run's start.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeStart {
+    /// The period label of the Run's start.
+    pub bucket: String,
+    pub run_id: String,
+    /// The Run's `run_started` timestamp and payload.
+    pub run_ts: String,
+    pub run_payload: serde_json::Value,
+    pub event_id: Option<i64>,
+    pub node_id: Option<String>,
+    pub iter: Option<i64>,
+    pub payload: serde_json::Value,
+}
+
 /// What a Run's detail reads live from disk on top of its projection: its
 /// lines-of-code delta, its cost, the run-scoped pipeline's graph. Never
 /// fails: an unreadable source leaves its field as the projection had it.

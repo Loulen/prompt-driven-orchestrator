@@ -27,7 +27,7 @@
 use std::time::{Duration, SystemTime};
 
 use crate::common::TestDaemon;
-use pdo_daemon::stale_detector;
+use pdo_run::application::stale::detector as stale_detector;
 
 const DOC_PIPELINE: &str = "turn-end-doc";
 const CM_PIPELINE: &str = "turn-end-cm";

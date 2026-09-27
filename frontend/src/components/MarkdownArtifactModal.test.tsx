@@ -6,8 +6,10 @@ const fetchNodeIOMock = vi.fn();
 
 vi.mock("../api", () => ({
   fetchArtifact: (...args: unknown[]) => fetchArtifactMock(...args),
-  fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
+}));
+vi.mock("../run/api/nodes", () => ({
+  fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
 }));
 
 vi.mock("react-markdown", () => ({
@@ -17,7 +19,7 @@ vi.mock("remark-gfm", () => ({ default: () => null }));
 
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { IterationInfo } from "../shared/generated/IterationInfo";
-import type { FileInfo } from "../api";
+import type { FileInfo } from "../run/api/nodes";
 import { dismissTransientOverlays } from "../lib/overlays";
 
 function makeFile(path: string, exists = true): FileInfo {

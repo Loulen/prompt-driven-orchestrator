@@ -12,16 +12,22 @@ globalThis.ResizeObserver = class {
 };
 
 vi.mock("../api", () => ({
-  fetchPrompt: vi.fn().mockResolvedValue("prompt"),
-  fetchNodeIO: vi.fn().mockResolvedValue({ inputs: [], outputs: [] }),
-  markNodeDone: vi.fn().mockResolvedValue({ kind: "completed" }),
+  artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
+}));
+vi.mock("../run/api/commands", () => ({
   killNode: vi.fn(),
   restartNode: vi.fn(),
+}));
+vi.mock("../run/api/completion", () => ({
+  markNodeDone: vi.fn().mockResolvedValue({ kind: "completed" }),
+}));
+vi.mock("../run/api/nodes", () => ({
+  fetchPrompt: vi.fn().mockResolvedValue("prompt"),
+  fetchNodeIO: vi.fn().mockResolvedValue({ inputs: [], outputs: [] }),
   stopNode: vi.fn(),
   retryNode: vi.fn(),
   retryNodePreview: vi.fn().mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] }),
   startNode: vi.fn(),
-  artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 
 vi.mock("../workspace/api/provisioning", async (importOriginal) => ({

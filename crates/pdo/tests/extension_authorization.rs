@@ -10,7 +10,9 @@ use pdo::extension_api::{Actor, Operation, ResourceKind, Verb};
 use pdo::{serve, Config};
 use serde_json::{json, Value};
 
-use crate::common::flow::{completed_solo_run, git_init, seed_solo};
+use crate::common::flow::{
+    complete_node, create_run, git_init, wait_node_status, wait_run_status, write_pipeline,
+};
 use crate::common::TestDaemon;
 use crate::test_extension::{self, Refusal, TestExtension, ACTOR_HEADER};
 
@@ -161,28 +163,108 @@ async fn a_panic_in_authorize_is_a_refusal_and_the_daemon_lives_on() {
     assert_eq!(renamed["name"], "renamed");
 }
 
+/// `start → worker → second → end`: two agent nodes in a row.
+fn seed_relay(repo: &std::path::Path) -> anyhow::Result<()> {
+    let yaml = r#"name: relay
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: Worker
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: out
+  - id: second
+    name: Second
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: out }
+    target: { node: second, port: task }
+  - source: { node: second, port: out }
+    target: { node: end, port: result }
+"#;
+    write_pipeline(repo, "relay", yaml)?;
+    std::fs::write(
+        repo.join(".pdo/pipelines/relay.prompts/second.md"),
+        "Do the rest.\n",
+    )?;
+    git_init(repo)
+}
+
+fn complete(run_id: &str, node_id: &str) -> Operation {
+    Operation::new(ResourceKind::Node, Verb::Action("complete".into()))
+        .on(format!("{run_id}/{node_id}"))
+}
+
 #[tokio::test]
 async fn the_scheduler_never_asks_the_authorization() {
-    // The extension refuses everything a context could ask about: a Run still
-    // goes from launch to `completed`, because none of its transitions is an
-    // Operation.
-    let (ext, control) = TestExtension::new(Refusal::Everything);
-    let daemon =
-        TestDaemon::spawn_with_extensions(|repo| seed_solo(repo, &[("solo", false)]), ext.boxed())
-            .await
-            .unwrap();
+    // The extension refuses everything while the Run is in flight: an agent's
+    // completion is a gesture and is refused, but the scheduler still drives the
+    // Run — the next node spawns and the Run completes — because none of its
+    // transitions is an Operation.
+    let (ext, control) = TestExtension::new(Refusal::Nothing);
+    let daemon = TestDaemon::spawn_with_extensions(seed_relay, ext.boxed())
+        .await
+        .unwrap();
+    let run_id = create_run(&daemon, "relay").await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+    let before = control.seen().len();
 
-    completed_solo_run(&daemon, "solo").await;
+    control.set(Refusal::Everything);
+    let (status, body) = complete_node(&daemon, &run_id, "worker").await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(body["error"], "operation_refused");
+    assert_eq!(
+        wait_node_status(&daemon, &run_id, "worker", "running").await["status"],
+        "running",
+        "a refused completion leaves the Run as it was"
+    );
 
-    // Only the requests this test made could have been asked about.
-    let asked: Vec<_> = control
+    control.set(Refusal::Nothing);
+    let (status, body) = complete_node(&daemon, &run_id, "worker").await;
+    assert_eq!(status, 200, "worker completes: {body}");
+    // Everything refused again: the spawn of `second` is the scheduler's.
+    control.set(Refusal::Everything);
+    wait_node_status(&daemon, &run_id, "second", "running").await;
+
+    control.set(Refusal::Nothing);
+    let (status, body) = complete_node(&daemon, &run_id, "second").await;
+    assert_eq!(status, 200, "second completes: {body}");
+    wait_run_status(&daemon, &run_id, "completed").await;
+
+    // Only this test's three completions were asked about.
+    let asked: Vec<Operation> = control
         .seen()
         .into_iter()
-        .filter(|(_, op)| !matches!(op.resource, ResourceKind::Run | ResourceKind::Node))
+        .skip(before)
+        .map(|(_, op)| op)
         .collect();
     assert_eq!(
         asked,
-        vec![],
+        vec![
+            complete(&run_id, "worker"),
+            complete(&run_id, "worker"),
+            complete(&run_id, "second"),
+        ],
         "a scheduler transition asked the authorization"
     );
 }

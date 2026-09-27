@@ -3,25 +3,17 @@
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.
 crates/pdo-daemon/src/instance_config.rs 910
-crates/pdo-daemon/src/lib.rs 15738
-crates/pdo-daemon/src/node_io_resolver.rs 435
-crates/pdo-daemon/src/node_primitives.rs 893
-crates/pdo-daemon/src/node_spawn.rs 1560
+crates/pdo-daemon/src/lib.rs 10443
 crates/pdo-daemon/src/price_table.rs 760
-crates/pdo-daemon/src/prompt_augmenter.rs 1192
-crates/pdo-daemon/src/run_advance.rs 784
-crates/pdo-daemon/src/run_command.rs 2561
 crates/pdo-daemon/src/run_cost.rs 1426
 crates/pdo-daemon/src/run_refs.rs 434
-crates/pdo-daemon/src/scheduler.rs 1534
-crates/pdo-daemon/src/stale_detector.rs 599
 crates/pdo-daemon/src/stats.rs 1945
 crates/pdo-daemon/src/stats_absorption.rs 1799
 crates/pdo-daemon/src/stats_performance.rs 2386
 crates/pdo-daemon/src/structured_diff.rs 671
 crates/pdo-daemon/src/trigger_store.rs 806
-frontend/src/api.ts 1125
-frontend/src/app/App.tsx 1276
+frontend/src/api.ts 719
+frontend/src/app/App.tsx 1242
 frontend/src/components/DiffTab.tsx 747
 frontend/src/components/EdgeDetailPanel.tsx 777
 frontend/src/components/MarkdownArtifactModal.tsx 605
@@ -35,7 +27,7 @@ frontend/src/components/StatsCharts.tsx 3793
 frontend/src/components/StatsModal.tsx 478
 frontend/src/components/TriggerDetailPanel.tsx 428
 frontend/src/components/TriggersListPanel.tsx 553
-frontend/src/components/UnifiedLeftPanel.tsx 1135
+frontend/src/components/UnifiedLeftPanel.tsx 1129
 frontend/src/components/editNodeDerivation.ts 675
 frontend/src/components/review/CommentCard.tsx 656
 frontend/src/components/review/ReviewFileCard.tsx 584

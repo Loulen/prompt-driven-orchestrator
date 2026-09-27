@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pdo_daemon::{
-    run_complete, run_docs, run_fail, run_migrate, run_reap, run_review, run_run_create,
-    run_run_wait, run_skip, run_wait_user, Cli, Commands, RunAction,
+    run_docs, run_migrate, run_reap, run_review, run_run_create, Cli, Commands, RunAction,
 };
 use pdo_kernel::extension_host::NoExtensions;
 use pdo_platform::adapters::cli::{run_page, run_service};
+use pdo_run::adapters::cli::{run_complete, run_fail, run_run_wait, run_skip, run_wait_user};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

@@ -186,11 +186,9 @@ pub fn launchd_plist_path(home: &Path) -> PathBuf {
         .join(format!("{LAUNCHD_LABEL}.plist"))
 }
 
-/// The port a daemon — and the service unit — listens on by default.
-pub const DEFAULT_PORT: u16 = 5172;
-
-/// Where the CLI reaches the daemon when `PDO_DAEMON_URL` is unset.
-pub const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
+/// The port a daemon — and the service unit — listens on by default, and where
+/// the CLI reaches the daemon when `PDO_DAEMON_URL` is unset.
+pub use pdo_kernel::env::{DEFAULT_DAEMON_URL, DEFAULT_PORT};
 
 /// What the port-conflict pre-flight probe found on the service's address.
 ///

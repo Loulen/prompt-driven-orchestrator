@@ -186,6 +186,55 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             format!("/projects/{project}/provisioning"),
             Some(json!({})),
         ),
+        // The run context's gestures (#924) refuse before looking the Run up.
+        call(
+            "POST",
+            "/runs/{run_id}/commands",
+            format!("/runs/{RUN}/commands"),
+            Some(json!({ "kind": "pause_run" })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/done",
+            format!("/runs/{RUN}/nodes/worker/done"),
+            Some(json!({ "iter": 1 })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/release",
+            format!("/runs/{RUN}/nodes/worker/release"),
+            Some(json!({ "iter": 1 })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/fail",
+            format!("/runs/{RUN}/nodes/worker/fail"),
+            Some(json!({ "reason": "broken", "iter": 1 })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/skip",
+            format!("/runs/{RUN}/nodes/worker/skip"),
+            Some(json!({ "reason": "nothing to do", "iter": 1 })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/start",
+            format!("/runs/{RUN}/nodes/worker/start"),
+            None,
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/stop",
+            format!("/runs/{RUN}/nodes/worker/stop"),
+            None,
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/retry",
+            format!("/runs/{RUN}/nodes/worker/retry"),
+            None,
+        ),
         call(
             "POST",
             "/runs/{run_id}/nodes/{node_id}/wait-user",
@@ -335,7 +384,7 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
     ]
 }
 
-/// A Run id the session routes aim at: they refuse before looking it up.
+/// A Run id the session and run routes aim at: they refuse before looking it up.
 const RUN: &str = "20260101-000000-abcdef0";
 
 /// The reference file of the seeded skill.

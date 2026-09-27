@@ -20,9 +20,11 @@ use pdo_platform::adapters::sqlite_audit_log::SqliteAuditLog;
 use pdo_platform::adapters::sqlite_page_mounts::SqlitePageMounts;
 use pdo_platform::application::update_context::UpdateOptions;
 use pdo_platform::{Platform, PlatformPorts};
+use pdo_run::adapters::contexts::{ContextSkills, SessionWaits, WorkspaceProjects};
 use pdo_run::adapters::manager_sessions::TmuxManagerSessions;
 use pdo_run::adapters::sqlite_event_store::SqliteEventStore;
 use pdo_run::{Runs, RunsOptions, RunsPorts};
+use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_session::adapters::terminal_window::OsTerminalWindow;
 use pdo_session::adapters::tmux::TmuxCli;
 use pdo_session::{Session, SessionOptions, SessionPorts};
@@ -30,7 +32,7 @@ use pdo_session::{Session, SessionOptions, SessionPorts};
 /// Wire every extracted context. Called once per daemon, at boot.
 pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) -> Contexts {
     let session = session(&resources, host.clone());
-    let run = run(&resources, &session);
+    let run = run(&resources, &session, host.clone());
     let pipelines = pipelines(&resources, host.clone());
     let platform = platform(resources, host);
     Contexts {
@@ -44,19 +46,36 @@ pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) ->
 }
 
 /// The `run` context: the event log over SQLite, the kernel's bus the daemon
-/// opened, the manager probe over the session's tmux, and what the legacy
-/// daemon still reads from disk for a Run's detail.
-fn run(r: &ContextResources, session: &Session) -> Arc<Runs> {
+/// opened, tmux and the declared wait of the session context, the Projets of
+/// the workspace, the skills, the staging profiles over SQLite, and what the
+/// legacy daemon still implements (a Run's detail read from disk, the instance
+/// settings, the Run's surfaces the Pipeline Manager reaches).
+fn run(r: &ContextResources, session: &Arc<Session>, host: Arc<dyn ExtensionHost>) -> Arc<Runs> {
+    let legacy = r.run.clone();
     Runs::new(
         RunsPorts {
             store: Arc::new(SqliteEventStore::new(r.db.clone())),
-            bus: r.run.bus.clone(),
-            live_facts: r.run.live_facts.clone(),
+            bus: legacy.bus,
+            live_facts: legacy.live_facts,
             managers: Arc::new(TmuxManagerSessions(session.tmux().clone())),
+            tmux: session.tmux().clone(),
+            waits: Arc::new(SessionWaits(session.clone())),
+            projects: Arc::new(WorkspaceProjects(legacy.workspace)),
+            skills: Arc::new(ContextSkills(legacy.skills)),
+            sandbox_profiles: Arc::new(SqliteProfiles::new(r.db.clone())),
+            settings: legacy.settings,
+            surfaces: legacy.surfaces,
+            extensions: host,
         },
         RunsOptions {
             daemon_port: r.port,
             allowed_ws_origins: r.allowed_ws_origins.clone(),
+            repo_root: r.repo_root.clone(),
+            tmux_cmd_override: r.tmux_cmd_override.clone(),
+            docker_cmd_override: legacy.docker_cmd_override,
+            sandbox_home_override: legacy.sandbox_home_override,
+            panic_on_stale_sweep: legacy.panic_on_stale_sweep,
+            panic_on_spawn: legacy.panic_on_spawn,
         },
     )
 }

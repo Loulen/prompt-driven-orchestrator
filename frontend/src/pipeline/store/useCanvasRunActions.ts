@@ -8,7 +8,7 @@ import { isTerminalRun } from "../../run/model/runStatus";
 import { pendingCount, pendingTone, reviewQuickAccessTitle } from "../../lib/reviewComments";
 import { reviewUrl } from "../../lib/runRefs";
 import { useReviewSeen } from "../../hooks/useReviewUnread";
-import { reopenRun, retryAll } from "../../api";
+import { reopenRun, retryAll } from "../../run/api/commands";
 import { useRunShell } from "../../session/store/useRunShell";
 // #723 — orchestrator pastilles on the run-view node card.
 

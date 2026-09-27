@@ -130,9 +130,15 @@ cd "$(git rev-parse --show-toplevel)"
 #   completion_refusal and child_awaiting to crates/pdo-run; SessionCounter and its test to
 #   frontend/src/run/components/. run_ports.rs is admitted: the legacy side of the context's
 #   ports (what a Run's detail reads from disk).
+# crates/pdo-daemon/src: 21 (#924, spec #913) ratchet down: the run context's scheduler and
+#   node lifecycle moved out — scheduler, scheduler_dispatcher, scheduler_interpreter,
+#   run_advance, run_command, node_primitives, node_spawn, node_io_resolver, prompt_augmenter,
+#   outputs_validator, merge_action, recovery, boot_recovery, stale_detector and
+#   repo_edit_refusal to crates/pdo-run; run_sandbox.rs keeps only the sandbox context's routes
+#   and profile referents, renamed sandbox_ports.rs.
 BASELINES='
 frontend/src/components 152
-crates/pdo-daemon/src 36
+crates/pdo-daemon/src 21
 '
 
 fail=0

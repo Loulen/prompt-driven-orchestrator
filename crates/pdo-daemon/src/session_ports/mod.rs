@@ -5,13 +5,10 @@
 mod daemon;
 mod owners;
 mod runs;
-mod sandbox;
 
 use std::sync::{Arc, Weak};
 
 use pdo_session::application::ports::RunLookup;
-
-pub(crate) use sandbox::SandboxExec;
 
 use crate::{event_log, AppState};
 

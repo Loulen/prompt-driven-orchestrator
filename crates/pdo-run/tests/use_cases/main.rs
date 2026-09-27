@@ -4,6 +4,11 @@
 //! One binary for every use case, so the crate links its tests once.
 
 mod append_event;
+mod commands;
 mod fakes;
+mod gestures;
+mod ports;
+mod project_tiers;
 mod projections;
 mod read_run;
+mod scheduler;

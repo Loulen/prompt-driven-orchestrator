@@ -1,7 +1,7 @@
 import { type Node, type NodeProps } from "@xyflow/react";
 import type { LoopKind } from "../shared/generated/LoopKind";
 import { useEditStore } from "../pipeline/store/editStore";
-import { endRegion } from "../api";
+import { endRegion } from "../run/api/commands";
 
 /**
  * Data carried by a `loopRegion` canvas node (ADR-0011 / #148, #150). A loop

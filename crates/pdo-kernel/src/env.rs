@@ -5,6 +5,12 @@
 //! They live in the kernel, not in the module that consumes each value, so that
 //! reading a setting never means importing the session manager or the sandbox.
 
+/// The port a daemon — and the service unit — listens on by default.
+pub const DEFAULT_PORT: u16 = 5172;
+
+/// Where the CLI reaches the daemon when `PDO_DAEMON_URL` is unset.
+pub const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
+
 /// Replaces the `claude …` tail in the tmux script of a node session.
 ///
 /// Read **once at daemon boot** (`DaemonConfig::from_env`) and then carried as

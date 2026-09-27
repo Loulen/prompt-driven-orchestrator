@@ -4,11 +4,11 @@ import { ReactFlowProvider } from "@xyflow/react";
 import type { Node, NodeProps } from "@xyflow/react";
 import { LoopRegionNode, type LoopRegionNodeData } from "./LoopRegionNode";
 import { useEditStore } from "../pipeline/store/editStore";
-import { endRegion, bumpRegion } from "../api";
+import { endRegion, bumpRegion } from "../run/api/commands";
 import type { LoopRegion } from "../shared/generated/LoopRegion";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
-vi.mock("../api", () => ({
+vi.mock("../run/api/commands", () => ({
   endRegion: vi.fn().mockResolvedValue(undefined),
   bumpRegion: vi.fn().mockResolvedValue(undefined),
 }));

@@ -9,8 +9,9 @@ use pdo_session::domain::declared_wait::{
 use pdo_session::domain::launch::ContainerExec;
 use pdo_session::domain::pane::{PaneTarget, ReattachOutcome};
 
-use super::{LegacySessionPorts, SandboxExec};
+use super::LegacySessionPorts;
 use crate::event_log;
+use pdo_run::application::sandbox::SandboxExec;
 
 impl NodeWaits for LegacySessionPorts {
     fn wait_facts<'a>(
@@ -141,8 +142,8 @@ impl NodePanes for LegacySessionPorts {
                 Err(RunLookup::Storage(error)) => return ReattachOutcome::TraceRefused { error },
             };
             let repo_root = crate::effective_repo_root(&state, &run_state);
-            crate::reattach_node_session(
-                &state, &events, &run_state, &repo_root, run_id, node_id, iter, session,
+            pdo_run::application::node::reattach::reattach_node_session(
+                &state.run, &events, &run_state, &repo_root, run_id, node_id, iter, session,
             )
             .await
         })
@@ -184,7 +185,7 @@ impl RunShells for LegacySessionPorts {
         Box::pin(async move {
             let (state, _, run_state) =
                 self.projected(run_id).await.map_err(|e| format!("{e:?}"))?;
-            let prep = match crate::run_sandbox::context_from_state(&state, &run_state).await {
+            let prep = match crate::run_sandbox::context_from_state(&state.run, &run_state).await {
                 Ok(prep) => tokio::task::spawn_blocking(move || prep.ensure_ready())
                     .await
                     .unwrap_or_else(|je| {

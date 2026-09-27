@@ -142,13 +142,18 @@ fn normalise(s: Option<&str>) -> Option<String> {
     s.map(str::trim).filter(|s| !s.is_empty()).map(String::from)
 }
 
+/// The reserved id of the instance's floor profile (ADR-0057 ¶3): the profile
+/// every resolution falls back to. Distinct from its editable name (`Default`):
+/// only the id is fixed forever, so a rename can never orphan the floor.
+pub const DEFAULT_PROFILE_ID: &str = "default";
+
 /// Resolve the effective combination for a spawn, walking the four tiers
 /// finest-to-coarsest and falling through to the reserved Default profile.
 ///
 /// `profiles` is the ONE atomic snapshot the caller took before this call
 /// (ADR-0057 ¶4) — a `Profile` reference is looked up in it, never re-queried.
 /// `default_profile_id` names the reserved floor profile
-/// (`agent_profile::DEFAULT_PROFILE_ID` in production code; a plain
+/// ([`DEFAULT_PROFILE_ID`] in production code; a plain
 /// literal in tests that don't want the whole `agent_profile` module).
 pub fn resolve(
     tiers: &Tiers<'_>,

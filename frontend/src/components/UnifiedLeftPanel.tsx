@@ -7,7 +7,8 @@ import type { Trigger } from "../shared/generated/Trigger";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { Project } from "../workspace/model/project";
 import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
-import { cleanupRun, forgetRun, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { forgetRun } from "../api";
+import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../run/api/commands";
 import { useRunShell } from "../session/store/useRunShell";
 import { useEditStore } from "../pipeline/store/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -16,15 +17,8 @@ import { handleSelectionKeydown } from "../lib/selectionKeys";
 import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
 import {
-  ancestorIds,
-  buildRunTree,
-  cascadeImpact,
-  filterRunTree,
-  flattenAll,
-  flattenVisible,
-  parentIds,
-  rootOf,
-  type RunTreeNode,
+  ancestorIds, buildRunTree, cascadeImpact, filterRunTree, flattenAll, flattenVisible, parentIds,
+  rootOf, type RunTreeNode,
 } from "../lib/runTree";
 import { loadChildRunsExpanded } from "../lib/uiPrefs";
 import { projectLookup } from "../workspace/model/projectLookup";

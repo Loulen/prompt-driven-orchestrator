@@ -190,6 +190,10 @@ impl EventStore for SqliteEventStore {
         Box::pin(run_ids(&self.db))
     }
 
+    fn is_forgotten<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<bool>> {
+        Box::pin(is_forgotten(&self.db, run_id))
+    }
+
     fn has_children<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, bool> {
         Box::pin(has_children(&self.db, run_id))
     }
@@ -281,6 +285,10 @@ mod tests {
         assert!(store.events("gone").await.unwrap().is_empty());
         assert!(is_forgotten(&store.db, "gone").await.unwrap());
         assert!(!is_forgotten(&store.db, "alive").await.unwrap());
+        // The same answer through the port the use cases read it by.
+        let port: &dyn EventStore = &store;
+        assert!(port.is_forgotten("gone").await.unwrap());
+        assert!(!port.is_forgotten("alive").await.unwrap());
     }
 
     #[tokio::test]

@@ -46,12 +46,14 @@ vi.mock("@xyflow/react", async (importOriginal) => {
   };
 });
 
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+}));
+
 // EditCanvas (via usePipelineLibraryState) imports the API client; stub the
 // network so nothing fetches on mount.
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
-  // #669: the skills selector's reads (bank + inherited tiers), empty by default.
-  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
   fetchLibrary: vi.fn().mockResolvedValue([]),
   fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline", scope: "repo" }),

@@ -92,9 +92,10 @@ merges its `router()` before `identify` wraps everything. Route coverage reads e
 context's `router()` too (`ROUTER_SOURCES`). The daemon's integration tests (stage 4) live there too, in
 `crates/pdo/tests/`, and every test daemon goes through the same `identify` head as `pdo daemon`.
 
-Extracted so far: `workspace` (`crates/pdo-workspace`, `frontend/src/workspace/`). While the
-legacy crate still assembles the daemon, it wires an extracted context's adapters onto its ports
-(`workspace_context` in `lib.rs`) and `.merge(…)`s its `router()` into `build_router`; list every
+Extracted so far: `workspace` (`crates/pdo-workspace`, `frontend/src/workspace/`) and `skill`
+(`crates/pdo-skill`, `frontend/src/skill/`). While the legacy crate still assembles the daemon,
+it wires an extracted context's adapters onto its ports (`workspace_context`, `skill_context` in
+`lib.rs`) and `.merge(…)`s its `router()` into `build_router`; list every
 merged router in `ROUTER_SOURCES` of `route_coverage.rs`. The legacy crate may call an extracted
 context's public API (its use cases, its adapters' free functions, re-exported at the root of
 `lib.rs` for the modules that still read them), never the other way round.
@@ -111,6 +112,18 @@ Two patterns the workspace set for the contexts that follow:
   `ProjectSettings` trait that names their real types, so the wire keeps its shape and the
   generated TypeScript type is `Project<A, S>` (the front aliases it in
   `workspace/model/project.ts`).
+
+Two more the skill context set:
+
+- **Consume another context's technology through your own port.** The skill context never runs
+  `git`: its delivery port (`SkillDelivery`) and its Source scanner are implemented by adapters
+  that call the workspace's git adapter (`index`, `info/exclude`, the provisioning manifest, the
+  shallow clone). What the workspace did not offer yet was added on the workspace's side.
+- **Reads a downstream context answers.** Who selects a skill (instance, Projets, Triggers,
+  pipelines, Runs) lives downstream of the skill context. It asks through a port
+  (`SkillReferents`) that the legacy crate implements until those contexts move out. A
+  transition of the daemon or of the scheduler (the seed at startup, the delivery into a
+  worktree) is a use case too, but it does not ask the Autorisation d'opération (D10).
 
 The HTTP and WebSocket contract stays frozen for the whole migration. A temporary suite,
 `crates/pdo/tests/snapshots_temporary/`, plays eight business scenarios against the real

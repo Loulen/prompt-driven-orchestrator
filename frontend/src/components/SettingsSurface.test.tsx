@@ -47,6 +47,27 @@ const fetchStatsAbsorptionsMock = vi
   .mockResolvedValue({ absorptions: [] });
 const uncombineStatsMemberMock = vi.fn();
 
+// #668: the skill bank drill-down. Same Proxy trap as `../api` below: every
+// function `SkillBankPanel` / `PasteSkillModal` import must exist here or the
+// panel throws on first access.
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi
+    .fn()
+    .mockResolvedValue({
+      skills: [],
+      folders: [],
+      root_path: "/home/user/.pdo/skills",
+    }),
+  createSkill: vi.fn(),
+  fetchSkill: vi.fn(),
+  updateSkill: vi.fn(),
+  deleteSkill: vi.fn(),
+  fetchSkillReferents: vi.fn(),
+  createSkillFolder: vi.fn(),
+  updateSkillFolder: vi.fn(),
+  deleteSkillFolder: vi.fn(),
+}));
+
 // #431: `browseFs` MUST be in this factory now that the Dockerfile picker renders
 // `FsExplorerModal`. Vitest 4 wraps the factory's return in a Proxy whose `get` trap
 // throws, and the SSR transform rewrites `browseFs(path)` into a member access on the
@@ -74,23 +95,6 @@ vi.mock("../api", () => ({
     deleteSandboxProfileMock(...args),
   fetchSandboxProfileReferents: (...args: unknown[]) =>
     fetchSandboxProfileReferentsMock(...args),
-  // #668: the skill bank drill-down. Same Proxy trap: every function `SkillBankPanel`
-  // / `PasteSkillModal` import must exist here or the panel throws on first access.
-  fetchSkillBank: vi
-    .fn()
-    .mockResolvedValue({
-      skills: [],
-      folders: [],
-      root_path: "/home/user/.pdo/skills",
-    }),
-  createSkill: vi.fn(),
-  fetchSkill: vi.fn(),
-  updateSkill: vi.fn(),
-  deleteSkill: vi.fn(),
-  fetchSkillReferents: vi.fn(),
-  createSkillFolder: vi.fn(),
-  updateSkillFolder: vi.fn(),
-  deleteSkillFolder: vi.fn(),
   fetchStatsAbsorptions: (...args: unknown[]) =>
     fetchStatsAbsorptionsMock(...args),
   uncombineStatsMember: (...args: unknown[]) =>
@@ -2999,7 +3003,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
   });
 
   it("a changed instance-tier skill selection dirties the Skills row and persists with Save", async () => {
-    const { fetchSkillBank } = await import("../api");
+    const { fetchSkillBank } = await import("../skill/api/bank");
     vi.mocked(fetchSkillBank).mockResolvedValue({
       skills: [
         { locked: false,

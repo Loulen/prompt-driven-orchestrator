@@ -98,8 +98,8 @@ cd "$(git rev-parse --show-toplevel)"
 #   their tests to frontend/src/workspace/components.
 # frontend/src/components: 180 and crates/pdo-daemon/src: 73 — #917, #916 and #919 combined.
 BASELINES='
-frontend/src/components 180
-crates/pdo-daemon/src 73
+frontend/src/components 168
+crates/pdo-daemon/src 68
 '
 
 fail=0

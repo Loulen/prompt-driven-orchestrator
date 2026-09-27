@@ -10,7 +10,7 @@ import type { Project } from "../workspace/model/project";
 import type { LibraryPipelineEntry } from "../api";
 import { ApiError } from "../shared/http/client";
 import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
-import { announceSkillsChanged } from "../hooks/useSkillBank";
+import { announceSkillsChanged } from "../skill/store/useSkillBank";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";

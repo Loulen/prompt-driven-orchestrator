@@ -65,11 +65,6 @@ mod scheduler;
 mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod shared_terminal;
-mod skill_bank;
-mod skill_delivery;
-mod skill_import;
-mod skill_selection;
-mod skill_sidecar;
 pub mod stale_detector;
 mod stats;
 mod stats_absorption;
@@ -128,7 +123,6 @@ use pdo_workspace::adapters::git::repository::{
 // The workspace context's modules the rest of this crate reads, until each
 // context migrates onto the workspace's ports.
 pub(crate) use pdo_workspace::adapters::fs::provisioner;
-pub(crate) use pdo_workspace::adapters::git::manifest;
 pub(crate) use pdo_workspace::adapters::git::worktrees;
 #[cfg(test)]
 use pdo_workspace::adapters::git::worktrees::create_sub_worktree;
@@ -140,6 +134,12 @@ use pdo_workspace::adapters::git::worktrees::{
 pub(crate) use pdo_workspace::adapters::sqlite as workspace_db;
 use pdo_workspace::domain::branches::FetchError;
 pub(crate) use pdo_workspace::domain::provisioning;
+
+// The skill context's rules the rest of this crate reads: the selection per
+// tier (instance, Projet, Trigger, pipeline node, Run) and what a delivery
+// reports. Every skill gesture goes through `AppState::skills`.
+pub(crate) use pdo_skill::domain::delivery as skill_delivery;
+pub(crate) use pdo_skill::domain::selection as skill_selection;
 
 const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
 const DEFAULT_DAEMON_URL: &str = pdo_platform::domain::service_unit::DEFAULT_DAEMON_URL;
@@ -431,6 +431,8 @@ pub enum DocsAction {
 struct AppState {
     /// The workspace context: Projets, repositories, provisioning, git.
     workspace: Arc<pdo_workspace::application::Workspace>,
+    /// The skill context: the Banque de skills, its import, the delivery.
+    skills: Arc<pdo_skill::Skills>,
     db: sqlx::SqlitePool,
     event_tx: broadcast::Sender<event_log::Event>,
     pipeline_tx: broadcast::Sender<serde_json::Value>,
@@ -2610,11 +2612,16 @@ pub async fn serve_with_config(
     // must not leave its statements in the serving pool's caches.
     match sqlx::SqlitePool::connect(&format!("sqlite:{}?mode=rwc", db_path.display())).await {
         Ok(seed_db) => {
-            match skill_bank::seed(&seed_db, &repo_root).await {
+            let seeding = skill_context(
+                &seed_db,
+                &repo_root,
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            );
+            match seeding.seed().await {
                 Ok(outcomes) => {
                     for (id, outcome) in &outcomes {
                         match outcome {
-                            skill_bank::SeedOutcome::Skipped { reason } => {
+                            pdo_skill::domain::seed::SeedOutcome::Skipped { reason } => {
                                 warn!("skill seed `{id}` skipped: {reason}")
                             }
                             _ => info!("skill seed `{id}`: {outcome:?}"),
@@ -2682,7 +2689,13 @@ pub async fn serve_with_config(
     let run_update_check_loop = config.run_update_check_loop;
     let nested_daemon = config.nested_daemon;
     let router_layer = config.router_layer.clone();
-    let workspace = workspace_context(&db, &pipeline_tx, &repo_root, config.extension_host.0);
+    let workspace = workspace_context(
+        &db,
+        &pipeline_tx,
+        &repo_root,
+        config.extension_host.0.clone(),
+    );
+    let skills = skill_context(&db, &repo_root, config.extension_host.0.clone());
     let wire_contexts = router_layer
         .as_ref()
         .and_then(RouterLayer::contexts)
@@ -2715,6 +2728,7 @@ pub async fn serve_with_config(
         contexts_router = Some(wired.router);
         AppState {
             workspace,
+            skills,
             platform: wired.platform,
             db,
             event_tx,
@@ -3943,7 +3957,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/pipelines/import",
             post(import_pipeline_document).route_layer(axum::extract::DefaultBodyLimit::max(
-                SKILL_UPLOAD_BODY_LIMIT,
+                pdo_skill::adapters::http::SKILL_UPLOAD_BODY_LIMIT,
             )),
         )
         .route(
@@ -4114,63 +4128,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/settings/agent-profiles/{id}/referents",
             get(get_agent_profile_referents),
         )
-        // Banque de skills (#668, ADR-0062): the bank's index + content CRUD, the
-        // folder hierarchy, and the referents endpoint the delete dialog reads.
-        // Folders sit under their own prefix (`/settings/skill-folders`) rather than
-        // `/settings/skills/folders`, so they can never shadow a skill id.
-        .route("/settings/skills", get(list_skills).post(create_skill))
-        .route(
-            "/settings/skills/{id}",
-            get(get_skill).put(update_skill).delete(delete_skill),
-        )
-        .route("/settings/skills/{id}/referents", get(get_skill_referents))
-        // Import from a Source (#670): scan (clone + walk + collisions), import,
-        // and the per-folder rescan / update. Fixed segments sit under
-        // `/settings/skills/` but never collide with a skill id (UUIDs).
-        .route("/settings/skills/scan", post(scan_skill_source))
-        .route(
-            "/settings/skills/scan/{scan_id}/cancel",
-            post(cancel_skill_scan),
-        )
-        .route("/settings/skills/import", post(import_skills))
-        .route("/settings/skills/sources/recent", get(recent_skill_sources))
-        .route(
-            "/settings/skill-folders/{id}/rescan",
-            post(rescan_skill_folder),
-        )
-        .route(
-            "/settings/skill-folders/{id}/update",
-            post(update_skill_folder_from_source),
-        )
-        // Reference files (#671): upload (multipart from the browser, or
-        // `{ "from_path" }` from the explorer), read / overwrite as plain text,
-        // delete. `{*path}` keeps sub-folders (`examples/login.spec.ts`); the
-        // module refuses anything that would leave the skill's folder (400).
-        // Own body limit: the default 2 MB would refuse a 4 MB fixture before the
-        // per-file 10 MB rule gets to name it.
-        .route(
-            "/settings/skills/{id}/files",
-            post(upload_skill_files).route_layer(axum::extract::DefaultBodyLimit::max(
-                SKILL_UPLOAD_BODY_LIMIT,
-            )),
-        )
-        .route(
-            "/settings/skills/{id}/files/{*path}",
-            get(read_skill_file)
-                .put(write_skill_file)
-                .delete(delete_skill_file)
-                .route_layer(axum::extract::DefaultBodyLimit::max(
-                    SKILL_UPLOAD_BODY_LIMIT,
-                )),
-        )
-        .route(
-            "/settings/skill-folders",
-            get(list_skill_folders).post(create_skill_folder),
-        )
-        .route(
-            "/settings/skill-folders/{id}",
-            put(update_skill_folder).delete(delete_skill_folder),
-        )
         .route("/settings/sandbox-profiles", get(list_sandbox_profiles))
         .route(
             "/settings/sandbox-profiles/{name}",
@@ -4213,6 +4170,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .merge(
             pdo_workspace::adapters::http::router::<LegacyProjectSettings>(state.workspace.clone()),
         )
+        .merge(pdo_skill::adapters::http::router(state.skills.clone()))
 }
 
 async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
@@ -4286,7 +4244,7 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
 
     // The Banque de skills index (#668, ADR-0062). Content lives on disk under
     // `<repo_root>/.pdo/skills/<id>/`; nothing is seeded.
-    skill_bank::init(db)
+    pdo_skill::adapters::sqlite::init(db)
         .await
         .context("failed to create skill bank tables")?;
 
@@ -6214,11 +6172,12 @@ async fn get_pipeline_document(
 /// pipeline references no skill (nothing to ship — the YAML alone is the
 /// document). A referenced id with no folder in the bank is left out: the
 /// exporting instance already shows the warning, and the importing one will.
-fn skills_sidecar_response(repo_root: &Path, pipeline: &pipeline::PipelineDef) -> Response {
-    if skill_sidecar::referenced_skills(pipeline).is_empty() {
+fn skills_sidecar_response(bank: &pdo_skill::Skills, pipeline: &pipeline::PipelineDef) -> Response {
+    let references = pipeline_skill_references(pipeline);
+    if references.is_empty() {
         return StatusCode::NO_CONTENT.into_response();
     }
-    let (skills, absent) = skill_sidecar::collect(repo_root, pipeline);
+    let (skills, absent) = bank.sidecar_of(&references);
     if !absent.is_empty() {
         info!(
             "skills sidecar of '{}': {} referenced skill(s) not in the bank: {}",
@@ -6227,7 +6186,7 @@ fn skills_sidecar_response(repo_root: &Path, pipeline: &pipeline::PipelineDef) -
             absent.join(", ")
         );
     }
-    match skill_sidecar::write_zip(&pipeline.name, &skills) {
+    match pdo_skill::adapters::sidecar_zip::write_zip(&pipeline.name, &skills) {
         Ok(bytes) => (
             [
                 (header::CONTENT_TYPE, "application/zip".to_string()),
@@ -6235,7 +6194,8 @@ fn skills_sidecar_response(repo_root: &Path, pipeline: &pipeline::PipelineDef) -
                     header::CONTENT_DISPOSITION,
                     format!(
                         "attachment; filename=\"{}.zip\"",
-                        skill_sidecar::sidecar_dir_name(&pipeline.name).replace('"', "")
+                        pdo_skill::domain::sidecar::sidecar_dir_name(&pipeline.name)
+                            .replace('"', "")
                     ),
                 ),
                 (
@@ -6252,6 +6212,13 @@ fn skills_sidecar_response(repo_root: &Path, pipeline: &pipeline::PipelineDef) -
         )
             .into_response(),
     }
+}
+
+/// The unique skill references of a pipeline's nodes, in first-seen order.
+fn pipeline_skill_references(pipeline: &pipeline::PipelineDef) -> Vec<skill_selection::SkillRef> {
+    pdo_skill::domain::sidecar::referenced_skills(
+        pipeline.nodes.iter().map(|node| node.skills.as_slice()),
+    )
 }
 
 async fn get_pipeline_document_skills(
@@ -6273,7 +6240,7 @@ async fn get_pipeline_document_skills(
                 .into_response()
         }
     };
-    skills_sidecar_response(&state.repo_root, &parsed.pipeline)
+    skills_sidecar_response(&state.skills, &parsed.pipeline)
 }
 
 #[derive(Deserialize)]
@@ -6288,6 +6255,7 @@ struct ImportPipelineDocumentRequest {
 
 async fn import_pipeline_document(
     State(state): State<Arc<AppState>>,
+    axum::Extension(actor): axum::Extension<pdo_kernel::Actor>,
     Json(req): Json<ImportPipelineDocumentRequest>,
 ) -> Response {
     let interpreted = match portable_pipeline::interpret(&req.document) {
@@ -6315,7 +6283,7 @@ async fn import_pipeline_document(
                         .into_response()
                 }
             };
-            match skill_sidecar::read_zip(&bytes) {
+            match pdo_skill::adapters::sidecar_zip::read_zip(&bytes) {
                 Ok(skills) => skills,
                 Err(error) => {
                     return (
@@ -6343,13 +6311,27 @@ async fn import_pipeline_document(
     // The import folder is named after the document's own name (its provenance),
     // before the "(2)" a same-named pipeline on this instance may add.
     let mut warnings = interpreted.warnings;
-    let skills =
-        match skill_sidecar::import_into_bank(&state.db, &state.repo_root, &mut imported, &sidecar)
-            .await
-        {
-            Ok(report) => report,
-            Err(error) => return skill_error_response(error),
-        };
+    let skills = match state
+        .skills
+        .import_sidecar(
+            &actor,
+            &imported.name,
+            pipeline_skill_references(&imported),
+            &sidecar,
+        )
+        .await
+    {
+        Ok(report) => report,
+        Err(error) => return pdo_skill::adapters::http::skill_error_response(error),
+    };
+    let final_names = skills.final_names();
+    for node in &mut imported.nodes {
+        for skill in &mut node.skills {
+            if let Some(name) = final_names.get(&skill.id) {
+                skill.name = name.clone();
+            }
+        }
+    }
     warnings.extend(skills.warnings.iter().cloned());
     imported.name = name;
     match write_pipeline_atomically(&dir, &id, &imported, &interpreted.prompts) {
@@ -8618,9 +8600,7 @@ async fn create_run_inner(
             crate::project_skills_for_path(&state.db, &run_repo_root.to_string_lossy())
                 .await
                 .unwrap_or_default();
-        let bank = crate::skill_bank::snapshot_names(&state.db)
-            .await
-            .unwrap_or_default();
+        let bank = state.skills.bank_names().await.unwrap_or_default();
         let tiers = crate::skill_selection::SkillTiers {
             instance: Some(&instance_skills),
             project: Some(&project_skills),
@@ -8781,40 +8761,26 @@ async fn create_run_inner(
     // worktree's provisioning manifest, so no skill ever reaches the Run branch. A
     // versioned homonym is skipped and reported on the Run; an I/O failure refuses
     // the Run like a provisioning failure (never a partial environment).
-    let skill_delivery = crate::skill_delivery::snapshot_skills(
-        &state.repo_root,
-        &run_repo_root,
-        &run_id,
-        &frozen_skills,
-    )
-    .and_then(|mut skipped| {
-        let mut report = crate::skill_delivery::deliver(
-            &worktree_dir,
-            &crate::skill_delivery::snapshot_root(&run_repo_root, &run_id),
-            &run_id,
-            &frozen_skills,
-        )?;
-        skipped.append(&mut report.skipped);
-        report.skipped = skipped;
-        Ok(report)
-    });
+    let skill_delivery =
+        state
+            .skills
+            .deliver(&worktree_dir, &run_repo_root, &run_id, &frozen_skills);
     match skill_delivery {
-        Ok(report) => {
-            for skipped in &report.skipped {
+        Ok(skipped) => {
+            for skipped in &skipped {
                 warn!(
                     "run {run_id}: skill '{}' not delivered: {}",
                     skipped.name, skipped.reason
                 );
             }
-            if !report.skipped.is_empty() {
+            if !skipped.is_empty() {
                 if let Some(payload) = run_started.payload.as_mut() {
-                    payload["skipped_skills"] =
-                        serde_json::to_value(&report.skipped).unwrap_or_default();
+                    payload["skipped_skills"] = serde_json::to_value(&skipped).unwrap_or_default();
                 }
             }
         }
         Err(e) => {
-            let _ = crate::skill_delivery::remove_exclusions(&run_repo_root, &run_id);
+            let _ = state.skills.withdraw(&run_repo_root, &run_id);
             reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -10559,839 +10525,6 @@ async fn get_agent_profile_referents(
         "runs": []
     }))
     .into_response()
-}
-
-// ---------------------------------------------------------------------------
-// Banque de skills (#668, ADR-0062)
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-struct CreateSkillRequest {
-    /// The pasted `SKILL.md` text, frontmatter included.
-    content: String,
-    /// The bank label; defaults to the frontmatter `name`.
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    folder_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct UpdateSkillRequest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    folder_id: Option<Option<String>>,
-}
-
-#[derive(Deserialize)]
-struct CreateSkillFolderRequest {
-    name: String,
-    #[serde(default)]
-    parent_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct UpdateSkillFolderRequest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    parent_id: Option<Option<String>>,
-}
-
-/// A stable machine-readable code next to the human message, so the popup can
-/// light the right check without parsing English.
-fn skill_error_code(error: &skill_bank::SkillError) -> &'static str {
-    use skill_bank::SkillError as E;
-    match error {
-        E::NoFrontmatter => "no_frontmatter",
-        E::MalformedFrontmatter(_) => "malformed_frontmatter",
-        E::MissingName => "missing_name",
-        E::NameNotKebabCase(_) => "name_not_kebab_case",
-        E::MissingDescription => "missing_description",
-        E::EmptyBody => "empty_body",
-        E::DuplicateName { .. } => "duplicate_name",
-        E::EmptyLabel => "empty_label",
-        E::NotFound => "not_found",
-        E::FolderNotFound => "folder_not_found",
-        E::EmptyFolderName => "empty_folder_name",
-        E::FolderCycle => "folder_cycle",
-        E::InvalidPath(_) => "invalid_path",
-        E::SkillMdReserved => "skill_md_reserved",
-        E::FileNotFound(_) => "file_not_found",
-        E::FileTooLarge { .. } => "file_too_large",
-        E::SourceNotAFile(_) => "source_not_a_file",
-        E::Locked { .. } => "locked",
-        E::Storage(_) => "storage",
-    }
-}
-
-fn skill_error_response(error: skill_bank::SkillError) -> Response {
-    use skill_bank::SkillError as E;
-    let status = match &error {
-        E::NotFound | E::FileNotFound(_) => StatusCode::NOT_FOUND,
-        E::Locked { .. } => StatusCode::FORBIDDEN,
-        E::DuplicateName { .. } => StatusCode::CONFLICT,
-        E::FileTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
-        E::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        E::InvalidPath(_)
-        | E::SkillMdReserved
-        | E::SourceNotAFile(_)
-        | E::NoFrontmatter
-        | E::MalformedFrontmatter(_)
-        | E::MissingName
-        | E::NameNotKebabCase(_)
-        | E::MissingDescription
-        | E::EmptyBody
-        | E::EmptyLabel
-        | E::FolderNotFound
-        | E::EmptyFolderName
-        | E::FolderCycle => StatusCode::BAD_REQUEST,
-    };
-    let mut body = serde_json::json!({
-        "error": error.to_string(),
-        "code": skill_error_code(&error),
-    });
-    if let E::DuplicateName { existing_id, name } = &error {
-        body["existing_id"] = serde_json::Value::String(existing_id.clone());
-        body["existing_name"] = serde_json::Value::String(name.clone());
-    }
-    (status, Json(body)).into_response()
-}
-
-fn storage_error_response(error: impl std::fmt::Display) -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": error.to_string(), "code": "storage" })),
-    )
-        .into_response()
-}
-
-/// `GET /settings/skills` — the whole bank in one read: skills, folders, and the
-/// disk root the panel's footer names.
-async fn list_skills(State(state): State<Arc<AppState>>) -> Response {
-    let skills = match skill_bank::list(&state.db).await {
-        Ok(skills) => skills,
-        Err(error) => return storage_error_response(error),
-    };
-    let folders = match skill_bank::list_folders(&state.db).await {
-        Ok(folders) => folders,
-        Err(error) => return storage_error_response(error),
-    };
-    Json(serde_json::json!({
-        "skills": skills,
-        "folders": folders,
-        "root_path": skill_bank::skills_root(&state.repo_root).display().to_string(),
-    }))
-    .into_response()
-}
-
-async fn create_skill(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateSkillRequest>,
-) -> Response {
-    match skill_bank::create(
-        &state.db,
-        &state.repo_root,
-        &req.content,
-        req.name.as_deref(),
-        req.folder_id.as_deref(),
-    )
-    .await
-    {
-        Ok(skill) => (StatusCode::CREATED, Json(skill)).into_response(),
-        Err(error) => skill_error_response(error),
-    }
-}
-
-/// `GET /settings/skills/{id}` — the row plus its content: the raw `SKILL.md`,
-/// the parsed frontmatter (for the read-only table), the body, and the reference
-/// files. A skill whose folder vanished from disk still answers with its row
-/// and `content: null`, never a 500: the row is the truth of the index.
-async fn get_skill(State(state): State<Arc<AppState>>, AxumPath(id): AxumPath<String>) -> Response {
-    let skill = match skill_bank::get(&state.db, &id).await {
-        Ok(Some(skill)) => skill,
-        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
-        Err(error) => return storage_error_response(error),
-    };
-    let content = skill_bank::read_skill_md(&state.repo_root, &id).ok();
-    let parsed = content
-        .as_deref()
-        .and_then(|text| skill_bank::validate_skill_md(text).ok());
-    let files = skill_bank::list_files(&state.repo_root, &id).unwrap_or_default();
-    let mut body = serde_json::to_value(&skill).unwrap_or_default();
-    body["content"] = serde_json::to_value(&content).unwrap_or_default();
-    // The table is rendered in the author's order: `serde_json` objects do not
-    // keep insertion order, so the keys travel separately.
-    body["frontmatter"] = parsed
-        .as_ref()
-        .map(|p| serde_json::to_value(&p.frontmatter).unwrap_or_default())
-        .unwrap_or(serde_json::Value::Null);
-    body["frontmatter_keys"] = parsed
-        .as_ref()
-        .map(|p| {
-            serde_json::Value::Array(
-                p.frontmatter
-                    .keys()
-                    .filter_map(|k| k.as_str().map(|s| serde_json::Value::String(s.to_string())))
-                    .collect(),
-            )
-        })
-        .unwrap_or(serde_json::Value::Null);
-    body["body"] = parsed
-        .as_ref()
-        .map(|p| serde_json::Value::String(p.body.clone()))
-        .unwrap_or(serde_json::Value::Null);
-    body["files"] = serde_json::to_value(&files).unwrap_or_default();
-    body["path"] = serde_json::Value::String(
-        skill_bank::skill_dir(&state.repo_root, &id)
-            .display()
-            .to_string(),
-    );
-    Json(body).into_response()
-}
-
-/// `PUT /settings/skills/{id}` — rename (label only) and/or move. Renaming never
-/// touches the disk: the folder carries the id (#668 AC).
-async fn update_skill(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-    Json(req): Json<UpdateSkillRequest>,
-) -> Response {
-    match skill_bank::update(
-        &state.db,
-        &id,
-        req.name.as_deref(),
-        req.folder_id.as_ref().map(|f| f.as_deref()),
-    )
-    .await
-    {
-        Ok(skill) => Json(skill).into_response(),
-        Err(error) => skill_error_response(error),
-    }
-}
-
-async fn delete_skill(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    match skill_bank::delete(&state.db, &state.repo_root, &id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => skill_error_response(skill_bank::SkillError::NotFound),
-        Err(error) => skill_error_response(error),
-    }
-}
-
-/// `GET /settings/skills/{id}/referents` — who selects this skill, by tier
-/// (#669, same pattern as `get_agent_profile_referents`, ADR-0057): the
-/// instance, the Projets, the Triggers, the pipelines' nodes, and the **not yet
-/// started** Runs (a `run_started` whose payload selects the id, non-terminal,
-/// with no `node_started` yet — the only Runs whose resolution still lies
-/// ahead; a Run with a spawned node already froze its content at the Run).
-///
-/// Informative, never blocking: the delete is unconditional (`skill_bank::delete`),
-/// and every referent keeps the id and shows a warning afterwards.
-async fn get_skill_referents(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    match skill_bank::get(&state.db, &id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
-        Err(error) => return storage_error_response(error),
-    }
-
-    let instance = instance_config::get(&state.db)
-        .await
-        .map(|config| skill_selection::selects(&config.skills, &id))
-        .unwrap_or(false);
-
-    let projects = pdo_workspace::adapters::sqlite::list(&state.db)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|project| skill_selection::selects(&project_skills(project), &id))
-        .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
-        .collect::<Vec<_>>();
-
-    let triggers = trigger_store::list(&state.db)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|trigger| skill_selection::selects(&trigger.skills, &id))
-        .map(|trigger| {
-            serde_json::json!({
-                "id": trigger.id,
-                "name": trigger.name,
-                "pipeline_id": trigger.pipeline_id
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let pipeline_entries = instance_pipeline_dir(&state.repo_root)
-        .map(|directory| scan_pipeline_dir(&directory, "instance"))
-        .unwrap_or_default();
-    let pipelines = pipeline_entries
-        .into_iter()
-        .flat_map(|entry| {
-            let Ok(yaml) = std::fs::read_to_string(&entry.path) else {
-                return Vec::new();
-            };
-            let Ok(parsed) = pipeline::parse_pipeline(&yaml) else {
-                return Vec::new();
-            };
-            parsed
-                .pipeline
-                .nodes
-                .into_iter()
-                .filter(|node| skill_selection::selects(&node.skills, &id))
-                .map(|node| {
-                    serde_json::json!({
-                        "id": entry.id,
-                        "name": entry.name,
-                        "node_id": node.id,
-                        "scope": entry.scope
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    // One indexed pass over `run_started` payloads: non-terminal Runs that have not
-    // spawned a single node yet (same terminality test as the sandbox-profile
-    // referents, plus the "no node_started" clause that makes them *not started*).
-    let rows: Result<Vec<(String, String)>, _> = sqlx::query_as(
-        "SELECT e.run_id, e.payload FROM events e \
-         WHERE e.kind = 'run_started' AND e.payload IS NOT NULL \
-           AND NOT EXISTS ( \
-             SELECT 1 FROM events t WHERE t.run_id = e.run_id AND t.kind IN \
-               ('run_completed', 'run_failed', 'run_skipped', 'run_halted', 'run_archived', \
-                'node_started') \
-           ) \
-         ORDER BY e.ts DESC",
-    )
-    .fetch_all(&state.db)
-    .await;
-    let runs: Vec<serde_json::Value> = match rows {
-        Ok(rows) => rows
-            .iter()
-            .filter_map(|(run_id, payload)| {
-                let val = serde_json::from_str::<serde_json::Value>(payload).ok()?;
-                let skills: Vec<skill_selection::SkillRef> =
-                    serde_json::from_value(val.get("skills")?.clone()).ok()?;
-                if !skill_selection::selects(&skills, &id) {
-                    return None;
-                }
-                Some(serde_json::json!({
-                    "run_id": run_id,
-                    "pipeline_name": val.get("pipeline_name").and_then(|v| v.as_str()),
-                    "name": val.get("name").and_then(|v| v.as_str()),
-                }))
-            })
-            .collect(),
-        Err(e) => {
-            error!("failed to query runs for skill referents: {e}");
-            Vec::new()
-        }
-    };
-
-    Json(serde_json::json!({
-        "skill_id": id,
-        "instance": instance,
-        "projects": projects,
-        "triggers": triggers,
-        "pipelines": pipelines,
-        "runs": runs
-    }))
-    .into_response()
-}
-
-/// Body ceiling of the files routes: a handful of 10 MB files per multipart
-/// request. The per-file rule (`skill_bank::MAX_FILE_BYTES`) does the naming.
-const SKILL_UPLOAD_BODY_LIMIT: usize = 64 * 1024 * 1024;
-
-#[derive(Deserialize)]
-struct UploadFromPathRequest {
-    /// Absolute path on the daemon's host, picked in the explorer.
-    from_path: String,
-    /// Destination relative to the skill folder; defaults to the file name.
-    #[serde(default)]
-    path: Option<String>,
-}
-
-/// `POST /settings/skills/{id}/files` — add reference files. Two bodies, one
-/// list (#671 design "deux chemins d'upload"):
-///
-/// - `multipart/form-data`: each `file` part is written under its `filename`
-///   (a relative path, sub-folders kept); a `path` text part right before a
-///   `file` part overrides that name (browsers flatten `webkitRelativePath`).
-/// - JSON `{ "from_path": "/abs/on/host", "path"?: "rel" }`: the daemon copies
-///   the file the explorer picked.
-///
-/// Files are written one by one, in order; the first refusal stops the batch
-/// and is returned with the files already written (`uploaded`), so the popup
-/// can mark them and retry the rest. A `SKILL.md` is refused here (400
-/// `skill_md_reserved`): the UI routes a dropped one to `PUT …/files/SKILL.md`.
-async fn upload_skill_files(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-    req: axum::extract::Request,
-) -> Response {
-    match skill_bank::get(&state.db, &id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
-        Err(error) => return storage_error_response(error),
-    }
-    let content_type = req
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
-    let mut uploaded: Vec<skill_bank::SkillFile> = Vec::new();
-    let mut failure: Option<skill_bank::SkillError> = None;
-
-    if content_type.starts_with("multipart/form-data") {
-        let mut multipart = match Multipart::from_request(req, &()).await {
-            Ok(m) => m,
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!("multipart parse error: {e}"),
-                        "code": "bad_multipart"
-                    })),
-                )
-                    .into_response();
-            }
-        };
-        let mut pending_path: Option<String> = None;
-        loop {
-            let field = match multipart.next_field().await {
-                Ok(Some(field)) => field,
-                Ok(None) => break,
-                Err(e) => {
-                    // A body over the route limit surfaces here, mid-stream.
-                    failure = Some(skill_bank::SkillError::Storage(format!(
-                        "upload interrupted: {e}"
-                    )));
-                    break;
-                }
-            };
-            let field_name = field.name().unwrap_or("").to_string();
-            match field_name.as_str() {
-                "path" => {
-                    pending_path = field.text().await.ok().filter(|s| !s.trim().is_empty());
-                }
-                "file" => {
-                    let filename = field.file_name().unwrap_or("").to_string();
-                    let rel = pending_path.take().unwrap_or(filename);
-                    let data = match field.bytes().await {
-                        Ok(data) => data,
-                        Err(e) => {
-                            failure = Some(skill_bank::SkillError::Storage(format!(
-                                "failed to read `{rel}`: {e}"
-                            )));
-                            break;
-                        }
-                    };
-                    match skill_bank::write_file(&state.repo_root, &id, &rel, &data) {
-                        Ok(file) => uploaded.push(file),
-                        Err(error) => {
-                            failure = Some(error);
-                            break;
-                        }
-                    }
-                }
-                other => {
-                    failure = Some(skill_bank::SkillError::InvalidPath(format!(
-                        "unknown multipart field `{other}` (accepted: path, file)"
-                    )));
-                    break;
-                }
-            }
-        }
-    } else {
-        let body = match Json::<UploadFromPathRequest>::from_request(req, &()).await {
-            Ok(Json(body)) => body,
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!("expected multipart/form-data or {{ \"from_path\" }}: {e}"),
-                        "code": "bad_request"
-                    })),
-                )
-                    .into_response();
-            }
-        };
-        let from = std::path::Path::new(&body.from_path);
-        if !from.is_absolute() {
-            failure = Some(skill_bank::SkillError::SourceNotAFile(
-                body.from_path.clone(),
-            ));
-        } else {
-            match skill_bank::copy_file_from(&state.repo_root, &id, from, body.path.as_deref()) {
-                Ok(file) => uploaded.push(file),
-                Err(error) => failure = Some(error),
-            }
-        }
-    }
-
-    let files = skill_bank::list_files(&state.repo_root, &id).unwrap_or_default();
-    match failure {
-        None => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "uploaded": uploaded, "files": files })),
-        )
-            .into_response(),
-        Some(error) => {
-            let mut response = skill_error_response(error);
-            // Keep the status and reason; add what did land, so the client
-            // never re-uploads a file that is already there.
-            let (parts, body) = response.into_parts();
-            let bytes = axum::body::to_bytes(body, usize::MAX)
-                .await
-                .unwrap_or_default();
-            let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
-            json["uploaded"] = serde_json::to_value(&uploaded).unwrap_or_default();
-            json["files"] = serde_json::to_value(&files).unwrap_or_default();
-            response = Response::from_parts(parts, axum::body::Body::from(json.to_string()));
-            response
-        }
-    }
-}
-
-/// `GET /settings/skills/{id}/files/{*path}` — one file for the plain-text
-/// editor: `text` when it decodes as UTF-8, else `text: null, binary: true`
-/// (the editor shows "binary file · N KB" instead of the text).
-async fn read_skill_file(
-    State(state): State<Arc<AppState>>,
-    AxumPath((id, path)): AxumPath<(String, String)>,
-) -> Response {
-    match skill_bank::get(&state.db, &id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
-        Err(error) => return storage_error_response(error),
-    }
-    match skill_bank::read_file(&state.repo_root, &id, &path) {
-        Ok((file, bytes)) => {
-            let text = String::from_utf8(bytes).ok();
-            Json(serde_json::json!({
-                "path": file.path,
-                "size": file.size,
-                "binary": text.is_none(),
-                "text": text,
-            }))
-            .into_response()
-        }
-        Err(error) => skill_error_response(error),
-    }
-}
-
-/// `PUT /settings/skills/{id}/files/{*path}` — save the editor's text. Any
-/// `Content-Type`; the body is the file. `SKILL.md` goes through the five
-/// checks again (`skill_bank::update_skill_md`): a refusal is the same named
-/// 400 the paste popup gets, and the file on disk is untouched.
-async fn write_skill_file(
-    State(state): State<Arc<AppState>>,
-    AxumPath((id, path)): AxumPath<(String, String)>,
-    body: String,
-) -> Response {
-    let rel = match skill_bank::normalise_file_path(&path) {
-        Ok(rel) => rel,
-        Err(error) => return skill_error_response(error),
-    };
-    if rel == skill_bank::SKILL_MD {
-        return match skill_bank::update_skill_md(&state.db, &state.repo_root, &id, &body).await {
-            Ok(skill) => Json(serde_json::json!({
-                "path": skill_bank::SKILL_MD,
-                "size": body.len(),
-                "skill": skill,
-            }))
-            .into_response(),
-            Err(error) => skill_error_response(error),
-        };
-    }
-    match skill_bank::get(&state.db, &id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
-        Err(error) => return storage_error_response(error),
-    }
-    match skill_bank::overwrite_file(&state.repo_root, &id, &rel, &body) {
-        Ok(file) => {
-            Json(serde_json::json!({ "path": file.path, "size": file.size })).into_response()
-        }
-        Err(error) => skill_error_response(error),
-    }
-}
-
-/// `DELETE /settings/skills/{id}/files/{*path}` — remove one reference file
-/// (never `SKILL.md`: 400 `skill_md_reserved`).
-async fn delete_skill_file(
-    State(state): State<Arc<AppState>>,
-    AxumPath((id, path)): AxumPath<(String, String)>,
-) -> Response {
-    match skill_bank::get(&state.db, &id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
-        Err(error) => return storage_error_response(error),
-    }
-    match skill_bank::delete_file(&state.repo_root, &id, &path) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => skill_error_response(error),
-    }
-}
-
-async fn list_skill_folders(State(state): State<Arc<AppState>>) -> Response {
-    match skill_bank::list_folders(&state.db).await {
-        Ok(folders) => Json(serde_json::json!({ "folders": folders })).into_response(),
-        Err(error) => storage_error_response(error),
-    }
-}
-
-async fn create_skill_folder(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateSkillFolderRequest>,
-) -> Response {
-    match skill_bank::create_folder(&state.db, &req.name, req.parent_id.as_deref()).await {
-        Ok(folder) => (StatusCode::CREATED, Json(folder)).into_response(),
-        Err(error) => skill_error_response(error),
-    }
-}
-
-/// A folder addressed by its own route that does not exist is a 404, while an
-/// unknown folder *named in a body* (a move target, a parent) stays a 400: the
-/// first is "no such resource", the second "your request is wrong".
-fn skill_folder_not_found_response() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({
-            "error": skill_bank::SkillError::FolderNotFound.to_string(),
-            "code": "not_found",
-        })),
-    )
-        .into_response()
-}
-
-async fn update_skill_folder(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-    Json(req): Json<UpdateSkillFolderRequest>,
-) -> Response {
-    match skill_bank::get_folder(&state.db, &id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return skill_folder_not_found_response(),
-        Err(error) => return storage_error_response(error),
-    }
-    match skill_bank::update_folder(
-        &state.db,
-        &id,
-        req.name.as_deref(),
-        req.parent_id.as_ref().map(|p| p.as_deref()),
-    )
-    .await
-    {
-        Ok(folder) => Json(folder).into_response(),
-        Err(error) => skill_error_response(error),
-    }
-}
-
-/// `DELETE /settings/skill-folders/{id}` — the folder's skills and sub-folders
-/// move to its parent. Never deletes a skill.
-async fn delete_skill_folder(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    match skill_bank::delete_folder(&state.db, &id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => skill_folder_not_found_response(),
-        Err(error) => skill_error_response(error),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Import from a Source (#670)
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-struct ScanSkillSourceRequest {
-    /// Client-chosen id; the clone is kept under it for the import that follows
-    /// and `POST …/scan/{id}/cancel` kills it.
-    scan_id: String,
-    source: String,
-}
-
-#[derive(Deserialize)]
-struct ImportSkillsRequest {
-    scan_id: String,
-    source: String,
-    #[serde(default)]
-    folder: Option<skill_import::ImportFolder>,
-    items: Vec<skill_import::ImportItem>,
-}
-
-#[derive(Deserialize)]
-struct RescanSkillFolderRequest {
-    scan_id: String,
-}
-
-#[derive(Deserialize)]
-struct UpdateSkillFolderFromSourceRequest {
-    scan_id: String,
-    items: Vec<skill_import::UpdateItem>,
-}
-
-fn import_error_response(error: skill_import::ImportError) -> Response {
-    use skill_import::ImportError as E;
-    if let E::Skill(inner) = error {
-        return skill_error_response(inner);
-    }
-    let status = match &error {
-        E::CloneFailed(_) | E::CloneTimeout => StatusCode::BAD_GATEWAY,
-        E::Cancelled => StatusCode::from_u16(499).unwrap_or(StatusCode::BAD_REQUEST),
-        E::ScanExpired => StatusCode::GONE,
-        E::NotASourceFolder | E::UnknownCandidate(_) | E::UnresolvedCollision(_) => {
-            StatusCode::CONFLICT
-        }
-        E::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        E::EmptySource | E::InvalidSource(_) | E::LocalNotFound(_) => StatusCode::BAD_REQUEST,
-        E::Skill(_) => unreachable!("handled above"),
-    };
-    (
-        status,
-        Json(serde_json::json!({
-            "error": error.to_string(),
-            "code": skill_import::error_code(&error),
-        })),
-    )
-        .into_response()
-}
-
-fn daemon_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
-/// `POST /settings/skills/scan` — clone shallow (or open a local folder), walk
-/// it for `SKILL.md`s, validate each, and report collisions with the bank.
-/// Nothing is written to the bank.
-async fn scan_skill_source(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ScanSkillSourceRequest>,
-) -> Response {
-    let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
-        Ok(source) => source,
-        Err(error) => return import_error_response(error),
-    };
-    let outcome = match skill_import::scan(&req.scan_id, source).await {
-        Ok(outcome) => outcome,
-        Err(error) => return import_error_response(error),
-    };
-    let candidates = match skill_import::with_collisions(
-        &state.db,
-        &outcome.source,
-        outcome.commit.as_deref(),
-        outcome.candidates,
-    )
-    .await
-    {
-        Ok(candidates) => candidates,
-        Err(error) => return import_error_response(error),
-    };
-    let _ = skill_bank::remember_source(
-        &state.db,
-        &outcome.source.url,
-        outcome.source.git_ref.as_deref(),
-        &outcome.source.path,
-    )
-    .await;
-    Json(serde_json::json!({
-        "scan_id": req.scan_id,
-        "source": outcome.source,
-        "commit": outcome.commit,
-        "candidates": candidates,
-        "elsewhere": outcome.elsewhere,
-        "elsewhere_count": outcome.elsewhere_count,
-    }))
-    .into_response()
-}
-
-async fn cancel_skill_scan(AxumPath(scan_id): AxumPath<String>) -> Response {
-    let cancelled = skill_import::cancel_scan(&scan_id);
-    Json(serde_json::json!({ "cancelled": cancelled })).into_response()
-}
-
-/// `POST /settings/skills/import` — write the checked candidates into a Source
-/// folder (new or given), with the explicit per-collision choice.
-async fn import_skills(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ImportSkillsRequest>,
-) -> Response {
-    let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
-        Ok(source) => source,
-        Err(error) => return import_error_response(error),
-    };
-    let folder = req.folder.unwrap_or(skill_import::ImportFolder {
-        id: None,
-        name: None,
-        parent_id: None,
-    });
-    match skill_import::import(
-        &state.db,
-        &state.repo_root,
-        &req.scan_id,
-        source,
-        folder,
-        req.items,
-    )
-    .await
-    {
-        Ok(report) => Json(report).into_response(),
-        Err(error) => import_error_response(error),
-    }
-}
-
-async fn recent_skill_sources(State(state): State<Arc<AppState>>) -> Response {
-    match skill_bank::recent_sources(&state.db).await {
-        Ok(sources) => Json(serde_json::json!({ "sources": sources })).into_response(),
-        Err(error) => storage_error_response(error),
-    }
-}
-
-/// `POST /settings/skill-folders/{id}/rescan` — re-clone the folder's source
-/// and diff it against the folder's skills. Read-only on the bank.
-async fn rescan_skill_folder(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-    Json(req): Json<RescanSkillFolderRequest>,
-) -> Response {
-    match skill_bank::get_folder(&state.db, &id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return skill_folder_not_found_response(),
-        Err(error) => return storage_error_response(error),
-    }
-    match skill_import::rescan(&state.db, &state.repo_root, &id, &req.scan_id).await {
-        Ok(report) => Json(report).into_response(),
-        Err(error) => import_error_response(error),
-    }
-}
-
-/// `POST /settings/skill-folders/{id}/update` — apply the confirmed diff.
-async fn update_skill_folder_from_source(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-    Json(req): Json<UpdateSkillFolderFromSourceRequest>,
-) -> Response {
-    match skill_bank::get_folder(&state.db, &id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return skill_folder_not_found_response(),
-        Err(error) => return storage_error_response(error),
-    }
-    match skill_import::update(&state.db, &state.repo_root, &id, &req.scan_id, req.items).await {
-        Ok(report) => Json(report).into_response(),
-        Err(error) => import_error_response(error),
-    }
 }
 
 /// Serialise one resolved entry for the editor.
@@ -13876,7 +13009,7 @@ async fn get_run_pipeline_document_skills(
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
     match run_pipeline_for_export(&state, &run_id).await {
-        Ok((pipeline, _)) => skills_sidecar_response(&state.repo_root, &pipeline),
+        Ok((pipeline, _)) => skills_sidecar_response(&state.skills, &pipeline),
         Err(response) => *response,
     }
 }
@@ -18663,7 +17796,7 @@ async fn archive_single_run(
     // #672 / ADR-0062: take back the per-skill exclusions this Run wrote in the target
     // repo's `info/exclude` (its `# pdo <run-id>` marked lines only — every other
     // line, PDO's for another Run or the user's, stays intact).
-    if let Err(e) = crate::skill_delivery::remove_exclusions(&repo_root, run_id) {
+    if let Err(e) = state.skills.withdraw(&repo_root, run_id) {
         warn!("cleanup_run: cannot remove skill exclusions for run {run_id}: {e:#}");
     }
 
@@ -20497,6 +19630,160 @@ fn workspace_context(
     ))
 }
 
+/// The skill context over this daemon's database and repository root (where
+/// the bank keeps its content), with `host` as the Autorisation d'opération.
+fn skill_context(
+    db: &sqlx::SqlitePool,
+    repo_root: &Path,
+    host: Arc<dyn pdo_kernel::extension_host::ExtensionHost>,
+) -> Arc<pdo_skill::Skills> {
+    use pdo_skill::adapters::{delivery, fs, source, sqlite};
+    Arc::new(pdo_skill::Skills::new(
+        pdo_skill::SkillsPorts {
+            skills: Arc::new(sqlite::SqliteSkillIndex::new(db.clone())),
+            folders: Arc::new(sqlite::SqliteFolderIndex::new(db.clone())),
+            sources: Arc::new(sqlite::SqliteSourceHistory::new(db.clone())),
+            content: Arc::new(fs::FsSkillContent::new(repo_root)),
+            scanner: Arc::new(source::GitSourceScanner::new()),
+            delivery: Arc::new(delivery::WorktreeDelivery::new(repo_root)),
+            referents: Arc::new(LegacySkillReferents {
+                db: db.clone(),
+                repo_root: repo_root.to_path_buf(),
+            }),
+        },
+        host,
+    ))
+}
+
+/// Who selects a skill, read from the tiers that still live in this crate: the
+/// instance configuration, the Projets, the Triggers, the instance pipelines'
+/// nodes, and the Runs not started yet (#669).
+struct LegacySkillReferents {
+    db: sqlx::SqlitePool,
+    repo_root: PathBuf,
+}
+
+impl pdo_skill::application::ports::SkillReferents for LegacySkillReferents {
+    fn referents<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> pdo_skill::application::ports::BoxFuture<'a, pdo_skill::application::ports::Referents>
+    {
+        Box::pin(skill_referents(&self.db, &self.repo_root, id))
+    }
+}
+
+async fn skill_referents(
+    db: &sqlx::SqlitePool,
+    repo_root: &Path,
+    id: &str,
+) -> pdo_skill::application::ports::Referents {
+    use pdo_skill::application::ports::{
+        NamedRef, PipelineReferent, Referents, RunReferent, TriggerReferent,
+    };
+    let instance = instance_config::get(db)
+        .await
+        .map(|config| skill_selection::selects(&config.skills, id))
+        .unwrap_or(false);
+
+    let projects = pdo_workspace::adapters::sqlite::list(db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|project| skill_selection::selects(&project_skills(project), id))
+        .map(|project| NamedRef {
+            id: project.id,
+            name: project.name,
+        })
+        .collect();
+
+    let triggers = trigger_store::list(db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|trigger| skill_selection::selects(&trigger.skills, id))
+        .map(|trigger| TriggerReferent {
+            id: trigger.id,
+            name: trigger.name,
+            pipeline_id: trigger.pipeline_id,
+        })
+        .collect();
+
+    let pipeline_entries = instance_pipeline_dir(repo_root)
+        .map(|directory| scan_pipeline_dir(&directory, "instance"))
+        .unwrap_or_default();
+    let pipelines = pipeline_entries
+        .into_iter()
+        .flat_map(|entry| {
+            let Ok(yaml) = std::fs::read_to_string(&entry.path) else {
+                return Vec::new();
+            };
+            let Ok(parsed) = pipeline::parse_pipeline(&yaml) else {
+                return Vec::new();
+            };
+            parsed
+                .pipeline
+                .nodes
+                .into_iter()
+                .filter(|node| skill_selection::selects(&node.skills, id))
+                .map(|node| PipelineReferent {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    node_id: node.id,
+                    scope: entry.scope.to_string(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    // One indexed pass over `run_started` payloads: non-terminal Runs that have not
+    // spawned a single node yet (same terminality test as the sandbox-profile
+    // referents, plus the "no node_started" clause that makes them *not started*).
+    let rows: Result<Vec<(String, String)>, _> = sqlx::query_as(
+        "SELECT e.run_id, e.payload FROM events e \
+         WHERE e.kind = 'run_started' AND e.payload IS NOT NULL \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM events t WHERE t.run_id = e.run_id AND t.kind IN \
+               ('run_completed', 'run_failed', 'run_skipped', 'run_halted', 'run_archived', \
+                'node_started') \
+           ) \
+         ORDER BY e.ts DESC",
+    )
+    .fetch_all(db)
+    .await;
+    let runs = match rows {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|(run_id, payload)| {
+                let val = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+                let skills: Vec<skill_selection::SkillRef> =
+                    serde_json::from_value(val.get("skills")?.clone()).ok()?;
+                if !skill_selection::selects(&skills, id) {
+                    return None;
+                }
+                let text = |key: &str| val.get(key).and_then(|v| v.as_str()).map(str::to_string);
+                Some(RunReferent {
+                    run_id: run_id.clone(),
+                    pipeline_name: text("pipeline_name"),
+                    name: text("name"),
+                })
+            })
+            .collect(),
+        Err(e) => {
+            error!("failed to query runs for skill referents: {e}");
+            Vec::new()
+        }
+    };
+
+    Referents {
+        instance,
+        projects,
+        triggers,
+        pipelines,
+        runs,
+    }
+}
+
 /// Reap the worktree of a Run aborted at create, and what it left beside it.
 ///
 /// #672: a Run aborted at create may already have snapshotted skills beside the
@@ -20505,7 +19792,7 @@ fn workspace_context(
 fn reap_orphan_run_worktree(repo_root: &Path, worktree_dir: &Path, branch: &str) {
     worktrees::reap_orphan_sub_worktree(repo_root, worktree_dir, branch);
     if let Some(run_id) = branch.strip_prefix("pdo/run-") {
-        let _ = skill_delivery::remove_exclusions(repo_root, run_id);
+        let _ = pdo_skill::adapters::delivery::remove_exclusions(repo_root, run_id);
         let _ = std::fs::remove_dir_all(skill_delivery::snapshot_root(repo_root, run_id));
     }
     if let Some(run_dir) = worktree_dir.parent() {
@@ -21406,6 +20693,11 @@ mod tests {
             workspace: workspace_context(
                 &db,
                 &pipeline_tx,
+                &std::env::current_dir().unwrap(),
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
+            skills: skill_context(
+                &db,
                 &std::env::current_dir().unwrap(),
                 Arc::new(pdo_kernel::extension_host::NoExtensions),
             ),
@@ -26633,6 +25925,11 @@ mod tests {
             workspace: workspace_context(
                 &db,
                 &pipeline_tx,
+                &std::env::current_dir().unwrap(),
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
+            skills: skill_context(
+                &db,
                 &std::env::current_dir().unwrap(),
                 Arc::new(pdo_kernel::extension_host::NoExtensions),
             ),
@@ -32609,6 +31906,7 @@ mod tests {
                 dir,
                 Arc::new(pdo_kernel::extension_host::NoExtensions),
             ),
+            skills: skill_context(&db, dir, Arc::new(pdo_kernel::extension_host::NoExtensions)),
             platform: test_platform(&db, None).await,
             db,
             event_tx,
@@ -39233,6 +38531,11 @@ edges: []
                 &repo.clone(),
                 Arc::new(pdo_kernel::extension_host::NoExtensions),
             ),
+            skills: skill_context(
+                &db,
+                &repo.clone(),
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
             platform: test_platform(&db, None).await,
             db,
             event_tx,
@@ -39434,6 +38737,11 @@ edges: []
             workspace: workspace_context(
                 &db,
                 &pipeline_tx,
+                &repo.clone(),
+                Arc::new(pdo_kernel::extension_host::NoExtensions),
+            ),
+            skills: skill_context(
+                &db,
                 &repo.clone(),
                 Arc::new(pdo_kernel::extension_host::NoExtensions),
             ),

@@ -20,10 +20,12 @@ function renderInspector(props: Parameters<typeof NodeInspector>[0]) {
   );
 }
 
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+}));
+
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
-  // #669: the skills selector's reads (bank + inherited tiers), empty by default.
-  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
   fetchLibrary: vi.fn().mockResolvedValue([]),
   // #586: the harness pin picker now fetches /settings for its dynamic option
   // list. Resolve it with the embedded floor so the picker offers claude/opencode.

@@ -79,6 +79,26 @@ afterAll(() => {
 
 const { fetchSettingsMock } = vi.hoisted(() => ({ fetchSettingsMock: vi.fn() }));
 
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
+  createSkill: vi.fn().mockResolvedValue({}),
+  fetchSkill: vi.fn().mockResolvedValue(""),
+  updateSkill: vi.fn().mockResolvedValue(undefined),
+  deleteSkill: vi.fn().mockResolvedValue(undefined),
+  fetchSkillReferents: vi.fn().mockResolvedValue([]),
+  createSkillFolder: vi.fn().mockResolvedValue(undefined),
+  updateSkillFolder: vi.fn().mockResolvedValue(undefined),
+  deleteSkillFolder: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../skill/api/files", () => ({
+  deleteSkillFile: vi.fn().mockResolvedValue(undefined),
+  fetchSkillFile: vi.fn().mockResolvedValue(""),
+  uploadSkillFileFromPath: vi.fn().mockResolvedValue({}),
+  uploadSkillFiles: vi.fn().mockResolvedValue({}),
+  writeSkillFile: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../api", () => {
   // Vanilla `InstanceSettings` as `GET /settings` serves a pristine instance
   // (mirrors the `sample()` fixture of SettingsSurface.test.tsx, default tiers).
@@ -217,19 +237,6 @@ vi.mock("../api", () => {
       updateAgentProfile: vi.fn().mockResolvedValue(undefined),
       deleteAgentProfile: vi.fn().mockResolvedValue(undefined),
       fetchAgentProfileReferents: vi.fn().mockResolvedValue([]),
-      fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
-      createSkill: vi.fn().mockResolvedValue({}),
-      fetchSkill: vi.fn().mockResolvedValue(""),
-      updateSkill: vi.fn().mockResolvedValue(undefined),
-      deleteSkill: vi.fn().mockResolvedValue(undefined),
-      fetchSkillReferents: vi.fn().mockResolvedValue([]),
-      createSkillFolder: vi.fn().mockResolvedValue(undefined),
-      updateSkillFolder: vi.fn().mockResolvedValue(undefined),
-      deleteSkillFile: vi.fn().mockResolvedValue(undefined),
-      fetchSkillFile: vi.fn().mockResolvedValue(""),
-      uploadSkillFileFromPath: vi.fn().mockResolvedValue({}),
-      uploadSkillFiles: vi.fn().mockResolvedValue({}),
-      writeSkillFile: vi.fn().mockResolvedValue(undefined),
       // A minimal but complete virtual profile — the editor renders `floor`,
       // `disabled`, `extras`, `env`… of the selected one.
       fetchSandboxProfile: vi.fn().mockImplementation((name: string) =>

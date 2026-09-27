@@ -13,6 +13,18 @@ const fetchUpdateStatusMock = vi.fn();
 const fetchUpdateAttemptLogMock = vi.fn();
 const checkForUpdateNowMock = vi.fn();
 
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
+  createSkill: vi.fn(),
+  fetchSkill: vi.fn(),
+  updateSkill: vi.fn(),
+  deleteSkill: vi.fn(),
+  fetchSkillReferents: vi.fn(),
+  createSkillFolder: vi.fn(),
+  updateSkillFolder: vi.fn(),
+  deleteSkillFolder: vi.fn(),
+}));
+
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
@@ -27,15 +39,6 @@ vi.mock("../api", () => ({
   saveSandboxProfile: vi.fn(),
   deleteSandboxProfile: vi.fn(),
   fetchSandboxProfileReferents: vi.fn(),
-  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
-  createSkill: vi.fn(),
-  fetchSkill: vi.fn(),
-  updateSkill: vi.fn(),
-  deleteSkill: vi.fn(),
-  fetchSkillReferents: vi.fn(),
-  createSkillFolder: vi.fn(),
-  updateSkillFolder: vi.fn(),
-  deleteSkillFolder: vi.fn(),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;

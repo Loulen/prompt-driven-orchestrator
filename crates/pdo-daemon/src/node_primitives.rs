@@ -4,10 +4,14 @@ use std::path::{Path, PathBuf};
 use pdo_harness::{adapters::binary_path, registry, resolver};
 use serde::Serialize;
 
+use pdo_session::application::ports::Tmux;
+use pdo_session::domain::launch::SessionTail;
+
+use crate::blackboard;
 use crate::event_log::{self, EventKind, NodeStatus};
 use crate::pipeline::{self, PipelineDef};
+use crate::session_ports::SandboxExec;
 use crate::worktrees::{ensure_sub_worktree, sub_worktree_branch, sub_worktree_path};
-use crate::{blackboard, tmux_session_manager};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -74,9 +78,8 @@ pub(crate) struct StartNodeParams<'a> {
 /// in the type, so the wrong order is not expressible. Don't collapse it back
 /// into a direct spawn.
 ///
-/// Owns its data because [`tmux_session_manager::SessionTail`] and
-/// [`tmux_session_manager::SandboxWrap`] borrow; both are rebuilt in
-/// [`StartNodeSpawn::execute`].
+/// Owns its data because [`SessionTail`] and the sandbox wrap borrow; both are
+/// rebuilt in [`StartNodeSpawn::execute`].
 pub(crate) struct StartNodeSpawn {
     session_name: String,
     prompt: String,
@@ -87,12 +90,13 @@ pub(crate) struct StartNodeSpawn {
     daemon_port: u16,
     tmux_cmd_override: Option<String>,
     tail: StartNodeTail,
-    sandbox: Option<StartNodeSandbox>,
+    /// The `docker exec` into the Run's container, when sandboxed.
+    sandbox: Option<SandboxExec>,
     /// Arm the turn-end `Stop` hook (already ANDed with `!is_script`).
     inject_hook: bool,
 }
 
-/// Owned mirror of [`tmux_session_manager::SessionTail`] — the borrowing enum
+/// Owned mirror of [`SessionTail`] — the borrowing enum
 /// cannot be carried across the append.
 enum StartNodeTail {
     Agent {
@@ -110,18 +114,6 @@ enum StartNodeTail {
     },
 }
 
-/// Owned mirror of [`tmux_session_manager::SandboxWrap`]. `marker` and `workdir`
-/// are not stored: they are always the session name and the working dir, which
-/// [`StartNodeSpawn`] already owns.
-struct StartNodeSandbox {
-    docker_bin: String,
-    uid: u32,
-    gid: u32,
-    /// The resolved harness's staging-set env (#708), forwarded on the `docker exec`.
-    /// Empty for `claude` and for a fill that could not run.
-    set_env: Vec<(String, String)>,
-}
-
 impl StartNodeSpawn {
     /// Launch the session. **Call this only after the `NodeStarted` event has been
     /// appended** (ADR-0038) — see the type's doc-comment.
@@ -129,38 +121,26 @@ impl StartNodeSpawn {
     /// The deliberate trade: if the append succeeds and this fails, the run has a
     /// `NodeStarted` with no session — a *visible* failure (ADR-0032 makes session
     /// death loud) rather than the silent orphan of the other order.
-    pub(crate) fn execute(&self) -> anyhow::Result<()> {
+    pub(crate) fn execute(&self, tmux: &dyn Tmux) -> anyhow::Result<()> {
         let tail = match &self.tail {
             StartNodeTail::Agent {
                 harness,
                 model,
                 effort,
                 session_id,
-            } => tmux_session_manager::SessionTail::Agent {
+            } => SessionTail::Agent {
                 harness: harness.as_ref(),
                 model: model.as_deref(),
                 effort: effort.as_deref(),
                 session_id: session_id.as_deref(),
             },
-            StartNodeTail::Script { timeout_secs, env } => {
-                tmux_session_manager::SessionTail::Script {
-                    timeout_secs: *timeout_secs,
-                    env,
-                }
-            }
+            StartNodeTail::Script { timeout_secs, env } => SessionTail::Script {
+                timeout_secs: *timeout_secs,
+                env,
+            },
         };
-        let sandbox_wrap = self
-            .sandbox
-            .as_ref()
-            .map(|sbx| tmux_session_manager::SandboxWrap {
-                docker_bin: &sbx.docker_bin,
-                uid: sbx.uid,
-                gid: sbx.gid,
-                marker: &self.session_name,
-                workdir: &self.working_dir,
-                set_env: &sbx.set_env,
-            });
-        tmux_session_manager::spawn(
+        pdo_session::application::launch::spawn(
+            tmux,
             &self.session_name,
             &self.prompt,
             &self.working_dir,
@@ -170,7 +150,7 @@ impl StartNodeSpawn {
             self.daemon_port,
             self.tmux_cmd_override.as_deref(),
             tail,
-            sandbox_wrap.as_ref(),
+            self.sandbox.as_ref().map(SandboxExec::wrap).as_ref(),
             self.inject_hook,
         )
     }
@@ -521,7 +501,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         .map(|_| uuid::Uuid::new_v4().to_string());
     let tail = if is_script {
         StartNodeTail::Script {
-            timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
+            timeout_secs: pdo_session::domain::launch::SCRIPT_TIMEOUT_SECS,
             env: script_env,
         }
     } else {
@@ -574,15 +554,18 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     };
 
     let session_name =
-        tmux_session_manager::node_session_name(params.run_id, params.node_id, params.iter);
+        pdo_session::domain::names::node_session_name(params.run_id, params.node_id, params.iter);
     // **Do not add a spawn path that spawns before the caller appends
     // `NodeStarted`** (ADR-0038): the reaper's "absent ⇒ orphan" verdict is only
     // sound because no session can exist before its reservation.
-    let sandbox = sandboxed.then(|| StartNodeSandbox {
-        docker_bin: params.docker_cmd_override.unwrap_or("docker").to_string(),
-        uid: pdo_sandbox::adapters::host::host_uid(),
-        gid: pdo_sandbox::adapters::host::host_gid(),
-        set_env: sandbox_set_env,
+    let sandbox = sandboxed.then(|| {
+        SandboxExec::new(
+            params.docker_cmd_override,
+            params.run_id,
+            &session_name,
+            &working_dir,
+            &sandbox_set_env,
+        )
     });
     let spawn = StartNodeSpawn {
         session_name,
@@ -710,7 +693,7 @@ pub(crate) struct StopNodeParams<'a> {
     pub run_id: &'a str,
     pub node_id: &'a str,
     pub iter: i64,
-    pub tmux_socket: &'a str,
+    pub tmux: &'a dyn Tmux,
 }
 
 #[allow(dead_code)]
@@ -721,9 +704,9 @@ pub(crate) struct StopNodeResult {
 
 pub(crate) fn stop_node(params: &StopNodeParams<'_>) -> StopNodeResult {
     let session_name =
-        tmux_session_manager::node_session_name(params.run_id, params.node_id, params.iter);
+        pdo_session::domain::names::node_session_name(params.run_id, params.node_id, params.iter);
 
-    tmux_session_manager::kill(params.tmux_socket, &session_name);
+    params.tmux.kill(&session_name);
 
     let stopped_event = event_log::Event {
         id: None,
@@ -2012,7 +1995,7 @@ mod tests {
             run_id: "run-1",
             node_id: "worker",
             iter: 1,
-            tmux_socket: "pdo-test",
+            tmux: &pdo_session::adapters::tmux::TmuxCli::on_socket("pdo-test"),
         };
 
         let result = stop_node(&params);
@@ -2034,7 +2017,7 @@ mod tests {
             run_id: "run-1",
             node_id: "worker",
             iter: 1,
-            tmux_socket: "pdo-test",
+            tmux: &pdo_session::adapters::tmux::TmuxCli::on_socket("pdo-test"),
         };
 
         let result = stop_node(&params);

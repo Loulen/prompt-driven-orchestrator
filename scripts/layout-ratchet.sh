@@ -103,9 +103,18 @@ cd "$(git rev-parse --show-toplevel)"
 #   their tests to frontend/src/workspace/components.
 # frontend/src/components: 180 and crates/pdo-daemon/src: 73 — #917, #916 and #919 combined.
 # frontend/src/components: 179 and crates/pdo-daemon/src: 69 — #916, #917, #919 and #921 combined.
+# frontend/src/components: 195 and crates/pdo-daemon/src: 78 (#920) ratchet down: the
+#   session context moved out — TmuxTerminal, RunShellModal and their tests to
+#   frontend/src/session/components/, tmux_session_manager, pty_bridge, shared_terminal and
+#   declared_wait to crates/pdo-session. The legacy side of its ports is one new module,
+#   contexts.rs, plus the session_ports/ directory (not a direct file).
+# frontend/src/components: 176 and crates/pdo-daemon/src: 69 — #920, #917, #916 and #919
+#   combined.
+# frontend/src/components: 175 and crates/pdo-daemon/src: 65 — #916, #917, #919, #920 and
+#   #921 combined.
 BASELINES='
-frontend/src/components 179
-crates/pdo-daemon/src 69
+frontend/src/components 175
+crates/pdo-daemon/src 65
 '
 
 fail=0

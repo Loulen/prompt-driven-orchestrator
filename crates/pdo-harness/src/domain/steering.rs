@@ -16,8 +16,8 @@
 //! 2. **Runtime messages are excluded by prefix**: every text the daemon itself
 //!    types or pastes into a harness session starts with [`RUNTIME_PREFIX`],
 //!    posed once at the tmux bottleneck
-//!    (`tmux_session_manager::send_message` /
-//!    `tmux_session_manager::paste_message`). A turn starting with it
+//!    (`pdo_session::application::messages::send_message` /
+//!    `paste_message`). A turn starting with it
 //!    is PDO's, not a human's.
 //! 3. **Only typed text counts**: tool results, meta/skill loads, compaction
 //!    summaries, interruptions and local-command echoes are never a steering

@@ -10,6 +10,27 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.4 — Contexte `session` extrait (#920, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques).
+
+- Nouveau crate `pdo-session` (domain / application / adapters) : gestionnaire tmux, pont PTY,
+  terminal partagé, attente déclarée et assistant de bibliothèque quittent `pdo-legacy`, avec
+  les routes `/sessions*`, `…/nodes/{id}/pane` et `…/wait-user`.
+- tmux passe derrière un port unique (`Tmux`) : le crate legacy, le pont PTY et les deux appels
+  du terminal partagé (`list-clients`, `refresh-client`) y passent. Le gestionnaire (5,4 k lignes)
+  est découpé par responsabilité : cycle de vie des sessions, envoi de texte, reaper, pilote du
+  terminal.
+- Chaque mutation du contexte (attente, reprise sur Entrée, shell, assistant, focus, sauvegarde,
+  prise de main, pop-out, résurrection d'un pane) passe par un use case qui demande
+  l'Autorisation d'opération ; le reaper et l'attente posée par le daemon sur une complétion
+  refusée restent des transitions internes.
+- Cibles `RUST_LOG` : `pdo_daemon::tmux_session_manager` devient `pdo_session::adapters::tmux`
+  (et `pdo_session::application::launch`), `pdo_daemon::pty_bridge` devient
+  `pdo_session::adapters::pty`.
+- Front : le terminal, la modale du shell de Run et le panneau de l'assistant passent dans
+  `frontend/src/session/`.
+
 ## 1.111.3 — Contexte `workspace` extrait (#917, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les

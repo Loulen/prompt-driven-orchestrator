@@ -91,6 +91,15 @@ Contexts already out of the legacy crate:
   `RUST_LOG=pdo_sandbox::adapters::staging`, `pdo_daemon::sandbox_container` becomes
   `pdo_sandbox::application::container`, `pdo_daemon::sandbox_run` becomes
   `pdo_sandbox::application::prepare` (and `pdo_daemon::run_sandbox` for the Run's side).
+- `session` (#920): `crates/pdo-session`, `frontend/src/session/`. tmux sits behind the one
+  `Tmux` port (`application/ports.rs`, adapter `adapters/tmux/`): the legacy crate, the PTY
+  bridge and the shared terminal reach tmux through it, never through `Command::new("tmux")`.
+  What the context reads of the Runs (the declared wait's facts, a pane's iteration, the run
+  shell's worktree, the sweep's owners) are ports the legacy crate implements in
+  `session_ports/`, wired by the composition root (`crates/pdo/src/contexts.rs`) over the
+  `ContextResources` the legacy daemon opens (`contexts.rs`). `RUST_LOG=pdo_daemon::tmux_session_manager`
+  becomes `RUST_LOG=pdo_session::adapters::tmux` (and `…::application::launch` for the
+  spawns), `pdo_daemon::pty_bridge` becomes `pdo_session::adapters::pty`.
 
 While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the

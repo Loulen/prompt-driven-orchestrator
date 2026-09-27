@@ -114,7 +114,7 @@ const CONTAINER_SIDE_HOST: &str = "host.docker.internal";
 /// Un seul résolveur, consommé par les deux, rend la dérive impossible (leçon #373).
 ///
 /// **Ce résolveur ne s'applique PAS aux exports d'env côté hôte du wrapper
-/// `docker exec`** (`tmux_session_manager::wrap_with_env`) : ceux-là tournent AVANT
+/// `docker exec`** (`pdo_session::domain::launch::wrap_with_env`) : ceux-là tournent AVANT
 /// le `docker exec`, ne traversent pas dans le conteneur, et doivent donc rester
 /// `localhost` (ADR-0030 §5). Ils appellent avec `sandboxed = false` — l'argument
 /// nomme le côté d'exécution, pas le mode du Run.
@@ -225,7 +225,7 @@ k TERM; sleep 2; k KILL"
     )
 }
 
-/// Single-quote une chaîne pour un `sh -c` (miroir de `tmux_session_manager::sh_single_quote`).
+/// Single-quote une chaîne pour un `sh -c` (miroir de `pdo_session::domain::launch::sh_single_quote`).
 pub fn sh_single_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');

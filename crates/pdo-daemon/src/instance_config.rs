@@ -18,7 +18,7 @@
 //! The public API mirrors the store idiom: `init` (create + seed), `get`
 //! (singleton fetch), and `update` (partial, set-only edit). Precedence itself
 //! lives with each reader (`admission::configured_cap_with`,
-//! `tmux_session_manager::reaper_ttl_with`, `guard_runner::guard_timeout_with`);
+//! `pdo_session::adapters::env::reaper_ttl_with`, `guard_runner::guard_timeout_with`);
 //! this module only persists the `stored` tier.
 
 use pdo_sandbox::domain::image::{DOCKERFILE_PATH_ENV, IMAGE_SOURCE_ENV};
@@ -40,7 +40,7 @@ pub(crate) struct InstanceConfig {
     /// (default 1 h, an operator may want to read it later), this one bounds an
     /// assistant nobody is attached to and nobody is editing against (default
     /// 120 s). The resolver
-    /// ([`crate::tmux_session_manager::libassist_idle_ttl_with`]) owns the
+    /// ([`pdo_session::adapters::env::libassist_idle_ttl_with`]) owns the
     /// precedence.
     pub libassist_idle_ttl_secs: Option<i64>,
     /// Stored Trigger guard timeout in **seconds**, or `None` when unset. Note

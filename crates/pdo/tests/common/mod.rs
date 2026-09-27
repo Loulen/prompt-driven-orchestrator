@@ -742,7 +742,7 @@ impl TestDaemon {
     /// spawn or inspect tmux sessions out-of-band must use this socket so
     /// they hit the same tmux server the daemon talks to.
     pub fn tmux_socket(&self) -> String {
-        pdo_daemon::tmux_session_manager::tmux_socket_name(self.addr.port())
+        pdo_session::domain::names::tmux_socket_name(self.addr.port())
     }
 
     /// Drive a single Trigger scheduler tick synchronously (test seam).
@@ -1064,4 +1064,10 @@ pub fn ensure_pdo_on_path() {
         let existing = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{}:{}", dir.display(), existing));
     });
+}
+
+/// The tmux adapter on `socket` — how a test inspects or drives the daemon's
+/// sessions out of band, through the session context's own port.
+pub fn tmux(socket: &str) -> Box<dyn pdo_session::application::ports::Tmux> {
+    Box::new(pdo_session::adapters::tmux::TmuxCli::on_socket(socket))
 }

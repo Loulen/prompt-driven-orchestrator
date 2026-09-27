@@ -39,6 +39,7 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
         "pub fn router<S: ProjectSettings>(",
     ),
     ("../pdo-platform/src/adapters/http/mod.rs", "pub fn router("),
+    ("../pdo-session/src/adapters/http/mod.rs", "pub fn router("),
 ];
 
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];

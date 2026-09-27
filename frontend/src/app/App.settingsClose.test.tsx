@@ -181,7 +181,6 @@ vi.mock("../api", () => {
     {
       fetchRuns: vi.fn().mockResolvedValue([]),
       fetchRun: vi.fn().mockResolvedValue({}),
-      fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
       fetchTriggers: vi.fn().mockResolvedValue([]),
       fetchTriggersHealth: vi.fn().mockResolvedValue({
         last_tick_at: null,
@@ -211,8 +210,6 @@ vi.mock("../api", () => {
       uploadSkillFiles: vi.fn().mockResolvedValue({}),
       writeSkillFile: vi.fn().mockResolvedValue(undefined),
       fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
-      closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
-      putLibassistFocus: vi.fn().mockResolvedValue(undefined),
       fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
       uncombineStatsMember: vi.fn(),
       fetchStatsOverview: vi.fn().mockResolvedValue({
@@ -316,6 +313,15 @@ vi.mock("../sandbox/api/profiles", () => {
     fetchSandboxProfileReferents: vi.fn().mockResolvedValue({ runs: [], triggers: [] }),
   };
 });
+
+vi.mock("../session/api/sessions", () => ({
+  fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
+}));
+
+vi.mock("../session/api/assistant", () => ({
+  closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
+  putLibassistFocus: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspace/api/projects")>()),

@@ -28,7 +28,6 @@ use std::time::{Duration, SystemTime};
 
 use crate::common::TestDaemon;
 use pdo_daemon::stale_detector;
-use pdo_daemon::tmux_session_manager;
 
 const DOC_PIPELINE: &str = "turn-end-doc";
 const CM_PIPELINE: &str = "turn-end-cm";
@@ -322,7 +321,7 @@ async fn a_long_silent_tool_call_never_kills_the_run() {
     set_autocomplete(&daemon.url(), true).await;
 
     let run_id = create_run(&daemon, DOC_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(
         wait_for_session(&socket, &session, Duration::from_secs(5)).await,
         "the node session should appear"
@@ -388,7 +387,7 @@ async fn an_idle_transcript_with_incomplete_outputs_is_no_longer_stale() {
     let home = daemon.repo_root().to_path_buf();
 
     let run_id = create_run(&daemon, DOC_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
@@ -432,7 +431,7 @@ async fn session_death_is_still_detected() {
     let socket = daemon.tmux_socket();
 
     let run_id = create_run(&daemon, DOC_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
     kill_session(&socket, &session);
 
@@ -503,7 +502,7 @@ async fn the_setting_gates_completion_and_takes_effect_on_the_next_sweep() {
     );
 
     let run_id = create_run(&daemon, DOC_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
@@ -590,7 +589,7 @@ async fn done_with_auto_true_records_node_auto_completed() {
     let home = daemon.repo_root().to_path_buf();
 
     let run_id = create_run(&daemon, DOC_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
@@ -640,7 +639,7 @@ async fn done_with_auto_false_records_plain_node_completed() {
     let home = daemon.repo_root().to_path_buf();
 
     let run_id = create_run(&daemon, DOC_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
@@ -695,7 +694,7 @@ async fn a_repeat_auto_completion_never_doubles_the_terminal_event() {
     let home = daemon.repo_root().to_path_buf();
 
     let run_id = create_run(&daemon, DOC_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
@@ -758,7 +757,7 @@ async fn auto_done_with_missing_output_is_recoverable_and_records_nothing() {
     let socket = daemon.tmux_socket();
 
     let run_id = create_run(&daemon, DOC_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
     // No outputs written → the completion is refused, recoverably.
@@ -807,7 +806,7 @@ async fn auto_completing_an_isolated_node_merges_its_commit() {
     set_autocomplete(&daemon.url(), true).await;
 
     let run_id = create_run(&daemon, CM_PIPELINE).await;
-    let session = tmux_session_manager::node_session_name(&run_id, NODE_ID, 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");

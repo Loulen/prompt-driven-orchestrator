@@ -572,7 +572,7 @@ pub struct AwaitingInfo {
     /// on read from an awaiting child run, never written to this run's log).
     pub cause: String,
     /// The prose the banner shows: the agent's question (capped at
-    /// [`crate::declared_wait::MESSAGE_MAX_CHARS`] by the CLI), the daemon's
+    /// [`pdo_session::domain::declared_wait::MESSAGE_MAX_CHARS`] by the CLI), the daemon's
     /// sentence on a refused completion, or « child run <name> is awaiting you ».
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

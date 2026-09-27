@@ -1,0 +1,35 @@
+[package]
+# The `platform` bounded context (ADR-0079): the daemon as an installed piece of
+# software — its mounted pages, its version check and self-update, its out-of-Run
+# audit journal, its OS service unit. Hexagonal inside: `domain/`,
+# `application/` (ports + one use case per file), `adapters/`.
+name = "pdo-platform"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's platform context: page mounts, version check and update, audit journal, service unit"
+publish = false
+
+[dependencies]
+pdo-kernel.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+clap.workspace = true
+libc = "0.2"
+mime_guess.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+pdo-extension-api.workspace = true
+tempfile.workspace = true

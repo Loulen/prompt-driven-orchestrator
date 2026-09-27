@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.2 — Contexte `platform` extrait (#916, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les
+routes `/pages*`, `/update*` et `/audit` répondent comme avant).
+
+- Nouveau crate `pdo-platform` (domain / application / adapters), premier contexte extrait et
+  gabarit des suivants : montage de pages, vérification et application des mises à jour,
+  changelog, unité de service et journal d'audit quittent `pdo-legacy`. Chaque mutation passe
+  par un use case qui construit une Opération et appelle l'autorisation.
+- La CLI `pdo page` et `pdo service` passe dans `adapters/cli` du contexte. Le crate legacy
+  câble les contextes extraits via `contexts.rs`, la seule couture que la composition root
+  utilise.
+- Front : pages montées, mise à jour, changelog et journal d'audit passent dans
+  `frontend/src/platform/`.
+
 ## 1.111.1 — Contexte `harness` extrait (#919, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques, bloc

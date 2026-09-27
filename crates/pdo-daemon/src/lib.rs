@@ -5,7 +5,6 @@
 
 pub mod admission;
 mod agent_profile;
-mod audit_log;
 mod auto_fail;
 mod blackboard;
 mod boot_recovery;
@@ -13,6 +12,7 @@ mod child_awaiting;
 pub(crate) mod completion_refusal;
 #[allow(dead_code)]
 mod condition;
+mod contexts;
 #[allow(dead_code)]
 mod cron_schedule;
 mod declared_wait;
@@ -36,7 +36,6 @@ mod node_io_resolver;
 mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
-mod page_mount;
 mod pipeline;
 mod pipeline_migrator;
 #[cfg(test)]
@@ -68,7 +67,6 @@ mod sandbox_staging;
 mod scheduler;
 mod scheduler_dispatcher;
 mod scheduler_interpreter;
-mod service_unit;
 mod shared_terminal;
 mod skill_bank;
 mod skill_delivery;
@@ -87,15 +85,13 @@ mod transition_guard;
 mod trigger_scheduler;
 #[allow(dead_code)]
 mod trigger_store;
-pub mod update_check;
-pub mod update_executor;
 #[allow(dead_code)]
 mod variable_resolver;
 mod workflow_importer;
 mod worktree_ops;
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -106,13 +102,12 @@ use axum::extract::{
     FromRequest, Json, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade,
 };
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::Router;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
 use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{error, info, warn};
@@ -130,9 +125,14 @@ use crate::worktree_ops::{
     secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
     worktree_dir_for_run, worktree_has_tracked_changes,
 };
+use contexts::ContextResourcesSeed;
+pub use contexts::{ContextResources, Contexts};
+pub use pdo_platform::adapters::cli::{PageAction, ServiceAction};
+use pdo_platform::adapters::http::OriginHint;
+pub use pdo_platform::domain::service_health::ServiceHealthOverride;
 
-const DEFAULT_PORT: u16 = 5172;
-const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
+const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
+const DEFAULT_DAEMON_URL: &str = pdo_platform::domain::service_unit::DEFAULT_DAEMON_URL;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Embed)]
@@ -298,16 +298,6 @@ pub enum ReviewAction {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum PageAction {
-    /// Bind a name to a directory and serve it under `/pages/<name>/`.
-    Mount { name: String, directory: PathBuf },
-    /// List active page mounts.
-    List,
-    /// Remove a page mount.
-    Unmount { name: String },
-}
-
-#[derive(Subcommand, Debug)]
 // `Create` carries every creation flag, `Wait` two — a clap enum is parsed once
 // per process, so the size skew buys nothing to box away (it is already boxed
 // behind `Commands::Run`).
@@ -428,27 +418,6 @@ pub enum DocsAction {
     },
 }
 
-#[derive(Subcommand, Debug)]
-pub enum ServiceAction {
-    /// Generate + enable the service unit so the daemon starts at boot / survives logout.
-    Install {
-        /// Address the service daemon listens on. Omit to keep the default.
-        #[arg(long)]
-        bind: Option<IpAddr>,
-        #[arg(short, long, env = "PDO_PORT", default_value_t = DEFAULT_PORT)]
-        port: u16,
-        /// Print the unit file + the exact commands, make NO changes. Still
-        /// probes the port so the conflict guard is visible, but performs zero
-        /// writes and runs no `systemctl`.
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Stop, disable, and remove the service unit.
-    Uninstall,
-    /// Show the service unit's status (`systemctl --user status pdo` / launchd equivalent).
-    Status,
-}
-
 struct AppState {
     db: sqlx::SqlitePool,
     event_tx: broadcast::Sender<event_log::Event>,
@@ -459,7 +428,6 @@ struct AppState {
     /// Serializes page-mount mutations with Run archival. The guard stays held
     /// until `RunArchived` lands, so a verified node session cannot insert a
     /// run-owned mount after cleanup removed that Run's mounts.
-    page_mount_lock: tokio::sync::Mutex<()>,
     /// Serializes admission so the slot check is atomic check-and-reserve. A
     /// spawn holds this from the moment it counts live sessions until it has
     /// appended the reservation event (`NodeStarted` / `NodeWaiting`). Without
@@ -554,9 +522,6 @@ struct AppState {
     node_done_tail_gate: Arc<tokio::sync::Notify>,
     /// Whether the tail gate is currently armed. See [`Self::node_done_tail_gate`].
     node_done_tail_gate_armed: Arc<std::sync::atomic::AtomicBool>,
-    /// Persistent-service health, computed once at boot and cached so the polled
-    /// `GET /sessions` pays zero subprocess cost per request.
-    service_health: Arc<ServiceHealth>,
     /// TTL cache (~10 s) of the Docker availability probe, surfaced as
     /// `sandbox_docker` on `GET /settings`. Lazily refreshed when stale — not
     /// boot-once (a user may start Docker mid-session) and not per-fetch (a `PUT`
@@ -584,35 +549,9 @@ struct AppState {
     /// Whether the boot pass may refresh the fetched tier. See
     /// [`DaemonConfig::price_refresh_at_boot`].
     price_refresh_at_boot: bool,
-    /// Release-source URL override (#697); `None` →
-    /// [`update_check::RELEASE_SOURCE_URL_DEFAULT`]. Seeded per-daemon so a layer-3
-    /// test points the check at its own fixture, never at GitHub.
-    update_source_url: Option<String>,
-    /// The last version-check result (#697), mirrored on disk at
-    /// [`update_check::cache_path`]. `None` = never checked. Every read of
-    /// `GET /update` and the status-bar badge comes from HERE, never from a live
-    /// request: a page load costs no egress.
-    update_cache: tokio::sync::Mutex<Option<update_check::UpdateCache>>,
-    /// Serialises version checks; a second concurrent "Check now" answers 409.
-    update_check_lock: tokio::sync::Mutex<()>,
-    /// The release list behind « What's new » (#698), memoised per latest version:
-    /// `(latest_version, releases)`. Opening the modal twice on the same latest
-    /// costs one request to the release source, not two.
-    update_releases: tokio::sync::Mutex<Option<(String, Vec<update_check::Release>)>>,
-    /// Executor command override (#699, [`update_executor::EXECUTOR_OVERRIDE_ENV`]):
-    /// `Some(cmd)` runs `<cmd> <script>` instead of `sh <script>`, so a layer-3 test
-    /// exercises the whole apply path against a fixture that never touches brew.
-    update_executor_override: Option<String>,
-    /// Forced installation method (#699, [`update_executor::INSTALL_METHOD_OVERRIDE_ENV`]).
-    /// `None` → detected from the binary path and the installer receipt.
-    install_method_override: Option<update_check::InstallMethod>,
-    /// Forced supervision (#699); `None` → detected from the supervisor's env.
-    supervision_override: Option<update_check::Supervision>,
-    /// The command line an unsupervised relaunch runs, argv form (#699). `pdo daemon`
-    /// records its stable exe + `daemon --port <port>`; `None` → derived at apply time.
-    relaunch_command: Option<Vec<String>>,
-    /// Serialises `POST /update/apply`: one executor at a time.
-    update_apply_lock: tokio::sync::Mutex<()>,
+    /// The `platform` context (page mounts, update, audit journal, service
+    /// health), wired by the composition root.
+    platform: Arc<pdo_platform::Platform>,
     /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`,
     /// parsed + normalised at boot. Shared by BOTH WS upgrades (`/ws` and
     /// `/sessions/{id}/pty`) via [`pty_bridge::check_origin`]; the four localhost
@@ -1848,7 +1787,7 @@ pub fn run_review(action: ReviewAction) -> Result<()> {
             )))
             .send()
             .context("failed to reach daemon")?;
-            let body: serde_json::Value = page_cli_response(response, "list review comments")?;
+            let body: serde_json::Value = daemon_cli_response(response, "list review comments")?;
             println!("{}", serde_json::to_string_pretty(&body)?);
         }
         ReviewAction::Reply {
@@ -1868,7 +1807,7 @@ pub fn run_review(action: ReviewAction) -> Result<()> {
             .json(&serde_json::json!({ "text": text, "resolved": resolved }))
             .send()
             .context("failed to reach daemon")?;
-            let body: serde_json::Value = page_cli_response(response, "reply to review comment")?;
+            let body: serde_json::Value = daemon_cli_response(response, "reply to review comment")?;
             let author = body["author"].as_str().unwrap_or("agent");
             let outcome = body["outcome"].as_str().unwrap_or("replied");
             let what = match outcome {
@@ -1882,60 +1821,7 @@ pub fn run_review(action: ReviewAction) -> Result<()> {
     Ok(())
 }
 
-pub fn run_page(action: PageAction) -> Result<()> {
-    let url = cli_daemon_url();
-    let client = reqwest::blocking::Client::new();
-    let session = session_env_claim();
-    let with_identity = |request: reqwest::blocking::RequestBuilder| {
-        let mut request = request.header("X-PDO-Actor", "cli");
-        if let Some((run_id, node_id)) = &session {
-            request = request
-                .header(SESSION_RUN_HEADER, run_id)
-                .header(SESSION_NODE_HEADER, node_id);
-        }
-        request
-    };
-
-    match action {
-        PageAction::Mount { name, directory } => {
-            let directory = directory
-                .canonicalize()
-                .with_context(|| format!("cannot resolve {}", directory.display()))?;
-            let response = with_identity(client.post(format!("{url}/pages")))
-                .json(&serde_json::json!({ "name": name, "directory": directory }))
-                .send()
-                .context("failed to reach daemon")?;
-            let mount: page_mount::PageMount = page_cli_response(response, "mount page")?;
-            println!(
-                "Mounted {} at /pages/{}/ from {}.",
-                mount.name, mount.name, mount.directory
-            );
-        }
-        PageAction::List => {
-            let response = with_identity(client.get(format!("{url}/pages")))
-                .send()
-                .context("failed to reach daemon")?;
-            let mounts: Vec<page_mount::PageMount> = page_cli_response(response, "list pages")?;
-            for mount in mounts {
-                let run = mount.run_id.as_deref().unwrap_or("-");
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    mount.name, mount.directory, run, mount.created_at
-                );
-            }
-        }
-        PageAction::Unmount { name } => {
-            let response = with_identity(client.delete(format!("{url}/pages/{name}")))
-                .send()
-                .context("failed to reach daemon")?;
-            let _: page_mount::PageMount = page_cli_response(response, "unmount page")?;
-            println!("Unmounted {name}.");
-        }
-    }
-    Ok(())
-}
-
-fn page_cli_response<T: serde::de::DeserializeOwned>(
+fn daemon_cli_response<T: serde::de::DeserializeOwned>(
     response: reqwest::blocking::Response,
     operation: &str,
 ) -> Result<T> {
@@ -2267,558 +2153,6 @@ pub fn run_reap(
     Ok(())
 }
 
-/// What the port-conflict pre-flight probe found on `127.0.0.1:<port>`.
-///
-/// Two daemons can never share a port (`pdo daemon` binds with no `SO_REUSEADDR`
-/// / retry — an `EADDRINUSE` propagates and the process exits), so an enabled unit
-/// colliding with an already-bound port would crash-loop under
-/// `Restart=on-failure`. Classify the port so `install` refuses loudly or degrades
-/// to idempotent instead of enabling a doomed unit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PortState {
-    /// Nothing is listening — safe to enable + start.
-    Free,
-    /// A PDO daemon already answers `GET /sessions` here. Treat idempotently:
-    /// ensure the unit is written + enabled for boot, but do NOT `--now` a
-    /// competing instance onto the bound port.
-    PdoDaemon,
-    /// Something else holds the port (a non-PDO process, or a bare `pdo daemon`
-    /// that isn't answering yet). Refuse: enabling would crash-loop.
-    Foreign,
-}
-
-/// Outcome of a spawned side-effect command (`systemctl` / `loginctl` / `launchctl`).
-struct CmdOutcome {
-    success: bool,
-    stdout: String,
-    stderr: String,
-}
-
-/// Injectable side-effect surface for `pdo service`.
-///
-/// Everything non-hermetic (exe/cwd/home/user lookup, port probe, file write,
-/// command spawn) must funnel through this trait, so the suite never runs a real
-/// `systemctl`/`launchctl` or touches `~/.config` (ADR-0004: host-mutating acts
-/// stay out of the automated suite).
-trait ServiceEnv {
-    /// Absolute path of the running `pdo` binary — the unit's `ExecStart`.
-    fn current_exe(&self) -> Result<PathBuf>;
-    /// Current working directory — the unit's `WorkingDirectory` (→ repo_root).
-    fn current_dir(&self) -> Result<PathBuf>;
-    /// Directory holding `node`, or `None` when it isn't on `$PATH`.
-    fn node_dir(&self) -> Option<PathBuf>;
-    /// `$XDG_CONFIG_HOME`-resolved config home (systemd unit lives under it).
-    fn config_home(&self) -> Result<PathBuf>;
-    /// `$HOME` — launchd plist location + the plist's `HOME` env var.
-    fn home(&self) -> Result<PathBuf>;
-    /// `$USER` — for `loginctl enable-linger $USER`.
-    fn user(&self) -> Result<String>;
-    /// Classify the address the service daemon would occupy.
-    fn probe_port(&self, addr: SocketAddr) -> PortState;
-    /// Write a unit/plist file, creating parent dirs.
-    fn write_file(&self, path: &Path, contents: &str) -> Result<()>;
-    /// Remove a unit/plist file (uninstall); Ok if already absent.
-    fn remove_file(&self, path: &Path) -> Result<()>;
-    /// Run a side-effect command, capturing its outcome.
-    fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome>;
-}
-
-/// Production [`ServiceEnv`]: real env lookups, real TCP probe, real
-/// `std::process::Command`.
-struct RealServiceEnv;
-
-impl ServiceEnv for RealServiceEnv {
-    fn current_exe(&self) -> Result<PathBuf> {
-        // #699: the unit points at the binary by the path the user INVOKED —
-        // Homebrew's stable `bin/pdo` symlink, never the `Cellar/pdo/<version>/`
-        // target it resolves to, which `brew upgrade` deletes (and with it the
-        // service's ability to restart). Resolved path only as a fallback.
-        if let Some(stable) = update_check::stable_exe_path_from_env() {
-            return Ok(stable);
-        }
-        let exe = std::env::current_exe().context("failed to determine current executable path")?;
-        Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
-    }
-
-    fn current_dir(&self) -> Result<PathBuf> {
-        std::env::current_dir().context("failed to determine current directory")
-    }
-
-    fn node_dir(&self) -> Option<PathBuf> {
-        service_unit::resolve_node_dir()
-    }
-
-    fn config_home(&self) -> Result<PathBuf> {
-        service_unit::resolve_config_home().context(
-            "neither $XDG_CONFIG_HOME nor $HOME is set: cannot locate the systemd user dir",
-        )
-    }
-
-    fn home(&self) -> Result<PathBuf> {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .context("$HOME is not set")
-    }
-
-    fn user(&self) -> Result<String> {
-        std::env::var("USER").context("$USER is not set")
-    }
-
-    fn probe_port(&self, addr: SocketAddr) -> PortState {
-        use std::net::TcpStream;
-        if std::net::TcpListener::bind(addr).is_ok() {
-            return PortState::Free;
-        }
-        let addr = connect_addr(addr);
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_err() {
-            return PortState::Foreign;
-        }
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(800))
-            .build()
-        {
-            Ok(c) => c,
-            Err(_) => return PortState::Foreign,
-        };
-        match client.get(format!("http://{addr}/sessions")).send() {
-            Ok(resp) if resp.status().is_success() => {
-                let body = resp.text().unwrap_or_default();
-                // The `/sessions` payload carries `cap` + `version` — markers no
-                // random service would emit together.
-                if body.contains("\"cap\"") && body.contains("\"version\"") {
-                    PortState::PdoDaemon
-                } else {
-                    PortState::Foreign
-                }
-            }
-            _ => PortState::Foreign,
-        }
-    }
-
-    fn write_file(&self, path: &Path, contents: &str) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        std::fs::write(path, contents)
-            .with_context(|| format!("failed to write {}", path.display()))
-    }
-
-    fn remove_file(&self, path: &Path) -> Result<()> {
-        match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
-        }
-    }
-
-    fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome> {
-        let output = std::process::Command::new(program)
-            .args(args)
-            .output()
-            .with_context(|| format!("failed to spawn `{program}`"))?;
-        Ok(CmdOutcome {
-            success: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
-    }
-}
-
-pub fn run_service(action: ServiceAction) -> Result<()> {
-    let mut out = std::io::stdout();
-    run_service_with(action, &RealServiceEnv, &mut out)
-}
-
-/// Core `pdo service` logic against an injected [`ServiceEnv`] and output sink —
-/// the seam that lets tests assert argv sequence and written bytes without
-/// touching real systemd or `~/.config`.
-fn run_service_with(
-    action: ServiceAction,
-    env: &dyn ServiceEnv,
-    out: &mut dyn std::io::Write,
-) -> Result<()> {
-    let is_macos = cfg!(target_os = "macos");
-    match action {
-        ServiceAction::Install {
-            bind,
-            port,
-            dry_run,
-        } => {
-            if is_macos {
-                service_install_launchd(env, out, bind, port, dry_run)
-            } else {
-                service_install_systemd(env, out, bind, port, dry_run)
-            }
-        }
-        ServiceAction::Uninstall => {
-            if is_macos {
-                service_uninstall_launchd(env, out)
-            } else {
-                service_uninstall_systemd(env, out)
-            }
-        }
-        ServiceAction::Status => {
-            if is_macos {
-                service_status_launchd(env, out)
-            } else {
-                service_status_systemd(env, out)
-            }
-        }
-    }
-}
-
-/// Human-readable description of a port-probe result, for the plan / guard output.
-fn service_addr(bind: Option<IpAddr>, port: u16) -> SocketAddr {
-    SocketAddr::new(bind.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), port)
-}
-
-fn connect_addr(listen_addr: SocketAddr) -> SocketAddr {
-    match listen_addr.ip() {
-        IpAddr::V4(ip) if ip.is_unspecified() => {
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), listen_addr.port())
-        }
-        IpAddr::V6(ip) if ip.is_unspecified() => {
-            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), listen_addr.port())
-        }
-        _ => listen_addr,
-    }
-}
-
-fn describe_port_state(addr: SocketAddr, state: &PortState) -> String {
-    match state {
-        PortState::Free => format!("{addr} is free"),
-        PortState::PdoDaemon => {
-            format!(
-                "a PDO daemon is already answering on {}",
-                connect_addr(addr)
-            )
-        }
-        PortState::Foreign => {
-            format!("{addr} is already bound by a non-PDO process (or a not-yet-ready daemon)")
-        }
-    }
-}
-
-/// `pdo service install` — Linux systemd `--user` path.
-fn service_install_systemd(
-    env: &dyn ServiceEnv,
-    out: &mut dyn std::io::Write,
-    bind: Option<IpAddr>,
-    port: u16,
-    dry_run: bool,
-) -> Result<()> {
-    let exe = env.current_exe()?;
-    let working_dir = env.current_dir()?;
-    let node_dir = env.node_dir();
-    let path_env = service_unit::build_path_env(&exe, node_dir.as_deref());
-    let user = env.user().unwrap_or_else(|_| "$USER".to_string());
-    let config_home = env.config_home()?;
-    let unit_path = service_unit::systemd_unit_path(&config_home);
-    let unit = service_unit::render_systemd_unit(&exe, port, bind, &working_dir, &path_env);
-    let service_addr = service_addr(bind, port);
-    let state = env.probe_port(service_addr);
-
-    // `--now` only when the port is free: never start a competitor onto a port a
-    // PDO daemon already owns.
-    let start_now = state == PortState::Free;
-    let enable_args: &[&str] = if start_now {
-        &["--user", "enable", "--now", "pdo"]
-    } else {
-        &["--user", "enable", "pdo"]
-    };
-
-    if node_dir.is_none() {
-        writeln!(
-            out,
-            "# WARNING: `node` was not found on $PATH — the unit's Environment=PATH \
-             will lack the node dir and the service daemon may fail to spawn claude/node."
-        )?;
-    }
-
-    if dry_run {
-        writeln!(out, "# pdo service install --dry-run (NO changes made)")?;
-        writeln!(out, "# {}", describe_port_state(service_addr, &state))?;
-        if state == PortState::Foreign {
-            writeln!(
-                out,
-                "# WARNING: a real install would REFUSE — enabling a unit here would \
-                 crash-loop on EADDRINUSE. Stop the process on port {port} or pass --port."
-            )?;
-        } else if state == PortState::PdoDaemon {
-            writeln!(
-                out,
-                "# NOTE: a PDO daemon already serves this port; a real install would enable \
-                 the unit for boot WITHOUT starting a competing instance (no --now)."
-            )?;
-        }
-        writeln!(out, "# --- unit file ({}) ---", unit_path.display())?;
-        write!(out, "{unit}")?;
-        writeln!(out, "# --- command plan ---")?;
-        writeln!(out, "#   write unit to {}", unit_path.display())?;
-        writeln!(out, "#   systemctl --user daemon-reload")?;
-        writeln!(out, "#   loginctl enable-linger {user}")?;
-        writeln!(out, "#   systemctl {}", enable_args.join(" "))?;
-        return Ok(());
-    }
-
-    if state == PortState::Foreign {
-        anyhow::bail!(
-            "refusing to install: {}. The enabled unit's daemon would crash-loop on \
-             EADDRINUSE (Restart=on-failure). Stop the process on port {port}, or install \
-             with a free --port.",
-            describe_port_state(service_addr, &state)
-        );
-    }
-    if state == PortState::PdoDaemon {
-        writeln!(
-            out,
-            "note: {} — enabling the unit for boot but NOT starting a competing instance.",
-            describe_port_state(service_addr, &state)
-        )?;
-    }
-
-    env.write_file(&unit_path, &unit)?;
-    writeln!(out, "wrote {}", unit_path.display())?;
-
-    run_checked(env, out, "systemctl", &["--user", "daemon-reload"])?;
-
-    // `enable-linger` lets the user's units run without a login. On a
-    // hardened/headless box it can fail — degrade with a hint, don't abort.
-    match env.run_cmd("loginctl", &["enable-linger", &user]) {
-        Ok(o) if o.success => writeln!(out, "loginctl enable-linger {user}: ok")?,
-        Ok(o) => writeln!(
-            out,
-            "warning: `loginctl enable-linger {user}` failed ({}). Run `sudo loginctl \
-             enable-linger {user}` so the daemon survives logout.",
-            o.stderr.trim()
-        )?,
-        Err(e) => writeln!(
-            out,
-            "warning: could not run loginctl ({e}). Run `sudo loginctl enable-linger {user}`."
-        )?,
-    }
-
-    run_checked(env, out, "systemctl", enable_args)?;
-
-    writeln!(
-        out,
-        "\nPDO service installed. The daemon will now start at boot and survive logout."
-    )?;
-    if !start_now {
-        writeln!(
-            out,
-            "It was enabled but not started (a daemon already owns port {port})."
-        )?;
-    }
-    Ok(())
-}
-
-/// `pdo service uninstall` — Linux systemd `--user` path. Leaves linger (it's
-/// user-global, not this unit's to revoke).
-fn service_uninstall_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
-    let config_home = env.config_home()?;
-    let unit_path = service_unit::systemd_unit_path(&config_home);
-
-    // Tolerate a non-zero exit (the unit may be absent) so uninstall is idempotent.
-    match env.run_cmd("systemctl", &["--user", "disable", "--now", "pdo"]) {
-        Ok(o) if o.success => writeln!(out, "systemctl --user disable --now pdo: ok")?,
-        Ok(o) => writeln!(
-            out,
-            "systemctl --user disable --now pdo: {} (continuing)",
-            o.stderr.trim()
-        )?,
-        Err(e) => writeln!(out, "warning: could not run systemctl ({e})")?,
-    }
-
-    env.remove_file(&unit_path)?;
-    writeln!(out, "removed {}", unit_path.display())?;
-
-    run_checked(env, out, "systemctl", &["--user", "daemon-reload"])?;
-    writeln!(
-        out,
-        "\nPDO service uninstalled (linger left intact — it is user-global)."
-    )?;
-    Ok(())
-}
-
-/// `pdo service status` — Linux. Read-only: prints the unit's status and never
-/// mutates state. A non-zero exit (inactive/missing unit) is not an error.
-fn service_status_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
-    match env.run_cmd("systemctl", &["--user", "--no-pager", "status", "pdo"]) {
-        Ok(o) => {
-            write!(out, "{}", o.stdout)?;
-            if !o.stderr.is_empty() {
-                write!(out, "{}", o.stderr)?;
-            }
-        }
-        Err(e) => writeln!(out, "could not run systemctl ({e})")?,
-    }
-    Ok(())
-}
-
-/// `pdo service install` — macOS launchd LaunchAgent path.
-/// **Best-effort / untested on the Linux CI box** (generation is golden-tested).
-fn service_install_launchd(
-    env: &dyn ServiceEnv,
-    out: &mut dyn std::io::Write,
-    bind: Option<IpAddr>,
-    port: u16,
-    dry_run: bool,
-) -> Result<()> {
-    let exe = env.current_exe()?;
-    let working_dir = env.current_dir()?;
-    let home = env.home()?;
-    let node_dir = env.node_dir();
-    let path_env = service_unit::build_path_env(&exe, node_dir.as_deref());
-    let plist_path = service_unit::launchd_plist_path(&home);
-    let plist =
-        service_unit::render_launchd_plist(&exe, port, bind, &working_dir, &home, &path_env);
-    let service_addr = service_addr(bind, port);
-    let state = env.probe_port(service_addr);
-    let label = service_unit::LAUNCHD_LABEL;
-
-    if node_dir.is_none() {
-        writeln!(
-            out,
-            "# WARNING: `node` was not found on $PATH — the plist's PATH will lack the \
-             node dir and the service daemon may fail to spawn claude/node."
-        )?;
-    }
-
-    if dry_run {
-        writeln!(out, "# pdo service install --dry-run (NO changes made)")?;
-        writeln!(out, "# {}", describe_port_state(service_addr, &state))?;
-        if state == PortState::Foreign {
-            writeln!(
-                out,
-                "# WARNING: a real install would REFUSE — the daemon would crash-loop on \
-                 EADDRINUSE. Free port {port} or pass --port."
-            )?;
-        }
-        writeln!(
-            out,
-            "# --- LaunchAgent plist ({}) ---",
-            plist_path.display()
-        )?;
-        write!(out, "{plist}")?;
-        writeln!(out, "# --- command plan ---")?;
-        writeln!(out, "#   write plist to {}", plist_path.display())?;
-        writeln!(
-            out,
-            "#   launchctl bootout gui/$(id -u)/{label}  (ignore error)"
-        )?;
-        writeln!(
-            out,
-            "#   launchctl bootstrap gui/$(id -u) {}",
-            plist_path.display()
-        )?;
-        writeln!(
-            out,
-            "# NOTE: LaunchAgents do NOT run while logged out (no linger equivalent); \
-             true headless needs a root LaunchDaemon (deferred, ADR-0019)."
-        )?;
-        return Ok(());
-    }
-
-    if state == PortState::Foreign {
-        anyhow::bail!(
-            "refusing to install: {}. Free the port or pass a free --port.",
-            describe_port_state(service_addr, &state)
-        );
-    }
-
-    env.write_file(&plist_path, &plist)?;
-    writeln!(out, "wrote {}", plist_path.display())?;
-
-    let uid = env
-        .run_cmd("id", &["-u"])
-        .map(|o| o.stdout.trim().to_string());
-    let uid = match uid {
-        Ok(u) if !u.is_empty() => u,
-        _ => anyhow::bail!("could not determine uid via `id -u`"),
-    };
-    let target = format!("gui/{uid}");
-    let bootout_target = format!("{target}/{label}");
-    // Bootstrap is not idempotent — bootout first (ignore error), then bootstrap.
-    let _ = env.run_cmd("launchctl", &["bootout", &bootout_target]);
-    run_checked(
-        env,
-        out,
-        "launchctl",
-        &["bootstrap", &target, &plist_path.to_string_lossy()],
-    )?;
-    writeln!(
-        out,
-        "\nPDO LaunchAgent installed (best-effort). Note: it will NOT run while logged out."
-    )?;
-    Ok(())
-}
-
-/// `pdo service uninstall` — macOS launchd path.
-fn service_uninstall_launchd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
-    let home = env.home()?;
-    let plist_path = service_unit::launchd_plist_path(&home);
-    let label = service_unit::LAUNCHD_LABEL;
-
-    let uid = env
-        .run_cmd("id", &["-u"])
-        .map(|o| o.stdout.trim().to_string())
-        .unwrap_or_default();
-    if !uid.is_empty() {
-        let _ = env.run_cmd("launchctl", &["bootout", &format!("gui/{uid}/{label}")]);
-    }
-    env.remove_file(&plist_path)?;
-    writeln!(out, "removed {}", plist_path.display())?;
-    writeln!(out, "\nPDO LaunchAgent uninstalled.")?;
-    Ok(())
-}
-
-/// `pdo service status` — macOS launchd path. Read-only.
-fn service_status_launchd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) -> Result<()> {
-    let label = service_unit::LAUNCHD_LABEL;
-    let uid = env
-        .run_cmd("id", &["-u"])
-        .map(|o| o.stdout.trim().to_string())
-        .unwrap_or_default();
-    let target = format!("gui/{uid}/{label}");
-    match env.run_cmd("launchctl", &["print", &target]) {
-        Ok(o) => {
-            write!(out, "{}", o.stdout)?;
-            if !o.stderr.is_empty() {
-                write!(out, "{}", o.stderr)?;
-            }
-        }
-        Err(e) => writeln!(out, "could not run launchctl ({e})")?,
-    }
-    Ok(())
-}
-
-/// Run a side-effect command, printing a one-line trace, and fail the install if
-/// it returns non-zero (the steps that MUST succeed: `daemon-reload`,
-/// `enable`, `bootstrap`).
-fn run_checked(
-    env: &dyn ServiceEnv,
-    out: &mut dyn std::io::Write,
-    program: &str,
-    args: &[&str],
-) -> Result<()> {
-    let o = env
-        .run_cmd(program, args)
-        .with_context(|| format!("failed to run `{program} {}`", args.join(" ")))?;
-    if o.success {
-        writeln!(out, "{program} {}: ok", args.join(" "))?;
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "`{program} {}` failed: {}{}",
-            args.join(" "),
-            o.stdout.trim(),
-            o.stderr.trim()
-        )
-    }
-}
-
 pub struct DaemonHandle {
     pub addr: SocketAddr,
     pub task: tokio::task::JoinHandle<Result<()>>,
@@ -2858,8 +2192,7 @@ impl DaemonHandle {
     /// cache if not yet done, then checks ONLY if the setting is on and the cache is
     /// older than the interval — production's own gates, driven deterministically.
     pub async fn run_update_check_tick(&self) {
-        load_update_cache(&self.state).await;
-        periodic_update_check(&self.state).await;
+        self.state.platform.check_for_update().periodic().await;
     }
 
     /// Warm the harness-catalogue cache synchronously. Production spawns it
@@ -2993,125 +2326,6 @@ impl DaemonHandle {
     }
 }
 
-/// Persistent-service health for the status bar (ADR-0019).
-///
-/// Computed **once at daemon boot** and cached in [`AppState`], so the polled
-/// `GET /sessions` pays zero subprocess cost per request. Serialized as the
-/// `service` object on `/sessions`.
-///
-/// **Accepted staleness:** install happens out-of-process, so a daemon already
-/// running when the service is installed keeps a stale value until it restarts.
-/// The normal flow is install-then-run (ADR-0019).
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
-struct ServiceHealth {
-    /// How THIS process was launched, best-effort from env markers:
-    /// `"systemd"` | `"launchd"` | `"none"`. A diagnostic hint, not a guarantee
-    /// (the markers are inheritable).
-    supervisor: String,
-    /// Will a daemon come back after reboot? `Some(true)` when an enabled `pdo`
-    /// unit is present, `Some(false)` when reachable-but-ephemeral, `None`
-    /// (serialized `null`) when unknown/unsupported (non-Linux, no systemd,
-    /// spawn failure, or timeout). **Never** surfaced as an error — the UI
-    /// silences on `true`/`null` and shows an amber `ephemeral` pill only on
-    /// `false`.
-    persistent: Option<bool>,
-}
-
-/// Forced service-health observation, armed by `PDO_SERVICE_HEALTH`. Makes the
-/// `ephemeral` status-bar branch demonstrable in a real browser on a box where an
-/// enabled `pdo.service` already exists, without touching the real unit.
-#[derive(Debug, Clone, Copy)]
-pub enum ServiceHealthOverride {
-    Persistent,
-    Ephemeral,
-    Unknown,
-}
-
-impl ServiceHealthOverride {
-    fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "persistent" => Some(Self::Persistent),
-            "ephemeral" => Some(Self::Ephemeral),
-            "unknown" => Some(Self::Unknown),
-            _ => None,
-        }
-    }
-
-    fn into_health(self) -> ServiceHealth {
-        let persistent = match self {
-            Self::Persistent => Some(true),
-            Self::Ephemeral => Some(false),
-            Self::Unknown => None,
-        };
-        ServiceHealth {
-            supervisor: detect_supervisor().to_string(),
-            persistent,
-        }
-    }
-}
-
-fn compute_service_health() -> ServiceHealth {
-    ServiceHealth {
-        supervisor: detect_supervisor().to_string(),
-        persistent: detect_persistent(),
-    }
-}
-
-/// Best-effort detection of how this process was launched. Env markers only —
-/// treat as a hint, since they are inheritable.
-fn detect_supervisor() -> &'static str {
-    if std::env::var_os("XPC_SERVICE_NAME").is_some() {
-        "launchd"
-    } else if std::env::var_os("INVOCATION_ID").is_some()
-        || std::env::var_os("NOTIFY_SOCKET").is_some()
-        || std::env::var_os("JOURNAL_STREAM").is_some()
-    {
-        "systemd"
-    } else {
-        "none"
-    }
-}
-
-/// Is an enabled `pdo` service unit present — "will a daemon come back after
-/// reboot?" `None` when unknown/unsupported; never an error.
-fn detect_persistent() -> Option<bool> {
-    if cfg!(target_os = "macos") {
-        let home = std::env::var_os("HOME").map(PathBuf::from)?;
-        return Some(service_unit::launchd_plist_path(&home).exists());
-    }
-    detect_systemd_enabled()
-}
-
-/// `systemctl --user is-enabled pdo.service`, timeout-guarded.
-///
-/// Runs on a detached thread so a wedged systemctl can't block boot past ~1s; on
-/// timeout / spawn failure it degrades to `None`, never an error.
-fn detect_systemd_enabled() -> Option<bool> {
-    use std::sync::mpsc;
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let out = std::process::Command::new("systemctl")
-            .args(["--user", "is-enabled", service_unit::SYSTEMD_UNIT_NAME])
-            .output();
-        let _ = tx.send(out);
-    });
-    match rx.recv_timeout(Duration::from_secs(1)) {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            match stdout.trim() {
-                "enabled" | "enabled-runtime" => Some(true),
-                // Any other reported state (disabled/static/masked/not-found…)
-                // means it will NOT come back → ephemeral.
-                s if !s.is_empty() => Some(false),
-                _ => None,
-            }
-        }
-        // Systemctl absent (spawn error) or wedged (timeout) → unknown.
-        Ok(Err(_)) | Err(_) => None,
-    }
-}
-
 /// Boot-time configuration for a daemon instance.
 ///
 /// Carries the knobs that must be decided *per daemon* rather than read from
@@ -3159,7 +2373,7 @@ pub struct DaemonConfig {
     /// `PDO_PRICE_SYNC=off|0|""` disarms it.
     pub price_refresh_at_boot: bool,
     /// Release-source URL for the version check (#697); `None` →
-    /// [`update_check::RELEASE_SOURCE_URL_DEFAULT`]. `Some(url)` points the check at
+    /// the shipped GitHub Releases endpoint. `Some(url)` points the check at
     /// a local fixture, same seam as [`Self::price_source_url`].
     pub update_source_url: Option<String>,
     /// Run the boot check + 6 h periodic version-check loop. `true` in production;
@@ -3171,10 +2385,10 @@ pub struct DaemonConfig {
     /// Env: `PDO_UPDATE_EXECUTOR`. Tests point it at a fixture script.
     pub update_executor_override: Option<String>,
     /// Forced installation method (#699); `None` → detected. Env: `PDO_INSTALL_METHOD`.
-    pub install_method_override: Option<update_check::InstallMethod>,
+    pub install_method_override: Option<pdo_platform::domain::install::InstallMethod>,
     /// Forced supervision (#699); `None` → detected from `INVOCATION_ID` /
     /// `XPC_SERVICE_NAME`. No env seam: a test sets those variables on a real binary.
-    pub supervision_override: Option<update_check::Supervision>,
+    pub supervision_override: Option<pdo_platform::domain::install::Supervision>,
     /// The daemon's own command line for an unsupervised relaunch (#699), argv form.
     /// `daemon_cli_config` fills it; `None` → `<stable exe> daemon --port <bound port>`.
     pub relaunch_command: Option<Vec<String>>,
@@ -3227,18 +2441,42 @@ pub struct DaemonConfig {
     pub router_layer: Option<RouterLayer>,
 }
 
-/// A transformation of the daemon's router, applied once at boot (see
-/// [`DaemonConfig::router_layer`]).
+/// What the composition root plugs into the legacy daemon at boot (see
+/// [`DaemonConfig::router_layer`]): a transformation of the assembled router,
+/// and — for the daemon itself — the wiring of the bounded contexts already
+/// extracted from this crate.
 #[derive(Clone)]
-pub struct RouterLayer(Arc<dyn Fn(Router) -> Router + Send + Sync>);
+pub struct RouterLayer {
+    wrap: Arc<dyn Fn(Router) -> Router + Send + Sync>,
+    contexts: Option<WireContexts>,
+}
+
+/// Wire the extracted contexts over the daemon's resources.
+pub type WireContexts = Arc<dyn Fn(ContextResources) -> Contexts + Send + Sync>;
 
 impl RouterLayer {
     pub fn new(layer: impl Fn(Router) -> Router + Send + Sync + 'static) -> Self {
-        Self(Arc::new(layer))
+        Self {
+            wrap: Arc::new(layer),
+            contexts: None,
+        }
+    }
+
+    /// The same layer, wiring the extracted contexts with `wire`.
+    pub fn with_contexts(
+        mut self,
+        wire: impl Fn(ContextResources) -> Contexts + Send + Sync + 'static,
+    ) -> Self {
+        self.contexts = Some(Arc::new(wire));
+        self
     }
 
     pub fn apply(&self, router: Router) -> Router {
-        (self.0)(router)
+        (self.wrap)(router)
+    }
+
+    fn contexts(&self) -> Option<WireContexts> {
+        self.contexts.clone()
     }
 }
 
@@ -3301,17 +2539,16 @@ impl DaemonConfig {
             // Core daemon behaviour; the `update_check` SETTING is the user's
             // off switch, not an env var. Only the layer-3 literals opt out.
             run_update_check_loop: true,
-            update_executor_override: std::env::var(update_executor::EXECUTOR_OVERRIDE_ENV)
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
-            install_method_override: std::env::var(update_executor::INSTALL_METHOD_OVERRIDE_ENV)
-                .ok()
-                .and_then(|v| match v.trim() {
-                    "homebrew" => Some(update_check::InstallMethod::Homebrew),
-                    "script" => Some(update_check::InstallMethod::Script),
-                    "unknown" => Some(update_check::InstallMethod::Unknown),
-                    _ => None,
-                }),
+            update_executor_override: std::env::var(
+                pdo_platform::adapters::detached_executor::EXECUTOR_OVERRIDE_ENV,
+            )
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
+            install_method_override: std::env::var(
+                pdo_platform::adapters::detached_executor::INSTALL_METHOD_OVERRIDE_ENV,
+            )
+            .ok()
+            .and_then(|v| pdo_platform::domain::install::InstallMethod::parse(&v)),
             supervision_override: None,
             relaunch_command: None,
             // No env seam: the loop is core daemon behaviour; only the layer-3
@@ -3350,13 +2587,10 @@ pub fn advertised_url(bound_addr: std::net::SocketAddr) -> String {
     }
 }
 
-pub async fn serve(addr: SocketAddr, repo_root: PathBuf) -> Result<DaemonHandle> {
-    serve_with_config(addr, repo_root, DaemonConfig::from_env()).await
-}
-
-/// Like [`serve`], but takes an explicit [`DaemonConfig`] instead of reading the
-/// environment. Tests use this to seed a per-daemon `tmux_cmd_override` without
-/// mutating process-global env.
+/// Start the legacy daemon with an explicit [`DaemonConfig`]. Its
+/// [`DaemonConfig::router_layer`] must carry the context wiring of the
+/// composition root (`pdo::serve`, `pdo::composed_router_layer`). Tests use this
+/// to seed a per-daemon `tmux_cmd_override` without mutating process-global env.
 pub async fn serve_with_config(
     addr: SocketAddr,
     repo_root: PathBuf,
@@ -3450,69 +2684,87 @@ pub async fn serve_with_config(
         .local_addr()
         .context("failed to read bound local addr")?;
 
-    // Computed ONCE at boot and cached in `AppState`, so `GET /sessions` never
-    // shells out per poll.
-    let service_health = Arc::new(match config.service_health_override {
-        Some(o) => o.into_health(),
-        None => compute_service_health(),
-    });
-
     // Captured before `config` is consumed into `AppState` below.
     let run_trigger_scheduler_loop = config.run_trigger_scheduler_loop;
     let run_update_check_loop = config.run_update_check_loop;
     let nested_daemon = config.nested_daemon;
     let router_layer = config.router_layer.clone();
-
-    let state = Arc::new(AppState {
-        db,
-        event_tx,
-        pipeline_tx,
-        repo_root,
+    let wire_contexts = router_layer
+        .as_ref()
+        .and_then(RouterLayer::contexts)
+        .context(
+            "the daemon runs under the composition root (`pdo::serve`), which wires its \
+             bounded contexts: no context wiring was given",
+        )?;
+    // The contexts are wired over the daemon's resources, and the ports they
+    // need from the legacy side (the Runs, the settings) reach back into the
+    // state being built — hence the cyclic construction.
+    let mut contexts_router: Option<Router> = None;
+    let resources = ContextResourcesSeed {
+        db: db.clone(),
+        repo_root: repo_root.clone(),
         port: bound_addr.port(),
-        merge_lock: tokio::sync::Mutex::new(()),
-        page_mount_lock: tokio::sync::Mutex::new(()),
-        admission_lock: tokio::sync::Mutex::new(()),
-        trigger_tick_lock: tokio::sync::Mutex::new(()),
-        recent_writes,
-        run_watcher: run_watcher.clone(),
-        tmux_cmd_override: config.tmux_cmd_override,
-        docker_cmd_override: config.docker_cmd_override,
-        sandbox_home_override: config.sandbox_home_override,
-        last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        panic_on_trigger_name: config.panic_on_trigger_name,
-        last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
-        shared_terminals: Default::default(),
-        panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
-            config.panic_on_stale_sweep,
-        )),
-        panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
-        node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
-        node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        service_health,
-        docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-        harness_catalogue: Arc::new(
-            pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-        ),
-        price_sync_lock: tokio::sync::Mutex::new(()),
-        price_source_url: config.price_source_url,
-        price_refresh_at_boot: config.price_refresh_at_boot,
-        update_source_url: config.update_source_url,
-        update_cache: tokio::sync::Mutex::new(None),
-        update_check_lock: tokio::sync::Mutex::new(()),
-        update_releases: tokio::sync::Mutex::new(None),
-        update_executor_override: config.update_executor_override,
+        home_root: config
+            .sandbox_home_override
+            .clone()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from)),
+        update_source_url: config.update_source_url.clone(),
+        update_executor_override: config.update_executor_override.clone(),
         install_method_override: config.install_method_override,
         supervision_override: config.supervision_override,
-        relaunch_command: config.relaunch_command,
-        update_apply_lock: tokio::sync::Mutex::new(()),
-        allowed_ws_origins: config.allowed_ws_origins,
-        libassist_focus: Mutex::new(None),
+        relaunch_command: config.relaunch_command.clone(),
+        service_health_override: config.service_health_override,
+    };
+
+    let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
+        let wired = wire_contexts(resources.into_resources(weak.clone()));
+        contexts_router = Some(wired.router);
+        AppState {
+            platform: wired.platform,
+            db,
+            event_tx,
+            pipeline_tx,
+            repo_root,
+            port: bound_addr.port(),
+            merge_lock: tokio::sync::Mutex::new(()),
+            admission_lock: tokio::sync::Mutex::new(()),
+            trigger_tick_lock: tokio::sync::Mutex::new(()),
+            recent_writes,
+            run_watcher: run_watcher.clone(),
+            tmux_cmd_override: config.tmux_cmd_override,
+            docker_cmd_override: config.docker_cmd_override,
+            sandbox_home_override: config.sandbox_home_override,
+            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            panic_on_trigger_name: config.panic_on_trigger_name,
+            last_stale_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            blocked_on_limit: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            shared_terminals: Default::default(),
+            panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
+                config.panic_on_stale_sweep,
+            )),
+            panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
+            node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
+            node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue: Arc::new(
+                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
+            ),
+            price_sync_lock: tokio::sync::Mutex::new(()),
+            price_source_url: config.price_source_url,
+            price_refresh_at_boot: config.price_refresh_at_boot,
+            allowed_ws_origins: config.allowed_ws_origins,
+            libassist_focus: Mutex::new(None),
+        }
     });
+    state
+        .platform
+        .init()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to create the platform tables: {e}"))?;
 
     // A nested daemon suppresses every AUTOMATIC cleanup pathway, so a Tester or
     // Implementer that accidentally runs `pdo daemon` can't trigger reaper-based
@@ -3534,7 +2786,12 @@ pub async fn serve_with_config(
         boot_recovery::run_boot_recovery(&state).await;
     }
 
-    let app = build_router(state.clone());
+    // The router of each extracted context joins the legacy one before the
+    // composition root's layer (`identify`) wraps them all.
+    let mut app = build_router(state.clone());
+    if let Some(router) = contexts_router {
+        app = app.merge(router);
+    }
     let app = match &router_layer {
         Some(layer) => layer.apply(app),
         None => app,
@@ -3673,24 +2930,7 @@ pub async fn serve_with_config(
     // Version check (#697): load the on-disk cache so `GET /update` answers from
     // it immediately, then boot check + 6 h loop — detached, like the price
     // refresh, so a slow GitHub never delays the first `accept()`.
-    {
-        let update_state = state.clone();
-        tokio::spawn(async move {
-            load_update_cache(&update_state).await;
-            if !run_update_check_loop {
-                return;
-            }
-            let mut ticker = tokio::time::interval(update_check::UPDATE_CHECK_INTERVAL);
-            loop {
-                ticker.tick().await; // fires immediately: this IS the boot check
-                let s = update_state.clone();
-                run_isolated("update check", async move {
-                    periodic_update_check(&s).await;
-                })
-                .await;
-            }
-        });
-    }
+    state.platform.start_update_checks(run_update_check_loop);
 
     // Warm the harness-catalogue cache at boot, detached for the same reason as
     // the price refresh: probing every harness's `--help`/`--version` must not
@@ -3739,8 +2979,8 @@ pub fn daemon_cli_config(bind: Option<IpAddr>, port: u16) -> DaemonConfig {
     // #699: the command line an unsupervised update relaunches — the STABLE binary
     // path (Homebrew's `bin/pdo`, not the Cellar target `brew upgrade` deletes) and
     // the same port, whether it came from `--port` or `PDO_PORT`.
-    config.relaunch_command =
-        update_check::invoked_exe_path().map(|exe| daemon_relaunch_command(&exe, bind, port));
+    config.relaunch_command = pdo_platform::adapters::host_installation::invoked_exe_path()
+        .map(|exe| daemon_relaunch_command(&exe, bind, port));
     config
 }
 
@@ -4430,7 +3670,7 @@ async fn guard_test(
 
 async fn create_trigger(
     State(state): State<Arc<AppState>>,
-    actor: audit_log::Actor,
+    actor: OriginHint,
     Json(req): Json<CreateTriggerRequest>,
 ) -> Response {
     if req.name.trim().is_empty() {
@@ -4582,18 +3822,18 @@ async fn create_trigger(
                 "trigger_id": trigger.id,
             }));
             // Audit AFTER the row committed (ADR-0044 §2·B — never over-report).
-            audit_log::record_best_effort(
-                &state.db,
-                audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "trigger.created".to_string(),
                     target_kind: Some("trigger".to_string()),
                     target_id: Some(trigger.id.clone()),
                     before: None,
                     after: serde_json::to_value(&trigger).ok(),
-                },
-            )
-            .await;
+                })
+                .await;
             (StatusCode::CREATED, Json(trigger)).into_response()
         }
         Err(e) => {
@@ -4643,7 +3883,7 @@ async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
 async fn delete_trigger(
     State(state): State<Arc<AppState>>,
     AxumPath(trigger_id): AxumPath<String>,
-    actor: audit_log::Actor,
+    actor: OriginHint,
 ) -> Response {
     // Read the "before" snapshot HERE, before the row is gone: `delete` returns
     // `bool`, never the row, so a later read would leave the audit a dead UUID.
@@ -4657,18 +3897,18 @@ async fn delete_trigger(
                 "type": "trigger_deleted",
                 "trigger_id": trigger_id,
             }));
-            audit_log::record_best_effort(
-                &state.db,
-                audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "trigger.deleted".to_string(),
                     target_kind: Some("trigger".to_string()),
                     target_id: Some(trigger_id.clone()),
                     before: before.as_ref().and_then(|t| serde_json::to_value(t).ok()),
                     after: None,
-                },
-            )
-            .await;
+                })
+                .await;
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => (
@@ -4777,7 +4017,7 @@ struct PatchTriggerRequest {
 async fn patch_trigger(
     State(state): State<Arc<AppState>>,
     AxumPath(trigger_id): AxumPath<String>,
-    actor: audit_log::Actor,
+    actor: OriginHint,
     Json(req): Json<PatchTriggerRequest>,
 ) -> Response {
     let existing = match trigger_store::get(&state.db, &trigger_id).await {
@@ -5022,18 +4262,18 @@ async fn patch_trigger(
             // Persist BOTH snapshots (ADR-0044 §2·D): "a patch happened" cannot tell
             // a manual `enabled:false` from a cron edit unless before→after is on the
             // row.
-            audit_log::record_best_effort(
-                &state.db,
-                audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "trigger.updated".to_string(),
                     target_kind: Some("trigger".to_string()),
                     target_id: Some(trigger_id.clone()),
                     before: serde_json::to_value(&existing).ok(),
                     after: serde_json::to_value(&updated).ok(),
-                },
-            )
-            .await;
+                })
+                .await;
             Json(updated).into_response()
         }
         _ => (
@@ -5058,47 +4298,6 @@ async fn list_trigger_fires(
             )
                 .into_response()
         }
-    }
-}
-
-/// `GET /audit` — the out-of-Run audit feed (ADR-0044). All filters are OPTIONAL;
-/// with none, a global newest-first feed. `from`/`to` bound a half-open
-/// `[from, to)` ISO-8601 window.
-#[derive(Debug, Deserialize)]
-struct AuditQuery {
-    #[serde(default)]
-    from: Option<String>,
-    #[serde(default)]
-    to: Option<String>,
-    #[serde(default)]
-    target_kind: Option<String>,
-    #[serde(default)]
-    target_id: Option<String>,
-    #[serde(default = "default_audit_limit")]
-    limit: i64,
-}
-
-fn default_audit_limit() -> i64 {
-    200
-}
-
-async fn get_audit(State(state): State<Arc<AppState>>, Query(q): Query<AuditQuery>) -> Response {
-    match audit_log::list(
-        &state.db,
-        q.from.as_deref(),
-        q.to.as_deref(),
-        q.target_kind.as_deref(),
-        q.target_id.as_deref(),
-        q.limit,
-    )
-    .await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("audit list: {e}") })),
-        )
-            .into_response(),
     }
 }
 
@@ -5237,14 +4436,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(create_run).route_layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .route("/runs", get(list_runs))
-        .route("/pages", get(list_page_mounts).post(create_page_mount))
-        .route("/pages/", get(list_page_mounts))
-        .route(
-            "/pages/{name}",
-            get(redirect_page_mount).delete(delete_page_mount),
-        )
-        .route("/pages/{name}/", get(serve_page_mount_root))
-        .route("/pages/{name}/{*path}", get(serve_page_mount_file))
         // Static path — must stay declared before `/runs/{run_id}`.
         .route("/runs/reapable", get(list_reapable_runs))
         .route("/sessions", get(sessions))
@@ -5404,11 +4595,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         //
         // Price sync (ADR-0034) — the ONLY route in the crate that reaches the network.
         .route("/settings/cost-prices/sync", post(sync_cost_prices))
-        .route("/update", get(get_update_status))
-        .route("/update/check", post(check_update_now))
-        .route("/update/changelog", get(get_update_changelog))
-        .route("/update/apply", post(apply_update))
-        .route("/update/attempts/{id}/log", get(get_update_attempt_log))
         .route(
             "/settings/agent-profiles",
             get(list_agent_profiles).post(create_agent_profile),
@@ -5511,7 +4697,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::delete(stats_absorption::delete_absorption_member),
         )
         // Out-of-Run audit feed (ADR-0044).
-        .route("/audit", get(get_audit))
         // Projets (ADR-0046) — the group-header pencil's CRUD and the middle tier of
         // the harness axis.
         .route("/projects", get(list_projects).post(create_project))
@@ -5552,271 +4737,6 @@ struct ProvisioningPreviewRequest {
 
 fn default_provisioning_git_ref() -> String {
     "HEAD".to_string()
-}
-
-#[derive(Deserialize)]
-struct CreatePageMountRequest {
-    name: String,
-    directory: PathBuf,
-}
-
-async fn list_page_mounts(State(state): State<Arc<AppState>>) -> Response {
-    match page_mount::list(&state.db).await {
-        Ok(mounts) => Json(mounts).into_response(),
-        Err(error) => {
-            error!("failed to list page mounts: {error}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "page mount storage error" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-async fn create_page_mount(
-    State(state): State<Arc<AppState>>,
-    actor: audit_log::Actor,
-    headers: HeaderMap,
-    Json(request): Json<CreatePageMountRequest>,
-) -> Response {
-    let _guard = state.page_mount_lock.lock().await;
-    let session = session_claim_from_headers(&headers);
-    if let Some(claim) = &session {
-        if let Err((status, body)) = verify_session_claim(&state, claim).await {
-            return (status, Json(body)).into_response();
-        }
-    }
-
-    let mount = match page_mount::create(
-        &state.db,
-        &request.name,
-        &request.directory,
-        session.as_ref().map(|claim| claim.run_id.as_str()),
-    )
-    .await
-    {
-        Ok(mount) => mount,
-        Err(page_mount::MountError::Invalid(message)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": message })),
-            )
-                .into_response()
-        }
-        Err(page_mount::MountError::Duplicate(name)) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("page mount `{name}` is already mounted")
-                })),
-            )
-                .into_response()
-        }
-        Err(page_mount::MountError::Database(error)) => {
-            error!("failed to create page mount: {error}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "page mount storage error" })),
-            )
-                .into_response();
-        }
-    };
-
-    if let Err(error) = record_page_mount_mutation(
-        &state,
-        actor,
-        session.as_ref(),
-        "page_mount.mounted",
-        None,
-        Some(serde_json::json!(mount)),
-    )
-    .await
-    {
-        if let Err(rollback_error) = page_mount::remove(&state.db, &mount.name).await {
-            error!(
-                "failed to roll back page mount {} after event error: {rollback_error}",
-                mount.name
-            );
-        }
-        error!("failed to record page mount event: {error:#}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "page mount event log error" })),
-        )
-            .into_response();
-    }
-    (StatusCode::CREATED, Json(mount)).into_response()
-}
-
-async fn delete_page_mount(
-    State(state): State<Arc<AppState>>,
-    actor: audit_log::Actor,
-    headers: HeaderMap,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    let _guard = state.page_mount_lock.lock().await;
-    let session = session_claim_from_headers(&headers);
-    if let Some(claim) = &session {
-        if let Err((status, body)) = verify_session_claim(&state, claim).await {
-            return (status, Json(body)).into_response();
-        }
-    }
-
-    let mount = match page_mount::remove(&state.db, &name).await {
-        Ok(Some(mount)) => mount,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("page mount `{name}` not found") })),
-            )
-                .into_response()
-        }
-        Err(error) => {
-            error!("failed to remove page mount: {error}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "page mount storage error" })),
-            )
-                .into_response();
-        }
-    };
-
-    if let Err(error) = record_page_mount_mutation(
-        &state,
-        actor,
-        session.as_ref(),
-        "page_mount.unmounted",
-        Some(serde_json::json!(mount)),
-        None,
-    )
-    .await
-    {
-        if let Err(rollback_error) = page_mount::restore(&state.db, &mount).await {
-            error!(
-                "failed to restore page mount {} after event error: {rollback_error}",
-                mount.name
-            );
-        }
-        error!("failed to record page unmount event: {error:#}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "page mount event log error" })),
-        )
-            .into_response();
-    }
-    Json(mount).into_response()
-}
-
-async fn record_page_mount_mutation(
-    state: &AppState,
-    actor: audit_log::Actor,
-    session: Option<&SessionClaim>,
-    action: &str,
-    before: Option<serde_json::Value>,
-    after: Option<serde_json::Value>,
-) -> Result<()> {
-    let mount = before.as_ref().or(after.as_ref());
-    let name = mount
-        .and_then(|value| value.get("name"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    if let Some(claim) = session {
-        append_event(
-            state,
-            &event_log::Event {
-                id: None,
-                run_id: claim.run_id.clone(),
-                ts: pdo_kernel::clock::now_iso(),
-                kind: event_log::EventKind::CommandIssued,
-                node_id: Some(claim.node_id.clone()),
-                iter: None,
-                payload: Some(serde_json::json!({
-                    "command": action,
-                    "page_mount": mount,
-                })),
-            },
-        )
-        .await?;
-    } else {
-        audit_log::record_best_effort(
-            &state.db,
-            audit_log::NewAuditEntry {
-                actor_hint: actor.as_hint().to_string(),
-                action: action.to_string(),
-                target_kind: Some("page_mount".to_string()),
-                target_id: Some(name.to_string()),
-                before,
-                after,
-            },
-        )
-        .await;
-    }
-    Ok(())
-}
-
-async fn redirect_page_mount(
-    State(state): State<Arc<AppState>>,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    match page_mount::get(&state.db, &name).await {
-        Ok(Some(_)) => Redirect::permanent(&format!("/pages/{name}/")).into_response(),
-        Ok(None) => page_not_found(),
-        Err(error) => {
-            error!("failed to resolve page mount: {error}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
-async fn serve_page_mount_root(
-    State(state): State<Arc<AppState>>,
-    AxumPath(name): AxumPath<String>,
-) -> Response {
-    serve_page_mount(&state, &name, "").await
-}
-
-async fn serve_page_mount_file(
-    State(state): State<Arc<AppState>>,
-    AxumPath((name, path)): AxumPath<(String, String)>,
-) -> Response {
-    serve_page_mount(&state, &name, &path).await
-}
-
-async fn serve_page_mount(state: &AppState, name: &str, path: &str) -> Response {
-    let mount = match page_mount::get(&state.db, name).await {
-        Ok(Some(mount)) => mount,
-        Ok(None) => return page_not_found(),
-        Err(error) => {
-            error!("failed to resolve page mount: {error}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    let Some(opened) = page_mount::open_file(&mount, path) else {
-        return page_not_found();
-    };
-    let mime = mime_guess::from_path(&opened.mime_path).first_or_octet_stream();
-    let mut file = tokio::fs::File::from_std(opened.file);
-    let mut content = Vec::new();
-    if let Err(error) = file.read_to_end(&mut content).await {
-        error!("failed to read mounted page: {error}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, mime.as_ref())],
-        content,
-    )
-        .into_response()
-}
-
-fn page_not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        "page not found",
-    )
-        .into_response()
 }
 
 fn provisioning_rules_through_scope(
@@ -6314,14 +5234,8 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .await
         .context("failed to create sandbox_profiles table")?;
 
-    // The third journal (ADR-0044): out-of-Run config mutations, no `run_id`.
-    audit_log::init(db)
-        .await
-        .context("failed to create audit_log table")?;
-
-    page_mount::init(db)
-        .await
-        .context("failed to create page_mounts table")?;
+    // The audit journal (ADR-0044) and the page mounts belong to the platform
+    // context, which creates its own tables (`Platform::init`).
 
     // Materialised on demand — nothing seeded.
     project_store::init(db)
@@ -11379,7 +10293,7 @@ async fn sessions(State(state): State<Arc<AppState>>) -> Response {
         "live": live,
         "cap": cap,
         "version": env!("CARGO_PKG_VERSION"),
-        "service": &*state.service_health,
+        "service": state.platform.service_health(),
         "reaper": {
             "last_sweep_at": last_sweep_at,
             "killed": state.reaper_killed.load(ord),
@@ -11688,8 +10602,9 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     };
 
     let uc_stored = cfg.update_check.map(|v| v != 0);
-    let uc_env = update_check::env_update_check();
-    let uc_effective = update_check::update_check_with(cfg.update_check);
+    let uc_env = pdo_platform::adapters::env::env_update_check();
+    let uc_effective =
+        pdo_platform::domain::update_check::resolve_update_check(cfg.update_check, uc_env);
     let uc_source = if uc_stored.is_some() {
         "stored"
     } else if uc_env.is_some() {
@@ -11881,7 +10796,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             uc_source,
             uc_stored,
             uc_env,
-            update_check::UPDATE_CHECK_DEFAULT,
+            pdo_platform::domain::update_check::UPDATE_CHECK_DEFAULT,
         ),
         // #751: may an agent's `pdo review reply --resolved` resolve the comment
         // directly? Default OFF: the human resolves, the agent proposes (ADR-0067 §4).
@@ -12187,561 +11102,6 @@ async fn refresh_prices_at_boot(state: &Arc<AppState>) {
     }
 }
 
-/* ------------------------------------------------------------------------------------ */
-/* Version check (#697)                                                                  */
-/* ------------------------------------------------------------------------------------ */
-
-/// The release-source URL for this daemon: the per-daemon override (layer-3 seam)
-/// else the shipped GitHub Releases endpoint.
-fn update_source_url(state: &AppState) -> String {
-    state
-        .update_source_url
-        .clone()
-        .unwrap_or_else(|| update_check::RELEASE_SOURCE_URL_DEFAULT.to_string())
-}
-
-/// Is the version check on? `stored → env → default(true)`, read FRESH so a toggle
-/// takes effect on the next pass without a restart.
-async fn update_check_enabled(db: &sqlx::SqlitePool) -> bool {
-    let stored = instance_config::get(db)
-        .await
-        .ok()
-        .and_then(|c| c.update_check);
-    update_check::update_check_with(stored)
-}
-
-/// Load the on-disk cache into memory once (a no-op once something is loaded).
-async fn load_update_cache(state: &Arc<AppState>) {
-    let mut memo = state.update_cache.lock().await;
-    if memo.is_some() {
-        return;
-    }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(state) else {
-        return;
-    };
-    *memo = update_check::read_cache(&update_check::cache_path(&home));
-}
-
-/// One periodic pass: honours the setting and the interval, then checks.
-async fn periodic_update_check(state: &Arc<AppState>) {
-    if !update_check_enabled(&state.db).await {
-        return; // off: no request ever leaves the daemon
-    }
-    let fresh = state
-        .update_cache
-        .lock()
-        .await
-        .as_ref()
-        .is_some_and(|c| c.is_fresh(update_check::UPDATE_CHECK_INTERVAL));
-    if fresh {
-        return; // checked within the interval: the cache IS the answer
-    }
-    match perform_update_check(state).await {
-        Ok(_) => {}
-        Err(e) => warn!("update check: {e} — keeping the last known values"),
-    }
-}
-
-/// Hit the release source once and record the outcome — success or failure — in
-/// memory and on disk. `checked_at` moves either way; `latest_version` only on
-/// success (a failed check keeps the last good value, with the error beside it).
-///
-/// Returns the recorded cache on success, the error message on failure. Does NOT
-/// consult the setting: the callers do, each at its own edge.
-async fn perform_update_check(state: &Arc<AppState>) -> Result<update_check::UpdateCache, String> {
-    let Ok(_guard) = state.update_check_lock.try_lock() else {
-        return Err("a version check is already in flight".to_string());
-    };
-    let url = update_source_url(state);
-    let outcome = update_check::fetch_latest(&url).await;
-    let mut memo = state.update_cache.lock().await;
-    let mut cache = memo.clone().unwrap_or_default();
-    cache.schema = update_check::CACHE_SCHEMA.to_string();
-    cache.source = url.clone();
-    cache.checked_at = Some(pdo_kernel::clock::now_iso());
-    match &outcome {
-        Ok(latest) => {
-            cache.latest_version = Some(latest.clone());
-            cache.error = None;
-        }
-        Err(e) => {
-            cache.error = Some(format!("release source unreachable: {url}: {e}"));
-        }
-    }
-    if let Ok((home, _)) = sandbox_run::sandbox_home_roots(state) {
-        if let Err(e) = update_check::write_cache(&update_check::cache_path(&home), &cache) {
-            warn!("update check: cannot write the cache: {e}");
-        }
-    }
-    *memo = Some(cache.clone());
-    match outcome {
-        Ok(_) => Ok(cache),
-        Err(_) => Err(cache.error.clone().unwrap_or_default()),
-    }
-}
-
-/// Build the `GET /update` payload from the cache and the setting. When the check is
-/// off, `latest_version` is `null` whatever the cache holds — never a stale claim
-/// the user asked us not to make — and `reason` says why.
-async fn update_status_view(state: &Arc<AppState>) -> serde_json::Value {
-    let enabled = update_check_enabled(&state.db).await;
-    let cache = state.update_cache.lock().await.clone();
-    let installed = env!("CARGO_PKG_VERSION");
-    let url = update_source_url(state);
-    let method = effective_install_method(state);
-    let supervision = effective_supervision(state);
-    let active_runs = count_live_runs(state).await;
-    let last_attempt = read_last_attempt(state);
-    let (can_apply, apply_blocked_reason) = apply_gate(method, last_attempt.as_ref());
-
-    let (latest, checked_at, error, reason): (
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<&str>,
-    ) = match (&enabled, &cache) {
-        (false, c) => (
-            None,
-            c.as_ref().and_then(|c| c.checked_at.clone()),
-            None,
-            Some("Update check is off."),
-        ),
-        (true, None) => (None, None, None, Some("Not checked yet.")),
-        (true, Some(c)) => {
-            let reason = if c.latest_version.is_none() {
-                if c.error.is_some() {
-                    Some("Release source unreachable at last check.")
-                } else {
-                    Some("Not checked yet.")
-                }
-            } else {
-                None
-            };
-            (
-                c.latest_version.clone(),
-                c.checked_at.clone(),
-                c.error.clone(),
-                reason,
-            )
-        }
-    };
-    let newer = latest
-        .as_deref()
-        .is_some_and(|l| update_check::is_newer(installed, l));
-    serde_json::json!({
-        "installed_version": installed,
-        "latest_version": latest,
-        "newer_available": newer,
-        "checked_at": checked_at,
-        "source": update_check::source_label(&url),
-        "source_url": url,
-        "check_enabled": enabled,
-        "install_method": method,
-        "manual_command": method.manual_command(),
-        "supervision": supervision,
-        "reason": reason,
-        "last_error": error,
-        "active_runs": active_runs,
-        "can_apply": can_apply,
-        "apply_blocked_reason": apply_blocked_reason,
-        "last_attempt": last_attempt,
-    })
-}
-
-/* ------------------------------------------------------------------------------------ */
-/* Update executor (#699)                                                                */
-/* ------------------------------------------------------------------------------------ */
-
-/// The installation method this daemon delegates to: the per-daemon override (layer-3
-/// seam, FP container) else the detection over the binary path and the receipt.
-fn effective_install_method(state: &AppState) -> update_check::InstallMethod {
-    state
-        .install_method_override
-        .unwrap_or_else(update_check::detect_install_method_from_env)
-}
-
-/// Who restarts the daemon: override else the supervisor's env.
-fn effective_supervision(state: &AppState) -> update_check::Supervision {
-    state
-        .supervision_override
-        .unwrap_or_else(update_check::detect_supervision_from_env)
-}
-
-/// Live Runs (`Running` / `AwaitingUser` / `Paused`) — what the confirm dialog
-/// counts. Informational only: an update is never refused for active Runs (the
-/// daemon restarts, tmux sessions survive — `KillMode=process`).
-async fn count_live_runs(state: &AppState) -> usize {
-    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
-        return 0;
-    };
-    let mut live = 0;
-    for run_id in run_ids {
-        let Ok(events) = load_events(&state.db, &run_id).await else {
-            continue;
-        };
-        if let Some(run_state) = event_log::project(&events) {
-            if run_state.status.is_live() {
-                live += 1;
-            }
-        }
-    }
-    live
-}
-
-/// The last attempt record, from `<home>/.pdo/update/last-attempt.json`.
-fn read_last_attempt(state: &AppState) -> Option<update_executor::UpdateAttempt> {
-    let (home, _) = sandbox_run::sandbox_home_roots(state).ok()?;
-    update_executor::read_attempt(&update_executor::attempt_path(&home))
-}
-
-/// A `running` attempt is considered stale — the daemon it belonged to is gone or the
-/// executor crashed without recording — after this long. Past it, apply is allowed
-/// again and the record is shown as failed.
-const ATTEMPT_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
-
-fn attempt_is_running(attempt: &update_executor::UpdateAttempt) -> bool {
-    if attempt.status != update_executor::AttemptStatus::Running {
-        return false;
-    }
-    let started = chrono::DateTime::parse_from_rfc3339(&attempt.started_at)
-        .ok()
-        .map(|d| d.with_timezone(&chrono::Utc));
-    match started {
-        Some(at) => {
-            chrono::Utc::now().signed_duration_since(at)
-                < chrono::Duration::from_std(ATTEMPT_STALE_AFTER)
-                    .unwrap_or_else(|_| chrono::Duration::minutes(30))
-        }
-        None => false,
-    }
-}
-
-/// Can `POST /update/apply` run? `unknown` method → no, with the reason (ADR-0045:
-/// declared absence, never a guess); an attempt still running → no.
-fn apply_gate(
-    method: update_check::InstallMethod,
-    last: Option<&update_executor::UpdateAttempt>,
-) -> (bool, Option<String>) {
-    if method == update_check::InstallMethod::Unknown {
-        return (
-            false,
-            Some(
-                "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist \
-                 receipt): PDO will not guess how to replace its own binary. Update manually, \
-                 then restart the daemon."
-                    .to_string(),
-            ),
-        );
-    }
-    if let Some(a) = last {
-        if attempt_is_running(a) {
-            return (
-                false,
-                Some(format!(
-                    "An update attempt ({}) is already running.",
-                    a.attempt_id
-                )),
-            );
-        }
-    }
-    (true, None)
-}
-
-/// `POST /update/apply` (#699) — spawn the detached executor and answer at once with
-/// the attempt id. 409 with the reason when the method is `unknown` or an attempt is
-/// running; 500 when the script cannot be written or spawned (the record then says
-/// `failed` with the error in the log). Never refused for active Runs.
-async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
-    let _serial = state.update_apply_lock.lock().await;
-    let method = effective_install_method(&state);
-    let supervision = effective_supervision(&state);
-    let last = read_last_attempt(&state);
-    let (ok, reason) = apply_gate(method, last.as_ref());
-    if !ok {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": reason,
-                "install_method": method,
-                "manual_command": method.manual_command(),
-            })),
-        )
-            .into_response();
-    }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(
-                serde_json::json!({ "error": "HOME is not set; cannot place the update journal" }),
-            ),
-        )
-            .into_response();
-    };
-    let attempt_id = update_executor::new_attempt_id();
-    let exe = update_check::invoked_exe_path().unwrap_or_else(|| PathBuf::from("pdo"));
-    let relaunch = state.relaunch_command.clone().unwrap_or_else(|| {
-        vec![
-            exe.display().to_string(),
-            "daemon".to_string(),
-            "--port".to_string(),
-            state.port.to_string(),
-        ]
-    });
-    let plan = update_executor::UpdatePlan {
-        attempt_id: attempt_id.clone(),
-        method,
-        supervision,
-        exe,
-        port: state.port,
-        bind: update_executor::explicit_bind_from_relaunch(&relaunch),
-        working_dir: state.repo_root.clone(),
-        daemon_pid: std::process::id(),
-        relaunch,
-        log_path: update_executor::log_path(&home, &attempt_id),
-        attempt_path: update_executor::attempt_path(&home),
-        from_version: env!("CARGO_PKG_VERSION").to_string(),
-    };
-    let mut attempt = update_executor::UpdateAttempt {
-        schema: update_executor::ATTEMPT_SCHEMA.to_string(),
-        attempt_id: attempt_id.clone(),
-        status: update_executor::AttemptStatus::Running,
-        started_at: pdo_kernel::clock::now_iso(),
-        finished_at: None,
-        exit_code: None,
-        method,
-        command: plan.upgrade_command().to_string(),
-        supervision,
-        log_path: plan.log_path.clone(),
-        from_version: plan.from_version.clone(),
-    };
-    let script_path = update_executor::script_path(&home, &attempt_id);
-    let spawned = (|| -> Result<std::process::Child, String> {
-        if let Some(dir) = script_path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&script_path, update_executor::render_update_script(&plan))
-            .map_err(|e| format!("cannot write {}: {e}", script_path.display()))?;
-        update_executor::write_attempt(&plan.attempt_path, &attempt)?;
-        update_executor::spawn_detached(
-            &plan,
-            &script_path,
-            state.update_executor_override.as_deref(),
-        )
-        .map_err(|e| format!("cannot spawn the update executor: {e}"))
-    })();
-    match spawned {
-        Ok(mut child) => {
-            info!(
-                "update {attempt_id}: executor spawned (pid {}), method {method:?}, supervision {supervision:?}, log {}",
-                child.id(),
-                plan.log_path.display()
-            );
-            // Reap the child if we outlive it (fixture executor, failed upgrade):
-            // record the exit code so a non-zero exit is visible in Settings even
-            // when the script died before its own `record`.
-            let attempt_path = plan.attempt_path.clone();
-            let id_for_wait = attempt_id.clone();
-            tokio::task::spawn_blocking(move || {
-                let Ok(status) = child.wait() else {
-                    return;
-                };
-                let code = status.code().unwrap_or(-1);
-                if let Some(mut a) = update_executor::read_attempt(&attempt_path) {
-                    if a.attempt_id != id_for_wait {
-                        return; // a newer attempt owns the record
-                    }
-                    a.exit_code = Some(code);
-                    a.finished_at.get_or_insert_with(pdo_kernel::clock::now_iso);
-                    a.status = if code == 0 {
-                        update_executor::AttemptStatus::Succeeded
-                    } else {
-                        update_executor::AttemptStatus::Failed
-                    };
-                    if let Err(e) = update_executor::write_attempt(&attempt_path, &a) {
-                        warn!("update {id_for_wait}: cannot record the exit: {e}");
-                    }
-                }
-            });
-            (
-                StatusCode::ACCEPTED,
-                Json(serde_json::json!({
-                    "attempt_id": attempt_id,
-                    "status": "running",
-                    "method": method,
-                    "command": plan.upgrade_command(),
-                    "supervision": supervision,
-                    "log_path": plan.log_path,
-                    "started_at": attempt.started_at,
-                    "from_version": plan.from_version,
-                })),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("update {attempt_id}: {e}");
-            attempt.status = update_executor::AttemptStatus::Failed;
-            attempt.finished_at = Some(pdo_kernel::clock::now_iso());
-            let _ = update_executor::write_attempt(&plan.attempt_path, &attempt);
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&plan.log_path)
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    writeln!(f, "== pdo update {attempt_id}: {e}")
-                });
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e, "attempt_id": attempt_id })),
-            )
-                .into_response()
-        }
-    }
-}
-
-/// `GET /update/attempts/{id}/log` (#699) — the executor's journal, `text/plain`.
-/// 404 when no such attempt was journaled here. The id is filesystem-safe by
-/// construction; anything else is refused before touching the disk.
-async fn get_update_attempt_log(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    if id.is_empty()
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return (StatusCode::BAD_REQUEST, "invalid attempt id").into_response();
-    }
-    let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "HOME is not set").into_response();
-    };
-    match std::fs::read_to_string(update_executor::log_path(&home, &id)) {
-        Ok(text) => (
-            StatusCode::OK,
-            [("content-type", "text/plain; charset=utf-8")],
-            text,
-        )
-            .into_response(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            (StatusCode::NOT_FOUND, "no log for this attempt").into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `GET /update` — the cached version-check state (#697). Reads the cache, never the
-/// network: two page loads are zero requests.
-async fn get_update_status(State(state): State<Arc<AppState>>) -> Response {
-    load_update_cache(&state).await;
-    Json(update_status_view(&state).await).into_response()
-}
-
-/// `POST /update/check` — force a check now (#697). Refused with 409 when the setting
-/// is off (the UI disables the button, a stale client is told) or when a check is
-/// already in flight. A failed fetch answers 502 **with the refreshed state**: the
-/// date moved, the last good version is kept, the error is in `last_error`.
-async fn check_update_now(State(state): State<Arc<AppState>>) -> Response {
-    load_update_cache(&state).await;
-    if !update_check_enabled(&state.db).await {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "the update check is off — turn it on to check now"
-            })),
-        )
-            .into_response();
-    }
-    match perform_update_check(&state).await {
-        Ok(_) => Json(update_status_view(&state).await).into_response(),
-        Err(e) if e.contains("already in flight") => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
-        Err(e) => {
-            let mut view = update_status_view(&state).await;
-            view["error"] = serde_json::json!(e);
-            (StatusCode::BAD_GATEWAY, Json(view)).into_response()
-        }
-    }
-}
-
-/// `GET /update/changelog` — the « What's new » document (#698): the release notes
-/// of every version strictly newer than the installed one, newest first, one `##`
-/// heading per version. The release list is fetched from the source on demand (and
-/// memoised per latest version); the payload says where its body comes from:
-///
-/// - `source: "releases"` — assembled from the missed releases;
-/// - `source: "embedded"`, `fallback_reason: null` — up to date, the embedded
-///   `CHANGELOG.md` is the nominal body;
-/// - `source: "embedded"`, `fallback_reason: "…"` — the list was NOT available
-///   (check off, source unreachable at last check, list fetch failed).
-///
-/// Never an error to the caller: the embedded changelog always answers.
-async fn get_update_changelog(State(state): State<Arc<AppState>>) -> Response {
-    load_update_cache(&state).await;
-    let installed = env!("CARGO_PKG_VERSION");
-    let enabled = update_check_enabled(&state.db).await;
-    let cache = state.update_cache.lock().await.clone();
-
-    if !enabled {
-        return Json(update_check::embedded_changelog(
-            installed,
-            None,
-            "The update check is off.",
-        ))
-        .into_response();
-    }
-    let latest = cache.as_ref().and_then(|c| c.latest_version.clone());
-    let Some(latest) = latest else {
-        let reason = match cache.as_ref().and_then(|c| c.error.as_deref()) {
-            Some(_) => "The release source was unreachable at the last check.",
-            None => "The release source has not been checked yet.",
-        };
-        return Json(update_check::embedded_changelog(installed, None, reason)).into_response();
-    };
-    if !update_check::is_newer(installed, &latest) {
-        // Up to date: nothing to assemble, the embedded changelog is the body.
-        return Json(update_check::assemble_changelog(
-            installed,
-            Some(&latest),
-            &[],
-        ))
-        .into_response();
-    }
-
-    let memo = state.update_releases.lock().await.clone();
-    let releases = match memo {
-        Some((for_latest, rels)) if for_latest == latest => Ok(rels),
-        _ => {
-            let url = update_check::releases_list_url(&update_source_url(&state));
-            let fetched = update_check::fetch_releases(&url).await;
-            if let Ok(rels) = &fetched {
-                *state.update_releases.lock().await = Some((latest.clone(), rels.clone()));
-            }
-            fetched.map_err(|e| format!("release list unavailable: {url}: {e}"))
-        }
-    };
-    match releases {
-        Ok(rels) => Json(update_check::assemble_changelog(
-            installed,
-            Some(&latest),
-            &rels,
-        ))
-        .into_response(),
-        Err(e) => {
-            warn!("update changelog: {e} — falling back to the embedded changelog");
-            Json(update_check::embedded_changelog(
-                installed,
-                Some(&latest),
-                "The release source was unreachable when loading the release notes.",
-            ))
-            .into_response()
-        }
-    }
-}
-
 /// `GET /settings` — the instance-wide config, per knob, as
 /// `{effective, source, stored, env, default}` (ADR-0015). `GET /sessions` stays the
 /// lean status-bar view.
@@ -12951,13 +11311,7 @@ async fn put_settings(
             // reads "Not checked yet since re-enabling." until it lands. Turning it
             // off needs nothing: the read path already answers `null` when off.
             if update_check_edit == Some(true) {
-                let s = state.clone();
-                tokio::spawn(async move {
-                    run_isolated("update check (re-enabled)", async move {
-                        let _ = perform_update_check(&s).await;
-                    })
-                    .await;
-                });
+                state.platform.check_for_update_in_background();
             }
             match build_settings_view(&state).await {
                 Ok(view) => Json(view).into_response(),
@@ -14484,7 +12838,7 @@ struct PauseTriggersRequest {
 /// orthogonal channels, which is what makes "restore the prior state on unpause" free.
 async fn pause_triggers(
     State(state): State<Arc<AppState>>,
-    actor: audit_log::Actor,
+    actor: OriginHint,
     Json(req): Json<PauseTriggersRequest>,
 ) -> Response {
     // This endpoint writes blind, so capture the "before" flag first or the audit
@@ -14496,18 +12850,18 @@ async fn pause_triggers(
                 "type": "triggers_paused",
                 "paused": req.paused,
             }));
-            audit_log::record_best_effort(
-                &state.db,
-                audit_log::NewAuditEntry {
+            state
+                .platform
+                .record_audit()
+                .execute(pdo_platform::domain::audit::NewAuditEntry {
                     actor_hint: actor.as_hint().to_string(),
                     action: "triggers.pause_changed".to_string(),
                     target_kind: Some("instance".to_string()),
                     target_id: None,
                     before: Some(serde_json::json!({ "paused": before })),
                     after: Some(serde_json::json!({ "paused": req.paused })),
-                },
-            )
-            .await;
+                })
+                .await;
             Json(serde_json::json!({ "ok": true, "paused": req.paused })).into_response()
         }
         Err(e) => (
@@ -21092,7 +19446,7 @@ async fn load_all_projected_runs(state: &AppState) -> Result<Vec<event_log::RunS
 /// skipped silently (idempotent): only the root itself being archived is a
 /// `409`, as before.
 async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
-    let _page_mount_guard = state.page_mount_lock.lock().await;
+    let _page_mount_guard = state.platform.release_run_pages().hold().await;
     let (_, run_state) = match load_projected(state, run_id).await {
         Ok(t) => t,
         Err(resp) => return *resp,
@@ -21175,7 +19529,7 @@ async fn archive_single_run(
 ) -> Result<(), Box<Response>> {
     let run_id = run_state.run_id.as_str();
 
-    if let Err(error) = page_mount::remove_for_run(&state.db, run_id).await {
+    if let Err(error) = state.platform.release_run_pages().execute(run_id).await {
         error!("cleanup_run: failed to remove page mounts for run {run_id}: {error}");
         return Err(Box::new(
             (
@@ -24068,6 +22422,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use pdo_platform::domain::service_health::ServiceHealth;
     use tower::util::ServiceExt;
 
     /// #541 — the startup banner must hand the user a URL the WS Origin guard
@@ -24753,6 +23108,81 @@ mod tests {
         );
     }
 
+    /// The platform context of a test state: its real SQLite and filesystem
+    /// adapters, no Run to verify a session against, no home to journal an
+    /// update in.
+    async fn test_platform(
+        db: &sqlx::SqlitePool,
+        health: Option<pdo_platform::domain::service_health::ServiceHealth>,
+    ) -> Arc<pdo_platform::Platform> {
+        use pdo_platform::adapters as a;
+        use pdo_platform::application::ports::{BoxFuture, Runs};
+
+        struct NoRuns;
+        impl Runs for NoRuns {
+            fn verify<'a>(
+                &'a self,
+                run_id: &'a str,
+                _: &'a str,
+            ) -> BoxFuture<'a, Result<(), String>> {
+                Box::pin(async move { Err(format!("no run `{run_id}` in a test state")) })
+            }
+            fn record_command<'a>(
+                &'a self,
+                _: &'a str,
+                _: &'a str,
+                _: &'a str,
+                _: serde_json::Value,
+            ) -> BoxFuture<'a, Result<(), String>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn count_live(&self) -> BoxFuture<'_, usize> {
+                Box::pin(async { 0 })
+            }
+        }
+
+        let platform = pdo_platform::Platform::new(
+            pdo_platform::PlatformPorts {
+                page_mounts: Arc::new(a::sqlite_page_mounts::SqlitePageMounts::new(db.clone())),
+                page_files: Arc::new(a::page_files::LocalPageFiles),
+                audit: Arc::new(a::sqlite_audit_log::SqliteAuditLog::new(db.clone())),
+                runs: Arc::new(NoRuns),
+                update_setting: Arc::new(contexts::LegacyUpdateSetting { db: db.clone() }),
+                release_source: Arc::new(a::github_releases::GithubReleases),
+                update_journal: Arc::new(a::fs_update_journal::FsUpdateJournal::new(None)),
+                installation: Arc::new(a::host_installation::HostInstallation::default()),
+                update_executor: Arc::new(a::detached_executor::DetachedExecutor::new(None)),
+                extensions: Arc::new(pdo_kernel::extension_host::NoExtensions),
+            },
+            pdo_platform::application::update_context::UpdateOptions::default(),
+            health.unwrap_or(pdo_platform::domain::service_health::ServiceHealth {
+                supervisor: "none".to_string(),
+                persistent: None,
+            }),
+        );
+        platform.init().await.unwrap();
+        platform
+    }
+
+    /// The audit rows of a test state, newest first, through the platform's
+    /// SQLite adapter.
+    async fn audit_rows(
+        state: &AppState,
+        target_kind: Option<&str>,
+        target_id: Option<&str>,
+    ) -> Vec<pdo_platform::domain::audit::AuditEntry> {
+        use pdo_platform::application::ports::AuditLog;
+        let filter = pdo_platform::domain::audit::AuditFilter {
+            target_kind: target_kind.map(str::to_string),
+            target_id: target_id.map(str::to_string),
+            ..Default::default()
+        };
+        pdo_platform::adapters::sqlite_audit_log::SqliteAuditLog::new(state.db.clone())
+            .list(&filter)
+            .await
+            .unwrap()
+    }
+
     async fn test_state() -> Arc<AppState> {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -24763,13 +23193,13 @@ mod tests {
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         Arc::new(AppState {
+            platform: test_platform(&db, None).await,
             db,
             event_tx,
             pipeline_tx,
             repo_root: std::env::current_dir().unwrap(),
             port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -24793,12 +23223,6 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default: tests that assert the `/sessions` service
-            // field build their own state via `test_state_with_service_health`.
-            service_health: Arc::new(ServiceHealth {
-                supervisor: "none".to_string(),
-                persistent: None,
-            }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -24806,15 +23230,6 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -29994,13 +28409,13 @@ mod tests {
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         Arc::new(AppState {
+            platform: test_platform(&db, Some(service_health)).await,
             db,
             event_tx,
             pipeline_tx,
             repo_root: std::env::current_dir().unwrap(),
             port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -30021,7 +28436,6 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            service_health: Arc::new(service_health),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -30029,15 +28443,6 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -30656,33 +29061,6 @@ mod tests {
             json["service"]["persistent"].is_null(),
             "unknown persistence must serialize as null, not an error or false"
         );
-    }
-
-    #[test]
-    fn service_health_override_maps_to_persistence_bit() {
-        // The PDO_SERVICE_HEALTH observation seam (#156, D5).
-        assert_eq!(
-            ServiceHealthOverride::parse("ephemeral")
-                .unwrap()
-                .into_health()
-                .persistent,
-            Some(false)
-        );
-        assert_eq!(
-            ServiceHealthOverride::parse("PERSISTENT")
-                .unwrap()
-                .into_health()
-                .persistent,
-            Some(true)
-        );
-        assert_eq!(
-            ServiceHealthOverride::parse("unknown")
-                .unwrap()
-                .into_health()
-                .persistent,
-            None
-        );
-        assert!(ServiceHealthOverride::parse("garbage").is_none());
     }
 
     #[tokio::test]
@@ -36022,13 +34400,13 @@ mod tests {
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         Arc::new(AppState {
+            platform: test_platform(&db, None).await,
             db,
             event_tx,
             pipeline_tx,
             repo_root: dir.to_path_buf(),
             port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -36052,12 +34430,6 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default: tests that assert the `/sessions` service
-            // field build their own state via `test_state_with_service_health`.
-            service_health: Arc::new(ServiceHealth {
-                supervisor: "none".to_string(),
-                persistent: None,
-            }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -36065,15 +34437,6 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -36399,9 +34762,7 @@ mod tests {
         let state = test_state_with_dir(tmp.path()).await;
         let id = create_trigger_ok(&state, tmp.path()).await;
 
-        let rows = audit_log::list(&state.db, None, None, None, None, 200)
-            .await
-            .unwrap();
+        let rows = audit_rows(&state, None, None).await;
         assert_eq!(rows.len(), 1, "create leaves exactly one audit row");
         let e = &rows[0];
         assert_eq!(e.action, "trigger.created");
@@ -36442,9 +34803,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-        let rows = audit_log::list(&state.db, None, None, Some("trigger"), Some(&id), 200)
-            .await
-            .unwrap();
+        let rows = audit_rows(&state, Some("trigger"), Some(&id)).await;
         let del = rows
             .iter()
             .find(|e| e.action == "trigger.deleted")
@@ -36490,9 +34849,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let rows = audit_log::list(&state.db, None, None, Some("trigger"), Some(&id), 200)
-            .await
-            .unwrap();
+        let rows = audit_rows(&state, Some("trigger"), Some(&id)).await;
         let upd = rows
             .iter()
             .find(|e| e.action == "trigger.updated")
@@ -36535,9 +34892,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let rows = audit_log::list(&state.db, None, None, Some("instance"), None, 200)
-            .await
-            .unwrap();
+        let rows = audit_rows(&state, Some("instance"), None).await;
         let p = rows
             .iter()
             .find(|e| e.action == "triggers.pause_changed")
@@ -39118,350 +37473,6 @@ edges:
         assert!(
             session_env_claim().is_none(),
             "no env vars ⇒ out of session"
-        );
-    }
-
-    // --- Layer 3a: `run_service` against a recording fake env (#156, D4).
-    // No real systemctl/launchctl, no ~/.config touched.
-
-    /// A recording [`ServiceEnv`]: fixed identity, configurable port state, real
-    /// file writes into an injected (temp) config home, and a command log.
-    struct FakeServiceEnv {
-        exe: PathBuf,
-        cwd: PathBuf,
-        node_dir: Option<PathBuf>,
-        config_home: PathBuf,
-        home: PathBuf,
-        user: String,
-        port_state: PortState,
-        commands: std::cell::RefCell<Vec<(String, Vec<String>)>>,
-    }
-
-    impl FakeServiceEnv {
-        fn new(config_home: PathBuf, port_state: PortState) -> Self {
-            Self {
-                exe: PathBuf::from("/home/user/.local/bin/pdo"),
-                cwd: PathBuf::from("/home/user/.pdo/app"),
-                node_dir: Some(PathBuf::from("/opt/node/bin")),
-                config_home,
-                home: PathBuf::from("/home/user"),
-                user: "user".to_string(),
-                port_state,
-                commands: std::cell::RefCell::new(Vec::new()),
-            }
-        }
-
-        fn command_log(&self) -> Vec<(String, Vec<String>)> {
-            self.commands.borrow().clone()
-        }
-    }
-
-    impl ServiceEnv for FakeServiceEnv {
-        fn current_exe(&self) -> Result<PathBuf> {
-            Ok(self.exe.clone())
-        }
-        fn current_dir(&self) -> Result<PathBuf> {
-            Ok(self.cwd.clone())
-        }
-        fn node_dir(&self) -> Option<PathBuf> {
-            self.node_dir.clone()
-        }
-        fn config_home(&self) -> Result<PathBuf> {
-            Ok(self.config_home.clone())
-        }
-        fn home(&self) -> Result<PathBuf> {
-            Ok(self.home.clone())
-        }
-        fn user(&self) -> Result<String> {
-            Ok(self.user.clone())
-        }
-        fn probe_port(&self, _addr: SocketAddr) -> PortState {
-            self.port_state.clone()
-        }
-        fn write_file(&self, path: &Path, contents: &str) -> Result<()> {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(path, contents)?;
-            Ok(())
-        }
-        fn remove_file(&self, path: &Path) -> Result<()> {
-            match std::fs::remove_file(path) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(e.into()),
-            }
-        }
-        fn run_cmd(&self, program: &str, args: &[&str]) -> Result<CmdOutcome> {
-            self.commands.borrow_mut().push((
-                program.to_string(),
-                args.iter().map(|s| s.to_string()).collect(),
-            ));
-            Ok(CmdOutcome {
-                success: true,
-                stdout: String::new(),
-                stderr: String::new(),
-            })
-        }
-    }
-
-    /// #699: the unit carries the path it was GIVEN — Homebrew's stable `bin/pdo`
-    /// symlink — verbatim, never the resolved `Cellar/pdo/<version>/` target that
-    /// `brew upgrade` deletes. `--dry-run` on such an install shows `bin/pdo`.
-    #[test]
-    fn service_install_writes_the_given_stable_path_verbatim() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let mut env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        env.exe = PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo");
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 5172,
-                dry_run: true,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-        let s = String::from_utf8(out).unwrap();
-        if cfg!(target_os = "macos") {
-            assert!(s.contains("<string>/home/linuxbrew/.linuxbrew/bin/pdo</string>"));
-        } else {
-            assert!(
-                s.contains("ExecStart=/home/linuxbrew/.linuxbrew/bin/pdo daemon"),
-                "the stable path, verbatim: {s}"
-            );
-            assert!(s.contains("Environment=PATH=/home/linuxbrew/.linuxbrew/bin:"));
-        }
-        assert!(!s.contains("Cellar"), "never the versioned target: {s}");
-    }
-
-    #[test]
-    fn service_dry_run_is_side_effect_free_and_prints_unit_and_plan() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 6183,
-                dry_run: true,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-        let s = String::from_utf8(out).unwrap();
-        // The systemd path prints on Linux CI; assert the load-bearing lines.
-        if !cfg!(target_os = "macos") {
-            assert!(s.contains("KillMode=process"), "unit missing KillMode: {s}");
-            assert!(s.contains("Environment=PDO_PORT=6183"));
-            assert!(!s.contains("Environment=PDO_BIND="));
-            assert!(s.contains("ExecStart=/home/user/.local/bin/pdo daemon"));
-            assert!(s.contains("WorkingDirectory=/home/user/.pdo/app"));
-            // Command plan, in order.
-            assert!(s.contains("systemctl --user daemon-reload"));
-            assert!(s.contains("loginctl enable-linger user"));
-            assert!(s.contains("systemctl --user enable --now pdo"));
-        }
-        // No command was run and no unit file was written (side-effect-free).
-        assert!(env.command_log().is_empty(), "dry-run ran commands!");
-        assert!(
-            !service_unit::systemd_unit_path(tmp.path()).exists(),
-            "dry-run wrote the unit file!"
-        );
-    }
-
-    #[test]
-    fn service_dry_run_carries_bind_and_the_harness_path_comment() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: Some("127.0.0.1".parse().unwrap()),
-                port: 6183,
-                dry_run: true,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-        let s = String::from_utf8(out).unwrap();
-        if cfg!(target_os = "macos") {
-            assert!(s.contains("<key>PDO_BIND</key><string>127.0.0.1</string>"));
-        } else {
-            assert!(s.contains("Environment=PDO_BIND=127.0.0.1"));
-        }
-        assert!(s.contains("interactive shell PATH (ADR-0055)"));
-    }
-
-    #[test]
-    fn service_conflict_probe_uses_the_effective_bind_address() {
-        assert_eq!(
-            service_addr(Some("192.0.2.10".parse().unwrap()), 6183),
-            "192.0.2.10:6183".parse().unwrap()
-        );
-        assert_eq!(
-            service_addr(Some("0.0.0.0".parse().unwrap()), 6183),
-            "0.0.0.0:6183".parse().unwrap()
-        );
-        assert_eq!(
-            connect_addr(service_addr(Some("::".parse().unwrap()), 6183)),
-            "[::1]:6183".parse().unwrap()
-        );
-    }
-
-    #[test]
-    fn wildcard_service_probe_detects_a_listener_on_another_local_address() {
-        let listener = std::net::TcpListener::bind("127.0.1.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let state = RealServiceEnv.probe_port(SocketAddr::from(([0, 0, 0, 0], port)));
-        assert_eq!(state, PortState::Foreign);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn service_install_writes_unit_and_runs_exact_systemctl_sequence() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 6183,
-                dry_run: false,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-
-        // The unit file was written with byte-identical content.
-        let unit_path = service_unit::systemd_unit_path(tmp.path());
-        let written = std::fs::read_to_string(&unit_path).unwrap();
-        let expected = service_unit::render_systemd_unit(
-            Path::new("/home/user/.local/bin/pdo"),
-            6183,
-            None,
-            Path::new("/home/user/.pdo/app"),
-            "/home/user/.local/bin:/opt/node/bin:/usr/local/bin:/usr/bin:/bin",
-        );
-        assert_eq!(written, expected);
-
-        // The exact command sequence, in order (D4 install flow).
-        let log = env.command_log();
-        assert_eq!(
-            log,
-            vec![
-                (
-                    "systemctl".into(),
-                    vec!["--user".into(), "daemon-reload".into()]
-                ),
-                (
-                    "loginctl".into(),
-                    vec!["enable-linger".into(), "user".into()]
-                ),
-                (
-                    "systemctl".into(),
-                    vec![
-                        "--user".into(),
-                        "enable".into(),
-                        "--now".into(),
-                        "pdo".into()
-                    ]
-                ),
-            ]
-        );
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn service_install_refuses_a_foreign_port_and_touches_nothing() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Foreign);
-        let mut out: Vec<u8> = Vec::new();
-        let err = run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 6183,
-                dry_run: false,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("refusing to install"),
-            "expected loud refusal, got: {err}"
-        );
-        // No systemctl ran and no unit was written.
-        assert!(env.command_log().is_empty());
-        assert!(!service_unit::systemd_unit_path(tmp.path()).exists());
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn service_install_is_idempotent_when_a_pdo_daemon_already_owns_the_port() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::PdoDaemon);
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(
-            ServiceAction::Install {
-                bind: None,
-                port: 6183,
-                dry_run: false,
-            },
-            &env,
-            &mut out,
-        )
-        .unwrap();
-        // Unit is still written + enabled, but WITHOUT `--now` (no competitor).
-        assert!(service_unit::systemd_unit_path(tmp.path()).exists());
-        let log = env.command_log();
-        let enable = log
-            .iter()
-            .find(|(p, a)| p == "systemctl" && a.contains(&"enable".to_string()))
-            .expect("expected an enable command");
-        assert!(
-            !enable.1.contains(&"--now".to_string()),
-            "enable must NOT carry --now when a daemon already owns the port: {enable:?}"
-        );
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn service_uninstall_disables_removes_and_reloads() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
-        // Seed a unit file so removal is observable.
-        let unit_path = service_unit::systemd_unit_path(tmp.path());
-        std::fs::create_dir_all(unit_path.parent().unwrap()).unwrap();
-        std::fs::write(&unit_path, "stub").unwrap();
-
-        let mut out: Vec<u8> = Vec::new();
-        run_service_with(ServiceAction::Uninstall, &env, &mut out).unwrap();
-
-        assert!(!unit_path.exists(), "unit file should be removed");
-        let log = env.command_log();
-        assert_eq!(
-            log,
-            vec![
-                (
-                    "systemctl".into(),
-                    vec![
-                        "--user".into(),
-                        "disable".into(),
-                        "--now".into(),
-                        "pdo".into()
-                    ]
-                ),
-                (
-                    "systemctl".into(),
-                    vec!["--user".into(), "daemon-reload".into()]
-                ),
-            ]
         );
     }
 
@@ -43101,13 +41112,13 @@ edges: []
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         let state = Arc::new(AppState {
+            platform: test_platform(&db, None).await,
             db,
             event_tx,
             pipeline_tx,
             repo_root: repo.clone(),
             port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -43131,12 +41142,6 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default: tests that assert the `/sessions` service
-            // field build their own state via `test_state_with_service_health`.
-            service_health: Arc::new(ServiceHealth {
-                supervisor: "none".to_string(),
-                persistent: None,
-            }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -43144,15 +41149,6 @@ edges: []
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         });
@@ -43314,13 +41310,13 @@ edges: []
         let (event_tx, _) = broadcast::channel(64);
         let (pipeline_tx, _) = broadcast::channel(16);
         let state = Arc::new(AppState {
+            platform: test_platform(&db, None).await,
             db,
             event_tx,
             pipeline_tx,
             repo_root: repo.clone(),
             port: next_test_daemon_port(),
             merge_lock: tokio::sync::Mutex::new(()),
-            page_mount_lock: tokio::sync::Mutex::new(()),
             admission_lock: tokio::sync::Mutex::new(()),
             trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes: Arc::new(Mutex::new(HashMap::new())),
@@ -43344,12 +41340,6 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default: tests that assert the `/sessions` service
-            // field build their own state via `test_state_with_service_health`.
-            service_health: Arc::new(ServiceHealth {
-                supervisor: "none".to_string(),
-                persistent: None,
-            }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -43357,15 +41347,6 @@ edges: []
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
-            update_source_url: None,
-            update_cache: tokio::sync::Mutex::new(None),
-            update_check_lock: tokio::sync::Mutex::new(()),
-            update_releases: tokio::sync::Mutex::new(None),
-            update_executor_override: None,
-            install_method_override: None,
-            supervision_override: None,
-            relaunch_command: None,
-            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         });

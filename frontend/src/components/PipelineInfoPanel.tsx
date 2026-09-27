@@ -1,7 +1,8 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { Info, Terminal, X, FileText, Code, Box, Loader, Bot, Copy, Download, ChevronDown, ChevronRight, Play, PowerOff, RefreshCw, FileDiff, FolderGit2, CloudOff } from "lucide-react";
 import { SectionHead, SourceDriftChip } from "./InspectorPrimitives";
-import TmuxTerminal from "./TmuxTerminal";
+import TmuxTerminal from "../session/components/TmuxTerminal";
+import AssistantPanel from "../session/components/AssistantPanel";
 import DiffTab from "./DiffTab";
 import RepositoriesSection from "./RepositoriesSection";
 import { deliverySignature } from "../lib/diffTab";
@@ -9,7 +10,7 @@ import { useReviewUnread } from "../hooks/useReviewUnread";
 import { useSourceDrift } from "../hooks/useSourceDrift";
 import type { CollapsedFiles } from "../lib/diffTab";
 import type { LibraryPipelineEntry } from "../api";
-import { fetchPipelineDocument, fetchPipelineSkillsSidecar, fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar, openLibraryAssistant, startRunManager, stopRunManager } from "../api";
+import { fetchPipelineDocument, fetchPipelineSkillsSidecar, fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar, startRunManager, stopRunManager } from "../api";
 import type { RunState } from "../shared/generated/RunState";
 import { isLiveRun } from "../run/model/runStatus";
 import { shortAge } from "../workspace/model/branchSelect";
@@ -276,7 +277,7 @@ export default function PipelineInfoPanel({
         // #594: NOT keyed on the pipeline. One shared assistant means switching
         // template must keep the same session and the same conversation — a
         // remount per pipeline is the exact opposite of sharing.
-        <AssistantTab />
+        <AssistantPanel />
       )}
 
       {resolvedTab === "yaml" && (
@@ -303,7 +304,7 @@ export default function PipelineInfoPanel({
  *   per-Run default in Settings;
  * - **starting** — the POST round-trip plus the gap until the next run-state
  *   fetch flips `has_manager` (the same beat the Assistant tab has);
- * - **error** — a failed spawn, with a Retry, mirroring `AssistantTab`;
+ * - **error** — a failed spawn, with a Retry, mirroring `AssistantPanel`;
  * - **live** — today's terminal, unchanged, plus a Stop control with a
  *   confirmation: cost control is the point of the feature, so the session
  *   must be killable from the panel, not only by the orphan sweep.
@@ -504,80 +505,6 @@ function ManagerTab({
           enable it for every run in Settings
         </button>
       </div>
-    </div>
-  );
-}
-
-/**
- * The Assistant tab body (#302 / ADR-0048, #594 / ADR-0051): an inline `claude`
- * REPL that authors pipeline templates.
- *
- * **It creates, and never reaps.** Mounting still spawns the shared session on
- * demand, but the unmount cleanup that used to `DELETE` is gone: this component
- * unmounts whenever the panel closes, and the panel closes by itself on every
- * edit-tab switch (#385) — so reaping here killed the conversation each time the
- * user glanced at another template. The reap now lives at App level, keyed on
- * "no edit view left at all" (`useLibassistLifecycle`), with the daemon's idle
- * sweep behind it.
- *
- * It takes no props for the same reason: which template is being edited is the
- * daemon's focus, not this component's business.
- */
-function AssistantTab() {
-  const [session, setSession] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    openLibraryAssistant()
-      .then((r) => {
-        if (!cancelled) setSession(r.session);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <div
-      className="flex min-h-0 flex-1 flex-col"
-      style={{ fontSize: "11.5px" }}
-      data-testid="assistant-tab"
-    >
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <Bot size={14} className="text-fg-3" />
-        <span className="text-fg-2" style={{ fontSize: "11px" }}>
-          Pipeline Assistant
-        </span>
-        {session && (
-          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
-            {session}
-          </span>
-        )}
-      </div>
-      {error ? (
-        <div
-          className="flex flex-1 items-center justify-center px-4 text-center text-st-failed"
-          style={{ fontSize: "11.5px" }}
-          data-testid="assistant-error"
-        >
-          Failed to start the assistant: {error}
-        </div>
-      ) : session ? (
-        <TmuxTerminal session={session} expanded status="running" />
-      ) : (
-        <div
-          className="flex flex-1 items-center justify-center gap-2 text-fg-4"
-          style={{ fontSize: "11.5px" }}
-          data-testid="assistant-loading"
-        >
-          <Loader size={14} className="animate-spin" />
-          Starting the assistant…
-        </div>
-      )}
     </div>
   );
 }

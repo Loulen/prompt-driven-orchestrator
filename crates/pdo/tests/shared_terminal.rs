@@ -384,7 +384,7 @@ async fn a_spectators_enter_does_not_lift_a_declared_wait() {
     let (status, body) = wait_user(&daemon, &run_id, "worker", Some("Strip or card?")).await;
     assert_eq!(status, 200, "{body}");
 
-    let session = pdo_daemon::tmux_session_manager::node_session_name(&run_id, "worker", 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, "worker", 1);
     let mut a = connect(&daemon, &session, Some("posteA")).await;
     role_until(&mut a, is("solo")).await;
     let mut b = connect(&daemon, &session, Some("posteB")).await;
@@ -608,7 +608,7 @@ async fn after_a_take_over_only_the_new_pilot_lifts_a_declared_wait() {
     let (status, body) = wait_user(&daemon, &run_id, "worker", Some("Strip or card?")).await;
     assert_eq!(status, 200, "{body}");
 
-    let session = pdo_daemon::tmux_session_manager::node_session_name(&run_id, "worker", 1);
+    let session = pdo_session::domain::names::node_session_name(&run_id, "worker", 1);
     let mut a = connect(&daemon, &session, Some("posteA")).await;
     role_until(&mut a, is("solo")).await;
     let mut b = connect(&daemon, &session, Some("posteB")).await;

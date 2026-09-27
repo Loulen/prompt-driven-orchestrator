@@ -25,7 +25,6 @@
 use std::time::Duration;
 
 use crate::common::TestDaemon;
-use pdo_daemon::tmux_session_manager;
 
 const PIPELINE_NAME: &str = "starve";
 
@@ -200,8 +199,8 @@ async fn boot_recovery_redrives_a_waiting_node_after_freeing_a_slot() {
 
     // Simulate the crash: kill ONLY leaf1's session in Run A, out of band. leader
     // stays alive and attached.
-    let leaf1_session = tmux_session_manager::node_session_name(&run_a, "leaf1", 1);
-    tmux_session_manager::kill(&socket, &leaf1_session);
+    let leaf1_session = pdo_session::domain::names::node_session_name(&run_a, "leaf1", 1);
+    crate::common::tmux(&socket).kill(&leaf1_session);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     daemon.run_boot_recovery_tick().await;
@@ -224,15 +223,13 @@ async fn boot_recovery_redrives_a_waiting_node_after_freeing_a_slot() {
     // slot; the other stays waiting. Before the fix, BOTH stayed waiting for ever.
     wait_for_a_redriven_node(&daemon, &run_b).await;
 
-    tmux_session_manager::kill(
-        &socket,
-        &tmux_session_manager::node_session_name(&run_a, "leader", 1),
-    );
+    crate::common::tmux(&socket).kill(&pdo_session::domain::names::node_session_name(
+        &run_a, "leader", 1,
+    ));
     for node in ["leaf1", "leader"] {
-        tmux_session_manager::kill(
-            &socket,
-            &tmux_session_manager::node_session_name(&run_b, node, 1),
-        );
+        crate::common::tmux(&socket).kill(&pdo_session::domain::names::node_session_name(
+            &run_b, node, 1,
+        ));
     }
 }
 

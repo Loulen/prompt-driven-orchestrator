@@ -12,7 +12,6 @@ use serde::Deserialize;
 use tracing::warn;
 
 use super::origin::{check_origin, origin_for_log};
-use super::refused;
 use crate::adapters::pty::handle_pty_ws;
 use crate::domain::shared_terminal::sanitize_poste;
 use crate::Session;
@@ -45,7 +44,7 @@ pub(super) async fn pty(
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
     if let Err(denied) = session.terminals().authorize_attach(&actor, &session_id) {
-        return refused(denied);
+        return denied.into_response();
     }
 
     let poste = sanitize_poste(query.poste.as_deref());

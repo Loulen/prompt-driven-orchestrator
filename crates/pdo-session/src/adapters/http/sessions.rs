@@ -11,7 +11,7 @@ use pdo_kernel::Actor;
 use serde::Serialize;
 use ts_rs::TS;
 
-use super::{error, refused, run_lookup};
+use super::{error, run_lookup};
 use crate::application::attach::{AttachError, Attached};
 use crate::application::open_shell::OpenShellError;
 use crate::Session;
@@ -82,7 +82,7 @@ fn attached(result: Result<Attached, AttachError>) -> Response {
             }),
         )
             .into_response(),
-        Err(AttachError::Refused(denied)) => refused(denied),
+        Err(AttachError::Refused(denied)) => denied.into_response(),
         Err(AttachError::NoManager { session }) => error(
             StatusCode::NOT_FOUND,
             format!("manager session {session} not found"),
@@ -109,7 +109,7 @@ pub(super) async fn open_shell(
             }),
         )
             .into_response(),
-        Err(OpenShellError::Refused(denied)) => refused(denied),
+        Err(OpenShellError::Refused(denied)) => denied.into_response(),
         Err(OpenShellError::Run(lookup)) => run_lookup(lookup),
         Err(OpenShellError::NotEligible) => error(
             StatusCode::CONFLICT,

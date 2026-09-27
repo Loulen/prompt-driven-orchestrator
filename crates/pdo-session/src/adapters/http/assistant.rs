@@ -11,7 +11,7 @@ use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{error, refused};
+use super::error;
 use crate::application::assistant::{OpenAssistantError, SaveFocusedError};
 use crate::application::ports::TemplateSaveError;
 use crate::domain::libassist::{focus_json, focus_text};
@@ -40,7 +40,7 @@ pub(super) async fn open(
             }),
         )
             .into_response(),
-        Err(OpenAssistantError::Refused(denied)) => refused(denied),
+        Err(OpenAssistantError::Refused(denied)) => denied.into_response(),
         Err(OpenAssistantError::Dir(message) | OpenAssistantError::Spawn(message)) => {
             error(StatusCode::INTERNAL_SERVER_ERROR, message)
         }
@@ -57,7 +57,7 @@ pub(super) async fn close(
             Json(serde_json::json!({ "ok": true, "reaped": reaped })),
         )
             .into_response(),
-        Err(denied) => refused(denied),
+        Err(denied) => denied.into_response(),
     }
 }
 
@@ -76,7 +76,7 @@ pub(super) async fn put_focus(
 ) -> Response {
     match session.declare_focus().execute(&actor, req.pipeline_id) {
         Ok(body) => Json(body).into_response(),
-        Err(denied) => refused(denied),
+        Err(denied) => denied.into_response(),
     }
 }
 
@@ -137,7 +137,7 @@ pub(super) async fn save(
             })),
         )
             .into_response(),
-        Err(SaveFocusedError::Refused(denied)) => refused(denied),
+        Err(SaveFocusedError::Refused(denied)) => denied.into_response(),
         Err(SaveFocusedError::NoFocus) => error(
             StatusCode::CONFLICT,
             "no pipeline template is open in the UI — ask the user which one to \

@@ -50,9 +50,7 @@ fn profile_error(e: ProfileError) -> Response {
     match e {
         ProfileError::Invalid(msg) => error(StatusCode::BAD_REQUEST, msg),
         ProfileError::NotFound(msg) => error(StatusCode::NOT_FOUND, msg),
-        // An Operation an extension refused: 403, the reason in the `error` the
-        // gesture already shows.
-        ProfileError::Denied(denied) => error(StatusCode::FORBIDDEN, denied.to_string()),
+        ProfileError::Denied(denied) => denied.into_response(),
         ProfileError::Store(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, msg),
     }
 }
@@ -264,7 +262,9 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
-        assert!(body.contains("admins only"), "{body}");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], "operation_refused", "{body}");
+        assert_eq!(body["reason"], "admins only", "{body}");
     }
 
     #[tokio::test]

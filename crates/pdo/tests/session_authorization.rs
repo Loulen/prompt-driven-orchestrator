@@ -49,7 +49,11 @@ async fn a_refusing_extension_turns_every_session_gesture_into_a_named_403() {
     .unwrap();
     let base = format!("http://{}", daemon.addr());
     let client = reqwest::Client::new();
-    let refused = serde_json::json!({ "error": "operation refused: sessions are closed today" });
+    let refused = serde_json::json!({
+        "error": "operation_refused",
+        "message": "operation refused: sessions are closed today",
+        "reason": "sessions are closed today",
+    });
 
     let open = client
         .post(format!("{base}/sessions/libassist"))

@@ -116,8 +116,72 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             format!("/projects/{project}/provisioning"),
             Some(json!({})),
         ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/wait-user",
+            format!("/runs/{RUN}/nodes/worker/wait-user"),
+            Some(json!({ "iter": 1 })),
+        ),
+        call(
+            "POST",
+            "/sessions/{session_id}/attach",
+            format!("/sessions/pdo-{RUN}-worker/attach"),
+            None,
+        ),
+        call(
+            "POST",
+            "/sessions/{run_id}/manager/attach",
+            format!("/sessions/{RUN}/manager/attach"),
+            None,
+        ),
+        call(
+            "POST",
+            "/sessions/{run_id}/shell",
+            format!("/sessions/{RUN}/shell"),
+            None,
+        ),
+        call(
+            "POST",
+            "/sessions/libassist",
+            "/sessions/libassist".into(),
+            None,
+        ),
+        call(
+            "DELETE",
+            "/sessions/libassist",
+            "/sessions/libassist".into(),
+            None,
+        ),
+        call(
+            "PUT",
+            "/sessions/libassist/focus",
+            "/sessions/libassist/focus".into(),
+            Some(json!({ "pipeline_id": "other" })),
+        ),
+        // Saves the focused template: `seed` declared the focus.
+        call(
+            "POST",
+            "/sessions/libassist/save",
+            "/sessions/libassist/save".into(),
+            Some(json!({ "yaml": "name: review\n" })),
+        ),
+        call(
+            "PUT",
+            "/settings/sandbox-profiles/{name}",
+            "/settings/sandbox-profiles/team".into(),
+            Some(json!({})),
+        ),
+        call(
+            "DELETE",
+            "/settings/sandbox-profiles/{name}",
+            "/settings/sandbox-profiles/team".into(),
+            None,
+        ),
     ]
 }
+
+/// A Run id the session routes aim at: they refuse before looking it up.
+const RUN: &str = "20260101-000000-abcdef0";
 
 struct Fixtures {
     project: String,
@@ -125,7 +189,8 @@ struct Fixtures {
     scratch: String,
 }
 
-/// A Projet with the daemon's repo as member, and a mounted page.
+/// A Projet with the daemon's repo as member, a mounted page, and the
+/// assistant's focus on a template.
 async fn seed(daemon: &TestDaemon, scratch: &Path) -> Fixtures {
     let client = reqwest::Client::new();
     let url = daemon.url();
@@ -157,6 +222,13 @@ async fn seed(daemon: &TestDaemon, scratch: &Path) -> Fixtures {
         .await
         .unwrap();
     assert_eq!(mount.status(), 201);
+    let focus = client
+        .put(format!("{url}/sessions/libassist/focus"))
+        .json(&json!({ "pipeline_id": "review" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(focus.status().is_success(), "{}", focus.status());
     Fixtures {
         project,
         site,
@@ -223,4 +295,6 @@ async fn an_extension_refusing_everything_refuses_every_mutation_route() {
     assert_eq!(project["name"], "fixture");
     let pages = daemon.get_json("/pages").await;
     assert_eq!(pages.as_array().map(Vec::len), Some(1), "{pages}");
+    let focus = daemon.get_json("/sessions/libassist/focus").await;
+    assert_eq!(focus["pipeline_id"], "review", "{focus}");
 }

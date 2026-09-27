@@ -10,6 +10,23 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.5 — Contexte `sandbox` extrait (#921, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les
+routes des profils de staging et de leurs référents répondent comme avant).
+
+- Nouveau crate `pdo-sandbox` (domain / application / adapters) : profils de staging, image,
+  conteneur, staging du home et préparation d'un Run quittent `pdo-legacy`. `run_sandbox.rs` garde
+  le côté Run (contexte sandbox d'un Run depuis son état) jusqu'à l'extraction du contexte run.
+- Docker passe derrière le port `DockerCli` (adaptateur `ProcessDocker`). Créer, modifier et
+  supprimer un profil sont des use cases qui construisent une Opération et passent par
+  l'autorisation, avec l'Acteur du middleware `identify` et le même hôte d'extensions que les
+  autres contextes. Les ports du contexte session (`SandboxExec`, `ContainerExec`) s'appuient
+  désormais sur `pdo-sandbox`.
+- Reste à faire : comme workspace, le routeur sandbox est encore monté dans `pdo-legacy`
+  (`run_sandbox::router`) plutôt que via `contexts.rs`.
+- Front : l'éditeur de profils de staging passe dans `frontend/src/sandbox/`.
+
 ## 1.111.4 — Contexte `session` extrait (#920, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques).

@@ -9,9 +9,9 @@ import { useAgentProfiles } from "../../hooks/useAgentProfiles";
 import AgentControl from "../../components/AgentControl";
 import HarnessSelect from "../../harness/components/HarnessSelect";
 import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
-import SkillSelector from "../../components/SkillSelector";
-import { useSkillBank } from "../../hooks/useSkillBank";
-import { announceSkillTiersChanged, useSkillTiers } from "../../hooks/useSkillTiers";
+import SkillSelector from "../../skill/components/SkillSelector";
+import { useSkillBank } from "../../skill/store/useSkillBank";
+import { announceSkillTiersChanged, useSkillTiers } from "../../skill/store/useSkillTiers";
 
 /**
  * The group-header pencil (#552, ADR-0046): name a Projet (or rename an existing

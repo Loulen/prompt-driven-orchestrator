@@ -112,9 +112,14 @@ cd "$(git rev-parse --show-toplevel)"
 #   combined.
 # frontend/src/components: 175 and crates/pdo-daemon/src: 65 — #916, #917, #919, #920 and
 #   #921 combined.
+# frontend/src/components: 168 and crates/pdo-daemon/src: 68 (#918, spec #913) ratchet down:
+#   the skill context moved out — skill_bank, skill_import, skill_selection, skill_sidecar and
+#   skill_delivery to crates/pdo-skill; the skill bank UI to frontend/src/skill/.
+# frontend/src/components: 163 and crates/pdo-daemon/src: 60 — #916, #917, #918, #919, #920
+#   and #921 combined.
 BASELINES='
-frontend/src/components 175
-crates/pdo-daemon/src 65
+frontend/src/components 163
+crates/pdo-daemon/src 60
 '
 
 fail=0

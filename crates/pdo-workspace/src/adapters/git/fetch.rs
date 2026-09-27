@@ -80,7 +80,7 @@ pub fn fetch_in_flight() -> &'static std::sync::Mutex<
 ///
 /// Read-only and **non-interactive by construction**: `GIT_TERMINAL_PROMPT=0` plus a
 /// batch-mode ssh, so a missing credential fails with git's own message instead of
-/// hanging on a prompt nobody can see (the `skill_import` clone precedent). Bounded by
+/// hanging on a prompt nobody can see (the precedent of `clone::clone_shallow`). Bounded by
 /// `FETCH_TIMEOUT`. Never pushes, merges or rebases — that is the whole of ADR-0070 §2.
 ///
 /// Only ONE fetch per repo runs at a time: the form fetches on open and on repo

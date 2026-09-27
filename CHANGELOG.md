@@ -10,6 +10,28 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.6 — Contexte `skill` extrait (#918, spec #913)
+
+Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les
+routes `/settings/skills*` et `/settings/skill-folders*` répondent comme avant).
+
+- Nouveau crate `pdo-skill` (domain / application / adapters) : banque de skills, dossiers,
+  import depuis une Source, sélection par tier, sidecar du document portable et livraison dans
+  le worktree quittent `pdo-legacy` (`skill_bank`, `skill_import`, `skill_selection`,
+  `skill_sidecar`, `skill_delivery`). Chaque mutation passe par un use case qui construit une
+  Opération et appelle l'autorisation ; le seed au démarrage et la livraison (transitions du
+  daemon et du scheduler) n'y passent pas.
+- La livraison passe par un port (`SkillDelivery`) ; son adaptateur lit l'index, le
+  `info/exclude` et le manifeste de provisioning par l'adaptateur git du contexte `workspace`,
+  qui gagne aussi le clone superficiel d'une Source.
+- Les référents d'un skill (instance, Projets, Triggers, pipelines, Runs pas encore démarrés)
+  sont lus par un port que le crate legacy implémente tant que ces contextes y vivent.
+- Front : banque, import, collage, onglet Files, sélecteur et arbre passent dans
+  `frontend/src/skill/`, découpés en fichiers de 400 lignes au plus.
+- Correctif : `useDaemonSocket` ne reprogramme plus de reconnexion quand l'événement `close`
+  arrive après le démontage (second socket après un remontage, timer déclenché après la fin
+  d'un test).
+
 ## 1.111.5 — Contexte `sandbox` extrait (#921, spec #913)
 
 Refactor sans changement visible : le contrat HTTP/WS ne bouge pas (snapshots identiques ; les

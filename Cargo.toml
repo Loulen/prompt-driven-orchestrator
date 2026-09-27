@@ -8,6 +8,7 @@ members = [
   "crates/pdo-extension-api",
   "crates/pdo-kernel",
   "crates/pdo-workspace",
+  "crates/pdo-skill",
   "crates/pdo-platform",
   "crates/pdo-harness",
   "crates/pdo-sandbox",
@@ -18,7 +19,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "1.111.5"
+version = "1.111.6"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -66,6 +67,7 @@ reqwest = { version = "0.12", default-features = false, features = ["charset", "
 pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.1.0" }
 pdo-kernel = { path = "crates/pdo-kernel" }
 pdo-workspace = { path = "crates/pdo-workspace" }
+pdo-skill = { path = "crates/pdo-skill" }
 pdo-platform = { path = "crates/pdo-platform" }
 pdo-harness = { path = "crates/pdo-harness" }
 pdo-sandbox = { path = "crates/pdo-sandbox" }

@@ -1,10 +1,13 @@
 //! Git, for the whole workspace context: the only module of this crate that
 //! runs `git`. [`GitCli`] serves the [`Git`] port; the free functions below it
-//! serve the contexts that have not moved onto the port yet (the Run).
+//! serve the contexts that have not moved onto the port yet (the Run), and the
+//! adapters of the skill context (the shallow clone of a Source, the index and
+//! `info/exclude` of the worktree a skill is delivered into).
 //!
 //! Tested against real temporary repositories (`tests/git_*.rs`).
 
 pub mod branches;
+pub mod clone;
 pub mod fast_forward;
 pub mod fetch;
 pub mod manifest;

@@ -31,6 +31,10 @@ const mockImportWorkflow = vi.mocked(importWorkflow);
 const mockImportPipelineDocument = vi.mocked(importPipelineDocument);
 const originalOpenPipeline = useEditStore.getState().openPipeline;
 
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+}));
+
 vi.mock("../api", () => ({
   // The real error class: the component narrows on `instanceof` to tell a name
   // collision from anything else, so a stand-in `Error` would not be the test.
@@ -70,8 +74,6 @@ vi.mock("../api", () => ({
   }),
   fetchSettings: vi.fn().mockResolvedValue({}),
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
-  // #669: the skills selector's reads (bank + inherited tiers), empty by default.
-  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
 }));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({

@@ -11,7 +11,7 @@ import type { LibraryPipelineEntry } from "../api";
 import { ApiError } from "../shared/http/client";
 import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useRunShell } from "../session/store/useRunShell";
-import { announceSkillsChanged } from "../hooks/useSkillBank";
+import { announceSkillsChanged } from "../skill/store/useSkillBank";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";

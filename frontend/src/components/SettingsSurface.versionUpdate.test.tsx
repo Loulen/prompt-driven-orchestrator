@@ -13,6 +13,18 @@ const fetchUpdateStatusMock = vi.fn();
 const fetchUpdateAttemptLogMock = vi.fn();
 const checkForUpdateNowMock = vi.fn();
 
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
+  createSkill: vi.fn(),
+  fetchSkill: vi.fn(),
+  updateSkill: vi.fn(),
+  deleteSkill: vi.fn(),
+  fetchSkillReferents: vi.fn(),
+  createSkillFolder: vi.fn(),
+  updateSkillFolder: vi.fn(),
+  deleteSkillFolder: vi.fn(),
+}));
+
 // The staging-profile panel reads the sandbox context's own API module.
 vi.mock("../sandbox/api/profiles", () => ({
   fetchSandboxProfiles: vi.fn().mockResolvedValue({ profiles: [], home: "/home/user" }),
@@ -31,15 +43,6 @@ vi.mock("../api", () => ({
   fetchAgentProfileReferents: vi.fn(),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
-  createSkill: vi.fn(),
-  fetchSkill: vi.fn(),
-  updateSkill: vi.fn(),
-  deleteSkill: vi.fn(),
-  fetchSkillReferents: vi.fn(),
-  createSkillFolder: vi.fn(),
-  updateSkillFolder: vi.fn(),
-  deleteSkillFolder: vi.fn(),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;

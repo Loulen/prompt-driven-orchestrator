@@ -19,7 +19,13 @@ export function useDaemonSocket() {
   }, []);
 
   useEffect(() => {
+    // `close()` in the cleanup fires the socket's "close" event asynchronously,
+    // after the effect is gone: without this flag its handler would schedule a
+    // reconnect nobody clears (a second socket after a StrictMode remount, a
+    // timer firing after a test environment is torn down).
+    let disposed = false;
     function connect() {
+      if (disposed) return;
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const url = `${protocol}//${window.location.host}/ws`;
 
@@ -55,6 +61,7 @@ export function useDaemonSocket() {
       });
 
       ws.addEventListener("close", () => {
+        if (disposed) return;
         setStatus("reconnecting");
         wsRef.current = null;
         reconnectTimer.current = setTimeout(connect, RECONNECT_INTERVAL);
@@ -67,6 +74,7 @@ export function useDaemonSocket() {
 
     connect();
     return () => {
+      disposed = true;
       clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };

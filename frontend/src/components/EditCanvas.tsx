@@ -70,7 +70,7 @@ import { pendingSource, resetWiringSession, wiringGesture, wiringTrace } from ".
 import { droppedPath } from "../lib/wiringGesture";
 import { useWiringStore } from "../stores/wiringStore";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
-import { useSkillBank } from "../hooks/useSkillBank";
+import { useSkillBank } from "../skill/store/useSkillBank";
 import { Bookmark, SlidersHorizontal, TriangleAlert } from "lucide-react";
 // #723 — orchestrator pastilles on the run-view node card.
 import { ChildCountPills } from "./OrchestrationTab";

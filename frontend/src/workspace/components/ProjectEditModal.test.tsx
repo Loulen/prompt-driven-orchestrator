@@ -10,14 +10,16 @@ const updateProject = vi.fn();
 const addProjectMember = vi.fn();
 const removeProjectMember = vi.fn();
 
+vi.mock("../../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+}));
+
 vi.mock("../../api", () => {
   // Defined INSIDE the factory: `vi.mock` is hoisted above module top-level, so a
   // class declared outside would be in its TDZ here.
   class ApiError extends Error {}
   return {
     fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
-    // #669: the skills selector's reads (bank + inherited tiers), empty by default.
-    fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
     ApiError,
     // #586: the harness select fetches /settings for its dynamic options. Resolve
     // it with the embedded floor so claude/opencode are offered.

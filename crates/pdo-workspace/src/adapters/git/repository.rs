@@ -266,3 +266,47 @@ pub fn resolve_commit(repo: &Path, r: &str) -> Option<String> {
     let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!sha.is_empty()).then_some(sha)
 }
+
+/// `<common git dir>/info/exclude` of the repository `dir` belongs to (a linked
+/// worktree resolves to the shared common dir). `None` outside a work tree.
+pub fn info_exclude_path(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
+    use anyhow::Context;
+    let output = std::process::Command::new("git")
+        .args([
+            "rev-parse",
+            "--is-inside-work-tree",
+            "--git-path",
+            "info/exclude",
+        ])
+        .current_dir(dir)
+        .output()
+        .with_context(|| format!("locate Git metadata for {}", dir.display()))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut lines = text.lines();
+    if lines.next() != Some("true") {
+        return Ok(None);
+    }
+    let Some(path) = lines.next().filter(|l| !l.is_empty()) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path);
+    Ok(Some(if path.is_absolute() {
+        path
+    } else {
+        dir.join(path)
+    }))
+}
+
+/// Whether any path under `rel` is tracked in `worktree`'s index.
+pub fn is_tracked(worktree: &Path, rel: &str) -> anyhow::Result<bool> {
+    use anyhow::Context;
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "-z", "--", rel])
+        .current_dir(worktree)
+        .output()
+        .with_context(|| format!("git ls-files {rel} in {}", worktree.display()))?;
+    Ok(output.status.success() && !output.stdout.is_empty())
+}

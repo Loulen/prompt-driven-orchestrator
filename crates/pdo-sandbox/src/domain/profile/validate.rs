@@ -17,7 +17,7 @@ pub const MAX_PROFILE_NAME_LEN: usize = 32;
 ///
 /// - `off` is **reserved**: it short-circuits resolution before any lookup, so a
 ///   profile named `off` would be unreachable for life.
-/// - `""` is **reserved**: it is the *clear* sentinel in `put_settings`, trigger create
+/// - `""` is **reserved**: it is the *clear* sentinel of a `PUT /settings`, trigger create
 ///   and `default_sandbox_with`.
 /// - `full` / `minimal` are **allowed** — creating them *is* materialising them.
 /// - An uppercase name is a **400, never folded**: accepting `Foo` and storing `foo`

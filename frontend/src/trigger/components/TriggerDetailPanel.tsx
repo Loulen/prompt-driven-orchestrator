@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Clock, FolderGit2, GitBranch, Layers, Zap } from "lucide-react";
 import type { Trigger } from "../../shared/generated/Trigger";
-import { fetchSettings } from "../../api";
+import { fetchSettings } from "../../settings/api/settings";
 import { humanizeCron } from "../model/cronPresets";
 import { formatFireTs, overlapLabel } from "../model/outcome";
 import { tildify } from "../../lib/homePath";

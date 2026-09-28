@@ -26,7 +26,7 @@ import DragConnectionLine from "../../components/DragConnectionLine";
 import { DragHighlightProvider } from "../../components/DragHighlightContext";
 import { useWiringGridStep } from "../../hooks/useWiringGrid";
 import { useWiringStore } from "../../stores/wiringStore";
-import { useAgentProfiles } from "../../hooks/useAgentProfiles";
+import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
 import { useSkillBank } from "../../skill/store/useSkillBank";
 // #723 — orchestrator pastilles on the run-view node card.
 import { childrenOfNode, countChildren, useRunChildren } from "../../run/model/orchestration";

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { fetchSettings } from "../../../api";
-import { SETTINGS_CHANGED } from "../../../hooks/useSettings";
+import { fetchSettings } from "../../../settings/api/settings";
+import { SETTINGS_CHANGED } from "../../../settings/store/useSettings";
 import { cronToPreset, parseDailyTime } from "../../../trigger/model/cronPresets";
 import { EMPTY_PROVISIONING_RULES } from "../../../workspace/model/provisioning";
 import type { OpenIntent } from "../../model/openIntent";

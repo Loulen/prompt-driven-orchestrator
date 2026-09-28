@@ -10,6 +10,40 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.15 — Contexte `settings` : le hub de configuration d'instance dissous, profils agentiques (#929, spec #913)
+
+Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots
+HTTP et WS identiques ; `GET/PUT /settings` et `/settings/agent-profiles*` répondent comme
+avant, octet pour octet, sans extension).
+
+- Le hub `instance_config` est dissous : chaque contexte possède ses défauts d'instance (variable
+  d'environnement, valeur intégrée, résolveur `stored → env → default` et divulgation sur la
+  page) dans son propre `adapters/instance_defaults.rs` — `pdo-run` (cap de sessions,
+  auto-complétion, nommage, `auto_fail`, manager, budget de pièces jointes), `pdo-session` (TTL
+  du reaper et de l'assistant, modèle et harnais par défaut), `pdo-trigger` (timeout du guard),
+  `pdo-review`, `pdo-platform`, `pdo-sandbox` (sandbox par défaut, profils de staging, Docker).
+  Le noyau gagne la forme commune de cette divulgation (`instance_default::Disclosed`).
+- Le contexte quitte `pdo-legacy` pour `crates/pdo-settings` : il garde le tier stocké (la ligne
+  singleton) et assemble la page à partir des sections des contextes. Il dépend des autres
+  contextes, jamais l'inverse ; il implémente les ports par lesquels les contextes amont lisent
+  leurs réglages (`InstanceSettings`, `ReviewSettings`, `TriggerSettings`,
+  `UpdateCheckSetting`), câblés par la composition root.
+- Chaque mutation est un use case qui reçoit l'Acteur et consulte d'abord l'Autorisation
+  d'opération : l'édition des réglages (`instance_settings` × `update`), la création, l'édition
+  et la suppression d'un profil agentique (`agent_profile` × `create` / `update` / `delete`).
+  L'avertissement de démarrage sur les réglages sandbox retirés et le préchauffage des
+  catalogues de harnais sont des transitions du daemon et ne demandent rien.
+- Tests : les use cases contre des ports en mémoire (étage 2) remplacent les tests `oneshot` du
+  crate legacy (`/settings`) ; les tests du store (`instance_config`, `agent_profile`) et de la
+  page à travers le router du contexte passent en étage 3 (`crates/pdo-settings/tests/adapters/`).
+  La couverture des refus d'extension s'étend aux quatre routes de mutation du contexte. Le
+  router du crate legacy ne déclare plus aucune route.
+- Les cibles `RUST_LOG` changent avec le code : `pdo_daemon` (handlers des réglages,
+  avertissement de démarrage) devient `pdo_settings::application` (`::boot`,
+  `::agent_profiles::read`…).
+- Front : la surface Settings (découpée par section sous 400 lignes), le panneau et la modale
+  des profils agentiques, leurs stores, modèles et API passent dans `frontend/src/settings/`.
+
 ## 1.111.14 — Contexte `trigger` : cron, guard, fires (#927, spec #913)
 
 Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots

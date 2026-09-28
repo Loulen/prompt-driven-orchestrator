@@ -53,7 +53,7 @@ vi.mock("../../skill/api/bank", () => ({
 
 // EditCanvas (via usePipelineLibraryState) imports the API client; stub the
 // network so nothing fetches on mount.
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchLibrary: vi.fn().mockResolvedValue([]),
   fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
@@ -62,14 +62,16 @@ vi.mock("../../api", () => ({
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
 }));
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 vi.mock("../api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 
 vi.mock("../../workspace/api/projects", async (importOriginal) => ({

@@ -50,7 +50,9 @@ impl SessionOwners for LegacySessionPorts {
     fn ttls(&self) -> BoxFuture<'_, SweepTtls> {
         Box::pin(async move {
             let cfg = match self.state() {
-                Ok(state) => crate::instance_config::get(&state.db).await.ok(),
+                Ok(state) => pdo_settings::adapters::sqlite::instance_config::get(&state.db)
+                    .await
+                    .ok(),
                 Err(_) => None,
             };
             SweepTtls {

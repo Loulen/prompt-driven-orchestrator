@@ -5,14 +5,16 @@ import { useEditStore } from "../pipeline/store/editStore";
 import type { ParseNodeResult } from "../pipeline/model/library";
 
 // Keep the real `libraryPortToPortDef`; only `parseNodeYaml` is stubbed per-test.
-vi.mock("../api", async (orig) => {
-  const actual = await orig<typeof import("../api")>();
+vi.mock("../settings/api/settings", async (orig) => {
+  const actual = await orig<typeof import("../settings/api/settings")>();
   return { ...actual, parseNodeYaml: vi.fn() };
 });
-// The pipeline context's API answers with the mock of `../api` above.
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../pipeline/api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../lib/nanoid", () => ({ generateNodeId: () => "fresh-node-id" }));
 

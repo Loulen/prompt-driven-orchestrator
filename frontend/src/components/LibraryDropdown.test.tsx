@@ -13,7 +13,7 @@ function renderDropdown(props: Parameters<typeof LibraryDropdown>[0]) {
   );
 }
 
-vi.mock("../api", () => ({
+vi.mock("../settings/api/settings", () => ({
   fetchLibrary: vi.fn().mockResolvedValue([]),
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
@@ -28,10 +28,12 @@ vi.mock("../api", () => ({
     prompt: "test prompt",
   }),
 }));
-// The pipeline context's API answers with the mock of `../api` above.
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../pipeline/api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 
 vi.mock("../lib/nanoid", () => ({

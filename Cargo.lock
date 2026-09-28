@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -1993,6 +1993,7 @@ dependencies = [
  "pdo-run",
  "pdo-sandbox",
  "pdo-session",
+ "pdo-settings",
  "pdo-stats",
  "pdo-trigger",
  "pretty_assertions",
@@ -2022,7 +2023,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "filetime",
  "pdo-kernel",
@@ -2038,10 +2039,11 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "chrono",
  "pdo-extension-api",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -2050,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-legacy"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2077,6 +2079,7 @@ dependencies = [
  "pdo-run",
  "pdo-sandbox",
  "pdo-session",
+ "pdo-settings",
  "pdo-skill",
  "pdo-stats",
  "pdo-trigger",
@@ -2104,7 +2107,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-pipeline"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2135,7 +2138,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2159,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-review"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2188,7 +2191,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-run"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2223,7 +2226,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-sandbox"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2245,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-session"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2265,8 +2268,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdo-settings"
+version = "1.111.15"
+dependencies = [
+ "axum",
+ "chrono",
+ "pdo-extension-api",
+ "pdo-harness",
+ "pdo-kernel",
+ "pdo-pipeline",
+ "pdo-platform",
+ "pdo-review",
+ "pdo-run",
+ "pdo-sandbox",
+ "pdo-session",
+ "pdo-skill",
+ "pdo-trigger",
+ "pdo-workspace",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "pdo-skill"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2288,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-stats"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -2316,7 +2349,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-trigger"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "axum",
  "chrono",
@@ -2346,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "1.111.14"
+version = "1.111.15"
 dependencies = [
  "anyhow",
  "axum",

@@ -20,7 +20,7 @@ import ServiceHealthIndicator from "../components/ServiceHealthIndicator";
 import UnifiedLeftPanel from "../components/UnifiedLeftPanel";
 import NodeDetailPanel from "../run/components/NodeDetailPanel";
 import NewRunModal, { RUN_INTENT, type OpenIntent } from "../run/components/NewRunModal";
-import SettingsSurface, { type SettingsPosition, type StatsOpenIntent } from "../components/SettingsSurface";
+import SettingsSurface, { type SettingsPosition, type StatsOpenIntent } from "../settings/components/SettingsSurface";
 import VersionBadge from "../platform/components/VersionBadge";
 import ChangelogModal from "../platform/components/ChangelogModal";
 import UpdateConfirmModal from "../platform/components/UpdateConfirmModal";

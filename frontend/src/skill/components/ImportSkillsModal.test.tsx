@@ -13,7 +13,7 @@ vi.mock("../api/import", () => ({
   fetchRecentSkillSources: (...args: unknown[]) => recentMock(...args),
 }));
 
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;
@@ -24,6 +24,8 @@ vi.mock("../../api", () => ({
     }
   },
 }));
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
 
 vi.mock("../../workspace/api/browse", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../workspace/api/browse")>()),

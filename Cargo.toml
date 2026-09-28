@@ -18,13 +18,14 @@ members = [
   "crates/pdo-trigger",
   "crates/pdo-stats",
   "crates/pdo-review",
+  "crates/pdo-settings",
   "crates/pdo-daemon",
   "crates/pdo",
 ]
 
 [workspace.package]
 edition = "2021"
-version = "1.111.14"
+version = "1.111.15"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -82,6 +83,7 @@ pdo-run = { path = "crates/pdo-run" }
 pdo-trigger = { path = "crates/pdo-trigger" }
 pdo-stats = { path = "crates/pdo-stats" }
 pdo-review = { path = "crates/pdo-review" }
+pdo-settings = { path = "crates/pdo-settings" }
 # The legacy crate keeps its library name `pdo_daemon` (so `RUST_LOG=pdo_daemon::…`
 # targets and every `use pdo_daemon::` stay valid) under the package name
 # `pdo-legacy`: the package name `pdo-daemon` belongs to the composition root,

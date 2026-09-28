@@ -2,13 +2,11 @@
 # their size when the rule landed (#915). This list may only shrink: remove a
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.
-crates/pdo-daemon/src/instance_config.rs 910
-crates/pdo-daemon/src/lib.rs 2669
+crates/pdo-daemon/src/lib.rs 1630
 frontend/src/app/App.tsx 1216
 frontend/src/components/EdgeDetailPanel.tsx 777
 frontend/src/components/NodeInspector.tsx 958
 frontend/src/components/OrthogonalEdge.tsx 577
-frontend/src/components/SettingsSurface.tsx 2116
 frontend/src/components/editNodeDerivation.ts 675
 frontend/src/components/tour/TourCards.tsx 464
 frontend/src/hooks/useTour.ts 658

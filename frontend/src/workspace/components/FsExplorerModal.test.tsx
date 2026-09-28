@@ -6,7 +6,9 @@ import FsExplorerModal from "./FsExplorerModal";
 import type { BrowseResponse } from "../api/browse";
 import { browseFs } from "../api/browse";
 
-vi.mock("../../api", () => ({}));
+vi.mock("../../settings/api/settings", () => ({}));
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
 
 vi.mock("../api/browse", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/browse")>()),

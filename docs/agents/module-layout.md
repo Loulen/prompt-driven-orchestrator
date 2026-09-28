@@ -155,9 +155,10 @@ Contexts already out of the legacy crate:
   the verdicts' projection in `adapters/http/verdicts/`. The context reads the other contexts
   through narrow ports (`application/ports.rs`): tmux and the declared wait (session), the
   Projets (workspace), the bank and the delivery (skill), the staging profiles (sandbox),
-  wired by `adapters/contexts.rs`; and what is still legacy through `InstanceSettings` (the
-  instance defaults and the agentic profiles) and `RunSurfaces` (archive and `retry_all`,
-  whose answers the commands forward verbatim), implemented in `run_ports.rs`. The node routes,
+  wired by `adapters/contexts.rs`; the instance defaults and the agentic profiles through
+  `InstanceSettings` (implemented by the settings context since #929); and what is still
+  legacy through `RunSurfaces` (archive and `retry_all`, whose answers the commands forward
+  verbatim), implemented in `run_ports.rs`. The node routes,
   `/runs/{run_id}/commands` and `/stale/health` are in its `router()`; the agent CLI (`pdo
   complete`, `fail`, `skip`, `wait-user`, `run wait`) is `adapters/cli/`. Tests: the use cases against in-memory ports
   (`tests/use_cases/`, stage 2); the context over its real adapters — SQLite, git in a
@@ -228,8 +229,8 @@ Contexts already out of the legacy crate:
   the `ReviewRuns` port (`adapters/runs.rs`, over `pdo_run::Runs`: the log, the projection, the
   Run's repository and worktree, the manager on demand, the paste into its session), git through
   `ReviewGit` (`adapters/git.rs`, over the workspace's `adapters/git/revisions.rs`) and the
-  `review_agent_can_resolve` instance setting through `ReviewSettings` (the legacy crate's
-  `review_ports.rs` until the settings context moves out). Every gesture — send, reply,
+  `review_agent_can_resolve` instance setting through `ReviewSettings` (implemented by the
+  settings context since #929). Every gesture — send, reply,
   resolve, reopen — receives the Acteur and asks the Autorisation d'opération before it reads
   the Run (`review_comment` × `create`, or × `reply` / `resolve` / `reopen` on
   `<run>/<comment>`); the author of a reply is the Acteur's node. The use cases answer a
@@ -265,7 +266,7 @@ Contexts already out of the legacy crate:
   creation without its gate), the pipelines of the library, the repositories (the write-boundary
   rule and the pre-cut fetch through the workspace's git), the staging profiles, the platform's
   audit journal. The pause and the guard timeout are the instance settings', implemented by
-  the legacy crate in `trigger_ports.rs` until #929. The legacy crate reads the Triggers
+  the settings context since #929. The legacy crate reads the Triggers
   through `pdo_trigger::adapters::sqlite::list` (the referents of a skill, a staging profile, an
   agentic profile) and creates their tables through its `init`. `GET /stale/health` is the Run's
   stale sweep and stays in `pdo-run`. Tests: the use cases against in-memory ports
@@ -306,6 +307,43 @@ Contexts already out of the legacy crate:
   `RUST_LOG=pdo_stats::application::prices`. Front: the Stats modal and its tabs
   (`stats/components/`, `StatsCharts` split by tab under `components/charts/`), the absorptions,
   their hooks (`stats/store/`), models and API (`stats/api/`).
+- `settings` (#929): `crates/pdo-settings`, `frontend/src/settings/`. The last context of the
+  map: it depends on the others, never the other way round. The `instance_config` hub is
+  dissolved: **each context owns its instance defaults** — their env var, their built-in
+  value, their `stored → env → default` resolver, and how `GET /settings` discloses them, in
+  its own `adapters/instance_defaults.rs` (`pdo_run`: the cap, the auto-completion, the
+  auto-naming, `auto_fail`, the manager's auto-start and pin, the attachment budget;
+  `pdo_session`: the reaper's TTLs, the default model and harness; `pdo_trigger`: the guard
+  timeout; `pdo_review`: `review_agent_can_resolve`; `pdo_platform`: `update_check`;
+  `pdo_sandbox`: the default sandbox, the staging profiles' names, Docker), with the shape
+  `pdo_kernel::instance_default::Disclosed`. The settings context keeps the stored tier (one
+  singleton row, `adapters/sqlite/`) and assembles the page: each context is one
+  `SettingsSection` (`adapters/sections/`), the page is their union plus the instance tiers it
+  owns (the agentic profile and the skills selection). Its `domain/` holds the stored row and
+  the edit a `PUT` may make of it (`edit.rs`: the retired fields, the bounds), an agentic
+  profile (the draft, the name clash), who names one. Every mutation is a use case that asks
+  the Autorisation d'opération first: the edit of the settings (`instance_settings` ×
+  `update`), the create, edit and delete of an agentic profile (`agent_profile` × `create` /
+  `update` / `delete` on the profile). The boot's warning about the retired sandbox settings
+  and the catalogues' warm-up are transitions and never ask. The ports the upstream contexts
+  read their settings through (`InstanceSettings`, `ReviewSettings`, `TriggerSettings`,
+  `UpdateCheckSetting`) are implemented by `adapters/contexts/`, and the composition root wires
+  them over the context's stores before the contexts that read them. The legacy crate still
+  reads the stored row through `pdo_settings::adapters::sqlite::instance_config` (the sweep's
+  TTLs, the referents of a skill and of a staging profile) and creates the tables through its
+  `init`. Tests: the use cases against in-memory ports (`tests/use_cases/`, stage 2, replacing
+  the legacy router `oneshot` tests of `/settings`), the stored tier, the profiles, the page
+  through the context's router and the upstream ports over the real SQLite (`tests/adapters/`,
+  stage 3, the legacy crate's in-crate tests of this code, moved), the unit tests beside their
+  code. `RUST_LOG=pdo_daemon` (the settings handlers, the boot warning) becomes
+  `RUST_LOG=pdo_settings::application` (`::boot`, `::agent_profiles::read`…). Front: the API
+  (`settings/api/{settings, agentProfiles}`), the draft, the source notes, the categories and
+  the agentic profiles' helpers (`settings/model/`), the stores of the page, of the form and
+  of the profiles (`settings/store/`), the surface (`SettingsSurface`, split by section under
+  `components/settingsSurface/`), `AgentProfilesPanel` and `AgentProfileModal`.
+  The legacy crate's router declares no route any more: route coverage reads the context
+  routers only.
+
 While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package

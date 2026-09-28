@@ -14,8 +14,6 @@ use pdo_platform::domain::audit::NewAuditEntry;
 use pdo_platform::Platform;
 use pdo_run::application::paths::resolve_pipeline_path;
 use pdo_sandbox::application::ports::SandboxProfileRepository;
-use pdo_sandbox::domain::mode::SandboxMode;
-use pdo_sandbox::domain::profile::{FULL_PROFILE, MINIMAL_PROFILE};
 
 pub use repositories::GitRepositories;
 pub use runs::RunsOfTriggers;
@@ -49,31 +47,12 @@ impl TriggerPipelines for LibraryPipelines {
 pub struct StagingProfiles(pub Arc<dyn SandboxProfileRepository>);
 
 impl SandboxProfiles for StagingProfiles {
-    /// The SHARED existence gate for any `sandbox` reference a client can store
-    /// (ADR-0031 §7). `""` is the *clear* sentinel and `off` means "no sandbox", so
-    /// both are always valid; anything else must name a profile that resolves.
-    ///
-    /// A **write-time** gate, deliberately not the authoritative one — the create-run
-    /// chokepoint is, and it re-resolves at every fire. This one exists so the error
-    /// lands where the user can fix it.
+    /// The sandbox context's write-time gate.
     fn validate<'a>(&'a self, raw: &'a str) -> BoxFuture<'a, Result<(), String>> {
-        Box::pin(async move {
-            let Some(mode) = SandboxMode::parse(raw) else {
-                return Ok(()); // "" / whitespace = the clear sentinel
-            };
-            let Some(name) = mode.profile() else {
-                return Ok(()); // `off`
-            };
-            match pdo_sandbox::application::profiles::exists(self.0.as_ref(), name).await {
-                Ok(true) => Ok(()),
-                Ok(false) => Err(format!(
-                    "unknown sandbox profile `{name}`: use `off`, `{MINIMAL_PROFILE}`, \
-                     `{FULL_PROFILE}`, or a profile you created under Settings → Staging \
-                     profiles",
-                )),
-                Err(e) => Err(format!("sandbox profile store error: {e}")),
-            }
-        })
+        Box::pin(pdo_sandbox::application::profiles::validate_ref(
+            self.0.as_ref(),
+            raw,
+        ))
     }
 }
 

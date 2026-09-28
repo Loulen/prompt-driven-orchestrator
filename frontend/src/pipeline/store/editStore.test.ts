@@ -11,10 +11,10 @@ import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
 import { legacyScope } from "../../test/legacy";
 
-vi.mock("../../api", async (importOriginal) => ({
+vi.mock("../../settings/api/settings", async (importOriginal) => ({
   // Keep the real `ApiError` (a value the store reads via `instanceof`) while
   // stubbing the network wrappers the store calls.
-  ...(await importOriginal<typeof import("../../api")>()),
+  ...(await importOriginal<typeof import("../../settings/api/settings")>()),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   fetchPipeline: vi.fn().mockResolvedValue({
     scope: "repo",
@@ -46,19 +46,21 @@ vi.mock("../../api", async (importOriginal) => ({
   renamePipeline: vi.fn().mockResolvedValue({ ok: true }),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "x", scope: "user" }),
 }));
-// The run context's API answers with the mock of `../../api`.
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../../run/api/runPipeline", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 vi.mock("../api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 
 const mockSavePipeline = vi.mocked(savePipeline);

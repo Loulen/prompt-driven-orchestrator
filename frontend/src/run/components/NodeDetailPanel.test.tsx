@@ -36,13 +36,15 @@ const previewProvisioningMock = vi.fn().mockResolvedValue({
 const markNodeDoneMock = vi.fn().mockResolvedValue({ kind: "completed" });
 const releaseNodeCompletionMock = vi.fn().mockResolvedValue({ kind: "released" });
 
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
-// The run context's API answers with the mock of `../../api`.
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../api/artifacts", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 vi.mock("../api/commands", () => ({
   killNode: (...args: unknown[]) => killNodeMock(...args),

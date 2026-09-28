@@ -4,7 +4,7 @@ import { edgeIndexFromId } from "./editNodeDerivation";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
-vi.mock("../api", () => ({
+vi.mock("../settings/api/settings", () => ({
   fetchPipelines: vi.fn().mockResolvedValue([]),
   fetchPipeline: vi.fn().mockResolvedValue({
     scope: "repo",
@@ -19,15 +19,17 @@ vi.mock("../api", () => ({
   savePipeline: vi.fn().mockResolvedValue(undefined),
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
 }));
-// The run context's API answers with the mock of `../api`.
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The run context's API answers with the mock of `../settings/api/settings`.
 vi.mock("../run/api/runPipeline", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
-// The pipeline context's API answers with the mock of `../api` above.
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 
 function makePipeline(nodes: EditorNodeDef[] = [], edges: EdgeDef[] = []): EditorPipelineDef {

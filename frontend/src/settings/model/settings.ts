@@ -1,6 +1,7 @@
 /**
- * Hand-written shapes of the instance-settings payloads that have no Rust DTO
- * yet (built with `json!` on the daemon side, `build_settings_view`).
+ * Hand-written shapes of the instance-settings payloads that have no generated type yet:
+ * `GET /settings` is the union of each context's section (`<context>::adapters::
+ * instance_defaults`, assembled by the settings context), serialized as a JSON object.
  */
 
 import type { AgentChoice } from "../../shared/generated/AgentChoice";

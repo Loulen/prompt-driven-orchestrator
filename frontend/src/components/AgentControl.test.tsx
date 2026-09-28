@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import AgentControl from "./AgentControl";
-import { combinationLabel, resolveAgentChoice } from "../lib/agentProfiles";
+import { combinationLabel, resolveAgentChoice } from "../settings/model/agentProfiles";
 import type { HarnessOption } from "../harness/model/catalog";
 
 const profiles = [{

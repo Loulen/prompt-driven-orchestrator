@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within, act } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import NodeInspector from "./NodeInspector";
 import type { LibraryEntry } from "../pipeline/model/library";
-import { fetchSettings } from "../api";
+import { fetchSettings } from "../settings/api/settings";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../pipeline/api/library";
 import { useEditStore } from "../pipeline/store/editStore";
 import { TooltipProvider } from "../shared/ui/tooltip";
@@ -20,7 +20,7 @@ vi.mock("../skill/api/bank", () => ({
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
 }));
 
-vi.mock("../api", () => ({
+vi.mock("../settings/api/settings", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchLibrary: vi.fn().mockResolvedValue([]),
   // #586: the harness pin picker now fetches /settings for its dynamic option
@@ -86,10 +86,12 @@ vi.mock("../api", () => ({
     prompt: "stub",
   }),
 }));
-// The pipeline context's API answers with the mock of `../api` above.
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../pipeline/api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({

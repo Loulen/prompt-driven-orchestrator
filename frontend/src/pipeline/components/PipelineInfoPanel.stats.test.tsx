@@ -8,15 +8,17 @@ import type { RunState } from "../../shared/generated/RunState";
 vi.mock("../../review/api/diff", () => ({
   fetchRunStructuredDiff: vi.fn().mockResolvedValue({ files: [], additions: 0, deletions: 0, files_changed: 0 }),
 }));
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   // #803: the Info tab reads the Run's drift on mount. Unreadable here, so the
   // Source block never renders and these stay tests about the Stats block.
   fetchSourceDrift: vi.fn().mockRejectedValue(new Error("no drift in this test")),
 }));
-// The run context's API answers with the mock of `../../api`.
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../../run/api/runs", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 
 vi.mock("../../workspace/api/repos", async (importOriginal) => ({

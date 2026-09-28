@@ -43,6 +43,53 @@ impl PriceTable {
     }
 }
 
+/// Which price tier won, as `GET /settings` shows it: an observed STATE, not a
+/// knob. A hand-edited file passes through NO validator by construction, so the
+/// only honest place to surface a refused row is here, as an advisory `reason`
+/// (the SAME string the loader logs). Both paths are ALWAYS named, even when
+/// neither file exists — nothing is ever seeded (ADR-0031 §2), so naming the
+/// paths IS the whole discoverability story.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PriceTableState {
+    pub manual_path: Option<String>,
+    pub fetched_path: Option<String>,
+    pub source: Option<String>,
+    pub fetched_at: Option<String>,
+    pub fetched_rows: usize,
+    pub manual_keys: Vec<String>,
+    pub reason: Option<String>,
+}
+
+/// The state of the table under `home_root`, or what `None` (HOME unset) means.
+pub fn price_table_state(home_root: Option<&Path>) -> PriceTableState {
+    let Some(home) = home_root else {
+        return PriceTableState {
+            manual_path: None,
+            fetched_path: None,
+            source: None,
+            fetched_at: None,
+            fetched_rows: 0,
+            manual_keys: Vec::new(),
+            reason: Some(
+                "HOME is unset, so the price files have no resolvable path — \
+                 only the prices compiled into the binary apply"
+                    .to_string(),
+            ),
+        };
+    };
+    let table = PriceTable::load(home);
+    let (manual_path, fetched_path) = PriceTable::paths(home);
+    PriceTableState {
+        manual_path: Some(manual_path.to_string_lossy().into_owned()),
+        fetched_path: Some(fetched_path.to_string_lossy().into_owned()),
+        source: table.source().map(str::to_string),
+        fetched_at: table.fetched_at().map(str::to_string),
+        fetched_rows: table.fetched_rows(),
+        manual_keys: table.manual_keys().to_vec(),
+        reason: table.diagnostic(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

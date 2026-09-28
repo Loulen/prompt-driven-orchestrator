@@ -1155,8 +1155,8 @@ describe("the definition holds the copy rules", () => {
 
 // ---- the preparations -----------------------------------------------------
 
-vi.mock("../../api", async () => {
-  const actual = await vi.importActual<typeof import("../../api")>("../../api");
+vi.mock("../../settings/api/settings", async () => {
+  const actual = await vi.importActual<typeof import("../../settings/api/settings")>("../../settings/api/settings");
   return {
     ...actual,
     fetchPipelines: vi.fn(async () => [] as unknown[]),
@@ -1164,10 +1164,12 @@ vi.mock("../../api", async () => {
     savePipeline: vi.fn(async () => ({ ok: true })),
   };
 });
-// The pipeline context's API answers with the mock of `../../api` above.
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The pipeline context's API answers with the mock of `../../settings/api/settings` above.
 vi.mock("../../pipeline/api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 
 vi.mock("../../workspace/api/repos", async (importOriginal) => ({

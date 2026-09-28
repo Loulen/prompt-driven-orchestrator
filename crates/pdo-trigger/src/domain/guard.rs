@@ -9,6 +9,9 @@ use std::time::Duration;
 /// the scheduler.
 pub const GUARD_TIMEOUT_SECS: u64 = 60;
 
+/// The longest guard timeout an operator may store, in seconds.
+pub const MAX_GUARD_TIMEOUT_SECS: u64 = 600;
+
 /// Cap on the guard output we *capture* for the fire history (#244): each of
 /// stdout/stderr is tail-kept to at most this many bytes. This bounds the
 /// diagnostic blob stored per skip row; it is **never** applied to the `Pass`
@@ -43,7 +46,7 @@ pub fn cap_tail(s: &str, limit: usize) -> String {
 /// rejects it with `400`, so this is a defensive floor).
 pub fn guard_timeout(stored_secs: Option<u64>, env_ms: Option<u64>) -> Duration {
     stored_secs
-        .filter(|&n| (1..=600).contains(&n))
+        .filter(|&n| (1..=MAX_GUARD_TIMEOUT_SECS).contains(&n))
         .map(Duration::from_secs)
         .or_else(|| env_ms.map(Duration::from_millis))
         .unwrap_or_else(|| Duration::from_secs(GUARD_TIMEOUT_SECS))

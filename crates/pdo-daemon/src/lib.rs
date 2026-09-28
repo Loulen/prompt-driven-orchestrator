@@ -3,16 +3,12 @@
 // (with `clippy -D warnings`) keeps the crate surface from re-widening.
 #![warn(unreachable_pub)]
 
-mod agent_profile;
 mod contexts;
-mod instance_config;
 mod pipeline_ports;
-mod review_ports;
 mod run_ports;
 mod sandbox_ports;
 mod session_ports;
 mod stats_ports;
-mod trigger_ports;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -20,24 +16,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use axum::extract::{Json, Path as AxumPath, State};
 use axum::http::{header, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
 use axum::Router;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
-use serde::Deserialize;
 use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{error, info, warn};
-use ts_rs::TS;
 
 use crate::contexts::ContextResourcesSeed;
 pub use crate::contexts::{
     ContextResources, Contexts, PipelineResources, RunResources, SessionRunPorts,
 };
-pub use crate::trigger_ports::TriggerResources;
 pub use pdo_platform::adapters::cli::{PageAction, ServiceAction};
 pub use pdo_platform::domain::service_health::ServiceHealthOverride;
 
@@ -65,12 +56,8 @@ pub(crate) use pdo_pipeline::domain::pipeline;
 // its comments) in `pdo-review` (#926).
 pub use pdo_review::adapters::cli::{run_review, ReviewAction};
 pub use pdo_run::adapters::cli::{run_reap, run_run_create, RunAction};
-use pdo_run::adapters::env::{
-    env_max_attachments_mb, resolve_max_attachments_mb, MAX_ATTACHMENTS_MB_DEFAULT,
-};
 use pdo_run::application::boot_recovery;
 use pdo_run::application::events::append_event as append_run_event;
-pub(crate) use pdo_run::application::node::prompt as prompt_augmenter;
 use pdo_run::application::paths::{dirs_next_home, instance_pipeline_dir, resolve_pipeline_path};
 use pdo_run::application::pipeline_modified::relay_pipeline_modifications;
 pub(crate) use pdo_run::application::sandbox as run_sandbox;
@@ -78,6 +65,7 @@ use pdo_run::application::session_claim::SessionClaim;
 pub(crate) use pdo_run::application::stale::detector as stale_detector;
 use pdo_run::application::stale::sweep::run_stale_detection_supervised;
 use pdo_run::application::supervision::run_isolated;
+#[cfg(test)]
 pub(crate) use pdo_run::domain::admission;
 
 /// A Run's events, its state and their projection, from the run context
@@ -292,20 +280,6 @@ struct AppState {
     /// Per-daemon sandbox home-root override, so layer-3 staging lands under the
     /// test's tempdir. Seeded via [`DaemonConfig`].
     sandbox_home_override: Option<PathBuf>,
-    /// TTL cache (~10 s) of the Docker availability probe, surfaced as
-    /// `sandbox_docker` on `GET /settings`. Lazily refreshed when stale — not
-    /// boot-once (a user may start Docker mid-session) and not per-fetch (a `PUT`
-    /// of an unrelated knob would pay a docker round-trip). The refresh runs under
-    /// `spawn_blocking` + a short `timeout`, so a cold Docker daemon never hangs
-    /// the `/settings` response.
-    docker_probe_cache: Arc<pdo_sandbox::application::docker_probe::DockerProbeCache>,
-    /// Per-harness offered-catalogue cache (ADR-0053 §3), keyed by harness name.
-    /// Freshness contract: at most one `--version` re-check per harness per
-    /// version window, and a full `--help` re-probe only when that version
-    /// changed — so an auto-updating binary is followed without a restart, at
-    /// bounded subprocess cost on the `/settings` path. Never persisted: the truth
-    /// is on disk, so a restart just re-reads it.
-    harness_catalogue: Arc<pdo_harness::application::read_catalogue::CatalogueReader>,
     /// The `stats` context (#928): the Stats cockpit, its absorptions and the
     /// price sync, wired by the composition root. The legacy side only drives
     /// its boot refresh.
@@ -473,6 +447,8 @@ pub struct DaemonHandle {
     state: Arc<AppState>,
     /// The trigger context (#927), for its test seams.
     triggers: Arc<pdo_trigger::Triggers>,
+    /// The settings context (#929), for its test seams.
+    settings: Arc<pdo_settings::Settings>,
 }
 
 impl DaemonHandle {
@@ -514,7 +490,7 @@ impl DaemonHandle {
     /// Warm the harness-catalogue cache synchronously. Production spawns it
     /// DETACHED at boot, so a test drives it here instead of racing that task.
     pub async fn run_catalogue_probe_tick(&self) {
-        probe_harness_catalogues_at_boot(&self.state).await;
+        self.settings.warm_harness_catalogues().await;
     }
 
     /// Run a single orphan-sweep (reaper) pass synchronously, instead of racing
@@ -969,7 +945,10 @@ pub async fn serve_with_config(
     // Must sit after the schema is up (the reader PRAGMA-probes the columns) and
     // before anything can consume a setting — the only moment where "one line per
     // boot" is a fact rather than a hope.
-    warn_about_retired_sandbox_settings(&db).await;
+    pdo_settings::application::boot::warn_about_retired_settings(
+        &pdo_settings::adapters::sqlite::SqliteInstanceConfig::new(db.clone()),
+    )
+    .await;
 
     // One-shot migration of prompts stranded in the flat
     // `<repo>/.pdo/pipelines/prompts/` dir into each pipeline's canonical
@@ -1040,6 +1019,7 @@ pub async fn serve_with_config(
     // into the state being built — hence the cyclic construction.
     let mut contexts_router: Option<Router> = None;
     let mut triggers: Option<Arc<pdo_trigger::Triggers>> = None;
+    let mut settings: Option<Arc<pdo_settings::Settings>> = None;
     let resources = ContextResourcesSeed {
         db: db.clone(),
         repo_root: repo_root.clone(),
@@ -1077,6 +1057,7 @@ pub async fn serve_with_config(
         let wired = wire_contexts(resources.into_resources(weak.clone()));
         contexts_router = Some(wired.router);
         triggers = Some(wired.triggers);
+        settings = Some(wired.settings);
         AppState {
             workspace,
             skills,
@@ -1088,10 +1069,6 @@ pub async fn serve_with_config(
             recent_writes,
             docker_cmd_override: config.docker_cmd_override,
             sandbox_home_override: config.sandbox_home_override,
-            docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_catalogue: Arc::new(
-                pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-            ),
             stats: wired.stats,
             allowed_ws_origins: config.allowed_ws_origins,
             session: wired.session,
@@ -1103,6 +1080,7 @@ pub async fn serve_with_config(
         .await
         .map_err(|e| anyhow::anyhow!("failed to create the platform tables: {e}"))?;
     let triggers = triggers.context("the context wiring gave no trigger context")?;
+    let settings = settings.context("the context wiring gave no settings context")?;
 
     // A nested daemon suppresses every AUTOMATIC cleanup pathway, so a Tester or
     // Implementer that accidentally runs `pdo daemon` can't trigger reaper-based
@@ -1261,10 +1239,10 @@ pub async fn serve_with_config(
     // the price refresh: probing every harness's `--help`/`--version` must not
     // delay the first `accept()`.
     {
-        let catalogue_state = state.clone();
+        let settings = settings.clone();
         tokio::spawn(async move {
             run_isolated("harness catalogue probe", async move {
-                probe_harness_catalogues_at_boot(&catalogue_state).await;
+                settings.warm_harness_catalogues().await;
             })
             .await;
         });
@@ -1275,6 +1253,7 @@ pub async fn serve_with_config(
         task,
         state,
         triggers,
+        settings,
     })
 }
 
@@ -1310,35 +1289,6 @@ pub fn daemon_cli_config(bind: Option<IpAddr>, port: u16) -> DaemonConfig {
     config
 }
 
-/// The SHARED existence gate for any `sandbox` reference a client can store (ADR-0031
-/// §7). `""` is the *clear* sentinel and `off` means "no sandbox", so both are always
-/// valid; anything else must name a profile that resolves.
-///
-/// A **write-time** gate, deliberately not the authoritative one — the create-run
-/// chokepoint is, and it re-resolves at every fire. This one exists so the error lands
-/// where the user can fix it. The `env` tier (`PDO_DEFAULT_SANDBOX`) never passes
-/// through here, which is why `build_settings_view` also discloses a `reason` on
-/// `default_sandbox`.
-async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), String> {
-    let Some(mode) = event_log::SandboxMode::parse(raw) else {
-        return Ok(()); // "" / whitespace = the clear sentinel
-    };
-    let Some(name) = mode.profile() else {
-        return Ok(()); // `off`
-    };
-    match pdo_sandbox::application::profiles::exists(&sandbox_ports::profile_store(db), name).await
-    {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(format!(
-            "unknown sandbox profile `{name}`: use `off`, `{}`, `{}`, or a profile you \
-             created under Settings → Staging profiles",
-            pdo_sandbox::domain::profile::MINIMAL_PROFILE,
-            pdo_sandbox::domain::profile::FULL_PROFILE,
-        )),
-        Err(e) => Err(format!("sandbox profile store error: {e}")),
-    }
-}
-
 /// ROUTER TRAP: any NEW top-level path prefix (`/nodes`, `/stats`, `/fs`, `/audit`,
 /// `/projects`, …) also needs its own entry in the vite dev proxy whitelist
 /// (`frontend/vite.config.ts`). Without it a dev-mode request answers 200 with the
@@ -1347,29 +1297,6 @@ async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), St
 /// same subtree is fine — axum 0.8 prefers the static one.
 fn build_router(state: Arc<AppState>) -> Router {
     let router = Router::new()
-        // Instance-wide settings (ADR-0015). `GET` returns the per-field
-        // {effective, source, stored, env, default} view; `PUT` writes the stored
-        // tier, with fail-fast validation.
-        .route("/settings", get(get_settings).put(put_settings))
-        // Staging profiles (ADR-0031 §2-§7) sit UNDER `/settings` as a routing
-        // decision only. It is NOT a claim about the schema: profiles are ROWS, not
-        // an {effective, source, stored, env, default} knob, and they must NOT be
-        // folded into `build_settings_view` beyond the name list. The price sync
-        // (ADR-0034) is the stats context's (#928).
-        .route(
-            "/settings/agent-profiles",
-            get(list_agent_profiles).post(create_agent_profile),
-        )
-        .route(
-            "/settings/agent-profiles/{id}",
-            get(get_agent_profile)
-                .put(update_agent_profile)
-                .delete(delete_agent_profile),
-        )
-        .route(
-            "/settings/agent-profiles/{id}/referents",
-            get(get_agent_profile_referents),
-        )
         .fallback(static_handler)
         .with_state(state.clone())
         .merge(
@@ -1397,9 +1324,11 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .await
         .context("failed to create trigger tables")?;
 
-    instance_config::init(db)
+    // The stored instance settings and the agentic profiles (seeded with the
+    // reserved `Default`) belong to the settings context (#929).
+    pdo_settings::adapters::sqlite::init(db)
         .await
-        .context("failed to create instance_config table")?;
+        .context("failed to create the instance settings and agent profiles tables")?;
 
     // NO seed row: `minimal` and `full` are virtual defaults (ADR-0031 §2), so an
     // untouched install has zero rows here and still resolves both names.
@@ -1414,12 +1343,6 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     pdo_workspace::adapters::sqlite::init(db)
         .await
         .context("failed to create project and provisioning rules tables")?;
-
-    // Unlike `project_store`, this table IS seeded: the reserved `Default` profile
-    // must exist on every instance, immediately.
-    agent_profile::init(db)
-        .await
-        .context("failed to create agent_profiles table")?;
 
     // The Banque de skills index (#668, ADR-0062). Content lives on disk under
     // `<repo_root>/.pdo/skills/<id>/`; nothing is seeded.
@@ -1436,953 +1359,6 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
 }
 
 // --- API handlers ---
-
-/// One knob's `stored → env → default` disclosure for `GET /settings` (ADR-0015):
-/// `effective` is what the daemon actually uses, produced by the same resolver, and
-/// each tier is exposed so the UI can *reveal* a shadowed env var instead of ignoring
-/// it. Values are in the knob's canonical unit — except the guard's `env`, which is
-/// the raw `PDO_GUARD_TIMEOUT_MS` in milliseconds, the env seam's own unit.
-fn settings_field(
-    effective: i64,
-    source: &str,
-    stored: Option<i64>,
-    env: Option<i64>,
-    default: i64,
-) -> serde_json::Value {
-    serde_json::json!({
-        "effective": effective,
-        "source": source,
-        "stored": stored,
-        "env": env,
-        "default": default,
-    })
-}
-
-/// String sibling of [`settings_field`]. Every tier is a string-or-null: there is no
-/// baked-in default model, so `default` is always `null` (the account default = no
-/// `--model`).
-fn settings_field_str(
-    effective: Option<&str>,
-    source: &str,
-    stored: Option<&str>,
-    env: Option<&str>,
-) -> serde_json::Value {
-    serde_json::json!({
-        "effective": effective,
-        "source": source,
-        "stored": stored,
-        "env": env,
-        "default": serde_json::Value::Null,
-    })
-}
-
-/// Boolean sibling of [`settings_field`] for a checkbox knob. Unlike
-/// [`settings_field_str`], `default` is a real value.
-fn settings_field_bool(
-    effective: bool,
-    source: &str,
-    stored: Option<bool>,
-    env: Option<bool>,
-    default: bool,
-) -> serde_json::Value {
-    serde_json::json!({
-        "effective": effective,
-        "source": source,
-        "stored": stored,
-        "env": env,
-        "default": default,
-    })
-}
-
-/// The cached Docker availability probe (advisory: the run-advance fail-fast stays the
-/// authoritative gate).
-async fn docker_probe_cached(state: &AppState) -> pdo_sandbox::domain::image::DockerProbe {
-    pdo_sandbox::application::docker_probe::probe_cached(
-        &state.docker_probe_cache,
-        run_sandbox::runtime(&state.run).docker,
-    )
-    .await
-}
-
-/// Probe every installed harness's catalogue once, populating the cache, so the
-/// first `/settings` fetch answers warm.
-async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
-    let home = run_sandbox::sandbox_home_roots(&state.run)
-        .ok()
-        .map(|(h, _)| h);
-    let registry = pdo_harness::adapters::descriptor_file::load_or_builtin(home.as_deref());
-    pdo_harness::application::harness_offers::warm_catalogues(&state.harness_catalogue, &registry)
-        .await;
-}
-
-/// Build the `GET /settings` view: per knob, the effective value, the winning tier,
-/// and every tier's raw value (ADR-0015). Each `effective` MUST be computed by that
-/// knob's own resolver, or the page drifts from what the daemon uses at spawn /
-/// sweep / tick time.
-async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx::Error> {
-    let db = &state.db;
-    let cfg = instance_config::get(db).await?;
-
-    let cap_default = admission::DEFAULT_SESSION_CAP as i64;
-    let cap_stored_wins = cfg.session_cap.filter(|&n| n >= 1);
-    let cap_env = pdo_run::adapters::env::env_cap().map(|n| n as i64);
-    let cap_effective =
-        pdo_run::adapters::env::configured_cap_with(cfg.session_cap.map(|n| n as usize)) as i64;
-    let cap_source = if cap_stored_wins.is_some() {
-        "stored"
-    } else if cap_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    let ttl_default = pdo_session::domain::settings::DEFAULT_REAPER_TTL.as_secs() as i64;
-    let ttl_stored_wins = cfg.reaper_ttl_secs.filter(|&n| n >= 1);
-    let ttl_env = pdo_session::adapters::env::env_reaper_ttl_secs().map(|n| n as i64);
-    let ttl_effective = pdo_session::adapters::env::reaper_ttl_with(
-        cfg.reaper_ttl_secs.map(|n| n as u64),
-    )
-    .as_secs() as i64;
-    let ttl_source = if ttl_stored_wins.is_some() {
-        "stored"
-    } else if ttl_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    let lat_default = pdo_session::domain::settings::DEFAULT_LIBASSIST_IDLE_TTL.as_secs() as i64;
-    let lat_stored_wins = cfg.libassist_idle_ttl_secs.filter(|&n| n >= 1);
-    let lat_env = pdo_session::adapters::env::env_libassist_idle_ttl_secs().map(|n| n as i64);
-    let lat_effective = pdo_session::adapters::env::libassist_idle_ttl_with(
-        cfg.libassist_idle_ttl_secs.map(|n| n as u64),
-    )
-    .as_secs() as i64;
-    let lat_source = if lat_stored_wins.is_some() {
-        "stored"
-    } else if lat_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    // The env seam is milliseconds; everything else here is seconds.
-    let guard_default = pdo_trigger::domain::guard::GUARD_TIMEOUT_SECS as i64;
-    let guard_stored_wins = cfg.guard_timeout_secs.filter(|&n| (1..=600).contains(&n));
-    let guard_env_ms = pdo_trigger::adapters::env::env_guard_timeout_ms().map(|n| n as i64);
-    let guard_effective =
-        pdo_trigger::adapters::env::guard_timeout_with(cfg.guard_timeout_secs.map(|n| n as u64))
-            .as_secs() as i64;
-    let guard_source = if guard_stored_wins.is_some() {
-        "stored"
-    } else if guard_env_ms.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    // The empty-string filter mirrors the resolver: a `""` stored/env value is
-    // treated as unset, so it never wins the tier or discloses a bogus value.
-    let dm_stored = cfg.default_model.as_deref().filter(|s| !s.is_empty());
-    let dm_env = pdo_session::adapters::env::env_default_model();
-    let dm_effective = pdo_session::adapters::env::default_model_with(cfg.default_model.clone());
-    let dm_source = if dm_stored.is_some() {
-        "stored"
-    } else if dm_env.is_some() {
-        "env"
-    } else {
-        // Effective=null, default=null ⇒ the account default (no --model).
-        "default"
-    };
-
-    // `effective`=null ⇒ the `claude` floor applies at resolve time.
-    let dh_stored = cfg.default_harness.as_deref().filter(|s| !s.is_empty());
-    let dh_env = pdo_session::adapters::env::env_default_harness();
-    let dh_effective =
-        pdo_session::adapters::env::default_harness_with(cfg.default_harness.clone());
-    let dh_source = if dh_stored.is_some() {
-        "stored"
-    } else if dh_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-    // The stored map plus the legacy `PDO_DEFAULT_MODEL` env folded under `claude`,
-    // so the screen shows exactly what the resolver's `instance` tier will read.
-    let dhm_stored = cfg.default_harness_model.clone();
-    let mut dhm_effective = dhm_stored.clone();
-    if !dhm_effective.contains_key(pdo_harness::registry::CLAUDE) {
-        if let Some(m) = dm_effective.clone() {
-            dhm_effective.insert(pdo_harness::registry::CLAUDE.to_string(), m);
-        }
-    }
-
-    // `effective` is computed by the SAME resolver the create-run chokepoint consumes,
-    // so the disclosed value cannot drift. This is the ONLY sandbox knob on this
-    // screen: what a sandboxed Run *is* — image, home content, env — belongs to the
-    // staging profile.
-    let sbx_stored = cfg.default_sandbox.as_deref().filter(|s| !s.is_empty());
-    let sbx_env = pdo_sandbox::adapters::env::DEFAULT_SANDBOX_ENV;
-    let sbx_env_val = std::env::var(sbx_env)
-        .ok()
-        .as_deref()
-        .and_then(event_log::SandboxMode::parse)
-        .map(|m| m.as_str().to_string());
-    let sbx_effective =
-        pdo_sandbox::adapters::env::default_sandbox_with(cfg.default_sandbox.clone());
-    let sbx_source = if sbx_stored.is_some() {
-        "stored"
-    } else if sbx_env_val.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-    // The winning tier may name a staging profile that does not exist, and every Run
-    // it produces dies with a 400. `put_settings` gates the *stored* tier, but the
-    // **env** tier passes through no validator by construction — so the only honest
-    // place to surface it is here, as an advisory `reason` beside the value.
-    let sbx_reason = match sbx_effective.profile() {
-        None => None,
-        Some(name) => {
-            match pdo_sandbox::application::profiles::exists(
-                &sandbox_ports::profile_store(db),
-                name,
-            )
-            .await
-            {
-                Ok(true) => None,
-                Ok(false) => Some(format!(
-                    "no staging profile named `{name}` — every Run that falls back to this \
-                 default will fail at launch (tier: {sbx_source})"
-                )),
-                Err(e) => Some(format!("cannot check staging profile `{name}`: {e}")),
-            }
-        }
-    };
-
-    // `effective` comes from the SAME resolver the sweep consumes. Stored is `0`/`1`;
-    // both are a stored *decision* and both win over the env.
-    let ate_stored = cfg.autocomplete_turn_end.map(|v| v != 0);
-    let ate_env = stale_detector::env_autocomplete_turn_end();
-    let ate_effective = stale_detector::autocomplete_turn_end_with(cfg.autocomplete_turn_end);
-    let ate_source = if ate_stored.is_some() {
-        "stored"
-    } else if ate_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    // Same discipline as `autocomplete_turn_end`, against the create chokepoint's
-    // resolver.
-    let dan_stored = cfg.default_auto_name.map(|v| v != 0);
-    let dan_env = prompt_augmenter::env_default_auto_name();
-    let dan_effective = prompt_augmenter::default_auto_name_with(cfg.default_auto_name);
-    let dan_source = if dan_stored.is_some() {
-        "stored"
-    } else if dan_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    // Same discipline, against `resolve_run_auto_fail`'s instance tier.
-    let af_stored = cfg.auto_fail.map(|v| v != 0);
-    let af_env = std::env::var(instance_config::AUTO_FAIL_ENV).ok().map(|s| {
-        let t = s.trim();
-        t.eq_ignore_ascii_case("1")
-            || t.eq_ignore_ascii_case("true")
-            || t.eq_ignore_ascii_case("yes")
-            || t.eq_ignore_ascii_case("on")
-    });
-    let af_effective = instance_config::resolve_instance_auto_fail(cfg.auto_fail);
-    let af_source = if af_stored.is_some() {
-        "stored"
-    } else if af_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    // #697: the version-check switch, same `0`/`1` stored discipline.
-    // #751: `review_agent_can_resolve`, against the reply endpoint's resolver.
-    let racr_stored = cfg.review_agent_can_resolve.map(|v| v != 0);
-    let racr_env = pdo_review::adapters::env::env_agent_can_resolve();
-    let racr_effective =
-        pdo_review::adapters::env::agent_can_resolve_with(cfg.review_agent_can_resolve);
-    let racr_source = if racr_stored.is_some() {
-        "stored"
-    } else if racr_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    let uc_stored = cfg.update_check.map(|v| v != 0);
-    let uc_env = pdo_platform::adapters::env::env_update_check();
-    let uc_effective =
-        pdo_platform::domain::update_check::resolve_update_check(cfg.update_check, uc_env);
-    let uc_source = if uc_stored.is_some() {
-        "stored"
-    } else if uc_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-
-    // Manager on demand: the auto-start flag, `stored → env → default(false)` —
-    // the SAME resolver the create-run chokepoint consumes, so the disclosed
-    // value cannot drift.
-    let me_stored = cfg.manager_enabled.map(|v| v != 0);
-    let me_env = std::env::var(instance_config::MANAGER_ENABLED_ENV)
-        .ok()
-        .map(|s| {
-            let t = s.trim();
-            t.eq_ignore_ascii_case("1")
-                || t.eq_ignore_ascii_case("true")
-                || t.eq_ignore_ascii_case("yes")
-                || t.eq_ignore_ascii_case("on")
-        });
-    let me_effective = instance_config::resolve_manager_enabled(cfg.manager_enabled);
-    let me_source = if me_stored.is_some() {
-        "stored"
-    } else if me_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-    // #779: the per-run attachment budget, `stored → env → default(50 MB)` —
-    // the SAME resolver the `POST /runs` multipart branch consumes.
-    let att_stored = cfg.max_attachments_mb.filter(|&n| n >= 1);
-    let att_env = env_max_attachments_mb();
-    let att_effective = resolve_max_attachments_mb(cfg.max_attachments_mb);
-    let att_source = if att_stored.is_some() {
-        "stored"
-    } else if att_env.is_some() {
-        "env"
-    } else {
-        "default"
-    };
-    // The profile pin: a stored agent-profile NAME, or unset (« Follow the
-    // Run »). No env tier — unlike the flag, a pin is a pure stored decision.
-    let mp_stored = cfg.manager_profile.as_deref().filter(|s| !s.is_empty());
-    let mp_source = if mp_stored.is_some() {
-        "stored"
-    } else {
-        "default"
-    };
-
-    // Not a `settings_field` — it has no stored/env/default tier. Folded in here so
-    // the modal learns the default AND whether Docker can run a sandbox in ONE fetch.
-    // Advisory: it grays out `full`/`minimal`, but the run-advance fail-fast
-    // (ADR-0030 pt 4) stays the authoritative gate.
-    let docker_probe = docker_probe_cached(state).await;
-
-    // NAMES ONLY is part of the contract, not an oversight: this payload is on the hot
-    // path of the launch dialog, which fetches settings on every open. Serving resolved
-    // entry lists here would make a `<select>` that needs three strings pay a
-    // per-profile fold. The editor reads `GET /settings/sandbox-profiles` for the rest.
-    //
-    // `home` is an observed FACT, not a tier: the filesystem explorer yields ABSOLUTE
-    // paths while a profile entry is RELATIVE to `$HOME`. It MUST honour
-    // `sandbox_home_override`, or the layer-3 harness and the daemon disagree about
-    // what "under $HOME" means.
-    let profile_names =
-        pdo_sandbox::application::profiles::names(&sandbox_ports::profile_store(db))
-            .await
-            .map_err(|e| sqlx::Error::Protocol(e.0))?;
-    let sandbox_profiles: Vec<serde_json::Value> = profile_names
-        .iter()
-        .map(|(name, is_virtual)| serde_json::json!({ "name": name, "virtual": is_virtual }))
-        .collect();
-    let host_home_path = run_sandbox::sandbox_home_roots(&state.run)
-        .ok()
-        .map(|(h, _)| h);
-    let host_home = host_home_path
-        .as_ref()
-        .map(|h| h.to_string_lossy().into_owned());
-
-    // An observed STATE, not a settings knob: no stored/env/default tier, only which
-    // of the three price tiers won. A hand-edited file passes through NO validator by
-    // construction, so the only honest place to surface a refused row is here, as an
-    // advisory `reason`.
-    //
-    // Both paths are ALWAYS reported, even when neither file exists — nothing is ever
-    // seeded (ADR-0031 §2), so naming the paths IS the entire discoverability story.
-    //
-    // The resolved read view lives on `/stats/cost` instead, beside the "Sync costs"
-    // action, so pressing sync and reading what PDO can price happen in one place.
-    let price_table_view = match &host_home_path {
-        Some(home) => {
-            let table = pdo_run::domain::prices::PriceTable::load(home);
-            let (manual_path, fetched_path) = pdo_run::domain::prices::PriceTable::paths(home);
-            serde_json::json!({
-                "manual_path": manual_path.to_string_lossy(),
-                "fetched_path": fetched_path.to_string_lossy(),
-                "source": table.source(),
-                "fetched_at": table.fetched_at(),
-                "fetched_rows": table.fetched_rows(),
-                "manual_keys": table.manual_keys(),
-                // The SAME string the loader logs, so the page and the journal cannot
-                // disagree.
-                "reason": table.diagnostic(),
-            })
-        }
-        None => serde_json::json!({
-            "manual_path": null,
-            "fetched_path": null,
-            "source": null,
-            "fetched_at": null,
-            "fetched_rows": 0,
-            "manual_keys": [],
-            "reason": "HOME is unset, so the price files have no resolvable path — \
-                       only the prices compiled into the binary apply",
-        }),
-    };
-
-    // The disk descriptor tier (ADR-0045), same posture as `price_table` above: a
-    // hand-edited descriptor file passes through NO validator, so the only honest
-    // place to say a descriptor is inert or refused is here. The harness context
-    // builds the whole block: each harness's offer, the refusals, the path.
-    let registry =
-        pdo_harness::adapters::descriptor_file::load_or_builtin(host_home_path.as_deref());
-    let offers =
-        pdo_harness::application::harness_offers::list_offers(&state.harness_catalogue, &registry)
-            .await;
-    let harness_descriptors_view = pdo_harness::adapters::http::descriptors_view::descriptors_view(
-        host_home_path.as_deref(),
-        &registry,
-        &offers,
-    );
-
-    Ok(serde_json::json!({
-        "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
-        "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
-        // Its own knob, deliberately not a reuse of `reaper_ttl_secs`: that one bounds
-        // a completed node's session (1 h), this one a REPL nobody is using (120 s).
-        "libassist_idle_ttl_secs": settings_field(lat_effective, lat_source, cfg.libassist_idle_ttl_secs, lat_env, lat_default),
-        "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
-        "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
-        // `default_harness_model` is a per-harness map, disclosed as
-        // {effective, stored} so the screen shows both what is set and what the
-        // resolver will read.
-        "default_harness": settings_field_str(dh_effective.as_deref(), dh_source, dh_stored, dh_env.as_deref()),
-        "default_harness_model": {
-            "effective": dhm_effective,
-            "stored": dhm_stored,
-        },
-        "agent_choice": cfg.agent_choice,
-        // #669: the Instance tier of the skills selection, as stored (ids + labels).
-        "skills": cfg.skills,
-        // The settings surface is where a broken descriptor is ALWAYS said.
-        "harness_descriptors": harness_descriptors_view,
-        "default_sandbox": {
-            "effective": sbx_effective.as_str(),
-            "source": sbx_source,
-            "stored": sbx_stored,
-            "env": sbx_env_val,
-            "default": event_log::SandboxMode::OFF_WIRE,
-            // `null` when the winning tier resolves. Only `default_sandbox` carries a
-            // `reason`: it is the one enum knob whose value space is open (a profile
-            // name), hence the one that can point at nothing.
-            "reason": sbx_reason,
-        },
-        "sandbox_profiles": sandbox_profiles,
-        "home": host_home,
-        "price_table": price_table_view,
-        "sandbox_docker": {
-            "available": docker_probe.available,
-            "reason": docker_probe.reason,
-            "checked_at": pdo_kernel::clock::now_iso(),
-        },
-        "autocomplete_turn_end": settings_field_bool(
-            ate_effective,
-            ate_source,
-            ate_stored,
-            ate_env,
-            stale_detector::AUTOCOMPLETE_TURN_END_DEFAULT,
-        ),
-        "default_auto_name": settings_field_bool(
-            dan_effective,
-            dan_source,
-            dan_stored,
-            dan_env,
-            prompt_augmenter::DEFAULT_AUTO_NAME_DEFAULT,
-        ),
-        // The global tier of `auto_fail`. Default `false`: an agent `pdo fail` parks
-        // the run for a human to confirm.
-        "auto_fail": settings_field_bool(af_effective, af_source, af_stored, af_env, false),
-        // #697: may the daemon ask the release source at all. Default ON.
-        "update_check": settings_field_bool(
-            uc_effective,
-            uc_source,
-            uc_stored,
-            uc_env,
-            pdo_platform::domain::update_check::UPDATE_CHECK_DEFAULT,
-        ),
-        // #751: may an agent's `pdo review reply --resolved` resolve the comment
-        // directly? Default OFF: the human resolves, the agent proposes (ADR-0067 §4).
-        "review_agent_can_resolve": settings_field_bool(
-            racr_effective,
-            racr_source,
-            racr_stored,
-            racr_env,
-            pdo_review::domain::comments::decision::AGENT_CAN_RESOLVE_DEFAULT,
-        ),
-        // Manager on demand: off by default — a Run starts managerless and the
-        // Manager tab's Start button (or the Settings toggle for future Runs)
-        // brings one up.
-        "manager_enabled": settings_field_bool(
-            me_effective,
-            me_source,
-            me_stored,
-            me_env,
-            instance_config::MANAGER_ENABLED_DEFAULT,
-        ),
-        // The agent-profile NAME the manager is pinned to, or null (« Follow the
-        // Run » — the manager mirrors the Run's harness/model/effort). A stored
-        // name whose profile was deleted dangles: the UI renders the #432
-        // tombstone, and the spawn falls back to « Follow the Run ».
-        "manager_profile": settings_field_str(mp_stored, mp_source, mp_stored, None),
-        // #779: images + files budget per Run, in MB. Bounds the multipart body
-        // of `POST /runs` and drives the modal's client-side gate.
-        "max_attachments_mb": settings_field(
-            att_effective,
-            att_source,
-            att_stored,
-            att_env,
-            MAX_ATTACHMENTS_MB_DEFAULT,
-        ),
-        "updated_at": cfg.updated_at,
-    }))
-}
-
-/// `GET /settings` — the instance-wide config, per knob, as
-/// `{effective, source, stored, env, default}` (ADR-0015). `GET /sessions` stays the
-/// lean status-bar view.
-async fn get_settings(State(state): State<Arc<AppState>>) -> Response {
-    match build_settings_view(&state).await {
-        Ok(view) => Json(view).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// The ONE boot line owed to a user whose database still holds `image_source` or
-/// `dockerfile_path`: those values are now **inert**, and a value that stops
-/// mattering must never do so in silence.
-///
-/// Returns `Option` rather than logging, so "nothing stored ⇒ nothing said" is a
-/// property of the value, not of a branch at the call site. ONE line for both
-/// columns: two lines for one obsolete decision would read like two problems.
-///
-/// `profile_hint` is the profile a Run currently falls back to — the concrete thing
-/// to go and edit. `None` degrades to naming the screen instead.
-fn retired_sandbox_settings_warning(
-    stored: &[(&'static str, String)],
-    profile_hint: Option<&str>,
-) -> Option<String> {
-    if stored.is_empty() {
-        return None;
-    }
-    let values = stored
-        .iter()
-        .map(|(field, value)| format!("`{field}` = `{value}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let where_to_go = match profile_hint {
-        Some(name) => format!("the staging profile `{name}`, which is this instance's default"),
-        None => "the staging profile your Runs launch with".to_string(),
-    };
-    let env_vars = instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS
-        .iter()
-        .map(|(_, env)| format!("`{env}`"))
-        .collect::<Vec<_>>()
-        .join(" / ");
-    Some(format!(
-        "instance_config still stores {values}, and #471 made those values IGNORED — a staging \
-         profile's own image source decides now. Set the image on {where_to_go} (Settings → \
-         Manage staging profiles…), or set {env_vars} in the daemon's environment to move the \
-         built-in default. No Run is affected either way."
-    ))
-}
-
-/// Say the above ONCE per boot, right after the schema is up. Best-effort: a DB read
-/// failure here must not stop a daemon from starting over a message about a setting
-/// that is already inert.
-async fn warn_about_retired_sandbox_settings(db: &sqlx::SqlitePool) {
-    let stored = match instance_config::retired_sandbox_image_values(db).await {
-        Ok(stored) => stored,
-        Err(e) => {
-            warn!("#471: cannot check for retired sandbox image settings: {e}");
-            return;
-        }
-    };
-    let hint = instance_config::get(db).await.ok().and_then(|cfg| {
-        pdo_sandbox::adapters::env::default_sandbox_with(cfg.default_sandbox)
-            .profile()
-            .map(String::from)
-    });
-    if let Some(msg) = retired_sandbox_settings_warning(&stored, hint.as_deref()) {
-        warn!("{msg}");
-    }
-}
-
-/// The message a `PUT /settings` gets for a retired field. It has to answer the only
-/// question the caller has — *where did it go?* — hence naming the profile editor AND
-/// the surviving env var; a bare "unknown field" would be true and useless.
-fn retired_setting_message(field: &str, env_var: &str) -> String {
-    format!(
-        "`{field}` is no longer an instance-wide setting: a staging profile's own image source \
-         replaced it (#471). Set the image on the profile itself (Settings → Manage staging \
-         profiles…), or set `{env_var}` in the daemon's environment to move the built-in default."
-    )
-}
-
-/// `PUT /settings` — persist the stored tier of one or more knobs, then return the
-/// recomputed [`build_settings_view`] so the UI shows the new effective/source
-/// without a second round-trip (ADR-0015). Validation is fail-fast: an out-of-range
-/// value is a `400` before anything is persisted — never a silent default like the
-/// env parser.
-///
-/// The body is taken as raw JSON rather than straight into
-/// [`instance_config::UpdateInstanceConfig`] for ONE reason: a *retired* field must
-/// 400 **naming itself**, not be silently ignored by serde and answered 200 as though
-/// applied. It also turns axum's opaque 422 on a type error into a 400 with a message.
-async fn put_settings(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> Response {
-    let bad = |msg: &str| -> Response {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response()
-    };
-    // Checked BEFORE parsing, so the answer is about the field the caller sent rather
-    // than about the shape of the struct that no longer has it.
-    for (field, env_var) in instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS {
-        if body.get(field).is_some() {
-            return bad(&retired_setting_message(field, env_var));
-        }
-    }
-    let req: instance_config::UpdateInstanceConfig = match serde_json::from_value(body) {
-        Ok(req) => req,
-        Err(e) => return bad(&format!("invalid settings payload: {e}")),
-    };
-    if let Some(c) = req.session_cap {
-        if c < 1 {
-            return bad("session_cap must be >= 1");
-        }
-    }
-    if let Some(t) = req.reaper_ttl_secs {
-        if t < 1 {
-            return bad("reaper_ttl_secs must be >= 1");
-        }
-    }
-    if let Some(t) = req.libassist_idle_ttl_secs {
-        if t < 1 {
-            return bad("libassist_idle_ttl_secs must be >= 1");
-        }
-    }
-    if let Some(g) = req.guard_timeout_secs {
-        if !(1..=600).contains(&g) {
-            return bad("guard_timeout_secs must be between 1 and 600 seconds");
-        }
-    }
-    if let Some(m) = req.max_attachments_mb {
-        // #779: at least 1 MB, and bounded so the budget stays a sane
-        // in-memory multipart body (the parts are buffered before the write).
-        if !(1..=4096).contains(&m) {
-            return bad("max_attachments_mb must be between 1 and 4096");
-        }
-    }
-    if let Some(s) = req.default_sandbox.as_deref() {
-        // "" = clear sentinel; anything else must be `off` or a staging profile that
-        // RESOLVES. Same shared gate as the Trigger surfaces.
-        if let Err(msg) = validate_sandbox_ref(&state.db, s).await {
-            return bad(&msg);
-        }
-    }
-    if let Some(p) = req.manager_profile.as_deref() {
-        // "" = clear sentinel (back to « Follow the Run »); anything else must
-        // name an EXISTING agent profile. A pin to nothing would silently fall
-        // back at spawn time, so it is refused at registration — the #432
-        // tombstone then only ever arises from a LATER profile deletion/rename,
-        // which no PUT can prevent.
-        if !p.is_empty() {
-            match agent_profile::find_by_name_ci(&state.db, p).await {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    let names = agent_profile::list(&state.db)
-                        .await
-                        .map(|profiles| {
-                            profiles
-                                .iter()
-                                .map(|profile| profile.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        })
-                        .unwrap_or_default();
-                    return bad(&format!(
-                        "unknown manager profile `{p}`: it names no agent profile — a pin to \
-                         nothing would silently fall back to « Follow the Run ». Known profiles: {names}"
-                    ));
-                }
-                Err(e) => {
-                    return bad(&format!("cannot check agent profile `{p}`: {e}"));
-                }
-            }
-        }
-    }
-    if let Some(h) = req.default_harness.as_deref() {
-        // "" = clear sentinel; anything else must RESOLVE against the registry. A
-        // default harness that resolves to nothing would break EVERY spawn that falls
-        // through to it, so it is refused at registration.
-        if !h.is_empty() {
-            let home_root = run_sandbox::sandbox_home_roots(&state.run)
-                .map(|(home, _)| home)
-                .unwrap_or_default();
-            let registry = pdo_harness::adapters::descriptor_file::load(&home_root);
-            if registry.resolve(h).is_none() {
-                return bad(&format!(
-                    "unknown default harness `{h}`: it resolves to no embedded or declared \
-                     harness — a default that does not resolve would break every spawn that \
-                     falls through to it. Known harnesses: {}",
-                    registry.names().join(", ")
-                ));
-            }
-        }
-    }
-
-    let update_check_edit = req.update_check;
-    match instance_config::update(&state.db, req).await {
-        Ok(_) => {
-            // #697: re-enabling the check runs one at once, detached — the section
-            // reads "Not checked yet since re-enabling." until it lands. Turning it
-            // off needs nothing: the read path already answers `null` when off.
-            if update_check_edit == Some(true) {
-                state.platform.check_for_update_in_background();
-            }
-            match build_settings_view(&state).await {
-                Ok(view) => Json(view).into_response(),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-                    .into_response(),
-            }
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-#[derive(Deserialize, TS)]
-#[ts(export, optional_fields = nullable, rename = "AgentProfileInput")]
-struct WriteAgentProfileRequest {
-    name: String,
-    harness: String,
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    effort: Option<String>,
-}
-
-fn agent_profile_error_response(error: agent_profile::AgentProfileError) -> Response {
-    let status = match error {
-        agent_profile::AgentProfileError::NotFound => StatusCode::NOT_FOUND,
-        agent_profile::AgentProfileError::DuplicateName { .. } => StatusCode::CONFLICT,
-        agent_profile::AgentProfileError::EmptyName
-        | agent_profile::AgentProfileError::EmptyHarness
-        | agent_profile::AgentProfileError::DefaultUndeletable => StatusCode::BAD_REQUEST,
-        agent_profile::AgentProfileError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    (
-        status,
-        Json(serde_json::json!({ "error": error.to_string() })),
-    )
-        .into_response()
-}
-
-async fn list_agent_profiles(State(state): State<Arc<AppState>>) -> Response {
-    match agent_profile::list(&state.db).await {
-        Ok(profiles) => Json(serde_json::json!({ "profiles": profiles })).into_response(),
-        Err(error) => {
-            error!("failed to list agent profiles: {error}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": error.to_string() })),
-            )
-                .into_response()
-        }
-    }
-}
-
-async fn get_agent_profile(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    match agent_profile::get(&state.db, &id).await {
-        Ok(Some(profile)) => Json(profile).into_response(),
-        Ok(None) => agent_profile_error_response(agent_profile::AgentProfileError::NotFound),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-async fn create_agent_profile(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<WriteAgentProfileRequest>,
-) -> Response {
-    match agent_profile::create(
-        &state.db,
-        &req.name,
-        &req.harness,
-        req.model.as_deref(),
-        req.effort.as_deref(),
-    )
-    .await
-    {
-        Ok(profile) => (StatusCode::CREATED, Json(profile)).into_response(),
-        Err(error) => agent_profile_error_response(error),
-    }
-}
-
-async fn update_agent_profile(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-    Json(req): Json<WriteAgentProfileRequest>,
-) -> Response {
-    match agent_profile::update(
-        &state.db,
-        &id,
-        &req.name,
-        &req.harness,
-        req.model.as_deref(),
-        req.effort.as_deref(),
-    )
-    .await
-    {
-        Ok(profile) => Json(profile).into_response(),
-        Err(error) => agent_profile_error_response(error),
-    }
-}
-
-async fn delete_agent_profile(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    match agent_profile::delete(&state.db, &id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => agent_profile_error_response(agent_profile::AgentProfileError::NotFound),
-        Err(error) => agent_profile_error_response(error),
-    }
-}
-
-async fn get_agent_profile_referents(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    if !matches!(agent_profile::get(&state.db, &id).await, Ok(Some(_))) {
-        return agent_profile_error_response(agent_profile::AgentProfileError::NotFound);
-    }
-
-    let instance = instance_config::get(&state.db)
-        .await
-        .ok()
-        .and_then(|config| config.agent_choice)
-        .is_some_and(|choice| {
-            matches!(choice, pdo_harness::agent_choice::AgentChoice::Profile { profile_id } if profile_id == id)
-        });
-
-    let projects = pdo_workspace::adapters::sqlite::list(&state.db)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|project| {
-            matches!(
-                project_agent_choice(project),
-                Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == id
-            )
-        })
-        .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
-        .collect::<Vec<_>>();
-
-    let triggers = pdo_trigger::adapters::sqlite::list(&state.db)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|trigger| {
-            matches!(
-                trigger.agent_choice.as_ref(),
-                Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
-            )
-        })
-        .map(|trigger| {
-            serde_json::json!({
-                "id": trigger.id,
-                "name": trigger.name,
-                "pipeline_id": trigger.pipeline_id
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let pipeline_entries = instance_pipeline_dir(&state.repo_root)
-        .map(|directory| pdo_pipeline::adapters::registry::pipeline_files(&directory))
-        .unwrap_or_default();
-    let pipelines = pipeline_entries
-        .into_iter()
-        .flat_map(|entry| {
-            let Ok(yaml) = std::fs::read_to_string(&entry.path) else {
-                return Vec::new();
-            };
-            let Ok(parsed) = pipeline::parse_pipeline(&yaml) else {
-                return Vec::new();
-            };
-            let name = parsed.pipeline.name.clone();
-            parsed
-                .pipeline
-                .nodes
-                .into_iter()
-                .filter(|node| {
-                    matches!(
-                        node.agent_choice.as_ref(),
-                        Some(pdo_harness::agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
-                    )
-                })
-                .map(|node| {
-                    serde_json::json!({
-                        "id": entry.id,
-                        "name": name,
-                        "node_id": node.id,
-                        "scope": "instance"
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    Json(serde_json::json!({
-        "profile_id": id,
-        "instance": instance,
-        "projects": projects,
-        "triggers": triggers,
-        "pipelines": pipelines,
-        "runs": []
-    }))
-    .into_response()
-}
 
 pub use pdo_kernel::env::TMUX_CMD_OVERRIDE_ENV;
 
@@ -2440,19 +1416,6 @@ const DEV_PLACEHOLDER: &str = r#"<!DOCTYPE html>
 // ─────────────────────────────────────────────────────────────────────────────
 // The workspace context (crates/pdo-workspace), wired into this daemon
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// The settings a Projet carries for the contexts still in this crate: the
-/// agentic profile (ADR-0057) and the skills selection (ADR-0062).
-/// The agentic profile a Projet carries, as this crate types it.
-fn project_agent_choice(
-    project: &pdo_workspace::domain::project::Project,
-) -> Option<pdo_harness::agent_choice::AgentChoice> {
-    use pdo_workspace::adapters::http::ProjectSettings;
-    project
-        .agent_choice
-        .as_ref()
-        .and_then(|stored| LegacyProjectSettings::decode_agent_choice(stored.as_str()))
-}
 
 /// The skills a Projet selects, as this crate types them.
 fn project_skills(
@@ -2563,7 +1526,7 @@ async fn skill_referents(
     use pdo_skill::application::ports::{
         NamedRef, PipelineReferent, Referents, RunReferent, TriggerReferent,
     };
-    let instance = instance_config::get(db)
+    let instance = pdo_settings::adapters::sqlite::instance_config::get(db)
         .await
         .map(|config| skill_selection::selects(&config.skills, id))
         .unwrap_or(false);
@@ -2821,7 +1784,11 @@ mod tests {
                 page_files: Arc::new(a::page_files::LocalPageFiles),
                 audit: Arc::new(a::sqlite_audit_log::SqliteAuditLog::new(db.clone())),
                 runs: Arc::new(NoRuns),
-                update_setting: Arc::new(contexts::LegacyUpdateSetting { db: db.clone() }),
+                update_setting: Arc::new(pdo_settings::adapters::contexts::UpdateCheckOfPlatform(
+                    Arc::new(pdo_settings::adapters::sqlite::SqliteInstanceConfig::new(
+                        db.clone(),
+                    )),
+                )),
                 release_source: Arc::new(a::github_releases::GithubReleases),
                 update_journal: Arc::new(a::fs_update_journal::FsUpdateJournal::new(None)),
                 installation: Arc::new(a::host_installation::HostInstallation::default()),
@@ -2953,10 +1920,6 @@ mod tests {
                 recent_writes: SelfWrites::new(),
                 docker_cmd_override: None,
                 sandbox_home_override: None,
-                docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-                harness_catalogue: Arc::new(
-                    pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-                ),
                 stats,
                 allowed_ws_origins: Vec::new(),
                 session,
@@ -3021,10 +1984,6 @@ mod tests {
                 recent_writes: SelfWrites::new(),
                 docker_cmd_override: None,
                 sandbox_home_override: None,
-                docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-                harness_catalogue: Arc::new(
-                    pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-                ),
                 stats,
                 allowed_ws_origins: Vec::new(),
                 session,
@@ -3037,7 +1996,9 @@ mod tests {
         Router::new()
             .route(
                 "/ws",
-                get(|ws: axum::extract::WebSocketUpgrade| async { ws.on_upgrade(|_| async {}) }),
+                axum::routing::get(|ws: axum::extract::WebSocketUpgrade| async {
+                    ws.on_upgrade(|_| async {})
+                }),
             )
             .fallback(static_handler)
     }
@@ -3741,10 +2702,6 @@ mod tests {
                 recent_writes: SelfWrites::new(),
                 docker_cmd_override,
                 sandbox_home_override: None,
-                docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
-                harness_catalogue: Arc::new(
-                    pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
-                ),
                 stats,
                 allowed_ws_origins: Vec::new(),
                 session,
@@ -4416,86 +3373,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn settings_view_discloses_the_autocomplete_tiers() {
-        // #469 §4 / ADR-0015: `effective` comes from the SAME resolver the sweep
-        // consumes, and both directions of an explicit save are a STORED decision
-        // (a stored 0 must beat `PDO_AUTOCOMPLETE_TURN_END=1`, or unticking the box
-        // would be a no-op on a machine that sets the env var).
-        let state = test_state().await;
-
-        let fresh = build_settings_view(&state).await.unwrap();
-        assert_eq!(fresh["autocomplete_turn_end"]["effective"], false);
-        assert_eq!(fresh["autocomplete_turn_end"]["default"], false);
-        assert!(fresh["autocomplete_turn_end"]["stored"].is_null());
-
-        for (on, want_source) in [(true, "stored"), (false, "stored")] {
-            instance_config::update(
-                &state.db,
-                instance_config::UpdateInstanceConfig {
-                    autocomplete_turn_end: Some(on),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-            let view = build_settings_view(&state).await.unwrap();
-            assert_eq!(
-                view["autocomplete_turn_end"]["effective"],
-                serde_json::json!(on)
-            );
-            assert_eq!(
-                view["autocomplete_turn_end"]["stored"],
-                serde_json::json!(on),
-                "the stored tier is disclosed as a bool, not as 0/1"
-            );
-            assert_eq!(
-                view["autocomplete_turn_end"]["source"],
-                serde_json::json!(want_source)
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn settings_view_discloses_the_default_auto_name_tiers() {
-        // #338 / ADR-0015: `effective` comes from the SAME resolver the create
-        // chokepoint consumes, the built-in default is ON, and both directions of an
-        // explicit save are a STORED decision (a stored 0 must beat
-        // `PDO_DEFAULT_AUTO_NAME=1`, or unticking the box would be a no-op with the env set).
-        let state = test_state().await;
-
-        let fresh = build_settings_view(&state).await.unwrap();
-        assert_eq!(fresh["default_auto_name"]["effective"], true);
-        assert_eq!(fresh["default_auto_name"]["default"], true);
-        assert!(fresh["default_auto_name"]["stored"].is_null());
-
-        for on in [false, true] {
-            instance_config::update(
-                &state.db,
-                instance_config::UpdateInstanceConfig {
-                    default_auto_name: Some(on),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-            let view = build_settings_view(&state).await.unwrap();
-            assert_eq!(
-                view["default_auto_name"]["effective"],
-                serde_json::json!(on)
-            );
-            assert_eq!(
-                view["default_auto_name"]["stored"],
-                serde_json::json!(on),
-                "the stored tier is disclosed as a bool, not as 0/1"
-            );
-            assert_eq!(
-                view["default_auto_name"]["source"],
-                serde_json::json!("stored")
-            );
-        }
-    }
-
     // Characterization net for POST /runs/{id}/commands
     //
     // Written BEFORE the dispatcher refactor and green on the unmodified tree.
@@ -4600,714 +3477,6 @@ mod tests {
         assert_eq!(
             started_after, started_before,
             "a resurrection refused at the cap must reserve nothing (no NodeStarted)"
-        );
-    }
-
-    async fn get_settings_json(state: &Arc<AppState>) -> serde_json::Value {
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/settings")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "GET /settings should 200");
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        serde_json::from_slice(&body).unwrap()
-    }
-
-    async fn put_settings_resp(
-        state: &Arc<AppState>,
-        body: &str,
-    ) -> (StatusCode, serde_json::Value) {
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/settings")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-        (status, json)
-    }
-
-    #[tokio::test]
-    async fn get_settings_default_shape_stored_null() {
-        // A fresh instance has an all-NULL row. Assert the robust invariants: the
-        // per-field shape, the `default` tier's constants, and `stored == null`.
-        // We deliberately do NOT assert `source`/`effective` for the cap here —
-        // they read the process-global `PDO_SESSION_CAP`, which a concurrent
-        // env-mutating unit test could transiently shadow (the resolver unit
-        // tests own the env-precedence assertions).
-        let state = test_state().await;
-        let view = get_settings_json(&state).await;
-
-        for field in ["session_cap", "reaper_ttl_secs", "guard_timeout_secs"] {
-            let f = &view[field];
-            assert!(
-                f["stored"].is_null(),
-                "{field}.stored must be null on a fresh row: {f}"
-            );
-            assert!(f.get("effective").is_some(), "{field}.effective missing");
-            assert!(f.get("source").is_some(), "{field}.source missing");
-            assert!(f.get("env").is_some(), "{field}.env key missing");
-            assert!(f.get("default").is_some(), "{field}.default missing");
-        }
-        assert_eq!(view["session_cap"]["default"], 20);
-        assert_eq!(view["reaper_ttl_secs"]["default"], 3600);
-        assert_eq!(view["guard_timeout_secs"]["default"], 60);
-        assert!(
-            view["updated_at"].is_string(),
-            "updated_at must be surfaced"
-        );
-
-        // default_model: string knob with no baked-in default. On a fresh
-        // row (and no PDO_DEFAULT_MODEL) stored/effective/default are all null and
-        // the source is "default" (= the account default, no --model).
-        let dm = &view["default_model"];
-        assert!(
-            dm["stored"].is_null(),
-            "default_model.stored must be null: {dm}"
-        );
-        assert!(
-            dm["default"].is_null(),
-            "default_model.default is always null: {dm}"
-        );
-        assert!(
-            dm.get("effective").is_some(),
-            "default_model.effective missing"
-        );
-        assert!(dm.get("source").is_some(), "default_model.source missing");
-        assert!(dm.get("env").is_some(), "default_model.env key missing");
-        // `env` reads the process-global PDO_DEFAULT_MODEL; a concurrent
-        // env-mutating unit test could transiently shadow it, so we assert the
-        // effective/source pairing only in the stored-wins tests below.
-
-        // #471 AC1: the two sandbox-image knobs are GONE from the payload, along with the
-        // `sandbox_image` tag disclosure that only existed to explain the Dockerfile field.
-        // Asserted here, on the shape test, so a re-add cannot slip in as an extra key.
-        for gone in ["image_source", "dockerfile_path", "sandbox_image"] {
-            assert!(
-                view.get(gone).is_none(),
-                "#471 removed `{gone}` from GET /settings: {view}"
-            );
-        }
-        // What is left on the sandbox side: the profile knob, the profile list, the probe.
-        for kept in ["default_sandbox", "sandbox_profiles", "sandbox_docker"] {
-            assert!(view.get(kept).is_some(), "`{kept}` must stay: {view}");
-        }
-    }
-
-    #[tokio::test]
-    async fn settings_view_lists_harnesses_with_source_and_installed() {
-        // #586 AC#1: `GET /settings → harness_descriptors` carries, per resolved
-        // harness, `name` + `source` (builtin|descriptor) + `installed` (bool) — the
-        // shape the two-section, grey-if-uninstalled picker reads. The embedded floor
-        // (claude/opencode) always resolves as `builtin`; disk-declared harnesses (if
-        // any on this host) ride as `descriptor`. `installed` reads the real `$PATH`,
-        // so we assert its TYPE, never a value — the picker only greys on it. `rejected`
-        // is preserved alongside (AC: kept for an eventual display).
-        let state = test_state().await;
-        let view = get_settings_json(&state).await;
-
-        let harnesses = view["harness_descriptors"]["harnesses"]
-            .as_array()
-            .expect("harness_descriptors.harnesses must be an array");
-        assert!(
-            !harnesses.is_empty(),
-            "the floor alone makes this non-empty"
-        );
-
-        for h in harnesses {
-            assert!(h["name"].is_string(), "each harness carries a name: {h}");
-            let source = h["source"].as_str().expect("source is a string");
-            assert!(
-                source == "builtin" || source == "descriptor",
-                "source is builtin|descriptor, got {source:?}"
-            );
-            assert!(h["installed"].is_boolean(), "installed is a bool: {h}");
-            // #616/ADR-0053: the offer deduced from the binary rides on each entry —
-            // the model & effort catalogues (arrays, possibly empty = free-text
-            // fallback), the served effort-axis fact (a bool, replacing the client's
-            // hard-coded map), and the probed version (a string or null).
-            assert!(h["models"].is_array(), "models is an array: {h}");
-            assert!(h["efforts"].is_array(), "efforts is an array: {h}");
-            assert!(h["has_effort"].is_boolean(), "has_effort is a bool: {h}");
-            assert!(
-                h["version"].is_string() || h["version"].is_null(),
-                "version is a string or null: {h}"
-            );
-        }
-
-        // The embedded floor always resolves, always as `builtin` — copilot and pi
-        // are the third and fourth arms, listed under "Built-in" like the other two.
-        for floor in ["claude", "opencode", "copilot", "pi"] {
-            let entry = harnesses
-                .iter()
-                .find(|h| h["name"] == floor)
-                .unwrap_or_else(|| panic!("floor harness `{floor}` must appear: {view}"));
-            assert_eq!(entry["source"], "builtin", "`{floor}` is built-in");
-        }
-
-        assert!(
-            view["harness_descriptors"]["rejected"].is_array(),
-            "rejected stays an array: {view}"
-        );
-    }
-
-    #[tokio::test]
-    async fn put_settings_round_trips_the_autocomplete_flag_both_ways() {
-        // #469 §4: the checkbox is authoritative in BOTH directions. Unticking must
-        // persist a stored `0` (source still "stored"), not clear back to unset —
-        // otherwise it could not override `PDO_AUTOCOMPLETE_TURN_END=1`.
-        let state = test_state().await;
-
-        let (status, view) = put_settings_resp(&state, r#"{"autocomplete_turn_end": true}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["autocomplete_turn_end"]["effective"], true);
-        assert_eq!(view["autocomplete_turn_end"]["source"], "stored");
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .autocomplete_turn_end,
-            Some(1)
-        );
-
-        let (status, view) = put_settings_resp(&state, r#"{"autocomplete_turn_end": false}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["autocomplete_turn_end"]["effective"], false);
-        assert_eq!(
-            view["autocomplete_turn_end"]["source"], "stored",
-            "unticking is a stored decision, not a fall-through: {view}"
-        );
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .autocomplete_turn_end,
-            Some(0),
-            "off must persist a stored 0, never NULL"
-        );
-    }
-
-    #[tokio::test]
-    async fn put_settings_round_trips_the_default_auto_name_flag_both_ways() {
-        // The checkbox is authoritative in BOTH directions. Unticking must persist a
-        // stored `0` (source still "stored"), not clear back to unset — otherwise it could
-        // not override `PDO_DEFAULT_AUTO_NAME=1`.
-        let state = test_state().await;
-
-        let (status, view) = put_settings_resp(&state, r#"{"default_auto_name": false}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["default_auto_name"]["effective"], false);
-        assert_eq!(view["default_auto_name"]["source"], "stored");
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .default_auto_name,
-            Some(0),
-            "off must persist a stored 0, never NULL"
-        );
-
-        let (status, view) = put_settings_resp(&state, r#"{"default_auto_name": true}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["default_auto_name"]["effective"], true);
-        assert_eq!(view["default_auto_name"]["source"], "stored");
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .default_auto_name,
-            Some(1)
-        );
-    }
-
-    #[tokio::test]
-    async fn put_settings_round_trips_the_review_agent_can_resolve_flag_both_ways() {
-        // #751: default OFF (the human resolves); both directions of a save are a
-        // stored decision — unticking persists a `0` that beats
-        // `PDO_REVIEW_AGENT_CAN_RESOLVE=1`.
-        let state = test_state().await;
-        let fresh = get_settings_json(&state).await;
-        assert_eq!(fresh["review_agent_can_resolve"]["default"], false);
-        assert!(fresh["review_agent_can_resolve"]["stored"].is_null());
-        if fresh["review_agent_can_resolve"]["env"].is_null() {
-            assert_eq!(fresh["review_agent_can_resolve"]["effective"], false);
-            assert_eq!(fresh["review_agent_can_resolve"]["source"], "default");
-        }
-
-        let (status, view) =
-            put_settings_resp(&state, r#"{"review_agent_can_resolve": true}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["review_agent_can_resolve"]["effective"], true);
-        assert_eq!(view["review_agent_can_resolve"]["source"], "stored");
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .review_agent_can_resolve,
-            Some(1)
-        );
-
-        let (status, view) =
-            put_settings_resp(&state, r#"{"review_agent_can_resolve": false}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["review_agent_can_resolve"]["effective"], false);
-        assert_eq!(view["review_agent_can_resolve"]["source"], "stored");
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .review_agent_can_resolve,
-            Some(0),
-            "off must persist a stored 0, never NULL"
-        );
-    }
-
-    #[tokio::test]
-    async fn put_settings_round_trips_the_manager_enabled_flag_both_ways() {
-        // Manager on demand: the checkbox is authoritative in BOTH directions.
-        // Unticking must persist a stored `0` (not a clear back to NULL), or it
-        // could never override a `PDO_MANAGER_ENABLED=1`. The fresh view also
-        // discloses the built-in default: OFF — a Run starts managerless.
-        let state = test_state().await;
-
-        let (_, fresh) = put_settings_resp(&state, "{}").await;
-        assert_eq!(fresh["manager_enabled"]["effective"], false);
-        assert_eq!(fresh["manager_enabled"]["source"], "default");
-        assert_eq!(fresh["manager_enabled"]["default"], false);
-        assert_eq!(
-            fresh["manager_profile"]["effective"],
-            serde_json::Value::Null
-        );
-
-        let (status, view) = put_settings_resp(&state, r#"{"manager_enabled": true}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["manager_enabled"]["effective"], true);
-        assert_eq!(view["manager_enabled"]["source"], "stored");
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .manager_enabled,
-            Some(1),
-            "on must persist a stored 1"
-        );
-
-        let (status, view) = put_settings_resp(&state, r#"{"manager_enabled": false}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["manager_enabled"]["effective"], false);
-        assert_eq!(view["manager_enabled"]["source"], "stored");
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .manager_enabled,
-            Some(0),
-            "off must persist a stored 0, never NULL"
-        );
-    }
-
-    #[tokio::test]
-    async fn put_settings_persists_and_clears_the_manager_profile_pin() {
-        let state = test_state().await;
-        let profile = agent_profile::create(&state.db, "reviewer", "claude", Some("sonnet"), None)
-            .await
-            .unwrap();
-
-        let (status, view) = put_settings_resp(&state, r#"{"manager_profile": "reviewer"}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(view["manager_profile"]["effective"], "reviewer");
-        assert_eq!(view["manager_profile"]["source"], "stored");
-
-        // "" is the clear sentinel — back to « Follow the Run », persisted as
-        // SQL NULL, never as an empty string that would win precedence.
-        let (status, view) = put_settings_resp(&state, r#"{"manager_profile": ""}"#).await;
-        assert_eq!(status, StatusCode::OK, "got {view}");
-        assert_eq!(
-            view["manager_profile"]["effective"],
-            serde_json::Value::Null
-        );
-        assert_eq!(view["manager_profile"]["source"], "default");
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .manager_profile,
-            None,
-            "clear must persist NULL, never ''"
-        );
-
-        // Keep the profile referenced so `create`'s row is not dead code.
-        assert_eq!(profile.name, "reviewer");
-    }
-
-    #[tokio::test]
-    async fn put_settings_refuses_an_unknown_manager_profile() {
-        // A pin to nothing would silently fall back to « Follow the Run » at
-        // spawn time — refused at registration instead. (The #432 tombstone
-        // only ever arises from a LATER profile deletion, which no PUT can
-        // prevent.)
-        let state = test_state().await;
-        let (status, body) = put_settings_resp(&state, r#"{"manager_profile": "ghost"}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap()
-                .contains("unknown manager profile `ghost`"),
-            "got {body}"
-        );
-        assert_eq!(
-            instance_config::get(&state.db)
-                .await
-                .unwrap()
-                .manager_profile,
-            None,
-            "a refused edit must persist nothing"
-        );
-    }
-
-    #[tokio::test]
-    async fn put_settings_persists_and_stored_wins() {
-        // Stored always wins over env/default, so these assertions are race-free.
-        let state = test_state().await;
-        let (status, view) = put_settings_resp(
-            &state,
-            r#"{"session_cap": 4, "reaper_ttl_secs": 120, "guard_timeout_secs": 30}"#,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-
-        // PUT returns the recomputed view (D6) — no second round-trip needed.
-        assert_eq!(view["session_cap"]["stored"], 4);
-        assert_eq!(view["session_cap"]["source"], "stored");
-        assert_eq!(view["session_cap"]["effective"], 4);
-        assert_eq!(view["reaper_ttl_secs"]["stored"], 120);
-        assert_eq!(view["reaper_ttl_secs"]["source"], "stored");
-        assert_eq!(view["reaper_ttl_secs"]["effective"], 120);
-        assert_eq!(view["guard_timeout_secs"]["stored"], 30);
-        assert_eq!(view["guard_timeout_secs"]["source"], "stored");
-        assert_eq!(view["guard_timeout_secs"]["effective"], 30);
-
-        // Re-GET confirms persistence.
-        let reget = get_settings_json(&state).await;
-        assert_eq!(reget["session_cap"]["stored"], 4);
-        assert_eq!(reget["session_cap"]["effective"], 4);
-    }
-
-    #[tokio::test]
-    async fn put_settings_persists_default_model() {
-        // Stored always wins over env/default, so the effective/source assertions
-        // are race-free even with a concurrent env-mutating test.
-        let state = test_state().await;
-        let (status, view) = put_settings_resp(&state, r#"{"default_model": "opus"}"#).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(view["default_model"]["stored"], "opus");
-        assert_eq!(view["default_model"]["source"], "stored");
-        assert_eq!(view["default_model"]["effective"], "opus");
-        assert!(view["default_model"]["default"].is_null());
-
-        // Re-GET confirms persistence.
-        let reget = get_settings_json(&state).await;
-        assert_eq!(reget["default_model"]["stored"], "opus");
-        assert_eq!(reget["default_model"]["effective"], "opus");
-    }
-
-    #[tokio::test]
-    async fn put_settings_clears_default_model_on_empty_string() {
-        // "" is the clear sentinel (D): it must NOT be rejected, and it must reset
-        // the stored tier to null so the resolver falls through to env/account.
-        let state = test_state().await;
-        put_settings_resp(&state, r#"{"default_model": "opus"}"#).await;
-        let (status, view) = put_settings_resp(&state, r#"{"default_model": ""}"#).await;
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "empty string must be accepted, not 400"
-        );
-        assert!(
-            view["default_model"]["stored"].is_null(),
-            "empty string clears the stored model: {}",
-            view["default_model"]
-        );
-        assert_eq!(view["default_model"]["source"], "default");
-    }
-
-    #[tokio::test]
-    async fn put_settings_rejects_cap_below_one() {
-        let state = test_state().await;
-        let (status, body) = put_settings_resp(&state, r#"{"session_cap": 0}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(body["error"].is_string(), "400 must carry an error: {body}");
-        // Store untouched.
-        let view = get_settings_json(&state).await;
-        assert!(view["session_cap"]["stored"].is_null());
-    }
-
-    #[tokio::test]
-    async fn put_settings_rejects_ttl_below_one() {
-        let state = test_state().await;
-        let (status, _) = put_settings_resp(&state, r#"{"reaper_ttl_secs": 0}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        let view = get_settings_json(&state).await;
-        assert!(view["reaper_ttl_secs"]["stored"].is_null());
-    }
-
-    #[tokio::test]
-    async fn put_settings_rejects_guard_out_of_range() {
-        let state = test_state().await;
-        let (lo, _) = put_settings_resp(&state, r#"{"guard_timeout_secs": 0}"#).await;
-        assert_eq!(lo, StatusCode::BAD_REQUEST);
-        let (hi, _) = put_settings_resp(&state, r#"{"guard_timeout_secs": 601}"#).await;
-        assert_eq!(hi, StatusCode::BAD_REQUEST);
-        // A boundary value is accepted.
-        let (ok, view) = put_settings_resp(&state, r#"{"guard_timeout_secs": 600}"#).await;
-        assert_eq!(ok, StatusCode::OK);
-        assert_eq!(view["guard_timeout_secs"]["stored"], 600);
-    }
-
-    #[tokio::test]
-    async fn put_settings_partial_edit_leaves_other_fields() {
-        let state = test_state().await;
-        put_settings_resp(&state, r#"{"session_cap": 7}"#).await;
-        let (_, view) = put_settings_resp(&state, r#"{"reaper_ttl_secs": 200}"#).await;
-        // The second edit must not clear the cap set by the first.
-        assert_eq!(view["session_cap"]["stored"], 7);
-        assert_eq!(view["reaper_ttl_secs"]["stored"], 200);
-    }
-
-    /// AC2: a `PUT` carrying a retired field is a **400 naming the field**, not a 200 that
-    /// silently ignores it. Both fields, and the store is untouched either way.
-    #[tokio::test]
-    async fn put_settings_rejects_a_retired_sandbox_image_field() {
-        let state = test_state().await;
-        for (field, env_var) in instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS {
-            let (status, body) =
-                put_settings_resp(&state, &format!(r#"{{"{field}": "registry"}}"#)).await;
-            assert_eq!(
-                status,
-                StatusCode::BAD_REQUEST,
-                "`{field}` must be refused, not ignored: {body}"
-            );
-            let err = body["error"].as_str().unwrap_or_default();
-            assert!(err.contains(field), "the 400 must NAME the field: {body}");
-            assert!(
-                err.contains("staging profile") && err.contains(env_var),
-                "…and say where the knob went: {body}"
-            );
-        }
-        // Nothing was persisted.
-        let view = get_settings_json(&state).await;
-        assert!(view["session_cap"]["stored"].is_null());
-    }
-
-    /// The refusal must not let a legitimate edit riding in the same body through: a `PUT` is one
-    /// transaction, so a retired field poisons the whole thing rather than applying half of it.
-    #[tokio::test]
-    async fn a_retired_field_rejects_the_whole_put() {
-        let state = test_state().await;
-        let (status, _) = put_settings_resp(
-            &state,
-            r#"{"session_cap": 5, "image_source": "dockerfile"}"#,
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        let view = get_settings_json(&state).await;
-        assert!(
-            view["session_cap"]["stored"].is_null(),
-            "the sibling edit must NOT have been applied: {view}"
-        );
-    }
-
-    /// A field nobody has ever heard of stays what it always was — ignored by serde. Only the
-    /// two RETIRED names get the named 400: they are the ones a real client might still send.
-    #[tokio::test]
-    async fn an_unknown_field_is_still_ignored_not_rejected() {
-        let state = test_state().await;
-        let (status, _) =
-            put_settings_resp(&state, r#"{"session_cap": 5, "no_such_knob": 1}"#).await;
-        assert_eq!(status, StatusCode::OK);
-        let view = get_settings_json(&state).await;
-        assert_eq!(view["session_cap"]["stored"], 5);
-    }
-
-    /// A malformed body is a 400 with a message, not axum's opaque 422 — the consequence of
-    /// taking the body as raw JSON so the retired-field check can run first.
-    #[tokio::test]
-    async fn a_type_error_in_the_body_is_a_400_with_a_message() {
-        let state = test_state().await;
-        let (status, body) = put_settings_resp(&state, r#"{"session_cap": "many"}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("invalid settings payload"),
-            "{body}"
-        );
-    }
-
-    /// AC5, the message half: what the boot says when a retired value is still in the row. Pure,
-    /// so the wording is pinned here rather than discovered in a terminal.
-    #[test]
-    fn the_retired_settings_warning_names_the_values_and_where_to_go() {
-        // Nothing stored ⇒ nothing said. The reference instance's case.
-        assert_eq!(retired_sandbox_settings_warning(&[], Some("full")), None);
-
-        let stored = vec![
-            ("image_source", "dockerfile".to_string()),
-            ("dockerfile_path", "/repo/Dockerfile".to_string()),
-        ];
-        let msg = retired_sandbox_settings_warning(&stored, Some("chrome")).unwrap();
-        // ONE line, both values, verbatim.
-        assert!(msg.contains("`image_source` = `dockerfile`"), "{msg}");
-        assert!(
-            msg.contains("`dockerfile_path` = `/repo/Dockerfile`"),
-            "{msg}"
-        );
-        assert!(!msg.contains('\n'), "one line, not two: {msg}");
-        // It says the values are ignored, names the profile to edit, and the env escape hatch.
-        assert!(msg.contains("IGNORED"), "{msg}");
-        assert!(msg.contains("`chrome`"), "the profile to edit: {msg}");
-        assert!(
-            msg.contains(pdo_sandbox::domain::image::IMAGE_SOURCE_ENV),
-            "{msg}"
-        );
-        assert!(
-            msg.contains(pdo_sandbox::domain::image::DOCKERFILE_PATH_ENV),
-            "{msg}"
-        );
-        // And that no Run is affected — the whole point of it being a warning, not an error.
-        assert!(msg.contains("No Run is affected"), "{msg}");
-
-        // With no default profile (`off`), it names the screen instead of a profile.
-        let msg = retired_sandbox_settings_warning(&stored, None).unwrap();
-        assert!(
-            msg.contains("the staging profile your Runs launch with"),
-            "{msg}"
-        );
-    }
-
-    /// AC5, the wiring half: the boot path reads a seeded value out of a pre-#471 row and produces
-    /// exactly that message. Exercises `retired_sandbox_image_values` + the profile hint together,
-    /// which is the pair the boot uses — `warn_about_retired_sandbox_settings` itself only logs.
-    #[tokio::test]
-    async fn a_seeded_retired_value_produces_the_boot_warning() {
-        let state = test_state().await;
-        // Re-add the columns a pre-#471 daemon left behind, and seed one.
-        for (column, _) in instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS {
-            sqlx::query(&format!(
-                "ALTER TABLE instance_config ADD COLUMN {column} TEXT"
-            ))
-            .execute(&state.db)
-            .await
-            .unwrap();
-        }
-        sqlx::query("UPDATE instance_config SET image_source = 'dockerfile' WHERE id = 1")
-            .execute(&state.db)
-            .await
-            .unwrap();
-        put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
-
-        let stored = instance_config::retired_sandbox_image_values(&state.db)
-            .await
-            .unwrap();
-        assert_eq!(stored, vec![("image_source", "dockerfile".to_string())]);
-        let msg = retired_sandbox_settings_warning(&stored, Some("minimal")).unwrap();
-        assert!(msg.contains("`image_source` = `dockerfile`"), "{msg}");
-        assert!(msg.contains("`minimal`"), "{msg}");
-        // And it did NOT come back as config: the view has no such key, so no Run can read it.
-        let view = get_settings_json(&state).await;
-        assert!(view.get("image_source").is_none(), "{view}");
-        // The logging wrapper is exercised too — it must not panic on this row.
-        warn_about_retired_sandbox_settings(&state.db).await;
-    }
-
-    #[tokio::test]
-    async fn put_settings_persists_default_sandbox() {
-        // Stored always wins over env/default, so the effective/source assertions are
-        // race-free (the `lib.rs` convention: env reads a process-global a concurrent test
-        // could shadow, so only stored-wins is safe at the HTTP level).
-        let state = test_state().await;
-        let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(view["default_sandbox"]["stored"], "minimal");
-        assert_eq!(view["default_sandbox"]["source"], "stored");
-        assert_eq!(view["default_sandbox"]["effective"], "minimal");
-        assert_eq!(view["default_sandbox"]["default"], "off");
-
-        // Re-GET confirms persistence.
-        let reget = get_settings_json(&state).await;
-        assert_eq!(reget["default_sandbox"]["stored"], "minimal");
-        assert_eq!(reget["default_sandbox"]["effective"], "minimal");
-    }
-
-    #[tokio::test]
-    async fn put_settings_clears_default_sandbox_on_empty_string() {
-        // "" is the clear sentinel: accepted (not 400), resets the stored tier to null
-        // so the resolver falls back to the built-in default `off`.
-        let state = test_state().await;
-        put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
-        let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": ""}"#).await;
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "empty string must be accepted, not 400"
-        );
-        assert!(
-            view["default_sandbox"]["stored"].is_null(),
-            "empty string clears the stored default sandbox: {}",
-            view["default_sandbox"]
-        );
-        assert_eq!(view["default_sandbox"]["source"], "default");
-        assert_eq!(view["default_sandbox"]["effective"], "off");
-    }
-
-    #[tokio::test]
-    async fn put_settings_rejects_invalid_default_sandbox() {
-        // A non-variant token is rejected 400 before anything is persisted.
-        let state = test_state().await;
-        let (status, body) = put_settings_resp(&state, r#"{"default_sandbox": "vm"}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(body["error"].is_string(), "400 must carry an error: {body}");
-        let view = get_settings_json(&state).await;
-        assert!(view["default_sandbox"]["stored"].is_null());
-    }
-
-    #[tokio::test]
-    async fn get_settings_surfaces_sandbox_docker_probe() {
-        // The advisory probe is folded into GET /settings. `test_state` has no
-        // docker_cmd_override, so the real `docker` (absent in CI) → available:false
-        // with a reason. The shape must always be present regardless of the verdict.
-        let state = test_state().await;
-        let view = get_settings_json(&state).await;
-        let sd = &view["sandbox_docker"];
-        assert!(sd.get("available").is_some(), "available missing: {sd}");
-        assert!(sd["available"].is_boolean(), "available must be bool: {sd}");
-        assert!(
-            sd.get("reason").is_some(),
-            "reason key must be present: {sd}"
-        );
-        assert!(
-            sd["checked_at"].is_string(),
-            "checked_at must be a string: {sd}"
         );
     }
 

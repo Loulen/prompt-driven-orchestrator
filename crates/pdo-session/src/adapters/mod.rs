@@ -3,6 +3,7 @@
 
 pub mod env;
 pub mod http;
+pub mod instance_defaults;
 pub(crate) mod pty;
 pub mod terminal_window;
 pub mod tmux;

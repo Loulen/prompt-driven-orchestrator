@@ -10,6 +10,22 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.0.0 — PDO v2 : architecture extensible (spec #1, dépôt `Loulen/PDO-v2`)
+
+Premier numéro de la lignée **PDO v2**, qui vit dans le dépôt privé `Loulen/PDO-v2` et
+s'installe avec la formule `pdo-v2` (tap `Loulen/homebrew-pdo-v2`), à côté de PDO v1 qui reste
+sur la ligne 1.x du dépôt public. Aucun changement de code par rapport à 1.112.1 : ce bump majeur
+marque la séparation des deux lignées et l'ensemble de la story, dont les entrées 1.109.1 à
+1.112.1 ci-dessous donnent le détail.
+
+- Le daemon est un monolithe modulaire hexagonal : douze crates de contexte, `pdo-kernel`,
+  `pdo-extension-api` (API d'extension 0.1, semver propre) et la composition root `crates/pdo`.
+- Les issues de la story ont été recréées dans `Loulen/PDO-v2` : la spec y est le #1 et les
+  tickets #914 à #932 y deviennent #2 à #20 (ancien numéro − 912). Les messages de commit et les
+  entrées ci-dessous gardent les anciens numéros.
+- Seul point cassant pour l'opérateur, déjà noté en 1.112.1 : les cibles `RUST_LOG` en
+  `pdo_daemon…` ne correspondent plus à rien (voir `docs/reference/runbook.md`).
+
 ## 1.112.1 — Contract : le crate legacy, la suite de snapshots et le ratchet supprimés (#932, spec #913)
 
 Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas. La suite de

@@ -2,6 +2,7 @@
 
 > Statut : accepted (grilling du 2026-09-26, story « architecture extensible »). Vocabulaire :
 > CONTEXT.md § *Extensions*. S'appuie sur ADR-0079 (les mutations passent par des use cases).
+> Amendé par #21 : comment une distribution obtient le frontend embarqué (§ *Amendements*).
 
 ## Contexte
 
@@ -88,3 +89,32 @@ daemon » et l'init du tracing, en dépendant de crates hors semver.
   core, plus un choix de chaque binaire. Un `--dry-run` ne change rien et ne demande donc rien.
 - Ajout rétrocompatible : bump mineur du core (2.1.0), `pdo-extension-api` inchangé. Les
   sous-commandes une à une et `pdo::cli` restent hors contrat.
+
+## Amendements (#21)
+
+**Une distribution fournit le frontend déjà construit.** `pdo-daemon` embarque l'UI à la
+compilation (rust-embed). Le checkout que fait cargo pour une dépendance par tag n'a pas de
+`node_modules`, et un build script ne doit écrire que dans `OUT_DIR`. `crates/pdo/build.rs` place
+donc toujours le frontend dans `$OUT_DIR/frontend-dist` et le prend, dans cet ordre :
+
+1. `PDO_FRONTEND_DIST=<chemin absolu>` : un `dist/` déjà construit (avec `index.html`), copié
+   tel quel. Ni Node ni pnpm. C'est la voie d'une distribution.
+2. `PDO_SKIP_FRONTEND_BUILD` : rien n'est construit, le contenu déjà présent dans `OUT_DIR` est
+   embarqué (vide sur un `target/` neuf). Pour les boucles qui ne compilent que le Rust.
+3. Sinon `pnpm run build` dans `frontend/`, Vite écrivant dans `OUT_DIR`, **si
+   `frontend/node_modules` existe**. Sinon le build échoue avec un message qui nomme les deux
+   remèdes (`PDO_FRONTEND_DIST`, ou Node.js 22+ et pnpm puis `pnpm install --frozen-lockfile`).
+   Le build ne compte plus sur l'auto-install de pnpm (`verify-deps-before-run`), qui dépend de
+   la version et de la config de pnpm et remplissait le checkout du cache cargo.
+
+Aujourd'hui la distribution construit ce `dist/` une fois, depuis un clone du core au même tag
+(`pnpm install --frozen-lockfile && pnpm run build` dans `frontend/`), puis pointe
+`PDO_FRONTEND_DIST` dessus. Procédure : README, « Building a binary that embeds PDO ». Le seul
+reste dans les sources est le cache incrémental de `tsc -b` (`*.tsbuildinfo`), et seulement dans
+la voie 3, à l'intérieur du `node_modules` installé à la main.
+
+Écartés : faire lancer `pnpm install` par build.rs (réseau pendant `cargo build`, ~800 paquets
+hors de portée de `cargo clean`, builds parallèles qui se marchent dessus) et faire télécharger un
+asset par build.rs (casse les builds hors ligne ou vendorisés). Reste à faire : publier le `dist`
+en asset de release (`pdo-frontend-dist-<tag>.tar.gz`), téléchargé par la distribution et non par
+build.rs, et vérifier qu'un `dist` fourni correspond au tag.

@@ -8,6 +8,14 @@ const daemonTarget = `http://127.0.0.1:${daemonPort}`
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    // crates/pdo/build.rs sets PDO_FRONTEND_OUT_DIR to a folder under cargo's
+    // OUT_DIR, the one the daemon embeds (#21): a cargo build never writes
+    // `dist/` into the source tree. Vite only empties an outDir outside the
+    // project root when told to.
+    outDir: process.env.PDO_FRONTEND_OUT_DIR ?? 'dist',
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

@@ -15,7 +15,7 @@ cd "$REPO_ROOT"
 BIN="$REPO_ROOT/target/debug/pdo"
 if [[ ! -x "$BIN" ]]; then
   echo "[smoke] Building pdo daemon (debug)..."
-  PDO_SKIP_FRONTEND_BUILD="${PDO_SKIP_FRONTEND_BUILD:-}" cargo build -p pdo-daemon
+  cargo build -p pdo-daemon   # honours PDO_SKIP_FRONTEND_BUILD if the caller set it
 fi
 
 # Pick a free port. Prefer python3 (available in CI + most dev setups);

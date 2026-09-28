@@ -105,8 +105,15 @@ pub trait Extension: Send + Sync + 'static {
 
     /// Routes served under `/ext/<id>/`: the router is nested there, so it
     /// declares its paths from `/` (its `/` answers `/ext/<id>`, its `/events`
-    /// `/ext/<id>/events`). It can never hide a route of the core, and a path
-    /// it does not serve answers `404`. None by default.
+    /// `/ext/<id>/events`). It can never hide a route of the core. None by
+    /// default.
+    ///
+    /// The whole `/ext/` prefix is the API's, never the SPA's, whatever the
+    /// method: a path the router does not serve answers `404`
+    /// `{"error": "not_found", "message", "id"}`; without routes (`None`, or a
+    /// panic here), and for any id no loaded extension has, `/ext/<id>` and
+    /// everything under it answer `404`
+    /// `{"error": "extension_not_found", "message", "id"}`.
     fn routes(&self) -> Option<axum::Router> {
         None
     }

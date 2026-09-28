@@ -73,6 +73,10 @@ mod extension_trigger_fire;
 #[path = "extension_hooks.rs"]
 mod extension_hooks;
 
+// `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
+#[path = "extension_not_found.rs"]
+mod extension_not_found;
+
 #[path = "demo_daemon.rs"]
 mod demo_daemon;
 

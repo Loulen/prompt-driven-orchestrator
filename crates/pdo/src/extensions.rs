@@ -4,13 +4,27 @@
 //! Every path of an extension sits under its own `/ext/<id>` prefix, so an
 //! extension can never hide a route of the core, nor another extension's.
 //!
+//! The whole `/ext/` prefix belongs to the API and never falls through to the
+//! SPA, whatever the method (#22):
+//!
+//! - `/ext/<id>` and `/ext/<id>/…`, when no extension `<id>` is loaded, or it is
+//!   loaded but serves no route: `404`
+//!   `{"error": "extension_not_found", "message", "id"}`;
+//! - `/ext/<id>/<path>` of a loaded extension that does not serve `<path>`:
+//!   `404` `{"error": "not_found", "message", "id"}`.
+//!
+//! A client tells "extension absent" from a real answer by that slug.
+//!
 //! ROUTER TRAP: `/ext` is a top-level prefix of the vite dev proxy whitelist
 //! (`frontend/vite.config.ts`).
 
-use axum::extract::State;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use axum::extract::{OriginalUri, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{any, get};
 use axum::{Json, Router};
 use pdo_extension_api::{Slot, UiContributions};
 use pdo_kernel::attributes::wire_kind;
@@ -132,35 +146,81 @@ async fn index(State(extensions): State<Extensions>) -> Response {
 }
 
 /// `router`, with the core's `/ext` routes and each extension's routes nested
-/// under `/ext/<id>`. A path of an extension it does not serve answers `404`.
+/// under `/ext/<id>`. The rest of the prefix answers `404` JSON: a path a loaded
+/// extension does not serve (`not_found`), and any `/ext/<id>…` of an id no
+/// loaded extension serves routes for (`extension_not_found`).
 pub(crate) fn mount(router: Router, extensions: &Extensions) -> Router {
     let mut router = router.merge(self::router(extensions.clone()));
+    // Each loaded extension's id, and whether it serves routes.
+    let mut serves = BTreeMap::new();
     for (manifest, extension) in extensions.iter() {
         let routes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| extension.routes()))
             .unwrap_or_else(|_| {
                 tracing::error!("extension `{}` panicked in routes", manifest.id);
                 None
             });
+        let id = manifest.id.clone();
+        serves.insert(id.clone(), routes.is_some());
         if let Some(routes) = routes {
-            let prefix = format!("/ext/{}", manifest.id);
-            router = router.nest(&prefix, routes.fallback(not_found));
+            let prefix = format!("/ext/{id}");
+            let unserved =
+                move |OriginalUri(uri): OriginalUri| async move { not_found(&id, uri.path()) };
+            router = router.nest(&prefix, routes.fallback(unserved));
         }
     }
+    // What no route under `/ext` claims. A fallback, not a `/ext/{id}/{*rest}`
+    // route: axum keeps nested fallbacks in their own router, consulted only
+    // once no route matched, so a route here would win over every extension's
+    // `not_found` above. `/ext/` matches no fallback's `{*rest}`, hence its route.
+    let serves = Arc::new(serves);
+    let absent = move |OriginalUri(uri): OriginalUri| async move {
+        let path = uri.path();
+        let id = ext_id(path);
+        match serves.get(id) {
+            Some(true) => not_found(id, path),
+            Some(false) => extension_not_found(id, true),
+            None => extension_not_found(id, false),
+        }
+    };
     router
+        .route("/ext/", any(absent.clone()))
+        .nest("/ext", Router::new().fallback(absent))
 }
 
-async fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({ "error": "not found" })),
-    )
-        .into_response()
+/// The `<id>` of `/ext/<id>…`; empty for `/ext/`.
+fn ext_id(path: &str) -> &str {
+    let rest = path.strip_prefix("/ext/").unwrap_or_default();
+    rest.split('/').next().unwrap_or_default()
+}
+
+/// `404` for `/ext/<id>…` when no loaded extension `id` serves routes.
+fn extension_not_found(id: &str, loaded: bool) -> Response {
+    let message = if id.is_empty() {
+        "`/ext/` names no extension".to_string()
+    } else if loaded {
+        format!("extension `{id}` serves no route")
+    } else {
+        format!("no extension `{id}` in this daemon")
+    };
+    let body = serde_json::json!({ "error": "extension_not_found", "message": message, "id": id });
+    (StatusCode::NOT_FOUND, Json(body)).into_response()
+}
+
+/// `404` for a `path` the loaded extension `id` does not serve.
+fn not_found(id: &str, path: &str) -> Response {
+    let message = format!("extension `{id}` serves no `{path}`");
+    let body = serde_json::json!({ "error": "not_found", "message": message, "id": id });
+    (StatusCode::NOT_FOUND, Json(body)).into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::{header, Method, Request};
     use pdo_extension_api::{Extension, Manifest, ResourceKind, UiSlot};
+    use serde_json::Value;
+    use tower::util::ServiceExt;
 
     struct Contributes;
     impl Extension for Contributes {
@@ -214,5 +274,186 @@ mod tests {
                 { "id": "silent", "name": "Silent", "version": "0.1.0" },
             ])
         );
+    }
+
+    /// Serves `/` and `/items` under `/ext/serves/`.
+    struct Serves;
+    impl Extension for Serves {
+        fn manifest(&self) -> Manifest {
+            Manifest::new("serves", "Serves", "1.0.0")
+        }
+        fn routes(&self) -> Option<Router> {
+            Some(
+                Router::new()
+                    .route("/", get(|| async { "root" }))
+                    .route("/items", get(|| async { "items" })),
+            )
+        }
+    }
+
+    /// Panics when asked for its routes.
+    struct PanicsInRoutes;
+    impl Extension for PanicsInRoutes {
+        fn manifest(&self) -> Manifest {
+            Manifest::new("broken", "Broken", "1.0.0")
+        }
+        fn routes(&self) -> Option<Router> {
+            panic!("no routes today")
+        }
+    }
+
+    /// The router as the daemon assembles it: the SPA fallback, then `mount`.
+    fn app(extensions: Vec<Box<dyn Extension>>) -> Router {
+        let extensions = Extensions::register(extensions).unwrap();
+        mount(
+            Router::new().fallback(crate::spa::static_handler),
+            &extensions,
+        )
+    }
+
+    /// `(status, content-type, body)`; the body is `Value::Null` when not JSON.
+    async fn call(app: &Router, method: Method, uri: &str) -> (u16, String, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(request).await.unwrap();
+        let status = resp.status().as_u16();
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, content_type, body)
+    }
+
+    /// Asserts `uri` answers `404` JSON with `slug`, naming `id`.
+    async fn assert_404(app: &Router, method: Method, uri: &str, slug: &str, id: &str) -> Value {
+        let (status, content_type, body) = call(app, method.clone(), uri).await;
+        assert_eq!(status, 404, "{method} {uri}: {body}");
+        assert_eq!(content_type, "application/json", "{method} {uri}");
+        assert_eq!(body["error"], slug, "{method} {uri}: {body}");
+        assert_eq!(body["id"], id, "{method} {uri}: {body}");
+        assert!(body["message"].is_string(), "{method} {uri}: {body}");
+        body
+    }
+
+    #[tokio::test]
+    async fn an_extension_without_routes_answers_404_json_under_its_prefix() {
+        let app = app(vec![Box::new(Silent), Box::new(PanicsInRoutes)]);
+        for uri in [
+            "/ext/silent",
+            "/ext/silent/",
+            "/ext/silent/x",
+            "/ext/silent/a/b",
+        ] {
+            let body = assert_404(&app, Method::GET, uri, "extension_not_found", "silent").await;
+            assert!(
+                body["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("serves no route"),
+                "{body}"
+            );
+        }
+        assert_404(
+            &app,
+            Method::POST,
+            "/ext/silent/x",
+            "extension_not_found",
+            "silent",
+        )
+        .await;
+        assert_404(
+            &app,
+            Method::GET,
+            "/ext/broken/x",
+            "extension_not_found",
+            "broken",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_unknown_id_answers_404_json_for_every_method() {
+        let app = app(vec![Box::new(Serves)]);
+        for method in [
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+        ] {
+            for uri in ["/ext/hello", "/ext/hello/", "/ext/hello/api/x"] {
+                let (status, content_type, _) = call(&app, method.clone(), uri).await;
+                assert_eq!(status, 404, "{method} {uri}");
+                assert_eq!(content_type, "application/json", "{method} {uri}");
+            }
+        }
+        let body = assert_404(
+            &app,
+            Method::GET,
+            "/ext/hello",
+            "extension_not_found",
+            "hello",
+        )
+        .await;
+        assert_eq!(body["message"], "no extension `hello` in this daemon");
+        // An id sharing a prefix with a loaded one is still unknown.
+        assert_404(
+            &app,
+            Method::GET,
+            "/ext/servesx/items",
+            "extension_not_found",
+            "servesx",
+        )
+        .await;
+        assert_404(&app, Method::GET, "/ext/", "extension_not_found", "").await;
+    }
+
+    #[tokio::test]
+    async fn a_loaded_extension_keeps_its_routes_and_its_404() {
+        let app = app(vec![Box::new(Serves)]);
+        assert_eq!(call(&app, Method::GET, "/ext/serves").await.0, 200);
+        assert_eq!(call(&app, Method::GET, "/ext/serves/items").await.0, 200);
+        let body = assert_404(&app, Method::GET, "/ext/serves/nope", "not_found", "serves").await;
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("/ext/serves/nope"),
+            "{body}"
+        );
+        assert_404(
+            &app,
+            Method::POST,
+            "/ext/serves/nope/deeper",
+            "not_found",
+            "serves",
+        )
+        .await;
+        // No `{*rest}` matches an empty tail: the core's catch-all still knows it.
+        assert_404(&app, Method::GET, "/ext/serves/", "not_found", "serves").await;
+    }
+
+    #[tokio::test]
+    async fn the_index_and_the_spa_are_untouched() {
+        let app = app(vec![]);
+        let (status, content_type, body) = call(&app, Method::GET, "/ext").await;
+        assert_eq!((status, content_type.as_str()), (200, "application/json"));
+        assert_eq!(body, serde_json::json!([]));
+        for uri in ["/", "/runs/abc/review", "/definitely-not-a-route"] {
+            let (status, content_type, _) = call(&app, Method::GET, uri).await;
+            assert_eq!(status, 200, "{uri}");
+            assert!(
+                content_type.starts_with("text/html"),
+                "{uri}: {content_type}"
+            );
+        }
     }
 }

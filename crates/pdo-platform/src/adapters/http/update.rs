@@ -16,10 +16,13 @@ use crate::application::read_attempt_log::LogError;
 use crate::domain::update_status::UpdateStatus;
 use crate::Platform;
 
-/// The `GET /update` payload.
+/// The `GET /update` payload. `installed_version` is the release channel's
+/// (#24); `core_version` the core's, equal to it for the vanilla binary.
 fn status_json(s: UpdateStatus) -> serde_json::Value {
     serde_json::json!({
+        "channel_name": s.channel_name,
         "installed_version": s.installed_version,
+        "core_version": s.core_version,
         "latest_version": s.latest_version,
         "newer_available": s.newer_available,
         "checked_at": s.checked_at,
@@ -44,10 +47,11 @@ pub(super) async fn status(State(platform): State<Arc<Platform>>) -> Response {
     Json(status_json(platform.get_update_status.execute().await)).into_response()
 }
 
-/// `POST /update/check` — force a check now. 409 when the setting is off (the UI
-/// disables the button, a stale client is told) or when a check is already in
-/// flight. A failed fetch answers 502 **with the refreshed state**: the date
-/// moved, the last good version is kept, the error is in `last_error`.
+/// `POST /update/check` — force a check now. 409 when no release source is
+/// declared, when the setting is off (the UI disables the button, a stale client
+/// is told) or when a check is already in flight. A failed fetch answers 502
+/// **with the refreshed state**: the date moved, the last good version is kept,
+/// the error is in `last_error`.
 pub(super) async fn check(
     State(platform): State<Arc<Platform>>,
     Extension(actor): Extension<Actor>,
@@ -55,6 +59,7 @@ pub(super) async fn check(
     match platform.check_for_update.execute(&actor).await {
         Ok(()) => Json(status_json(platform.get_update_status.execute().await)).into_response(),
         Err(CheckError::Refused(denied)) => denied.into_response(),
+        Err(CheckError::NoSource(e)) => error(StatusCode::CONFLICT, e),
         Err(CheckError::Off) => error(
             StatusCode::CONFLICT,
             "the update check is off — turn it on to check now",
@@ -75,9 +80,10 @@ pub(super) async fn changelog(State(platform): State<Arc<Platform>>) -> Response
 }
 
 /// `POST /update/apply` — spawn the detached executor, 202 with the attempt at
-/// once. 409 with the reason when the method is `unknown` or an attempt is
-/// running; 500 when the script cannot be written or spawned (the record then
-/// says `failed`, the error is in the log).
+/// once. 409 with the reason when the method is `unknown`, when the release
+/// channel declares no command, or when an attempt is running; 500 when the
+/// script cannot be written or spawned (the record then says `failed`, the error
+/// is in the log).
 pub(super) async fn apply(
     State(platform): State<Arc<Platform>>,
     Extension(actor): Extension<Actor>,
@@ -98,12 +104,16 @@ pub(super) async fn apply(
         )
             .into_response(),
         Err(ApplyError::Refused(denied)) => denied.into_response(),
-        Err(ApplyError::Blocked { reason, method }) => (
+        Err(ApplyError::Blocked {
+            reason,
+            method,
+            manual_command,
+        }) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
                 "error": reason,
                 "install_method": method,
-                "manual_command": method.manual_command(),
+                "manual_command": manual_command,
             })),
         )
             .into_response(),

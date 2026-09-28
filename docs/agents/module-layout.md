@@ -148,7 +148,8 @@ and unit tests beside the code.
 ## The composition root
 
 `crates/pdo` (package `pdo-daemon`: dist names the installer after it) is the only crate that
-knows every context. It exposes `serve(config, extensions)` (ADR-0081) and:
+knows every context. It exposes `serve(config, extensions)` (ADR-0081), with
+`Config::with_release_channel` for a distribution to declare how it updates (#24), and:
 
 - opens the database and creates every context's tables (`src/daemon/storage.rs`), runs the boot's
   fix-ups, binds the listener and starts the background loops (`src/daemon/`);

@@ -3,4 +3,4 @@
 /**
  * How this binary got here — what an Update delegates to.
  */
-export type InstallMethod = "homebrew" | "script" | "unknown";
+export type InstallMethod = "homebrew" | "script" | "unknown" | "declared";

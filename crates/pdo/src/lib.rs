@@ -8,9 +8,9 @@
 //! depends on this crate by git tag and calls [`serve`] with its extensions
 //! (ADR-0081).
 //!
-//! Only [`serve`], [`Config`], [`Daemon`] and the re-exported
-//! [`extension_api`] are covered by semver. Everything else in the workspace
-//! promises nothing.
+//! Only [`serve`], [`Config`], [`ReleaseChannel`], [`Daemon`] and the
+//! re-exported [`extension_api`] are covered by semver. Everything else in the
+//! workspace promises nothing.
 
 mod attributes;
 #[doc(hidden)]
@@ -29,7 +29,7 @@ pub use daemon::router_layer::RouterLayer;
 pub use daemon::{serve_with_config, DaemonConfig, DaemonHandle, ExtensionHostHandle};
 #[doc(hidden)]
 pub use serve::{compose, composed_router_layer};
-pub use serve::{serve, Config, Daemon};
+pub use serve::{serve, Config, Daemon, ReleaseChannel};
 
 /// The extension API this build of PDO implements.
 pub use pdo_extension_api as extension_api;

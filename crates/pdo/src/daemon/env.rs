@@ -57,6 +57,9 @@ impl DaemonConfig {
             update_source_url: std::env::var("PDO_UPDATE_SOURCE_URL")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            // Not an env var: the channel belongs to the binary, which declares it
+            // at compile time through `Config::with_release_channel`.
+            release_channel: None,
             // Core daemon behaviour; the `update_check` SETTING is the user's
             // off switch, not an env var. Only the layer-3 literals opt out.
             run_update_check_loop: true,

@@ -30,7 +30,9 @@ function attempt(overrides: Partial<UpdateAttempt> = {}): UpdateAttempt {
 
 function status(last_attempt: UpdateAttempt | null): UpdateStatus {
   return {
+    channel_name: "PDO",
     installed_version: "1.60.0",
+    core_version: "1.60.0",
     latest_version: "1.61.0",
     newer_available: true,
     checked_at: null,

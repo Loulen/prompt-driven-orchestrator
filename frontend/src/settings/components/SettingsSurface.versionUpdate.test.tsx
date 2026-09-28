@@ -116,7 +116,9 @@ function settings(): InstanceSettings {
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
+    channel_name: "PDO",
     installed_version: "1.58.1",
+    core_version: "1.58.1",
     latest_version: "1.59.0",
     newer_available: true,
     checked_at: new Date(Date.now() - 2 * 3600_000).toISOString(),

@@ -10,7 +10,7 @@
 //!
 //! What is proven (ADR-0004 — an AC closes at layer ≥ 3):
 //!   1. apply answers 202 AT ONCE with an attempt id; the log is created; the
-//!      fixture received `brew update && brew upgrade Loulen/tap/pdo`; the attempt
+//!      fixture received `brew update && brew upgrade Loulen/pdo-v2/pdo-v2`; the attempt
 //!      is visible in `GET /update` and ends `succeeded` with exit 0;
 //!   2. `script` method, unsupervised: the installer re-run, and a script that stops
 //!      the daemon by pid then relaunches `daemon --port <same port>`;
@@ -120,7 +120,7 @@ async fn apply_homebrew_answers_at_once_and_the_fixture_receives_the_brew_comman
     assert_eq!(body["status"], "running");
     assert_eq!(
         body["command"],
-        "brew update && brew upgrade Loulen/tap/pdo"
+        "brew update && brew upgrade Loulen/pdo-v2/pdo-v2"
     );
     assert_eq!(body["from_version"], env!("CARGO_PKG_VERSION"));
 
@@ -138,7 +138,7 @@ async fn apply_homebrew_answers_at_once_and_the_fixture_receives_the_brew_comman
         "log created and written: {log}"
     );
     assert!(
-        log.contains("cmd=brew update && brew upgrade Loulen/tap/pdo"),
+        log.contains("cmd=brew update && brew upgrade Loulen/pdo-v2/pdo-v2"),
         "the executor receives the method's command: {log}"
     );
     assert!(log.contains("method=homebrew"));
@@ -148,7 +148,7 @@ async fn apply_homebrew_answers_at_once_and_the_fixture_receives_the_brew_comman
     // The generated script (what production runs) reinstalls the unit through the
     // binary path, then restarts the service — no kill/relaunch when supervised.
     let script = read_script(&daemon, &id);
-    assert!(script.contains("brew update && brew upgrade Loulen/tap/pdo"));
+    assert!(script.contains("brew update && brew upgrade Loulen/pdo-v2/pdo-v2"));
     assert!(
         script.contains(&format!("service install --port {}", daemon.addr.port())),
         "idempotent service install with the daemon's port:\n{script}"
@@ -495,7 +495,7 @@ async fn the_executor_survives_the_daemon_death() {
     loop {
         let log = std::fs::read_to_string(&log_path).unwrap_or_default();
         if log.contains("detached-done") {
-            assert!(log.contains("cmd=brew update && brew upgrade Loulen/tap/pdo"));
+            assert!(log.contains("cmd=brew update && brew upgrade Loulen/pdo-v2/pdo-v2"));
             break;
         }
         assert!(

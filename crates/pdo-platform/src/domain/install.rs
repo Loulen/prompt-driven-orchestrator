@@ -9,12 +9,14 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Homebrew formula the tap publishes; the manual command names it in full so
-/// `brew` never resolves an ambiguous `pdo`.
-pub const HOMEBREW_COMMAND: &str = "brew update && brew upgrade Loulen/tap/pdo";
+/// The v2 formula (`pdo-v2`, tap `Loulen/homebrew-pdo-v2`). The manual command
+/// names it in full so `brew` never resolves the v1 `pdo` formula of `Loulen/tap`.
+pub const HOMEBREW_COMMAND: &str = "brew update && brew upgrade Loulen/pdo-v2/pdo-v2";
 /// Re-running the cargo-dist installer replaces `~/.local/bin/pdo` the supported way.
+/// `Loulen/PDO-v2` publishes no release yet, so this installer does not exist
+/// yet: only a cargo-dist receipt left on the machine (by a v1 install) leads here.
 pub const SCRIPT_COMMAND: &str = "curl --proto '=https' --tlsv1.2 -LsSf \
-    https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh | sh";
+    https://github.com/Loulen/PDO-v2/releases/latest/download/pdo-daemon-installer.sh | sh";
 /// No installer to delegate to: the user rebuilds, PDO does not update itself.
 pub const UNKNOWN_COMMAND: &str = "Build from source, then restart the daemon.";
 
@@ -26,19 +28,26 @@ pub enum InstallMethod {
     Homebrew,
     Script,
     Unknown,
+    /// Declared by a distribution's release channel (#24): never detected, and
+    /// its command is the channel's, not one of the constants above.
+    Declared,
 }
 
 impl InstallMethod {
-    /// The exact command the user would type — and the Update button runs.
-    pub fn manual_command(self) -> &'static str {
+    /// The exact command the user would type (and the Update button runs) for a
+    /// detected method. `None` for [`InstallMethod::Declared`]: the release
+    /// channel carries that command.
+    pub fn manual_command(self) -> Option<&'static str> {
         match self {
-            InstallMethod::Homebrew => HOMEBREW_COMMAND,
-            InstallMethod::Script => SCRIPT_COMMAND,
-            InstallMethod::Unknown => UNKNOWN_COMMAND,
+            InstallMethod::Homebrew => Some(HOMEBREW_COMMAND),
+            InstallMethod::Script => Some(SCRIPT_COMMAND),
+            InstallMethod::Unknown => Some(UNKNOWN_COMMAND),
+            InstallMethod::Declared => None,
         }
     }
 
-    /// The method a `PDO_INSTALL_METHOD` value forces, if it names one.
+    /// The method a `PDO_INSTALL_METHOD` value forces, if it names one. Never
+    /// `declared`: only a distribution's channel declares its method.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim() {
             "homebrew" => Some(InstallMethod::Homebrew),
@@ -48,12 +57,13 @@ impl InstallMethod {
         }
     }
 
-    /// The lowercase wire name (`homebrew` / `script` / `unknown`).
+    /// The lowercase wire name (`homebrew` / `script` / `unknown` / `declared`).
     pub fn as_str(self) -> &'static str {
         match self {
             InstallMethod::Homebrew => "homebrew",
             InstallMethod::Script => "script",
             InstallMethod::Unknown => "unknown",
+            InstallMethod::Declared => "declared",
         }
     }
 }
@@ -249,14 +259,18 @@ mod tests {
     fn manual_command_matches_the_method() {
         assert_eq!(
             InstallMethod::Homebrew.manual_command(),
-            "brew update && brew upgrade Loulen/tap/pdo"
+            Some("brew update && brew upgrade Loulen/pdo-v2/pdo-v2")
         );
         assert!(InstallMethod::Script
             .manual_command()
-            .contains("pdo-daemon-installer.sh"));
+            .unwrap()
+            .contains("Loulen/PDO-v2/releases/latest/download/pdo-daemon-installer.sh"));
         assert!(InstallMethod::Unknown
             .manual_command()
+            .unwrap()
             .starts_with("Build from source"));
+        // A distribution's channel carries its own command.
+        assert_eq!(InstallMethod::Declared.manual_command(), None);
     }
 
     #[test]
@@ -271,6 +285,7 @@ mod tests {
             Some(InstallMethod::Unknown)
         );
         assert_eq!(InstallMethod::parse("npm"), None);
+        assert_eq!(InstallMethod::parse("declared"), None);
         assert_eq!(InstallMethod::Script.as_str(), "script");
         assert_eq!(Supervision::Launchd.as_str(), "launchd");
     }

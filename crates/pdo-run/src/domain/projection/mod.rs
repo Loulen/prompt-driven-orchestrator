@@ -4198,7 +4198,7 @@ mod tests {
                     "name": "Golden Run",
                     "input": "exercise every concern",
                     "image_filenames": ["screenshot.png"],
-                    "target_repo": "Loulen/prompt-driven-orchestrator",
+                    "target_repo": "Loulen/PDO-v2",
                     "source_branch": "main",
                     "triggered_by": "trigger-7",
                     "node_defs": [
@@ -4686,7 +4686,7 @@ mod tests {
             "switch_states": {
                 "sw": { "chosen_branch": "pass", "evaluated_at": "2026-02-01T00:05:00.000Z", "switch_node_id": "sw" }
             },
-            "target_repo": "Loulen/prompt-driven-orchestrator",
+            "target_repo": "Loulen/PDO-v2",
             "triggered_by": "trigger-7",
             "sandbox": "off"
         });

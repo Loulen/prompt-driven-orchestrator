@@ -79,6 +79,14 @@ impl UpdateCache {
         }
     }
 
+    /// `true` when this cache answers for `source`. A cache written for another
+    /// source says nothing about this one (#24): `~/.pdo/update/check.json` is
+    /// shared by every binary run under the same home, vanilla or distribution.
+    /// A cache without a recorded source is trusted, as before the field existed.
+    pub fn is_for(&self, source: &str) -> bool {
+        self.source.is_empty() || self.source == source
+    }
+
     /// Record one check of `source` at `now`: the date moves either way, the
     /// version only on success (a failed check keeps the last good value, with
     /// the error beside it).
@@ -143,5 +151,14 @@ mod tests {
             Some("release source unreachable: http://x: HTTP 500")
         );
         assert_eq!(cache.schema, CACHE_SCHEMA);
+    }
+
+    #[test]
+    fn a_cache_answers_only_for_its_source() {
+        let mut cache = UpdateCache::default();
+        assert!(cache.is_for("http://x"), "no recorded source: trusted");
+        cache.record("http://x", "t1".into(), &Ok("1.2.3".into()));
+        assert!(cache.is_for("http://x"));
+        assert!(!cache.is_for("http://y"));
     }
 }

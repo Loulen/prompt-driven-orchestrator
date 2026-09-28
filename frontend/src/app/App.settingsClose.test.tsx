@@ -408,7 +408,9 @@ vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
 // tests do so no real ReactFlow measurement runs under jsdom.
 vi.mock("../platform/api/update", () => ({
   fetchUpdateStatus: vi.fn().mockResolvedValue({
+    channel_name: "PDO",
     installed_version: "9.9.9-test",
+    core_version: "9.9.9-test",
     latest_version: null,
     newer_available: false,
     checked_at: null,

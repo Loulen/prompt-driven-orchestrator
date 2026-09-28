@@ -1,5 +1,8 @@
-//! The run context's environment variables: the session cap and the
-//! attachment budget of a `POST /runs`.
+//! The run context's environment variables: the session cap, the attachment
+//! budget of a `POST /runs`, the instance tier of `auto_fail` and the manager's
+//! auto-start.
+
+use pdo_kernel::instance_default::truthy;
 
 use crate::domain::admission::{parse_cap, resolve_cap, SESSION_CAP_ENV};
 
@@ -53,6 +56,53 @@ pub fn env_max_attachments_mb() -> Option<i64> {
         .ok()
         .and_then(|s| s.trim().parse::<i64>().ok())
         .filter(|&n| n >= 1)
+}
+
+/// Env seam for the instance-wide `auto_fail` default (ADR-0049 / ADR-0015).
+/// Read only inside [`resolve_instance_auto_fail`], the `stored → env → default`
+/// precedence — never elsewhere. Any of `1`/`true`/`yes`/`on` (case-insensitive)
+/// is truthy; anything else (incl. unset) is falsey.
+pub const AUTO_FAIL_ENV: &str = "PDO_AUTO_FAIL";
+
+/// The `auto_fail` default contributed by [`AUTO_FAIL_ENV`] alone, or `None`
+/// when unset.
+pub fn env_auto_fail() -> Option<bool> {
+    std::env::var(AUTO_FAIL_ENV).ok().map(|s| truthy(&s))
+}
+
+/// The instance (global) tier of `auto_fail`, `stored → env → default(false)`
+/// (ADR-0049). `stored` is the `auto_fail` column value (`Some(0/1)` a stored
+/// decision, `None` unset). Reads the env only when `stored` is `None`, so a
+/// stored `0` beats a `PDO_AUTO_FAIL=1`.
+pub fn resolve_instance_auto_fail(stored: Option<i64>) -> bool {
+    match stored {
+        Some(v) => v != 0,
+        None => env_auto_fail().unwrap_or(false),
+    }
+}
+
+/// Env seam for the manager auto-start flag (manager on demand / ADR-0015).
+/// Same truthy vocabulary as [`AUTO_FAIL_ENV`].
+pub const MANAGER_ENABLED_ENV: &str = "PDO_MANAGER_ENABLED";
+
+/// Built-in default for the manager auto-start flag: **off** — a Run starts
+/// managerless and the user starts one from the Manager tab when they want it.
+pub const MANAGER_ENABLED_DEFAULT: bool = false;
+
+/// The manager auto-start flag contributed by [`MANAGER_ENABLED_ENV`] alone, or
+/// `None` when unset.
+pub fn env_manager_enabled() -> Option<bool> {
+    std::env::var(MANAGER_ENABLED_ENV).ok().map(|s| truthy(&s))
+}
+
+/// The manager auto-start flag, `stored → env → default(false)`. `stored` is
+/// the `manager_enabled` column value (`Some(0/1)`: a stored decision, `None`
+/// unset); a stored `0` beats a `PDO_MANAGER_ENABLED=1`.
+pub fn resolve_manager_enabled(stored: Option<i64>) -> bool {
+    match stored {
+        Some(v) => v != 0,
+        None => env_manager_enabled().unwrap_or(MANAGER_ENABLED_DEFAULT),
+    }
 }
 
 #[cfg(test)]

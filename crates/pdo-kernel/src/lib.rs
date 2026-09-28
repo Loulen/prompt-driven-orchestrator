@@ -3,8 +3,9 @@
 //! What every bounded context shares, and nothing else: the clock, the
 //! [`Actor`] and the [`Operation`] (defined by the extension API and re-exported
 //! here), the neutral authorization point, the event bus, the extension host
-//! (with the checks an extension goes through at registration), and the names
-//! of the environment variables the instance configuration reads.
+//! (with the checks an extension goes through at registration), the shape an
+//! instance default is disclosed with, and the names of the environment
+//! variables the instance defaults read.
 //! Keep it small and stable: a concept that belongs to one context lives in that
 //! context's crate.
 
@@ -14,6 +15,7 @@ pub mod clock;
 pub mod env;
 pub mod event_bus;
 pub mod extension_host;
+pub mod instance_default;
 pub mod operation;
 pub mod registration;
 

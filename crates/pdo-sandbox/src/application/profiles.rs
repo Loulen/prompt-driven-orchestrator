@@ -9,7 +9,10 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
 use super::ports::{HostHome, ProfileReferents, Referents, SandboxProfileRepository, StoreError};
-use crate::domain::profile::{profile_names, resolve_profile, ResolvedProfile};
+use crate::domain::mode::SandboxMode;
+use crate::domain::profile::{
+    profile_names, resolve_profile, ResolvedProfile, FULL_PROFILE, MINIMAL_PROFILE,
+};
 
 /// Why a profile use case did not do what it was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +129,34 @@ pub async fn names(
 ) -> Result<Vec<(String, bool)>, StoreError> {
     let rows = store.list().await?;
     Ok(profile_names(rows.into_iter().map(|d| d.name)))
+}
+
+/// The SHARED existence gate for any `sandbox` reference a client can store
+/// (ADR-0031 §7): the instance default, a Trigger's `sandbox`. `""` is the
+/// *clear* sentinel and `off` means "no sandbox", so both are always valid;
+/// anything else must name a profile that resolves.
+///
+/// A **write-time** gate, deliberately not the authoritative one — the create-run
+/// chokepoint is, and it re-resolves at every fire. This one exists so the error
+/// lands where the user can fix it. The env tier (`PDO_DEFAULT_SANDBOX`) never
+/// passes through here, which is why the settings page discloses a `reason`
+/// beside the instance default.
+pub async fn validate_ref(store: &dyn SandboxProfileRepository, raw: &str) -> Result<(), String> {
+    let Some(mode) = SandboxMode::parse(raw) else {
+        return Ok(()); // "" / whitespace = the clear sentinel
+    };
+    let Some(name) = mode.profile() else {
+        return Ok(()); // `off`
+    };
+    match exists(store, name).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "unknown sandbox profile `{name}`: use `off`, `{MINIMAL_PROFILE}`, \
+             `{FULL_PROFILE}`, or a profile you created under Settings → Staging \
+             profiles",
+        )),
+        Err(e) => Err(format!("sandbox profile store error: {e}")),
+    }
 }
 
 #[cfg(test)]

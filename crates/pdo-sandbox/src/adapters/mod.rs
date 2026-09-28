@@ -6,6 +6,7 @@ pub mod dockerfiles;
 pub mod env;
 pub mod host;
 pub mod http;
+pub mod instance_defaults;
 pub mod sqlite_profiles;
 pub mod staging;
 

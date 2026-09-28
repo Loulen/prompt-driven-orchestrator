@@ -19,7 +19,9 @@ use pdo_sandbox::application::profiles::SandboxProfiles;
 use pdo_sandbox::domain::mode::SandboxMode;
 use tracing::error;
 
-use crate::{instance_config, AppState};
+use pdo_settings::adapters::sqlite::instance_config;
+
+use crate::AppState;
 
 /// The staging profiles of `db`.
 pub(crate) fn profile_store(db: &sqlx::SqlitePool) -> SqliteProfiles {

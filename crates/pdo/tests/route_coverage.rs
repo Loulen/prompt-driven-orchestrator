@@ -8,9 +8,8 @@
 //! How it reads both sides, statically — nextest runs one process per test, so no
 //! runtime recorder could see the calls the other tests make:
 //!
-//! - **the routes**: the `.route("<path>", <method router>)` calls of
-//!   `build_router` in the legacy crate and of every context router it merges,
-//!   each top-level `get(`/`post(`/`put(`/
+//! - **the routes**: the `.route("<path>", <method router>)` calls of every
+//!   context router the daemon merges, each top-level `get(`/`post(`/`put(`/
 //!   `patch(`/`delete(` of the method router being one route. When the
 //!   migration moves the router, point [`ROUTER_SOURCES`] at its new home.
 //! - **the calls**: every string literal of `tests/**/*.rs` that reads as a URL
@@ -28,11 +27,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The files holding the assembled router (relative to this crate), and the
-/// function that builds each part: the legacy crate's router, and the router of
-/// every context already extracted (merged by the legacy router or by the
-/// composition root).
+/// function that builds each part: the router of every bounded context (merged
+/// by the legacy router or by the composition root). The legacy crate's own
+/// router declares no route any more since the settings context moved out
+/// (#929): it only serves the SPA and merges the contexts it still wires.
 const ROUTER_SOURCES: &[(&str, &str)] = &[
-    (LEGACY_ROUTER, "fn build_router("),
     ("../pdo-sandbox/src/adapters/http/mod.rs", "pub fn router("),
     (
         "../pdo-workspace/src/adapters/http/mod.rs",
@@ -46,10 +45,8 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("../pdo-trigger/src/adapters/http/mod.rs", "pub fn router("),
     ("../pdo-review/src/adapters/http/mod.rs", "pub fn router("),
     ("../pdo-stats/src/adapters/http/mod.rs", "pub fn router("),
+    ("../pdo-settings/src/adapters/http/mod.rs", "pub fn router("),
 ];
-
-/// The legacy crate's router, which the migration empties context by context.
-const LEGACY_ROUTER: &str = "../pdo-daemon/src/lib.rs";
 
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
 
@@ -568,17 +565,10 @@ fn assembled_routes() -> Vec<Route> {
         .collect()
 }
 
-/// The routes of every bounded context already extracted from the legacy crate
-/// — what [`ROUTER_SOURCES`] lists beside the legacy router.
+/// The routes of every bounded context — every router [`ROUTER_SOURCES`]
+/// lists.
 pub(crate) fn context_routes() -> Vec<Route> {
-    ROUTER_SOURCES
-        .iter()
-        .filter(|(file, _)| *file != LEGACY_ROUTER)
-        .flat_map(|(file, marker)| {
-            let src = std::fs::read_to_string(crate_dir().join(file)).unwrap();
-            router_routes(&src, marker)
-        })
-        .collect()
+    assembled_routes()
 }
 
 fn uncovered(routes: &[Route], sources: &[(String, String)]) -> Vec<Route> {
@@ -637,16 +627,17 @@ fn the_router_reader_sees_every_route_declaration() {
 /// a fictitious method on a covered path, both come out uncovered.
 #[test]
 fn a_route_without_a_test_turns_the_coverage_red() {
-    let src = std::fs::read_to_string(crate_dir().join("../pdo-daemon/src/lib.rs")).unwrap();
+    let src = std::fs::read_to_string(crate_dir().join("../pdo-settings/src/adapters/http/mod.rs"))
+        .unwrap();
     let injected = src.replacen(
-        "fn build_router(state: Arc<AppState>) -> Router {\n    let router = Router::new()\n",
-        "fn build_router(state: Arc<AppState>) -> Router {\n    let router = Router::new()\n        \
+        "pub fn router(settings: Arc<Settings>) -> Router {\n    Router::new()\n",
+        "pub fn router(settings: Arc<Settings>) -> Router {\n    Router::new()\n        \
          .route(\"/net-914/fictitious\", get(fictitious))\n        \
          .route(\"/runs/reapable\", axum::routing::delete(fictitious))\n",
         1,
     );
     assert_ne!(injected, src, "the injection point moved");
-    let routes = router_routes(&injected, "fn build_router(");
+    let routes = router_routes(&injected, "pub fn router(");
     assert_eq!(
         uncovered(&routes, &test_sources()),
         vec![

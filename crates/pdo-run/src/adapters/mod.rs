@@ -7,6 +7,7 @@ pub mod contexts;
 pub mod disk_live_facts;
 pub mod env;
 pub mod http;
+pub mod instance_defaults;
 pub mod manager_sessions;
 pub mod price_files;
 pub mod run_cost;

@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use pdo_daemon::{ContextResources, Contexts};
+use pdo_harness::adapters::binary_probe::installed_catalogue_reader;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_pipeline::adapters::events::BroadcastPipelineEvents;
 use pdo_pipeline::adapters::library_fs::FsNodeLibrary;
@@ -28,10 +29,22 @@ use pdo_run::adapters::disk_live_facts::DiskLiveFacts;
 use pdo_run::adapters::manager_sessions::TmuxManagerSessions;
 use pdo_run::adapters::sqlite_event_store::SqliteEventStore;
 use pdo_run::{Runs, RunsOptions, RunsPorts};
+use pdo_sandbox::adapters::local_runtime;
 use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_session::adapters::terminal_window::OsTerminalWindow;
 use pdo_session::adapters::tmux::TmuxCli;
 use pdo_session::{Session, SessionOptions, SessionPorts};
+use pdo_settings::adapters::contexts::{
+    ContextReferents, PlatformUpdateChecks, RunInstanceSettings, SandboxStagingProfiles,
+    SettingsOfReview, SettingsOfTriggers, UpdateCheckOfPlatform,
+};
+use pdo_settings::adapters::sections::{
+    HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
+    SandboxSection, SessionDefaults, TriggerDefaults,
+};
+use pdo_settings::adapters::sqlite::{SqliteAgentProfiles, SqliteInstanceConfig};
+use pdo_settings::application::ports::{AgentProfileStore, InstanceConfigStore};
+use pdo_settings::{Settings, SettingsPorts};
 use pdo_stats::adapters::contexts::{
     BusAnnouncements, PlatformAudit, WorkspaceProjects as StatsProjects,
 };
@@ -53,42 +66,112 @@ use pdo_trigger::{Triggers, TriggersOptions, TriggersPorts};
 
 /// Wire every extracted context. Called once per daemon, at boot.
 pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) -> Contexts {
+    // The stored instance settings and the agentic profiles come first: the
+    // upstream contexts read them through their own ports.
+    let stored = StoredSettings {
+        config: Arc::new(SqliteInstanceConfig::new(resources.db.clone())),
+        profiles: Arc::new(SqliteAgentProfiles::new(resources.db.clone())),
+    };
     let session = session(&resources, host.clone());
-    let run = run(&resources, &session, host.clone());
-    let review = review(&resources, &run, host.clone());
-    let platform = platform(&resources, host.clone());
+    let run = run(&resources, &session, &stored, host.clone());
+    let review = review(&run, &stored, host.clone());
+    let platform = platform(&resources, &stored, host.clone());
     let stats = stats(&resources, &platform, host.clone());
     let pipelines = pipelines(&resources, &stats, host.clone());
     let triggers = triggers(TriggerWiring {
         db: resources.db.clone(),
         repo_root: resources.repo_root.clone(),
-        legacy: resources.trigger.clone(),
+        panic_on_trigger_name: resources.panic_on_trigger_name.clone(),
+        settings: stored.config.clone(),
         run: &run,
         platform: &platform,
-        host,
+        host: host.clone(),
     });
+    let settings = settings(&resources, stored, &platform, host);
     Contexts {
         router: pdo_platform::router(platform.clone())
             .merge(pdo_session::router(session.clone()))
             .merge(pdo_pipeline::adapters::http::router(pipelines))
             .merge(pdo_review::router(review))
             .merge(pdo_stats::router(stats.clone()))
-            .merge(pdo_trigger::router(triggers.clone())),
+            .merge(pdo_trigger::router(triggers.clone()))
+            .merge(pdo_settings::router(settings.clone())),
         platform,
         session,
         run,
         stats,
         triggers,
+        settings,
     }
+}
+
+/// The settings context's stores, which the upstream contexts read too.
+struct StoredSettings {
+    config: Arc<dyn InstanceConfigStore>,
+    profiles: Arc<dyn AgentProfileStore>,
+}
+
+/// The `settings` context: the stored tier and the agentic profiles over
+/// SQLite, the page's sections — each context's instance defaults, the staging
+/// profiles and Docker, the harnesses' catalogues, the price table — under the
+/// daemon's home, the platform's version check, and who names a profile (the
+/// Projets, the Triggers, the instance pipelines).
+fn settings(
+    r: &ContextResources,
+    stored: StoredSettings,
+    platform: &Arc<Platform>,
+    host: Arc<dyn ExtensionHost>,
+) -> Arc<Settings> {
+    let home = HostHome {
+        override_home: r.run.sandbox_home_override.clone(),
+    };
+    let profiles = Arc::new(SqliteProfiles::new(r.db.clone()));
+    let harnesses = Arc::new(HarnessCatalogue {
+        home: home.clone(),
+        reader: installed_catalogue_reader(),
+    });
+    let sandbox = SandboxSection::new(
+        profiles.clone(),
+        local_runtime(r.run.docker_cmd_override.as_deref()).docker,
+        home.clone(),
+    );
+    Settings::new(SettingsPorts {
+        config: stored.config,
+        profiles: stored.profiles,
+        sections: vec![
+            Arc::new(RunDefaults),
+            Arc::new(SessionDefaults),
+            Arc::new(TriggerDefaults),
+            Arc::new(ReviewDefaults),
+            Arc::new(PlatformDefaults),
+            Arc::new(sandbox),
+            harnesses.clone(),
+            Arc::new(PriceTableSection { home }),
+        ],
+        harnesses,
+        staging_profiles: Arc::new(SandboxStagingProfiles(profiles)),
+        update_checks: Arc::new(PlatformUpdateChecks(platform.clone())),
+        referents: Arc::new(ContextReferents {
+            db: r.db.clone(),
+            repo_root: r.repo_root.clone(),
+        }),
+        extensions: host,
+    })
 }
 
 /// The `run` context: the event log over SQLite, the kernel's bus the daemon
 /// opened, what a Run's detail reads from disk, tmux and the declared wait of
 /// the session context, the Projets of the workspace, the skills and their
 /// bank, the staging profiles over SQLite, the pipeline watcher and the
-/// daemon's own writes, and what the legacy daemon still implements (the
-/// instance settings, the page mounts an archive releases).
-fn run(r: &ContextResources, session: &Arc<Session>, host: Arc<dyn ExtensionHost>) -> Arc<Runs> {
+/// daemon's own writes, the instance settings and the agentic profiles of the
+/// settings context, and what the legacy daemon still implements (the page
+/// mounts an archive releases).
+fn run(
+    r: &ContextResources,
+    session: &Arc<Session>,
+    stored: &StoredSettings,
+    host: Arc<dyn ExtensionHost>,
+) -> Arc<Runs> {
     let legacy = r.run.clone();
     Runs::new(
         RunsPorts {
@@ -104,7 +187,10 @@ fn run(r: &ContextResources, session: &Arc<Session>, host: Arc<dyn ExtensionHost
             projects: Arc::new(WorkspaceProjects(legacy.workspace)),
             skills: Arc::new(ContextSkills(legacy.skills.clone())),
             sandbox_profiles: Arc::new(SqliteProfiles::new(r.db.clone())),
-            settings: legacy.settings,
+            settings: Arc::new(RunInstanceSettings {
+                config: stored.config.clone(),
+                profiles: stored.profiles.clone(),
+            }),
             bank: Arc::new(BankOfSkills(legacy.skills)),
             pages: legacy.pages,
             run_dirs: legacy.run_dirs,
@@ -128,7 +214,8 @@ fn run(r: &ContextResources, session: &Arc<Session>, host: Arc<dyn ExtensionHost
 struct TriggerWiring<'a> {
     db: sqlx::SqlitePool,
     repo_root: std::path::PathBuf,
-    legacy: pdo_daemon::TriggerResources,
+    panic_on_trigger_name: Option<String>,
+    settings: Arc<dyn InstanceConfigStore>,
     run: &'a Arc<Runs>,
     platform: &'a Arc<Platform>,
     host: Arc<dyn ExtensionHost>,
@@ -137,13 +224,13 @@ struct TriggerWiring<'a> {
 /// The `trigger` context: the Triggers over SQLite, the guard run by `sh`, the
 /// Runs of the run context, the library's pipelines on disk, the repositories
 /// through git, the staging profiles over SQLite, the platform's audit journal,
-/// the kernel's bus, and the instance settings the legacy daemon still holds.
+/// the kernel's bus, and the pause and the guard timeout of the settings context.
 fn triggers(w: TriggerWiring<'_>) -> Arc<Triggers> {
     Triggers::new(
         TriggersPorts {
             store: Arc::new(SqliteTriggers::new(w.db.clone())),
             guards: Arc::new(ShellGuard),
-            settings: w.legacy.settings,
+            settings: Arc::new(SettingsOfTriggers(w.settings)),
             pipelines: Arc::new(LibraryPipelines {
                 repo_root: w.repo_root.clone(),
             }),
@@ -156,18 +243,18 @@ fn triggers(w: TriggerWiring<'_>) -> Arc<Triggers> {
         },
         TriggersOptions {
             repo_root: w.repo_root,
-            panic_on_trigger_name: w.legacy.panic_on_trigger_name,
+            panic_on_trigger_name: w.panic_on_trigger_name,
         },
     )
 }
 
 /// The `review` context: the Runs of the run context, git through the
-/// workspace's adapter, and the instance setting the legacy daemon still owns.
-fn review(r: &ContextResources, run: &Arc<Runs>, host: Arc<dyn ExtensionHost>) -> Arc<Review> {
+/// workspace's adapter, and the instance setting of the settings context.
+fn review(run: &Arc<Runs>, stored: &StoredSettings, host: Arc<dyn ExtensionHost>) -> Arc<Review> {
     Review::new(ReviewPorts {
         runs: Arc::new(ContextRuns(run.clone())),
         git: Arc::new(CliGit),
-        settings: r.review_settings.clone(),
+        settings: Arc::new(SettingsOfReview(stored.config.clone())),
         extensions: host,
     })
 }
@@ -258,14 +345,18 @@ fn pipelines(
 
 /// The `platform` context: SQLite for the mounts and the audit, the local
 /// filesystem for the pages and the update journal, GitHub for the releases,
-/// a detached `sh` for the update.
-fn platform(r: &ContextResources, host: Arc<dyn ExtensionHost>) -> Arc<Platform> {
+/// a detached `sh` for the update, and its `update_check` instance setting.
+fn platform(
+    r: &ContextResources,
+    stored: &StoredSettings,
+    host: Arc<dyn ExtensionHost>,
+) -> Arc<Platform> {
     let ports = PlatformPorts {
         page_mounts: Arc::new(SqlitePageMounts::new(r.db.clone())),
         page_files: Arc::new(LocalPageFiles),
         audit: Arc::new(SqliteAuditLog::new(r.db.clone())),
         runs: r.runs.clone(),
-        update_setting: r.update_setting.clone(),
+        update_setting: Arc::new(UpdateCheckOfPlatform(stored.config.clone())),
         release_source: Arc::new(GithubReleases),
         update_journal: Arc::new(FsUpdateJournal::new(r.home_root.clone())),
         installation: Arc::new(HostInstallation::new(

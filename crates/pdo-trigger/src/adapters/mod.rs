@@ -6,4 +6,5 @@ pub mod env;
 pub mod guard_shell;
 pub mod heartbeat;
 pub mod http;
+pub mod instance_defaults;
 pub mod sqlite;

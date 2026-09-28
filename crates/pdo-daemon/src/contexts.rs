@@ -4,10 +4,10 @@
 //! The legacy daemon opens the database and binds the listener; the composition
 //! root wires each extracted context over these [`ContextResources`] and hands
 //! back the [`Contexts`]. The ports a context needs from what is still legacy
-//! (the Runs, the templates, the instance settings) are implemented here for
-//! `platform`, and in `<context>_ports` for `session`, `pipeline`, `run`,
-//! `review`, `stats` and `trigger`, until what they read leaves the legacy
-//! crate.
+//! (the Runs, the templates) are implemented here for `platform`, and in
+//! `<context>_ports` for `session`, `pipeline`, `run` and `stats`, until what
+//! they read leaves the legacy crate. The instance settings are the settings
+//! context's (#929): the composition root wires them.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
@@ -15,12 +15,11 @@ use std::sync::{Arc, Weak};
 use axum::Router;
 use pdo_kernel::event_bus::EventBus;
 use pdo_pipeline::application::ports::ActiveRuns;
-use pdo_platform::application::ports::{BoxFuture, Runs, UpdateCheckSetting};
+use pdo_platform::application::ports::{BoxFuture, Runs};
 use pdo_platform::domain::install::{InstallMethod, Supervision};
 use pdo_platform::domain::service_health::ServiceHealthOverride;
 use pdo_platform::Platform;
-use pdo_review::application::ports::ReviewSettings;
-use pdo_run::application::ports::{InstanceSettings, RunDirWatch, RunPages};
+use pdo_run::application::ports::{RunDirWatch, RunPages};
 
 use pdo_session::application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunShells, SessionOwners, Templates,
@@ -29,13 +28,11 @@ use pdo_session::Session;
 use tokio::sync::broadcast;
 
 use crate::pipeline_ports::LegacyActiveRuns;
-use crate::review_ports::LegacyReviewSettings;
-use crate::run_ports::{LegacyInstanceSettings, LegacyRunPages};
+use crate::run_ports::LegacyRunPages;
 use crate::session_ports::LegacySessionPorts;
 use crate::stats_ports::{LegacyTriggerFires, StatsResources};
-use crate::trigger_ports::{LegacyTriggerSettings, TriggerResources};
 use crate::SelfWrites;
-use crate::{event_log, instance_config, AppState, SessionClaim};
+use crate::{event_log, AppState, SessionClaim};
 
 /// What the legacy daemon offers the contexts it hosts.
 pub struct ContextResources {
@@ -56,8 +53,6 @@ pub struct ContextResources {
     pub service_health_override: Option<ServiceHealthOverride>,
     /// The Runs, as the platform context sees them.
     pub runs: Arc<dyn Runs>,
-    /// The `update_check` instance setting.
-    pub update_setting: Arc<dyn UpdateCheckSetting>,
     /// Replaces the harness tail of a session (the per-daemon test seam).
     pub tmux_cmd_override: Option<String>,
     /// Extra WebSocket origins, parsed at boot.
@@ -70,22 +65,19 @@ pub struct ContextResources {
     pub run: RunResources,
     /// What the stats context needs from this daemon.
     pub stats: StatsResources,
-    /// The `review_agent_can_resolve` instance setting, as the review context
-    /// reads it.
-    pub review_settings: Arc<dyn ReviewSettings>,
-    /// What the trigger context needs from this daemon.
-    pub trigger: TriggerResources,
+    /// Debug-only fault injection of the trigger context: when a due Trigger's
+    /// name matches, its tick `panic!`s.
+    pub panic_on_trigger_name: Option<String>,
 }
 
 /// The run context's resources: the kernel's bus the daemon opened, the
 /// upstream contexts it reads (the Projets, the skills), the pipeline watcher
 /// and the record of the daemon's own writes, what the legacy side still
-/// implements (the instance settings, the page mounts an archive releases),
-/// with the daemon's per-run knobs.
+/// implements (the page mounts an archive releases), with the daemon's
+/// per-run knobs.
 #[derive(Clone)]
 pub struct RunResources {
     pub bus: Arc<dyn EventBus>,
-    pub settings: Arc<dyn InstanceSettings>,
     pub pages: Arc<dyn RunPages>,
     pub run_dirs: Arc<dyn RunDirWatch>,
     pub self_writes: SelfWrites,
@@ -148,6 +140,8 @@ pub struct Contexts {
     pub triggers: Arc<pdo_trigger::Triggers>,
     /// The stats context. The daemon drives its boot refresh.
     pub stats: Arc<pdo_stats::Stats>,
+    /// The settings context: the daemon warms its harness catalogues at boot.
+    pub settings: Arc<pdo_settings::Settings>,
     pub router: Router,
 }
 
@@ -184,20 +178,11 @@ pub(crate) struct ContextResourcesSeed {
 impl ContextResourcesSeed {
     pub(crate) fn into_resources(self, state: Weak<AppState>) -> ContextResources {
         ContextResources {
-            update_setting: Arc::new(LegacyUpdateSetting {
-                db: self.db.clone(),
-            }),
             runs: Arc::new(LegacyRuns {
                 state: state.clone(),
             }),
-            review_settings: Arc::new(LegacyReviewSettings {
-                db: self.db.clone(),
-            }),
             run: RunResources {
                 bus: self.bus,
-                settings: Arc::new(LegacyInstanceSettings {
-                    db: self.db.clone(),
-                }),
                 pages: Arc::new(LegacyRunPages {
                     state: state.clone(),
                 }),
@@ -210,12 +195,7 @@ impl ContextResourcesSeed {
                 panic_on_stale_sweep: self.panic_on_stale_sweep,
                 panic_on_spawn: self.panic_on_spawn,
             },
-            trigger: TriggerResources {
-                settings: Arc::new(LegacyTriggerSettings {
-                    db: self.db.clone(),
-                }),
-                panic_on_trigger_name: self.panic_on_trigger_name,
-            },
+            panic_on_trigger_name: self.panic_on_trigger_name,
             session: SessionRunPorts::over(state),
             pipeline: PipelineResources {
                 runs: Arc::new(LegacyActiveRuns {
@@ -336,26 +316,6 @@ impl Runs for LegacyRuns {
     }
 }
 
-/// The `update_check` instance setting, `stored → env → default`, read fresh.
-pub(crate) struct LegacyUpdateSetting {
-    pub(crate) db: sqlx::SqlitePool,
-}
-
-impl UpdateCheckSetting for LegacyUpdateSetting {
-    fn enabled(&self) -> BoxFuture<'_, bool> {
-        Box::pin(async move {
-            let stored = instance_config::get(&self.db)
-                .await
-                .ok()
-                .and_then(|c| c.update_check);
-            pdo_platform::domain::update_check::resolve_update_check(
-                stored,
-                pdo_platform::adapters::env::env_update_check(),
-            )
-        })
-    }
-}
-
 /// The session context of a unit-test state: the real tmux adapter on the test
 /// daemon's socket (no server runs there), the OS terminal window, and no
 /// extension — or the `tmux` a test injects.
@@ -392,8 +352,8 @@ pub(crate) fn test_session(
 }
 
 /// The run context of a unit-test state: the SQLite log of the test
-/// database, the state's bus, the disk's live facts, the legacy settings and
-/// page mounts,
+/// database, the state's bus, the disk's live facts, the settings context's
+/// instance settings over the test database, the legacy page mounts,
 /// the session's tmux and declared wait, the workspace's Projets and the skill
 /// context, and the test daemon's knobs (a node session runs `exec true`).
 #[cfg(test)]
@@ -435,7 +395,14 @@ pub(crate) fn test_run(t: TestRun<'_>) -> Arc<pdo_run::Runs> {
             sandbox_profiles: Arc::new(
                 pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles::new(t.db.clone()),
             ),
-            settings: Arc::new(LegacyInstanceSettings { db: t.db.clone() }),
+            settings: Arc::new(pdo_settings::adapters::contexts::RunInstanceSettings {
+                config: Arc::new(pdo_settings::adapters::sqlite::SqliteInstanceConfig::new(
+                    t.db.clone(),
+                )),
+                profiles: Arc::new(pdo_settings::adapters::sqlite::SqliteAgentProfiles::new(
+                    t.db.clone(),
+                )),
+            }),
             bank: Arc::new(pdo_pipeline::adapters::skill_bank::BankOfSkills(t.skills)),
             pages: Arc::new(LegacyRunPages { state: t.state }),
             run_dirs: Arc::new(pdo_run::adapters::run_dir_watch::DebouncedRunDirs(

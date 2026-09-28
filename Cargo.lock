@@ -1993,6 +1993,7 @@ dependencies = [
  "pdo-run",
  "pdo-sandbox",
  "pdo-session",
+ "pdo-settings",
  "pdo-stats",
  "pdo-trigger",
  "pretty_assertions",
@@ -2042,6 +2043,7 @@ version = "1.111.14"
 dependencies = [
  "chrono",
  "pdo-extension-api",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -2077,6 +2079,7 @@ dependencies = [
  "pdo-run",
  "pdo-sandbox",
  "pdo-session",
+ "pdo-settings",
  "pdo-skill",
  "pdo-stats",
  "pdo-trigger",
@@ -2262,6 +2265,36 @@ dependencies = [
  "tokio",
  "tracing",
  "ts-rs",
+]
+
+[[package]]
+name = "pdo-settings"
+version = "1.111.14"
+dependencies = [
+ "axum",
+ "chrono",
+ "pdo-extension-api",
+ "pdo-harness",
+ "pdo-kernel",
+ "pdo-pipeline",
+ "pdo-platform",
+ "pdo-review",
+ "pdo-run",
+ "pdo-sandbox",
+ "pdo-session",
+ "pdo-skill",
+ "pdo-trigger",
+ "pdo-workspace",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]

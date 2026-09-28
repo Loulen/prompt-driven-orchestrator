@@ -11,6 +11,7 @@ pub mod github_releases;
 pub mod host_installation;
 pub mod host_service;
 pub mod http;
+pub mod instance_defaults;
 pub mod page_files;
 pub mod service_health_probe;
 pub mod sqlite_audit_log;

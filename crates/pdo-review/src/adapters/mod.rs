@@ -5,4 +5,5 @@ pub mod cli;
 pub mod env;
 pub mod git;
 pub mod http;
+pub mod instance_defaults;
 pub mod runs;

@@ -35,6 +35,7 @@ pdo-run.workspace = true
 pdo-trigger.workspace = true
 pdo-stats.workspace = true
 pdo-review.workspace = true
+pdo-settings.workspace = true
 ts-rs.workspace = true
 tokio.workspace = true
 axum.workspace = true

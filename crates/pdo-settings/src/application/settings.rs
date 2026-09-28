@@ -1,0 +1,71 @@
+//! The settings context, assembled: its ports.
+
+use std::sync::Arc;
+
+use pdo_kernel::authorization::{authorize, Denied};
+use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::{Actor, Operation};
+
+use super::ports::{
+    AgentProfileStore, Harnesses, InstanceConfigStore, ProfileReferents, SettingsSection,
+    StagingProfiles, UpdateChecks,
+};
+
+/// Every port the context needs, as the composition root plugs them in.
+pub struct SettingsPorts {
+    /// The stored tier of the instance defaults.
+    pub config: Arc<dyn InstanceConfigStore>,
+    pub profiles: Arc<dyn AgentProfileStore>,
+    /// The sections of the page, one per context that discloses something on
+    /// it. The page is their union, plus the instance tiers the settings
+    /// context owns itself (the agentic profile and the skills selection).
+    pub sections: Vec<Arc<dyn SettingsSection>>,
+    pub harnesses: Arc<dyn Harnesses>,
+    pub staging_profiles: Arc<dyn StagingProfiles>,
+    pub update_checks: Arc<dyn UpdateChecks>,
+    pub referents: Arc<dyn ProfileReferents>,
+    /// Asked before every mutation.
+    pub extensions: Arc<dyn ExtensionHost>,
+}
+
+/// The context, assembled: its use cases over its ports.
+pub struct Settings {
+    pub(crate) config: Arc<dyn InstanceConfigStore>,
+    pub(crate) profiles: Arc<dyn AgentProfileStore>,
+    pub(crate) sections: Vec<Arc<dyn SettingsSection>>,
+    pub(crate) harnesses: Arc<dyn Harnesses>,
+    pub(crate) staging_profiles: Arc<dyn StagingProfiles>,
+    pub(crate) update_checks: Arc<dyn UpdateChecks>,
+    pub(crate) referents: Arc<dyn ProfileReferents>,
+    extensions: Arc<dyn ExtensionHost>,
+}
+
+impl Settings {
+    pub fn new(ports: SettingsPorts) -> Arc<Self> {
+        let SettingsPorts {
+            config,
+            profiles,
+            sections,
+            harnesses,
+            staging_profiles,
+            update_checks,
+            referents,
+            extensions,
+        } = ports;
+        Arc::new(Self {
+            config,
+            profiles,
+            sections,
+            harnesses,
+            staging_profiles,
+            update_checks,
+            referents,
+            extensions,
+        })
+    }
+
+    /// Ask the extensions whether `actor` may run `operation`.
+    pub(crate) fn authorize(&self, actor: &Actor, operation: &Operation) -> Result<(), Denied> {
+        authorize(self.extensions.as_ref(), actor, operation)
+    }
+}

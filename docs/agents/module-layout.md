@@ -389,6 +389,31 @@ there (or list a `POST` that mutates nothing, with the reason). The extension it
 `crates/pdo/tests/test_extension/`; `demo_daemon.rs` next to it serves `pdo daemon` with that
 extension for the Feature Paths (see its header).
 
+The other hooks of the extension API (#931) follow the same rule: generic, in the use case,
+never context-specific.
+
+- **Entity attributes.** A use case that creates a Run, a Projet, an agentic profile, a
+  Trigger or a pipeline of the library calls `pdo_kernel::attributes::stamp` once the entity
+  exists: the extensions answer `on_create`, the kernel prefixes each key with the extension's
+  id and stores the result through the `AttributeStore` port (`entity_attributes`, SQLite,
+  in the composition root). The entity's DTO carries `attributes`, skipped when empty so the
+  wire stays byte-identical without extension; the list endpoint reads `?attr.<id>/<key>=
+  <value>` through `AttributeFilter` / `AttributedList`. Never put attributes in the event log.
+- **`OperationApplied`.** Nothing to write in a use case: `authorize` records every allowed
+  Operation in the request's scope (`pdo_kernel::applied`), and the `identify` middleware
+  publishes them once the response is a success. A primary adapter outside HTTP (the Triggers'
+  cron tick) publishes its own. Deleting an entity drops its attributes there too.
+- **Events.** The extension host subscribes to the kernel's bus: an extension's `on_event`
+  receives the JSON `/ws` relays, on the extension's own thread, through a bounded queue that
+  never makes the publisher wait.
+- **Routes and UI.** `crates/pdo/src/extensions.rs` nests each extension's router under
+  `/ext/<id>` and serves `GET /ext`, the index the front reads. The front's UI slots live in
+  `frontend/src/shared/extensions/` (navigation entry in the top bar, settings panel on the
+  Settings rail, list filter under the Runs filters, detail tab in the Run's info panel); each
+  bundle is imported at runtime, with React shared through the import map of `index.html` and
+  the shims of `frontend/public/shared/`. A bundle declaring another React major is never
+  imported, and a banner says so.
+
 Two more the skill context set:
 
 - **Consume another context's technology through your own port.** The skill context never runs

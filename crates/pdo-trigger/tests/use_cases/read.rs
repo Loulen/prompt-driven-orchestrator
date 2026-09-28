@@ -15,7 +15,7 @@ async fn the_list_resolves_the_effective_repo_without_touching_the_raw_one() {
         .filter(|t| t.id == legacy)
         .for_each(|t| t.target_repo = None);
 
-    let list = w.triggers.list().await.unwrap();
+    let list = w.triggers.list(Default::default()).await.unwrap();
     let of = |id: &str| list.iter().find(|e| e.trigger.id == id).unwrap();
     assert_eq!(of(&id).effective_repo, REPO);
     assert_eq!(of(&legacy).effective_repo, "/daemon/root");

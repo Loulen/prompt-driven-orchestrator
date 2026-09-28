@@ -266,6 +266,11 @@ impl Runs {
         self.node_done_tail_gate.notify_waiters();
     }
 
+    /// The extension host: the attributes of the Runs.
+    pub fn extensions(&self) -> &dyn ExtensionHost {
+        self.extensions.as_ref()
+    }
+
     /// Ask the extensions whether `actor` may run `operation`: every gesture
     /// of an actor does, never a transition of the scheduler (D10).
     pub fn authorize(&self, actor: &Actor, operation: &Operation) -> Result<(), Denied> {

@@ -16,15 +16,19 @@
 
 mod actor;
 mod entity;
+mod event;
 mod extension;
 mod manifest;
 mod operation;
+mod ui;
 
 pub use actor::Actor;
 pub use entity::{Attributes, EntityRef};
-pub use extension::{Authorization, Extension, RequestParts, UiContributions};
+pub use event::{OperationApplied, OPERATION_APPLIED};
+pub use extension::{Authorization, Extension, ExtensionContext, RequestParts};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
+pub use ui::{Slot, UiContributions, UiSlot};
 
 pub use axum;
 pub use serde_json;

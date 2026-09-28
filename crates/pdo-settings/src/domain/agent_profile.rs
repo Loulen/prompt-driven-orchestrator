@@ -20,6 +20,7 @@
 use std::fmt;
 
 use pdo_harness::agent_choice::ResolvedCombo;
+use pdo_kernel::attributes::Attributes;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -49,6 +50,11 @@ pub struct AgentProfile {
     pub effort: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// The entity attributes the extensions stamped on it (CONTEXT.md §
+    /// *Extensions*); absent when none.
+    #[serde(default, skip_serializing_if = "Attributes::is_empty")]
+    #[ts(as = "Option<Attributes>", optional)]
+    pub attributes: Attributes,
 }
 
 impl AgentProfile {
@@ -170,6 +176,7 @@ mod tests {
             effort: None,
             created_at: String::new(),
             updated_at: String::new(),
+            attributes: Default::default(),
         }
     }
 

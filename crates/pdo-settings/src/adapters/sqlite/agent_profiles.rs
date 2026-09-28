@@ -22,6 +22,7 @@ fn row_to_profile(row: &sqlx::sqlite::SqliteRow) -> AgentProfile {
             .filter(|s| !s.is_empty()),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        attributes: Default::default(),
     }
 }
 
@@ -104,6 +105,7 @@ pub async fn create(db: &SqlitePool, draft: ProfileDraft) -> Result<AgentProfile
         effort: draft.effort,
         created_at: now.clone(),
         updated_at: now,
+        attributes: Default::default(),
     })
 }
 

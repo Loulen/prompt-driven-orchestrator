@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use pdo_harness::agent_choice::AgentChoice;
-use pdo_kernel::{Actor, Verb};
+use pdo_kernel::attributes::{stamp, EntityRef};
+use pdo_kernel::{Actor, ResourceKind, Verb};
 use pdo_platform::domain::audit::ActorHint;
 use pdo_run::application::create_run::TargetRepoInput;
 use pdo_skill::domain::selection::SkillRef;
@@ -188,6 +189,9 @@ impl Triggers {
             serde_json::to_value(&trigger).ok(),
         )
         .await;
+        let mut trigger = trigger;
+        let entity = EntityRef::new(ResourceKind::Trigger, trigger.id.clone());
+        trigger.attributes = stamp(self.extensions(), actor, entity).await;
         Ok(trigger)
     }
 }

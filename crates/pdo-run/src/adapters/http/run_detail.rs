@@ -7,6 +7,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
+use pdo_kernel::attributes;
+use pdo_kernel::ResourceKind;
+
 use crate::domain::event::{Event, EventKind};
 use crate::Runs;
 
@@ -18,6 +21,11 @@ pub(super) async fn detail(State(runs): State<Arc<Runs>>, Path(run_id): Path<Str
             let mut response = serde_json::to_value(detail.state).expect("RunState serializes");
             inject_frozen_node_provisioning(&mut response, &detail.events);
             response["has_manager"] = serde_json::Value::Bool(detail.has_manager);
+            let carried =
+                attributes::of_entity(runs.extensions(), ResourceKind::Run, &run_id).await;
+            if !carried.is_empty() {
+                response["attributes"] = serde_json::json!(carried);
+            }
             Json(response).into_response()
         }
     }

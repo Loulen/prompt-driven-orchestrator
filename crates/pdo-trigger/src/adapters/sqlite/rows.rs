@@ -42,6 +42,7 @@ pub(super) fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         next_fire_at: row.get("next_fire_at"),
         last_fired_at: row.get("last_fired_at"),
         last_outcome: row.get("last_outcome"),
+        attributes: Default::default(),
     }
 }
 

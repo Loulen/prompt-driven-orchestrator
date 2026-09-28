@@ -135,6 +135,7 @@ pub fn profile(id: &str, name: &str, harness: &str) -> AgentProfile {
         effort: None,
         created_at: "t0".into(),
         updated_at: "t0".into(),
+        attributes: Default::default(),
     }
 }
 
@@ -206,6 +207,7 @@ impl AgentProfileStore for InMemoryProfiles {
             effort: d.effort,
             created_at: "t1".into(),
             updated_at: "t1".into(),
+            attributes: Default::default(),
         };
         self.profiles.lock().unwrap().push(created.clone());
         Box::pin(ready(Ok(created)))

@@ -10,6 +10,33 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.112.0 — API d'extension 0.1.1 : Attributs d'entité, événements, routes `/ext/` et Emplacements d'UI (#931, spec #913)
+
+Ajout de fonctionnalité, rétrocompatible : sans extension, le contrat HTTP/WS ne bouge pas
+(snapshots temporaires identiques, aucun élément d'UI ajouté). Les seuls ajouts sont ceux
+qu'ouvre l'API d'extension.
+
+- **Attributs d'entité.** À la création d'un Run, d'un Projet, d'un profil agentique, d'un
+  Trigger ou d'une pipeline de la bibliothèque, les extensions posent leurs attributs
+  (`on_create`), préfixés par leur id (`<id>/<clé>`) et stockés hors de l'event log (table
+  `entity_attributes`). Ils sont renvoyés avec l'entité (`attributes`, absent quand vide), et
+  `GET /runs`, `/projects`, `/settings/agent-profiles`, `/triggers` et `/pipelines` acceptent
+  `?attr.<id>/<clé>=<valeur>`.
+- **Événements.** `on_event` reçoit le JSON exact de `/ws`, plus `operation_applied`
+  (`{acteur, opération, entité}`) après chaque mutation autorisée et réussie. La livraison est
+  asynchrone et isolée : un thread et une file bornée par extension, si bien qu'une extension
+  lente ou qui panique ne retarde ni ne bloque jamais le core.
+- **Routes et données.** Les routes d'une extension sont montées sous `/ext/<id>/` (préfixe
+  ajouté au proxy Vite) ; `GET /ext` liste les extensions et leurs contributions d'UI. Chaque
+  extension reçoit son dossier de données `~/.pdo/extensions/<id>/` (nouveau hook `start`).
+- **Emplacements d'UI** (`frontend/src/shared/extensions/`) : entrée de navigation (barre du
+  haut), panneau de réglages (entrée « Extensions » de Settings), filtre de la liste des Runs,
+  onglet du détail d'un Run. Le front importe à l'exécution le bundle ES de l'extension et lui
+  partage son React par import map ; un bundle d'une autre majeure de React n'est pas chargé et
+  une bannière le signale.
+- `pdo-extension-api` passe en 0.1.1 (ajouts rétrocompatibles : `start`/`ExtensionContext`,
+  `UiContributions` et ses `UiSlot`, `OperationApplied`).
+
 ## 1.111.15 — Contexte `settings` : le hub de configuration d'instance dissous, profils agentiques (#929, spec #913)
 
 Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots

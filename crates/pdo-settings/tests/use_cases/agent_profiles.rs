@@ -225,7 +225,14 @@ async fn a_refused_delete_keeps_the_profile() {
 #[tokio::test]
 async fn the_reads_ask_no_one() {
     let w = world();
-    assert_eq!(w.settings.agent_profiles().await.unwrap().len(), 1);
+    assert_eq!(
+        w.settings
+            .agent_profiles(Default::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(
         w.settings
             .agent_profile(DEFAULT_PROFILE_ID)

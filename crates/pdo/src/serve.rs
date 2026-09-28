@@ -8,9 +8,11 @@ use anyhow::{Context, Result};
 use axum::Router;
 use pdo_daemon::{DaemonConfig, DaemonHandle, ExtensionHostHandle, RouterLayer};
 use pdo_extension_api::Extension;
-use pdo_kernel::extension_host::{ExtensionHost, Extensions, NoExtensions};
+use pdo_kernel::extension_host::{ExtensionHost, Extensions, HostServices};
 
+use crate::attributes::SqliteAttributes;
 use crate::contexts;
+use crate::extensions;
 use crate::identify::with_identify;
 
 /// How to start a daemon.
@@ -108,19 +110,20 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
 
 /// Not covered by semver: register `extensions` and plug into the legacy
 /// daemon's knobs what `serve` plugs — the extension host every context asks,
-/// the wiring of the extracted contexts, `inner` (if any) around the assembled
-/// router, then `identify` in front of everything. The test suite's daemons use
-/// it so they go through the same head as `pdo daemon`.
+/// the wiring of the extracted contexts (which starts the host: the attribute
+/// store, the data folders, the events), the extensions' routes under
+/// `/ext/<id>/`, `inner` (if any) around the assembled router, then `identify`
+/// in front of everything. The test suite's daemons use it so they go through
+/// the same head as `pdo daemon`.
 #[doc(hidden)]
 pub fn compose(
     daemon: &mut DaemonConfig,
     extensions: Vec<Box<dyn Extension>>,
     inner: Option<RouterLayer>,
 ) -> Result<()> {
-    let host: Arc<dyn ExtensionHost> =
-        Arc::new(Extensions::register(extensions).context("the daemon refused an extension")?);
-    daemon.extension_host = ExtensionHostHandle(host.clone());
-    daemon.router_layer = Some(identify_layer(host, inner));
+    let extensions = Extensions::register(extensions).context("the daemon refused an extension")?;
+    daemon.extension_host = ExtensionHostHandle(Arc::new(extensions.clone()));
+    daemon.router_layer = Some(identify_layer(extensions, inner));
     Ok(())
 }
 
@@ -128,19 +131,42 @@ pub fn compose(
 /// extension, for the tests that assemble their [`DaemonConfig`] by hand.
 #[doc(hidden)]
 pub fn composed_router_layer(inner: Option<RouterLayer>) -> RouterLayer {
-    identify_layer(Arc::new(NoExtensions), inner)
+    identify_layer(Extensions::default(), inner)
 }
 
-/// The wiring of the extracted contexts, `inner` (if any), then `identify`
-/// asking `host`, in front of everything.
-fn identify_layer(host: Arc<dyn ExtensionHost>, inner: Option<RouterLayer>) -> RouterLayer {
+/// The wiring of the extracted contexts (then the start of the extension
+/// host), the extensions' routes, `inner` (if any), then `identify` asking the
+/// host, in front of everything.
+fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterLayer {
+    let host: Arc<dyn ExtensionHost> = Arc::new(extensions.clone());
     let contexts_host = host.clone();
+    let started = extensions.clone();
     RouterLayer::new(move |router| {
+        let router = extensions::mount(router, &extensions);
         let router = match &inner {
             Some(inner) => inner.apply(router),
             None => router,
         };
         with_identify(router, host.clone())
     })
-    .with_contexts(move |resources| contexts::wire(resources, contexts_host.clone()))
+    .with_contexts(move |resources| {
+        started.start(HostServices {
+            attributes: Arc::new(SqliteAttributes::new(resources.db.clone())),
+            bus: resources.run.bus.clone(),
+            data_root: extensions_data_root(&resources),
+        });
+        contexts::wire(resources, contexts_host.clone())
+    })
+}
+
+/// Where the extensions keep their data: `~/.pdo/extensions/` (the daemon's
+/// home override in the tests), or under the daemon's own `.pdo/` without a
+/// home.
+fn extensions_data_root(resources: &pdo_daemon::ContextResources) -> PathBuf {
+    resources
+        .home_root
+        .clone()
+        .unwrap_or_else(|| resources.repo_root.clone())
+        .join(".pdo")
+        .join("extensions")
 }

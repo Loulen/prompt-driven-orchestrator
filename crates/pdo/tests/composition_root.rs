@@ -14,8 +14,11 @@ use pdo_kernel::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
 use pdo_kernel::Actor;
 
 /// A daemon that spawns no real agent and runs no background loop.
-fn quiet() -> DaemonConfig {
+/// A daemon that fires nothing on its own, whose home (hence the extensions'
+/// data folders) is under `repo`, never the real `$HOME`.
+fn quiet(repo: &std::path::Path) -> DaemonConfig {
     DaemonConfig {
+        sandbox_home_override: Some(repo.join("home")),
         tmux_cmd_override: Some("exec sleep 600".to_string()),
         run_update_check_loop: false,
         run_trigger_scheduler_loop: false,
@@ -36,7 +39,7 @@ async fn daemon_recording(
     let seen: Seen = Arc::default();
     let log = seen.clone();
     let config = Config::new(SocketAddr::from(([127, 0, 0, 1], 0)), repo)
-        .with_daemon_config(quiet())
+        .with_daemon_config(quiet(repo))
         .with_inner_layer(move |router| {
             let log = log.clone();
             router.layer(middleware::from_fn(move |req: Request, next: Next| {
@@ -57,7 +60,8 @@ async fn daemon_recording(
 async fn serve_with_no_extension_starts_the_daemon() {
     let repo = tempfile::tempdir().unwrap();
     let daemon = serve(
-        Config::new(SocketAddr::from(([127, 0, 0, 1], 0)), repo.path()).with_daemon_config(quiet()),
+        Config::new(SocketAddr::from(([127, 0, 0, 1], 0)), repo.path())
+            .with_daemon_config(quiet(repo.path())),
         vec![],
     )
     .await

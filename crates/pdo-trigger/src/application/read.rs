@@ -1,6 +1,8 @@
 //! The reads of the context: the list, one Trigger, its fires, the heartbeat's
 //! health. Reads change nothing, so they ask no one.
 
+use pdo_kernel::attributes::{self, AttributeFilter, AttributedList};
+use pdo_kernel::ResourceKind;
 use serde::Serialize;
 use tracing::error;
 use ts_rs::TS;
@@ -34,7 +36,12 @@ pub struct Health {
 }
 
 impl Triggers {
-    pub async fn list(&self) -> Result<Vec<TriggerListEntry>, TriggerError> {
+    /// Every Trigger carrying the attributes `filter` asks for, each with its
+    /// attributes.
+    pub async fn list(
+        &self,
+        filter: AttributeFilter,
+    ) -> Result<Vec<TriggerListEntry>, TriggerError> {
         let triggers = self.store.list().await.map_err(|e| {
             error!("failed to list triggers: {e}");
             TriggerError::Storage("failed to list triggers".to_string())
@@ -45,9 +52,13 @@ impl Triggers {
         // create/update. The raw `target_repo` is left untouched so the badge / detail
         // / Run-now pre-fill keep showing only what the user actually set.
         let repo_root = self.options.repo_root.to_string_lossy().into_owned();
+        let attributed =
+            AttributedList::read(self.extensions(), ResourceKind::Trigger, filter).await;
         Ok(triggers
             .into_iter()
-            .map(|t| {
+            .filter(|t| attributed.keeps(&t.id))
+            .map(|mut t| {
+                t.attributes = attributed.of(&t.id);
                 let effective_repo = t.target_repo.clone().unwrap_or_else(|| repo_root.clone());
                 TriggerListEntry {
                     trigger: t,
@@ -66,6 +77,14 @@ impl Triggers {
                 Err(TriggerError::Storage("failed to fetch trigger".to_string()))
             }
         }
+    }
+
+    /// One Trigger, with its attributes.
+    pub async fn attributed(&self, id: &str) -> Result<Trigger, TriggerError> {
+        let mut trigger = self.get(id).await?;
+        trigger.attributes =
+            attributes::of_entity(self.extensions(), ResourceKind::Trigger, id).await;
+        Ok(trigger)
     }
 
     pub async fn fires(&self, id: &str) -> Result<Vec<TriggerFire>, TriggerError> {

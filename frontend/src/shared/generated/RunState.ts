@@ -24,9 +24,10 @@ import type { SwitchState } from "./SwitchState";
 
 /**
  * The TypeScript shape of `GET /runs/{id}`: the projected [`RunState`] plus what
- * `get_run` adds to the JSON on the way out (`has_manager`).
+ * `get_run` adds to the JSON on the way out (`has_manager`, and the entity
+ * attributes the extensions stamped on the Run when it carries some).
  */
-export type RunState = { has_manager?: boolean, run_id: string, status: RunStatus, pipeline_name: string, name?: string, input: string | null, started_at: string | null, completed_at: string | null, 
+export type RunState = { has_manager?: boolean, attributes?: { [key in string]: string }, run_id: string, status: RunStatus, pipeline_name: string, name?: string, input: string | null, started_at: string | null, completed_at: string | null, 
 /**
  * Why the Run reached a non-green terminal state — the `reason` of its
  * `RunFailed` / `RunSkipped` / `RunHalted` (#503).

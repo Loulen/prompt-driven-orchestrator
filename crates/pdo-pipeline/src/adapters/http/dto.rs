@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use pdo_kernel::attributes::Attributes;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -42,10 +44,15 @@ pub(super) struct PipelineListEntry {
     /// Whether a manual Run must supply a non-empty prompt. Surfaced so the New Run
     /// modal can make the prompt field optional.
     prompt_required: bool,
+    /// The entity attributes the extensions stamped on it (CONTEXT.md §
+    /// *Extensions*); absent when none.
+    #[serde(skip_serializing_if = "Attributes::is_empty")]
+    #[ts(as = "Option<Attributes>", optional)]
+    attributes: Attributes,
 }
 
-impl From<PipelineSummary> for PipelineListEntry {
-    fn from(summary: PipelineSummary) -> Self {
+impl From<(PipelineSummary, Attributes)> for PipelineListEntry {
+    fn from((summary, attributes): (PipelineSummary, Attributes)) -> Self {
         Self {
             id: summary.id,
             name: summary.name,
@@ -59,6 +66,7 @@ impl From<PipelineSummary> for PipelineListEntry {
                 .map(|(k, v)| (k.clone(), v.into()))
                 .collect(),
             prompt_required: summary.prompt_required,
+            attributes,
         }
     }
 }

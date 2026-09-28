@@ -33,4 +33,9 @@ skills?: Array<S>,
  * Member repository paths, compared **verbatim** (ADR-0033). Ordered by
  * attach time.
  */
-members: Array<string>, };
+members: Array<string>, 
+/**
+ * The entity attributes the extensions stamped on it (CONTEXT.md §
+ * *Extensions*); absent when none.
+ */
+attributes?: { [key in string]: string }, };

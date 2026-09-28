@@ -1,6 +1,8 @@
+use std::path::PathBuf;
+
 use serde::Serialize;
 
-use crate::{Actor, Attributes, EntityRef, Manifest, Operation};
+use crate::{Actor, Attributes, EntityRef, Manifest, Operation, UiContributions};
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
 /// Never the body, which a hook must not consume.
@@ -31,13 +33,22 @@ impl Authorization {
     }
 }
 
-/// What an extension adds to the interface (the UI slots of CONTEXT.md §
-/// *Extensions*). Empty by default.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+/// What the core gives an extension when the daemon starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct UiContributions {
-    /// Where the daemon serves the extension's UI bundle, if it has one.
-    pub bundle_url: Option<String>,
+pub struct ExtensionContext {
+    /// The extension's own data folder, `~/.pdo/extensions/<id>/`, created
+    /// before [`Extension::start`] is called: its database, its files. Nothing
+    /// else of the core writes there.
+    pub data_dir: PathBuf,
+}
+
+impl ExtensionContext {
+    pub fn new(data_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            data_dir: data_dir.into(),
+        }
+    }
 }
 
 /// A third-party module registered when the daemon starts (ADR-0081).
@@ -48,9 +59,16 @@ pub struct UiContributions {
 /// Hooks are called from the daemon's request path, so they must be quick. A
 /// panic in `authorize` is a refusal; `on_event` is called off the request path
 /// and can never slow the core down.
+///
+/// When the daemon starts, it calls [`Extension::start`] once, then
+/// [`Extension::routes`] and [`Extension::ui`], before it serves anything.
 pub trait Extension: Send + Sync + 'static {
     /// Who this extension is.
     fn manifest(&self) -> Manifest;
+
+    /// Receive what the core gives the extension (its data folder), once, when
+    /// the daemon starts. Does nothing by default.
+    fn start(&self, _context: &ExtensionContext) {}
 
     /// Identify the actor behind a request. `None` (the default) lets the next
     /// extension, then the core, decide: the local operator, or the agent of the
@@ -66,18 +84,29 @@ pub trait Extension: Send + Sync + 'static {
         Authorization::Allow
     }
 
-    /// The attributes to stamp on an entity the actor just created. None by
-    /// default.
+    /// The attributes to stamp on an entity the actor just created: a Run, a
+    /// Projet, an agentic profile, a Trigger, a pipeline of the library. The
+    /// core prefixes each key with the extension's id (`<id>/<key>`), stores
+    /// them outside the event log, returns them with the entity and filters
+    /// the entity lists on them (`?attr.<id>/<key>=<value>`). None by default.
     fn on_create(&self, _actor: &Actor, _entity: &EntityRef) -> Attributes {
         Attributes::new()
     }
 
     /// Observe an event: exactly the JSON the daemon broadcasts on `/ws`, plus
-    /// `OperationApplied` after each authorized and successful mutation. Ignores
-    /// everything by default.
+    /// [`OperationApplied`](crate::OperationApplied) after each authorized and
+    /// successful mutation. Ignores everything by default.
+    ///
+    /// Called on the extension's own thread, in the order the events came: a
+    /// slow `on_event` delays only this extension's next events, never the
+    /// core nor another extension. A panic is logged and the next event is
+    /// delivered as usual.
     fn on_event(&self, _event: &serde_json::Value) {}
 
-    /// Routes served under `/ext/<id>/`. None by default.
+    /// Routes served under `/ext/<id>/`: the router is nested there, so it
+    /// declares its paths from `/` (its `/` answers `/ext/<id>`, its `/events`
+    /// `/ext/<id>/events`). It can never hide a route of the core, and a path
+    /// it does not serve answers `404`. None by default.
     fn routes(&self) -> Option<axum::Router> {
         None
     }
@@ -118,6 +147,7 @@ mod tests {
         assert!(ext
             .on_create(&actor, &EntityRef::new(ResourceKind::Project, "p1"))
             .is_empty());
+        ext.start(&ExtensionContext::new("/tmp/bare"));
         ext.on_event(&serde_json::json!({ "kind": "RunCreated" }));
         assert!(ext.routes().is_none());
         assert!(ext.ui().is_none());

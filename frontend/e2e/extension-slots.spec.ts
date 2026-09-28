@@ -1,0 +1,218 @@
+import { test, expect, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { cleanupRuns, runMultipart, E2E_TARGET_REPO } from "./helpers";
+
+// Stage 5 (ADR-0080) — #931: the four UI slots (Emplacements d'UI) in a real
+// browser, against the real embedded front.
+//
+// The e2e daemon is the shipped binary, with no extension: this spec plays the
+// test extension of the daemon's suite (crates/pdo/tests/test_extension/) on the
+// network — `GET /ext` declares it, `/ext/test/ui.js` serves its very bundle —
+// and adds its attribute to one real Run. What is under test is the front: it
+// reads the declarations, imports the ES bundle at runtime with React shared
+// through the import map, renders each slot, and refuses a bundle built for
+// another React major with a banner.
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
+const BUNDLE_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/ui.js");
+const PIPELINE_NAME = `e2e-extension-slots-${process.pid}-${Date.now()}`;
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
+const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
+const REACT_MAJOR = 19;
+
+const SEED_YAML = `name: ${PIPELINE_NAME}
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: bottom }
+    view: { x: 100, y: 0 }
+  - id: worker
+    name: worker
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - { name: task, side: top }
+    outputs:
+      - { name: summary, side: bottom }
+    view: { x: 100, y: 150 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: top }
+    view: { x: 100, y: 300 }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: summary }
+    target: { node: end, port: result }
+`;
+
+function declaration(reactMajor: number) {
+  return [
+    {
+      id: "test",
+      name: "Test extension",
+      version: "0.0.0",
+      ui: {
+        bundle_url: "/ext/test/ui.js",
+        react_major: reactMajor,
+        slots: [
+          { slot: "navigation", id: "events", label: "Test events", component: "EventsPage" },
+          { slot: "settings_panel", id: "settings", label: "Test extension", component: "SettingsPanel" },
+          { slot: "list_filter", resource: "run", id: "started-by", label: "Started by", component: "StartedByFilter" },
+          { slot: "detail_tab", resource: "run", id: "run-tab", label: "Test", component: "RunTab" },
+        ],
+      },
+    },
+  ];
+}
+
+const createdRuns: string[] = [];
+let runId = "";
+
+test.beforeAll(async () => {
+  await fs.mkdir(PIPELINE_DIR, { recursive: true });
+  await fs.writeFile(PIPELINE_PATH, SEED_YAML);
+});
+
+test.afterAll(async () => {
+  await cleanupRuns(...createdRuns);
+  await fs.rm(PIPELINE_PATH, { force: true });
+  // The daemon never deletes a Run's worktree nor its branch (ADR-0012): the
+  // spec takes back what its Run left in the workspace's repository.
+  for (const id of createdRuns) {
+    const git = (args: string[]) => {
+      try {
+        execFileSync("git", args, { cwd: E2E_TARGET_REPO, stdio: "ignore" });
+      } catch {
+        // best-effort teardown
+      }
+    };
+    git(["worktree", "remove", "--force", path.join(E2E_TARGET_REPO, ".pdo", "runs", id, "worktree")]);
+    git(["branch", "-D", `pdo/run-${id}`]);
+  }
+});
+
+/** Play the test extension on the network; the Run `runId` carries its attribute. */
+async function playTestExtension(page: Page, reactMajor = REACT_MAJOR) {
+  const bundle = await fs.readFile(BUNDLE_PATH, "utf8");
+  let bundleRequests = 0;
+  await page.route("**/ext", (route) => route.fulfill({ json: declaration(reactMajor) }));
+  await page.route("**/ext/test/ui.js", (route) => {
+    bundleRequests += 1;
+    return route.fulfill({ body: bundle, contentType: "text/javascript" });
+  });
+  await page.route("**/ext/test/events", (route) =>
+    route.fulfill({
+      json: [
+        {
+          type: "operation_applied",
+          actor: { kind: "local_operator" },
+          operation: { resource: "instance_settings", verb: "update", target: null },
+          entity: null,
+        },
+        { type: "event", event: { kind: "RunStarted", run_id: runId } },
+      ],
+    }),
+  );
+  await page.route("**/ext/test", (route) =>
+    route.fulfill({ json: { id: "test", data_dir: "/home/pdo/.pdo/extensions/test" } }),
+  );
+  const attributes = { "test/started_by": "alice" };
+  await page.route("**/runs", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const runs = (await response.json()) as { run_id: string; attributes?: object }[];
+    for (const run of runs) if (run.run_id === runId) run.attributes = attributes;
+    return route.fulfill({ response, json: runs });
+  });
+  await page.route(`**/runs/${runId}`, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    return route.fulfill({ response, json: { ...(await response.json()), attributes } });
+  });
+  return { bundleRequests: () => bundleRequests };
+}
+
+test.beforeEach(async ({ page, baseURL }) => {
+  if (runId) return;
+  const resp = await page.request.post(`${baseURL}/runs`, {
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "extension slots" }),
+  });
+  expect(resp.status()).toBe(201);
+  runId = (await resp.json()).run_id;
+  createdRuns.push(runId);
+});
+
+test("the four slots show the test extension's contributions", async ({ page }) => {
+  const played = await playTestExtension(page);
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+
+  // Navigation entry → its page lists the OperationApplied and the Run's events.
+  const entry = page.getByTestId("extension-nav-test:events");
+  await expect(entry).toHaveText("Test events");
+  expect(played.bundleRequests()).toBe(1);
+  await entry.click();
+  const events = page.getByTestId("test-extension-events");
+  await expect(events).toContainText("OperationApplied: update instance_settings");
+  await expect(events).toContainText(`RunStarted (${runId})`);
+  await page.getByRole("button", { name: "Close Test events" }).click();
+
+  // List filter → only the Run carrying the attribute stays.
+  const filter = page.getByLabel("Started by");
+  await expect(filter).toBeVisible();
+  await filter.fill("alice");
+  await expect(page.getByText(runId.slice(0, 20)).first()).toBeVisible();
+  await filter.fill("bob");
+  await expect(page.getByTestId("run-filter-empty")).toBeVisible();
+  await filter.fill("");
+
+  // Detail tab of the Run → its attributes.
+  await page.getByText(runId.slice(0, 20)).first().click({ position: { x: 5, y: 5 } });
+  await page.getByTestId("toolbar-info").click();
+  await page.getByTestId("info-tab-ext-test:run-tab").click();
+  await expect(page.getByTestId("test-extension-run-tab")).toContainText(
+    "test/started_by = alice",
+  );
+
+  // Settings panel, on its own rail entry.
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("settings-category-extensions").click();
+  await expect(page.getByTestId("test-extension-settings")).toContainText(
+    "Data folder: /home/pdo/.pdo/extensions/test",
+  );
+});
+
+test("a bundle built for another React major is not loaded, and a banner says so", async ({
+  page,
+}) => {
+  const played = await playTestExtension(page, REACT_MAJOR - 1);
+  await page.goto("/");
+  await expect(page.getByTestId("extension-banner-test")).toContainText(
+    `built for React ${REACT_MAJOR - 1}, and PDO runs React ${REACT_MAJOR}`,
+  );
+  expect(played.bundleRequests()).toBe(0);
+  await expect(page.getByTestId("extension-nav")).toHaveCount(0);
+  // The rest of the UI works.
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-surface")).toBeVisible();
+  await expect(page.getByTestId("settings-category-extensions")).toHaveCount(0);
+});
+
+test("without extension, no element is added", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("extension-nav")).toHaveCount(0);
+  await expect(page.getByTestId("extension-banner")).toHaveCount(0);
+  await expect(page.getByTestId("extension-filters-run")).toHaveCount(0);
+});

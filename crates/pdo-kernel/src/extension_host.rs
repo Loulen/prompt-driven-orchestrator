@@ -2,12 +2,19 @@
 //! registered extensions.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
-use pdo_extension_api::{Authorization, Extension, RequestParts};
+use pdo_extension_api::{
+    Attributes, Authorization, EntityRef, Extension, ExtensionContext, Manifest, RequestParts,
+};
 use serde_json::Value;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::actor::actor_from_headers;
+use crate::attributes::{prefixed, AttributeStore, NoAttributes};
+use crate::delivery::Delivery;
+use crate::event_bus::EventBus;
 use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
@@ -19,12 +26,23 @@ pub trait ExtensionHost: Send + Sync {
     /// Whether `actor` may run `operation`.
     fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization;
 
-    /// Hand an event to every extension.
+    /// Hand an event to every extension, without waiting for any.
     fn publish(&self, event: &Value);
+
+    /// The attributes the extensions stamp on `entity`, which `actor` just
+    /// created, each key prefixed with its extension's id. None by default.
+    fn on_create(&self, _actor: &Actor, _entity: &EntityRef) -> Attributes {
+        Attributes::new()
+    }
+
+    /// Where the entity attributes are stored.
+    fn attributes(&self) -> Arc<dyn AttributeStore> {
+        Arc::new(NoAttributes)
+    }
 }
 
 /// The host of a daemon with no extension: the core's identification, everything
-/// allowed, events go nowhere.
+/// allowed, events go nowhere, no attribute.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoExtensions;
 
@@ -40,17 +58,40 @@ impl ExtensionHost for NoExtensions {
     fn publish(&self, _event: &Value) {}
 }
 
+/// What the daemon gives its extension host once its resources are open.
+pub struct HostServices {
+    /// Where the entity attributes are stored.
+    pub attributes: Arc<dyn AttributeStore>,
+    /// The bus whose events the extensions observe (the JSON of `/ws`).
+    pub bus: Arc<dyn EventBus>,
+    /// The folder holding one data folder per extension
+    /// (`~/.pdo/extensions`).
+    pub data_root: PathBuf,
+}
+
+/// One registered extension.
+#[derive(Clone)]
+struct Registered {
+    manifest: Manifest,
+    extension: Arc<dyn Extension>,
+    delivery: Delivery,
+}
+
 /// The host of the extensions registered at startup, in registration order.
 ///
 /// - `identify`: the first extension that names the actor wins; otherwise the
 ///   core's identification.
 /// - `authorize`: every extension must allow; the first refusal wins. An
 ///   extension that panics refuses.
-/// - `publish`: every extension sees the event; a panic in one is logged and
-///   does not reach the others.
+/// - `publish`: every extension sees the event, on its own thread
+///   (`delivery`); a slow or panicking one never delays the others nor the
+///   core.
+/// - `on_create`: every extension's attributes, prefixed with its id; a panic
+///   stamps nothing.
 #[derive(Clone, Default)]
 pub struct Extensions {
-    extensions: Vec<Arc<dyn Extension>>,
+    registered: Vec<Registered>,
+    attributes: Arc<OnceLock<Arc<dyn AttributeStore>>>,
 }
 
 impl Extensions {
@@ -61,35 +102,102 @@ impl Extensions {
         let extensions: Vec<Arc<dyn Extension>> = extensions.into_iter().map(Arc::from).collect();
         let manifests: Vec<_> = extensions.iter().map(|ext| ext.manifest()).collect();
         check_manifests(&manifests)?;
-        for manifest in &manifests {
-            tracing::info!(
-                "extension `{}` {} registered (extension API {})",
-                manifest.id,
-                manifest.version,
-                manifest.api_version
-            );
-        }
-        Ok(Self { extensions })
+        let registered = manifests
+            .into_iter()
+            .zip(extensions)
+            .map(|(manifest, extension)| {
+                tracing::info!(
+                    "extension `{}` {} registered (extension API {})",
+                    manifest.id,
+                    manifest.version,
+                    manifest.api_version
+                );
+                Registered {
+                    delivery: Delivery::start(manifest.id.clone(), extension.clone()),
+                    manifest,
+                    extension,
+                }
+            })
+            .collect();
+        Ok(Self {
+            registered,
+            attributes: Arc::default(),
+        })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.extensions.is_empty()
+        self.registered.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.extensions.len()
+        self.registered.len()
+    }
+
+    /// Each extension with its manifest, in registration order.
+    pub fn iter(&self) -> impl Iterator<Item = (&Manifest, &Arc<dyn Extension>)> {
+        self.registered.iter().map(|r| (&r.manifest, &r.extension))
+    }
+
+    /// Plug the daemon's services in, once, when the daemon starts: the
+    /// attribute store, each extension's data folder (created, then handed to
+    /// its `start`), and the relay of the bus to the extensions. Must be called
+    /// from within the daemon's tokio runtime.
+    pub fn start(&self, services: HostServices) {
+        let HostServices {
+            attributes,
+            bus,
+            data_root,
+        } = services;
+        if self.attributes.set(attributes).is_err() {
+            tracing::warn!("the extension host was started twice; the second start is ignored");
+            return;
+        }
+        for registered in &self.registered {
+            let id = &registered.manifest.id;
+            let data_dir = data_root.join(id);
+            if let Err(e) = std::fs::create_dir_all(&data_dir) {
+                tracing::error!(
+                    "failed to create the data folder {} of extension `{id}`: {e}",
+                    data_dir.display()
+                );
+            }
+            let context = ExtensionContext::new(data_dir);
+            if catch_unwind(AssertUnwindSafe(|| registered.extension.start(&context))).is_err() {
+                tracing::error!("extension `{id}` panicked in start");
+            }
+        }
+        if !self.is_empty() {
+            self.relay(bus);
+        }
+    }
+
+    /// Hand every event of `bus` to the extensions.
+    fn relay(&self, bus: Arc<dyn EventBus>) {
+        let host = self.clone();
+        let mut events = bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(event) => host.publish(&event),
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!("the extensions missed {n} events of the bus")
+                    }
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
     }
 }
 
 impl ExtensionHost for Extensions {
     fn identify(&self, request: &RequestParts) -> Actor {
-        for ext in &self.extensions {
-            match catch_unwind(AssertUnwindSafe(|| ext.identify(request))) {
+        for r in &self.registered {
+            match catch_unwind(AssertUnwindSafe(|| r.extension.identify(request))) {
                 Ok(Some(actor)) => return actor,
                 Ok(None) => {}
                 Err(_) => tracing::warn!(
                     "extension `{}` panicked in identify; ignored",
-                    ext.manifest().id
+                    r.manifest.id
                 ),
             }
         }
@@ -97,12 +205,12 @@ impl ExtensionHost for Extensions {
     }
 
     fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
-        for ext in &self.extensions {
-            match catch_unwind(AssertUnwindSafe(|| ext.authorize(actor, operation))) {
+        for r in &self.registered {
+            match catch_unwind(AssertUnwindSafe(|| r.extension.authorize(actor, operation))) {
                 Ok(Authorization::Allow) => {}
                 Ok(deny) => return deny,
                 Err(panic) => {
-                    let id = ext.manifest().id;
+                    let id = &r.manifest.id;
                     tracing::error!(
                         "extension `{id}` panicked in authorize ({}); {:?} {:?} refused",
                         panic_message(panic.as_ref()),
@@ -117,10 +225,29 @@ impl ExtensionHost for Extensions {
     }
 
     fn publish(&self, event: &Value) {
-        for ext in &self.extensions {
-            if catch_unwind(AssertUnwindSafe(|| ext.on_event(event))).is_err() {
-                tracing::warn!("extension `{}` panicked in on_event", ext.manifest().id);
+        for r in &self.registered {
+            r.delivery.send(event);
+        }
+    }
+
+    fn on_create(&self, actor: &Actor, entity: &EntityRef) -> Attributes {
+        let mut stamped = Attributes::new();
+        for r in &self.registered {
+            match catch_unwind(AssertUnwindSafe(|| r.extension.on_create(actor, entity))) {
+                Ok(attributes) => stamped.extend(prefixed(&r.manifest.id, attributes)),
+                Err(_) => tracing::warn!(
+                    "extension `{}` panicked in on_create; it stamps nothing",
+                    r.manifest.id
+                ),
             }
+        }
+        stamped
+    }
+
+    fn attributes(&self) -> Arc<dyn AttributeStore> {
+        match self.attributes.get() {
+            Some(store) => store.clone(),
+            None => Arc::new(NoAttributes),
         }
     }
 }
@@ -234,6 +361,86 @@ mod tests {
         );
         let host = Extensions::register(vec![Box::new(Panics)]).unwrap();
         assert!(!host.authorize(&Actor::LocalOperator, &op()).is_allowed());
+    }
+
+    struct Stamps(&'static str, &'static str);
+    impl Extension for Stamps {
+        fn manifest(&self) -> Manifest {
+            Manifest::new(self.0, self.0, "0.0.0")
+        }
+        fn on_create(&self, _actor: &Actor, _entity: &EntityRef) -> Attributes {
+            if self.1 == "panic" {
+                panic!("boom");
+            }
+            [("started_by".to_string(), self.1.to_string())].into()
+        }
+    }
+
+    #[test]
+    fn two_extensions_stamping_the_same_key_never_overwrite_each_other() {
+        let host = Extensions::register(vec![
+            Box::new(Stamps("a", "alice")),
+            Box::new(Stamps("b", "bob")),
+            Box::new(Stamps("c", "panic")),
+        ])
+        .unwrap();
+        let stamped = host.on_create(
+            &Actor::LocalOperator,
+            &EntityRef::new(ResourceKind::Run, "r1"),
+        );
+        assert_eq!(
+            stamped,
+            [
+                ("a/started_by".to_string(), "alice".to_string()),
+                ("b/started_by".to_string(), "bob".to_string()),
+            ]
+            .into()
+        );
+        assert!(NoExtensions
+            .on_create(
+                &Actor::LocalOperator,
+                &EntityRef::new(ResourceKind::Run, "r1")
+            )
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_creates_each_data_folder_and_plugs_the_attribute_store() {
+        struct Remembers(Arc<std::sync::Mutex<Option<PathBuf>>>);
+        impl Extension for Remembers {
+            fn manifest(&self) -> Manifest {
+                Manifest::new("remembers", "Remembers", "0.0.0")
+            }
+            fn start(&self, context: &ExtensionContext) {
+                *self.0.lock().unwrap() = Some(context.data_dir.clone());
+            }
+        }
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let host = Extensions::register(vec![Box::new(Remembers(seen.clone()))]).unwrap();
+        let root = std::env::temp_dir().join(format!("pdo-kernel-start-{}", std::process::id()));
+        let store = Arc::new(crate::attributes::InMemoryAttributes::default());
+        host.start(HostServices {
+            attributes: store,
+            bus: Arc::new(crate::event_bus::BroadcastEventBus::new(4)),
+            data_root: root.clone(),
+        });
+        let dir = seen.lock().unwrap().clone().unwrap();
+        assert_eq!(dir, root.join("remembers"));
+        assert!(dir.is_dir());
+        let run = EntityRef::new(ResourceKind::Run, "r1");
+        host.attributes()
+            .put(&run, &[("x/k".to_string(), "v".to_string())].into())
+            .await
+            .unwrap();
+        assert_eq!(
+            host.attributes()
+                .of_kind(ResourceKind::Run)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

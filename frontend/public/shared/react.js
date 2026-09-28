@@ -1,0 +1,47 @@
+// The front's own React, for the extensions' UI bundles (ADR-0081): the import
+// map of index.html points the bare specifier `react` here. The front puts its
+// modules on `globalThis.__PDO_SHARED__` before it renders anything
+// (src/shared/extensions/shared.ts), so a bundle never ships a second React.
+const React = globalThis.__PDO_SHARED__.react;
+export default React;
+export const {
+  Activity,
+  Children,
+  Component,
+  Fragment,
+  Profiler,
+  PureComponent,
+  StrictMode,
+  Suspense,
+  act,
+  cache,
+  cloneElement,
+  createContext,
+  createElement,
+  createRef,
+  forwardRef,
+  isValidElement,
+  lazy,
+  memo,
+  startTransition,
+  use,
+  useActionState,
+  useCallback,
+  useContext,
+  useDebugValue,
+  useDeferredValue,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useImperativeHandle,
+  useInsertionEffect,
+  useLayoutEffect,
+  useMemo,
+  useOptimistic,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  useTransition,
+  version,
+} = React;

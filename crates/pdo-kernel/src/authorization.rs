@@ -61,7 +61,10 @@ pub fn authorize(
     operation: &Operation,
 ) -> Result<(), Denied> {
     match host.authorize(actor, operation) {
-        Authorization::Allow => Ok(()),
+        Authorization::Allow => {
+            crate::applied::allowed(actor, operation);
+            Ok(())
+        }
         Authorization::Deny { reason } => {
             tracing::info!(
                 "operation refused: {:?} {:?} {:?} by {}: {reason}",

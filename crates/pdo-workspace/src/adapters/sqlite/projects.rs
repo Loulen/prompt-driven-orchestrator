@@ -27,6 +27,7 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow, members: Vec<String>) -> Projec
         agent_choice: stored(row.get::<Option<String>, _>("agent_choice")),
         skills: stored(row.try_get::<Option<String>, _>("skills").unwrap_or(None)),
         members,
+        attributes: Default::default(),
     }
 }
 

@@ -36,6 +36,19 @@
         document.documentElement.style.colorScheme = theme;
       } catch (e) {}
     </script>
+    <!-- The React the extensions' UI bundles import (ADR-0081): the front's own,
+         shared through these shims (public/shared/), never a second copy. A
+         bundle declaring another React major is not loaded at all
+         (src/shared/extensions/). -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/shared/react.js",
+          "react/jsx-runtime": "/shared/react-jsx-runtime.js",
+          "react-dom": "/shared/react-dom.js"
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

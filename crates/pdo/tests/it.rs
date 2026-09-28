@@ -69,6 +69,10 @@ mod extension_mutation_routes;
 #[path = "extension_trigger_fire.rs"]
 mod extension_trigger_fire;
 
+// The rest of the extension API (#931): attributes, events, routes, `/ext`.
+#[path = "extension_hooks.rs"]
+mod extension_hooks;
+
 #[path = "demo_daemon.rs"]
 mod demo_daemon;
 

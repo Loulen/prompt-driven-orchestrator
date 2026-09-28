@@ -2,6 +2,7 @@
 //! members come with the name, so naming a group is one `Create` Opération —
 //! an extension that refuses only `Update` never leaves a half-made Projet.
 
+use pdo_kernel::attributes::{stamp, EntityRef};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
 use crate::domain::project::{project_name, Project};
@@ -76,6 +77,8 @@ impl Workspace {
                 project = fresh;
             }
         }
+        let entity = EntityRef::new(ResourceKind::Project, project.id.clone());
+        project.attributes = stamp(self.host(), actor, entity).await;
         self.events.project_changed(&project.id);
         Ok(ProjectCreated::Created(project))
     }

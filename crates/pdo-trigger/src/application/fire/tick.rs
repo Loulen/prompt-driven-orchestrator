@@ -8,7 +8,9 @@
 
 use std::sync::atomic::Ordering;
 
-use pdo_kernel::{Actor, Verb};
+use pdo_kernel::applied::{self, OperationApplied};
+use pdo_kernel::attributes::EntityRef;
+use pdo_kernel::{Actor, ResourceKind, Verb};
 use tracing::warn;
 
 use crate::application::{operation, FIRE};
@@ -90,6 +92,16 @@ impl Triggers {
             }
 
             self.fire_one(&trigger, now, FireSource::Cron).await;
+            // A primary adapter of its own: the tick hands its fire to the
+            // extensions, as the `identify` middleware does for a request.
+            applied::publish(
+                self.extensions(),
+                vec![OperationApplied::new(
+                    actor,
+                    fire,
+                    Some(EntityRef::new(ResourceKind::Trigger, trigger.id.clone())),
+                )],
+            );
         }
     }
 

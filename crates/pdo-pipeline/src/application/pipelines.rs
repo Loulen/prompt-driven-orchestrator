@@ -46,6 +46,11 @@ impl Pipelines {
         }
     }
 
+    /// The extension host: the attributes of the pipelines.
+    pub(crate) fn host(&self) -> &dyn ExtensionHost {
+        self.host.as_ref()
+    }
+
     /// The Autorisation d'opération: every mutation goes through here first.
     pub(crate) fn authorize(&self, actor: &Actor, operation: Operation) -> Result<(), Denied> {
         authorize(self.host.as_ref(), actor, &operation)

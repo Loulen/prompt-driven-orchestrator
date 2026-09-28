@@ -35,6 +35,8 @@ async fn a_refusing_extension_turns_every_session_gesture_into_a_named_403() {
     let daemon = serve(
         Config::new(SocketAddr::from(([127, 0, 0, 1], 0)), repo.path()).with_daemon_config(
             DaemonConfig {
+                // The extensions' data folders stay out of the real `$HOME`.
+                sandbox_home_override: Some(repo.path().join("home")),
                 tmux_cmd_override: Some("exec sleep 600".to_string()),
                 run_update_check_loop: false,
                 run_trigger_scheduler_loop: false,

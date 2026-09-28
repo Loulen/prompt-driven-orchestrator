@@ -12,6 +12,12 @@
 //!   are read from `$PDO_DEMO_ROOT/.pdo/pipelines`, not from `$HOME`.
 //! - `PDO_TEST_EXTENSION_REFUSE`: what the test extension refuses (`none`, `all`,
 //!   `panic`, `<resource>:<verb>`), `project:update` by default.
+//! - `PDO_TEST_EXTENSION_INCOMPATIBLE`: `1` starts with the UI bundle declaring
+//!   a React major the front does not run (`POST /ext/test/incompatible` switches
+//!   it while the daemon runs).
+//!
+//! The test extension keeps its data under `$HOME/.pdo/extensions/test/`: give
+//! the demo daemon a disposable `HOME`.
 //!
 //! With `--exact`, the filter is the full path `demo_daemon::demo_daemon`.
 //!
@@ -45,7 +51,9 @@ async fn demo_daemon() {
         .unwrap_or_else(|_| Refusal::parse("project:update").unwrap());
 
     let config = pdo::Config::from_cli(Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), port).unwrap();
-    let (ext, _) = TestExtension::new(refusal.clone());
+    let (ext, control) = TestExtension::new(refusal.clone());
+    control
+        .set_incompatible(std::env::var("PDO_TEST_EXTENSION_INCOMPATIBLE").as_deref() == Ok("1"));
     let daemon = pdo::serve(config, ext.boxed()).await.unwrap();
     eprintln!(
         "demo daemon listening on http://{} (test extension refusing {refusal:?})",

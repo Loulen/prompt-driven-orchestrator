@@ -3,7 +3,7 @@
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.
 crates/pdo-daemon/src/lib.rs 1630
-frontend/src/app/App.tsx 1216
+frontend/src/app/App.tsx 1167
 frontend/src/components/EdgeDetailPanel.tsx 777
 frontend/src/components/NodeInspector.tsx 958
 frontend/src/components/OrthogonalEdge.tsx 577

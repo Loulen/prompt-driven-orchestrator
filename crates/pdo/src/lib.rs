@@ -9,7 +9,7 @@
 //! its extensions: the whole `pdo` binary, CLI and daemon. [`serve`] starts the
 //! daemon alone (ADR-0081).
 //!
-//! Only [`main_with`], [`serve`], [`Config`], [`ReleaseChannel`], [`Daemon`] and
+//! Only [`main_with`], [`main_with_config`], [`serve`], [`Config`], [`ReleaseChannel`], [`Daemon`] and
 //! the re-exported [`extension_api`] are covered by semver. Everything else in
 //! the workspace promises nothing.
 
@@ -30,8 +30,8 @@ pub use daemon::router_layer::RouterLayer;
 #[doc(hidden)]
 pub use daemon::{serve_with_config, DaemonConfig, DaemonHandle, ExtensionHostHandle};
 #[doc(hidden)]
-pub use entry::main_from;
-pub use entry::main_with;
+pub use entry::{main_from, main_from_config};
+pub use entry::{main_with, main_with_config};
 #[doc(hidden)]
 pub use serve::{compose, composed_router_layer};
 pub use serve::{serve, Config, Daemon, ReleaseChannel};

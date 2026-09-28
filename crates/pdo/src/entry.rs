@@ -45,7 +45,31 @@ use crate::cli::{run_docs, run_migrate, Cli, Commands};
 /// }
 /// ```
 pub fn main_with(extensions: impl FnOnce() -> Vec<Box<dyn Extension>>) -> ExitCode {
-    main_from(std::env::args_os(), extensions)
+    main_with_config(extensions, |config| config)
+}
+
+/// [`main_with`], with `configure` applied to the [`Config`](crate::Config)
+/// of `pdo daemon` before it serves: the way a distribution declares what
+/// `serve` would take, such as its [`ReleaseChannel`](crate::ReleaseChannel).
+/// Called at most once, by `pdo daemon` only.
+///
+/// ```no_run
+/// fn main() -> std::process::ExitCode {
+///     pdo::main_with_config(Vec::new, |config| {
+///         config.with_release_channel(pdo::ReleaseChannel {
+///             name: "pdo-dist".into(),
+///             installed_version: env!("CARGO_PKG_VERSION").into(),
+///             source_url: None,
+///             upgrade_command: None,
+///         })
+///     })
+/// }
+/// ```
+pub fn main_with_config(
+    extensions: impl FnOnce() -> Vec<Box<dyn Extension>>,
+    configure: impl FnOnce(crate::Config) -> crate::Config,
+) -> ExitCode {
+    main_from_config(std::env::args_os(), extensions, configure)
 }
 
 /// Not covered by semver: [`main_with`] on a given command line (`args`
@@ -53,6 +77,20 @@ pub fn main_with(extensions: impl FnOnce() -> Vec<Box<dyn Extension>>) -> ExitCo
 /// internal test extension.
 #[doc(hidden)]
 pub fn main_from<I, T>(args: I, extensions: impl FnOnce() -> Vec<Box<dyn Extension>>) -> ExitCode
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    main_from_config(args, extensions, |config| config)
+}
+
+/// Not covered by semver: [`main_with_config`] on a given command line.
+#[doc(hidden)]
+pub fn main_from_config<I, T>(
+    args: I,
+    extensions: impl FnOnce() -> Vec<Box<dyn Extension>>,
+    configure: impl FnOnce(crate::Config) -> crate::Config,
+) -> ExitCode
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -71,7 +109,7 @@ where
     // `daemon`: `reqwest::blocking` (the agent's CLI, the service's port probe)
     // panics when called from within a runtime.
     match cli.command {
-        Commands::Daemon { bind, port } => exit(run_daemon(bind, port, extensions)),
+        Commands::Daemon { bind, port } => exit(run_daemon(bind, port, extensions, configure)),
         // `complete` owns its exit code (see above): those codes live in
         // pipeline authors' bash — a `script` node's tail branches on the `4` to
         // avoid doubling a failure the daemon already recorded.
@@ -118,12 +156,14 @@ fn exit(res: Result<()>) -> ExitCode {
     }
 }
 
-/// `pdo daemon`: [`crate::serve`] with the binary's extensions, in the one
+/// `pdo daemon`: [`crate::serve`] with the binary's extensions and its
+/// configured [`Config`](crate::Config), in the one
 /// tokio runtime of the process, until the daemon stops.
 fn run_daemon(
     bind: Option<IpAddr>,
     port: u16,
     extensions: impl FnOnce() -> Vec<Box<dyn Extension>>,
+    configure: impl FnOnce(crate::Config) -> crate::Config,
 ) -> Result<()> {
     // `try_init`: a subscriber the binary set up before `main_with` wins.
     let _ = tracing_subscriber::fmt()
@@ -137,7 +177,7 @@ fn run_daemon(
         .build()
         .context("failed to build tokio runtime")?
         .block_on(async {
-            let config = crate::Config::from_cli(bind, port)?;
+            let config = configure(crate::Config::from_cli(bind, port)?);
             crate::serve(config, extensions()).await?.wait().await
         })
 }

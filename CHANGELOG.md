@@ -24,6 +24,9 @@ en 0.1.1.
   que `pdo::main_with(Vec::new)`. Une distribution écrit le même `main` avec sa fabrique
   d'extensions et ne dépend plus que de `pdo-daemon` et `pdo-extension-api` : plus de dispatch
   recopié, plus de crates hors semver à épingler.
+- **`pdo::main_with_config(extensions, configure)`** : pareil, avec `configure` appliqué à la
+  `Config` de `pdo daemon` avant `serve`. C'est par là qu'une distribution déclare son
+  `ReleaseChannel` (#24).
 - La fabrique (`impl FnOnce() -> Vec<Box<dyn Extension>>`) n'est appelée que par `pdo daemon` et
   `pdo service`, une fois. Le CLI de l'agent (`complete`, `fail`, `wait-user`, `run create`…) ne
   construit jamais les extensions.

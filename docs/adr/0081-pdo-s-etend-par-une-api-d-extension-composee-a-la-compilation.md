@@ -87,6 +87,9 @@ daemon » et l'init du tracing, en dépendant de crates hors semver.
 - **Les extensions du binaire règlent aussi `pdo service`** : `install` et `uninstall` sont des
   Opérations soumises à leur Autorisation d'opération, comme celles du daemon. C'est une règle du
   core, plus un choix de chaque binaire. Un `--dry-run` ne change rien et ne demande donc rien.
+- **`main_with_config(extensions, configure)`** applique `configure` à la `Config` du daemon
+  avant `serve` : une distribution y déclare ce que `serve` prendrait, dont son canal de mise à
+  jour (#24). Appelée au plus une fois, par `pdo daemon` seul.
 - Ajout rétrocompatible : bump mineur du core (2.1.0), `pdo-extension-api` inchangé. Les
   sous-commandes une à une et `pdo::cli` restent hors contrat.
 

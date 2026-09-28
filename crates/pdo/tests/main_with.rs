@@ -27,6 +27,8 @@ const ARGS_ENV: &str = "PDO_TEST_MAIN_FROM_ARGS";
 const FACTORY_ENV: &str = "PDO_TEST_MAIN_FROM_FACTORY";
 /// The child's last stderr line: how many times the factory was called.
 const CALLS_MARKER: &str = "main_from factory calls: ";
+/// The child's last stderr line but one: how many times `configure` was called.
+const CONFIGURE_MARKER: &str = "main_from configure calls: ";
 const FACTORY_PANIC: &str = "the factory of the extensions was called";
 /// A daemon nothing listens on.
 const NO_DAEMON: &str = "http://127.0.0.1:1";
@@ -42,19 +44,33 @@ fn main_from_child() {
     let factory = std::env::var(FACTORY_ENV).unwrap_or_default();
     let args = std::iter::once("pdo").chain(args.split('\x1f'));
     let mut calls = 0;
-    let code = pdo::main_from(args, || {
-        calls += 1;
-        match factory.split_once(':') {
-            Some(("count", "incompatible")) => TestExtension::new(Refusal::Nothing)
-                .0
-                .requiring_api("99.0.0")
-                .boxed(),
-            Some(("count", refusal)) => TestExtension::new(Refusal::parse(refusal).unwrap())
-                .0
-                .boxed(),
-            _ => panic!("{FACTORY_PANIC}"),
-        }
-    });
+    let mut configured = 0;
+    let code = pdo::main_from_config(
+        args,
+        || {
+            calls += 1;
+            match factory.split_once(':') {
+                Some(("count", "incompatible")) => TestExtension::new(Refusal::Nothing)
+                    .0
+                    .requiring_api("99.0.0")
+                    .boxed(),
+                Some(("count", refusal)) => TestExtension::new(Refusal::parse(refusal).unwrap())
+                    .0
+                    .boxed(),
+                _ => panic!("{FACTORY_PANIC}"),
+            }
+        },
+        |config| {
+            configured += 1;
+            config.with_release_channel(pdo::ReleaseChannel {
+                name: "acme".into(),
+                installed_version: "0.3.0".into(),
+                source_url: None,
+                upgrade_command: None,
+            })
+        },
+    );
+    eprintln!("{CONFIGURE_MARKER}{configured}");
     eprintln!("{CALLS_MARKER}{calls}");
     let code = (0..=u8::MAX)
         .find(|n| ExitCode::from(*n) == code)
@@ -76,6 +92,17 @@ impl Child {
             .lines()
             .find_map(|l| l.strip_prefix(CALLS_MARKER))
             .unwrap_or_else(|| panic!("the child reported no factory calls:\n{self}"))
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    /// How many times `configure` was called, as the child reported it.
+    fn configured(&self) -> usize {
+        self.stderr
+            .lines()
+            .find_map(|l| l.strip_prefix(CONFIGURE_MARKER))
+            .unwrap_or_else(|| panic!("the child reported no configure calls:\n{self}"))
             .trim()
             .parse()
             .unwrap()
@@ -230,6 +257,11 @@ fn the_daemon_builds_the_extensions_of_the_binary_once() {
         "{child}"
     );
     assert_eq!(child.calls(), 1, "{child}");
+    assert_eq!(
+        child.configured(),
+        1,
+        "`configure` shapes the daemon's Config:\n{child}"
+    );
 }
 
 /// `pdo service status` asks nothing of the extensions, but the service arm
@@ -238,6 +270,11 @@ fn the_daemon_builds_the_extensions_of_the_binary_once() {
 fn the_service_status_builds_the_extensions_of_the_binary_once() {
     let child = main_from(&["service", "status"], "count:none", &[]);
     assert_eq!(child.calls(), 1, "{child}");
+    assert_eq!(
+        child.configured(),
+        0,
+        "only the daemon is configured:\n{child}"
+    );
 }
 
 /// The agent's CLI never builds the extensions: the factory panics if called,
@@ -255,6 +292,7 @@ fn the_agent_cli_never_builds_the_extensions() {
         let child = main_from(args, "panic", &session);
         assert!(!child.stderr.contains(FACTORY_PANIC), "{args:?}: {child}");
         assert_eq!(child.calls(), 0, "{args:?}: {child}");
+        assert_eq!(child.configured(), 0, "{args:?}: {child}");
         assert_eq!(child.code, Some(1), "{args:?}: {child}");
     }
 }

@@ -13,6 +13,8 @@ import type { CollapsedFiles } from "../../review/model/diffTab";
 import type { LibraryPipelineEntry } from "../api/libraryPipelines";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
+import ExtensionDetailTab from "../../shared/extensions/ExtensionDetailTab";
+import { useDetailTabs } from "../../shared/extensions/slots";
 
 import { InfoTab } from "./InfoTab";
 import { ManagerTab } from "./ManagerTab";
@@ -98,12 +100,18 @@ export default function PipelineInfoPanel({
   // tab was last looked at. Recorded on entering and on leaving the tab.
   const deliverySig = run ? deliverySignature(run) : "";
   const [seenDeliverySig, setSeenDeliverySig] = useState(deliverySig);
+  // ADR-0081: the tabs extensions add to a Run's detail, after the core's.
+  const extensionTabs = useDetailTabs("run");
+  const [extensionTab, setExtensionTab] = useState<string | null>(null);
+  const activeExtension = run ? (extensionTabs.find((t) => t.key === extensionTab) ?? null) : null;
+  const shownTab = activeExtension ? null : resolvedTab;
   const selectTab = (id: TabId) => {
     if (id === "diff" || resolvedTab === "diff") setSeenDeliverySig(deliverySig);
     setActiveTab(id);
+    setExtensionTab(null);
   };
   const nudgeDiff =
-    run != null && resolvedTab !== "diff" && seenDeliverySig !== deliverySig && deliverySig !== "";
+    run != null && shownTab !== "diff" && seenDeliverySig !== deliverySig && deliverySig !== "";
   // #751: sent review comments with an unread reply — a solid count pill that
   // replaces the blue dot while > 0 (a number beats a dot; both mean "come look").
   // Cleared by opening the Review page (per browser, localStorage).
@@ -161,7 +169,7 @@ export default function PipelineInfoPanel({
               data-testid={`info-tab-${t.id}`}
               onClick={() => selectTab(t.id)}
               className={`flex items-center gap-1.5 px-2 py-1.5 transition-colors cursor-pointer ${
-                resolvedTab === t.id
+                shownTab === t.id
                   ? "border-b-2 border-acc text-fg font-medium"
                   : "text-fg-3 hover:text-fg-2"
               }`}
@@ -196,9 +204,32 @@ export default function PipelineInfoPanel({
               )}
             </button>
           ))}
+        {run &&
+          extensionTabs.map((t) => (
+            <button
+              key={t.key}
+              data-testid={`info-tab-ext-${t.key}`}
+              onClick={() => setExtensionTab(t.key)}
+              className={`flex items-center gap-1.5 px-2 py-1.5 transition-colors cursor-pointer ${
+                activeExtension?.key === t.key
+                  ? "border-b-2 border-acc text-fg font-medium"
+                  : "text-fg-3 hover:text-fg-2"
+              }`}
+            >
+              {t.slot.label}
+            </button>
+          ))}
       </div>
 
-      {resolvedTab === "info" && (
+      {activeExtension && run && (
+        <ExtensionDetailTab
+          key={`${activeExtension.key}:${run.run_id}`}
+          tab={activeExtension}
+          entity={{ kind: "run", id: run.run_id, attributes: run.attributes }}
+        />
+      )}
+
+      {shownTab === "info" && (
         <InfoTab
           run={run}
           pipeline={pipeline}
@@ -209,7 +240,7 @@ export default function PipelineInfoPanel({
         />
       )}
 
-      {resolvedTab === "diff" && run && (
+      {shownTab === "diff" && run && (
         <DiffTab
           key={run.run_id}
           run={run}
@@ -218,7 +249,7 @@ export default function PipelineInfoPanel({
         />
       )}
 
-      {resolvedTab === "repositories" && run && (
+      {shownTab === "repositories" && run && (
         <div data-testid="repositories-tab" className="flex flex-col">
           {run.target_repo ? (
             <RepositoriesSection key={run.run_id} run={run} onEdited={onRefreshRun} />
@@ -230,7 +261,7 @@ export default function PipelineInfoPanel({
         </div>
       )}
 
-      {resolvedTab === "manager" && run && managerSession && (
+      {shownTab === "manager" && run && managerSession && (
         <ManagerTab
           key={run.run_id}
           run={run}
@@ -240,14 +271,14 @@ export default function PipelineInfoPanel({
         />
       )}
 
-      {resolvedTab === "assistant" && hasAssistant && assistantId && (
+      {shownTab === "assistant" && hasAssistant && assistantId && (
         // #594: NOT keyed on the pipeline. One shared assistant means switching
         // template must keep the same session and the same conversation — a
         // remount per pipeline is the exact opposite of sharing.
         <AssistantPanel />
       )}
 
-      {resolvedTab === "yaml" && (
+      {shownTab === "yaml" && (
         <YamlTab
           pipeline={pipeline}
           pipelineId={assistantId ?? null}

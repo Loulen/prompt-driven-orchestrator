@@ -209,6 +209,9 @@ impl TestDaemon {
         setup(tempdir.path())?;
         let mut config = DaemonConfig {
             tmux_cmd_override: Some("exec sleep 600".to_string()),
+            // The extensions' data folders (`~/.pdo/extensions/<id>/`) stay in
+            // the tempdir, never the real `$HOME`.
+            sandbox_home_override: Some(tempdir.path().join("home")),
             ..DaemonConfig::default()
         };
         pdo::compose(&mut config, extensions, None)?;

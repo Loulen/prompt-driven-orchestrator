@@ -2,21 +2,27 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
+use pdo_kernel::attributes::{AttributeFilter, Attributes};
 use pdo_kernel::Actor;
 
 use super::dto::{
     CreatePipelineRequest, PipelineListEntry, RenamePipelineRequest, SavePipelineRequest,
 };
 use super::{common_response, error, error_with_message, structured_parse_error};
-use crate::application::{PipelineError, Pipelines, RenameOutcome};
+use crate::application::{Created, PipelineError, Pipelines, RenameOutcome};
 use crate::domain::pipeline::PipelineDef;
 
-pub(super) async fn list(State(pipelines): State<Arc<Pipelines>>) -> Response {
-    match pipelines.list() {
+/// `GET /pipelines[?attr.<id>/<key>=<value>…]`.
+pub(super) async fn list(
+    State(pipelines): State<Arc<Pipelines>>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let filter = AttributeFilter::from_query(query.as_deref());
+    match pipelines.list_carrying(filter).await {
         Ok(list) => Json(
             list.into_iter()
                 .map(PipelineListEntry::from)
@@ -103,15 +109,10 @@ pub(super) async fn create(
     Json(req): Json<CreatePipelineRequest>,
 ) -> Response {
     match pipelines.create(&actor, &req.name) {
-        Ok(created) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": created.id,
-                "scope": "instance",
-                "path": created.path.to_string_lossy(),
-            })),
-        )
-            .into_response(),
+        Ok(created) => {
+            let stamped = pipelines.stamp_created(&actor, &created.id).await;
+            created_response(created, stamped)
+        }
         Err(PipelineError::NameRequired) => error(StatusCode::BAD_REQUEST, "name is required"),
         Err(PipelineError::AlreadyExists) => error(StatusCode::CONFLICT, "pipeline already exists"),
         Err(PipelineError::Storage(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -152,13 +153,16 @@ pub(super) async fn rename(
         Ok(RenameOutcome::InPlace { id, name }) => {
             serde_json::json!({ "ok": true, "id": id, "name": name, "renamed": true })
         }
-        Ok(RenameOutcome::Moved { id, name, path }) => serde_json::json!({
+        Ok(RenameOutcome::Moved { id, name, path }) => {
+            pipelines.carry_attributes(&pipeline_id, &id).await;
+            serde_json::json!({
             "ok": true,
             "id": id,
             "name": name,
             "path": path.to_string_lossy(),
             "renamed": true,
-        }),
+            })
+        }
         Err(PipelineError::NameRequired) => {
             return error_with_message(
                 StatusCode::BAD_REQUEST,
@@ -204,15 +208,10 @@ pub(super) async fn duplicate(
     AxumPath(id): AxumPath<String>,
 ) -> Response {
     match pipelines.duplicate(&actor, &id) {
-        Ok(created) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": created.id,
-                "scope": "instance",
-                "path": created.path.to_string_lossy(),
-            })),
-        )
-            .into_response(),
+        Ok(created) => {
+            let stamped = pipelines.stamp_created(&actor, &created.id).await;
+            created_response(created, stamped)
+        }
         Err(PipelineError::Invalid(e)) => error(
             StatusCode::BAD_REQUEST,
             format!("invalid source pipeline: {e}"),
@@ -242,4 +241,23 @@ pub(super) async fn delete(
 fn fallback(error: PipelineError) -> Response {
     common_response(&error)
         .unwrap_or_else(|| super::error(StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")))
+}
+
+/// `201` with where the new pipeline landed, and the attributes the
+/// extensions stamped on it (absent when none).
+fn created_response(created: Created, stamped: Attributes) -> Response {
+    let mut body = serde_json::json!({
+        "id": created.id,
+        "scope": "instance",
+        "path": created.path.to_string_lossy(),
+    });
+    with_attributes(&mut body, stamped);
+    (StatusCode::CREATED, Json(body)).into_response()
+}
+
+/// `body`, with the attributes of the entity it names when there are some.
+pub(super) fn with_attributes(body: &mut serde_json::Value, attributes: Attributes) {
+    if !attributes.is_empty() {
+        body["attributes"] = serde_json::json!(attributes);
+    }
 }

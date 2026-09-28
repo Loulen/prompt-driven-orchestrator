@@ -24,7 +24,7 @@ impl Settings {
         }
         let draft = draft(self.profiles.as_ref(), &request, Some(id)).await?;
         match self.profiles.replace(id, draft).await {
-            Ok(Some(profile)) => Ok(profile),
+            Ok(Some(profile)) => Ok(self.with_attributes(profile).await),
             Ok(None) => Err(AgentProfileError::NotFound.into()),
             Err(e) => Err(AgentProfileError::Storage(e.0).into()),
         }

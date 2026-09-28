@@ -1,5 +1,6 @@
 //! The Projet as it travels over HTTP, and the bodies the project routes read.
 
+use pdo_kernel::attributes::Attributes;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -42,6 +43,11 @@ pub struct ProjectDto<A, S> {
     /// attach time.
     #[serde(default)]
     pub members: Vec<String>,
+    /// The entity attributes the extensions stamped on it (CONTEXT.md §
+    /// *Extensions*); absent when none.
+    #[serde(default, skip_serializing_if = "Attributes::is_empty")]
+    #[ts(as = "Option<Attributes>", optional)]
+    pub attributes: Attributes,
 }
 
 impl<A, S> ProjectDto<A, S> {
@@ -62,6 +68,7 @@ impl<A, S> ProjectDto<A, S> {
             harness: project.harness,
             auto_fail: project.auto_fail,
             members: project.members,
+            attributes: project.attributes,
         }
     }
 }

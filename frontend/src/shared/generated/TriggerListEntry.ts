@@ -84,4 +84,9 @@ auto_name: boolean, enabled: boolean,
  * The due query (`TriggerRepository::due`) is nonetheless tz-normalised so a legacy
  * or stray-offset row can never silently go dormant (#222).
  */
-next_fire_at?: string, last_fired_at?: string, last_outcome?: string, };
+next_fire_at?: string, last_fired_at?: string, last_outcome?: string, 
+/**
+ * The entity attributes the extensions stamped on it (CONTEXT.md §
+ * *Extensions*), when the read asked for them; absent when none.
+ */
+attributes?: { [key in string]: string }, };

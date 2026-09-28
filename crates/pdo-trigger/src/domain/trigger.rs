@@ -7,6 +7,7 @@
 //! Trigger merely *produces* Runs.
 
 use pdo_harness::agent_choice::AgentChoice;
+use pdo_kernel::attributes::Attributes;
 use pdo_skill::domain::selection::SkillRef;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -107,6 +108,11 @@ pub struct Trigger {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_outcome: Option<String>,
+    /// The entity attributes the extensions stamped on it (CONTEXT.md §
+    /// *Extensions*), when the read asked for them; absent when none.
+    #[serde(default, skip_serializing_if = "Attributes::is_empty")]
+    #[ts(as = "Option<Attributes>", optional)]
+    pub attributes: Attributes,
 }
 
 /// The fields supplied at creation time; scheduling state is derived/initial.

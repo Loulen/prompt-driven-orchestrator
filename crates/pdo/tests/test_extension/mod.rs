@@ -3,23 +3,45 @@
 //! published.
 //!
 //! - **`identify`**: the caller named by the [`ACTOR_HEADER`] request header
-//!   becomes `Actor::Identified { namespace: "test-extension", id }`; without the
+//!   becomes `Actor::Identified { namespace: "test", id }`; without the
 //!   header, the core decides.
 //! - **`authorize`**: refuses what its [`Refusal`] says, with a reason naming the
 //!   Operation. The refusal can change while the daemon runs ([`Control::set`]),
 //!   so a test seeds its fixtures before refusing everything.
 //! - Every `(Actor, Operation)` it is asked about is recorded ([`Control::seen`]).
+//! - **`on_create`**: stamps `started_by` (so `test/started_by`): the id of an
+//!   identified caller, else the kind of actor (`local_operator`, `trigger`…).
+//! - **`on_event`**: records every event ([`Control::events`]) and appends it
+//!   to `events.jsonl` in its data folder; it can be told to sleep or panic
+//!   first ([`OnEvent`]).
+//! - **`start`**: remembers its data folder ([`Control::data_dir`]).
+//! - **`routes`** (`routes.rs`): `/ext/test` answers who it is, `/events` the
+//!   trace of the events, `/ui.js` its UI bundle, `/incompatible` switches the
+//!   bundle to a React major the front does not run.
+//! - **`ui`**: one element in each of the four UI slots (`ui.js`).
 //!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
 
+mod routes;
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use pdo::extension_api::{
-    Actor, Authorization, Extension, Manifest, Operation, RequestParts, ResourceKind, Verb,
+    Actor, Attributes, Authorization, EntityRef, Extension, ExtensionContext, Manifest, Operation,
+    RequestParts, ResourceKind, Slot, UiContributions, UiSlot, Verb,
 };
+use serde_json::Value;
 
-/// The id of the test extension (its namespace for the actors it identifies).
-pub const ID: &str = "test-extension";
+/// The id of the test extension (its namespace for the actors it identifies,
+/// the prefix of its attributes, its routes under `/ext/test/`).
+pub const ID: &str = "test";
+
+/// The major of React the test bundle declares; the incompatible one declares
+/// the one before.
+pub const REACT_MAJOR: u32 = 19;
 
 /// The request header naming the caller.
 pub const ACTOR_HEADER: &str = "x-pdo-test-actor";
@@ -124,11 +146,38 @@ pub fn reason(operation: &Operation) -> String {
     )
 }
 
+/// What the test extension does in `on_event` before it records the event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnEvent {
+    Record,
+    /// Sleep that long first.
+    Sleep(Duration),
+    /// Panic instead of recording.
+    Panic,
+}
+
 /// The test's side of the extension: change what it refuses, read what it saw.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Control {
     refusal: Arc<Mutex<Option<Refusal>>>,
     seen: Arc<Mutex<Vec<(Actor, Operation)>>>,
+    events: Arc<Mutex<Vec<Value>>>,
+    on_event: Arc<Mutex<OnEvent>>,
+    data_dir: Arc<Mutex<Option<PathBuf>>>,
+    incompatible: Arc<AtomicBool>,
+}
+
+impl Default for Control {
+    fn default() -> Self {
+        Self {
+            refusal: Arc::default(),
+            seen: Arc::default(),
+            events: Arc::default(),
+            on_event: Arc::new(Mutex::new(OnEvent::Record)),
+            data_dir: Arc::default(),
+            incompatible: Arc::default(),
+        }
+    }
 }
 
 impl Control {
@@ -139,6 +188,43 @@ impl Control {
     /// Every `(actor, operation)` `authorize` was asked about, in order.
     pub fn seen(&self) -> Vec<(Actor, Operation)> {
         self.seen.lock().unwrap().clone()
+    }
+
+    /// Every event `on_event` recorded, in order.
+    pub fn events(&self) -> Vec<Value> {
+        self.events.lock().unwrap().clone()
+    }
+
+    pub fn on_event(&self, behaviour: OnEvent) {
+        *self.on_event.lock().unwrap() = behaviour;
+    }
+
+    /// The data folder `start` received.
+    pub fn data_dir(&self) -> Option<PathBuf> {
+        self.data_dir.lock().unwrap().clone()
+    }
+
+    /// Declare the bundle built for another major of React.
+    pub fn set_incompatible(&self, incompatible: bool) {
+        self.incompatible.store(incompatible, Ordering::Relaxed);
+    }
+
+    fn incompatible(&self) -> bool {
+        self.incompatible.load(Ordering::Relaxed)
+    }
+
+    fn record(&self, event: &Value) {
+        self.events.lock().unwrap().push(event.clone());
+        if let Some(dir) = self.data_dir() {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("events.jsonl"))
+            {
+                let _ = writeln!(file, "{event}");
+            }
+        }
     }
 }
 
@@ -185,6 +271,68 @@ impl Extension for TestExtension {
             namespace: ID.to_string(),
             id: caller.to_string(),
         })
+    }
+
+    fn start(&self, context: &ExtensionContext) {
+        *self.control.data_dir.lock().unwrap() = Some(context.data_dir.clone());
+    }
+
+    fn on_create(&self, actor: &Actor, _entity: &EntityRef) -> Attributes {
+        let started_by = match actor {
+            Actor::Identified { id, .. } => id.clone(),
+            other => other.kind().to_string(),
+        };
+        Attributes::from([("started_by".to_string(), started_by)])
+    }
+
+    fn on_event(&self, event: &Value) {
+        let behaviour = *self.control.on_event.lock().unwrap();
+        match behaviour {
+            OnEvent::Record => {}
+            OnEvent::Sleep(duration) => std::thread::sleep(duration),
+            OnEvent::Panic => panic!("the test extension panics in on_event"),
+        }
+        self.control.record(event);
+    }
+
+    fn routes(&self) -> Option<pdo::extension_api::axum::Router> {
+        Some(routes::router(self.control.clone()))
+    }
+
+    fn ui(&self) -> Option<UiContributions> {
+        let major = if self.control.incompatible() {
+            REACT_MAJOR - 1
+        } else {
+            REACT_MAJOR
+        };
+        let run = ResourceKind::Run;
+        Some(
+            UiContributions::bundle(format!("/ext/{ID}/ui.js"), major)
+                .with(UiSlot::new(
+                    Slot::Navigation,
+                    "events",
+                    "Test events",
+                    "EventsPage",
+                ))
+                .with(UiSlot::new(
+                    Slot::SettingsPanel,
+                    "settings",
+                    "Test extension",
+                    "SettingsPanel",
+                ))
+                .with(UiSlot::new(
+                    Slot::ListFilter { resource: run },
+                    "started-by",
+                    "Started by",
+                    "StartedByFilter",
+                ))
+                .with(UiSlot::new(
+                    Slot::DetailTab { resource: run },
+                    "run-tab",
+                    "Test",
+                    "RunTab",
+                )),
+        )
     }
 
     fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {

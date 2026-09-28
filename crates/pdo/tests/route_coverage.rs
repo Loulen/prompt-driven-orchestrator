@@ -46,6 +46,9 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("../pdo-review/src/adapters/http/mod.rs", "pub fn router("),
     ("../pdo-stats/src/adapters/http/mod.rs", "pub fn router("),
     ("../pdo-settings/src/adapters/http/mod.rs", "pub fn router("),
+    // The core's side of the extensions (`GET /ext`); each extension's own
+    // routes, nested under `/ext/<id>/`, are the extension's.
+    ("src/extensions.rs", "pub fn router("),
 ];
 
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];

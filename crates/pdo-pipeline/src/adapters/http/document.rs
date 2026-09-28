@@ -11,6 +11,7 @@ use pdo_kernel::Actor;
 use pdo_skill::domain::sidecar::SidecarSkill;
 
 use super::dto::ImportPipelineDocumentRequest;
+use super::pipelines::with_attributes;
 use super::{common_response, error};
 use crate::application::{PipelineError, Pipelines, SidecarExport};
 
@@ -93,17 +94,18 @@ pub(super) async fn import(
         .import_document(&actor, &req.document, &sidecar)
         .await
     {
-        Ok(imported) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
+        Ok(imported) => {
+            let mut body = serde_json::json!({
                 "id": imported.id,
                 "scope": "instance",
                 "path": imported.path.to_string_lossy(),
                 "warnings": imported.warnings,
                 "skills": imported.skills,
-            })),
-        )
-            .into_response(),
+            });
+            let stamped = pipelines.stamp_created(&actor, &imported.id).await;
+            with_attributes(&mut body, stamped);
+            (StatusCode::CREATED, Json(body)).into_response()
+        }
         Err(PipelineError::BadRequest(e)) => error(StatusCode::BAD_REQUEST, e),
         Err(PipelineError::Storage(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => common_response(&e)

@@ -35,4 +35,9 @@ parent_run_id?: string, parent_node_id?: string,
  * create boundary (ADR-0033) can be unset — this is a READ, so keep the
  * fallback forever.
  */
-effective_repo: string, };
+effective_repo: string, 
+/**
+ * The entity attributes the extensions stamped on it (CONTEXT.md §
+ * *Extensions*); absent when none.
+ */
+attributes?: { [key in string]: string }, };

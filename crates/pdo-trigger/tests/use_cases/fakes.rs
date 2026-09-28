@@ -116,6 +116,7 @@ impl TriggerRepository for InMemoryTriggers {
             next_fire_at: new.next_fire_at,
             last_fired_at: None,
             last_outcome: None,
+            attributes: Default::default(),
         };
         self.triggers.lock().unwrap().insert(0, trigger.clone());
         ready(Ok(trigger))

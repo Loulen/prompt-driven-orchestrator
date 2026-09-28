@@ -2,10 +2,11 @@
 //! grouping of member repo paths. Nothing is seeded: a row exists only once a
 //! human names a group or attaches a setting (ADR-0046).
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
+use pdo_kernel::attributes::AttributeFilter;
 use pdo_kernel::Actor;
 use tracing::error;
 
@@ -26,7 +27,9 @@ fn no_such_project() -> Response {
     (StatusCode::NOT_FOUND, "no such project").into_response()
 }
 
-fn project_json<S: ProjectSettings>(project: Project) -> Response {
+/// `project` on the wire, with its attributes.
+async fn project_json<S: ProjectSettings>(http: &Http<S>, project: Project) -> Response {
+    let project = http.workspace.with_attributes(project).await;
     Json(ProjectDto::from_project::<S>(project)).into_response()
 }
 
@@ -61,8 +64,13 @@ fn failure(err: WorkspaceError) -> Response {
     }
 }
 
-pub(super) async fn list<S: ProjectSettings>(State(http): State<Http<S>>) -> Response {
-    match http.workspace.list_projects().await {
+/// `GET /projects[?attr.<id>/<key>=<value>…]`.
+pub(super) async fn list<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let filter = AttributeFilter::from_query(query.as_deref());
+    match http.workspace.projects_carrying(filter).await {
         Ok(projects) => Json(
             projects
                 .into_iter()
@@ -81,8 +89,8 @@ pub(super) async fn get<S: ProjectSettings>(
     State(http): State<Http<S>>,
     AxumPath(project_id): AxumPath<String>,
 ) -> Response {
-    match http.workspace.project(&project_id).await {
-        Ok(Some(project)) => project_json::<S>(project),
+    match http.workspace.attributed_project(&project_id).await {
+        Ok(Some(project)) => Json(ProjectDto::from_project::<S>(project)).into_response(),
         Ok(None) => no_such_project(),
         Err(e) => {
             error!("failed to load project {project_id}: {e}");
@@ -126,7 +134,7 @@ pub(super) async fn patch<S: ProjectSettings>(
         .update_project(&actor, &project_id, update)
         .await
     {
-        Ok(project) => project_json::<S>(project),
+        Ok(project) => project_json::<S>(&http, project).await,
         Err(e) => failure(e),
     }
 }
@@ -153,7 +161,7 @@ pub(super) async fn add_member<S: ProjectSettings>(
         .add_project_member(&actor, &project_id, &req.path)
         .await
     {
-        Ok(MemberAdded::Attached(Some(project))) => project_json::<S>(project),
+        Ok(MemberAdded::Attached(Some(project))) => project_json::<S>(&http, project).await,
         Ok(MemberAdded::Attached(None)) => StatusCode::NO_CONTENT.into_response(),
         Ok(MemberAdded::Refused {
             owner_id,
@@ -175,7 +183,7 @@ pub(super) async fn remove_member<S: ProjectSettings>(
         .await
     {
         Ok(MemberRemoved::Untouched(project)) | Ok(MemberRemoved::Detached(Some(project))) => {
-            project_json::<S>(project)
+            project_json::<S>(&http, project).await
         }
         Ok(MemberRemoved::Detached(None)) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => failure(e),

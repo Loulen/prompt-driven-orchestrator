@@ -6,4 +6,9 @@
  * node's `Custom` choice carries inline (ADR-0057 ¶1: "Custom porte la même
  * forme qu'un profil").
  */
-export type AgentProfile = { id: string, name: string, harness: string, model?: string, effort?: string, created_at: string, updated_at: string, };
+export type AgentProfile = { id: string, name: string, harness: string, model?: string, effort?: string, created_at: string, updated_at: string, 
+/**
+ * The entity attributes the extensions stamped on it (CONTEXT.md §
+ * *Extensions*); absent when none.
+ */
+attributes?: { [key in string]: string }, };

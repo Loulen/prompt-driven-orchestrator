@@ -3,6 +3,7 @@
 //! reads, and the unification of the retired registries (a transition of the
 //! daemon, D10), go straight to the ports.
 
+mod attributes;
 mod create_pipeline;
 mod delete_pipeline;
 mod duplicate_pipeline;

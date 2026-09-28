@@ -64,6 +64,11 @@ impl Settings {
         })
     }
 
+    /// The extension host: the attributes of the profiles.
+    pub(crate) fn extensions(&self) -> &dyn ExtensionHost {
+        self.extensions.as_ref()
+    }
+
     /// Ask the extensions whether `actor` may run `operation`.
     pub(crate) fn authorize(&self, actor: &Actor, operation: &Operation) -> Result<(), Denied> {
         authorize(self.extensions.as_ref(), actor, operation)

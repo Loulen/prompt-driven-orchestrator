@@ -13,6 +13,8 @@
 //! secondary repo (ADR-0042) is never consulted, so adding or removing one can
 //! change neither the Projet nor the resolved harness.
 
+use pdo_kernel::attributes::Attributes;
+
 /// The stored JSON text of a setting a Projet carries **for another context**
 /// (the agentic profile of `harness`, the skills selection of `skill`).
 ///
@@ -48,6 +50,9 @@ pub struct Project {
     /// Member repository paths, compared **verbatim** (ADR-0033), ordered by
     /// attach time.
     pub members: Vec<String>,
+    /// The entity attributes the extensions stamped on it (CONTEXT.md §
+    /// *Extensions*), when the read asked for them.
+    pub attributes: Attributes,
 }
 
 impl Project {
@@ -61,6 +66,7 @@ impl Project {
             agent_choice: None,
             skills: None,
             members: Vec::new(),
+            attributes: Attributes::new(),
         }
     }
 }

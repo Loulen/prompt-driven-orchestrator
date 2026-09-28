@@ -10,10 +10,11 @@ mod multipart;
 
 use std::sync::Arc;
 
-use axum::extract::{FromRequest, Json, Multipart, Path, Query, Request, State};
+use axum::extract::{FromRequest, Json, Multipart, Path, Query, RawQuery, Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
+use pdo_kernel::attributes::AttributeFilter;
 use pdo_kernel::Actor;
 
 use crate::adapters::env::resolve_max_attachments_mb;
@@ -101,8 +102,10 @@ pub(super) async fn create(
     runs.create_run(&actor, parsed, attachments, session).await
 }
 
-pub(super) async fn list(State(runs): State<Arc<Runs>>) -> Response {
-    runs.list_runs().await
+/// `GET /runs[?attr.<id>/<key>=<value>…]`.
+pub(super) async fn list(State(runs): State<Arc<Runs>>, RawQuery(query): RawQuery) -> Response {
+    runs.list_runs(AttributeFilter::from_query(query.as_deref()))
+        .await
 }
 
 pub(super) async fn reapable(

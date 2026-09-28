@@ -3,6 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
+use pdo_kernel::attributes::{self, AttributeFilter, AttributedList};
+use pdo_kernel::ResourceKind;
+
 use crate::domain::branches::BranchList;
 use crate::domain::browse::BrowseRootError;
 use crate::domain::project::Project;
@@ -38,6 +41,36 @@ impl Workspace {
 
     pub async fn project(&self, id: &str) -> StoreResult<Option<Project>> {
         self.projects.get(id).await
+    }
+
+    /// Every Projet carrying the attributes `filter` asks for, each with its
+    /// attributes: the list the operator reads.
+    pub async fn projects_carrying(&self, filter: AttributeFilter) -> StoreResult<Vec<Project>> {
+        let projects = self.projects.list().await?;
+        let attributed = AttributedList::read(self.host(), ResourceKind::Project, filter).await;
+        Ok(projects
+            .into_iter()
+            .filter(|project| attributed.keeps(&project.id))
+            .map(|mut project| {
+                project.attributes = attributed.of(&project.id);
+                project
+            })
+            .collect())
+    }
+
+    /// One Projet, with its attributes.
+    pub async fn attributed_project(&self, id: &str) -> StoreResult<Option<Project>> {
+        Ok(match self.projects.get(id).await? {
+            Some(project) => Some(self.with_attributes(project).await),
+            None => None,
+        })
+    }
+
+    /// `project`, with its attributes.
+    pub async fn with_attributes(&self, mut project: Project) -> Project {
+        project.attributes =
+            attributes::of_entity(self.host(), ResourceKind::Project, &project.id).await;
+        project
     }
 
     /// The Projet owning `path`, compared verbatim (ADR-0033).

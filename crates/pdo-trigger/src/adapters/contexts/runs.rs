@@ -1,9 +1,11 @@
 //! The Runs a Trigger produces, through the run context's public use cases: a
-//! fire is a creation the trigger context has already gated (`Runs::start_run`).
+//! fire is a creation the trigger context has already gated (`Runs::start_run`),
+//! whose Run the extensions stamp with the Trigger as its Acteur.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use pdo_kernel::Actor;
 use pdo_run::application::create_run::{CreateRunRequest, TargetRepoInput};
 use pdo_run::domain::projection::project;
 use pdo_run::domain::state::SandboxMode;
@@ -47,8 +49,14 @@ impl TriggerRuns for RunsOfTriggers {
 
     fn start(&self, fire: RunFromTrigger) -> BoxFuture<'_, Result<String, String>> {
         Box::pin(async move {
+            let actor = Actor::Trigger {
+                trigger_id: fire.trigger.id.clone(),
+            };
             match self.0.start_run(request(fire), Vec::new(), None).await {
-                Ok(run_id) => Ok(run_id),
+                Ok(run_id) => {
+                    self.0.stamp_run(&actor, &run_id).await;
+                    Ok(run_id)
+                }
                 Err((_, body)) => Err(body
                     .get("error")
                     .and_then(|v| v.as_str())

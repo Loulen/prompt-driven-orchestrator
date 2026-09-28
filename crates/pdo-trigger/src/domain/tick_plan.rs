@@ -216,6 +216,7 @@ mod tests {
             next_fire_at: next_fire_at.map(str::to_string),
             last_fired_at: None,
             last_outcome: None,
+            attributes: Default::default(),
         }
     }
 

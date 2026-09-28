@@ -8,6 +8,8 @@ pub mod reapable;
 use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use pdo_kernel::attributes::{AttributeFilter, AttributedList, Attributes};
+use pdo_kernel::ResourceKind;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -63,11 +65,17 @@ pub struct RunListEntry {
     /// create boundary (ADR-0033) can be unset — this is a READ, so keep the
     /// fallback forever.
     pub effective_repo: String,
+    /// The entity attributes the extensions stamped on it (CONTEXT.md §
+    /// *Extensions*); absent when none.
+    #[serde(skip_serializing_if = "Attributes::is_empty")]
+    #[ts(as = "Option<Attributes>", optional)]
+    pub attributes: Attributes,
 }
 
 impl Runs {
-    /// `GET /runs`: every Run, as the list shows it.
-    pub async fn list_runs(&self) -> Response {
+    /// `GET /runs`: every Run carrying the attributes `filter` asks for, as the
+    /// list shows it, with its attributes.
+    pub async fn list_runs(&self, filter: AttributeFilter) -> Response {
         let state = self;
         let run_ids = match state.store().run_ids().await {
             Ok(ids) => ids,
@@ -88,6 +96,8 @@ impl Runs {
         }
         // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read.
         child_awaiting::overlay(&mut states);
+        let attributed = AttributedList::read(self.extensions(), ResourceKind::Run, filter).await;
+        states.retain(|run_state| attributed.keeps(&run_state.run_id));
 
         let mut runs = Vec::new();
         for run_state in states {
@@ -98,6 +108,7 @@ impl Runs {
                 let effective_repo = effective_repo_root(state, &run_state)
                     .to_string_lossy()
                     .into_owned();
+                let attributes = attributed.of(&run_state.run_id);
                 runs.push(RunListEntry {
                     run_id: run_state.run_id,
                     pipeline_name: run_state.pipeline_name,
@@ -112,6 +123,7 @@ impl Runs {
                     parent_run_id: run_state.parent_run_id,
                     parent_node_id: run_state.parent_node_id,
                     effective_repo,
+                    attributes,
                 });
             }
         }

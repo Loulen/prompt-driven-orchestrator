@@ -5,6 +5,11 @@ import {
 } from "../../model/runTree";
 import { EMPTY_RUN_FILTER, isFilterActive, runMatchesFilter } from "../../model/runFilter";
 import { loadChildRunsExpanded } from "../../../lib/uiPrefs";
+import {
+  isAttributeFilterActive,
+  matchesAttributes,
+  type Attributes,
+} from "../../../shared/extensions/attributes";
 
 /**
  * The Runs list's tree view: the client-side filters, the run tree split into
@@ -18,7 +23,10 @@ export function useRunTreeView(runs: RunListEntry[], selectedRunId: string | nul
   // active/archived split, so grouping, the Archived section and its count all
   // see the same filtered view.
   const [runFilter, setRunFilter] = useState(EMPTY_RUN_FILTER);
-  const filterActive = isFilterActive(runFilter);
+  // ADR-0081 — the attribute filter an extension's list filter sets: kept on
+  // the same tree, with the same AND semantics.
+  const [attributeFilter, setAttributeFilter] = useState<Attributes>({});
+  const filterActive = isFilterActive(runFilter) || isAttributeFilterActive(attributeFilter);
 
   // #783 — the run tree, built from ALL runs so a child follows its parent into
   // whatever section / group the ROOT lands in, whatever the child's own status
@@ -27,12 +35,13 @@ export function useRunTreeView(runs: RunListEntry[], selectedRunId: string | nul
   // Archived section only ever holds archived runs, never a live child.
   const tree = useMemo(() => buildRunTree(runs), [runs]);
   const { activeTree, archivedTree } = useMemo(() => {
-    const match = (r: RunListEntry) => runMatchesFilter(r, runFilter);
+    const match = (r: RunListEntry) =>
+      runMatchesFilter(r, runFilter) && matchesAttributes(r.attributes, attributeFilter);
     return {
       activeTree: filterRunTree(tree.filter((n) => n.run.status !== "archived"), match),
       archivedTree: filterRunTree(tree.filter((n) => n.run.status === "archived"), match),
     };
-  }, [tree, runFilter]);
+  }, [tree, runFilter, attributeFilter]);
   const filteredRuns = useMemo(
     () => [...flattenAll(activeTree), ...flattenAll(archivedTree)],
     [activeTree, archivedTree],
@@ -135,6 +144,8 @@ export function useRunTreeView(runs: RunListEntry[], selectedRunId: string | nul
   return {
     runFilter,
     setRunFilter,
+    attributeFilter,
+    setAttributeFilter,
     filterActive,
     activeTree,
     archivedTree,

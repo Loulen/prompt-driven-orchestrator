@@ -1,10 +1,12 @@
 import { useCallback, useRef, useState } from "react";
-import FullWindowShell from "../../components/FullWindowShell";
+import FullWindowShell, { type RailItem } from "../../components/FullWindowShell";
 import TutorialsSection from "../../components/tour/TutorialsSection";
 import { harnessCatalog } from "../../harness/model/catalog";
 import VersionUpdateSection from "../../platform/components/VersionUpdateSection";
 import SkillBankPanel from "../../skill/components/SkillBankPanel";
 import { announceSkillsChanged, useSkillBank } from "../../skill/store/useSkillBank";
+import ExtensionSettingsPanels from "../../shared/extensions/ExtensionSettingsPanels";
+import { useSettingsPanels } from "../../shared/extensions/slots";
 import StatsAbsorptionsPanel from "../../stats/components/StatsAbsorptionsPanel";
 import { updateSettings } from "../api/settings";
 import {
@@ -69,6 +71,9 @@ interface Props {
 
 const RAIL_WIDTH = 176;
 
+/** The rail entry of the extensions' settings panels (ADR-0081), shown only when one exists. */
+const EXTENSIONS = "extensions";
+
 /**
  * Instance-wide settings (#129, ADR-0015; full-window surface since #690 / CONTEXT.md
  * « Surface Settings »): the shell Stats uses, a rail of four categories, and per category
@@ -109,9 +114,10 @@ export default function SettingsSurface({
 
   // Position — survives a close (the surface is unmounted-by-render below, so this state
   // IS the page-session memory, story 17). A reload remounts and lands on General.
-  const [category, setCategory] = useState<SettingsCategoryId>(
+  const [category, setCategory] = useState<SettingsCategoryId | typeof EXTENSIONS>(
     initialPosition?.category ?? "general",
   );
+  const extensionPanels = useSettingsPanels();
   const [lastSection, setLastSection] = useState<
     Partial<Record<SettingsCategoryId, SettingsSectionId>>
   >(() =>
@@ -178,11 +184,12 @@ export default function SettingsSurface({
 
   if (!open) return null;
 
-  const rail = SETTINGS_CATEGORIES.map((item) => ({
+  const rail: RailItem[] = SETTINGS_CATEGORIES.map((item) => ({
     id: item.id,
     label: item.label,
     dirty: rollup.categories.has(item.id),
   }));
+  if (extensionPanels.length > 0) rail.push({ id: EXTENSIONS, label: "Extensions", dirty: false });
   const catalog = settings ? harnessCatalog(settings.harness_descriptors) : null;
   const formProps = values && settings ? { values, settings, dirty: rollup.fields, setField } : null;
 
@@ -221,7 +228,7 @@ export default function SettingsSurface({
         closeLabel="Close settings"
         rail={rail}
         activeRail={category}
-        onRailChange={(id) => setCategory(id as SettingsCategoryId)}
+        onRailChange={(id) => setCategory(id as SettingsCategoryId | typeof EXTENSIONS)}
         railWidth={RAIL_WIDTH}
         railAriaLabel="Settings categories"
         railTestIdPrefix="settings-category"
@@ -343,6 +350,7 @@ export default function SettingsSurface({
               ))}
           </CategoryPage>
         ))}
+        {extensionPanels.length > 0 && <ExtensionSettingsPanels active={category === EXTENSIONS} />}
       </FullWindowShell>
 
       {confirmClose && (

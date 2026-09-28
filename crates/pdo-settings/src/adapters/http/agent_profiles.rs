@@ -2,10 +2,11 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
+use pdo_kernel::attributes::AttributeFilter;
 use pdo_kernel::Actor;
 use serde::Deserialize;
 use ts_rs::TS;
@@ -36,8 +37,15 @@ impl From<WriteAgentProfileRequest> for ProfileRequest {
     }
 }
 
-pub(super) async fn list(State(settings): State<Arc<Settings>>) -> Response {
-    match settings.agent_profiles().await {
+/// `GET /settings/agent-profiles[?attr.<id>/<key>=<value>…]`.
+pub(super) async fn list(
+    State(settings): State<Arc<Settings>>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    match settings
+        .agent_profiles(AttributeFilter::from_query(query.as_deref()))
+        .await
+    {
         // Through `json!`, as the list always went: each profile's keys sorted.
         Ok(profiles) => Json(serde_json::json!({ "profiles": profiles })).into_response(),
         Err(e) => refusal(e),

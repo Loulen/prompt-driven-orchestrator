@@ -149,7 +149,7 @@ async fn a_panic_in_authorize_is_a_refusal_and_the_daemon_lives_on() {
         let (status, body) = rename_project(&daemon, &id, "renamed").await;
         assert_eq!(status, 403);
         assert_eq!(body["error"], "operation_refused");
-        assert_eq!(body["reason"], "extension `test-extension` failed");
+        assert_eq!(body["reason"], "extension `test` failed");
     }
 
     // Still serving, reads and mutations alike.
@@ -282,7 +282,7 @@ async fn an_extension_requiring_another_api_is_refused_at_startup() {
     let err = format!("{:#}", refused.err().expect("the daemon refuses to start"));
     assert!(
         err.contains(&format!(
-            "extension `test-extension` requires extension API 99.0.0, but this PDO implements \
+            "extension `test` requires extension API 99.0.0, but this PDO implements \
              extension API {}",
             pdo::extension_api::API_VERSION
         )),

@@ -3,13 +3,19 @@
 //! It asks the extension host who the caller is, once per request, and leaves
 //! the [`Actor`] in the request's extensions. A handler reads it with axum's
 //! `Extension<Actor>` extractor.
+//!
+//! It also runs the request in an `OperationApplied` scope: once the response
+//! is a success, the extensions observe every Operation the request was
+//! allowed to run (D20).
 
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
+use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::Router;
+use pdo_kernel::applied;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::Actor;
 
@@ -27,5 +33,10 @@ async fn identify(
     let actor: Actor = host.identify(&parts);
     let mut request = Request::from_parts(parts, body);
     request.extensions_mut().insert(actor);
-    next.run(request).await
+    let (response, record) = applied::scope(next.run(request)).await;
+    let status = response.status();
+    if status.is_success() || status == StatusCode::SWITCHING_PROTOCOLS {
+        applied::publish(host.as_ref(), record);
+    }
+    response
 }

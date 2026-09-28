@@ -10,6 +10,7 @@ use axum::{Extension, Json};
 use pdo_kernel::Actor;
 
 use super::dto::{ImportWorkflowRequest, ParseNodeRequest, SaveToLibraryRequest};
+use super::pipelines::with_attributes;
 use super::{common_response, error};
 use crate::application::{PipelineError, Pipelines, WorkflowImportError};
 use crate::domain::node_spec::parse_node_spec;
@@ -97,16 +98,17 @@ pub(super) async fn import_workflow(
     Json(req): Json<ImportWorkflowRequest>,
 ) -> Response {
     match pipelines.import_workflow(&actor, &req.filename, &req.content) {
-        Ok(imported) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
+        Ok(imported) => {
+            let mut body = serde_json::json!({
                 "id": imported.id,
                 "scope": "instance",
                 "path": imported.path.to_string_lossy(),
                 "warnings": imported.warnings,
-            })),
-        )
-            .into_response(),
+            });
+            let stamped = pipelines.stamp_created(&actor, &imported.id).await;
+            with_attributes(&mut body, stamped);
+            (StatusCode::CREATED, Json(body)).into_response()
+        }
         Err(WorkflowImportError::Untranslatable(e)) => {
             error(StatusCode::BAD_REQUEST, format!("import failed: {e}"))
         }

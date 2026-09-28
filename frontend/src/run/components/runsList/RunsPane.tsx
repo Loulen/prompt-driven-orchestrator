@@ -1,5 +1,6 @@
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
+import ExtensionListFilters from "../../../shared/extensions/ExtensionListFilters";
 import RunFilters from "../RunFilters";
 import RunsBulkActions from "./RunsBulkActions";
 import RunsPaneHeader from "./RunsPaneHeader";
@@ -31,6 +32,7 @@ export default function RunsPane({
   onShowTriggers,
 }: Props) {
   const { runFilter, setRunFilter, allParentIds, allExpanded, setAllExpanded } = pane;
+  const { attributeFilter, setAttributeFilter } = pane;
   return (
     <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
       <RunsPaneHeader pane={pane} onNewRun={onNewRun} />
@@ -47,6 +49,7 @@ export default function RunsPane({
           }
         />
       )}
+      <ExtensionListFilters resource="run" filter={attributeFilter} onChange={setAttributeFilter} />
       <RunTreeList
         pane={pane}
         runs={runs}

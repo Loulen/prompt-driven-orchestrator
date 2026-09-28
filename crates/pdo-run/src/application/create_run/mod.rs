@@ -23,6 +23,7 @@ use std::sync::Arc;
 use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use pdo_kernel::attributes::{self, Attributes, EntityRef};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::{info, warn};
 
@@ -52,7 +53,20 @@ impl Runs {
         if let Err(denied) = self.authorize(actor, &operation) {
             return denied.into_response();
         }
-        self.create_run_response(req, attachments, session).await
+        match self.start_run(req, attachments, session).await {
+            Ok(run_id) => {
+                self.stamp_run(actor, &run_id).await;
+                (StatusCode::CREATED, Json(CreateRunResponse { run_id })).into_response()
+            }
+            Err((status, body)) => (status, Json(body)).into_response(),
+        }
+    }
+
+    /// Stamp the extensions' attributes on the Run `run_id`, which `actor` just
+    /// created (a gesture's creation, or a Trigger's fire). Returns them.
+    pub async fn stamp_run(&self, actor: &Actor, run_id: &str) -> Attributes {
+        let entity = EntityRef::new(ResourceKind::Run, run_id);
+        attributes::stamp(self.extensions(), actor, entity).await
     }
 
     /// [`Self::start_run`], answered as `POST /runs` answers it: `201` and the

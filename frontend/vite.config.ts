@@ -58,6 +58,11 @@ export default defineConfig({
       // prefix — same trap as the others: without it a dev GET /update answers 200
       // with the SPA and the section would render nothing, silently.
       '/update': daemonTarget,
+      // ADR-0081 (#931): the extensions. `GET /ext` lists them and their UI
+      // slots, `/ext/<id>/…` are each extension's own routes (its UI bundle
+      // included). Same trap as the others: without it a dev GET /ext answers
+      // 200 with the SPA and no extension ever shows up.
+      '/ext': daemonTarget,
     },
   },
   test: {

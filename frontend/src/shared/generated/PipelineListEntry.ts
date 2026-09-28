@@ -6,4 +6,9 @@ export type PipelineListEntry = { id: string, name: string, scope: "instance", p
  * Whether a manual Run must supply a non-empty prompt. Surfaced so the New Run
  * modal can make the prompt field optional.
  */
-prompt_required: boolean, };
+prompt_required: boolean, 
+/**
+ * The entity attributes the extensions stamped on it (CONTEXT.md §
+ * *Extensions*); absent when none.
+ */
+attributes?: { [key in string]: string }, };

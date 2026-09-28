@@ -1,7 +1,8 @@
 //! Create an agentic profile (`POST /settings/agent-profiles`):
-//! `agent_profile` × `create`.
+//! `agent_profile` × `create`. The extensions stamp their attributes on it.
 
-use pdo_kernel::{Actor, Verb};
+use pdo_kernel::attributes::{stamp, EntityRef};
+use pdo_kernel::{Actor, ResourceKind, Verb};
 
 use super::{draft, operation, ProfileRequest};
 use crate::application::SettingsError;
@@ -16,9 +17,13 @@ impl Settings {
     ) -> Result<AgentProfile, SettingsError> {
         self.authorize(actor, &operation(Verb::Create, None))?;
         let draft = draft(self.profiles.as_ref(), &request, None).await?;
-        self.profiles
+        let mut profile = self
+            .profiles
             .create(draft)
             .await
-            .map_err(|e| AgentProfileError::Storage(e.0).into())
+            .map_err(|e| AgentProfileError::Storage(e.0))?;
+        let entity = EntityRef::new(ResourceKind::AgentProfile, profile.id.clone());
+        profile.attributes = stamp(self.extensions(), actor, entity).await;
+        Ok(profile)
     }
 }

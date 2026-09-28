@@ -3,10 +3,11 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
+use pdo_kernel::attributes::AttributeFilter;
 use pdo_kernel::Actor;
 use pdo_platform::adapters::http::OriginHint;
 
@@ -15,8 +16,15 @@ use crate::application::create_trigger::CreateTriggerRequest;
 use crate::application::update_trigger::PatchTriggerRequest;
 use crate::Triggers;
 
-pub(super) async fn list(State(triggers): State<Arc<Triggers>>) -> Response {
-    match triggers.list().await {
+/// `GET /triggers[?attr.<id>/<key>=<value>…]`.
+pub(super) async fn list(
+    State(triggers): State<Arc<Triggers>>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    match triggers
+        .list(AttributeFilter::from_query(query.as_deref()))
+        .await
+    {
         Ok(entries) => Json(entries).into_response(),
         Err(e) => refusal(e),
     }
@@ -38,7 +46,7 @@ pub(super) async fn get(
     State(triggers): State<Arc<Triggers>>,
     Path(trigger_id): Path<String>,
 ) -> Response {
-    match triggers.get(&trigger_id).await {
+    match triggers.attributed(&trigger_id).await {
         Ok(trigger) => Json(trigger).into_response(),
         Err(e) => refusal(e),
     }

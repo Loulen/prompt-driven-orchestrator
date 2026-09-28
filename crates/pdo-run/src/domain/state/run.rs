@@ -9,7 +9,8 @@ use super::*;
 use crate::domain::event::{EdgeInfo, NodeDefInfo};
 
 /// The TypeScript shape of `GET /runs/{id}`: the projected [`RunState`] plus what
-/// `get_run` adds to the JSON on the way out (`has_manager`).
+/// `get_run` adds to the JSON on the way out (`has_manager`, and the entity
+/// attributes the extensions stamped on the Run when it carries some).
 #[derive(TS)]
 #[ts(export, rename = "RunState")]
 #[allow(dead_code)]
@@ -18,6 +19,8 @@ struct RunStateView {
     state: RunState,
     #[ts(optional)]
     has_manager: Option<bool>,
+    #[ts(optional)]
+    attributes: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// The TypeScript shape of one node of `GET /runs/{id}`: the projected

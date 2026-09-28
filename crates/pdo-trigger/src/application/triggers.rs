@@ -115,6 +115,11 @@ impl Triggers {
         self.last_tick_ms.load(Ordering::Relaxed)
     }
 
+    /// The extension host: the attributes of the Triggers, the fires they observe.
+    pub(crate) fn extensions(&self) -> &dyn ExtensionHost {
+        self.extensions.as_ref()
+    }
+
     /// Ask the extensions whether `actor` may run `operation`.
     pub(crate) fn authorize(&self, actor: &Actor, operation: &Operation) -> Result<(), Denied> {
         authorize(self.extensions.as_ref(), actor, operation)

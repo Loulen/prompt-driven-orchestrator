@@ -1,13 +1,18 @@
-//! The embedded SPA: `frontend/dist`, compiled into the binary (rust-embed by
-//! `build.rs`), served as the fallback of the router. Every path no route
+//! The embedded SPA, served as the fallback of the router. Every path no route
 //! claims gets `index.html`, so the front's own routes deep-link.
+//!
+//! `build.rs` puts the built frontend in `$OUT_DIR/frontend-dist` (from
+//! `PDO_FRONTEND_DIST` or `pnpm run build`) and exports that folder, relative to
+//! this crate, as `PDO_FRONTEND_EMBED_DIR`: the `compression` feature of
+//! rust-embed refuses an absolute `folder`. Release builds compile the files in;
+//! debug builds read them from that folder at runtime (no `debug-embed`).
 
 use axum::http::{header, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use rust_embed::Embed;
 
 #[derive(Embed)]
-#[folder = "../../frontend/dist"]
+#[folder = "$PDO_FRONTEND_EMBED_DIR"]
 struct FrontendAssets;
 
 pub(crate) async fn static_handler(method: Method, uri: Uri) -> Response {

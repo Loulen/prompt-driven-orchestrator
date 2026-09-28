@@ -76,11 +76,22 @@ The daemon serves the embedded frontend at [http://localhost:5172](http://localh
 ### Production build
 
 ```bash
-cd frontend && pnpm run build && cd ..
+cd frontend && pnpm install --frozen-lockfile && cd ..
 cargo build --release -p pdo-daemon
 ```
 
-The release binary embeds `frontend/dist/`.
+The binary embeds the frontend. `crates/pdo/build.rs` runs `pnpm run build` (`tsc -b && vite
+build`) and Vite writes into cargo's `OUT_DIR` (`target/<profile>/build/pdo-daemon-*/out/frontend-dist`),
+never into `frontend/dist/`. A release build compiles the files in; a debug build reads them from
+that folder at runtime. Two variables change what gets embedded:
+
+| Variable | Effect |
+| --- | --- |
+| `PDO_FRONTEND_DIST=<absolute path>` | Copies an already built frontend (a `dist/` holding `index.html`) instead of building one. No Node or pnpm needed. |
+| `PDO_SKIP_FRONTEND_BUILD=1` | Builds nothing and keeps whatever `OUT_DIR` already holds: an empty folder on a fresh `target/`, so the debug binary shows its dev placeholder. For Rust-only loops such as `make types`. |
+
+Without either and without `frontend/node_modules`, the build stops and says which of the two to
+set up.
 
 ### CLI
 

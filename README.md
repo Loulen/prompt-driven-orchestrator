@@ -222,6 +222,25 @@ Updating, service options and every CLI command: [docs/reference/cli.md](docs/re
 
 Want to contribute or run PDO from source? See [CONTRIBUTING.md](CONTRIBUTING.md). Reference docs (CLI, reverse proxy, terminal, harness support) live in [docs/reference/](docs/reference/).
 
+### Building a binary that embeds PDO
+
+A binary with its own extensions depends on the core crates by git tag and calls `serve(config, extensions)` ([ADR-0081](docs/adr/0081-pdo-s-etend-par-une-api-d-extension-composee-a-la-compilation.md)). `pdo-daemon` embeds the web UI at compile time, and cargo's checkout of a git dependency has no `node_modules`, so give the build an already built UI of the **same tag** through `PDO_FRONTEND_DIST` (absolute path to a `dist/` folder holding `index.html`). Building that `dist/` takes Node.js 22+ and pnpm 10+, once:
+
+```bash
+git clone --depth 1 --branch v2.0.0 https://github.com/Loulen/PDO-v2 pdo-core
+(cd pdo-core/frontend && pnpm install --frozen-lockfile && pnpm run build)
+PDO_FRONTEND_DIST="$PWD/pdo-core/frontend/dist" cargo build   # in your project
+```
+
+To avoid exporting it on every build, set it in your project's `.cargo/config.toml` (`relative = true` resolves the path from the directory holding `.cargo/`):
+
+```toml
+[env]
+PDO_FRONTEND_DIST = { value = "pdo-core/frontend/dist", relative = true }
+```
+
+`cargo build` then needs neither Node nor pnpm, and writes nothing into `~/.cargo/git/checkouts/`: the UI is copied under `target/`. Without `PDO_FRONTEND_DIST`, the build looks for `frontend/node_modules` inside the checkout and stops with a message naming both options when it is missing. Nothing checks yet that the `dist/` matches the tag.
+
 ## License
 
 PDO is free and open source under the [MIT License](LICENSE): use it, modify it, embed it, host it, for any purpose.

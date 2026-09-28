@@ -6,8 +6,9 @@
 //! back the [`Contexts`]. The ports a context needs from what is still legacy
 //! (the Runs, the templates, the instance settings) are implemented here for
 //! `platform`, in `session_ports` for `session`, in `pipeline_ports` for
-//! `pipeline`, in `run_ports` for `run` and in `trigger_ports` for `trigger`,
-//! and move to their own crates when those contexts are extracted.
+//! `pipeline`, in `run_ports` for `run`, in `review_ports` for `review` and in
+//! `trigger_ports` for `trigger`, and move to their own crates when those
+//! contexts are extracted.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
@@ -19,6 +20,7 @@ use pdo_platform::application::ports::{BoxFuture, Runs, UpdateCheckSetting};
 use pdo_platform::domain::install::{InstallMethod, Supervision};
 use pdo_platform::domain::service_health::ServiceHealthOverride;
 use pdo_platform::Platform;
+use pdo_review::application::ports::ReviewSettings;
 use pdo_run::application::ports::{InstanceSettings, RunDirWatch, RunPages};
 
 use pdo_session::application::ports::{
@@ -29,6 +31,7 @@ use pdo_trigger::application::ports::TriggerSettings;
 use tokio::sync::broadcast;
 
 use crate::pipeline_ports::{LegacyActiveRuns, LegacyRenameLedger};
+use crate::review_ports::LegacyReviewSettings;
 use crate::run_ports::{LegacyInstanceSettings, LegacyRunPages};
 use crate::session_ports::LegacySessionPorts;
 use crate::trigger_ports::LegacyTriggerSettings;
@@ -66,6 +69,9 @@ pub struct ContextResources {
     pub pipeline: PipelineResources,
     /// What the run context needs from this daemon.
     pub run: RunResources,
+    /// The `review_agent_can_resolve` instance setting, as the review context
+    /// reads it.
+    pub review_settings: Arc<dyn ReviewSettings>,
     /// What the trigger context needs from this daemon.
     pub trigger: TriggerResources,
 }
@@ -187,6 +193,9 @@ impl ContextResourcesSeed {
             }),
             runs: Arc::new(LegacyRuns {
                 state: state.clone(),
+            }),
+            review_settings: Arc::new(LegacyReviewSettings {
+                db: self.db.clone(),
             }),
             run: RunResources {
                 bus: self.bus,

@@ -120,7 +120,7 @@ pub(crate) struct InstanceConfig {
     /// Stored `review_agent_can_resolve` flag as `0`/`1`, or `None` when unset
     /// (#751, ADR-0067 §4): may an agent's `pdo review reply --resolved` resolve
     /// the comment directly? `None` falls through to the env seam
-    /// ([`crate::review_comments::REVIEW_AGENT_CAN_RESOLVE_ENV`]) then the
+    /// (`pdo_review::adapters::env::AGENT_CAN_RESOLVE_ENV`) then the
     /// built-in default (`false`: the reply is a proposal the human decides on).
     /// Same `0`-not-`NULL` discipline as [`Self::default_auto_name`].
     pub review_agent_can_resolve: Option<i64>,

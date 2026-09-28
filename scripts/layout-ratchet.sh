@@ -141,9 +141,18 @@ cd "$(git rev-parse --show-toplevel)"
 #   only the price sync); NewRunModal, NodeDetailPanel, MarkdownArtifactModal,
 #   OrchestrationTab, RunFilters, runFilter, ForgetRunModal, CleanupConfirmModal,
 #   RepositoriesSection, SecondaryRepoRow and their tests to frontend/src/run/.
+# frontend/src/components: 129 and crates/pdo-daemon/src: 18 (#926, spec #913) ratchet down:
+#   the review of a Run moved out — structured_diff.rs and review_comments.rs to
+#   crates/pdo-review (review_ports.rs, the review's port the legacy side implements,
+#   takes one slot back); DiffTab and its test to frontend/src/review/.
+# frontend/src/components: 123 and crates/pdo-daemon/src: 14 (#927, spec #913) ratchet down:
+#   the trigger context moved out — cron_schedule, fire_decision, guard_runner,
+#   trigger_scheduler and trigger_store to crates/pdo-trigger (trigger_ports.rs, the trigger's
+#   port the legacy side implements, takes one slot back); TriggersListPanel,
+#   TriggerDetailPanel, their tests, GuardOutput and GuardTestResult to frontend/src/trigger/.
 BASELINES='
-frontend/src/components 125
-crates/pdo-daemon/src 15
+frontend/src/components 123
+crates/pdo-daemon/src 14
 '
 
 fail=0

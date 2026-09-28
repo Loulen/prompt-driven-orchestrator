@@ -39,7 +39,7 @@ vi.mock("../skill/api/bank", () => ({
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
 }));
 
-vi.mock("../api", () => ({
+vi.mock("../settings/api/settings", () => ({
   // The real error class: the component narrows on `instanceof` to tell a name
   // collision from anything else, so a stand-in `Error` would not be the test.
   ApiError: class ApiError extends Error {
@@ -74,10 +74,12 @@ vi.mock("../api", () => ({
   fetchSettings: vi.fn().mockResolvedValue({}),
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
 }));
-// The run context's API answers with the mock of `../api`.
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The run context's API answers with the mock of `../settings/api/settings`.
 vi.mock("../run/api/runs", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../run/api/commands", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
@@ -86,27 +88,27 @@ vi.mock("../run/api/commands", () => ({
   retryAll: vi.fn().mockResolvedValue({ run_id: "offspring-1" }),
   renameRun: vi.fn().mockResolvedValue(undefined),
 }));
-// The trigger context's API answers with the mock of `../api` above.
+// The trigger context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../trigger/api/triggers", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
-// The pipeline context's API answers with the mock of `../api` above.
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../pipeline/api/document", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../pipeline/api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 
 vi.mock("../workspace/api/projects", async (importOriginal) => ({

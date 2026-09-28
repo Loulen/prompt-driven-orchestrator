@@ -47,7 +47,7 @@ vi.mock("../api/import", () => ({
   importSkills: vi.fn(),
 }));
 
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   // Defined INSIDE the hoisted factory (a top-level class would not exist yet),
   // with the real constructor signature so tests read like production code.
   ApiError: class ApiError extends Error {
@@ -60,6 +60,8 @@ vi.mock("../../api", () => ({
     }
   },
 }));
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
 
 vi.mock("../../workspace/api/browse", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../workspace/api/browse")>()),

@@ -8,14 +8,16 @@ const fetchUpdateChangelogMock = vi.fn();
 vi.mock("../api/update", () => ({
   fetchUpdateChangelog: (...args: unknown[]) => fetchUpdateChangelogMock(...args),
 }));
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   fetchArtifact: vi.fn(),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${path}`,
 }));
-// The run context's API answers with the mock of `../../api`.
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../../run/api/artifacts", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 vi.mock("../../run/api/nodes", () => ({
   fetchNodeIO: vi.fn(),

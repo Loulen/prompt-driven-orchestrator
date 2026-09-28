@@ -14,9 +14,11 @@ vi.mock("../api/triggers", () => ({
 vi.mock("../api/guard", () => ({
   testGuard: (cmd: string, repo?: string) => testGuard(cmd, repo),
 }));
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   fetchSettings: () => fetchSettings(),
 }));
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
 
 function trigger(overrides: Partial<Trigger> = {}): Trigger {
   return {

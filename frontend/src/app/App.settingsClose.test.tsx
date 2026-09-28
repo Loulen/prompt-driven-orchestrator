@@ -99,7 +99,7 @@ vi.mock("../skill/api/files", () => ({
   writeSkillFile: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../api", () => {
+vi.mock("../settings/api/settings", () => {
   // Vanilla `InstanceSettings` as `GET /settings` serves a pristine instance
   // (mirrors the `sample()` fixture of SettingsSurface.test.tsx, default tiers).
   const settings = {
@@ -280,36 +280,38 @@ vi.mock("../api", () => {
     },
   );
 });
-// The trigger context's API answers with the mock of `../api` above.
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The trigger context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../trigger/api/triggers", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
-// The pipeline context's API answers with the mock of `../api` above.
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../pipeline/api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 // So does the stats context's (#928): its figures, absorptions and price sync.
 vi.mock("../stats/api/stats", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../stats/api/absorptions", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../stats/api/prices", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 
 // The staging-profile panel reads the sandbox context's own API module (#432).

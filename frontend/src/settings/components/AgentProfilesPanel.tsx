@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Lock, Pencil, Plus, Trash2 } from "lucide-react";
-import { deleteAgentProfile, fetchAgentProfileReferents } from "../api";
-import type { AgentProfile } from "../shared/generated/AgentProfile";
-import type { AgentProfileReferents } from "../settings/model/settings";
+import { deleteAgentProfile, fetchAgentProfileReferents } from "../api/agentProfiles";
+import type { AgentProfile } from "../../shared/generated/AgentProfile";
+import type { AgentProfileReferents } from "../model/settings";
 import AgentProfileModal from "./AgentProfileModal";
 
 /**

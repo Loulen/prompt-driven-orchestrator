@@ -40,7 +40,7 @@ vi.mock("../../skill/api/bank", () => ({
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
 }));
 
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   // #410: the modal fetches settings on open (default_sandbox prefill +
@@ -81,24 +81,26 @@ vi.mock("../../api", () => ({
     detail: null,
   }),
 }));
-// The trigger context's API answers with the mock of `../../api`.
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The trigger context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../../trigger/api/triggers", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 vi.mock("../../trigger/api/guard", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
-// The run context's API answers with the mock of `../../api`.
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../api/createRun", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../../pipeline/api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 
 vi.mock("../../workspace/api/browse", async (importOriginal) => ({
@@ -140,7 +142,7 @@ vi.mock("../../workspace/api/repos", async (importOriginal) => ({
   fetchRemotes: vi.fn(),
 }));
 
-const { fetchSettings } = await import("../../api");
+const { fetchSettings } = await import("../../settings/api/settings");
 const { createTrigger, updateTrigger } = await import("../../trigger/api/triggers");
 const { testGuard } = await import("../../trigger/api/guard");
 const { createRun } = await import("../api/createRun");

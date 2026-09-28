@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchSettings, updateSettings } from "../api";
-import type { InstanceSettings } from "../settings/model/settings";
-import type { UpdateSettingsRequest } from "../shared/generated/UpdateSettingsRequest";
+import { fetchSettings, updateSettings } from "../api/settings";
+import type { InstanceSettings } from "../model/settings";
+import type { UpdateSettingsRequest } from "../../shared/generated/UpdateSettingsRequest";
 
 /**
  * Window bus fired after every write that changes what `GET /settings` serves — the

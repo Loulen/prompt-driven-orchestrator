@@ -50,7 +50,7 @@ const uncombineStatsMemberMock = vi.fn();
 // #668: the skill bank drill-down. Same Proxy trap as `../api` below: every
 // function `SkillBankPanel` / `PasteSkillModal` import must exist here or the
 // panel throws on first access.
-vi.mock("../skill/api/bank", () => ({
+vi.mock("../../skill/api/bank", () => ({
   fetchSkillBank: vi
     .fn()
     .mockResolvedValue({
@@ -74,32 +74,30 @@ vi.mock("../skill/api/bank", () => ({
 // module namespace — so a missing key does NOT break at import, it throws at FIRST
 // ACCESS (i.e. the moment the picker opens) with `No "browseFs" export is defined`.
 //
-// Deliberately NOT switching to `vi.mock("../api", async (orig) => ({ ...await orig() }))`:
+// Deliberately NOT switching to `vi.mock("../api/settings", async (orig) => ({ ...await orig() }))`:
 // that would let every un-stubbed function reach the real `fetch` under jsdom, trading a
 // loud error for a silent one.
-vi.mock("../api", () => ({
+vi.mock("../api/settings", () => ({
+  fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
+  updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
+}));
+vi.mock("../api/agentProfiles", () => ({
   fetchAgentProfiles: (...args: unknown[]) => fetchAgentProfilesMock(...args),
   // #691: the agent-profiles panel is mounted inline; its writes must exist here too.
   createAgentProfile: (...args: unknown[]) => createAgentProfileMock(...args),
   updateAgentProfile: vi.fn(),
   deleteAgentProfile: vi.fn(),
   fetchAgentProfileReferents: vi.fn(),
-  fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
-  updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  ApiError: class ApiError extends Error {
-    status?: number;
-    body?: unknown;
-  },
 }));
 // #891: Settings › General › Stats absorptions reads the stats context's API.
-vi.mock("../stats/api/absorptions", () => ({
+vi.mock("../../stats/api/absorptions", () => ({
   fetchStatsAbsorptions: (...args: unknown[]) =>
     fetchStatsAbsorptionsMock(...args),
   uncombineStatsMember: (...args: unknown[]) =>
     uncombineStatsMemberMock(...args),
 }));
 // #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
-vi.mock("../platform/api/update", () => ({
+vi.mock("../../platform/api/update", () => ({
   fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
   applyUpdate: vi.fn(),
   fetchUpdateAttemptLog: (...args: unknown[]) =>
@@ -109,7 +107,7 @@ vi.mock("../platform/api/update", () => ({
 
 // #432: the staging-profile panel reads the sandbox context's own API module. Same Proxy
 // trap as the `../api` factory above — a missing key here throws the moment the panel mounts.
-vi.mock("../sandbox/api/profiles", () => ({
+vi.mock("../../sandbox/api/profiles", () => ({
   fetchSandboxProfiles: (...args: unknown[]) =>
     fetchSandboxProfilesMock(...args),
   saveSandboxProfile: (...args: unknown[]) => saveSandboxProfileMock(...args),
@@ -119,13 +117,13 @@ vi.mock("../sandbox/api/profiles", () => ({
     fetchSandboxProfileReferentsMock(...args),
 }));
 
-vi.mock("../workspace/api/browse", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+vi.mock("../../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/browse")>()),
   browseFs: (...args: unknown[]) => browseFsMock(...args),
 }));
 
-vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/provisioning")>()),
   saveInstanceProvisioning: vi
     .fn()
     .mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
@@ -134,10 +132,10 @@ vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
 }));
 
 import SettingsSurface from "./SettingsSurface";
-import { useEditStore } from "../pipeline/store/editStore";
-import { useWiringStore } from "../stores/wiringStore";
-import type { InstanceSettings } from "../settings/model/settings";
-import type { SandboxProfile } from "../sandbox/model/sandbox";
+import { useEditStore } from "../../pipeline/store/editStore";
+import { useWiringStore } from "../../stores/wiringStore";
+import type { InstanceSettings } from "../model/settings";
+import type { SandboxProfile } from "../../sandbox/model/sandbox";
 
 function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
   return {
@@ -2985,7 +2983,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
   });
 
   it("a changed instance-tier skill selection dirties the Skills row and persists with Save", async () => {
-    const { fetchSkillBank } = await import("../skill/api/bank");
+    const { fetchSkillBank } = await import("../../skill/api/bank");
     vi.mocked(fetchSkillBank).mockResolvedValue({
       skills: [
         { locked: false,

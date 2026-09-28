@@ -5,7 +5,7 @@ import type { SkillRef } from "../../shared/generated/SkillRef";
 import { addProjectMember, createProject, removeProjectMember, updateProject } from "../api/projects";
 import { ApiError } from "../../shared/http/client";
 import { useHarnessCatalog } from "../../harness/store/useHarnessCatalog";
-import { useAgentProfiles } from "../../hooks/useAgentProfiles";
+import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
 import AgentControl from "../../components/AgentControl";
 import HarnessSelect from "../../harness/components/HarnessSelect";
 import PersistedProvisioningEditor from "./PersistedProvisioningEditor";

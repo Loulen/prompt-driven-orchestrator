@@ -1,7 +1,7 @@
 // The harness catalog is served inside `GET /settings` (`harness_descriptors`,
 // #553, #586): the harness context reads it from there.
 
-import { fetchSettings } from "../../api";
+import { fetchSettings } from "../../settings/api/settings";
 import { harnessCatalog, type HarnessCatalog } from "../model/catalog";
 
 /** The picker catalog, from a fresh `GET /settings`. */

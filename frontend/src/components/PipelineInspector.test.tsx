@@ -6,7 +6,7 @@ import { useWiringStore } from "../stores/wiringStore";
 import { serializePipeline } from "../lib/serializePipeline";
 import { TooltipProvider } from "../shared/ui/tooltip";
 
-vi.mock("../api", () => ({
+vi.mock("../settings/api/settings", () => ({
   fetchLibrary: vi.fn().mockResolvedValue([]),
   fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline", scope: "repo" }),
@@ -14,14 +14,16 @@ vi.mock("../api", () => ({
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
 }));
-// The pipeline context's API answers with the mock of `../api` above.
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../pipeline/api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 
 function seedTab(libraryBinding?: { id: string | null; scope: "repo" | "user" | null }) {

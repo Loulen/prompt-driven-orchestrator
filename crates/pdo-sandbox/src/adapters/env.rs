@@ -10,7 +10,7 @@ use crate::domain::image::{
 use crate::domain::mode::{resolve_default_sandbox, SandboxMode};
 
 /// Env var overriding the stored instance default (optional tier). Read ONCE at the
-/// edge (create-run chokepoint + `build_settings_view` disclosure), never in the
+/// edge (create-run chokepoint + the settings page's disclosure), never in the
 /// resolver core — mirror of [`IMAGE_SOURCE_ENV`] (#410).
 pub const DEFAULT_SANDBOX_ENV: &str = "PDO_DEFAULT_SANDBOX";
 
@@ -24,7 +24,7 @@ pub fn env_default_sandbox() -> Option<SandboxMode> {
 }
 
 /// Instance default, precedence `stored → env → default(Off)`. SINGLE source shared by
-/// the create-run chokepoint AND `build_settings_view`. See
+/// the create-run chokepoint AND the settings page (`instance_defaults`). See
 /// [`resolve_default_sandbox`].
 pub fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
     resolve_default_sandbox(stored, env_default_sandbox())

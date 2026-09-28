@@ -8,7 +8,7 @@ import { findHarnessOption, effortOffer } from "../harness/model/catalog";
 import HarnessSelect from "../harness/components/HarnessSelect";
 import ModelPicker from "../harness/components/ModelPicker";
 import EffortPicker from "../harness/components/EffortPicker";
-import { combinationLabel, resolveAgentChoice } from "../lib/agentProfiles";
+import { combinationLabel, resolveAgentChoice } from "../settings/model/agentProfiles";
 
 const EMPTY: AgentCombination = { harness: "claude", model: null, effort: null };
 

@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { InstanceSettings } from "../settings/model/settings";
-import type { UpdateStatus } from "../platform/model/update";
+import type { InstanceSettings } from "../model/settings";
+import type { UpdateStatus } from "../../platform/model/update";
 
 // #697 — Settings › General › Version & update. Every api function the surface (and the
 // panels it mounts) imports must exist in this factory: Vitest 4 wraps the module
@@ -13,7 +13,7 @@ const fetchUpdateStatusMock = vi.fn();
 const fetchUpdateAttemptLogMock = vi.fn();
 const checkForUpdateNowMock = vi.fn();
 
-vi.mock("../skill/api/bank", () => ({
+vi.mock("../../skill/api/bank", () => ({
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
   createSkill: vi.fn(),
   fetchSkill: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock("../skill/api/bank", () => ({
 }));
 
 // The staging-profile panel reads the sandbox context's own API module.
-vi.mock("../sandbox/api/profiles", () => ({
+vi.mock("../../sandbox/api/profiles", () => ({
   fetchSandboxProfiles: vi.fn().mockResolvedValue({ profiles: [], home: "/home/user" }),
   saveSandboxProfile: vi.fn(),
   deleteSandboxProfile: vi.fn(),
@@ -34,44 +34,42 @@ vi.mock("../sandbox/api/profiles", () => ({
 }));
 
 // #891: Settings › General › Stats absorptions reads the stats context's API.
-vi.mock("../stats/api/absorptions", () => ({
+vi.mock("../../stats/api/absorptions", () => ({
   fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
   uncombineStatsMember: vi.fn(),
 }));
 
-vi.mock("../api", () => ({
+vi.mock("../api/settings", () => ({
+  fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
+  updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
+}));
+vi.mock("../api/agentProfiles", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createAgentProfile: vi.fn(),
   updateAgentProfile: vi.fn(),
   deleteAgentProfile: vi.fn(),
   fetchAgentProfileReferents: vi.fn(),
-  fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
-  updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  ApiError: class ApiError extends Error {
-    status?: number;
-    body?: unknown;
-  },
 }));
-vi.mock("../platform/api/update", () => ({
+vi.mock("../../platform/api/update", () => ({
   fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
   applyUpdate: vi.fn(),
   fetchUpdateAttemptLog: (...args: unknown[]) => fetchUpdateAttemptLogMock(...args),
   checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
 }));
 
-vi.mock("../workspace/api/browse", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+vi.mock("../../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/browse")>()),
   browseFs: vi.fn(),
 }));
 
-vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/provisioning")>()),
   saveInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
 }));
 
 import SettingsSurface from "./SettingsSurface";
-import { UPDATE_STATUS_CHANGED } from "../platform/model/updateStatus";
+import { UPDATE_STATUS_CHANGED } from "../../platform/model/updateStatus";
 
 function settings(): InstanceSettings {
   return {

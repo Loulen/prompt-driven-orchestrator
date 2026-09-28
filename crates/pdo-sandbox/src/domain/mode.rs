@@ -51,7 +51,7 @@ impl SandboxMode {
     }
 
     /// The exact wire form: `off`, or the profile name verbatim. Consumed by
-    /// `build_settings_view` and the enum validators (#410).
+    /// the settings page's disclosure and the enum validators (#410).
     pub fn as_str(&self) -> &str {
         match self {
             SandboxMode::Off => Self::OFF_WIRE,

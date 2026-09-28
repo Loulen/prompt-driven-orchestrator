@@ -2,15 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AgentProfilesPanel from "./AgentProfilesPanel";
-import { createAgentProfile, updateAgentProfile } from "../api";
-import type { AgentProfile } from "../shared/generated/AgentProfile";
+import { createAgentProfile, updateAgentProfile } from "../api/agentProfiles";
+import type { AgentProfile } from "../../shared/generated/AgentProfile";
 
 // #798: the panel derives the effort offer from the SERVED catalogue via
 // `useHarnessCatalog` (→ `fetchSettings`). Two harnesses: `union` — the reported
 // regression pair, `union-alpha` supports ONLY `off` while `GPT5.4` supports the
 // full off..xhigh scale — and `claude` whose binary enumerates no catalogue at
 // all (unknown capabilities ⇒ pass-through).
-vi.mock("../api", () => ({
+vi.mock("../api/settings", () => ({
   fetchSettings: vi.fn().mockResolvedValue({
     harness_descriptors: {
       path: null,
@@ -43,6 +43,8 @@ vi.mock("../api", () => ({
       reason: null,
     },
   }),
+}));
+vi.mock("../api/agentProfiles", () => ({
   createAgentProfile: vi.fn().mockResolvedValue({}),
   updateAgentProfile: vi.fn().mockResolvedValue({}),
   deleteAgentProfile: vi.fn().mockResolvedValue({}),

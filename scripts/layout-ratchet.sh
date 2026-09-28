@@ -156,9 +156,14 @@ cd "$(git rev-parse --show-toplevel)"
 #   trigger_scheduler and trigger_store to crates/pdo-trigger (trigger_ports.rs, the trigger's
 #   port the legacy side implements, takes one slot back); TriggersListPanel,
 #   TriggerDetailPanel, their tests, GuardOutput and GuardTestResult to frontend/src/trigger/.
+# frontend/src/components: 109 and crates/pdo-daemon/src: 6 (#929, spec #913) ratchet down:
+#   the settings context moved out — instance_config and agent_profile to crates/pdo-settings
+#   (each context's instance defaults to its own crate), review_ports.rs and trigger_ports.rs
+#   gone with them; SettingsSurface (split by section), its tests, AgentProfilesPanel and its
+#   test, AgentProfileModal and settingsCategories to frontend/src/settings/.
 BASELINES='
-frontend/src/components 116
-crates/pdo-daemon/src 10
+frontend/src/components 109
+crates/pdo-daemon/src 6
 '
 
 fail=0

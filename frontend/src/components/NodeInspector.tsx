@@ -10,7 +10,7 @@ import OutputPortCard from "./OutputPortCard";
 import { NodeTypeIcon } from "./NodeTypeIcon";
 import PooledInputRow from "./PooledInputRow";
 import { useHarnessCatalog } from "../harness/store/useHarnessCatalog";
-import { useAgentProfiles } from "../hooks/useAgentProfiles";
+import { useAgentProfiles } from "../settings/store/useAgentProfiles";
 import AgentControl from "./AgentControl";
 import SkillSelector from "../skill/components/SkillSelector";
 import { useSkillBank } from "../skill/store/useSkillBank";

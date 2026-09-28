@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchSettings } from "../../api";
+import { fetchSettings } from "../../settings/api/settings";
 import { fetchProjects } from "../../workspace/api/projects";
 import type { Project } from "../../workspace/model/project";
 import type { SkillRef } from "../../shared/generated/SkillRef";

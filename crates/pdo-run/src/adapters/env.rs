@@ -19,7 +19,7 @@ pub fn env_cap() -> Option<usize> {
 }
 
 /// The configured global session cap, `stored → env → default`. The caller
-/// loads the stored value (from `instance_config`) and passes it in.
+/// loads the stored value (the settings context keeps it) and passes it in.
 pub fn configured_cap_with(stored: Option<usize>) -> usize {
     resolve_cap(stored, env_cap())
 }

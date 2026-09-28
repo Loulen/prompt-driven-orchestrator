@@ -1,23 +1,7 @@
-import type { InstanceSettings, AgentProfileReferents } from "./settings/model/settings";
-import type { UpdateSettingsRequest } from "./shared/generated/UpdateSettingsRequest";
-import type { AgentProfile } from "./shared/generated/AgentProfile";
-import type { AgentProfileInput } from "./shared/generated/AgentProfileInput";
-import { request } from "./shared/http/client";
-
-export function fetchSettings(): Promise<InstanceSettings> {
-  return request<InstanceSettings>("GET", "/settings");
-}
-
-/**
- * Persist one or more instance-config knobs and return the recomputed view
- * (#129, ADR-0015). Surfaces the daemon's fail-fast validation error (`400`)
- * verbatim so the modal can show it.
- */
-export function updateSettings(
-  patch: UpdateSettingsRequest,
-): Promise<InstanceSettings> {
-  return request<InstanceSettings>("PUT", "/settings", { body: patch });
-}
+import type { AgentProfile } from "../../shared/generated/AgentProfile";
+import type { AgentProfileInput } from "../../shared/generated/AgentProfileInput";
+import { request } from "../../shared/http/client";
+import type { AgentProfileReferents } from "../model/settings";
 
 export function fetchAgentProfiles(): Promise<{ profiles: AgentProfile[] }> {
   return request("GET", "/settings/agent-profiles");
@@ -44,6 +28,7 @@ export function deleteAgentProfile(id: string): Promise<void> {
   });
 }
 
+/** Who names the profile: the instance, the Projets, the Triggers, the pipelines' nodes. */
 export function fetchAgentProfileReferents(id: string): Promise<AgentProfileReferents> {
   return request(
     "GET",

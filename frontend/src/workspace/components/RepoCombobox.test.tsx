@@ -8,7 +8,9 @@ import { browseFs } from "../api/browse";
 // targets `/fs/browse`). Rewiring the mock factory + the fixture's new required
 // `is_dir` field is the ONLY change here: every ASSERTION below is frozen, because
 // this file is the non-regression net for the `FsExplorerModal` extraction.
-vi.mock("../../api", () => ({}));
+vi.mock("../../settings/api/settings", () => ({}));
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
 
 vi.mock("../api/browse", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/browse")>()),

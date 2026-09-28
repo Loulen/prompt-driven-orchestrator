@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import MergeInspector from "./MergeInspector";
-import { fetchSettings } from "../api";
+import { fetchSettings } from "../settings/api/settings";
 import { useEditStore } from "../pipeline/store/editStore";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
@@ -10,7 +10,7 @@ import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipelin
 // (correctif 9), so it fetches the served catalogue via `useHarnessCatalog`. Mock
 // `/settings` with claude serving models + efforts so its (unpinned → claude floor)
 // pickers render their dropdowns.
-vi.mock("../api", () => ({
+vi.mock("../settings/api/settings", () => ({
   fetchSettings: vi.fn().mockResolvedValue({
     harness_descriptors: {
       path: null,
@@ -46,6 +46,8 @@ vi.mock("../api", () => ({
     },
   }),
 }));
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
 
 function makeMergeNode(overrides?: Partial<EditorNodeDef>): EditorNodeDef {
   return {

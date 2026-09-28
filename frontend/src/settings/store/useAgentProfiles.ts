@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchAgentProfiles } from "../api";
-import type { AgentProfile } from "../shared/generated/AgentProfile";
+import { fetchAgentProfiles } from "../api/agentProfiles";
+import type { AgentProfile } from "../../shared/generated/AgentProfile";
 
 export const AGENT_PROFILES_CHANGED = "pdo:agent-profiles-changed";
 

@@ -35,8 +35,8 @@ const {
   fetchSourceDrift: vi.fn(),
   fetchRemotes: vi.fn(),
 }));
-vi.mock("../../api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../api")>();
+vi.mock("../../settings/api/settings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../settings/api/settings")>();
   return {
     ...actual,
     fetchPipelineDocument,
@@ -46,25 +46,27 @@ vi.mock("../../api", async (importOriginal) => {
     stopRunManager,
     fetchSourceDrift,};
 });
-// The run context's API answers with the mock of `../../api`.
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../../run/api/manager", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
-// The run context's API answers with the mock of `../../api`.
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../../run/api/runPipeline", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
-// The run context's API answers with the mock of `../../api`.
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../../run/api/runs", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../api/document", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 
 vi.mock("../../session/api/assistant", () => ({

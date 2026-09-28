@@ -7,7 +7,6 @@ frontend/src/app/App.tsx 1216
 frontend/src/components/EdgeDetailPanel.tsx 777
 frontend/src/components/NodeInspector.tsx 958
 frontend/src/components/OrthogonalEdge.tsx 577
-frontend/src/components/SettingsSurface.tsx 2116
 frontend/src/components/editNodeDerivation.ts 675
 frontend/src/components/tour/TourCards.tsx 464
 frontend/src/hooks/useTour.ts 658

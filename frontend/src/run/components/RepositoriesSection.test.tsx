@@ -8,7 +8,7 @@ import { editRunRepos } from "../api/createRun";
 import { fetchSourceDrift } from "../api/runs";
 import { validateRepo, listBranches } from "../../workspace/api/repos";
 
-vi.mock("../../api", () => ({
+vi.mock("../../settings/api/settings", () => ({
   editRunRepos: vi.fn(async () => ({ kind: "ok", run: {} as RunState })),
   // #803: the primary row carries the Run's drift. Unreadable by default, so the
   // tests that predate it see the row exactly as they did.
@@ -16,15 +16,17 @@ vi.mock("../../api", () => ({
     throw new Error("no drift in this test");
   }),
 }));
-// The run context's API answers with the mock of `../../api`.
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../api/createRun", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
-// The run context's API answers with the mock of `../../api`.
+// The run context's API answers with the mock of `../../settings/api/settings`.
 vi.mock("../api/runs", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../../api")),
+  ...(await import("../../settings/api/settings")),
 }));
 
 vi.mock("../../workspace/api/repos", async (importOriginal) => ({

@@ -7,7 +7,7 @@ import { useEditStore } from "../pipeline/store/editStore";
 import { TooltipProvider } from "../shared/ui/tooltip";
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
-vi.mock("../api", () => ({
+vi.mock("../settings/api/settings", () => ({
   fetchLibrary: vi.fn().mockResolvedValue([]),
   fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline", scope: "repo" }),
@@ -19,23 +19,25 @@ vi.mock("../api", () => ({
   fetchPipelines: vi.fn().mockResolvedValue([]),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
 }));
-// The run context's API answers with the mock of `../api`.
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The run context's API answers with the mock of `../settings/api/settings`.
 vi.mock("../run/api/runPipeline", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
-// The pipeline context's API answers with the mock of `../api` above.
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
 vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../pipeline/api/library", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  ...(await import("../api")),
+  ...(await import("../settings/api/settings")),
 }));
 
 const mockSaveLib = vi.mocked(saveLibraryPipeline);

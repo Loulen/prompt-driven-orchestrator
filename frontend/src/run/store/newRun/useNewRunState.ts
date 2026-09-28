@@ -3,7 +3,7 @@ import type { InstanceSettings } from "../../../settings/model/settings";
 import type { TestGuardResponse } from "../../../trigger/api/guard";
 import { useRecentReposStore } from "../../../stores/recentReposStore";
 import type { SecondaryRepo } from "../../components/SecondaryRepoRow";
-import { useAgentProfiles } from "../../../hooks/useAgentProfiles";
+import { useAgentProfiles } from "../../../settings/store/useAgentProfiles";
 import { useSkillBank } from "../../../skill/store/useSkillBank";
 import { useSkillTiers } from "../../../skill/store/useSkillTiers";
 import type { AgentChoice } from "../../../shared/generated/AgentChoice";

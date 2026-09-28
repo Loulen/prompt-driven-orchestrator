@@ -1,0 +1,251 @@
+/**
+ * The second half of the *First pipeline* tour (#823): the tester node, its
+ * verdict and screenshot outputs, the loop that wires it back to the implementer
+ * and on to End, then save and keep-or-delete. Pure data, spliced after the
+ * first half in `firstPipeline.ts`; the copy rules there apply here too.
+ */
+
+import type { TourStep } from "../tourDef";
+import {
+  ADD_MENU_NODE,
+  DELETE_CONFIRM,
+  NAME_INPUT,
+  OUT_PORT,
+  PROMPT_INPUT,
+  agent,
+  agents,
+  carryOutEdgeStep,
+  conditionStep,
+  cssEscape,
+  edgeIndex,
+  edgeSel,
+  edgeSelected,
+  endNode,
+  filled,
+  nodeSel,
+  outputSlot,
+  selected,
+} from "./firstPipelineReading";
+
+const TESTER_PROMPT = `Review the implementer's change and exercise the feature yourself.
+Put verdict: pass in your output's frontmatter when it holds up, verdict: fail otherwise, and attach an annotated screenshot.`;
+
+const TESTER_OUT = "A short verdict, and what failed if anything did";
+const TESTER_SHOT = "Annotated screenshot of the feature";
+
+export const TESTER_STEPS: TourStep[] = [
+  {
+    id: "open-add-menu-2",
+    title: "Add the second node",
+    body: "Open the + menu again. The tester is a second agent, not a second job for the first one.",
+    target: () => ['[data-testid="toolbar-add"]'],
+    waitingFor: "the canvas toolbar",
+    done: (o) => o.present(ADD_MENU_NODE),
+  },
+  {
+    id: "choose-node-2",
+    title: "Choose Node again",
+    body: "Pick Node. A second agent card lands on the canvas.",
+    target: () => [ADD_MENU_NODE],
+    waitingFor: "the Node entry of the Add menu",
+    soft: true,
+    done: (o) => agents(o.app).length >= 2,
+  },
+  {
+    id: "select-tester",
+    title: "Select the second node",
+    body: "Click the new card so the inspector follows it. Both cards look alike until you name them.",
+    target: (o) => nodeSel(agent(o.app, 1)),
+    waitingFor: "the second node on the canvas",
+    done: (o) => selected(o.app, agent(o.app, 1)),
+  },
+  {
+    id: "name-tester",
+    title: "Name it tester",
+    body: "Replace the name with the block below, then press Next. A node's name is how edges and conditions refer to it.",
+    target: () => [NAME_INPUT],
+    waitingFor: "the Name field of the selected node",
+    failureHint: "This usually means the node was deselected or the pane was closed.",
+    copyBlock: "tester",
+    confirm: true,
+    done: (o) => (o.value(NAME_INPUT) ?? "").trim() === "tester",
+  },
+  {
+    id: "tester-interactive",
+    title: "Make the tester interactive too",
+    body: "Turn on Interactive. It cannot complete until you release it, and it will wait on your answers along the way.",
+    target: () => ['[data-testid="node-interactive-toggle"]'],
+    waitingFor: "the Interactive toggle",
+    done: (o) => agent(o.app, 1)?.interactive === true,
+  },
+  {
+    id: "tester-worktree",
+    title: "Leave it in an isolated worktree",
+    body: "An isolated worktree gives this node its own copy of the repo, so the tester reads the change instead of sitting in the middle of it. That is already the default for a new agent — compare it with the implementer you just moved.",
+    target: () => ['[data-testid="workspace-isolated"]'],
+    waitingFor: "the Workspace choice",
+    done: (o) => agent(o.app, 1)?.isolated_worktree === true,
+  },
+  {
+    id: "tester-prompt",
+    title: "Give the tester its prompt",
+    body: "Paste the block below into Prompt. It asks for a verdict and a screenshot — the two things the rest of the graph reads.",
+    target: () => [PROMPT_INPUT],
+    waitingFor: "the Prompt field of the selected node",
+    failureHint: "This usually means the node was deselected or the pane was closed.",
+    copyBlock: TESTER_PROMPT,
+    confirm: true,
+    done: (o) => filled(o, PROMPT_INPUT),
+  },
+  {
+    id: "tester-out",
+    title: "Say what the tester's out must contain",
+    body: "Open Expected content on out and paste the block below. Same contract as the implementer's, different job.",
+    target: () => [outputSlot(0)],
+    waitingFor: "the out output of the tester",
+    copyBlock: TESTER_OUT,
+    confirm: true,
+    done: (o) => !!agent(o.app, 1)?.outputs[0]?.instructions?.trim(),
+  },
+  {
+    id: "tester-verdict",
+    title: "Declare the verdict field",
+    body: "Add a field named verdict, set its type to enum, and allow pass and fail. Edges read this frontmatter to decide where the Run goes next.",
+    target: () => [`${outputSlot(0)} [data-testid="output-schema-editor"]`],
+    waitingFor: "the output schema editor",
+    done: (o) => {
+      const decl = agent(o.app, 1)?.outputs[0]?.frontmatter?.verdict;
+      const allowed = decl?.allowed ?? [];
+      return decl?.type === "enum" && allowed.includes("pass") && allowed.includes("fail");
+    },
+  },
+  {
+    id: "add-image-port",
+    title: "Add a second output",
+    body: "Click + Add on Outputs. One port per kind of thing a node produces — the screenshot is not the verdict.",
+    target: () => ['[data-testid="add-output-port"]'],
+    waitingFor: "the Outputs section of the inspector",
+    done: (o) => (agent(o.app, 1)?.outputs.length ?? 0) >= 2,
+  },
+  {
+    id: "name-image-port",
+    title: "Name it image_list and set its type",
+    body: "Rename the new port to image_list and pick Image List as its Type. A typed port is what lets the UI show the screenshots instead of a path.",
+    target: () => [outputSlot(1)],
+    waitingFor: "the second output of the tester",
+    copyBlock: "image_list",
+    done: (o) => {
+      const port = agent(o.app, 1)?.outputs[1];
+      return port?.name === "image_list" && port?.port_type === "image_list";
+    },
+  },
+  {
+    id: "image-port-expected",
+    title: "Say what the screenshot must show",
+    body: "Open Expected content on image_list and paste the block below. Without it the agent guesses what to capture.",
+    target: () => [outputSlot(1)],
+    waitingFor: "the second output of the tester",
+    copyBlock: TESTER_SHOT,
+    confirm: true,
+    done: (o) => !!agent(o.app, 1)?.outputs[1]?.instructions?.trim(),
+  },
+  {
+    id: "edge-implementer-tester",
+    title: "Connect implementer to tester",
+    // #846 — there is no output dot any more (#844, ADR-0071): the whole border
+    // of a card is the drag-source. The card is the target, rim included, so
+    // the hole lights the very strip the press has to land on.
+    body: "Press anywhere on the border of the implementer's card — it glows amber — and drag onto tester. The edge is the hand-off: when the first finishes, the second starts.",
+    target: (o) => [...nodeSel(agent(o.app, 0)), ...nodeSel(agent(o.app, 1))],
+    waitingFor: "the two agent cards",
+    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 0), agent(o.app, 1)) >= 0,
+  },
+  carryOutEdgeStep({
+    id: "edge-tester-implementer",
+    title: "Draw the way back",
+    to: (app) => agent(app, 0),
+    body: "Now press on the border of the tester's card and drag onto implementer. That second edge is what makes this a loop rather than a line.",
+    // The tester grew a second output a few steps ago. A new edge carries the
+    // FIRST declared one (ADR-0073), which is `out`; an edge carrying only
+    // `image_list` would leave the next condition no verdict to read (#825).
+    note: "A new edge carries the tester's first output, out — not image_list, the screenshot, which has no verdict to route on.",
+    waitingFor: "the two agent cards",
+  }),
+  {
+    id: "select-loop-edge",
+    title: "Select the edge back to implementer",
+    body: (o) =>
+      edgeSelected(o.app, agent(o.app, 0))
+        ? "The edge is already selected, since you just fixed its outputs. Its inspector on the right is where a condition is authored."
+        : "Click the edge you just drew. Its inspector opens on the right, where a condition is authored.",
+    target: (o) => edgeSel(o.app, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
+    waitingFor: "the tester → implementer edge",
+    done: (o) => edgeSelected(o.app, agent(o.app, 0)),
+  },
+  conditionStep({
+    id: "loop-condition",
+    title: "Only loop back on a failure",
+    to: (app) => agent(app, 0),
+    value: "fail",
+    why: "The edge now fires only when the tester's frontmatter says the change did not hold up.",
+  }),
+  carryOutEdgeStep({
+    id: "edge-tester-end",
+    title: "Connect tester to End",
+    to: endNode,
+    body: "Press on the border of the tester's card again and drag onto the End marker. End is where a Run stops, and it needs a route in.",
+    // Same two outputs, same consequence: the `verdict eq pass` of the next
+    // step can only be written on an edge that carries the verdict (#825).
+    note: "Again the edge carries out, the first output: the condition below it reads the verdict in out's frontmatter.",
+    waitingFor: "the tester card and the End marker",
+  }),
+  {
+    id: "select-end-edge",
+    title: "Select the edge to End",
+    body: (o) =>
+      edgeSelected(o.app, endNode(o.app))
+        ? "The edge is already selected, since you just fixed its outputs. Same inspector, one more condition to write."
+        : "Click that last edge. Same inspector, one more condition to write.",
+    target: (o) => edgeSel(o.app, agent(o.app, 1), endNode(o.app), OUT_PORT),
+    waitingFor: "the tester → End edge",
+    done: (o) => edgeSelected(o.app, endNode(o.app)),
+  },
+  conditionStep({
+    id: "end-condition",
+    title: "Finish only on a pass",
+    to: endNode,
+    value: "pass",
+    why: "Both routes out of the tester are now explicit: pass ends the Run, fail sends it round again.",
+  }),
+  {
+    id: "save",
+    title: "Save the pipeline",
+    body: "Click Save. Until you do, all of this lives only in this browser tab.",
+    target: () => ['[data-testid="save-button"]'],
+    waitingFor: "the Save button",
+    // Not skippable: everything after this reads the saved file.
+    done: (o) => !o.app.dirty && !!o.app.pipelineId && o.app.libraryPipelineIds.includes(o.app.pipelineId),
+  },
+  {
+    id: "keep-or-delete",
+    title: "Keep it, or delete it",
+    // Two beats, one card: the trash, then the confirmation it opens.
+    body: (o) =>
+      o.present(DELETE_CONFIRM)
+        ? "Delete removes the YAML and its prompt files from disk, for good. Cancel leaves the row alone, and Skip ends the tour without deleting anything."
+        : "The row is yours now: open it again later, or use its trash to remove it. Skip keeps it.",
+    // Re-aims onto the confirmation, the way `open-output` re-aims onto the
+    // artifact. Without it the card instructs a click it then prevents: the
+    // dialog is drawn centred, outside the hole, and both of its buttons come
+    // back as the projecteur's blocker (FP finding, #825).
+    target: (o) => {
+      if (o.present(DELETE_CONFIRM)) return [DELETE_CONFIRM];
+      return o.app.pipelineId
+        ? [`[data-testid="library-row-${cssEscape(o.app.pipelineId)}"]`]
+        : [];
+    },
+    waitingFor: "the pipeline's row in the Library",
+    skippable: true,
+    done: (o) => !!o.app.pipelineId && !o.app.libraryPipelineIds.includes(o.app.pipelineId),
+  },
+];

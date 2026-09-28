@@ -120,8 +120,9 @@ test("offers remote branches grouped, defaults local, launches one verbatim", as
   await expect(picker).toBeVisible();
 
   // Two groups: Local (main, local-branch) and Remote (origin/feature-remote-only).
-  await expect(picker.getByText("Local", { exact: true })).toHaveCount(1);
-  await expect(picker.getByText("Remote", { exact: true })).toHaveCount(1);
+  // Each group header reads its label and its count ("Local 2").
+  await expect(picker.getByText(/^Local\s*\d+$/)).toHaveCount(1);
+  await expect(picker.getByText(/^Remote\s*\d+$/)).toHaveCount(1);
   const option = (name: string) =>
     picker.locator(`[data-testid="source-branch-option"][data-branch="${name}"]`);
   await expect(option("main")).toHaveCount(1);

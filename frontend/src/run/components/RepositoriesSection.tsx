@@ -4,7 +4,7 @@ import type { RunState } from "../../shared/generated/RunState";
 import { editRunRepos } from "../api/createRun";
 import { useRecentReposStore } from "../../stores/recentReposStore";
 import SecondaryRepoRow, { type SecondaryRepo } from "./SecondaryRepoRow";
-import { SourceDriftChip } from "../../components/InspectorPrimitives";
+import { SourceDriftChip } from "../../pipeline/components/InspectorPrimitives";
 import { useSourceDrift } from "../store/useSourceDrift";
 
 /** A Run is editable (its repo list can change) exactly while it is live — the same

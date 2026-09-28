@@ -494,7 +494,7 @@ async fn the_bank_survives_a_daemon_restart() {
     // so a fresh daemon over the same directory sees the same bank. Two daemons
     // are booted in turn over ONE tempdir with `serve_with_config` directly (the
     // `TestDaemon` constructors each own a fresh tempdir).
-    use pdo_daemon::{serve_with_config, DaemonConfig};
+    use pdo::{serve_with_config, DaemonConfig};
     use std::net::SocketAddr;
 
     let tempdir = tempfile::tempdir().unwrap();

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { Components } from "react-markdown";
 import type { Element } from "hast";
-import MermaidDiagram from "../../../components/MermaidDiagram";
+import MermaidDiagram from "../../../shared/ui/MermaidDiagram";
 
 /**
  * The markdown overrides of the artifact viewer: external links open a new tab,

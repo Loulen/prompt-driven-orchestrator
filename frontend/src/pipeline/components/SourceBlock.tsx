@@ -3,7 +3,7 @@
  */
 
 import { RefreshCw } from "lucide-react";
-import { SourceDriftChip } from "../../components/InspectorPrimitives";
+import { SourceDriftChip } from "./InspectorPrimitives";
 import { useSourceDrift } from "../../run/store/useSourceDrift";
 import type { RunState } from "../../shared/generated/RunState";
 import { shortAge } from "../../workspace/model/branchSelect";

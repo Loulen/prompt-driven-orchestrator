@@ -10,8 +10,8 @@
 //!
 //! - **the routes**: the `.route("<path>", <method router>)` calls of every
 //!   context router the daemon merges, each top-level `get(`/`post(`/`put(`/
-//!   `patch(`/`delete(` of the method router being one route. When the
-//!   migration moves the router, point [`ROUTER_SOURCES`] at its new home.
+//!   `patch(`/`delete(` of the method router being one route. When a router
+//!   moves, point [`ROUTER_SOURCES`] at its new home.
 //! - **the calls**: every string literal of `tests/**/*.rs` that reads as a URL
 //!   path (`"/runs"`, `"{}/runs/{run_id}/refs"`, `"ws://{}/ws"`, …) is matched to
 //!   the most specific route template, and its HTTP method is read from the call
@@ -27,10 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The files holding the assembled router (relative to this crate), and the
-/// function that builds each part: the router of every bounded context (merged
-/// by the legacy router or by the composition root). The legacy crate's own
-/// router declares no route any more since the settings context moved out
-/// (#929): it only serves the SPA and merges the contexts it still wires.
+/// function that builds each part: the router of every bounded context, which
+/// the composition root merges (`src/contexts/mod.rs`) in front of the SPA.
 const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("../pdo-sandbox/src/adapters/http/mod.rs", "pub fn router("),
     (

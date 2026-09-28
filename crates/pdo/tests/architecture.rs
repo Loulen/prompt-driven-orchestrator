@@ -163,6 +163,34 @@ fn context_crates() -> Vec<PathBuf> {
     crates
 }
 
+/// The twelve bounded contexts of the context map (ADR-0079).
+const CONTEXTS: [&str; 12] = [
+    "pdo-harness",
+    "pdo-pipeline",
+    "pdo-platform",
+    "pdo-review",
+    "pdo-run",
+    "pdo-sandbox",
+    "pdo-session",
+    "pdo-settings",
+    "pdo-skill",
+    "pdo-stats",
+    "pdo-trigger",
+    "pdo-workspace",
+];
+
+#[test]
+fn the_architecture_test_covers_the_twelve_context_crates() {
+    let covered: Vec<String> = context_crates()
+        .iter()
+        .map(|c| c.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        covered, CONTEXTS,
+        "every bounded context is a crate with a src/domain/, and only they are"
+    );
+}
+
 #[test]
 fn no_context_domain_imports_anything_technical() {
     let violations: Vec<String> = context_crates()

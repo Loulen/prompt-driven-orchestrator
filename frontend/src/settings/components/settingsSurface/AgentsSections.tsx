@@ -5,7 +5,7 @@
  */
 
 import { FileText } from "lucide-react";
-import AgentControl from "../../../components/AgentControl";
+import AgentControl from "../AgentControl";
 import HarnessSelect from "../../../harness/components/HarnessSelect";
 import ModelPicker from "../../../harness/components/ModelPicker";
 import { findHarnessOption, type HarnessCatalog } from "../../../harness/model/catalog";

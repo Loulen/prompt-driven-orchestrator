@@ -1,9 +1,8 @@
 [workspace]
 resolver = "2"
 # Modular monolith (ADR-0079): `pdo-extension-api` is the public contract,
-# `pdo-kernel` the shared kernel, `pdo` the composition root (the distributed
-# `pdo` binary), and `pdo-daemon` the legacy crate every bounded context is
-# strangled out of, one crate at a time.
+# `pdo-kernel` the shared kernel, one crate per bounded context, and `pdo` the
+# composition root (the distributed `pdo` binary).
 members = [
   "crates/pdo-extension-api",
   "crates/pdo-kernel",
@@ -19,13 +18,12 @@ members = [
   "crates/pdo-stats",
   "crates/pdo-review",
   "crates/pdo-settings",
-  "crates/pdo-daemon",
   "crates/pdo",
 ]
 
 [workspace.package]
 edition = "2021"
-version = "1.112.0"
+version = "1.112.1"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -61,7 +59,6 @@ notify = { version = "7", features = ["macos_fsevent"] }
 notify-debouncer-mini = "0.5"
 portable-pty = "0.8"
 pretty_assertions = "1"
-insta = { version = "1", features = ["yaml", "json"] }
 tempfile = "3"
 sha2 = "0.10"
 ignore = "0.4"
@@ -84,11 +81,6 @@ pdo-trigger = { path = "crates/pdo-trigger" }
 pdo-stats = { path = "crates/pdo-stats" }
 pdo-review = { path = "crates/pdo-review" }
 pdo-settings = { path = "crates/pdo-settings" }
-# The legacy crate keeps its library name `pdo_daemon` (so `RUST_LOG=pdo_daemon::…`
-# targets and every `use pdo_daemon::` stay valid) under the package name
-# `pdo-legacy`: the package name `pdo-daemon` belongs to the composition root,
-# because dist derives the installer name from it (see crates/pdo/Cargo.toml).
-pdo-legacy = { path = "crates/pdo-daemon" }
 
 # --- Release packaging (dist / ex-cargo-dist) -------------------------------
 # `dist` génère .github/workflows/release.yml à partir de cette config (voir
@@ -117,7 +109,7 @@ publish-jobs = ["homebrew"]
 # de renommer le package Cargo — chantier à part.)
 formula = "pdo"
 # Étapes injectées AVANT `dist build` : Node + `pnpm install` dans frontend/, car le
-# build.rs de pdo-daemon lance `pnpm run build` pendant `cargo build` (rust-embed).
+# build.rs de pdo-daemon (crates/pdo/build.rs) lance `pnpm run build` pendant `cargo build` (rust-embed).
 github-build-setup = "../build-setup.yml"
 # Parité avec l'unité systemd/launchd (`pdo service install` lit current_exe) et
 # avec l'ancien install.sh : binaire dans ~/.local/bin.

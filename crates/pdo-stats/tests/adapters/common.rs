@@ -26,7 +26,7 @@ use pdo_stats::{Stats, StatsOptions, StatsPorts};
 use pdo_workspace::domain::project::Project;
 
 /// The Triggers' two tables, as far as the fires go: the trigger context owns
-/// the real ones (the legacy crate tests its adapter against them).
+/// the real ones (the composition root tests its adapter against them).
 const TRIGGER_TABLES: [&str; 2] = [
     "CREATE TABLE triggers (id TEXT PRIMARY KEY, name TEXT NOT NULL, \
      pipeline_id TEXT NOT NULL, cron TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, \

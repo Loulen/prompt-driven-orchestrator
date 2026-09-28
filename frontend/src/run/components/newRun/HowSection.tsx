@@ -1,4 +1,4 @@
-import AgentControl from "../../../components/AgentControl";
+import AgentControl from "../../../settings/components/AgentControl";
 import HarnessSelect from "../../../harness/components/HarnessSelect";
 import SkillSelector from "../../../skill/components/SkillSelector";
 import PipelineSelect from "./PipelineSelect";

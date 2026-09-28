@@ -287,7 +287,7 @@ async fn nested_daemon_skips_orphan_sweep_and_reaper() {
     // process-global `PDO_DAEMON_NO_CLEANUP` mid-`spawn` would arm this daemon's
     // reaper and delete the very orphan the assertion below expects to survive.
     // The env → posture mapping is pinned separately and purely by
-    // `pdo_daemon`'s `nested_daemon_from` unit tests.
+    // the composition root's `nested_daemon_from` unit tests (`crates/pdo/src/daemon/env.rs`).
     let daemon = TestDaemon::spawn_nested(seed).await.unwrap();
     let socket = daemon.tmux_socket();
 

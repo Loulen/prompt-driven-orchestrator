@@ -6,8 +6,16 @@
 //!   a `PUT /settings` takes effect without a restart.
 //! - here: what the settings context reads of the others, behind its own
 //!   ports — the staging profiles, the version check, who names a profile.
+//! - who names a skill or a staging profile, for the skill and sandbox
+//!   contexts: the tiers that name them (instance, Projets, Triggers,
+//!   pipelines, Runs) live downstream of both, and the settings context reads
+//!   them all. So does the Projet tier of the agentic profile and of the skills
+//!   (`project_tiers`), which the workspace stores opaque.
 
+mod project_tiers;
 mod referents;
+mod sandbox_referents;
+mod skill_referents;
 mod upstream;
 
 use std::sync::Arc;
@@ -15,7 +23,10 @@ use std::sync::Arc;
 use pdo_platform::Platform;
 use pdo_sandbox::application::ports::SandboxProfileRepository;
 
+pub use project_tiers::{project_skills, ProjectTiers};
 pub use referents::ContextReferents;
+pub use sandbox_referents::SandboxTierReferents;
+pub use skill_referents::SkillTierReferents;
 pub use upstream::{
     RunInstanceSettings, SettingsOfReview, SettingsOfTriggers, UpdateCheckOfPlatform,
 };

@@ -1,7 +1,7 @@
 import { Pause, RotateCcw, Trash2 } from "lucide-react";
 import { cleanupRun, pauseRun, retryAll } from "../../api/commands";
-import BulkActionBar from "../../../components/BulkActionBar";
-import BulkActionModal from "../../../components/BulkActionModal";
+import BulkActionBar from "../../../pipeline/components/BulkActionBar";
+import BulkActionModal from "../../../pipeline/components/BulkActionModal";
 import { cleanupTitle } from "./runsListTables";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 

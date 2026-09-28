@@ -3,16 +3,16 @@
  * out of `stores/editStore.ts`). Pure: no store, no React, no network — the only
  * dependency is `../types`.
  *
- * Two emitters share one hand-rolled dumper:
+ * Two emitters share one hand-rolled dumper (`yamlDump.ts`):
  *  - `pipelineToYamlObject` / `serializePipeline` — the bytes written to
  *    `.pdo/pipelines/<id>.yaml`, and both sides of the library synced/diverged
  *    comparison (see `hooks/useLibraryPipelines`).
- *  - `exportNodeAsYaml` (#345) — the node-library entry shape.
+ *  - `exportNodeAsYaml` (#345, `exportNodeYaml.ts`) — the node-library entry shape.
  *
  * CROSS-LANGUAGE CONTRACT, enforced by nothing. Everything this module emits is
  * parsed by the daemon's serde-derived reader (`pipeline::parse_pipeline`, key
- * allow-list `KNOWN_TOP_LEVEL_KEYS` in `crates/pdo-daemon/src/pipeline.rs`), and
- * `exportNodeAsYaml`'s output must match `library_store::LibraryEntry`
+ * allow-list `KNOWN_TOP_LEVEL_KEYS` in `crates/pdo-pipeline/src/domain/pipeline/`), and
+ * `exportNodeAsYaml`'s output must match `pdo_pipeline::domain::library::LibraryEntry`
  * field-for-field including its omit-when-default policy. No test crosses that
  * boundary: `tests/serializer_round_trip.rs` exercises the daemon's own emitter,
  * not this one. #352 is what the gap costs — a dropped `max_iter` made the daemon
@@ -20,16 +20,15 @@
  * the Rust reader.
  *
  * The two per-port emitters are DELIBERATELY divergent — do not unify them, see
- * the comment on `portToYamlObject`.
+ * the comment on `portToYamlObject` (`exportNodeYaml.ts`).
  */
-import type { PortDef } from "../shared/generated/PortDef";
-import type { PortSide } from "../shared/generated/PortSide";
 import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
 import { foldNodeIntoHarnesses } from "../harness/model/nodeHarness";
 import { nodeIsolation } from "./nodeIsolation";
 import { hasProvisioningRules } from "../workspace/model/provisioning";
-import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
+import { yamlStringify } from "./yamlDump";
 
 /**
  * Drops the null-valued keys of every frontmatter declaration (#457).
@@ -49,7 +48,7 @@ import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipelin
  * Every one of the three frontmatter emit sites goes through here. Add a fourth
  * and it must too.
  */
-function frontmatterToYamlObject(
+export function frontmatterToYamlObject(
   frontmatter: Record<string, FrontmatterFieldDecl>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -270,197 +269,4 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
 
 export function serializePipeline(p: EditorPipelineDef): string {
   return yamlStringify(pipelineToYamlObject(p));
-}
-
-// Serialize one authored port to the node-library YAML shape (#345), mirroring
-// `pipelineToYamlObject`'s per-port emit: `name` always; the rest only when
-// non-default so a plain port stays a clean `- name: x`. `side` is omitted when
-// it equals the direction's default (left for inputs, right for outputs) — the
-// value the daemon/`libraryPortToPortDef` re-fill on import, so it round-trips
-// by absence.
-// NOT a duplicate of the inline per-port emit in `pipelineToYamlObject` above:
-// that one emits `side` whenever set and `when` on outputs only; this one omits
-// `side` when it equals the direction default (the value the daemon refills on
-// import, so it round-trips by absence) and emits `when` on both directions.
-// Unifying them strips `side:` from every pipeline file and flips every library
-// star to `diverged`. #355 makes `side` SEMANTIC.
-function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, unknown> {
-  const p: Record<string, unknown> = { name: port.name };
-  if (port.repeated) p.repeated = true;
-  if (port.required) p.required = true;
-  if (port.side && port.side !== defaultSide) p.side = port.side;
-  if (port.port_type && port.port_type !== "markdown") p.port_type = port.port_type;
-  if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
-  if (port.when) p.when = port.when;
-  if (port.instructions?.trim()) p.instructions = port.instructions;
-  return p;
-}
-
-// Emit a prompt as a YAML block scalar (#345) — the readable, copy-pasteable
-// form the issue asks for. NOT via `dumpYaml`: that JSON-escapes any multi-line
-// string onto a single illegible line (see the string branch of `dumpYaml`).
-//
-// An explicit indentation indicator (`|2` / `|2-`) fixes the block indent at 2
-// regardless of the prompt's own leading whitespace — without it, a first line
-// more-indented than a later one would make YAML end the block early and
-// misparse the rest. The chomping indicator preserves the exact trailing
-// newline: `|2-` (strip) when the prompt has none, `|2` (clip) keeps exactly
-// one when it does — and clip only keeps a newline the source physically ends
-// in, so we emit that newline below. An import→export round-trip is thus
-// byte-stable. Empty prompt → `prompt: ""` (a block scalar cannot express the
-// empty string).
-function promptToBlockScalar(prompt: string): string {
-  if (prompt === "") return 'prompt: ""';
-  const hasTrailingNewline = prompt.endsWith("\n");
-  const body = hasTrailingNewline ? prompt.slice(0, -1) : prompt;
-  const indicator = hasTrailingNewline ? "|2" : "|2-";
-  const indented = body
-    .split("\n")
-    .map((line) => (line.length > 0 ? `  ${line}` : ""))
-    .join("\n");
-  // Clip (`|2`) only keeps a trailing newline that physically ends the source,
-  // so emit that newline when the prompt has one; strip (`|2-`) needs none.
-  // Without this the `\n` is silently dropped and the round-trip diverges (the
-  // stripped node then re-exports as `|2-`), so the two indicators are a no-op.
-  return `prompt: ${indicator}\n${indented}${hasTrailingNewline ? "\n" : ""}`;
-}
-
-/**
- * Serialize a single node to the node-library YAML shape (#345): the same map a
- * `~/.pdo/library/*.yaml` file carries, so the output is directly re-importable
- * via `Add node from YAML…` and an actual library file exports/imports the same
- * way. Structural fields go through `dumpYaml`; the prompt is appended by hand
- * as a block scalar (see `promptToBlockScalar`).
- *
- * NEVER emits `id` (regenerated on add), `view` (re-centred), edges (they live
- * at pipeline level), or `over` (a region driver, not a node field). Legacy
- * `max_iter` (bounded-loop nodes) is emitted only when present.
- *
- * #616 (correctif 7): the harness axis round-trips like the pipeline emitter — the
- * `pin_harness` and the per-harness `harnesses` map, NOT a flat `model:`/`effort:`.
- * Flat keys re-homed the value onto the RESOLVED harness on reimport, which is
- * `claude` for an unpinned node — so a node pinned on another harness silently lost
- * its settings onto claude on the round-trip. Emitting the pin and the map preserves
- * both. This emitter and `pipelineToYamlObject` must stay in lockstep (see the note
- * on that function): a harness field added there must be added here too.
- */
-export function exportNodeAsYaml(node: EditorNodeDef, prompt: string): string {
-  const obj: Record<string, unknown> = {
-    name: node.name ?? "",
-    type: node.type,
-  };
-  if (node.interactive) obj.interactive = true;
-  // #653: same unconditional emit as `pipelineToYamlObject` — an exported node
-  // carries its worktree placement, so a re-import does not re-guess it.
-  const isolation = nodeIsolation(node);
-  if (isolation !== null) obj.isolated_worktree = isolation;
-  // #723/ADR-0064: same conditional emit as `pipelineToYamlObject` — the
-  // « Orchestrator » toggle travels with an exported node.
-  if (node.orchestrator) obj.orchestrator = true;
-  if (node.auto_fail !== undefined && node.auto_fail !== null) obj.auto_fail = node.auto_fail;
-  if (node.pin_harness) obj.pin_harness = node.pin_harness;
-  if (node.agent_choice && node.agent_choice.mode !== "inherit") {
-    obj.agent_choice = node.agent_choice;
-  }
-  if (node.skills && node.skills.length > 0) {
-    obj.skills = node.skills.map((skill) => ({ id: skill.id, name: skill.name }));
-  }
-  const harnesses = foldNodeIntoHarnesses(node);
-  if (harnesses) obj.harnesses = harnesses;
-  if (node.provisioning && hasProvisioningRules(node.provisioning)) {
-    obj.provisioning = node.provisioning;
-  }
-  // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still
-  // requires; regular nodes never set it, so its presence is the signal.
-  if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;
-  if (node.inputs.length > 0) {
-    obj.inputs = node.inputs.map((p) => portToYamlObject(p, "left"));
-  }
-  if (node.outputs.length > 0) {
-    obj.outputs = node.outputs.map((p) => portToYamlObject(p, "right"));
-  }
-  return `${yamlStringify(obj)}\n${promptToBlockScalar(prompt)}`;
-}
-
-function yamlStringify(obj: unknown): string {
-  return dumpYaml(obj, 0);
-}
-
-function dumpYaml(val: unknown, indent: number): string {
-  const prefix = "  ".repeat(indent);
-  if (val === null || val === undefined) return "null";
-  if (typeof val === "boolean") return val ? "true" : "false";
-  if (typeof val === "number") return String(val);
-  if (typeof val === "string") {
-    if (
-      val.includes("\n") ||
-      val.includes(":") ||
-      val.includes("#") ||
-      val.includes('"') ||
-      val === "" ||
-      /^[!&*[\]{},|>@`%]/.test(val) ||
-      /[[\]{},]/.test(val)
-    ) {
-      return JSON.stringify(val);
-    }
-    if (/^\d/.test(val) || val === "true" || val === "false" || val === "null") {
-      return JSON.stringify(val);
-    }
-    return val;
-  }
-  if (Array.isArray(val)) {
-    if (val.length === 0) return "[]";
-    const isSimple = val.every(
-      (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean",
-    );
-    if (isSimple) {
-      return `[${val.map((v) => dumpYaml(v, 0)).join(", ")}]`;
-    }
-    return val
-      .map((v) => {
-        const child = dumpYaml(v, indent + 1);
-        if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-          const lines = child.split("\n");
-          // The recursive call already indented continuation lines at indent+1,
-          // which lines up with the column where the first key lands after `- `
-          // — so pass them through verbatim.
-          const rest = lines.slice(1).join("\n");
-          return rest
-            ? `${prefix}- ${lines[0]}\n${rest}`
-            : `${prefix}- ${lines[0]}`;
-        }
-        return `${prefix}- ${child}`;
-      })
-      .join("\n");
-  }
-  if (typeof val === "object") {
-    const entries = Object.entries(val as Record<string, unknown>);
-    if (entries.length === 0) return "{}";
-    const isFlowable = entries.every(
-      ([, v]) => typeof v !== "object" || v === null,
-    );
-    if (isFlowable && entries.length <= 3) {
-      const inner = entries.map(([k, v]) => `${k}: ${dumpYaml(v, 0)}`).join(", ");
-      return `{ ${inner} }`;
-    }
-    return entries
-      .map(([k, v]) => {
-        const child = dumpYaml(v, indent + 1);
-        if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-          const lines = child.split("\n");
-          if (lines.length === 1 && lines[0].startsWith("{")) {
-            return `${k}: ${lines[0]}`;
-          }
-          const [first, ...rest] = lines;
-          const head = `${k}:\n  ${prefix}${first}`;
-          return rest.length > 0 ? `${head}\n${rest.join("\n")}` : head;
-        }
-        if (Array.isArray(v) && v.length > 0 && !v.every((x) => typeof x !== "object" || x === null)) {
-          return `${k}:\n${child}`;
-        }
-        return `${k}: ${child}`;
-      })
-      .join("\n" + prefix);
-  }
-  return String(val);
 }

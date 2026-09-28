@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { RotateCw } from "lucide-react";
-import FullWindowShell from "../../components/FullWindowShell";
+import FullWindowShell from "../../shared/ui/FullWindowShell";
 import { fetchStatsAbsorptions } from "../api/absorptions";
 import { syncCostPrices } from "../api/prices";
 import { useStats } from "../store/useStats";

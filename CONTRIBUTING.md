@@ -38,6 +38,20 @@ the history does. Reference the issue in the title.
 | [Node.js](https://nodejs.org/) | 22 or newer |
 | [pnpm](https://pnpm.io/) | Use the version declared by the project |
 
+### Where the code lives
+
+PDO is a modular monolith ([ADR-0079](docs/adr/0079-pdo-est-un-monolithe-modulaire-un-crate-par-bounded-context-hexagonal-a-l-interieur.md)).
+Each bounded context is a crate under `crates/` (`pdo-run`, `pdo-pipeline`, `pdo-review`,
+`pdo-session`, `pdo-harness`, `pdo-sandbox`, `pdo-skill`, `pdo-trigger`, `pdo-stats`,
+`pdo-workspace`, `pdo-settings`, `pdo-platform`), hexagonal inside (`domain/`, `application/`,
+`adapters/`). Next to them sit `pdo-kernel`, the shared kernel, and `pdo-extension-api`, the public
+contract of the extensions. `crates/pdo` is the composition root: it wires the contexts, carries
+the `pdo` binary and embeds the SPA. Its Cargo package is named `pdo-daemon`, because the installer
+is named after it. The frontend follows the same contexts
+(`frontend/src/<context>/{api,model,store,components}/`), plus `shared/` and `app/`. Where a new
+file goes, and the rules the test suite checks (a pure `domain/`, 400 lines per production file,
+a test for every route): [docs/agents/module-layout.md](docs/agents/module-layout.md).
+
 ### Frontend
 
 ```bash
@@ -99,8 +113,7 @@ Never edit those files: run `make types` after changing a serialized Rust type, 
 result. `make check` fails and shows the diff when they have drifted from the Rust side.
 
 A payload the daemon still builds with `json!` has no Rust type yet: its hand-written TypeScript
-sits in the `model/` folder of its context (`frontend/src/<context>/model/`) until the context's
-migration gives it a DTO.
+sits in the `model/` folder of its context (`frontend/src/<context>/model/`) until it gets a DTO.
 
 ### Harness support table
 

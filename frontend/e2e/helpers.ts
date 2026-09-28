@@ -39,13 +39,13 @@ export function runMultipart(fields: Record<string, string>): Record<string, str
 
 /**
  * Open a repo/user pipeline into the edit canvas via the post-refonte
- * UnifiedLeftPanel: switch to the Library tab, then click the entry by name.
+ * UnifiedLeftPanel: switch to the Pipelines tab, then click the entry by name.
  *
  * Replaces the pre-canvas-refonte `[data-testid='edit-toggle']` flow, which no
- * longer exists — pipelines are opened from the Library tab now (#146).
+ * longer exists — pipelines are opened from the Pipelines tab now (#146, renamed by #651).
  */
 export async function openPipelineForEdit(page: Page, name: string): Promise<void> {
-  await page.getByRole("tab", { name: "Library" }).click();
+  await page.getByRole("tab", { name: "Pipelines" }).click();
   await page.getByText(name).first().click({ timeout: 5_000 });
 }
 

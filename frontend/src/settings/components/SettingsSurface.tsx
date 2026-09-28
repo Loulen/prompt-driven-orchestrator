@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import FullWindowShell, { type RailItem } from "../../components/FullWindowShell";
-import TutorialsSection from "../../components/tour/TutorialsSection";
+import FullWindowShell, { type RailItem } from "../../shared/ui/FullWindowShell";
+import TutorialsSection from "../../app/tour/TutorialsSection";
 import { harnessCatalog } from "../../harness/model/catalog";
 import VersionUpdateSection from "../../platform/components/VersionUpdateSection";
 import SkillBankPanel from "../../skill/components/SkillBankPanel";

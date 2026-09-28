@@ -11,10 +11,10 @@ import { useEditStore } from "../store/editStore";
 import { useSelectionStore } from "../../stores/selectionStore";
 import { handleSelectionKeydown } from "../../lib/selectionKeys";
 import { type BulkItem, type BulkOutcome } from "../../lib/bulk";
-import BulkActionBar from "../../components/BulkActionBar";
-import BulkActionModal from "../../components/BulkActionModal";
-import ConfirmDeleteModal from "../../components/ConfirmDeleteModal";
-import LibraryRow from "../../components/LibraryRow";
+import BulkActionBar from "./BulkActionBar";
+import BulkActionModal from "./BulkActionModal";
+import ConfirmDeleteModal from "../../shared/ui/ConfirmDeleteModal";
+import LibraryRow from "./LibraryRow";
 
 import ImportWorkflowModal from "./ImportWorkflowModal";
 import NewPipelineModal from "./NewPipelineModal";

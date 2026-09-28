@@ -2,7 +2,7 @@
  * The edit canvas's right-click menu.
  */
 
-import DestroyLoopModal from "../../components/DestroyLoopModal";
+import DestroyLoopModal from "./DestroyLoopModal";
 import { regionsDestroyedByEdgeRemoval } from "../../lib/loopRegions";
 import type { EditorPipelineDef } from "../model/pipeline";
 import { useEditStore } from "../store/editStore";

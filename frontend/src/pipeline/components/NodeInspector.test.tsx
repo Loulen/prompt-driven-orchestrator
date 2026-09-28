@@ -1,0 +1,1192 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import NodeInspector from "./NodeInspector";
+import type { LibraryEntry } from "../model/library";
+import { fetchSettings } from "../../settings/api/settings";
+import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../api/library";
+import { useEditStore } from "../store/editStore";
+import { TooltipProvider } from "../../shared/ui/tooltip";
+
+function renderInspector(props: Parameters<typeof NodeInspector>[0]) {
+  return render(
+    <TooltipProvider>
+      <NodeInspector {...props} />
+    </TooltipProvider>,
+  );
+}
+
+vi.mock("../../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+}));
+
+vi.mock("../../settings/api/settings", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  fetchLibrary: vi.fn().mockResolvedValue([]),
+  // #586: the harness pin picker now fetches /settings for its dynamic option
+  // list. Resolve it with the embedded floor so the picker offers claude/opencode.
+  fetchSettings: vi.fn().mockResolvedValue({
+    harness_descriptors: {
+      path: null,
+      names: ["claude", "opencode", "copilot"],
+      // #616/ADR-0053: the served catalogue drives the model/effort pickers and the
+      // effort greying. claude offers models + efforts (effort axis present);
+      // opencode offers a model list but no effort axis (greyed); copilot offers
+      // efforts but NO model catalogue yet (#629), so its model control is the
+      // free-text field — the shape the #617 FP caught leaking a value.
+      harnesses: [
+        {
+          name: "claude",
+          source: "builtin",
+          installed: true,
+          // #798: two models of the SAME harness with disjoint effort support —
+          // the reported regression pair. `union-alpha` supports ONLY `off`.
+          models: ["sonnet", "opus", "haiku", "opusplan", "union-alpha", "GPT5.4"],
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          model_efforts: {
+            "union-alpha": ["off"],
+            "GPT5.4": ["off", "low", "medium", "high", "xhigh"],
+          },
+          has_effort: true,
+          version: "claude 1.0",
+        },
+        {
+          name: "opencode",
+          source: "builtin",
+          installed: true,
+          models: ["openrouter/foo"],
+          efforts: [],
+          has_effort: false,
+          version: "opencode 1.18",
+        },
+        {
+          name: "copilot",
+          source: "builtin",
+          installed: true,
+          models: [],
+          efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+          has_effort: true,
+          version: "copilot 1.0.80",
+        },
+      ],
+      rejected: [],
+      reason: null,
+    },
+  }),
+  saveToLibrary: vi.fn().mockResolvedValue({}),
+  deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
+  instantiateFromLibrary: vi.fn().mockResolvedValue({
+    spec: {
+      name: "reviewer",
+      type: "agent",
+      inputs: [],
+      outputs: [],
+      interactive: false,
+    },
+    prompt: "stub",
+  }),
+}));
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
+vi.mock("../api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../settings/api/settings")),
+}));
+
+vi.mock("../../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+const mockSave = vi.mocked(saveToLibrary);
+const mockDelete = vi.mocked(deleteFromLibrary);
+
+function seedTabWithReviewer(dirty: boolean, prompt = "Review this code.") {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "rv1",
+              name: "reviewer",
+              type: "agent",
+              interactive: false,
+              inputs: [{ name: "in", repeated: false, side: "left" }],
+              outputs: [{ name: "out", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+            },
+          ],
+          edges: [],
+        },
+        prompts: { rv1: prompt },
+        diagnostics: [],
+        dirty,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "rv1" },
+  });
+}
+
+function seedPooledReviewPipeline() {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "sec",
+              name: "security-reviewer",
+              type: "agent",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "review", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+            },
+            {
+              id: "perf",
+              name: "perf-reviewer",
+              type: "agent",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "review", repeated: false, side: "right" }],
+              view: { x: 0, y: 100 },
+            },
+            {
+              id: "impl",
+              name: "implementer",
+              type: "agent",
+              interactive: false,
+              inputs: [],
+              outputs: [
+                {
+                  name: "diff",
+                  repeated: false,
+                  side: "right",
+                  frontmatter: { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } },
+                },
+              ],
+              view: { x: 200, y: 50 },
+            },
+          ],
+          edges: [
+            { source: { node: "sec", port: "review" }, target: { node: "impl", port: "review" } },
+            { source: { node: "perf", port: "review" }, target: { node: "impl", port: "review" } },
+          ],
+        },
+        prompts: { impl: "Implement." },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "impl" },
+  });
+}
+
+function seedTabWithScript(prompt = "echo hi\n") {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "sc1",
+              name: "notify",
+              type: "script",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "out", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+            },
+          ],
+          edges: [],
+        },
+        prompts: { sc1: prompt },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "sc1" },
+  });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+/**
+ * #822: the two fields a guided tour types into. They are the contract the tour
+ * tickets (#823-#825) build on, so a rename has to break a test here rather than a
+ * tour step nobody runs until the day it matters.
+ */
+describe("NodeInspector — stable tour targets (#822)", () => {
+  it("names the Name field and the prompt body, and keeps editing them working", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const name = screen.getByTestId("node-name-input");
+    expect(name).toHaveValue("reviewer");
+    fireEvent.change(name, { target: { value: "implementer" } });
+    fireEvent.blur(name);
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].name).toBe("implementer");
+
+    const prompt = screen.getByTestId("node-prompt-input");
+    expect(prompt).toHaveValue("Review this code.");
+    fireEvent.change(prompt, { target: { value: "Implement it." } });
+    expect(useEditStore.getState().openTabs[0].prompts.rv1).toBe("Implement it.");
+  });
+
+  it("leaves a script node's body under its own name", () => {
+    seedTabWithScript();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("script-body")).toBeInTheDocument();
+    expect(screen.queryByTestId("node-prompt-input")).toBeNull();
+  });
+});
+
+describe("NodeInspector — script node surface (#248)", () => {
+  it("shows the Script (bash) body editor and hides the model field", () => {
+    seedTabWithScript();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("script-body")).toBeInTheDocument();
+    expect(screen.getByTestId("script-help")).toBeInTheDocument();
+    // A script launches no agent — the model field must be absent.
+    expect(screen.queryByTestId("node-model-trigger")).toBeNull();
+    // #424: and so must the effort field, for the same reason. Absent, not
+    // disabled — the house masks controls rather than greying them out.
+    expect(screen.queryByRole("radiogroup", { name: "Effort" })).toBeNull();
+    expect(screen.queryByTestId("node-effort-option-low")).toBeNull();
+  });
+
+  it("shows a static script type label (#248/#653: types are not toggles)", () => {
+    seedTabWithScript();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("script-type-label")).toBeInTheDocument();
+  });
+
+  it("persists edits to the bash body and marks the tab dirty", () => {
+    seedTabWithScript("echo old\n");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const body = screen.getByTestId("script-body");
+    fireEvent.change(body, { target: { value: "curl -X POST $PDO_DAEMON_URL\n" } });
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.prompts["sc1"]).toBe("curl -X POST $PDO_DAEMON_URL\n");
+    expect(tab.dirty).toBe(true);
+  });
+});
+
+describe("NodeInspector — pooled emergent inputs (#153)", () => {
+  it("shows one pooled input listing both contributing source nodes", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const pooled = screen.getByTestId("pooled-input-review");
+    expect(pooled).toHaveTextContent("review");
+    expect(pooled).toHaveTextContent("security-reviewer");
+    expect(pooled).toHaveTextContent("perf-reviewer");
+  });
+
+  it("shows the node ID", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByText("impl")).toBeInTheDocument();
+  });
+
+  it("shows the declared output port schema fields", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    // The output card for `diff` renders its frontmatter schema editor.
+    expect(screen.getByTestId("output-port-card-diff")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("verdict")).toBeInTheDocument();
+  });
+});
+
+describe("NodeInspector — per-node model field (#296/#324, #616)", () => {
+  // #616: the model picker renders the SERVED catalogue, fetched async via
+  // `useHarnessCatalog`. Queries `findBy*` so the fetch (claude's models) resolves
+  // before the dropdown trigger exists.
+  it("writes the picked model onto the node and marks the tab dirty", async () => {
+    const user = userEvent.setup();
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    await user.click(await screen.findByTestId("node-model-trigger"));
+    await user.click(await screen.findByTestId("node-model-option-opus"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.nodes[0].model).toBe("opus");
+    expect(tab.dirty).toBe(true);
+  });
+
+  it("clears the model to null via Default (stays unset, never serialized)", async () => {
+    const user = userEvent.setup();
+    seedTabWithReviewer(false, "Review this code.");
+    // Seed a model so we can watch it clear.
+    useEditStore.getState().updateNode("rv1", { model: "opus" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(await screen.findByTestId("node-model-trigger")).toHaveTextContent("opus");
+
+    await user.click(screen.getByTestId("node-model-trigger"));
+    await user.click(await screen.findByTestId("node-model-option-default"));
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].model).toBeNull();
+  });
+
+  it("renders a seeded served id on the trigger", async () => {
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { model: "haiku" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(await screen.findByTestId("node-model-trigger")).toHaveTextContent("haiku");
+  });
+
+  it("renders a seeded arbitrary full id on the trigger (free text survives)", async () => {
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { model: "claude-opus-4-8" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(await screen.findByTestId("node-model-trigger")).toHaveTextContent("claude-opus-4-8");
+  });
+});
+
+describe("NodeInspector — per-node effort field (#424, #616)", () => {
+  it("writes the picked effort onto the node and marks the tab dirty", async () => {
+    const user = userEvent.setup();
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    await user.click(await screen.findByTestId("node-effort-option-low"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.nodes[0].effort).toBe("low");
+    expect(tab.dirty).toBe(true);
+  });
+
+  it("clears the effort to null via Default (stays unset, never serialized)", async () => {
+    const user = userEvent.setup();
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { effort: "high" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(await screen.findByTestId("node-effort-option-high")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+
+    await user.click(screen.getByTestId("node-effort-option-default"));
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].effort).toBeNull();
+  });
+
+  it("is orthogonal to the model — setting one leaves the other alone", async () => {
+    const user = userEvent.setup();
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { model: "opus" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    await user.click(await screen.findByTestId("node-effort-option-max"));
+
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    expect(node.effort).toBe("max");
+    expect(node.model).toBe("opus");
+  });
+
+  it("renders a seeded unknown level in the pass-through segment (free text survives)", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    useEditStore.getState().updateNode("rv1", { effort: "turbo" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("node-effort-option-passthrough")).toHaveTextContent("turbo");
+  });
+
+  // #798: the effort offer follows the node's SELECTED model against its resolved
+  // harness. The reported pair: `union-alpha` supports ONLY `off`; `GPT5.4` the
+  // full off..xhigh scale.
+  describe("per-model effort support (#798)", () => {
+    function node() {
+      return useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    }
+
+    it("a supported (model, effort) pair renders checked with no warning", async () => {
+      seedNode({ model: "GPT5.4", effort: "low" });
+      renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+      // Resolved harness: the claude floor (no pin); GPT5.4's own offer applies.
+      expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("claude");
+      expect(await screen.findByTestId("node-effort-option-low")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(screen.getByTestId("node-effort-option-xhigh")).toBeInTheDocument();
+      expect(screen.queryByTestId("node-effort-unsupported")).toBeNull();
+    });
+
+    it("a stored effort unsupported by the NEW model warns, stays visible, and is not silently deleted", async () => {
+      const user = userEvent.setup();
+      seedNode({ model: "GPT5.4", effort: "low" });
+      renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+      await screen.findByTestId("node-effort-option-low");
+
+      // Switch the model to union-alpha (off-only): the stored `low` is now
+      // unsupported. It must NOT persist as an ordinary supported choice, and
+      // must NOT be silently deleted either (ADR-0001).
+      await user.click(screen.getByTestId("node-model-trigger"));
+      await user.click(await screen.findByTestId("node-model-option-union-alpha"));
+
+      expect(node().model).toBe("union-alpha");
+      expect(node().effort).toBe("low"); // preserved, never silently deleted
+      // Not offered as a supported option any more…
+      expect(screen.queryByTestId("node-effort-option-low")).toBeNull();
+      // …but kept visible, flagged unsupported, with the way out.
+      const extra = screen.getByTestId("node-effort-option-passthrough");
+      expect(extra).toHaveTextContent("low");
+      expect(extra).toHaveAttribute("data-unsupported", "true");
+      expect(screen.getByTestId("node-effort-unsupported")).toBeInTheDocument();
+
+      // The user resolves it explicitly: Default resets.
+      await user.click(screen.getByTestId("node-effort-option-default"));
+      expect(node().effort).toBeNull();
+    });
+
+    it("a model without a key retains the harness's global efforts (fallback, no exceptions)", async () => {
+      seedNode({ model: "sonnet", effort: "max" });
+      renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+      // `sonnet` has no model_efforts key: the global offer applies — `max` is a
+      // supported choice, not a warning.
+      expect(await screen.findByTestId("node-effort-option-max")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(screen.queryByTestId("node-effort-unsupported")).toBeNull();
+    });
+
+    it("a harness unknown to the catalogue preserves the pass-through UI (no warning)", async () => {
+      seedNode({ pin_harness: "mystery", effort: "turbo" });
+      renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+      expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("mystery");
+      const extra = screen.getByTestId("node-effort-option-passthrough");
+      expect(extra).toHaveTextContent("turbo");
+      expect(extra).toHaveAttribute("aria-checked", "true");
+      expect(extra).not.toHaveAttribute("data-unsupported");
+      expect(screen.queryByTestId("node-effort-unsupported")).toBeNull();
+    });
+  });
+});
+
+// #339: self-feeding node — the self-edge pools as an input source even though
+// no edge is clickable on the canvas; its auto-materialized bounded region makes
+// the × go through the destroy-loop confirmation.
+function seedSelfFeedPipeline() {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "cc1",
+              name: "cycler",
+              type: "agent",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "in", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+            },
+          ],
+          edges: [
+            { source: { node: "cc1", port: "in" }, target: { node: "cc1", port: "in" } },
+          ],
+          loops: [{ id: "self_loop", kind: "bounded", members: ["cc1"], max_iter: 3 }],
+        },
+        prompts: { cc1: "Loop." },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "cc1" },
+  });
+}
+
+// #843 / ADR-0073: ONE edge carrying two outputs feeds TWO inputs on the target.
+function seedMultiPortPipeline() {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "design",
+              name: "design",
+              type: "agent",
+              interactive: false,
+              inputs: [],
+              outputs: [
+                { name: "out", repeated: false, side: "right" },
+                { name: "spec", repeated: false, side: "right" },
+              ],
+              view: { x: 0, y: 0 },
+            },
+            {
+              id: "impl",
+              name: "implementer",
+              type: "agent",
+              interactive: false,
+              inputs: [],
+              outputs: [{ name: "diff", repeated: false, side: "right" }],
+              view: { x: 200, y: 0 },
+            },
+          ],
+          edges: [
+            {
+              source: { node: "design", ports: ["out", "spec"] },
+              target: { node: "impl", port: "out" },
+            },
+          ],
+        },
+        prompts: { impl: "Implement." },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "impl" },
+  });
+}
+
+describe("NodeInspector — inputs of a multi-output edge (#843)", () => {
+  it("lists one input per carried port, both fed by the same source node", () => {
+    seedMultiPortPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("pooled-input-out")).toHaveTextContent("design");
+    expect(screen.getByTestId("pooled-input-spec")).toHaveTextContent("design");
+  });
+
+  it("dropping one input unticks its output instead of deleting the shared edge", () => {
+    seedMultiPortPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-spec-delete-design"));
+
+    const edges = useEditStore.getState().openTabs[0].pipeline.edges;
+    // The arrow survives, back in the pre-#843 single-port shape, and the other
+    // input is untouched — deleting the edge would have taken it too.
+    expect(edges).toHaveLength(1);
+    expect(edges[0].source).toEqual({ node: "design", port: "out" });
+    expect(screen.getByTestId("pooled-input-out")).toBeInTheDocument();
+    expect(screen.queryByTestId("pooled-input-spec")).toBeNull();
+  });
+
+  it("dropping the last input of a now-single-port edge deletes the edge", () => {
+    seedMultiPortPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-spec-delete-design"));
+    fireEvent.click(screen.getByTestId("pooled-input-out-delete-design"));
+
+    expect(useEditStore.getState().openTabs[0].pipeline.edges).toHaveLength(0);
+  });
+});
+
+describe("NodeInspector — per-source input delete (#339)", () => {
+  it("deletes a non-cycle edge immediately and keeps the panel open on the node", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-review-delete-sec"));
+
+    const state = useEditStore.getState();
+    // The sec → impl edge is gone; perf → impl survives.
+    expect(state.openTabs[0].pipeline.edges).toEqual([
+      { source: { node: "perf", port: "review" }, target: { node: "impl", port: "review" } },
+    ]);
+    // Selection kept → the inspector does not self-close.
+    expect(state.selection).toEqual({ kind: "node", id: "impl" });
+    expect(screen.getByTestId("pooled-input-review")).toBeInTheDocument();
+    expect(screen.queryByTestId("destroy-loop-confirm")).toBeNull();
+  });
+
+  it("indices stay correct after a prior delete (re-derived each render)", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-review-delete-sec"));
+    // After the first delete the perf edge shifted to index 0 — the re-derived
+    // × must delete IT, not a stale index.
+    fireEvent.click(screen.getByTestId("pooled-input-review-delete-perf"));
+
+    expect(useEditStore.getState().openTabs[0].pipeline.edges).toHaveLength(0);
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "impl" });
+  });
+
+  it("self-edge (last cycle): × opens DestroyLoopModal; cancel leaves edge and loop", () => {
+    seedSelfFeedPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-in-delete-cc1"));
+
+    expect(screen.getByTestId("destroy-loop-confirm")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("destroy-loop-cancel"));
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.pipeline.edges).toHaveLength(1);
+    expect(tab.pipeline.loops).toHaveLength(1);
+    expect(screen.queryByTestId("destroy-loop-confirm")).toBeNull();
+  });
+
+  it("self-edge (last cycle): confirm deletes the edge AND the loops: entry, panel stays open", () => {
+    seedSelfFeedPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("pooled-input-in-delete-cc1"));
+    fireEvent.click(screen.getByTestId("destroy-loop-confirm"));
+
+    const state = useEditStore.getState();
+    expect(state.openTabs[0].pipeline.edges).toHaveLength(0);
+    expect(state.openTabs[0].pipeline.loops ?? []).toHaveLength(0);
+    expect(state.selection).toEqual({ kind: "node", id: "cc1" });
+    expect(screen.queryByTestId("destroy-loop-confirm")).toBeNull();
+  });
+
+  it("readOnly hides every × (archived gate) while rows still render", () => {
+    seedPooledReviewPipeline();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {}, readOnly: true });
+
+    expect(screen.getByTestId("pooled-input-review")).toBeInTheDocument();
+    expect(screen.queryByTestId("pooled-input-review-delete-sec")).toBeNull();
+    expect(screen.queryByTestId("pooled-input-review-delete-perf")).toBeNull();
+  });
+});
+
+describe("NodeInspector StarButton — library save is independent of pipeline save", () => {
+  it("Save to library works when pipeline is dirty (no longer requires save first)", () => {
+    seedTabWithReviewer(true, "Review this code.");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const star = screen.getByTitle("Save to library");
+    expect((star as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(star);
+    expect(mockSave).toHaveBeenCalledTimes(1);
+    expect(mockSave).toHaveBeenCalledWith({
+      name: "reviewer",
+      type: "agent",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false,
+      // #345/#296: the library is model-aware; a model-less node sends null.
+      model: null,
+      // #424: effort-aware too; an effort-less node sends null.
+      effort: null,
+      // #655: isolation-aware too — a node silent about its workspace stars on
+      // its type's resolved default, not on the silence.
+      isolated_worktree: true,
+      prompt: "Review this code.",
+    });
+  });
+
+  it("Save to library sends node spec + prompt inline (no pipeline_id)", () => {
+    seedTabWithReviewer(false, "v2 prompt");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTitle("Save to library"));
+
+    const arg = mockSave.mock.calls[0][0];
+    expect(arg.prompt).toBe("v2 prompt");
+    expect(arg.name).toBe("reviewer");
+    // Confirm the old call shape (positional nodeId, pipelineId) is gone.
+    expect(mockSave.mock.calls[0]).toHaveLength(1);
+  });
+
+  it("Save to library preserves nonblank output instructions", () => {
+    seedTabWithReviewer(false);
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    node.outputs = [
+      { ...node.outputs[0], instructions: "Return a concise verdict." },
+      { name: "empty", repeated: false, side: "right", instructions: "   " },
+    ];
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTitle("Save to library"));
+
+    expect(mockSave.mock.calls[0][0].outputs).toEqual([
+      {
+        name: "out",
+        repeated: false,
+        side: "right",
+        instructions: "Return a concise verdict.",
+      },
+      { name: "empty", repeated: false, side: "right" },
+    ]);
+  });
+
+  it("stars the node's chosen workspace, not its type's default (#655)", () => {
+    seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree = false;
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTitle("Save to library"));
+
+    expect(mockSave.mock.calls[0][0].isolated_worktree).toBe(false);
+  });
+
+  it("resets the workspace from the library entry (#655)", async () => {
+    // The entry parks the Agent in the Run's worktree; resetting must put the
+    // node back there rather than on the `agent` default.
+    vi.mocked(instantiateFromLibrary).mockResolvedValueOnce({
+      spec: {
+        name: "reviewer",
+        type: "agent",
+        inputs: [],
+        outputs: [],
+        interactive: false,
+        isolated_worktree: false,
+      },
+      prompt: "Review this code.",
+    });
+    const diverged: LibraryEntry = {
+      name: "reviewer",
+      type: "agent",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false,
+      isolated_worktree: false,
+      prompt: "Review this code.",
+    };
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [diverged], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTitle("In your library — out of sync"));
+    fireEvent.click(screen.getByText(/Reset from library/i));
+
+    await vi.waitFor(() => {
+      expect(
+        useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree,
+      ).toBe(false);
+    });
+  });
+
+  it("opens the popover when node is already synced with library", () => {
+    const synced: LibraryEntry = {
+      name: "reviewer",
+      type: "agent",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false,
+      prompt: "Review this code.",
+    };
+    seedTabWithReviewer(true, "Review this code.");
+    renderInspector({ libraryEntries: [synced], onLibraryChanged: () => {} });
+
+    const star = screen.getByTitle("In your library — synced");
+    fireEvent.click(star);
+
+    // Popover items appear; save was not invoked directly.
+    expect(screen.getByText(/Remove from library/i)).toBeInTheDocument();
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+});
+
+// #550/ADR-0046: the harness axis in the node inspector.
+function seedNode(node: Record<string, unknown>) {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "n1",
+              name: "worker",
+              type: "agent",
+              interactive: false,
+              inputs: [{ name: "in", repeated: false, side: "left" }],
+              outputs: [{ name: "out", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+              ...node,
+            },
+          ],
+          edges: [],
+        },
+        prompts: { n1: "do the thing" },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "n1" },
+  });
+}
+
+describe("NodeInspector — harness axis (#550, ADR-0046)", () => {
+  beforeEach(() => {
+    seedNode({});
+  });
+
+  it("resolves to the claude floor when the node has no pin", async () => {
+    seedNode({});
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("claude");
+    // #616: claude serves an effort axis → the picker is ENABLED and renders its
+    // served stops (here, "high"). `findBy*` awaits the async catalogue fetch.
+    expect(await screen.findByTestId("node-effort-option-high")).not.toBeDisabled();
+  });
+
+  it("shows the pinned harness as resolved and greys the effort picker on opencode", async () => {
+    seedNode({ pin_harness: "opencode" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("opencode");
+    // #616/AC #3: opencode's SERVED `has_effort` is false → the picker is greyed.
+    // opencode enumerates no stops, so assert on the always-present Default segment
+    // and the group — never on a served level (there is none). Assert `disabled`,
+    // never `.value`.
+    await waitFor(() => expect(vi.mocked(fetchSettings)).toHaveBeenCalled());
+    expect(screen.getByTestId("node-effort-option-default")).toBeDisabled();
+    expect(screen.getByRole("radiogroup", { name: "Effort" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("pinning a harness writes pin_harness onto the node", async () => {
+    const user = userEvent.setup();
+    seedNode({});
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    // #586: the pin is a custom sectioned dropdown; opencode is offered even before
+    // /settings answers (the embedded-floor fallback). Open it and pick opencode.
+    await user.click(screen.getByTestId("node-harness-select"));
+    await user.click(await screen.findByTestId("node-harness-select-option-opencode"));
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    expect(node.pin_harness).toBe("opencode");
+    // A green fetch settles the dynamic catalog; flush it inside act so the
+    // trailing setState doesn't leak past the test.
+    await waitFor(() =>
+      expect(vi.mocked(fetchSettings)).toHaveBeenCalled(),
+    );
+  });
+
+  it("hides the harness selector for a script node", () => {
+    seedNode({ type: "script" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.queryByTestId("node-harness")).toBeNull();
+  });
+});
+
+// #617 FP finding 3: the inspector is ONE component reused as the selection moves,
+// so a picker holding its own state can show — and then WRITE — the previously
+// selected node's model. That is an `opencode` slug landing on a `copilot` node,
+// which is exactly what "a model means nothing outside its harness" (#550/ADR-0046)
+// forbids. The journey below is the one the FP walked.
+describe("NodeInspector — the model field does not follow the selection (#617)", () => {
+  function seedTwoNodes() {
+    const base = {
+      type: "agent" as const,
+      interactive: false,
+      inputs: [],
+      outputs: [{ name: "out", repeated: false, side: "right" as const }],
+      view: { x: 0, y: 0 },
+    };
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "p1",
+          scope: "repo",
+          pipeline: {
+            name: "p1",
+            version: "1.0",
+            variables: {},
+            nodes: [
+              // Pinned to a harness with no served model catalogue so BOTH nodes
+              // render the free-text control — the shape that carried the value.
+              {
+                ...base,
+                id: "opc",
+                name: "opencode-ish",
+                pin_harness: "copilot",
+                model: "openrouter/anthropic/claude-haiku-4.5",
+              },
+              { ...base, id: "cop", name: "copilot", pin_harness: "copilot" },
+            ],
+            edges: [],
+          },
+          prompts: { opc: "a", cop: "b" },
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "p1",
+      selection: { kind: "node", id: "opc" },
+    });
+  }
+
+  it("shows nothing on a node that carries no model, whatever was selected before", async () => {
+    seedTwoNodes();
+    const { rerender } = renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const field = async () => (await screen.findByTestId("node-model-input")) as HTMLInputElement;
+    expect((await field()).value).toBe("openrouter/anthropic/claude-haiku-4.5");
+
+    useEditStore.setState({ selection: { kind: "node", id: "cop" } });
+    rerender(
+      <TooltipProvider>
+        <NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} />
+      </TooltipProvider>,
+    );
+
+    expect((await field()).value).toBe("");
+  });
+
+  it("a focus-and-blur on the second node writes no model onto it", async () => {
+    const user = userEvent.setup();
+    seedTwoNodes();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    await screen.findByTestId("node-model-input");
+
+    useEditStore.setState({ selection: { kind: "node", id: "cop" } });
+    await user.click(await screen.findByTestId("node-model-input"));
+    await user.click(screen.getByTestId("node-harness-resolved")); // click away
+
+    const cop = useEditStore.getState().openTabs[0].pipeline.nodes[1];
+    expect(cop.model ?? null).toBeNull();
+    // …and the tab is not dirtied by a field the user only looked at.
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+  });
+});
+
+/**
+ * #653 / ADR-0060 — the Workspace section. Two named places, the resolved path
+ * underneath, and nothing at all on the types that carry no isolation.
+ */
+describe("NodeInspector — Workspace (#653)", () => {
+  it("keeps provisioning collapsed under isolated Workspace and hides it for shared Workspace", async () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByRole("button", { name: "Configure provisioning" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByTestId("provisioning-isolated_node")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+    expect(screen.getByTestId("provisioning-isolated_node")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("workspace-shared"));
+    expect(screen.queryByRole("button", { name: /provisioning/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("provisioning-isolated_node")).not.toBeInTheDocument();
+  });
+
+  it("shows the frozen NodeRun recipe instead of the mutable pipeline recipe", async () => {
+    seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].provisioning = {
+      copy: ["current"],
+      hardlink: [],
+      symlink: [],
+    };
+    renderInspector({
+      libraryEntries: [],
+      onLibraryChanged: () => {},
+      runNode: { frontmatter_retries: 0,
+        node_id: "rv1",
+        status: "running",
+        iter: 1,
+        started_at: "2026-09-01T12:00:00Z",
+        completed_at: null,
+        failure_reason: null,
+        iterations: [],
+        isolated_worktree: true,
+        provisioning: { copy: ["frozen"], hardlink: [], symlink: [] },
+      },
+      provisioningFrozenAt: "12:00",
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+
+    expect(screen.getByLabelText("Copy patterns")).toHaveValue("frozen");
+  });
+
+  it("keeps pipeline provisioning editable when a stale run projection is present", async () => {
+    seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].provisioning = {
+      copy: ["pipeline-rule"],
+      hardlink: [],
+      symlink: [],
+    };
+    renderInspector({
+      libraryEntries: [],
+      onLibraryChanged: () => {},
+      runNode: { frontmatter_retries: 0,
+        node_id: "rv1",
+        status: "running",
+        iter: 1,
+        started_at: "2026-09-01T12:00:00Z",
+        completed_at: null,
+        failure_reason: null,
+        iterations: [],
+        isolated_worktree: true,
+        provisioning: { copy: ["stale-run-rule"], hardlink: [], symlink: [] },
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+    const copyPatterns = screen.getByLabelText("Copy patterns");
+    expect(copyPatterns).toHaveValue("pipeline-rule");
+
+    await userEvent.clear(copyPatterns);
+    await userEvent.type(copyPatterns, "updated-pipeline-rule");
+
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].provisioning?.copy).toEqual([
+      "updated-pipeline-rule",
+    ]);
+  });
+
+  it("shows a static agent type label instead of a type toggle", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("agent-type-label")).toBeInTheDocument();
+  });
+
+  it("preselects Isolated worktree for an agent that states nothing", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("workspace-isolated")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("preselects Run worktree for a script that states nothing", () => {
+    seedTabWithScript();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("writes the chosen value onto the node without touching its type", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("workspace-shared"));
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    expect(node.isolated_worktree).toBe(false);
+    expect(node.type).toBe("agent");
+  });
+
+  it("shows the resolved working directory and updates it on click", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("workspace-path")).toHaveTextContent(
+      ".pdo/runs/<run>/nodes/rv1/iter-<n>",
+    );
+    fireEvent.click(screen.getByTestId("workspace-shared"));
+    expect(screen.getByTestId("workspace-path")).toHaveTextContent(
+      ".pdo/runs/<run>/worktree",
+    );
+  });
+
+  it("shows the FROZEN value, read-only, once the NodeRun has started", () => {
+    // The document says isolated; the live iteration was spawned shared. Run mode
+    // shows where the Node actually works and refuses to move it.
+    seedTabWithReviewer(false);
+    renderInspector({
+      libraryEntries: [],
+      onLibraryChanged: () => {},
+      runNode: { frontmatter_retries: 0,
+        node_id: "rv1",
+        status: "running",
+        iter: 1,
+        started_at: null,
+        completed_at: null,
+        failure_reason: null,
+        iterations: [],
+        isolated_worktree: false,
+      },
+    });
+
+    expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("workspace-isolated")).toBeDisabled();
+    expect(screen.getByTestId("workspace-frozen")).toBeInTheDocument();
+  });
+});
+
+describe("NodeInspector — toggle skills (#588 / ADR-0069)", () => {
+  const node = () => useEditStore.getState().openTabs[0].pipeline.nodes[0];
+
+  it("seeds pdo-interactive when Interactive turns on and removes it when it turns off", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+    expect(node().interactive).toBe(true);
+    expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-interactive"]);
+    // The invocation block mirrors what PDO files at spawn: the bare line.
+    expect(screen.getByTestId("node-toggle-prompt-amendment")).toHaveTextContent("/pdo-interactive");
+    expect(screen.getByTestId("node-toggle-prompt-amendment")).not.toHaveTextContent("## Orchestration");
+    expect(screen.queryByTestId("node-interactive-skill-missing")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+    expect(node().interactive).toBe(false);
+    expect(node().skills).toBeUndefined();
+    expect(screen.queryByTestId("node-toggle-prompt-amendment")).toBeNull();
+  });
+
+  it("lists both invocation lines in spawn order when both toggles are on", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    fireEvent.click(screen.getByTestId("node-orchestrator-toggle"));
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+    expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-orchestrate", "pdo-interactive"]);
+    const pre = screen.getByTestId("node-toggle-prompt-amendment").querySelector("pre");
+    expect(pre?.textContent).toBe("/pdo-interactive\n/pdo-orchestrate");
+  });
+
+  it("warns when the seeded skill is removed by hand while the toggle stays on, and re-adds it", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+    // Remove the reference the way the Skills selector would.
+    act(() => useEditStore.getState().updateNode("rv1", { skills: undefined }));
+    expect(node().interactive).toBe(true);
+    const warning = screen.getByTestId("node-interactive-skill-missing");
+    expect(warning).toHaveTextContent("pdo-interactive skill was removed");
+    fireEvent.click(within(warning).getByText("Re-add it"));
+    expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-interactive"]);
+  });
+});

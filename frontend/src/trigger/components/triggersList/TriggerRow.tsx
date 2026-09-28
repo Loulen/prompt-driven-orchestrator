@@ -1,7 +1,7 @@
 import { Pencil, Play, Power, Trash2 } from "lucide-react";
 import type { Trigger } from "../../../shared/generated/Trigger";
 import { repoGroupLabel } from "../../../lib/groupByRepo";
-import SelectControl from "../../../components/SelectControl";
+import SelectControl from "../../../shared/ui/SelectControl";
 import { humanizeCron } from "../../model/cronPresets";
 import { lastOutcomeTooltip, outcomeDot, outcomeRing } from "../../model/outcome";
 

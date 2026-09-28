@@ -6,7 +6,7 @@ import { addProjectMember, createProject, removeProjectMember, updateProject } f
 import { ApiError } from "../../shared/http/client";
 import { useHarnessCatalog } from "../../harness/store/useHarnessCatalog";
 import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
-import AgentControl from "../../components/AgentControl";
+import AgentControl from "../../settings/components/AgentControl";
 import HarnessSelect from "../../harness/components/HarnessSelect";
 import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
 import SkillSelector from "../../skill/components/SkillSelector";

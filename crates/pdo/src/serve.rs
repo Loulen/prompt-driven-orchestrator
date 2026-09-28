@@ -4,14 +4,16 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::daemon::env::{daemon_bind_addr, daemon_cli_config};
+use crate::daemon::router_layer::RouterLayer;
+use crate::daemon::{serve_with_config, DaemonConfig, DaemonHandle, ExtensionHostHandle};
 use anyhow::{Context, Result};
 use axum::Router;
-use pdo_daemon::{DaemonConfig, DaemonHandle, ExtensionHostHandle, RouterLayer};
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::{ExtensionHost, Extensions, HostServices};
 
 use crate::attributes::SqliteAttributes;
-use crate::contexts;
+use crate::contexts::{self, ContextResources};
 use crate::extensions;
 use crate::identify::with_identify;
 
@@ -30,9 +32,9 @@ impl Config {
     pub fn from_cli(bind: Option<IpAddr>, port: u16) -> Result<Self> {
         let repo_root = std::env::current_dir().context("failed to determine current directory")?;
         Ok(Self {
-            addr: pdo_daemon::daemon_bind_addr(bind, port),
+            addr: daemon_bind_addr(bind, port),
             repo_root,
-            daemon: pdo_daemon::daemon_cli_config(bind, port),
+            daemon: daemon_cli_config(bind, port),
             inner_layer: None,
         })
     }
@@ -48,7 +50,7 @@ impl Config {
         }
     }
 
-    /// Not covered by semver: replace the legacy daemon's knobs. The test suite
+    /// Not covered by semver: replace the daemon's knobs. The test suite
     /// uses it to start a daemon that spawns no real agent.
     #[doc(hidden)]
     pub fn with_daemon_config(mut self, daemon: DaemonConfig) -> Self {
@@ -104,13 +106,13 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
         inner_layer,
     } = config;
     compose(&mut daemon, extensions, inner_layer)?;
-    let handle = pdo_daemon::serve_with_config(addr, repo_root, daemon).await?;
+    let handle = serve_with_config(addr, repo_root, daemon).await?;
     Ok(Daemon { handle })
 }
 
-/// Not covered by semver: register `extensions` and plug into the legacy
-/// daemon's knobs what `serve` plugs — the extension host every context asks,
-/// the wiring of the extracted contexts (which starts the host: the attribute
+/// Not covered by semver: register `extensions` and plug into the daemon's
+/// knobs what `serve` plugs — the extension host every context asks, the
+/// wiring of the contexts (which starts the host: the attribute
 /// store, the data folders, the events), the extensions' routes under
 /// `/ext/<id>/`, `inner` (if any) around the assembled router, then `identify`
 /// in front of everything. The test suite's daemons use it so they go through
@@ -134,7 +136,7 @@ pub fn composed_router_layer(inner: Option<RouterLayer>) -> RouterLayer {
     identify_layer(Extensions::default(), inner)
 }
 
-/// The wiring of the extracted contexts (then the start of the extension
+/// The wiring of the contexts (then the start of the extension
 /// host), the extensions' routes, `inner` (if any), then `identify` asking the
 /// host, in front of everything.
 fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterLayer {
@@ -152,7 +154,7 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
     .with_contexts(move |resources| {
         started.start(HostServices {
             attributes: Arc::new(SqliteAttributes::new(resources.db.clone())),
-            bus: resources.run.bus.clone(),
+            bus: resources.bus.clone(),
             data_root: extensions_data_root(&resources),
         });
         contexts::wire(resources, contexts_host.clone())
@@ -162,7 +164,7 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
 /// Where the extensions keep their data: `~/.pdo/extensions/` (the daemon's
 /// home override in the tests), or under the daemon's own `.pdo/` without a
 /// home.
-fn extensions_data_root(resources: &pdo_daemon::ContextResources) -> PathBuf {
+fn extensions_data_root(resources: &ContextResources) -> PathBuf {
     resources
         .home_root
         .clone()

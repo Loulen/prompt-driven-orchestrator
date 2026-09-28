@@ -102,10 +102,6 @@ mod routes_trigger;
 #[path = "routes_workspace.rs"]
 mod routes_workspace;
 
-// TEMPORARY (#914 → deleted by #932): the contract snapshots of spec #913.
-#[path = "snapshots_temporary/mod.rs"]
-mod snapshots_temporary;
-
 #[path = "run_create_upload_errors.rs"]
 mod run_create_upload_errors;
 

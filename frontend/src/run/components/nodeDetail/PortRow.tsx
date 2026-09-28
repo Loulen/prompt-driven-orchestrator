@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { artifactUrl } from "../../api/artifacts";
 import type { PortIO } from "../../api/nodes";
-import ImageLightbox from "../../../components/ImageLightbox";
+import ImageLightbox from "../../../shared/ui/ImageLightbox";
 import { fileBadge, formatSize, isImageFile } from "../../model/nodeDetailFormat";
 
 export default function PortRow({

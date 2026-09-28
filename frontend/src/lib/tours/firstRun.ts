@@ -1,6 +1,6 @@
 /**
- * The *First run* tour (#824, spec #821) — pure data, plus the two idempotent
- * preparations its first step depends on.
+ * The *First run* tour (#824, spec #821) — pure data. The two idempotent
+ * preparations its first step depends on live in `firstRunPreparation.ts`.
  *
  * It fills the New Run form, field by field, with the user doing every gesture,
  * and ends on Launch. Nine steps, and each one is an idea rather than a keystroke:
@@ -13,279 +13,51 @@
  * - Every free input carries the exact block to paste.
  * - Name what is written on the button. The ticket says "Start"; the button says
  *   **Launch**, so the tour says Launch (design Q1).
- *
- * The two preparations go through verbs that know nothing about tours (ADR-0071
- * §3): a generic repo-creation verb, and the ordinary pipeline API. Both are
- * reused when what they make is already there, so replaying the tour is free and
- * a user who edited the training repo keeps their edit.
  */
 
-import { ApiError } from "../../shared/http/client";
-import { createPipeline, fetchPipelines, savePipeline } from "../../pipeline/api/pipelines";
-import { createRepo } from "../../workspace/api/repos";
-import { isNodeFinished } from "../tour";
-import type { TourAppState, TourDef, TourObservation, TourRunNode, TourStep } from "../tour";
-
-/** Where the training repository is created, and the folder the explorer opens on. */
-export const TUTORIAL_REPO_PARENT = "/tmp";
-export const TUTORIAL_REPO_NAME = "pdo-tutorial";
-export const TUTORIAL_REPO_PATH = `${TUTORIAL_REPO_PARENT}/${TUTORIAL_REPO_NAME}`;
-
-/** The one-node pipeline the tour launches. A normal Library pipeline: no prefix,
- *  no tag — the name already says what it is (design Q8). */
-export const TUTORIAL_RUN_PIPELINE_ID = "tutorial-interactive";
-
-/** The block step 8 asks the user to paste. Deliberately concrete: the agent edits
- *  `notes.txt` and writes its output file, which the reading tour then shows. */
-export const TUTORIAL_PROMPT =
-  "Add a line saying hello from PDO to notes.txt, then write a short summary of what you did in your output file.";
-
-/** The line step 12 asks the user to type INTO the agent's own session (#825).
- *  An interactive node waits for a human; this is what telling it "go ahead"
- *  looks like, in the agent's language rather than the app's. */
-export const TUTORIAL_TERMINAL_LINE = "I am done, please write your summary and finish.";
-
-/** The output port the training pipeline declares — the file step 15 opens. */
-const TUTORIAL_OUT_PORT = "out";
-
-const TUTORIAL_OUT_EXPECTED = "Summary of what you changed";
-
-const README = `# pdo-tutorial
-
-A throwaway repository PDO created for the First run tour. Delete it whenever you like.
-`;
-
-const NOTES = `Notes\n`;
-
-/**
- * The training pipeline's document: one interactive node between Start and End,
- * no harness pinned (Inherit), one markdown output that says what it must contain.
- *
- * Interactive is the whole point — the node waits for the user instead of running
- * to completion on its own, which is what makes the Run worth looking at.
- *
- * All three nodes carry a `view` (#825, FP iteration 2). Only `assistant` used to,
- * so the canvas laid Start and End out itself — in a column at x = 200, straight
- * under the agent at x = 260. The very first canvas a newcomer sees had two cards
- * on top of each other. Three cards in a row, a step apart, is what the graph
- * actually is.
- */
-const TUTORIAL_PIPELINE_YAML = `name: ${TUTORIAL_RUN_PIPELINE_ID}
-version: "1.0"
-
-variables: {}
-
-nodes:
-  - id: start
-    name: Start
-    type: start
-    outputs:
-      - name: user_prompt
-    view: { x: 80, y: 120 }
-  - id: assistant
-    name: assistant
-    type: agent
-    interactive: true
-    isolated_worktree: false
-    inputs:
-      - name: task
-    outputs:
-      - name: out
-        port_type: markdown
-        instructions: ${TUTORIAL_OUT_EXPECTED}
-    view: { x: 360, y: 120 }
-  - id: end
-    name: End
-    type: end
-    inputs:
-      - name: result
-    view: { x: 640, y: 120 }
-
-edges:
-  - source: { node: start, port: user_prompt }
-    target: { node: assistant, port: task }
-  - source: { node: assistant, port: out }
-    target: { node: end, port: result }
-`;
-
-const TUTORIAL_NODE_PROMPT = `Do what the user asked, in the repository you are in.
-Then write a short summary of what you changed into your output file.`;
-
-// ---- preparation ----------------------------------------------------------
-
-async function prepareRepo(): Promise<void> {
-  await createRepo(TUTORIAL_REPO_PARENT, TUTORIAL_REPO_NAME, [
-    { path: "README.md", content: README },
-    { path: "notes.txt", content: NOTES },
-  ]);
-}
-
-/**
- * Put `tutorial-interactive` in the Library, or leave the one that is already
- * there alone — **even if the user edited it** (design §1). Re-writing it would
- * quietly undo their change, and a tutorial pipeline is theirs once it exists.
- *
- * The existence check is the pipeline list rather than the create call's 409,
- * because a 409 also fires on a name that collides for another reason; the list
- * answers the question that is actually being asked.
- */
-async function prepareTutorialPipeline(): Promise<void> {
-  const existing = await fetchPipelines();
-  if (existing.some((p) => p.id === TUTORIAL_RUN_PIPELINE_ID)) return;
-  try {
-    await createPipeline(TUTORIAL_RUN_PIPELINE_ID);
-  } catch (e) {
-    // Lost the race with another tab (or a list that was a beat stale): the
-    // pipeline exists, which is all this preparation promised.
-    if (!(e instanceof ApiError) || e.status !== 409) throw e;
-    return;
-  }
-  await savePipeline(TUTORIAL_RUN_PIPELINE_ID, TUTORIAL_PIPELINE_YAML, {
-    assistant: TUTORIAL_NODE_PROMPT,
-  });
-}
-
-// ---- selectors ------------------------------------------------------------
-
-const testId = (id: string) => `[data-testid="${id}"]`;
-
-const RUNS_TAB = testId("left-tab-runs");
-const NEW_RUN_BUTTON = testId("new-run-button");
-const NAME_INPUT = testId("run-name-input");
-const AUTO_NAME = testId("auto-name-checkbox");
-const REPO_INPUT = testId("target-repo-input");
-const BROWSE_TRIGGER = testId("repo-browse-trigger");
-const EXPLORER = testId("repo-browser-modal");
-const REPO_VALID = testId("repo-valid");
-const PIPELINE_TRIGGER = testId("pipeline-select");
-const PIPELINE_OPTION = testId(`pipeline-select-option-${TUTORIAL_RUN_PIPELINE_ID}`);
-/** The trigger, *and* it is holding the tutorial pipeline — one selector, so the
- *  step's condition never has to parse a display name out of a label. */
-const PIPELINE_CHOSEN = `${PIPELINE_TRIGGER}[data-pipeline-id="${TUTORIAL_RUN_PIPELINE_ID}"]`;
-const AGENT_TRIGGER = testId("run-agent-control");
-const AGENT_POPOVER = testId("run-agent-control-popover");
-/** The reserved floor profile's id is fixed forever; its NAME is renameable. */
-const AGENT_DEFAULT_ROW = testId("run-agent-control-choice-default");
-const AGENT_DEFAULT_CHOSEN = `${AGENT_TRIGGER}[data-choice="profile:default"]`;
-const SKILLS_TRIGGER = testId("run-skill-selector");
-const SKILLS_POPOVER = testId("run-skill-selector-popover");
-const SKILLS_PDO_FOLDER = testId("run-skill-selector-folder-skf-pdo");
-const ORCHESTRATE_ID = "pdo-orchestrate";
-const INTERACTIVE_ID = "pdo-interactive";
-const skillRow = (id: string) => testId(`run-skill-selector-option-${id}`);
-/** The skill's **ticked box** inside the popover (#849). The list of active skills
- *  under the trigger is gone — the popover is where a selection is read now — and
- *  since a pick no longer folds the picker away, the box the user just ticked is
- *  still on screen for the checklist to read. Inherited skills are ticked too
- *  (disabled), which is what makes an instance that already delivers both pass. */
-const skillChecked = (id: string) => `${testId(`run-skill-selector-check-${id}`)}:checked`;
-const PROMPT_INPUT = testId("input-textarea");
-const LAUNCH_BUTTON = testId("launch-button");
-const LAUNCH_ERROR = testId("launch-error");
-
-/** Every explorer row shares one testid; `data-entry-name` is what names this one. */
-const TUTORIAL_ENTRY = `${testId("repo-browse-entry")}[data-entry-name="${TUTORIAL_REPO_NAME}"]`;
-
-// ---- the reading half (#825) ----------------------------------------------
-
-/** The Run inspector — the pane the node's terminal, guard and outputs live in. */
-const INSPECTOR_RUN = testId("inspector-pane-run");
-const TERMINAL = testId("tmux-terminal");
-const RELEASE_BUTTON = testId("release-completion-btn");
-const OUT_ROW = `${testId("port-row")}[data-kind="output"][data-port="${TUTORIAL_OUT_PORT}"]`;
-const OUT_MODAL = `${testId("artifact-modal")}[data-port="${TUTORIAL_OUT_PORT}"]`;
-
-/** Attribute selectors carry ids the daemon sanitised, but a quote in one would
- *  break the selector silently rather than fail loudly. */
-function cssEscape(value: string): string {
-  return value.replace(/["\\]/g, "\\$&");
-}
-
-/** The row of the Run this tour launched, in the left panel. */
-function runRowSel(app: TourAppState): string | null {
-  const id = app.latestRun?.id;
-  return id ? `[data-run-row="${cssEscape(id)}"]` : null;
-}
-
-/**
- * The canvas is showing the Run this tour launched (#825). A question rather
- * than a tab-id comparison inlined twice: the step that waits on it also has to
- * *say* whether it already happened.
- */
-function runIsOpen(app: TourAppState): boolean {
-  return app.latestRun != null && app.activeRunId === app.latestRun.id;
-}
-
-/**
- * The one agent node of the training pipeline — the node every reading step is
- * about. Resolved from the Run rather than hard-coded on `assistant`: a user who
- * edited `tutorial-interactive` (the preparation leaves their edit alone, by
- * design) keeps a working tour.
- *
- * `null` until the Run is open: its nodes come from the detail the inspector
- * loads, which is exactly what step 10 asks the user to trigger.
- */
-function followedNode(app: TourAppState): TourRunNode | null {
-  return app.latestRun?.nodes.find((n) => n.type === "agent") ?? null;
-}
-
-/** xyflow stamps `data-id` with the node id — the one canvas target that is stable. */
-function nodeSel(node: TourRunNode | null): string[] {
-  return node ? [`.react-flow__node[data-id="${cssEscape(node.id)}"]`] : [];
-}
-
-/** The node stopped, but not on `completed` — failed, stopped, skipped. Said in
- *  one word, because three steps of the tour change their mind about it. */
-function endedBadly(node: TourRunNode | null): boolean {
-  return isNodeFinished(node) && node?.status !== "completed";
-}
-
-/**
- * How the recap names where the node got to. A tour that was skipped early has
- * no business claiming the node finished.
- *
- * It names the **status**, and nothing about how the node got there: « finished
- * on its own » was false for every reader whose agent stopped to ask a question
- * — `completed` covers the node that ended by itself and the one that ended
- * because somebody answered it in the terminal (FP finding, #825). That is the
- * same claim the wait card stopped making one step earlier; the summary the
- * reader takes away must not put it back.
- */
-function nodeEnding(node: TourRunNode | null): string {
-  if (node == null) return "not opened";
-  if (node.status === "completed") return "finished `completed`";
-  if (isNodeFinished(node)) return `ended \`${node.status}\``;
-  return "still running";
-}
-
-/** The inspector is showing THIS node: the Run pane is up, and the canvas
- *  selection is on it. Both, because the pane survives a change of selection. */
-function inspectorShows(o: TourObservation, node: TourRunNode | null): boolean {
-  if (!node) return false;
-  return (
-    o.present(INSPECTOR_RUN) &&
-    o.app.selection.kind === "node" &&
-    o.app.selection.id === node.id
-  );
-}
-
-function filled(o: TourObservation, selector: string): boolean {
-  return (o.value(selector) ?? "").trim().length > 0;
-}
-
-/** Is this skill ticked in the picker — by the user, or by a coarser tier? */
-function hasSkill(o: TourObservation, id: string): boolean {
-  return o.present(skillChecked(id));
-}
-
-/**
- * How long a reading step waits for its target. Longer than the form's five
- * seconds on purpose: each of these lands right after a fetch the click itself
- * triggered — the Run's detail, the pipeline of the tab that just opened — and a
- * tour that gave up while the app was still loading what it asked for would be
- * blaming the reader for a round trip.
- */
-const READING_TIMEOUT_MS = 15_000;
+import type { TourDef, TourStep } from "../tourDef";
+import {
+  TUTORIAL_OUT_PORT,
+  TUTORIAL_PROMPT,
+  TUTORIAL_REPO_NAME,
+  TUTORIAL_REPO_PARENT,
+  TUTORIAL_REPO_PATH,
+  TUTORIAL_RUN_PIPELINE_ID,
+  prepareRepo,
+  prepareTutorialPipeline,
+} from "./firstRunPreparation";
+import {
+  AGENT_DEFAULT_CHOSEN,
+  AGENT_DEFAULT_ROW,
+  AGENT_POPOVER,
+  AGENT_TRIGGER,
+  AUTO_NAME,
+  BROWSE_TRIGGER,
+  EXPLORER,
+  INTERACTIVE_ID,
+  LAUNCH_BUTTON,
+  LAUNCH_ERROR,
+  NAME_INPUT,
+  NEW_RUN_BUTTON,
+  ORCHESTRATE_ID,
+  PIPELINE_CHOSEN,
+  PIPELINE_OPTION,
+  PIPELINE_TRIGGER,
+  PROMPT_INPUT,
+  REPO_INPUT,
+  REPO_VALID,
+  RUNS_TAB,
+  SKILLS_PDO_FOLDER,
+  SKILLS_POPOVER,
+  SKILLS_TRIGGER,
+  TUTORIAL_ENTRY,
+  filled,
+  followedNode,
+  hasSkill,
+  nodeEnding,
+  skillRow,
+} from "./firstRunReading";
+import { READING_STEPS } from "./firstRunReadingSteps";
 
 // ---- the steps ------------------------------------------------------------
 
@@ -428,194 +200,9 @@ const STEPS: TourStep[] = [
     done: (o) => o.app.runCount > o.baseline.runCount,
   },
 
-  // ---- reading the Run (#825) ---------------------------------------------
-  // Launch closed the modal. From here the tour teaches the life of ONE
-  // interactive node, and every step advances on the Run's own state — the
-  // status the inspector polls, the guard flag, the artifact on disk — never on
-  // a timer. Each is skippable: a reader who already knows this half should not
-  // have to sit through it to get their checkmark.
-  {
-    id: "find-run",
-    title: "Find your Run",
-    // Launch opens the Run's tab itself, so on the nominal path the condition
-    // goes true a tick after this step is entered — too late for
-    // `satisfiedOnEntry`, and a step that advanced on its own was therefore
-    // never seen by anybody (the FP of #825 watched the tour jump from 9 to 11).
-    // It still has an idea to give — the list on the left is where your Runs
-    // live — so it stops for a `Next` once the Run is open, and says what
-    // already happened rather than instructing a click nobody needs to make.
-    body: (o) =>
-      runIsOpen(o.app)
-        ? "Your Run is the top row of the list on the left, and Launch already opened its tab. Every Run is a row here; the dot is its status, blue while it runs."
-        : "Click your Run at the top of the list. Every Run is a row here; the dot is its status, blue while it runs.",
-    // Strictly the row. Falling back to the Runs tab would keep a target alive
-    // forever, and « waiting on something that will never come » is precisely
-    // what story 18 asks a tour not to do.
-    target: (o) => {
-      const row = runRowSel(o.app);
-      return row ? [row] : [];
-    },
-    waitingFor: "your Run in the list on the left",
-    failureHint: "The list may be filtered — clear the filters above it, or reopen the Runs tab.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    skippable: true,
-    advanceHint: "advances when the Run opens",
-    // Only once it IS open: while the reader still has the click to make, the
-    // footer says what the tour is waiting for, and a `Next` nobody can press
-    // would be a control in the way of the instruction.
-    confirm: (o) => runIsOpen(o.app),
-    // The Run's tab is open on the canvas — which is what clicking the row does.
-    done: (o) => runIsOpen(o.app),
-  },
-  {
-    id: "open-node",
-    // Opening a Run puts the selection on its live node, so on the nominal path
-    // this step is entered already satisfied and stops for a `Next` — the same
-    // shape as `find-run` above. It says so rather than instructing a click that
-    // would change nothing, which a reader reads as an overlay swallowing their
-    // click (FP finding, #825).
-    title: "Open the node",
-    body: (o) => {
-      const name = followedNode(o.app)?.name ?? "agent";
-      return inspectorShows(o, followedNode(o.app))
-        ? `The inspector on the right is already showing the ${name} node — opening a Run selects the node it is running. It is the one agent of this pipeline, and that pane is its live terminal.`
-        : `Click the ${name} node. It is the one agent of this pipeline; the inspector on the right shows its live terminal.`;
-    },
-    target: (o) => nodeSel(followedNode(o.app)),
-    waitingFor: "the agent node on the canvas",
-    failureHint: "It sits between Start and End; scroll or zoom the canvas to bring it into view.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    skippable: true,
-    advanceHint: "advances when the inspector shows the node",
-    // No `confirm`: a reader who still owes the click should have it advance the
-    // moment they make it. The `Next` on this card comes from `satisfiedOnEntry`,
-    // which is the case the branched body above is written for.
-    done: (o) => inspectorShows(o, followedNode(o.app)),
-  },
-  {
-    id: "talk-to-agent",
-    title: "Talk to the agent",
-    body: "Click in the terminal and paste the line, then press Enter. This is the agent's own session; if it first asks whether you trust the folder, answer yes.",
-    target: () => [TERMINAL],
-    waitingFor: "the agent's terminal in the Run inspector",
-    failureHint: "The terminal is in the Run tab of the inspector, above the buttons.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    copyBlock: TUTORIAL_TERMINAL_LINE,
-    skippable: true,
-    // No condition at all: what happens in tmux is a pane of text, not a form
-    // control, and a tour that claimed to read it would be guessing. `Next` is
-    // live from the start — the user owns this one (story 14).
-  },
-  {
-    id: "release-completion",
-    title: "Release the completion",
-    body: "Click Mark ready for completion. An interactive node is guarded: the agent cannot finish until you release it — this is the release.",
-    note: '"Mark complete" next to it takes the artifacts as they are, without the agent — not for now.',
-    target: () => [RELEASE_BUTTON],
-    waitingFor: "the Mark ready for completion button",
-    failureHint: "It only shows while the node is live, under the terminal.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    skippable: true,
-    advanceHint: "advances once released",
-    // A node that has already stopped is past this step whatever opened its
-    // guard — including the other button. Reading only the flag would stop the
-    // tour on a card about a gesture that no longer has a button to make it.
-    done: (o) => {
-      const node = followedNode(o.app);
-      return node != null && (node.released || isNodeFinished(node));
-    },
-  },
-  {
-    id: "wait-for-node",
-    title: "Wait for the node to finish",
-    // Nothing left to instruct once it ended badly: the checklist has shown what
-    // happened and the note below says what it means.
-    body: (o) =>
-      endedBadly(followedNode(o.app))
-        ? ""
-        : "The agent writes its output and completes. Watch the status pill at the top of the inspector turn from Running to Completed.",
-    // The nominal card used to open on « Nothing to do », and that is not always
-    // true: an agent quick enough to run `pdo complete` before the release is
-    // refused, and parks on a question — the node then ends only once somebody
-    // answers it (FP finding, #825). Ordinary, not exotic, and it lands in the
-    // first five minutes of a newcomer. The terminal is inside the soft zone, so
-    // they can answer from where they are standing.
-    note: (o) =>
-      endedBadly(followedNode(o.app))
-        ? "The node ended without completing. Its terminal above says why; the tour goes on to the output, which may be missing."
-        : "If the agent asks you something in the terminal above, answer it — the step waits for as long as it takes.",
-    // The whole inspector, as a zone rather than a target: during a wait of
-    // unknown length the reader must keep the terminal — read it, scroll it,
-    // answer a late question. The rest of the app stays blocked.
-    target: () => [INSPECTOR_RUN],
-    soft: true,
-    // The one step with no limit (ticket: « sans limite de temps »). An agent
-    // takes as long as it takes, and a countdown here would be the tour deciding
-    // how fast somebody else's work should be.
-    targetTimeoutMs: null,
-    waitingFor: "the Run inspector",
-    waitingNote: "Waiting for the node to finish · no time limit",
-    skippable: true,
-    // Skipping a wait means "I have seen enough" (design Q3). The steps after it
-    // are about a file the node has not written, so the recap is the honest
-    // place to land — and it says the node is still running.
-    skipEndsTour: true,
-    advanceHint: "advances on its own",
-    // A failure is still an ending, so the step is done — but it waits for a
-    // click, because the sentence explaining it is the point.
-    confirm: (o) => endedBadly(followedNode(o.app)),
-    done: (o) => isNodeFinished(followedNode(o.app)),
-    checklist: (o) => {
-      const node = followedNode(o.app);
-      const finished = isNodeFinished(node);
-      return [
-        {
-          label: "completion released",
-          done: node?.released === true,
-          // The engine has no « back ». A reader who skipped the release learns
-          // here why nothing is happening — and the button is inside the soft
-          // zone, so they can still press it.
-          note:
-            node?.released || finished
-              ? undefined
-              : "the node waits for it: click Mark ready for completion",
-        },
-        {
-          label: "node finished",
-          done: finished,
-          badge: endedBadly(node) ? (node?.status ?? undefined) : undefined,
-        },
-      ];
-    },
-  },
-  {
-    id: "open-output",
-    title: "Open the output",
-    // Two beats, one card: click the row, then read what opened.
-    body: (o) =>
-      o.present(OUT_MODAL)
-        ? "This is what the agent wrote — the summary your prompt asked for, and the only thing the next node would have received. Read it, then press Next."
-        : `Click ${TUTORIAL_OUT_PORT}. It is the file the agent wrote — the summary your prompt asked for — and the only thing the next node would have received.`,
-    // Re-aims onto the artifact the click opened, the way `pick-repo` re-aims
-    // onto the explorer. Without it the tour ends the instant the file appears,
-    // and the recap card lands on top of the summary it just told the reader to
-    // open — the one thing this step exists to show them (FP finding, #825).
-    target: (o) => (o.present(OUT_MODAL) ? [OUT_MODAL] : [OUT_ROW]),
-    // A page to read, not a control to hit: once the artifact is up it is lit as
-    // a zone — dashed, lighter dim, scrollable — and the popover moves beside it.
-    soft: (o) => o.present(OUT_MODAL),
-    waitingFor: `the ${TUTORIAL_OUT_PORT} row under Outputs`,
-    failureHint: "A node that failed or was stopped writes no output.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    skippable: true,
-    advanceHint: "advances when the file opens",
-    // The reader owns the last moment of the tour: once the file is up, `Next`
-    // is what goes to the recap — so the recap cannot land on the summary
-    // before it has been read. Until then the footer keeps its waiting line.
-    confirm: (o) => o.present(OUT_MODAL),
-    done: (o) => o.present(OUT_MODAL),
-  },
+  ...READING_STEPS,
 ];
+
 
 export const FIRST_RUN_TOUR: TourDef = {
   id: "first-run",

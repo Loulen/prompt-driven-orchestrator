@@ -1,5 +1,5 @@
 import { useState } from "react";
-import SelectControl from "../../../../components/SelectControl";
+import SelectControl from "../../../../shared/ui/SelectControl";
 import { CombinedIcon } from "../../StatsAbsorption";
 import type { MasterSelection } from "../../../store/absorptionSelection";
 import type { AbsorbableRow } from "../../../model/statsAbsorption";

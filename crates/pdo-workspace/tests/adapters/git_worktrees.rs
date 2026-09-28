@@ -1232,7 +1232,7 @@ fn worktree_dir_for_run_follows_canonical_schema() {
 
 // New per-module unit test (#276 AC "new per-module unit tests"):
 // reap_orphan_sub_worktree was previously covered only end-to-end by
-// crates/pdo-daemon/tests/spawn_abort_recovery.rs.
+// crates/pdo/tests/spawn_abort_recovery.rs.
 #[test]
 fn reap_orphan_sub_worktree_removes_dir_and_branch() {
     let tmp = tempfile::tempdir().unwrap();

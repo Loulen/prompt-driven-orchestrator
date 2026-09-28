@@ -3,7 +3,7 @@ import { isLiveRun, isTerminalRun } from "../../model/runStatus";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
 import type { RunTreeNode } from "../../model/runTree";
 import { ChildCountPills } from "../OrchestrationTab";
-import SelectControl from "../../../components/SelectControl";
+import SelectControl from "../../../shared/ui/SelectControl";
 import { STATUS_STYLES } from "./runsListTables";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 

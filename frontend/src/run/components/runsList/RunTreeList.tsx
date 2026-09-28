@@ -4,7 +4,7 @@ import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntr
 import { handleSelectionKeydown } from "../../../lib/selectionKeys";
 import { flattenVisible, type RunTreeNode } from "../../model/runTree";
 import { EMPTY_RUN_FILTER } from "../../model/runFilter";
-import SelectControl from "../../../components/SelectControl";
+import SelectControl from "../../../shared/ui/SelectControl";
 import RunRow from "./RunRow";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 

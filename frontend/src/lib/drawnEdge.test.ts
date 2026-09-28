@@ -4,7 +4,8 @@ import { gridStep } from "./wiringGrid";
 
 // Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
 const GRID_STEP = gridStep("L");
-import { anchorPoint, enforcePerpendicularEnds, landingLeg } from "./anchorSide";
+import { anchorPoint } from "./anchorSide";
+import { enforcePerpendicularEnds, landingLeg } from "./anchorLanding";
 import type { Point } from "./orthogonalRouter";
 import {
   advanceGesture,

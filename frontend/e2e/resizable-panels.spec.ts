@@ -154,7 +154,7 @@ test("layout is unified across the run placeholder and the edit canvas", async (
   ).toBeNull();
 
   // Open a pipeline into the edit canvas; the same panel group stays mounted.
-  await page.getByRole("tab", { name: "Library" }).click();
+  await page.getByRole("tab", { name: "Pipelines" }).click();
   const entry = page.getByText(PIPELINE_NAME).first();
   await expect(entry).toBeVisible({ timeout: 10_000 });
   await entry.click();

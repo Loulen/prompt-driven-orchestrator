@@ -1,6 +1,6 @@
 import { useState } from "react";
-import GridSizePicker from "../../../components/GridSizePicker";
-import ThemeSelect from "../../../components/ThemeSelect";
+import GridSizePicker from "../../../pipeline/components/GridSizePicker";
+import ThemeSelect from "../../../shared/ui/ThemeSelect";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../../../lib/uiPrefs";
 import { useEditStore } from "../../../pipeline/store/editStore";
 import { useWiringStore } from "../../../stores/wiringStore";

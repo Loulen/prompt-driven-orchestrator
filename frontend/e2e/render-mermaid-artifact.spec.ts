@@ -21,7 +21,7 @@ const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
 // A valid pipeline needs exactly one `start` node (one `user_prompt` output) and
-// one `end` node (one `result` input); see crates/pdo-daemon/src/pipeline.rs. The
+// one `end` node (one `result` input); see crates/pdo-pipeline/src/domain/pipeline/. The
 // `start` auto-emits the prompt so `diagrammer` spawns (stubbed by sleep); we seed
 // its output artifacts on disk and read them back through the node-IO API.
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -63,7 +63,7 @@ edges:
 const ROLE_PROMPT = "You draw diagrams.\n";
 
 // Per-port artifact bodies. The daemon resolves a markdown output port to
-// `<node>/iter-1/<port>/output.md` (see crates/pdo-daemon/src/blackboard.rs);
+// `<node>/iter-1/<port>/output.md` (see crates/pdo-run/src/domain/blackboard.rs);
 // the flat `<port>.md` layout in older specs does NOT match that resolver.
 const ARTIFACTS: Record<string, string> = {
   good: `## Flow

@@ -14,11 +14,13 @@ import {
   skipStep,
   startTour,
   stepSoft,
-  type TourAppState,
-  type TourDef,
-  type TourObservation,
-  type TourStep,
 } from "./tour";
+import type {
+  TourAppState,
+  TourDef,
+  TourObservation,
+  TourStep,
+} from "./tourDef";
 
 const EMPTY_APP: TourAppState = {
   pipelineId: null,

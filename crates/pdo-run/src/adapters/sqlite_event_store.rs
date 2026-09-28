@@ -1,8 +1,9 @@
 //! The event log over SQLite: the `events` table and the tombstones of the
 //! forgotten Runs (ADR-0024).
 //!
-//! The free functions are what the legacy crate still calls directly, until
-//! the code that calls them moves onto the [`EventStore`] port.
+//! The free functions are what the readers outside a use case call directly
+//! (the session context's Run-side ports, the boot's schema), beside the
+//! [`EventStore`] port.
 
 use anyhow::{Context, Result};
 

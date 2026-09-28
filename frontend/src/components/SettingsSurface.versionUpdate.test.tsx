@@ -33,10 +33,14 @@ vi.mock("../sandbox/api/profiles", () => ({
   fetchSandboxProfileReferents: vi.fn(),
 }));
 
-vi.mock("../api", () => ({
-  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+// #891: Settings › General › Stats absorptions reads the stats context's API.
+vi.mock("../stats/api/absorptions", () => ({
   fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
   uncombineStatsMember: vi.fn(),
+}));
+
+vi.mock("../api", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createAgentProfile: vi.fn(),
   updateAgentProfile: vi.fn(),
   deleteAgentProfile: vi.fn(),

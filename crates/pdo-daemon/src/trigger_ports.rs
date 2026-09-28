@@ -1,11 +1,20 @@
 //! The port of the trigger context that what is still legacy implements: the
 //! instance settings it reads and the pause it writes (the settings context).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use pdo_trigger::application::ports::{BoxFuture, TriggerSettings};
 
 use crate::instance_config;
+
+/// The trigger context's resources: the instance settings it reads (the pause,
+/// the guard timeout), still legacy, and the daemon's fault-injection knob.
+#[derive(Clone)]
+pub struct TriggerResources {
+    pub settings: Arc<dyn TriggerSettings>,
+    pub panic_on_trigger_name: Option<String>,
+}
 
 /// The pause and the guard timeout of `instance_config`, read fresh at every call.
 pub(crate) struct LegacyTriggerSettings {

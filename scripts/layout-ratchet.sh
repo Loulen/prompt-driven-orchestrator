@@ -145,14 +145,20 @@ cd "$(git rev-parse --show-toplevel)"
 #   the review of a Run moved out — structured_diff.rs and review_comments.rs to
 #   crates/pdo-review (review_ports.rs, the review's port the legacy side implements,
 #   takes one slot back); DiffTab and its test to frontend/src/review/.
-# frontend/src/components: 123 and crates/pdo-daemon/src: 14 (#927, spec #913) ratchet down:
+# frontend/src/components: 124 and crates/pdo-daemon/src: 15 (#928, spec #913) ratchet down:
+#   the stats context moved out — stats, stats_performance, stats_absorption, distribution
+#   and price_table to crates/pdo-stats; StatsCharts (split by tab), StatsAbsorption,
+#   StatsAbsorptionsPanel, StatsModal and their tests to frontend/src/stats/. stats_ports.rs
+#   is admitted: the legacy side of the context's ports (the Triggers' fires).
+# frontend/src/components: 122 and crates/pdo-daemon/src: 14 — #926 and #928 combined.
+# frontend/src/components: 116 and crates/pdo-daemon/src: 10 (#927, spec #913) ratchet down:
 #   the trigger context moved out — cron_schedule, fire_decision, guard_runner,
 #   trigger_scheduler and trigger_store to crates/pdo-trigger (trigger_ports.rs, the trigger's
 #   port the legacy side implements, takes one slot back); TriggersListPanel,
 #   TriggerDetailPanel, their tests, GuardOutput and GuardTestResult to frontend/src/trigger/.
 BASELINES='
-frontend/src/components 123
-crates/pdo-daemon/src 14
+frontend/src/components 116
+crates/pdo-daemon/src 10
 '
 
 fail=0

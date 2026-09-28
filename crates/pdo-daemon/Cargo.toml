@@ -33,6 +33,7 @@ pdo-session.workspace = true
 pdo-pipeline.workspace = true
 pdo-run.workspace = true
 pdo-trigger.workspace = true
+pdo-stats.workspace = true
 pdo-review.workspace = true
 ts-rs.workspace = true
 tokio.workspace = true

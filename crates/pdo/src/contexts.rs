@@ -32,8 +32,20 @@ use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_session::adapters::terminal_window::OsTerminalWindow;
 use pdo_session::adapters::tmux::TmuxCli;
 use pdo_session::{Session, SessionOptions, SessionPorts};
+use pdo_stats::adapters::contexts::{
+    BusAnnouncements, PlatformAudit, WorkspaceProjects as StatsProjects,
+};
+use pdo_stats::adapters::models_dev::HttpPriceSource;
+use pdo_stats::adapters::price_files::HomePriceFiles;
+use pdo_stats::adapters::rename_ledger::StatsRenames;
+use pdo_stats::adapters::run_events::RunContextEvents;
+use pdo_stats::adapters::run_files::DiskRunFiles;
+use pdo_stats::adapters::sqlite_absorptions::SqliteAbsorptions;
+use pdo_stats::adapters::transcripts::HarnessTranscripts;
+use pdo_stats::{Stats, StatsOptions, StatsPorts};
 use pdo_trigger::adapters::contexts::{
-    GitRepositories, LibraryPipelines, PlatformAudit, RunsOfTriggers, StagingProfiles,
+    GitRepositories, LibraryPipelines, PlatformAudit as TriggerAudit, RunsOfTriggers,
+    StagingProfiles,
 };
 use pdo_trigger::adapters::guard_shell::ShellGuard;
 use pdo_trigger::adapters::sqlite::SqliteTriggers;
@@ -44,14 +56,13 @@ pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) ->
     let session = session(&resources, host.clone());
     let run = run(&resources, &session, host.clone());
     let review = review(&resources, &run, host.clone());
-    let pipelines = pipelines(&resources, host.clone());
-    let trigger = resources.trigger.clone();
-    let (db, repo_root) = (resources.db.clone(), resources.repo_root.clone());
-    let platform = platform(resources, host.clone());
+    let platform = platform(&resources, host.clone());
+    let stats = stats(&resources, &platform, host.clone());
+    let pipelines = pipelines(&resources, &stats, host.clone());
     let triggers = triggers(TriggerWiring {
-        db,
-        repo_root,
-        legacy: trigger,
+        db: resources.db.clone(),
+        repo_root: resources.repo_root.clone(),
+        legacy: resources.trigger.clone(),
         run: &run,
         platform: &platform,
         host,
@@ -61,10 +72,12 @@ pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) ->
             .merge(pdo_session::router(session.clone()))
             .merge(pdo_pipeline::adapters::http::router(pipelines))
             .merge(pdo_review::router(review))
+            .merge(pdo_stats::router(stats.clone()))
             .merge(pdo_trigger::router(triggers.clone())),
         platform,
         session,
         run,
+        stats,
         triggers,
     }
 }
@@ -137,7 +150,7 @@ fn triggers(w: TriggerWiring<'_>) -> Arc<Triggers> {
             repositories: Arc::new(GitRepositories),
             sandbox_profiles: Arc::new(StagingProfiles(Arc::new(SqliteProfiles::new(w.db)))),
             runs: Arc::new(RunsOfTriggers(w.run.clone())),
-            audit: Arc::new(PlatformAudit(w.platform.clone())),
+            audit: Arc::new(TriggerAudit(w.platform.clone())),
             bus: w.run.bus().clone(),
             extensions: w.host,
         },
@@ -185,17 +198,59 @@ fn session(r: &ContextResources, host: Arc<dyn ExtensionHost>) -> Arc<Session> {
     )
 }
 
+/// The `stats` context: the run context's event log (its `EventStore` and its
+/// cross-Run reads over SQLite), the absorptions over SQLite, the Runs' files
+/// and transcripts on disk, the price files of the host home and models.dev,
+/// the Projets of the workspace, the platform's audit journal, the kernel's
+/// bus, and the Triggers' fires the legacy daemon still holds.
+fn stats(
+    r: &ContextResources,
+    platform: &Arc<Platform>,
+    host: Arc<dyn ExtensionHost>,
+) -> Arc<Stats> {
+    let store = Arc::new(SqliteEventStore::new(r.db.clone()));
+    let home_override = r.run.sandbox_home_override.clone();
+    Stats::new(
+        StatsPorts {
+            events: Arc::new(RunContextEvents::new(store.clone(), store)),
+            triggers: r.stats.triggers.clone(),
+            projects: Arc::new(StatsProjects(r.run.workspace.clone())),
+            absorptions: Arc::new(SqliteAbsorptions::new(r.db.clone())),
+            run_files: Arc::new(DiskRunFiles::new(
+                r.repo_root.clone(),
+                home_override.clone(),
+            )),
+            transcripts: Arc::new(HarnessTranscripts),
+            price_files: Arc::new(HomePriceFiles::new(home_override)),
+            price_source: Arc::new(HttpPriceSource),
+            audit: Arc::new(PlatformAudit(platform.clone())),
+            announcements: Arc::new(BusAnnouncements(r.run.bus.clone())),
+            extensions: host,
+        },
+        StatsOptions {
+            repo_root: r.repo_root.clone(),
+            price_source_url: r.stats.price_source_url.clone(),
+            price_refresh_at_boot: r.stats.price_refresh_at_boot,
+        },
+    )
+}
+
 /// The `pipeline` context: the instance registry and the node library on
-/// disk, the daemon's live stream, the skill bank, and the Run-side and
-/// Stats-side ports the legacy daemon still implements.
-fn pipelines(r: &ContextResources, host: Arc<dyn ExtensionHost>) -> Arc<Pipelines> {
+/// disk, the daemon's live stream, the skill bank, the Stats absorption a
+/// rename leaves behind, and the Run-side port the legacy daemon still
+/// implements.
+fn pipelines(
+    r: &ContextResources,
+    stats: &Arc<Stats>,
+    host: Arc<dyn ExtensionHost>,
+) -> Arc<Pipelines> {
     let p = r.pipeline.clone();
     Arc::new(Pipelines::new(PipelinesPorts {
         registry: Arc::new(FsPipelineRegistry::new(r.repo_root.clone(), p.self_writes)),
         library: Arc::new(FsNodeLibrary::home()),
         events: Arc::new(BroadcastPipelineEvents(p.events)),
         runs: p.runs,
-        renames: p.renames,
+        renames: Arc::new(StatsRenames(stats.clone())),
         skills: Arc::new(BankOfSkills(p.skills)),
         extensions: host,
     }))
@@ -204,27 +259,27 @@ fn pipelines(r: &ContextResources, host: Arc<dyn ExtensionHost>) -> Arc<Pipeline
 /// The `platform` context: SQLite for the mounts and the audit, the local
 /// filesystem for the pages and the update journal, GitHub for the releases,
 /// a detached `sh` for the update.
-fn platform(r: ContextResources, host: Arc<dyn ExtensionHost>) -> Arc<Platform> {
+fn platform(r: &ContextResources, host: Arc<dyn ExtensionHost>) -> Arc<Platform> {
     let ports = PlatformPorts {
         page_mounts: Arc::new(SqlitePageMounts::new(r.db.clone())),
         page_files: Arc::new(LocalPageFiles),
-        audit: Arc::new(SqliteAuditLog::new(r.db)),
-        runs: r.runs,
-        update_setting: r.update_setting,
+        audit: Arc::new(SqliteAuditLog::new(r.db.clone())),
+        runs: r.runs.clone(),
+        update_setting: r.update_setting.clone(),
         release_source: Arc::new(GithubReleases),
-        update_journal: Arc::new(FsUpdateJournal::new(r.home_root)),
+        update_journal: Arc::new(FsUpdateJournal::new(r.home_root.clone())),
         installation: Arc::new(HostInstallation::new(
             r.install_method_override,
             r.supervision_override,
         )),
-        update_executor: Arc::new(DetachedExecutor::new(r.update_executor_override)),
+        update_executor: Arc::new(DetachedExecutor::new(r.update_executor_override.clone())),
         extensions: host,
     };
     let update = UpdateOptions {
-        source_url: r.update_source_url,
+        source_url: r.update_source_url.clone(),
         port: r.port,
-        working_dir: r.repo_root,
-        relaunch_command: r.relaunch_command,
+        working_dir: r.repo_root.clone(),
+        relaunch_command: r.relaunch_command.clone(),
     };
     // Observed once at boot, so the polled `GET /sessions` never shells out.
     let health = service_health_probe::observe(r.service_health_override);

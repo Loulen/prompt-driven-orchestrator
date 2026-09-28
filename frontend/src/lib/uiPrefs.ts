@@ -126,6 +126,6 @@ export function saveWiringGridSize(v: GridSize): void {
 /**
  * Stats keeps **no** per-browser preference (#819). The box-plot zoom and the
  * axis mode used to live here under `pdo.stats.*`; they are now ephemeral like
- * every other Stats setting — see `lib/statsFilters.ts`. Stale keys from an
+ * every other Stats setting — see `stats/model/statsFilters.ts`. Stale keys from an
  * older build are left alone: never read, never written, never cleaned up.
  */

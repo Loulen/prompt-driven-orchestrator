@@ -298,6 +298,19 @@ vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   ...(await import("../api")),
 }));
+// So does the stats context's (#928): its figures, absorptions and price sync.
+vi.mock("../stats/api/stats", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../stats/api/absorptions", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
+vi.mock("../stats/api/prices", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
 
 // The staging-profile panel reads the sandbox context's own API module (#432).
 vi.mock("../sandbox/api/profiles", () => {

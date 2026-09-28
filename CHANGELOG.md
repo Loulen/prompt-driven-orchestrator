@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.111.13 — Contexte `trigger` : cron, guard, fires (#927, spec #913)
+## 1.111.14 — Contexte `trigger` : cron, guard, fires (#927, spec #913)
 
 Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots
 HTTP et WS identiques ; `/triggers*` répond comme avant, octet pour octet, sans extension).
@@ -38,6 +38,40 @@ HTTP et WS identiques ; `/triggers*` répond comme avant, octet pour octet, sans
   devient `pdo_trigger::adapters::guard_shell`.
 - Front : l'onglet Triggers, le panneau de détail, le verdict et la sortie du guard, les presets
   cron et leur API passent dans `frontend/src/trigger/`, découpés sous 400 lignes par fichier.
+
+## 1.111.13 — Contexte `stats` : Overview, Cost, Performance, absorptions et synchronisation des prix (#928, spec #913)
+
+Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots
+HTTP et WS identiques ; `/stats/overview`, `/stats/cost`, `/stats/performance`,
+`/stats/absorptions`, `/stats/absorptions/member` et `/settings/cost-prices/sync` répondent
+comme avant, octet pour octet, sans extension).
+
+- Le contexte quitte `pdo-legacy` pour `crates/pdo-stats` : les trois replis et leurs
+  accumulateurs, la médiane R-7 et les clôtures de Tukey, les règles d'absorption (clés, ordre
+  de résolution, portée figée, cascade d'un retrait) et la normalisation de la source de prix
+  sont du domaine pur. Les règles d'absorption d'ADR-0077/0078 ne changent pas.
+- Les agrégations lisent le journal d'événements par les ports du contexte `run` (`EventStore`
+  et le nouveau `EventWindows`, dont l'adaptateur SQLite porte les requêtes indexées), jamais
+  la table directement. Le store des absorptions ne lit plus la table `events` : l'historique
+  d'un Pipeline lui est fourni par ces ports avant l'écriture, qui reste une transaction.
+- Chaque mutation est un use case qui reçoit l'Acteur et consulte d'abord l'Autorisation
+  d'opération : Combine (`stats_absorption` × `create`), Uncombine (`stats_absorption` ×
+  `delete` sur le membre), synchronisation des prix (`price_table` × `sync`). L'API
+  d'extension gagne ces deux ressources (`ResourceKind::StatsAbsorption`,
+  `ResourceKind::PriceTable`, ajout mineur). Le rafraîchissement des prix au démarrage et
+  l'absorption née d'un renommage sont des transitions du daemon et ne demandent rien (D10).
+- Le mémo de Performance et le verrou de synchronisation appartiennent à l'instance du
+  contexte, plus à un état global.
+- Tests : les use cases contre des ports en mémoire (étage 2), le contexte sur ses vrais
+  adaptateurs — SQLite, fichiers, transcripts — piloté par son routeur (étage 3, les tests
+  internes du crate legacy déplacés), la couverture des refus d'extension étendue aux trois
+  routes de mutation.
+- Les cibles `RUST_LOG` changent avec le code : `pdo_daemon` (synchronisation et
+  rafraîchissement des prix) devient `pdo_stats::application::prices`, et le renommage
+  `pdo_stats::application::absorptions::record_rename`.
+- Front : `StatsCharts` (3,8k lignes) est découpé par onglet (Overview, Cost, Performance)
+  dans `frontend/src/stats/components/charts/`, avec `StatsModal`, `StatsAbsorption`,
+  `StatsAbsorptionsPanel`, leurs hooks, leurs modèles et leur API (`frontend/src/stats/`).
 
 ## 1.111.12 — Contexte `review` : diff, diff structuré, commentaires de relecture (#926, spec #913)
 

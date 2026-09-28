@@ -39,10 +39,11 @@ nomme aucune extension en particulier.
   (sa base, ses migrations), et ses bundles d'UI chargés à l'exécution. React est partagé par
   import map et vérifié par majeure : en cas de décalage, le bundle n'est pas chargé et une
   bannière le signale.
-- **Composition à la compilation.** Un binaire tiers dépend des crates du core par tag git et
-  appelle `serve(config, extensions)`. **Seuls le crate d'API et `serve` sont couverts par le
-  semver** : l'API démarre en **0.x**, et le reste du core ne promet rien. Axum est réexporté par
-  l'API et fait donc partie du contrat.
+- **Composition à la compilation.** Un binaire tiers dépend des crates du core par tag git et son
+  `main` appelle `pdo::main_with(extensions)` : tout le binaire `pdo`, CLI comprise (amendement
+  #23 ci-dessous). `serve(config, extensions)` démarre le daemon seul. **Seuls le crate d'API,
+  `main_with` et `serve` sont couverts par le semver** : l'API démarre en **0.x**, et le reste du
+  core ne promet rien. Axum est réexporté par l'API et fait donc partie du contrat.
 - **Une extension de test interne** vit dans la suite de tests du core. Elle n'est ni publiée ni
   documentée, et elle fait jouer chaque hook. C'est le seul garde-fou qui fait échouer le core
   quand il casse son API.
@@ -66,3 +67,24 @@ nomme aucune extension en particulier.
 Quand une extension a besoin de ce que l'API n'expose pas (une vue sans emplacement, par exemple),
 il faut modifier le core. Chaque ajout reste générique et utilisable par toute extension. Les
 seams se découvrent en écrivant des extensions.
+
+## Amendement #23 : le point d'entrée `main_with(extensions)`
+
+Premier seam découvert ainsi, en écrivant la première distribution (`Loulen/pdo-extensions`).
+Le binaire `pdo` n'est pas que le daemon : les agents appellent `pdo complete` et `pdo wait-user`
+depuis leur session, et `pdo service install` enregistre l'exécutable courant comme daemon. Avec
+`serve` seul, une distribution devait recopier le dispatch de la CLI, donc le contrat de codes de
+sortie (`complete` 0/3/4/1, `wait-user` 3, `run wait` 2), la règle « runtime tokio pour le seul
+daemon » et l'init du tracing, en dépendant de crates hors semver.
+
+- **`pdo::main_with(extensions)` est tout le binaire** : parse de la ligne de commande, dispatch,
+  code de sortie. Le binaire vanilla est `pdo::main_with(Vec::new)`, si bien que le dispatch
+  n'existe qu'en un exemplaire.
+- **Une fabrique, pas une liste** (`impl FnOnce() -> Vec<Box<dyn Extension>>`) : appelée au plus
+  une fois, et seulement par `daemon` et `service`. Un `pdo complete` d'agent ne construit jamais
+  les extensions ni leurs effets de bord.
+- **Les extensions du binaire règlent aussi `pdo service`** : `install` et `uninstall` sont des
+  Opérations soumises à leur Autorisation d'opération, comme celles du daemon. C'est une règle du
+  core, plus un choix de chaque binaire. Un `--dry-run` ne change rien et ne demande donc rien.
+- Ajout rétrocompatible : bump mineur du core (2.1.0), `pdo-extension-api` inchangé. Les
+  sous-commandes une à une et `pdo::cli` restent hors contrat.

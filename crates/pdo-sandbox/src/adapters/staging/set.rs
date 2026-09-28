@@ -70,7 +70,7 @@ pub(super) fn apply_staging_set(
         if !from.exists() {
             if let Some(note) = entry.absent_note {
                 // `info!` et non `debug!` : le filtre par défaut du daemon est
-                // `info` (`crates/pdo/src/main.rs`).
+                // `info` (`crates/pdo/src/entry.rs`).
                 info!(
                     "sandbox staging: no {} at {} — {note}",
                     entry.rel,

@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.1.0 — `pdo::main_with(extensions)` : tout le binaire `pdo` pour les distributions (#23)
+
+Ajout rétrocompatible au contrat de `crates/pdo` : la CLI, ses codes de sortie et le daemon ne
+bougent pas (sortie de `--help` identique pour chaque sous-commande). `pdo-extension-api` reste
+en 0.1.1.
+
+- **`pdo::main_with(extensions)`**, couvert par le semver à côté de `serve`, `Config` et
+  `Daemon` : parse de la ligne de commande, dispatch, code de sortie. Le binaire vanilla n'est plus
+  que `pdo::main_with(Vec::new)`. Une distribution écrit le même `main` avec sa fabrique
+  d'extensions et ne dépend plus que de `pdo-daemon` et `pdo-extension-api` : plus de dispatch
+  recopié, plus de crates hors semver à épingler.
+- La fabrique (`impl FnOnce() -> Vec<Box<dyn Extension>>`) n'est appelée que par `pdo daemon` et
+  `pdo service`, une fois. Le CLI de l'agent (`complete`, `fail`, `wait-user`, `run create`…) ne
+  construit jamais les extensions.
+- **`pdo service` passe par les extensions du binaire** (ADR-0081, amendement #23) : `install` et
+  `uninstall` sont soumis à leur Autorisation d'opération. Sans extension, rien ne change.
+- Les codes de sortie de `pdo wait-user` (`3`) et `pdo run wait` (`2`) ont désormais leurs tests
+  au niveau du binaire, comme ceux de `pdo complete`.
+
 ## 2.0.0 — PDO v2 : architecture extensible (spec #1, dépôt `Loulen/PDO-v2`)
 
 Premier numéro de la lignée **PDO v2**, qui vit dans le dépôt privé `Loulen/PDO-v2` et

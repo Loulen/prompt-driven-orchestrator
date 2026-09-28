@@ -5,10 +5,11 @@
 //! context can answer), assembles the router with the `identify` middleware at
 //! its head and the embedded SPA behind it, registers the extensions, runs the
 //! daemon's background loops, and carries the CLI. A third-party binary
-//! depends on this crate by git tag and calls [`serve`] with its extensions
-//! (ADR-0081).
+//! depends on this crate by git tag and its `main` calls [`main_with`] with
+//! its extensions: the whole `pdo` binary, CLI and daemon. [`serve`] starts the
+//! daemon alone (ADR-0081).
 //!
-//! Only [`serve`], [`Config`], [`Daemon`] and the re-exported
+//! Only [`main_with`], [`serve`], [`Config`], [`Daemon`] and the re-exported
 //! [`extension_api`] are covered by semver. Everything else in the workspace
 //! promises nothing.
 
@@ -17,6 +18,7 @@ mod attributes;
 pub mod cli;
 mod contexts;
 mod daemon;
+mod entry;
 mod extensions;
 mod identify;
 mod ports;
@@ -27,6 +29,9 @@ mod spa;
 pub use daemon::router_layer::RouterLayer;
 #[doc(hidden)]
 pub use daemon::{serve_with_config, DaemonConfig, DaemonHandle, ExtensionHostHandle};
+#[doc(hidden)]
+pub use entry::main_from;
+pub use entry::main_with;
 #[doc(hidden)]
 pub use serve::{compose, composed_router_layer};
 pub use serve::{serve, Config, Daemon};

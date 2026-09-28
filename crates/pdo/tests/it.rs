@@ -26,6 +26,9 @@ mod cli_complete_does_not_panic;
 #[path = "cli_run_create.rs"]
 mod cli_run_create;
 
+#[path = "cli_wait_exit_codes.rs"]
+mod cli_wait_exit_codes;
+
 #[path = "cost_prices.rs"]
 mod cost_prices;
 
@@ -61,6 +64,10 @@ mod test_extension;
 
 #[path = "extension_authorization.rs"]
 mod extension_authorization;
+
+// The whole `pdo` binary of a distribution, `main_with(extensions)` (#23).
+#[path = "main_with.rs"]
+mod main_with;
 
 #[path = "extension_mutation_routes.rs"]
 mod extension_mutation_routes;

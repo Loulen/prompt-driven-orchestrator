@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { InstanceSettings } from "../../../settings/model/settings";
-import type { TestGuardResponse } from "../../../api";
+import type { TestGuardResponse } from "../../../trigger/api/guard";
 import { useRecentReposStore } from "../../../stores/recentReposStore";
 import type { SecondaryRepo } from "../../components/SecondaryRepoRow";
 import { useAgentProfiles } from "../../../hooks/useAgentProfiles";
@@ -8,7 +8,7 @@ import { useSkillBank } from "../../../skill/store/useSkillBank";
 import { useSkillTiers } from "../../../skill/store/useSkillTiers";
 import type { AgentChoice } from "../../../shared/generated/AgentChoice";
 import type { SkillRef } from "../../../shared/generated/SkillRef";
-import type { CronPresetId } from "../../../cronPresets";
+import type { CronPresetId } from "../../../trigger/model/cronPresets";
 import { useLaunchTargets } from "../useLaunchTargets";
 import { useRepoValidation } from "../../../workspace/store/useRepoValidation";
 import { EMPTY_PROVISIONING_RULES } from "../../../workspace/model/provisioning";

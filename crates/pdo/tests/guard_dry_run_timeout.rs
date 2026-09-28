@@ -1,6 +1,6 @@
 //! Layer 3a integration test for the guard dry-run *timeout* path (#350).
 //!
-//! Sets the process-global `PDO_GUARD_TIMEOUT_MS` env var (`guard_runner.rs`
+//! Sets the process-global `PDO_GUARD_TIMEOUT_MS` env var (`pdo_trigger::adapters::env`
 //! reads it via `std::env::var`), which `trigger_scheduler.rs` also sets; a
 //! concurrent mutation would flake. All of `tests/` compiles into the one `it`
 //! binary, so both go through `common::lock_guard_timeout_ms`. Do NOT add

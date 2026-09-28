@@ -1027,7 +1027,7 @@ async fn get_health(daemon: &TestDaemon) -> serde_json::Value {
 /// #222 write-side: a created Trigger stores `next_fire_at` as canonical UTC
 /// (`…Z`), not a local offset, and it round-trips through GET unchanged. The
 /// load-bearing read-side regression (a past-due local-offset row staying due)
-/// lives in `trigger_store`'s unit tests, where it can fail pre-fix on any host.
+/// lives in the trigger context's SQLite tests, where it can fail pre-fix on any host.
 #[tokio::test]
 async fn created_trigger_stores_next_fire_in_utc() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
@@ -1589,7 +1589,7 @@ async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
 /// #551 (ADR-0046): a Trigger carries the harness IN its Run template, and both a cron
 /// tick and a "Run now" manual fire produce a Run FROZEN on that harness — the AC's
 /// "« Run now » et un tir cron produisent le même harnais", proven because both routes
-/// share `fire_one_trigger`. Overlap `allow`, so the two fires both create a Run.
+/// share the trigger context's one fire. Overlap `allow`, so the two fires both create a Run.
 #[tokio::test]
 async fn trigger_fire_freezes_the_declared_harness_cron_and_run_now() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();

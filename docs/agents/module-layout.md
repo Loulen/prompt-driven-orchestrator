@@ -247,6 +247,39 @@ Contexts already out of the legacy crate:
   seen}`), the Review page's stores (`review/store/useReview{Run, Diff, Live, Layout,
   CommentState, Entries, Gestures}`), the page and its parts, the file cards, the comment cards
   and the Diff tab (`review/components/`).
+- `trigger` (#927): `crates/pdo-trigger`, `frontend/src/trigger/`. A Trigger and its fire
+  record, the cron schedule, when it fires next (`domain/schedule.rs`, the one
+  `recompute_next_fire`), the firing decision and the plan of a tick (`fire_decision`,
+  `tick_plan`), the guard's bounds and what a configuration must satisfy (`rules`) are its
+  `domain/`. Every gesture is a use case on `Triggers` that asks the Autorisation d'opération
+  first: `create`, `update`, `delete` (`trigger` × `create` / `update` / `delete`), `pause`
+  (`trigger` × `pause`), `test_guard` (`trigger` × `test_guard`: the dry-run runs an arbitrary
+  command), and a fire (`trigger` × `fire` on the Trigger): "Run now" (`application/fire/run_now.rs`)
+  asks as the caller `identify` set, the heartbeat's tick (`application/fire/tick.rs`) asks as
+  `Actor::Trigger` for each due Trigger. Deciding that a Trigger is due asks no one; a refused
+  cron fire starts no Run, spends the slot and records an `error` fire with the refusal. The
+  heartbeat is a primary adapter (`adapters/heartbeat.rs`, the clock); the Triggers are over
+  SQLite (`adapters/sqlite/`), the guard is run by `sh` (`adapters/guard_shell.rs`). What the
+  context reads of the others sits behind its ports (`application/ports.rs`), implemented in
+  `adapters/contexts/`: the Runs a fire starts (`Runs::start_run`, the run context's
+  creation without its gate), the pipelines of the library, the repositories (the write-boundary
+  rule and the pre-cut fetch through the workspace's git), the staging profiles, the platform's
+  audit journal. The pause and the guard timeout are the instance settings', implemented by
+  the legacy crate in `trigger_ports.rs` until #929. The legacy crate reads the Triggers
+  through `pdo_trigger::adapters::sqlite::list` (the referents of a skill, a staging profile, an
+  agentic profile) and creates their tables through its `init`. `GET /stale/health` is the Run's
+  stale sweep and stays in `pdo-run`. Tests: the use cases against in-memory ports
+  (`tests/use_cases/`, stage 2, replacing the legacy router `oneshot` tests), the SQLite store
+  and the pre-cut fetch against the real resource (`tests/adapters/`, stage 3), the pure rules
+  and `sh` beside their code; a stage-4 test (`extension_trigger_fire.rs`) proves a cron fire
+  asks as the Trigger. `RUST_LOG=pdo_daemon` (the Trigger handlers, the scheduler's tick and
+  fire) becomes `RUST_LOG=pdo_trigger::application` (`::fire`, `::fire::tick`, `::create_trigger`,
+  `::update_trigger`…), `pdo_daemon::guard_runner` becomes `pdo_trigger::adapters::guard_shell`.
+  Front: the API (`trigger/api/{triggers, guard}`), the Triggers tab (`TriggersListPanel` and
+  `triggersList/`), the detail panel (`TriggerDetailPanel` and `triggerDetail/`), the guard's
+  output and verdict, the cron presets and the canvas reconciliation (`trigger/model/`), and
+  the stores of the list, the pause, the fire history and the guard's dry-run. The New Run
+  modal's Trigger mode stays in `run/components/newRun/` and uses them.
 - `stats` (#928): `crates/pdo-stats`, `frontend/src/stats/`. The three sections' folds
   (`domain/overview/`, `domain/cost/`, `domain/performance/`), the R-7 distribution, the
   absorptions (`domain/absorption/`: keys, the resolver and its order of resolution, the Run

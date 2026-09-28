@@ -3,7 +3,7 @@
 //! Three daemon-wide runtime knobs — the concurrent-session cap, the tmux reaper
 //! TTL, and the Trigger guard timeout — historically lived only in environment
 //! variables (shell + restart). This module is their durable home: a SQLite
-//! *singleton* row (`id = 1`) in `pdo.db`, mirroring [`crate::trigger_store`]
+//! *singleton* row (`id = 1`) in `pdo.db`, mirroring the Triggers' store (`pdo_trigger::adapters::sqlite`)
 //! (config + mutable state, not a canvas-backed artifact → wrong fit for YAML,
 //! cf. CONTEXT.md *Persistence — table SQLite*).
 //!
@@ -18,7 +18,7 @@
 //! The public API mirrors the store idiom: `init` (create + seed), `get`
 //! (singleton fetch), and `update` (partial, set-only edit). Precedence itself
 //! lives with each reader (`admission::configured_cap_with`,
-//! `pdo_session::adapters::env::reaper_ttl_with`, `guard_runner::guard_timeout_with`);
+//! `pdo_session::adapters::env::reaper_ttl_with`, `pdo_trigger::domain::guard::guard_timeout`);
 //! this module only persists the `stored` tier.
 
 use pdo_sandbox::domain::image::{DOCKERFILE_PATH_ENV, IMAGE_SOURCE_ENV};
@@ -44,7 +44,7 @@ pub(crate) struct InstanceConfig {
     /// precedence.
     pub libassist_idle_ttl_secs: Option<i64>,
     /// Stored Trigger guard timeout in **seconds**, or `None` when unset. Note
-    /// the env seam ([`crate::guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV`]) is
+    /// the env seam ([`pdo_trigger::adapters::env::GUARD_TIMEOUT_MS_OVERRIDE_ENV`]) is
     /// in milliseconds; the stored value is seconds (ADR-0015).
     pub guard_timeout_secs: Option<i64>,
     /// Stored instance-wide default Claude model, or `None` when unset (#347).
@@ -96,7 +96,7 @@ pub(crate) struct InstanceConfig {
     /// Empty map ⇒ no per-harness default (for `claude` the legacy
     /// [`pdo_kernel::env::DEFAULT_MODEL_ENV`] still contributes at the
     /// spawn seam). Persisted as a JSON object in the `default_harness_model`
-    /// column (`trigger_store::variables` idiom).
+    /// column (the Triggers' `variables` idiom).
     #[serde(default)]
     pub default_harness_model: std::collections::BTreeMap<String, String>,
     /// Stored instance-wide `auto_fail` default as `0`/`1`, or `None` when unset
@@ -237,7 +237,7 @@ pub(crate) struct UpdateInstanceConfig {
     /// Set the Instance tier of the agentic-profile union (#563): `Some(None)`
     /// clears it back to unset (legacy `default_harness`/`default_harness_model`
     /// decide again); `Some(Some(choice))` sets it; `None` leaves it untouched.
-    /// Double-`Option`, mirroring [`crate::trigger_store::UpdateTrigger::harness`]
+    /// Double-`Option`, mirroring [`pdo_trigger::domain::trigger::UpdateTrigger::harness`]
     /// — this column, unlike the set-only numeric knobs, needs a genuine "clear"
     /// path back to legacy precedence.
     pub agent_choice: Option<Option<pdo_harness::agent_choice::AgentChoice>>,
@@ -289,7 +289,7 @@ impl UpdateInstanceConfig {
 ///
 /// Future knobs are added via an idempotent PRAGMA-guarded
 /// `ALTER TABLE … ADD COLUMN` (precedent: `max_concurrent` #239 in
-/// `trigger_store`), never a migration runner.
+/// the Triggers' store), never a migration runner.
 pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS instance_config (
@@ -328,7 +328,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     // Additive migration for pre-#347 databases: the `default_model` column is
     // absent on tables created before it joined the `CREATE TABLE` above. Add it
     // idempotently, PRAGMA-guarded (the first `ALTER` this module has needed;
-    // precedent: `trigger_store` `max_concurrent`, #239). Never a migration
+    // precedent: the Triggers' `max_concurrent`, #239). Never a migration
     // runner — a single guarded `ADD COLUMN`, safe on every boot.
     let has_default_model = sqlx::query(
         "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_model'",
@@ -560,7 +560,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         autocomplete_turn_end: row.get("autocomplete_turn_end"),
         default_auto_name: row.get("default_auto_name"),
         default_harness: row.get("default_harness"),
-        // Stored as a JSON object in a TEXT column (trigger_store::variables
+        // Stored as a JSON object in a TEXT column (the Triggers' `variables`
         // idiom). NULL / empty / unparseable ⇒ an empty map, so a fresh row and a
         // corrupt one both fall through to env → floor rather than erroring.
         default_harness_model: row
@@ -611,7 +611,7 @@ pub(crate) async fn update(
     }
 
     // Build the SET clause field-by-field, then bind in the same order so the
-    // positional placeholders line up (mirrors trigger_store::update).
+    // positional placeholders line up (mirrors the Triggers' `update`).
     let mut sets: Vec<&str> = Vec::new();
     if edit.session_cap.is_some() {
         sets.push("session_cap = ?");
@@ -1123,7 +1123,7 @@ mod tests {
 
     /// #563/ADR-0057: the Instance tier of `AgentChoice` — a fresh row carries
     /// none, round-trips a `Profile` reference, then clears back to `None` via
-    /// the `Some(None)` double-Option idiom (mirrors `trigger_store::harness`).
+    /// the `Some(None)` double-Option idiom (mirrors the Triggers' `harness`).
     #[tokio::test]
     async fn agent_choice_round_trips_and_clears() {
         let db = test_db().await;

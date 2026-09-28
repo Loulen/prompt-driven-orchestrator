@@ -9,7 +9,7 @@ import { useSelectionStore } from "../stores/selectionStore";
 import RunsPane from "../run/components/runsList/RunsPane";
 import RunsModals from "../run/components/runsList/RunsModals";
 import { useRunsPane } from "../run/store/runsList/useRunsPane";
-import TriggersListPanel from "./TriggersListPanel";
+import TriggersListPanel from "../trigger/components/TriggersListPanel";
 import PipelinesPane from "../pipeline/components/PipelinesPane";
 
 type LeftTab = "runs" | "triggers" | "library";

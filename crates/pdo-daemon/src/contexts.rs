@@ -5,10 +5,9 @@
 //! root wires each extracted context over these [`ContextResources`] and hands
 //! back the [`Contexts`]. The ports a context needs from what is still legacy
 //! (the Runs, the templates, the instance settings) are implemented here for
-//! `platform`, in `session_ports` for `session`, in `pipeline_ports` for
-//! `pipeline`, in `run_ports` for `run`, in `review_ports` for `review` and in
-//! `stats_ports` for `stats`, and move to their own crates when those contexts
-//! are extracted.
+//! `platform`, and in `<context>_ports` for `session`, `pipeline`, `run`,
+//! `review`, `stats` and `trigger`, until what they read leaves the legacy
+//! crate.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
@@ -22,7 +21,6 @@ use pdo_platform::domain::service_health::ServiceHealthOverride;
 use pdo_platform::Platform;
 use pdo_review::application::ports::ReviewSettings;
 use pdo_run::application::ports::{InstanceSettings, RunDirWatch, RunPages};
-use pdo_stats::application::ports::TriggerFires;
 
 use pdo_session::application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunShells, SessionOwners, Templates,
@@ -34,7 +32,8 @@ use crate::pipeline_ports::LegacyActiveRuns;
 use crate::review_ports::LegacyReviewSettings;
 use crate::run_ports::{LegacyInstanceSettings, LegacyRunPages};
 use crate::session_ports::LegacySessionPorts;
-use crate::stats_ports::LegacyTriggerFires;
+use crate::stats_ports::{LegacyTriggerFires, StatsResources};
+use crate::trigger_ports::{LegacyTriggerSettings, TriggerResources};
 use crate::SelfWrites;
 use crate::{event_log, instance_config, AppState, SessionClaim};
 
@@ -74,15 +73,8 @@ pub struct ContextResources {
     /// The `review_agent_can_resolve` instance setting, as the review context
     /// reads it.
     pub review_settings: Arc<dyn ReviewSettings>,
-}
-
-/// The stats context's resources: the Triggers' fires the legacy side still
-/// holds, and the daemon's price-sync knobs.
-#[derive(Clone)]
-pub struct StatsResources {
-    pub triggers: Arc<dyn TriggerFires>,
-    pub price_source_url: Option<String>,
-    pub price_refresh_at_boot: bool,
+    /// What the trigger context needs from this daemon.
+    pub trigger: TriggerResources,
 }
 
 /// The run context's resources: the kernel's bus the daemon opened, the
@@ -152,6 +144,8 @@ pub struct Contexts {
     /// The run context. Its routes are merged by the legacy router, which the
     /// daemon's in-crate tests drive as is.
     pub run: Arc<pdo_run::Runs>,
+    /// The trigger context: the daemon starts its heartbeat.
+    pub triggers: Arc<pdo_trigger::Triggers>,
     /// The stats context. The daemon drives its boot refresh.
     pub stats: Arc<pdo_stats::Stats>,
     pub router: Router,
@@ -182,6 +176,7 @@ pub(crate) struct ContextResourcesSeed {
     pub sandbox_home_override: Option<PathBuf>,
     pub panic_on_stale_sweep: bool,
     pub panic_on_spawn: bool,
+    pub panic_on_trigger_name: Option<String>,
     pub price_source_url: Option<String>,
     pub price_refresh_at_boot: bool,
 }
@@ -214,6 +209,12 @@ impl ContextResourcesSeed {
                 sandbox_home_override: self.sandbox_home_override,
                 panic_on_stale_sweep: self.panic_on_stale_sweep,
                 panic_on_spawn: self.panic_on_spawn,
+            },
+            trigger: TriggerResources {
+                settings: Arc::new(LegacyTriggerSettings {
+                    db: self.db.clone(),
+                }),
+                panic_on_trigger_name: self.panic_on_trigger_name,
             },
             session: SessionRunPorts::over(state),
             pipeline: PipelineResources {

@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
-import { createTrigger, updateTrigger, testGuard } from "../../../api";
+import { createTrigger, updateTrigger } from "../../../trigger/api/triggers";
+import { testGuard } from "../../../trigger/api/guard";
 import { createRun } from "../../api/createRun";
 import * as newRunForm from "../../model/newRunForm";
 import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../../../workspace/model/provisioning";

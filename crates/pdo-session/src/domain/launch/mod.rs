@@ -13,7 +13,7 @@ pub use tails::{build_script_tail, LIBASSIST_HOOK_SETTINGS_JSON};
 pub use wrap::host_daemon_url;
 
 /// Default wall-clock bound for a `script` node's bash body (#248 / ADR-0017).
-/// Mirrors the trigger guard's 60 s (`guard_runner`). A script has no JSONL, so
+/// Mirrors the trigger guard's 60 s (`pdo_trigger::domain::guard`). A script has no JSONL, so
 /// the stale-detector can never fire on it — the in-wrapper `timeout` is the
 /// *only* thing that bounds a hung script, hence it is mandatory, not optional.
 pub const SCRIPT_TIMEOUT_SECS: u64 = 60;

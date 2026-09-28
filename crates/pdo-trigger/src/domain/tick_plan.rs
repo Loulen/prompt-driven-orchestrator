@@ -1,99 +1,20 @@
-//! The Trigger scheduler: a background task (sibling of the reaper/stale tasks)
-//! that ticks every ~30 s and fires due Triggers.
-//!
-//! The per-tick *decision* is the pure `plan_tick`; the effectful `run_tick`
-//! drives the store and `create_run_core`. Run creation is validated by
-//! integration tests, not unit tests (CODING_STANDARDS).
+//! The per-tick plan of one Trigger: the pure spine of a fire (ADR-0012). The
+//! scheduler feeds it the facts (the live Runs, the guard's result, the
+//! pipeline's `prompt_required`); it returns what to do, what to audit and the
+//! next fire. Run creation is validated by the use cases and the daemon's
+//! integration tests, not here.
 
 use chrono::{DateTime, Utc};
 
-use crate::cron_schedule::CronSchedule;
-use crate::fire_decision::{self, FireDecision, FireInputs, GuardResult, OverlapPolicy};
-use crate::trigger_store::{FireRecord, Trigger};
-
-/// How often the scheduler wakes up. Cron resolves to the minute; a 30 s tick
-/// guarantees every slot is seen.
-pub(crate) const TICK_INTERVAL_SECS: u64 = 30;
-
-/// Where a fire evaluation comes from (#341, ADR-0027). A `Manual` fire ("Run
-/// now") is a first-class fire — same guard, same overlap gate, same audit trail
-/// — but is *always due* (the click is the schedule) and never touches
-/// `next_fire_at` (the cron heartbeat owns it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FireSource {
-    Cron,
-    Manual,
-}
-
-impl FireSource {
-    /// The `trigger_fires.source` column value.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            FireSource::Cron => "cron",
-            FireSource::Manual => "manual",
-        }
-    }
-}
-
-/// A lifecycle event that decides what happens to a Trigger's `next_fire_at`
-/// (#372). Every writer names its transition here and routes through
-/// [`recompute_next_fire`], so the decision lives in one exhaustive `match`
-/// instead of five scattered sites.
-///
-/// The advance variants carry a `CronSchedule` **already parsed by the calling
-/// site**. Don't take `&Trigger` (a PATCH's new cron lives in the request, not
-/// the stored row, so it would read a stale cron) nor `&str` (it would re-derive
-/// a parse error each route already handles to render its own `400`).
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Transition<'a> {
-    Create(&'a CronSchedule),
-    /// A schedule edit (new cron).
-    CronEdit(&'a CronSchedule),
-    /// A pipeline repoint reviving a dormant Trigger (existing cron).
-    Repoint(&'a CronSchedule),
-    /// Re-enabling a disabled Trigger. Decision B (#372, ADR-0012): recompute
-    /// **forward** from `now`, skipping the missed slot — never a hidden
-    /// catch-up fire. Before #372 this path left `next_fire_at` frozen in the
-    /// past *by omission*.
-    Enable(&'a CronSchedule),
-    /// A scheduler tick advancing past the slot it just evaluated.
-    CronTick(&'a CronSchedule),
-    /// A manual "Run now" (#341, ADR-0027): leave `next_fire_at` intact — a
-    /// 14:32 click must not shift the 15:00 slot.
-    ManualFire,
-    /// A dangling pipeline/repo reference: stop firing.
-    Dangling,
-}
-
-/// The single writer-side decision for `next_fire_at` (#372). The return mirrors
-/// [`crate::trigger_store::UpdateTrigger::next_fire_at`]
-/// (`Option<Option<String>>`): `None` = leave the stored value alone;
-/// `Some(None)` = set NULL; `Some(Some(s))` = write `s` (canonical UTC `…Z`).
-///
-/// The five ADVANCE arms share one body — deliberately. The exhaustive `match`
-/// *proves* every transition chose a behaviour explicitly (the issue's ask), and
-/// the compiler forces any future transition to choose too. The `Enable` arm
-/// advancing (rather than leaving, as it did by omission) is the #372 fix.
-pub(crate) fn recompute_next_fire(
-    now: DateTime<Utc>,
-    transition: Transition<'_>,
-) -> Option<Option<String>> {
-    use Transition::*;
-    match transition {
-        Create(s) | CronEdit(s) | Repoint(s) | Enable(s) | CronTick(s) => {
-            // `Some(None)` when the cron yields no future slot (e.g. Feb 30):
-            // clearing `next_fire_at` stops an impossible expression firing.
-            Some(s.next_fire_utc(now))
-        }
-        ManualFire => None,
-        Dangling => Some(None),
-    }
-}
+use super::cron_schedule::CronSchedule;
+use super::fire_decision::{self, FireDecision, FireInputs, GuardResult, OverlapPolicy};
+use super::schedule::{recompute_next_fire, FireSource, Transition};
+use super::trigger::{FireRecord, Trigger};
 
 /// The plan for one Trigger on one tick: what to do, what to audit, and the
 /// recomputed next fire.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct TickPlan {
+pub struct TickPlan {
     pub decision: FireDecision,
     /// The audit record to persist. A not-due / disabled no-op produces `None`.
     pub record: Option<FireRecord>,
@@ -106,8 +27,8 @@ pub(crate) struct TickPlan {
 /// `live_run_count` is the number of the Trigger's *own* Runs still live (#239):
 /// compared against the overlap ceiling (`skip` ⇒ 1, bounded `allow` ⇒
 /// `max_concurrent`). `guard` is the guard result (`None` for a cron-only trigger
-/// with no guard command; the guard is run and wired in `lib.rs`).
-pub(crate) fn plan_tick(
+/// with no guard command; the fire use case runs the guard).
+pub fn plan_tick(
     trigger: &Trigger,
     now: DateTime<Utc>,
     live_run_count: usize,
@@ -189,7 +110,7 @@ pub(crate) fn plan_tick(
 }
 
 fn record_for(decision: &FireDecision, source: FireSource) -> Option<FireRecord> {
-    use crate::fire_decision::SkipReason;
+    use super::fire_decision::SkipReason;
     match decision {
         FireDecision::Fire { .. } => Some(FireRecord {
             outcome: "fired".to_string(),
@@ -269,7 +190,7 @@ fn record_for(decision: &FireDecision, source: FireSource) -> Option<FireRecord>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trigger_store::Trigger;
+    use crate::domain::trigger::Trigger;
 
     fn trigger(cron: &str, next_fire_at: Option<&str>) -> Trigger {
         Trigger {

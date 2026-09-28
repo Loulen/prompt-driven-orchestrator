@@ -1,4 +1,4 @@
-import type { CreateTriggerRequest, UpdateTriggerRequest } from "../../api";
+import type { CreateTriggerRequest, UpdateTriggerRequest } from "../../trigger/api/triggers";
 import type { CreateRunRequest, TargetRepoInput } from "../api/createRun";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { SkillRef } from "../../shared/generated/SkillRef";

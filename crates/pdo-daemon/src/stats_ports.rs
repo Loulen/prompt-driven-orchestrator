@@ -1,10 +1,22 @@
-//! The port of the stats context that the Triggers implement, while they still
-//! live in this crate: the fires of a window (#377). Moves to the trigger
-//! context when it is extracted.
+//! The port of the stats context that the Triggers implement: the fires of a
+//! window (#377). The Triggers now live in `pdo-trigger` (#927); this adapter
+//! still reads their tables in the daemon's database directly, until it moves
+//! beside the stats context's other adapters.
+
+use std::sync::Arc;
 
 use pdo_stats::application::ports::{BoxFuture, TriggerFires};
 use pdo_stats::domain::overview::fires::DELETED_TRIGGER;
 use pdo_stats::domain::overview::TriggersCreatedRuns;
+
+/// The stats context's resources: the Triggers' fires the legacy side still
+/// holds, and the daemon's price-sync knobs.
+#[derive(Clone)]
+pub struct StatsResources {
+    pub triggers: Arc<dyn TriggerFires>,
+    pub price_source_url: Option<String>,
+    pub price_refresh_at_boot: bool,
+}
 
 /// The Triggers of the daemon's database.
 pub(crate) struct LegacyTriggerFires {

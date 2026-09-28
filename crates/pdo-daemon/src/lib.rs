@@ -5,11 +5,6 @@
 
 mod agent_profile;
 mod contexts;
-#[allow(dead_code)]
-mod cron_schedule;
-#[allow(dead_code)]
-mod fire_decision;
-mod guard_runner;
 mod instance_config;
 mod pipeline_ports;
 mod review_ports;
@@ -17,12 +12,8 @@ mod run_ports;
 mod sandbox_ports;
 mod session_ports;
 mod stats_ports;
-#[allow(dead_code)]
-mod trigger_scheduler;
-#[allow(dead_code)]
-mod trigger_store;
+mod trigger_ports;
 
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -32,11 +23,11 @@ use anyhow::{Context, Result};
 use axum::extract::{Json, Path as AxumPath, State};
 use axum::http::{header, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::Router;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{error, info, warn};
@@ -46,19 +37,13 @@ use crate::contexts::ContextResourcesSeed;
 pub use crate::contexts::{
     ContextResources, Contexts, PipelineResources, RunResources, SessionRunPorts,
 };
+pub use crate::trigger_ports::TriggerResources;
 pub use pdo_platform::adapters::cli::{PageAction, ServiceAction};
-use pdo_platform::adapters::http::OriginHint;
 pub use pdo_platform::domain::service_health::ServiceHealthOverride;
-use pdo_workspace::adapters::git::fetch::fetch_all_remotes;
-#[cfg(test)]
-use pdo_workspace::adapters::git::repository::validate_source_branch;
-use pdo_workspace::adapters::git::repository::validate_target_repo;
 
 // The workspace context's modules the rest of this crate reads, until each
 // context migrates onto the workspace's ports.
 use pdo_workspace::adapters::git::worktrees::worktree_dir_for_run;
-use pdo_workspace::domain::branches::FetchError;
-pub(crate) use pdo_workspace::domain::provisioning;
 
 // The skill context's rules the rest of this crate reads: the selection per
 // tier (instance, Projet, Trigger, pipeline node, Run). Every skill gesture
@@ -84,8 +69,6 @@ use pdo_run::adapters::env::{
     env_max_attachments_mb, resolve_max_attachments_mb, MAX_ATTACHMENTS_MB_DEFAULT,
 };
 use pdo_run::application::boot_recovery;
-use pdo_run::application::create_run::repos::required_target_repo;
-use pdo_run::application::create_run::{CreateRunRequest, TargetRepoInput};
 use pdo_run::application::events::append_event as append_run_event;
 pub(crate) use pdo_run::application::node::prompt as prompt_augmenter;
 use pdo_run::application::paths::{dirs_next_home, instance_pipeline_dir, resolve_pipeline_path};
@@ -298,11 +281,6 @@ struct AppState {
     /// relays the bus.
     bus_tx: broadcast::Sender<serde_json::Value>,
     repo_root: PathBuf,
-    /// Serializes Trigger scheduler ticks. A tick is read-decide-write
-    /// (`due_triggers` → guard subprocess → `set_next_fire`) with an await in the
-    /// middle; two concurrent ticks would both see the same Trigger as due and
-    /// double-fire it.
-    trigger_tick_lock: tokio::sync::Mutex<()>,
     /// Paths the daemon has just written. The pipeline watcher suppresses
     /// `pipeline_changed` broadcasts for paths seen within the TTL window — that
     /// is how our own writes are told apart from external ones (vim, git
@@ -314,15 +292,6 @@ struct AppState {
     /// Per-daemon sandbox home-root override, so layer-3 staging lands under the
     /// test's tempdir. Seeded via [`DaemonConfig`].
     sandbox_home_override: Option<PathBuf>,
-    /// Epoch-millis of the **start** of the most recent Trigger scheduler tick,
-    /// or `0` if it has never ticked. Written at tick start so a wedged tick
-    /// freezes the value; an isolated panic still advances it (the loop is
-    /// alive). Surfaced by `GET /triggers/health`.
-    last_trigger_tick_ms: Arc<std::sync::atomic::AtomicI64>,
-    /// Debug-only fault injection: when a due Trigger's name matches, its tick
-    /// `panic!`s, exercising the scheduler's panic isolation. Per-daemon, never
-    /// process-global env.
-    panic_on_trigger_name: Option<String>,
     /// TTL cache (~10 s) of the Docker availability probe, surfaced as
     /// `sandbox_docker` on `GET /settings`. Lazily refreshed when stale — not
     /// boot-once (a user may start Docker mid-session) and not per-fetch (a `PUT`
@@ -353,19 +322,6 @@ struct AppState {
     /// The session context (#920): tmux behind its port, the terminals, the
     /// declared wait, the reaper, the library assistant.
     session: Arc<pdo_session::Session>,
-}
-
-/// A Trigger as returned by `GET /triggers`, wrapping the raw stored Trigger with
-/// a resolved `effective_repo` for the "group by project" view. Don't fold it into
-/// `trigger.target_repo`: the raw value drives the row badge, the detail panel and
-/// the Run-now pre-fill, while this one exists purely so the client can group by a
-/// concrete path.
-#[derive(Serialize, TS)]
-#[ts(export)]
-struct TriggerListEntry {
-    #[serde(flatten)]
-    trigger: trigger_store::Trigger,
-    effective_repo: String,
 }
 
 /// One-shot `pdo docs`: render the documentation PDO generates from its own code,
@@ -515,6 +471,8 @@ pub struct DaemonHandle {
     pub addr: SocketAddr,
     pub task: tokio::task::JoinHandle<Result<()>>,
     state: Arc<AppState>,
+    /// The trigger context (#927), for its test seams.
+    triggers: Arc<pdo_trigger::Triggers>,
 }
 
 impl DaemonHandle {
@@ -522,7 +480,7 @@ impl DaemonHandle {
     /// tests drive firing deterministically instead of waiting for the ~30 s
     /// background interval.
     pub async fn run_trigger_tick(&self) {
-        run_trigger_scheduler_tick_supervised(&self.state).await;
+        pdo_trigger::adapters::heartbeat::tick_supervised(&self.triggers).await;
     }
 
     /// Run a single stale-detection sweep synchronously. Lets integration tests
@@ -600,12 +558,11 @@ impl DaemonHandle {
     /// [`Self::run_trigger_tick`] treats it as due. Test seam only — production
     /// next-fire times come from the cron schedule.
     pub async fn force_trigger_due(&self, trigger_id: &str) {
-        let _ = trigger_store::set_next_fire(
-            &self.state.db,
-            trigger_id,
-            Some("2020-01-01T00:00:00.000Z"),
-        )
-        .await;
+        let _ = self
+            .triggers
+            .store()
+            .set_next_fire(trigger_id, Some("2020-01-01T00:00:00.000Z"))
+            .await;
     }
 
     /// Seed a Trigger row whose `target_repo` is NULL — a legacy record.
@@ -621,9 +578,10 @@ impl DaemonHandle {
         cron: &str,
         guard_command: Option<&str>,
     ) -> String {
-        let trigger = trigger_store::create(
-            &self.state.db,
-            trigger_store::NewTrigger {
+        let trigger = self
+            .triggers
+            .store()
+            .create(pdo_trigger::domain::trigger::NewTrigger {
                 name: name.to_string(),
                 pipeline_id: pipeline_id.to_string(),
                 pipeline_name: pipeline_id.to_string(),
@@ -642,10 +600,9 @@ impl DaemonHandle {
                 skills: Vec::new(),
                 auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
-            },
-        )
-        .await
-        .expect("seeding a legacy trigger row must succeed");
+            })
+            .await
+            .expect("seeding a legacy trigger row must succeed");
         trigger.id
     }
 
@@ -745,7 +702,7 @@ pub struct DaemonConfig {
     /// [`DaemonHandle::run_trigger_tick`] seam, firing (or not) a Run out from
     /// under a test's `force_trigger_due`. Disabling the loop masks nothing: the
     /// production TOCTOU it exposed is fixed separately in
-    /// `run_trigger_scheduler_tick` by re-reading the pause kill-switch late.
+    /// the trigger context's tick by re-reading the pause kill-switch late.
     pub run_trigger_scheduler_loop: bool,
     /// **Nested (no-cleanup) mode**: suppress the boot orphan sweep, the periodic
     /// reaper, boot recovery and the stale detector, leaving the daemon completely
@@ -1082,6 +1039,7 @@ pub async fn serve_with_config(
     // need from the legacy side (the Runs, the templates, the settings) reach back
     // into the state being built — hence the cyclic construction.
     let mut contexts_router: Option<Router> = None;
+    let mut triggers: Option<Arc<pdo_trigger::Triggers>> = None;
     let resources = ContextResourcesSeed {
         db: db.clone(),
         repo_root: repo_root.clone(),
@@ -1110,6 +1068,7 @@ pub async fn serve_with_config(
         sandbox_home_override: config.sandbox_home_override.clone(),
         panic_on_stale_sweep: config.panic_on_stale_sweep,
         panic_on_spawn: config.panic_on_spawn,
+        panic_on_trigger_name: config.panic_on_trigger_name.clone(),
         price_source_url: config.price_source_url.clone(),
         price_refresh_at_boot: config.price_refresh_at_boot,
     };
@@ -1117,6 +1076,7 @@ pub async fn serve_with_config(
     let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
         let wired = wire_contexts(resources.into_resources(weak.clone()));
         contexts_router = Some(wired.router);
+        triggers = Some(wired.triggers);
         AppState {
             workspace,
             skills,
@@ -1125,12 +1085,9 @@ pub async fn serve_with_config(
             run: wired.run,
             bus_tx,
             repo_root,
-            trigger_tick_lock: tokio::sync::Mutex::new(()),
             recent_writes,
             docker_cmd_override: config.docker_cmd_override,
             sandbox_home_override: config.sandbox_home_override,
-            last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            panic_on_trigger_name: config.panic_on_trigger_name,
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue: Arc::new(
                 pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -1145,6 +1102,7 @@ pub async fn serve_with_config(
         .init()
         .await
         .map_err(|e| anyhow::anyhow!("failed to create the platform tables: {e}"))?;
+    let triggers = triggers.context("the context wiring gave no trigger context")?;
 
     // A nested daemon suppresses every AUTOMATIC cleanup pathway, so a Tester or
     // Implementer that accidentally runs `pdo daemon` can't trigger reaper-based
@@ -1263,20 +1221,11 @@ pub async fn serve_with_config(
         }))
     };
 
-    // Fires due Triggers on a ~30s tick. Best-effort: only runs while the daemon
-    // lives, forward-only — no backfill of missed slots.
+    // The Triggers' heartbeat (#927): fires due Triggers on a ~30s tick.
     let _trigger_handle = if nested_daemon || !run_trigger_scheduler_loop {
         None
     } else {
-        let trigger_state = state.clone();
-        Some(tokio::spawn(async move {
-            let mut tick =
-                time::interval(Duration::from_secs(trigger_scheduler::TICK_INTERVAL_SECS));
-            loop {
-                tick.tick().await;
-                run_trigger_scheduler_tick_supervised(&trigger_state).await;
-            }
-        }))
+        Some(pdo_trigger::adapters::heartbeat::spawn(triggers.clone()))
     };
 
     let task = tokio::spawn(async move {
@@ -1325,6 +1274,7 @@ pub async fn serve_with_config(
         addr: bound_addr,
         task,
         state,
+        triggers,
     })
 }
 
@@ -1360,68 +1310,6 @@ pub fn daemon_cli_config(bind: Option<IpAddr>, port: u16) -> DaemonConfig {
     config
 }
 
-#[derive(Deserialize)]
-struct CreateTriggerRequest {
-    name: String,
-    /// Library pipeline id the Trigger fires.
-    pipeline_id: String,
-    #[serde(default)]
-    target_repo: Option<String>,
-    /// Secondary repos to associate with fired Runs (ADR-0042). Stored as raw JSON
-    /// TEXT and forwarded at fire time. Absent → mono-repo fire.
-    #[serde(default)]
-    target_repos: Vec<TargetRepoInput>,
-    #[serde(default)]
-    source_branch: Option<String>,
-    #[serde(default)]
-    input_template: String,
-    #[serde(default)]
-    variables: HashMap<String, serde_yaml::Value>,
-    /// 5-field cron expression.
-    cron: String,
-    #[serde(default)]
-    guard_command: Option<String>,
-    #[serde(default = "default_overlap_policy")]
-    overlap_policy: String,
-    /// Bounded-`allow` ceiling: max simultaneous live Runs. `None` = unbounded.
-    /// Inert unless `overlap_policy == "allow"`.
-    #[serde(default)]
-    max_concurrent: Option<i64>,
-    /// Per-Trigger sandbox mode: `"off"` | `"full"` | `"minimal"`, or absent/`null` to
-    /// inherit the instance default. Read at fire time and folded into the create
-    /// request's explicit tier.
-    #[serde(default)]
-    sandbox: Option<String>,
-    /// Per-Trigger harness (ADR-0046): a harness name, or absent/`null`/blank to
-    /// inherit the instance default. Folded at fire time into the fired Run's harness —
-    /// there is no separate Trigger tier. Free text, no validation (ADR-0045).
-    #[serde(default)]
-    harness: Option<String>,
-    /// Per-Trigger `AgentChoice` (ADR-0057): `Inherit`/absent falls through to the
-    /// legacy `harness` field above; `Profile`/`Custom` is folded into the fired Run's
-    /// explicit tier at fire time.
-    #[serde(default)]
-    agent_choice: Option<pdo_harness::agent_choice::AgentChoice>,
-    /// The Run-tier skills every fired Run carries (#669, ADR-0062). Folded into
-    /// the fired Run's `skills` at fire time, like `harness`.
-    #[serde(default)]
-    skills: Vec<crate::skill_selection::SkillRef>,
-    /// Whether Runs this Trigger fires are auto-named. Seeded from the instance
-    /// default in the create modal and frozen on the row; defaults to `true` so an
-    /// older client that omits the field keeps auto-naming.
-    #[serde(default = "default_true")]
-    auto_name: bool,
-}
-
-fn default_overlap_policy() -> String {
-    "skip".to_string()
-}
-
-/// Matches the `NOT NULL DEFAULT 1` column and the built-in resolver default.
-fn default_true() -> bool {
-    true
-}
-
 /// The SHARED existence gate for any `sandbox` reference a client can store (ADR-0031
 /// §7). `""` is the *clear* sentinel and `off` means "no sandbox", so both are always
 /// valid; anything else must name a profile that resolves.
@@ -1451,849 +1339,6 @@ async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), St
     }
 }
 
-/// Validate a `max_concurrent` cap: when present it must be >= 1. Shared by create
-/// and patch so the rule can't drift between them. A cap set while
-/// `overlap_policy == "skip"` is accepted and stays inert.
-fn validate_max_concurrent(v: Option<i64>) -> Result<(), &'static str> {
-    match v {
-        Some(n) if n < 1 => Err("max_concurrent must be >= 1"),
-        _ => Ok(()),
-    }
-}
-
-/// Deserialize a double-`Option` PATCH field so a present `null` maps to `Some(None)`
-/// ("clear to NULL"), distinct from absent → `None` ("leave untouched"). serde's
-/// default for `Option<Option<T>>` collapses both to `None`; this helper is only
-/// invoked when the key is present, which is what recovers the three-way distinction.
-fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Ok(Some(Option::<T>::deserialize(deserializer)?))
-}
-
-/// Body of `POST /triggers/guard/test`: the guard command *as currently typed in the
-/// New-trigger tab* plus an optional target repo. No trigger id — this is pre-save.
-#[derive(serde::Deserialize)]
-struct GuardTestRequest {
-    guard_command: String,
-    #[serde(default)]
-    target_repo: Option<String>,
-}
-
-/// Response of `POST /triggers/guard/test`: a 1:1 projection of
-/// [`fire_decision::GuardResult`]. The would-fire / would-skip verdict is composed
-/// client-side from `outcome`. `exit_code` is `None` on error (spawn failure/timeout).
-#[derive(serde::Serialize, TS)]
-#[ts(export, rename = "TestGuardResponse")]
-struct GuardTestResponse {
-    outcome: &'static str,
-    stdout: String,
-    stderr: String,
-    exit_code: Option<i32>,
-    detail: Option<String>,
-}
-
-impl From<fire_decision::GuardResult> for GuardTestResponse {
-    fn from(r: fire_decision::GuardResult) -> Self {
-        use fire_decision::GuardResult::*;
-        match r {
-            Pass { stdout } => Self {
-                outcome: "pass",
-                stdout,
-                stderr: String::new(),
-                exit_code: Some(0),
-                detail: None,
-            },
-            Skip {
-                stdout,
-                stderr,
-                exit_code,
-            } => Self {
-                outcome: "skip",
-                stdout,
-                stderr,
-                exit_code,
-                detail: None,
-            },
-            Error { detail } => Self {
-                outcome: "error",
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: None,
-                detail: Some(detail),
-            },
-        }
-    }
-}
-
-/// `POST /triggers/guard/test` — dry-run a Trigger guard command.
-///
-/// Zero-side-effect invariant: this handler must call ONLY `required_target_repo`,
-/// `instance_config::get`, `guard_runner::guard_timeout_with` and
-/// `guard_runner::run_guard`. It must never route through `fire_one_trigger`,
-/// `plan_tick`, `create_run_inner`, `trigger_store::*` or `record_and_broadcast_fire`
-/// — no Run spawned, no `trigger_fires` row, no `next_fire_at` recompute.
-async fn guard_test(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<GuardTestRequest>,
-) -> Response {
-    if req.guard_command.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "guard_command must not be empty" })),
-        )
-            .into_response();
-    }
-
-    // Same rule as a real fire: a guard must never execute in a repository nobody
-    // named. The dry-run is pre-save, but it runs the same arbitrary `sh -c`.
-    let cwd = match required_target_repo(req.target_repo.as_deref()) {
-        Ok(p) => p,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-
-    // Same `stored → env → default` precedence a real fire uses (ADR-0015), so the
-    // dry-run reflects the bound the scheduler would apply. Stored is seconds; the env
-    // seam is ms.
-    let stored_secs = instance_config::get(&state.db)
-        .await
-        .ok()
-        .and_then(|c| c.guard_timeout_secs)
-        .map(|n| n as u64);
-    let timeout = guard_runner::guard_timeout_with(stored_secs);
-
-    let result = guard_runner::run_guard(req.guard_command.trim(), &cwd, timeout).await;
-    Json(GuardTestResponse::from(result)).into_response()
-}
-
-async fn create_trigger(
-    State(state): State<Arc<AppState>>,
-    actor: OriginHint,
-    Json(req): Json<CreateTriggerRequest>,
-) -> Response {
-    if req.name.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "trigger name must not be empty" })),
-        )
-            .into_response();
-    }
-
-    // Fail loud at config time, not at 3am (ADR-0001).
-    let schedule = match cron_schedule::CronSchedule::parse(&req.cron) {
-        Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid cron expression: {e}") })),
-            )
-                .into_response();
-        }
-    };
-
-    if let Err(msg) = validate_max_concurrent(req.max_concurrent) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response();
-    }
-
-    if let Some(raw) = req.sandbox.as_deref() {
-        if let Err(msg) = validate_sandbox_ref(&state.db, raw).await {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    }
-
-    let yaml =
-        std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, &req.pipeline_id)).ok();
-    let yaml = match yaml {
-        Some(y) => y,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("pipeline not found: {}", req.pipeline_id)
-                })),
-            )
-                .into_response();
-        }
-    };
-    let (pipeline_name, prompt_required) = match pipeline::parse_pipeline(&yaml) {
-        Ok(r) => (r.pipeline.name.clone(), r.pipeline.prompt_required),
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("pipeline parse error: {e}") })),
-            )
-                .into_response();
-        }
-    };
-
-    // A cron-only Trigger has no guard, so the input template is the only input
-    // source: empty + prompt-required is a misconfiguration. Refuse at creation.
-    if req.guard_command.as_deref().unwrap_or("").trim().is_empty()
-        && req.input_template.trim().is_empty()
-        && prompt_required
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "this pipeline requires a prompt; add a guard, an input \
-                          template, or mark the pipeline prompt-not-required"
-            })),
-        )
-            .into_response();
-    }
-
-    // A Trigger is a Run template (ADR-0012b), so it cannot be valid without a
-    // target repo.
-    let target_repo = match required_target_repo(req.target_repo.as_deref()) {
-        Ok(p) => p.to_string_lossy().into_owned(),
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    };
-
-    // The first fire, via the single recompute seam. `NewTrigger.next_fire_at` is a
-    // flat `Option<String>`, so flatten what `Create` returns; `Some(None)` = an
-    // impossible cron, which stays dormant.
-    let now = chrono::Utc::now();
-    let next_fire_at = trigger_scheduler::recompute_next_fire(
-        now,
-        trigger_scheduler::Transition::Create(&schedule),
-    )
-    .flatten();
-
-    let variables = serde_json::to_value(&req.variables).unwrap_or(serde_json::json!({}));
-
-    let new = trigger_store::NewTrigger {
-        name: req.name,
-        pipeline_id: req.pipeline_id,
-        pipeline_name,
-        target_repo: Some(target_repo),
-        target_repos: if req.target_repos.is_empty() {
-            None
-        } else {
-            serde_json::to_string(&req.target_repos).ok()
-        },
-        source_branch: req.source_branch,
-        input_template: req.input_template,
-        variables,
-        cron: req.cron,
-        guard_command: req.guard_command.filter(|g| !g.trim().is_empty()),
-        overlap_policy: if req.overlap_policy == "allow" {
-            "allow".to_string()
-        } else {
-            "skip".to_string()
-        },
-        max_concurrent: req.max_concurrent,
-        // Normalise `Some("")` to `None` (inherit the instance default), so an empty
-        // selector value never persists as a bogus stored mode.
-        sandbox: req.sandbox.filter(|s| !s.trim().is_empty()),
-        // Same normalisation for the harness: a blank value must inherit at fire time
-        // rather than persist as a harness named "".
-        harness: req.harness.filter(|s| !s.trim().is_empty()),
-        // No normalisation needed: `None`/`Inherit`/blank payloads are already
-        // transparent inside `pdo_harness::agent_choice::resolve`.
-        agent_choice: req.agent_choice,
-        // #669: the store normalises (trim, dedupe) and stores NULL for empty.
-        skills: req.skills,
-        // Frozen on the row, never re-resolved at fire time — the runtime never
-        // decides autonomy (ADR-0012 frontier).
-        auto_name: req.auto_name,
-        next_fire_at,
-    };
-
-    match trigger_store::create(&state.db, new).await {
-        Ok(trigger) => {
-            let _ = state.bus_tx.send(serde_json::json!({
-                "type": "trigger_created",
-                "trigger_id": trigger.id,
-            }));
-            // Audit AFTER the row committed (ADR-0044 §2·B — never over-report).
-            state
-                .platform
-                .record_audit()
-                .execute(pdo_platform::domain::audit::NewAuditEntry {
-                    actor_hint: actor.as_hint().to_string(),
-                    action: "trigger.created".to_string(),
-                    target_kind: Some("trigger".to_string()),
-                    target_id: Some(trigger.id.clone()),
-                    before: None,
-                    after: serde_json::to_value(&trigger).ok(),
-                })
-                .await;
-            (StatusCode::CREATED, Json(trigger)).into_response()
-        }
-        Err(e) => {
-            error!("failed to create trigger: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to persist trigger" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
-    match trigger_store::list(&state.db).await {
-        Ok(triggers) => {
-            // Read-side fallback only, and it stays: historical rows legitimately
-            // carry a null repo (the write boundary now refuses one), and the "no
-            // Unassigned bucket" invariant depends on resolving them here. Do NOT
-            // symmetrise it with `create_trigger`/`patch_trigger`. The raw
-            // `target_repo` is left untouched so the badge / detail / Run-now
-            // pre-fill keep showing only what the user actually set.
-            let repo_root = state.repo_root.to_string_lossy().into_owned();
-            let entries: Vec<TriggerListEntry> = triggers
-                .into_iter()
-                .map(|t| {
-                    let effective_repo = t.target_repo.clone().unwrap_or_else(|| repo_root.clone());
-                    TriggerListEntry {
-                        trigger: t,
-                        effective_repo,
-                    }
-                })
-                .collect();
-            Json(entries).into_response()
-        }
-        Err(e) => {
-            error!("failed to list triggers: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to list triggers" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-async fn delete_trigger(
-    State(state): State<Arc<AppState>>,
-    AxumPath(trigger_id): AxumPath<String>,
-    actor: OriginHint,
-) -> Response {
-    // Read the "before" snapshot HERE, before the row is gone: `delete` returns
-    // `bool`, never the row, so a later read would leave the audit a dead UUID.
-    let before = trigger_store::get(&state.db, &trigger_id)
-        .await
-        .ok()
-        .flatten();
-    match trigger_store::delete(&state.db, &trigger_id).await {
-        Ok(true) => {
-            let _ = state.bus_tx.send(serde_json::json!({
-                "type": "trigger_deleted",
-                "trigger_id": trigger_id,
-            }));
-            state
-                .platform
-                .record_audit()
-                .execute(pdo_platform::domain::audit::NewAuditEntry {
-                    actor_hint: actor.as_hint().to_string(),
-                    action: "trigger.deleted".to_string(),
-                    target_kind: Some("trigger".to_string()),
-                    target_id: Some(trigger_id.clone()),
-                    before: before.as_ref().and_then(|t| serde_json::to_value(t).ok()),
-                    after: None,
-                })
-                .await;
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "trigger not found" })),
-        )
-            .into_response(),
-        Err(e) => {
-            error!("failed to delete trigger: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to delete trigger" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-async fn get_trigger(
-    State(state): State<Arc<AppState>>,
-    AxumPath(trigger_id): AxumPath<String>,
-) -> Response {
-    match trigger_store::get(&state.db, &trigger_id).await {
-        Ok(Some(trigger)) => Json(trigger).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "trigger not found" })),
-        )
-            .into_response(),
-        Err(e) => {
-            error!("failed to fetch trigger: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to fetch trigger" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-/// A partial Trigger edit. Every field is optional; absent fields are left
-/// untouched.
-#[derive(Deserialize)]
-struct PatchTriggerRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    /// Repoint the Trigger to a different library pipeline. Validated against the
-    /// library/repo before applying; the denormalised display name and a revived
-    /// next-fire follow from it.
-    #[serde(default)]
-    pipeline_id: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    cron: Option<String>,
-    #[serde(default)]
-    input_template: Option<String>,
-    #[serde(default)]
-    overlap_policy: Option<String>,
-    /// Double-wrapped AND custom-deserialized, unlike its plain siblings below: the
-    /// point is to make the explicit CLEAR (`"target_repo": null`) *reachable* so it
-    /// can be REFUSED. With plain `#[serde(default)]` a present-`null` collapses to
-    /// `None` and the clear is a silent no-op, which is what the UI was sending on
-    /// every Trigger save.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    target_repo: Option<Option<String>>,
-    /// The secondary list, double-wrapped like `target_repo`: absent = leave, present
-    /// `null`/`[]` = clear to mono-repo, an array = set. Stored as raw JSON TEXT.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    target_repos: Option<Option<Vec<TargetRepoInput>>>,
-    #[serde(default)]
-    source_branch: Option<Option<String>>,
-    #[serde(default)]
-    guard_command: Option<Option<String>>,
-    #[serde(default)]
-    variables: Option<HashMap<String, serde_yaml::Value>>,
-    /// Bounded-`allow` ceiling, double-wrapped: absent = leave, present `null` =
-    /// clear to unbounded, `n` = set. `source_branch` / `guard_command` above keep
-    /// plain `#[serde(default)]`, where present-`null` collapses and cannot clear.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    max_concurrent: Option<Option<i64>>,
-    /// Per-Trigger sandbox mode, double-wrapped like `max_concurrent`: present `null`
-    /// clears back to inheriting the instance default, which is how the UI offers
-    /// "use the instance default".
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    sandbox: Option<Option<String>>,
-    /// Per-Trigger harness, double-wrapped like `sandbox`; present `null` clears back
-    /// to inheriting the instance default.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    harness: Option<Option<String>>,
-    /// Per-Trigger `AgentChoice`, double-wrapped like `harness`; present `null` clears
-    /// back to inheriting the legacy `harness` field.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    agent_choice: Option<Option<pdo_harness::agent_choice::AgentChoice>>,
-    /// The Run-tier skills (#669), replaced wholesale: absent leaves them, a list
-    /// sets them, an empty list clears them. Flat: the empty list IS the clear.
-    #[serde(default)]
-    skills: Option<Vec<crate::skill_selection::SkillRef>>,
-    /// Auto-naming toggle — a FLAT `Option<bool>`, deliberately not double-wrapped:
-    /// there is no "inherit" state to clear back to, a Trigger's autonomy is a plain
-    /// on/off.
-    #[serde(default)]
-    auto_name: Option<bool>,
-}
-
-async fn patch_trigger(
-    State(state): State<Arc<AppState>>,
-    AxumPath(trigger_id): AxumPath<String>,
-    actor: OriginHint,
-    Json(req): Json<PatchTriggerRequest>,
-) -> Response {
-    let existing = match trigger_store::get(&state.db, &trigger_id).await {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "trigger not found" })),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            error!("failed to load trigger for patch: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to load trigger" })),
-            )
-                .into_response();
-        }
-    };
-
-    if let Some(ref name) = req.name {
-        if name.trim().is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "trigger name must not be empty" })),
-            )
-                .into_response();
-        }
-    }
-
-    // One `now` for the whole request: a combined enable + cron-edit + repoint PATCH
-    // must recompute every slot against the same instant.
-    let now = chrono::Utc::now();
-
-    let mut next_fire_at: Option<Option<String>> = None;
-    if let Some(ref cron) = req.cron {
-        match cron_schedule::CronSchedule::parse(cron) {
-            Ok(schedule) => {
-                next_fire_at = trigger_scheduler::recompute_next_fire(
-                    now,
-                    trigger_scheduler::Transition::CronEdit(&schedule),
-                );
-            }
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": format!("invalid cron expression: {e}") })),
-                )
-                    .into_response();
-            }
-        }
-    }
-
-    // Parse the target's YAML to capture the display name (denormalised on the row)
-    // and the prompt_required flag the reject rule below needs.
-    let mut repoint: Option<(String, String)> = None;
-    let mut repoint_prompt_required: Option<bool> = None;
-    if let Some(ref new_pid) = req.pipeline_id {
-        if *new_pid != existing.pipeline_id {
-            let yaml =
-                std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, new_pid)).ok();
-            let yaml = match yaml {
-                Some(y) => y,
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({
-                            "error": format!("pipeline not found: {new_pid}")
-                        })),
-                    )
-                        .into_response();
-                }
-            };
-            match pipeline::parse_pipeline(&yaml) {
-                Ok(r) => {
-                    repoint_prompt_required = Some(r.pipeline.prompt_required);
-                    repoint = Some((new_pid.clone(), r.pipeline.name.clone()));
-                }
-                Err(e) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": format!("pipeline parse error: {e}") })),
-                    )
-                        .into_response();
-                }
-            }
-            // Revive the next fire from the existing cron unless a schedule edit
-            // already recomputed it, so a Trigger that went dormant on a pipeline-id
-            // rename comes back to life on repoint instead of staying dead.
-            if next_fire_at.is_none() {
-                if let Ok(schedule) = cron_schedule::CronSchedule::parse(&existing.cron) {
-                    next_fire_at = trigger_scheduler::recompute_next_fire(
-                        now,
-                        trigger_scheduler::Transition::Repoint(&schedule),
-                    );
-                }
-            }
-        }
-    }
-
-    // Re-activating a disabled Trigger recomputes next_fire_at FORWARD from now:
-    // the missed slot is SKIPPED, no catch-up (ADR-0012 amended). Merely flipping
-    // the bit leaves next_fire_at frozen in the past and the next tick fires an
-    // implicit catch-up. `enabling` is the disabled→enabled front ONLY: an
-    // `{enabled:true}` on an already-live Trigger must not shift its schedule. The
-    // `next_fire_at.is_none()` guard is load-bearing — a combined enable + cron-edit
-    // already recomputed off the *new* schedule, and Enable would overwrite it with
-    // the *existing* cron.
-    let enabling = !existing.enabled && req.enabled == Some(true);
-    if enabling && next_fire_at.is_none() {
-        if let Ok(schedule) = cron_schedule::CronSchedule::parse(&existing.cron) {
-            next_fire_at = trigger_scheduler::recompute_next_fire(
-                now,
-                trigger_scheduler::Transition::Enable(&schedule),
-            );
-        }
-    }
-
-    // PATCH stays a partial merge: an ABSENT `target_repo` leaves the stored value
-    // untouched, which is what makes `{"enabled": true}` a legal body. What is
-    // refused is an explicit CLEAR (`null` or a blank string).
-    let mut validated_target_repo: Option<Option<String>> = None;
-    if let Some(ref edit) = req.target_repo {
-        match required_target_repo(edit.as_deref()) {
-            Ok(p) => validated_target_repo = Some(Some(p.to_string_lossy().into_owned())),
-            Err(msg) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": msg })),
-                )
-                    .into_response();
-            }
-        }
-    }
-
-    if let Some(Some(n)) = req.max_concurrent {
-        if let Err(msg) = validate_max_concurrent(Some(n)) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    }
-
-    // Same shared existence gate as create and `PUT /settings`.
-    if let Some(Some(ref mode)) = req.sandbox {
-        if let Err(msg) = validate_sandbox_ref(&state.db, mode).await {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": msg })),
-            )
-                .into_response();
-        }
-    }
-
-    // Re-apply the create-time reject rule against the *resulting* config.
-    let resulting_guard = match &req.guard_command {
-        Some(g) => g.clone(),
-        None => existing.guard_command.clone(),
-    };
-    let resulting_input = req
-        .input_template
-        .clone()
-        .unwrap_or_else(|| existing.input_template.clone());
-    // When repointing, judge the *new* pipeline's prompt_required, not the old one's.
-    let prompt_required =
-        repoint_prompt_required.unwrap_or_else(|| trigger_prompt_required(&state, &existing));
-    if prompt_required
-        && resulting_guard.as_deref().unwrap_or("").trim().is_empty()
-        && resulting_input.trim().is_empty()
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "this pipeline requires a prompt; add a guard, an input \
-                          template, or mark the pipeline prompt-not-required"
-            })),
-        )
-            .into_response();
-    }
-
-    let edit = trigger_store::UpdateTrigger {
-        name: req.name,
-        pipeline_id: repoint.as_ref().map(|(id, _)| id.clone()),
-        pipeline_name: repoint.as_ref().map(|(_, name)| name.clone()),
-        // The trimmed, validated path — never the raw field.
-        target_repo: validated_target_repo,
-        // Absent → leave; present `null`/`[]` → clear to mono-repo; a non-empty array
-        // → the serialized JSON.
-        target_repos: req.target_repos.map(|inner| {
-            inner
-                .filter(|list| !list.is_empty())
-                .and_then(|list| serde_json::to_string(&list).ok())
-        }),
-        source_branch: req.source_branch,
-        input_template: req.input_template,
-        variables: req
-            .variables
-            .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({}))),
-        cron: req.cron,
-        guard_command: req.guard_command,
-        overlap_policy: req.overlap_policy.map(|p| {
-            if p == "allow" {
-                "allow".to_string()
-            } else {
-                "skip".to_string()
-            }
-        }),
-        max_concurrent: req.max_concurrent,
-        sandbox: req.sandbox,
-        // Normalise a stray `Some(Some(""))` to a clean clear, so a blank never
-        // persists as a harness named "".
-        harness: req
-            .harness
-            .map(|inner| inner.filter(|s| !s.trim().is_empty())),
-        agent_choice: req.agent_choice,
-        skills: req.skills,
-        auto_name: req.auto_name,
-        next_fire_at,
-        // The enable bit and the forward next_fire_at must land in ONE atomic UPDATE,
-        // or enabled=1 can persist with a stale (past) next_fire_at.
-        enabled: req.enabled,
-    };
-
-    if let Err(e) = trigger_store::update(&state.db, &trigger_id, edit).await {
-        error!("failed to update trigger: {e}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "failed to update trigger" })),
-        )
-            .into_response();
-    }
-
-    match trigger_store::get(&state.db, &trigger_id).await {
-        Ok(Some(updated)) => {
-            let _ = state.bus_tx.send(serde_json::json!({
-                "type": "trigger_updated",
-                "trigger_id": trigger_id,
-            }));
-            // Persist BOTH snapshots (ADR-0044 §2·D): "a patch happened" cannot tell
-            // a manual `enabled:false` from a cron edit unless before→after is on the
-            // row.
-            state
-                .platform
-                .record_audit()
-                .execute(pdo_platform::domain::audit::NewAuditEntry {
-                    actor_hint: actor.as_hint().to_string(),
-                    action: "trigger.updated".to_string(),
-                    target_kind: Some("trigger".to_string()),
-                    target_id: Some(trigger_id.clone()),
-                    before: serde_json::to_value(&existing).ok(),
-                    after: serde_json::to_value(&updated).ok(),
-                })
-                .await;
-            Json(updated).into_response()
-        }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "failed to reload trigger" })),
-        )
-            .into_response(),
-    }
-}
-
-async fn list_trigger_fires(
-    State(state): State<Arc<AppState>>,
-    AxumPath(trigger_id): AxumPath<String>,
-) -> Response {
-    match trigger_store::fire_history(&state.db, &trigger_id).await {
-        Ok(fires) => Json(fires).into_response(),
-        Err(e) => {
-            error!("failed to list trigger fires: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to list trigger fires" })),
-            )
-                .into_response()
-        }
-    }
-}
-
-/// `POST /triggers/{id}/fire` — a manual "Run now" fire (ADR-0027). A first-class
-/// fire: same guard, same overlap gate, same `trigger_fires` audit row
-/// (`source = "manual"`), same `triggered_by` provenance — but `next_fire_at` is
-/// left untouched, because the cron heartbeat owns the schedule.
-///
-/// Contract (ADR-0025): 404 unknown; 409 disabled or broken reference, before any
-/// effect and with no audit row; otherwise `200 {ok, fired, …}` — a guard/overlap
-/// skip is an honest 200, not an error.
-async fn fire_trigger_now(
-    State(state): State<Arc<AppState>>,
-    AxumPath(trigger_id): AxumPath<String>,
-) -> Response {
-    let trigger = match trigger_store::get(&state.db, &trigger_id).await {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("trigger not found: {trigger_id}") })),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            error!("failed to load trigger {trigger_id}: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to load trigger" })),
-            )
-                .into_response();
-        }
-    };
-
-    // Disabled ⇒ explicit 409 before any effect. A human click on a paused trigger
-    // deserves a truthful refusal, not a silent skip (ADR-0025); `decide()`'s silent
-    // no-op stays cron-only.
-    if !trigger.enabled {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("trigger '{trigger_id}' is disabled — enable it first"),
-            })),
-        )
-            .into_response();
-    }
-
-    // Refuse explicitly rather than record an error outcome — the cron path keeps
-    // its own audited treatment.
-    if let Some(reason) = trigger_dangling_reason(&state, &trigger) {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": format!("broken reference: {reason}") })),
-        )
-            .into_response();
-    }
-
-    // Serialize with the cron tick, or a manual fire and a tick race the same
-    // overlap window.
-    let _tick = state.trigger_tick_lock.lock().await;
-    let now = chrono::Utc::now();
-    let record =
-        fire_one_trigger(&state, &trigger, now, trigger_scheduler::FireSource::Manual).await;
-
-    match record {
-        Some(r) if r.outcome == "fired" => Json(serde_json::json!({
-            "ok": true,
-            "fired": true,
-            "run_id": r.run_id,
-        }))
-        .into_response(),
-        Some(r) => Json(serde_json::json!({
-            "ok": true,
-            "fired": false,
-            "outcome": r.outcome,
-            "reason": r.reason,
-        }))
-        .into_response(),
-        // Unreachable today (due is forced, enabled was checked); stay truthful
-        // rather than panic if the decision core evolves.
-        None => Json(serde_json::json!({
-            "ok": true,
-            "fired": false,
-            "outcome": "skipped",
-            "reason": "no action taken",
-        }))
-        .into_response(),
-    }
-}
-
 /// ROUTER TRAP: any NEW top-level path prefix (`/nodes`, `/stats`, `/fs`, `/audit`,
 /// `/projects`, …) also needs its own entry in the vite dev proxy whitelist
 /// (`frontend/vite.config.ts`). Without it a dev-mode request answers 200 with the
@@ -2302,13 +1347,6 @@ async fn fire_trigger_now(
 /// same subtree is fine — axum 0.8 prefers the static one.
 fn build_router(state: Arc<AppState>) -> Router {
     let router = Router::new()
-        .route("/triggers", get(list_triggers).post(create_trigger))
-        .route("/triggers/health", get(triggers_health))
-        // Dry-run a guard command with no side effects — the opposite pole of "Run
-        // now" (ADR-0027 addendum).
-        .route("/triggers/guard/test", post(guard_test))
-        // Global Trigger kill-switch.
-        .route("/triggers/pause", post(pause_triggers))
         // Instance-wide settings (ADR-0015). `GET` returns the per-field
         // {effective, source, stored, env, default} view; `PUT` writes the stored
         // tier, with fail-fast validation.
@@ -2332,13 +1370,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/settings/agent-profiles/{id}/referents",
             get(get_agent_profile_referents),
         )
-        .route(
-            "/triggers/{trigger_id}",
-            get(get_trigger).patch(patch_trigger).delete(delete_trigger),
-        )
-        .route("/triggers/{trigger_id}/fires", get(list_trigger_fires))
-        // Manual "Run now" — a first-class fire.
-        .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
         .with_state(state.clone())
         .merge(
@@ -2361,7 +1392,8 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     // The event log and the tombstones of the forgotten Runs (ADR-0024).
     pdo_run::adapters::sqlite_event_store::init(db).await?;
 
-    trigger_store::init(db)
+    // The Triggers' tables belong to the trigger context (#927).
+    pdo_trigger::adapters::sqlite::init(db)
         .await
         .context("failed to create trigger tables")?;
 
@@ -2401,360 +1433,6 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .context("failed to create stats_absorptions table")?;
 
     Ok(())
-}
-
-/// How many of the Trigger's *own* Runs are still live. A finished Run drops out of
-/// the count and frees a slot, which is what makes "max simultaneous live" hold with
-/// no extra state to track.
-async fn trigger_live_run_count(db: &sqlx::SqlitePool, trigger_id: &str) -> usize {
-    let run_ids = match load_all_run_ids(db).await {
-        Ok(ids) => ids,
-        Err(e) => {
-            warn!("trigger scheduler: failed to load run ids: {e}");
-            return 0;
-        }
-    };
-    let mut count = 0usize;
-    for run_id in run_ids {
-        let events = match load_events(db, &run_id).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        if let Some(state) = event_log::project(&events) {
-            if state.triggered_by.as_deref() == Some(trigger_id) && state.status.is_live() {
-                count += 1;
-            }
-        }
-    }
-    count
-}
-
-/// Load a Trigger's target pipeline yaml from the library (falling back to a
-/// pipeline file under the repo). `None` means a dangling pipeline reference.
-fn trigger_pipeline_yaml(state: &AppState, trigger: &trigger_store::Trigger) -> Option<String> {
-    std::fs::read_to_string(resolve_pipeline_path(
-        &state.repo_root,
-        &trigger.pipeline_id,
-    ))
-    .ok()
-}
-
-/// Resolve the target pipeline's `prompt_required` flag for a Trigger; defaults
-/// to `true` (and treats a missing/unparseable pipeline as such) so a dangling
-/// reference rejects rather than fires blind.
-fn trigger_prompt_required(state: &AppState, trigger: &trigger_store::Trigger) -> bool {
-    match trigger_pipeline_yaml(state, trigger) {
-        Some(y) => pipeline::parse_pipeline(&y)
-            .map(|r| r.pipeline.prompt_required)
-            .unwrap_or(true),
-        None => true,
-    }
-}
-
-/// Check a Trigger's external references before firing, so the scheduler surfaces
-/// an error outcome and stops firing rather than rotting silently.
-fn trigger_dangling_reason(state: &AppState, trigger: &trigger_store::Trigger) -> Option<String> {
-    if trigger_pipeline_yaml(state, trigger).is_none() {
-        return Some(format!("pipeline not found: {}", trigger.pipeline_id));
-    }
-    // A null/blank target repo is a dangling reference, not a fallback. Refuse HERE
-    // rather than at `create_run_inner`, for three things a chokepoint 400 cannot
-    // buy: the guard command never runs (guards do `git pull` / `gh issue list`,
-    // which would execute in the unnamed daemon repo), the `Dangling` transition
-    // NULLs `next_fire_at` so the Trigger goes dormant instead of emitting one red
-    // row per tick forever, and `POST /triggers/:id/fire` answers 409 with a banner
-    // instead of a `200 {fired:false}` buried in the fire history.
-    if let Err(msg) = required_target_repo(trigger.target_repo.as_deref()) {
-        return Some(msg);
-    }
-    None
-}
-
-/// Run one Trigger scheduler tick under panic isolation. The ~30 s background loop
-/// *and* the [`DaemonHandle::run_trigger_tick`] test seam both go through here, so
-/// production and the synchronous test path behave identically.
-async fn run_trigger_scheduler_tick_supervised(state: &Arc<AppState>) {
-    let tick_state = state.clone();
-    run_isolated("trigger scheduler", async move {
-        run_trigger_scheduler_tick(&tick_state).await
-    })
-    .await;
-}
-
-/// Run one scheduler tick: fire every due Trigger that the decision admits,
-/// recording every significant outcome and recomputing each next fire.
-async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
-    let _tick = state.trigger_tick_lock.lock().await;
-    let now = chrono::Utc::now();
-    // Record liveness at tick START: a wedged tick then freezes the value, while an
-    // isolated panic has already advanced it, so `/triggers/health` answers "is the
-    // loop alive?".
-    state
-        .last_trigger_tick_ms
-        .store(now.timestamp_millis(), std::sync::atomic::Ordering::Relaxed);
-
-    // Global kill-switch: skip the whole fire loop while paused. Read FRESH each
-    // tick so `POST /triggers/pause` takes effect without a restart. Liveness above
-    // still advances — paused ≠ dead. Because `due_triggers` is never called while
-    // paused, `next_fire_at` stays frozen in the past, so on unpause the next
-    // ordinary tick fires each due Trigger once and recomputes forward: a one-shot
-    // catch-up with NO dedicated code and NO `Transition` variant. Fail-OPEN on a
-    // read error, matching the scheduler's best-effort posture.
-    if instance_config::triggers_paused(&state.db)
-        .await
-        .unwrap_or(false)
-    {
-        return;
-    }
-
-    let now_str = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let due = match trigger_store::due_triggers(&state.db, &now_str).await {
-        Ok(t) => t,
-        Err(e) => {
-            warn!("trigger scheduler: due_triggers failed: {e}");
-            return;
-        }
-    };
-
-    for trigger in due {
-        // TOCTOU close: re-read the kill-switch at the last moment. The tick-start
-        // read is stale by now — `due_triggers` suspends on a DB round-trip, and
-        // `POST /triggers/pause` deliberately does NOT take `trigger_tick_lock` (a
-        // lock held across the guard subprocess would make the brake hang for
-        // ~guard-timeout, and a brake that hangs is no brake). Without this re-read a
-        // tick inside its critical section still fires a Run AFTER the operator
-        // paused. Bail the whole tick: `next_fire_at` stays frozen, preserving the
-        // one-shot catch-up. Fail-OPEN, same posture as above. "Run now" never
-        // reaches this Cron path, so it stays exempt.
-        if instance_config::triggers_paused(&state.db)
-            .await
-            .unwrap_or(false)
-        {
-            return;
-        }
-
-        if state.panic_on_trigger_name.as_deref() == Some(trigger.name.as_str()) {
-            panic!(
-                "PDO_DEBUG_PANIC_TRIGGER fault injection (#222): trigger {}",
-                trigger.name
-            );
-        }
-
-        // Surface an error outcome and stop firing (clear next_fire) rather than rot
-        // silently or auto-delete. The clear goes through the single recompute seam.
-        if let Some(reason) = trigger_dangling_reason(state, &trigger) {
-            let cleared = trigger_scheduler::recompute_next_fire(
-                now,
-                trigger_scheduler::Transition::Dangling,
-            )
-            .flatten();
-            let _ = trigger_store::set_next_fire(&state.db, &trigger.id, cleared.as_deref()).await;
-            let record = trigger_store::FireRecord {
-                outcome: "error".to_string(),
-                reason: Some(reason),
-                run_id: None,
-                guard_stdout: None,
-                guard_stderr: None,
-                guard_exit_code: None,
-                source: Some(trigger_scheduler::FireSource::Cron.as_str().to_string()),
-            };
-            record_and_broadcast_fire(state, &trigger.id, &record).await;
-            continue;
-        }
-
-        fire_one_trigger(state, &trigger, now, trigger_scheduler::FireSource::Cron).await;
-    }
-}
-
-/// Evaluate and (maybe) fire one Trigger — the shared spine of the cron tick and
-/// the manual "Run now" endpoint (ADR-0027). On `Cron` the next fire is recomputed
-/// forward; on `Manual` `next_fire_at` is left untouched, because the cron heartbeat
-/// owns the schedule and a 14:32 click must not shift the 15:00 slot.
-///
-/// `None` means the evaluation was a silent no-op.
-async fn fire_one_trigger(
-    state: &Arc<AppState>,
-    trigger: &trigger_store::Trigger,
-    now: chrono::DateTime<chrono::Utc>,
-    source: trigger_scheduler::FireSource,
-) -> Option<trigger_store::FireRecord> {
-    let live_count = trigger_live_run_count(&state.db, &trigger.id).await;
-    let prompt_required = trigger_prompt_required(state, trigger);
-
-    // Only run the guard when overlap wouldn't already skip — never spend a guard
-    // run on a tick we'd skip anyway. Route it through the same `overlap_ceiling`
-    // the decision core uses, or the guard-gate drifts from the fire decision.
-    let overlap = if trigger.overlap_policy == "allow" {
-        fire_decision::OverlapPolicy::Allow
-    } else {
-        fire_decision::OverlapPolicy::Skip
-    };
-    let overlap_skips =
-        fire_decision::overlap_ceiling(overlap, trigger.max_concurrent.map(|m| m.max(0) as usize))
-            .is_some_and(|ceiling| live_count >= ceiling);
-    let guard = match (&trigger.guard_command, overlap_skips) {
-        (Some(cmd), false) if !cmd.trim().is_empty() => {
-            // Guaranteed present: `trigger_dangling_reason` refused the fire upstream
-            // otherwise. No fallback to the daemon root.
-            let cwd = PathBuf::from(trigger.target_repo.as_deref().unwrap_or_default());
-            // Resolve the timeout fresh each tick so a settings change takes effect
-            // without a restart. Stored is seconds; the env seam is ms.
-            let stored_secs = instance_config::get(&state.db)
-                .await
-                .ok()
-                .and_then(|c| c.guard_timeout_secs)
-                .map(|n| n as u64);
-            let timeout = guard_runner::guard_timeout_with(stored_secs);
-            Some(guard_runner::run_guard(cmd, &cwd, timeout).await)
-        }
-        _ => None,
-    };
-
-    let plan =
-        trigger_scheduler::plan_tick(trigger, now, live_count, guard, prompt_required, source);
-
-    // Route the manual case through the recompute seam too, so the leave-vs-advance
-    // rule stays in the one exhaustive match rather than an ad-hoc branch.
-    let next_write: Option<Option<String>> = match source {
-        trigger_scheduler::FireSource::Cron => Some(plan.next_fire_at.clone()),
-        trigger_scheduler::FireSource::Manual => {
-            trigger_scheduler::recompute_next_fire(now, trigger_scheduler::Transition::ManualFire)
-        }
-    };
-    if let Some(next) = next_write {
-        if let Err(e) = trigger_store::set_next_fire(&state.db, &trigger.id, next.as_deref()).await
-        {
-            warn!(
-                "trigger scheduler: set_next_fire failed for {}: {e}",
-                trigger.id
-            );
-        }
-    }
-
-    match plan.decision {
-        fire_decision::FireDecision::Fire { input } => {
-            // #804 / ADR-0070 §1: refresh the remotes BEFORE the cut, so a Trigger
-            // whose source is a tracking ref fires on the server's state rather than
-            // on whatever the last manual fetch happened to leave behind. Here, in
-            // the `Fire` arm only: a tick we are about to skip must not touch the
-            // network. Never a fast-forward — nobody is around to arbitrate one.
-            //
-            // It holds the (serialized) tick for up to `FETCH_TIMEOUT`, exactly as
-            // the guard subprocess above already does and for the same reason: a
-            // fire is read-decide-act, and the act needs the decision's inputs to
-            // still be true. `next_fire_at` was written before this match, so a slow
-            // fetch delays THIS fire without ever shifting the schedule.
-            let source_fetch_error = fetch_before_trigger_cut(&trigger_fetch_targets(
-                trigger.target_repo.as_deref(),
-                trigger.target_repos.as_deref(),
-            ))
-            .await;
-            let req = CreateRunRequest {
-                pipeline: trigger.pipeline_id.clone(),
-                input,
-                variables: trigger_variables(trigger),
-                pipeline_id: Some(trigger.pipeline_id.clone()),
-                target_repo: trigger.target_repo.clone(),
-                // Stored as raw JSON TEXT so `trigger_store` stays decoupled from lib
-                // types; a blank/absent/malformed value defers to a mono-repo fire.
-                target_repos: trigger
-                    .target_repos
-                    .as_deref()
-                    .filter(|s| !s.trim().is_empty())
-                    .and_then(|s| serde_json::from_str::<Vec<TargetRepoInput>>(s).ok())
-                    .unwrap_or_default(),
-                source_branch: trigger.source_branch.clone(),
-                name: None,
-                triggered_by: Some(trigger.id.clone()),
-                // A Run has a single origin, so the Trigger's stored mode IS the
-                // request's explicit tier. `parse` is syntactic, so an unknown token
-                // reads as a profile NAME and the chokepoint 400s it by name; that
-                // message becomes this fire's `FireRecord` reason, visibly red in the
-                // Trigger history (ADR-0031 §7).
-                sandbox: trigger
-                    .sandbox
-                    .as_deref()
-                    .and_then(event_log::SandboxMode::parse),
-                // The Trigger carries the harness IN its Run template — there is no
-                // separate Trigger tier. Both a cron tick and a "Run now" route through
-                // here, so they freeze the SAME harness.
-                harness: trigger.harness.clone(),
-                agent_choice: trigger.agent_choice.clone(),
-                // #669: the Trigger's skills ARE the fired Run's Run tier, same as
-                // `harness` — a cron tick and a "Run now" freeze the SAME list.
-                skills: trigger.skills.clone(),
-                // `Some(b)` wins the chokepoint resolution unconditionally, so a fire
-                // with `auto_name=false` keeps a stable per-id name.
-                auto_name: Some(trigger.auto_name),
-                // No Trigger tier for `auto_fail` (ADR-0049): a fire states no
-                // run-level preference, so `pdo fail` resolves through project/instance.
-                auto_fail: None,
-                provisioning: provisioning::ProvisioningRules::default(),
-                source_fetch_error,
-            };
-            let record = match state.run.start_run(req, Vec::new(), None).await {
-                Ok(run_id) => trigger_store::FireRecord {
-                    outcome: "fired".to_string(),
-                    reason: None,
-                    run_id: Some(run_id),
-                    guard_stdout: None,
-                    guard_stderr: None,
-                    guard_exit_code: None,
-                    source: Some(source.as_str().to_string()),
-                },
-                Err((_, body)) => {
-                    let reason = body
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("run creation failed")
-                        .to_string();
-                    trigger_store::FireRecord {
-                        outcome: "error".to_string(),
-                        reason: Some(reason),
-                        run_id: None,
-                        guard_stdout: None,
-                        guard_stderr: None,
-                        guard_exit_code: None,
-                        source: Some(source.as_str().to_string()),
-                    }
-                }
-            };
-            record_and_broadcast_fire(state, &trigger.id, &record).await;
-            Some(record)
-        }
-        fire_decision::FireDecision::Skip { .. } | fire_decision::FireDecision::Reject { .. } => {
-            if let Some(record) = plan.record {
-                record_and_broadcast_fire(state, &trigger.id, &record).await;
-                Some(record)
-            } else {
-                None
-            }
-        }
-    }
-}
-
-/// Parse a Trigger's stored variable overrides (a JSON object) into the
-/// `CreateRunRequest` shape; an empty/invalid value yields no overrides.
-fn trigger_variables(trigger: &trigger_store::Trigger) -> HashMap<String, serde_yaml::Value> {
-    serde_json::from_value(trigger.variables.clone()).unwrap_or_default()
-}
-
-/// Persist a fire audit row and broadcast a `trigger_fired` update over the
-/// pipeline channel so the UI refreshes live.
-async fn record_and_broadcast_fire(
-    state: &AppState,
-    trigger_id: &str,
-    record: &trigger_store::FireRecord,
-) {
-    if let Err(e) = trigger_store::record_fire(&state.db, trigger_id, record).await {
-        warn!("trigger scheduler: record_fire failed for {trigger_id}: {e}");
-    }
-    let _ = state.bus_tx.send(serde_json::json!({
-        "type": "trigger_fired",
-        "trigger_id": trigger_id,
-        "outcome": record.outcome,
-        "run_id": record.run_id,
-    }));
 }
 
 // --- API handlers ---
@@ -2889,11 +1567,12 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     };
 
     // The env seam is milliseconds; everything else here is seconds.
-    let guard_default = guard_runner::GUARD_TIMEOUT_SECS as i64;
+    let guard_default = pdo_trigger::domain::guard::GUARD_TIMEOUT_SECS as i64;
     let guard_stored_wins = cfg.guard_timeout_secs.filter(|&n| (1..=600).contains(&n));
-    let guard_env_ms = guard_runner::env_guard_timeout_ms().map(|n| n as i64);
+    let guard_env_ms = pdo_trigger::adapters::env::env_guard_timeout_ms().map(|n| n as i64);
     let guard_effective =
-        guard_runner::guard_timeout_with(cfg.guard_timeout_secs.map(|n| n as u64)).as_secs() as i64;
+        pdo_trigger::adapters::env::guard_timeout_with(cfg.guard_timeout_secs.map(|n| n as u64))
+            .as_secs() as i64;
     let guard_source = if guard_stored_wins.is_some() {
         "stored"
     } else if guard_env_ms.is_some() {
@@ -3640,7 +2319,7 @@ async fn get_agent_profile_referents(
         .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
         .collect::<Vec<_>>();
 
-    let triggers = trigger_store::list(&state.db)
+    let triggers = pdo_trigger::adapters::sqlite::list(&state.db)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -3705,151 +2384,6 @@ async fn get_agent_profile_referents(
     .into_response()
 }
 
-#[derive(Deserialize)]
-struct PauseTriggersRequest {
-    paused: bool,
-}
-
-/// `POST /triggers/pause` — flip the global Trigger kill-switch.
-///
-/// Persists `triggers_paused` on `instance_config` (a daemon-wide scheduler gate,
-/// outside the `/settings` machinery) and broadcasts a WS event, because there is no
-/// trigger polling and a second tab would otherwise never learn. Idempotent.
-///
-/// The per-Trigger `enabled` flag is never touched: pause and per-Trigger disable are
-/// orthogonal channels, which is what makes "restore the prior state on unpause" free.
-async fn pause_triggers(
-    State(state): State<Arc<AppState>>,
-    actor: OriginHint,
-    Json(req): Json<PauseTriggersRequest>,
-) -> Response {
-    // This endpoint writes blind, so capture the "before" flag first or the audit
-    // entry cannot show the direction of the flip.
-    let before = instance_config::triggers_paused(&state.db).await.ok();
-    match instance_config::set_triggers_paused(&state.db, req.paused).await {
-        Ok(()) => {
-            let _ = state.bus_tx.send(serde_json::json!({
-                "type": "triggers_paused",
-                "paused": req.paused,
-            }));
-            state
-                .platform
-                .record_audit()
-                .execute(pdo_platform::domain::audit::NewAuditEntry {
-                    actor_hint: actor.as_hint().to_string(),
-                    action: "triggers.pause_changed".to_string(),
-                    target_kind: Some("instance".to_string()),
-                    target_id: None,
-                    before: Some(serde_json::json!({ "paused": before })),
-                    after: Some(serde_json::json!({ "paused": req.paused })),
-                })
-                .await;
-            Json(serde_json::json!({ "ok": true, "paused": req.paused })).into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// `GET /triggers/health` — scheduler liveness: the most recent tick start, the
-/// configured interval, and the global pause flag, so a dead/stalled scheduler — or
-/// a deliberately-paused one — is observable instead of silently dormant.
-async fn triggers_health(State(state): State<Arc<AppState>>) -> Response {
-    let ms = state
-        .last_trigger_tick_ms
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let last_tick_at = (ms != 0)
-        .then(|| chrono::DateTime::from_timestamp_millis(ms))
-        .flatten()
-        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    // Fail-open on a DB read error, matching the tick gate: a paused daemon must
-    // never look "dead", and a genuinely-broken DB surfaces on the next tick anyway.
-    let paused = instance_config::triggers_paused(&state.db)
-        .await
-        .unwrap_or(false);
-    Json(serde_json::json!({
-        "last_tick_at": last_tick_at,
-        "tick_interval_secs": trigger_scheduler::TICK_INTERVAL_SECS,
-        "paused": paused,
-    }))
-    .into_response()
-}
-
-/// Every repository a Trigger fire is about to cut from, **primary first** (#804).
-///
-/// Takes the Trigger's two stored fields verbatim (the secondary list is raw JSON
-/// TEXT, see [`trigger_store::Trigger::target_repos`]) and mirrors the very
-/// normalisation `create_run_inner` applies: the scalar is the primary when it is
-/// set, else row 0 of the list. Blanks and duplicates fall out — a repo named twice
-/// is one repo to fetch, and the ORDER is what makes "primary first" decidable by
-/// the caller, which reports only the primary's failure.
-///
-/// Pure, and separate from the fetch, so the list rule is testable without git: a
-/// malformed `target_repos` deferring to a mono-repo fire is the same rule the fire
-/// itself applies, and the two must not drift.
-fn trigger_fetch_targets(
-    target_repo: Option<&str>,
-    target_repos_json: Option<&str>,
-) -> Vec<String> {
-    let secondaries = target_repos_json
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| serde_json::from_str::<Vec<TargetRepoInput>>(s).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| r.repo);
-
-    let mut targets: Vec<String> = Vec::new();
-    for candidate in target_repo
-        .map(str::to_string)
-        .into_iter()
-        .chain(secondaries)
-    {
-        let path = candidate.trim().to_string();
-        if !path.is_empty() && !targets.contains(&path) {
-            targets.push(path);
-        }
-    }
-    targets
-}
-
-/// Fetch every remote of every repository a Trigger fire will cut from, before the
-/// cut (#804, ADR-0070 §1). Answers the **primary**'s failure — the one the Run
-/// surfaces — or `None` when it worked.
-///
-/// A failure NEVER stops the fire: the Run is cut from the last state known locally
-/// and carries the reason, because losing a scheduled fire to a network blip is the
-/// worse outcome by far (spec #801, story 21). Never a fast-forward either, in any
-/// of these repos: there is nobody at a Trigger to arbitrate one (ADR-0070 §2).
-///
-/// A secondary's failure is logged, not surfaced: its base ref is pinned to a SHA
-/// the moment after, and the Run detail states freshness for the source branch —
-/// one repo, one sentence. A path that is not a repository is skipped rather than
-/// reported, because the create chokepoint is about to refuse the fire naming that
-/// very path, and a git-remote error here would bury that message under a fetch one.
-async fn fetch_before_trigger_cut(targets: &[String]) -> Option<FetchError> {
-    let mut primary_error = None;
-    for (index, path) in targets.iter().enumerate() {
-        let Ok(repo) = validate_target_repo(path) else {
-            continue;
-        };
-        let outcome = fetch_all_remotes(&repo).await;
-        if index == 0 {
-            primary_error = outcome;
-        } else if let Some(error) = outcome {
-            warn!(
-                "trigger fire: pre-cut fetch of secondary repo {path} failed: {}",
-                error.message
-            );
-        }
-    }
-    primary_error
-}
-
-pub use guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV;
 pub use pdo_kernel::env::TMUX_CMD_OVERRIDE_ENV;
 
 // --- Static file serving ---
@@ -4045,7 +2579,7 @@ async fn skill_referents(
         })
         .collect();
 
-    let triggers = trigger_store::list(db)
+    let triggers = pdo_trigger::adapters::sqlite::list(db)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -4143,15 +2677,6 @@ mod tests {
     use pdo_run::application::reopen::embed_reopen_for_targeted_command;
     use pdo_run::application::scheduler::advance as run_advance;
     use pdo_run::domain::completion_refusal;
-    use pdo_workspace::adapters::git::branches::list_branches;
-    use pdo_workspace::domain::branches::BranchEntry;
-
-    fn branch_named<'a>(branches: &'a [BranchEntry], name: &str) -> &'a BranchEntry {
-        branches
-            .iter()
-            .find(|b| b.name == name)
-            .unwrap_or_else(|| panic!("no branch {name} in {branches:?}"))
-    }
 
     use axum::body::Body;
     use axum::http::Request;
@@ -4257,128 +2782,6 @@ mod tests {
         assert!(nested_daemon_from(None, Some("1")));
     }
 
-    // --- POST /triggers/guard/test: dry-run a guard, zero side effects.
-    // Router oneshots prove the route is mounted (the FP's "404 blocking" risk)
-    // and maps the pass / empty-command / absent-repo / bad-repo branches to
-    // 200 / 400 / 400 / 400 (#470 added the absent-repo refusal). Deeper
-    // pass/skip/cwd + zero-side-effect proofs live in the layer-3a
-    // `guard_dry_run.rs` (real daemon); the timeout path is isolated in its own
-    // binary because `PDO_GUARD_TIMEOUT_MS` is process-global. ---
-
-    #[tokio::test]
-    async fn guard_test_route_is_mounted_and_returns_pass() {
-        let state = test_state().await;
-        // The dry-run now demands a named repo, like a real fire.
-        let repo = state.repo_root.to_string_lossy().into_owned();
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers/guard/test")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({
-                            "guard_command": "echo hi",
-                            "target_repo": repo,
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(body["outcome"], "pass");
-        assert_eq!(body["stdout"], "hi\n");
-        assert_eq!(body["exit_code"], 0);
-    }
-
-    #[tokio::test]
-    async fn guard_test_empty_command_is_400() {
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers/guard/test")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({ "guard_command": "   " }))
-                            .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn guard_test_invalid_target_repo_is_400() {
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers/guard/test")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({
-                            "guard_command": "echo hi",
-                            "target_repo": "/no/such/path/pdo-guard-dry-run-xyz",
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn guard_test_without_target_repo_is_400() {
-        // The dry-run executes an arbitrary `sh -c`. Its "zero side effects"
-        // invariant is about not creating a Run — it says nothing about what the
-        // command does. So it must refuse an unnamed repo like a real fire does,
-        // instead of running in the daemon's own working directory.
-        let app = build_router(test_state().await);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers/guard/test")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({ "guard_command": "echo hi" }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let json: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(
-            json["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("target_repo"),
-            "got: {json}"
-        );
-    }
-
     /// The platform context of a test state: its real SQLite and filesystem
     /// adapters, no Run to verify a session against, no home to journal an
     /// update in.
@@ -4433,25 +2836,6 @@ mod tests {
         );
         platform.init().await.unwrap();
         platform
-    }
-
-    /// The audit rows of a test state, newest first, through the platform's
-    /// SQLite adapter.
-    async fn audit_rows(
-        state: &AppState,
-        target_kind: Option<&str>,
-        target_id: Option<&str>,
-    ) -> Vec<pdo_platform::domain::audit::AuditEntry> {
-        use pdo_platform::application::ports::AuditLog;
-        let filter = pdo_platform::domain::audit::AuditFilter {
-            target_kind: target_kind.map(str::to_string),
-            target_id: target_id.map(str::to_string),
-            ..Default::default()
-        };
-        pdo_platform::adapters::sqlite_audit_log::SqliteAuditLog::new(state.db.clone())
-            .list(&filter)
-            .await
-            .unwrap()
     }
 
     async fn test_state() -> Arc<AppState> {
@@ -4566,12 +2950,9 @@ mod tests {
                 run,
                 bus_tx,
                 repo_root: test_repo_root.clone(),
-                trigger_tick_lock: tokio::sync::Mutex::new(()),
                 recent_writes: SelfWrites::new(),
                 docker_cmd_override: None,
                 sandbox_home_override: None,
-                last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-                panic_on_trigger_name: None,
                 docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
                 harness_catalogue: Arc::new(
                     pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -4637,12 +3018,9 @@ mod tests {
                 run,
                 bus_tx,
                 repo_root: test_repo_root.clone(),
-                trigger_tick_lock: tokio::sync::Mutex::new(()),
                 recent_writes: SelfWrites::new(),
                 docker_cmd_override: None,
                 sandbox_home_override: None,
-                last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-                panic_on_trigger_name: None,
                 docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
                 harness_catalogue: Arc::new(
                     pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -5302,69 +3680,6 @@ mod tests {
     // `handle_node_completion` / `advance_run` no-op and the shared completion gate is
     // exercised in isolation.
 
-    fn init_test_repo(dir: &std::path::Path) {
-        let run = |args: &[&str]| {
-            std::process::Command::new("git")
-                .args(args)
-                .current_dir(dir)
-                .output()
-                .unwrap()
-        };
-        run(&["init"]);
-        run(&["config", "user.email", "test@test.com"]);
-        run(&["config", "user.name", "Test"]);
-        std::fs::write(dir.join("README.md"), "# test\n").unwrap();
-        run(&["add", "README.md"]);
-        run(&["commit", "-m", "initial"]);
-    }
-
-    fn run_git(dir: &std::path::Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    /// A `git clone` of a freshly-seeded origin, so `work` carries real
-    /// remote-tracking refs (`origin/main` — the twin of the local `main` — and
-    /// `origin/feature-remote-only`) PLUS the `origin/HEAD` symref every clone
-    /// writes, covering the symref-filter case for free. Returns `(origin,
-    /// work)`; keep both alive so the refs keep resolving.
-    fn init_repo_with_remote() -> (tempfile::TempDir, tempfile::TempDir) {
-        let origin = tempfile::tempdir().unwrap();
-        run_git(origin.path(), &["init", "-b", "main"]);
-        run_git(origin.path(), &["config", "user.email", "test@test.com"]);
-        run_git(origin.path(), &["config", "user.name", "Test"]);
-        std::fs::write(origin.path().join("README.md"), "# test\n").unwrap();
-        run_git(origin.path(), &["add", "."]);
-        run_git(origin.path(), &["commit", "-m", "init"]);
-        run_git(origin.path(), &["checkout", "-b", "feature-remote-only"]);
-        std::fs::write(origin.path().join("x.txt"), "x\n").unwrap();
-        run_git(origin.path(), &["add", "."]);
-        run_git(origin.path(), &["commit", "-m", "feat"]);
-        run_git(origin.path(), &["checkout", "main"]);
-
-        let work = tempfile::tempdir().unwrap();
-        run_git(
-            origin.path(),
-            &[
-                "clone",
-                "--quiet",
-                origin.path().to_str().unwrap(),
-                work.path().to_str().unwrap(),
-            ],
-        );
-        run_git(work.path(), &["config", "user.email", "test@test.com"]);
-        run_git(work.path(), &["config", "user.name", "Test"]);
-        (origin, work)
-    }
-
     async fn test_state_with_dir(dir: &std::path::Path) -> Arc<AppState> {
         test_state_with_dir_and_docker(dir, None).await
     }
@@ -5423,12 +3738,9 @@ mod tests {
                 run,
                 bus_tx,
                 repo_root: test_repo_root.clone(),
-                trigger_tick_lock: tokio::sync::Mutex::new(()),
                 recent_writes: SelfWrites::new(),
                 docker_cmd_override,
                 sandbox_home_override: None,
-                last_trigger_tick_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-                panic_on_trigger_name: None,
                 docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
                 harness_catalogue: Arc::new(
                     pdo_harness::adapters::binary_probe::installed_catalogue_reader(),
@@ -5438,490 +3750,6 @@ mod tests {
                 session,
             }
         })
-    }
-
-    const START_END_YAML: &str = "  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n";
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn patch_trigger_repoints_to_another_pipeline() {
-        // PATCH /triggers/{id} {pipeline_id} must move the trigger to the
-        // new pipeline — id *and* denormalised name — and persist it, instead of
-        // serde silently dropping an unknown field. Driven end-to-end through the
-        // router so the deserialization path itself is under test.
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        write_optional_pipeline(tmp.path(), "weekly-pipe");
-        // A Trigger cannot be created without a target repo any more.
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state.clone());
-
-        // Create a trigger bound to watch-pipe.
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "name": "PDO Weekly",
-                            "pipeline_id": "watch-pipe",
-                            "cron": "0 4 * * 1",
-                            "input_template": "x",
-                            "target_repo": tmp.path().to_string_lossy(),
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let id = created["id"].as_str().unwrap().to_string();
-        assert_eq!(created["pipeline_id"], "watch-pipe");
-        assert_eq!(created["pipeline_name"], "watch-pipe");
-
-        // Repoint it to weekly-pipe.
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri(format!("/triggers/{id}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({ "pipeline_id": "weekly-pipe" }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let updated: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(updated["pipeline_id"], "weekly-pipe");
-        assert_eq!(updated["pipeline_name"], "weekly-pipe");
-
-        // Persisted in the store, not merely echoed back.
-        let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
-        assert_eq!(after.pipeline_id, "weekly-pipe");
-        assert_eq!(after.pipeline_name, "weekly-pipe");
-        // The repoint revived the next fire from the trigger's own cron.
-        assert!(after.next_fire_at.is_some());
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn patch_trigger_rejects_repoint_to_unknown_pipeline() {
-        // A repoint to a non-existent pipeline is a loud 400, never a
-        // silent success that leaves the trigger dangling.
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        // A Trigger cannot be created without a target repo any more.
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state.clone());
-
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "name": "T",
-                            "pipeline_id": "watch-pipe",
-                            "cron": "0 4 * * 1",
-                            "input_template": "x",
-                            "target_repo": tmp.path().to_string_lossy(),
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let id = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
-
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri(format!("/triggers/{id}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({ "pipeline_id": "ghost-pipe" }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
-        // The trigger is left exactly as it was.
-        let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
-        assert_eq!(after.pipeline_id, "watch-pipe");
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn create_trigger_writes_one_audit_row() {
-        // A successful create leaves exactly one `trigger.created` row whose
-        // `after` is the FULL trigger (not a bare id) and whose `before` is empty.
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let id = create_trigger_ok(&state, tmp.path()).await;
-
-        let rows = audit_rows(&state, None, None).await;
-        assert_eq!(rows.len(), 1, "create leaves exactly one audit row");
-        let e = &rows[0];
-        assert_eq!(e.action, "trigger.created");
-        assert_eq!(e.target_kind.as_deref(), Some("trigger"));
-        assert_eq!(e.target_id.as_deref(), Some(id.as_str()));
-        // No header on `create_trigger_ok`'s request → the honest default.
-        assert_eq!(e.actor_hint, "unknown");
-        assert!(e.before.is_none(), "create has no before");
-        let after = e.after.as_ref().expect("create carries an after snapshot");
-        assert_eq!(after["id"], serde_json::json!(id));
-        assert_eq!(after["name"], serde_json::json!("T"));
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn delete_trigger_audits_the_full_before_snapshot() {
-        // Load-bearing (#507 §6): `trigger_store::delete` returns `bool`, so the
-        // handler must `get()` the row BEFORE deleting or the audit degrades to a
-        // dead UUID. Assert the `before` is the WHOLE row, `after` empty.
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let id = create_trigger_ok(&state, tmp.path()).await;
-
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/triggers/{id}"))
-                    .header("X-PDO-Actor", "ui")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        let rows = audit_rows(&state, Some("trigger"), Some(&id)).await;
-        let del = rows
-            .iter()
-            .find(|e| e.action == "trigger.deleted")
-            .expect("a delete row");
-        assert_eq!(del.actor_hint, "ui", "X-PDO-Actor header plumbed through");
-        assert!(del.after.is_none(), "delete has no after");
-        let before = del
-            .before
-            .as_ref()
-            .expect("delete carries the pre-image, NOT a bare UUID");
-        assert_eq!(before["id"], serde_json::json!(id));
-        assert_eq!(before["name"], serde_json::json!("T"));
-        assert_eq!(before["cron"], serde_json::json!("0 4 * * 1"));
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn patch_disable_audits_before_true_after_false() {
-        // The #505 discriminator: a manual disable must leave a row where
-        // before.enabled=true and after.enabled=false — that is what tells a
-        // "disabled by a gesture" apart from "no longer scheduled".
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let id = create_trigger_ok(&state, tmp.path()).await;
-
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri(format!("/triggers/{id}"))
-                    .header("content-type", "application/json")
-                    .header("X-PDO-Actor", "ui")
-                    .body(Body::from(
-                        serde_json::json!({ "enabled": false }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let rows = audit_rows(&state, Some("trigger"), Some(&id)).await;
-        let upd = rows
-            .iter()
-            .find(|e| e.action == "trigger.updated")
-            .expect("an update row");
-        assert_eq!(upd.actor_hint, "ui");
-        assert_eq!(
-            upd.before.as_ref().unwrap()["enabled"],
-            serde_json::json!(true)
-        );
-        assert_eq!(
-            upd.after.as_ref().unwrap()["enabled"],
-            serde_json::json!(false)
-        );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn pause_triggers_audits_the_flag_flip() {
-        // Pause is the instance-scoped seam: target_kind=instance, no target_id,
-        // and both directions of the flip are captured from `req.paused`.
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers/pause")
-                    .header("content-type", "application/json")
-                    .header("X-PDO-Actor", "ui")
-                    .body(Body::from(
-                        serde_json::json!({ "paused": true }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let rows = audit_rows(&state, Some("instance"), None).await;
-        let p = rows
-            .iter()
-            .find(|e| e.action == "triggers.pause_changed")
-            .expect("a pause row");
-        assert_eq!(p.actor_hint, "ui");
-        assert_eq!(p.target_kind.as_deref(), Some("instance"));
-        assert!(p.target_id.is_none(), "instance-global has no target_id");
-        assert_eq!(
-            p.before.as_ref().unwrap()["paused"],
-            serde_json::json!(false)
-        );
-        assert_eq!(p.after.as_ref().unwrap()["paused"], serde_json::json!(true));
-    }
-
-    /// Create a Trigger through the router, returning its id. `extra` is merged
-    /// into the body so callers can vary one axis at a time.
-    async fn create_trigger_ok(state: &Arc<AppState>, repo: &std::path::Path) -> String {
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "name": "T",
-                            "pipeline_id": "watch-pipe",
-                            "cron": "0 4 * * 1",
-                            "input_template": "x",
-                            "target_repo": repo.to_string_lossy(),
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    }
-
-    async fn patch_trigger_resp(
-        state: &Arc<AppState>,
-        id: &str,
-        body: serde_json::Value,
-    ) -> (StatusCode, serde_json::Value) {
-        let app = build_router(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri(format!("/triggers/{id}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-        (status, json)
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn create_trigger_without_target_repo_is_400() {
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let app = build_router(state.clone());
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/triggers")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "name": "T",
-                            "pipeline_id": "watch-pipe",
-                            "cron": "0 4 * * 1",
-                            "input_template": "x"
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let json: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(
-            json["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("target_repo"),
-            "got: {json}"
-        );
-        assert!(
-            trigger_store::list(&state.db).await.unwrap().is_empty(),
-            "no Trigger may be persisted on refusal"
-        );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn patch_trigger_clearing_target_repo_is_400() {
-        // An explicit `null` is now REACHABLE (double-option wiring) — precisely
-        // so it can be refused. Before #470 serde swallowed it into a no-op, so
-        // the UI's "blank the repo field" appeared to work and did nothing.
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let id = create_trigger_ok(&state, tmp.path()).await;
-
-        let (status, json) =
-            patch_trigger_resp(&state, &id, serde_json::json!({ "target_repo": null })).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {json}");
-        assert!(
-            json["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("target_repo"),
-            "got: {json}"
-        );
-
-        // Unchanged in the store — a refused PATCH applies nothing at all.
-        let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
-        assert_eq!(after.target_repo.as_deref(), tmp.path().to_str());
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn patch_trigger_with_blank_target_repo_is_400() {
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let id = create_trigger_ok(&state, tmp.path()).await;
-
-        for blank in ["", "   "] {
-            let (status, json) =
-                patch_trigger_resp(&state, &id, serde_json::json!({ "target_repo": blank })).await;
-            assert_eq!(status, StatusCode::BAD_REQUEST, "blank {blank:?}: {json}");
-            let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
-            assert_eq!(after.target_repo.as_deref(), tmp.path().to_str());
-        }
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn patch_trigger_without_target_repo_leaves_it_untouched() {
-        // The correct reading of AC4: PATCH is a partial MERGE. An absent
-        // `target_repo` is not a clear — that is what makes `{"enabled": false}`
-        // from the list toggle a legal body. This test exists to stop a future
-        // "fix" from reading AC4 literally and breaking the toggle.
-        let _home = FakeHome::new();
-        let tmp = tempfile::tempdir().unwrap();
-        write_optional_pipeline(tmp.path(), "watch-pipe");
-        init_test_repo(tmp.path());
-        let state = test_state_with_dir(tmp.path()).await;
-        let id = create_trigger_ok(&state, tmp.path()).await;
-
-        let (status, json) =
-            patch_trigger_resp(&state, &id, serde_json::json!({ "enabled": false })).await;
-        assert_eq!(status, StatusCode::OK, "body: {json}");
-
-        let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
-        assert!(!after.enabled, "the toggle must have applied");
-        assert_eq!(
-            after.target_repo.as_deref(),
-            tmp.path().to_str(),
-            "an absent target_repo leaves the stored value alone"
-        );
     }
 
     #[test]
@@ -6677,136 +4505,6 @@ mod tests {
     // below was observed, never deduced: the surface asserts no content-type
     // anywhere else in the repo, and the unknown-run behaviour is a three-way
     // split that no test covered.
-
-    /// Add `count` commits on `dir`'s current branch. Used to move an origin ahead
-    /// of its clone without a push (the origin here has a worktree, so a push to
-    /// its checked-out branch would be refused).
-    fn commit_n(dir: &std::path::Path, count: usize, prefix: &str) {
-        for i in 0..count {
-            let file = dir.join(format!("{prefix}-{i}.txt"));
-            std::fs::write(&file, format!("{prefix} {i}\n")).unwrap();
-            run_git(dir, &["add", "."]);
-            run_git(dir, &["commit", "-m", &format!("{prefix} {i}")]);
-        }
-    }
-
-    // ── #804: the pre-cut fetch of a Trigger fire ───────────────────────────────
-
-    #[test]
-    fn trigger_fetch_targets_leads_with_the_primary_and_fetches_a_repo_once() {
-        let targets = trigger_fetch_targets(
-            Some("/repos/primary"),
-            Some(r#"[{"repo":"/repos/primary"},{"repo":"/repos/lib"}]"#),
-        );
-        assert_eq!(
-            targets,
-            vec!["/repos/primary".to_string(), "/repos/lib".to_string()],
-            "the primary leads (its failure is the one the Run shows) and the row-0 \
-             echo of it is not a second repo to fetch"
-        );
-    }
-
-    #[test]
-    fn trigger_fetch_targets_takes_row_zero_as_the_primary_when_the_scalar_is_blank() {
-        // The multi-repo modal carries the primary in row 0; `create_run_inner`
-        // normalises exactly this way, and the fetch order must agree with it.
-        let targets = trigger_fetch_targets(
-            Some("   "),
-            Some(r#"[{"repo":"/repos/a"},{"repo":"/repos/b"}]"#),
-        );
-        assert_eq!(
-            targets,
-            vec!["/repos/a".to_string(), "/repos/b".to_string()]
-        );
-    }
-
-    #[test]
-    fn trigger_fetch_targets_defers_to_a_mono_repo_fire_on_an_unreadable_list() {
-        // Same rule the fire itself applies to `target_repos`: blank, absent or
-        // malformed all mean "mono-repo", never "no repo at all".
-        for stored in [None, Some(""), Some("not json")] {
-            assert_eq!(
-                trigger_fetch_targets(Some("/repos/only"), stored),
-                vec!["/repos/only".to_string()],
-                "stored list {stored:?} must leave the primary standing"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn the_pre_cut_fetch_makes_the_source_fresh_at_the_fire() {
-        let (origin, work) = init_repo_with_remote();
-        // Someone pushed since the last fetch — the very case a scheduled fire
-        // used to miss, cutting an "up to date" worktree from a stale ref.
-        commit_n(origin.path(), 2, "pushed-since");
-        assert_eq!(
-            branch_named(&list_branches(work.path()).unwrap(), "main").behind,
-            Some(0),
-            "stale refs still look level before the fire"
-        );
-
-        let targets = trigger_fetch_targets(Some(work.path().to_str().unwrap()), None);
-        assert_eq!(fetch_before_trigger_cut(&targets).await, None);
-
-        assert_eq!(
-            branch_named(&list_branches(work.path()).unwrap(), "main").behind,
-            Some(2),
-            "the cut that follows sees the two commits pushed since"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_failed_pre_cut_fetch_names_the_reason_and_still_lets_the_fire_through() {
-        let (_origin, work) = init_repo_with_remote();
-        run_git(
-            work.path(),
-            &["remote", "set-url", "origin", "/nonexistent/repo.git"],
-        );
-
-        let targets = trigger_fetch_targets(Some(work.path().to_str().unwrap()), None);
-        let error = fetch_before_trigger_cut(&targets)
-            .await
-            .expect("the reason the Run will carry");
-        assert!(
-            !error.message.is_empty(),
-            "git's own words are what the Run detail quotes"
-        );
-        // ADR-0070 §1 / story 21: nothing here refuses the fire. The source ref is
-        // still resolvable, so the cut that follows happens on local state.
-        assert!(validate_source_branch(work.path(), "main").is_ok());
-    }
-
-    #[tokio::test]
-    async fn the_pre_cut_fetch_refreshes_secondaries_but_only_the_primary_is_reported() {
-        let (_primary_origin, primary) = init_repo_with_remote();
-        let (secondary_origin, secondary) = init_repo_with_remote();
-        commit_n(secondary_origin.path(), 1, "secondary-move");
-
-        let targets = trigger_fetch_targets(
-            Some(primary.path().to_str().unwrap()),
-            Some(&format!(
-                r#"[{{"repo":"{}"}}]"#,
-                secondary.path().to_str().unwrap()
-            )),
-        );
-        assert_eq!(fetch_before_trigger_cut(&targets).await, None);
-
-        assert_eq!(
-            branch_named(&list_branches(secondary.path()).unwrap(), "main").behind,
-            Some(1),
-            "a secondary is cut from the same repo state as the primary, so it \
-             is refreshed by the same gesture"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_pre_cut_fetch_stays_silent_about_a_path_that_is_not_a_repository() {
-        // The create chokepoint is about to refuse this fire naming the path; a
-        // `git remote` error here would bury that message under a fetch one.
-        let tmp = tempfile::tempdir().unwrap();
-        let targets = trigger_fetch_targets(Some(tmp.path().to_str().unwrap()), None);
-        assert_eq!(fetch_before_trigger_cut(&targets).await, None);
-    }
 
     async fn seed_run_for_node_control(state: &Arc<AppState>, run_id: &str, pipeline_name: &str) {
         let ev = event_log::Event {
@@ -7688,51 +5386,5 @@ mod tests {
                 .join("worktree"),
         )
         .unwrap();
-    }
-
-    /// A prompt-optional repo pipeline, so trigger create/repoint never trips the
-    /// prompt-required reject rule in these route tests.
-    fn write_optional_pipeline(dir: &std::path::Path, id: &str) {
-        let pipelines_dir = dir.join(".pdo").join("pipelines");
-        std::fs::create_dir_all(&pipelines_dir).unwrap();
-        let yaml = format!(
-            "name: {id}\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
-        );
-        std::fs::write(pipelines_dir.join(format!("{id}.yaml")), yaml).unwrap();
-    }
-
-    /// RAII guard that sets HOME to a temporary directory and restores it on drop.
-    /// Holds HOME_TEST_LOCK to prevent concurrent env var mutation.
-    /// Serializes the tests that point `$HOME` at a temporary directory.
-    static HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    struct FakeHome {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        _dir: tempfile::TempDir,
-        prev: Option<String>,
-    }
-
-    impl FakeHome {
-        fn new() -> Self {
-            // Poison-tolerant: the lock only serializes HOME mutation; a panic
-            // in another test must not cascade here.
-            let lock = HOME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let dir = tempfile::tempdir().unwrap();
-            let prev = std::env::var("HOME").ok();
-            std::env::set_var("HOME", dir.path());
-            Self {
-                _lock: lock,
-                _dir: dir,
-                prev,
-            }
-        }
-    }
-
-    impl Drop for FakeHome {
-        fn drop(&mut self) {
-            if let Some(ref h) = self.prev {
-                std::env::set_var("HOME", h);
-            }
-        }
     }
 }

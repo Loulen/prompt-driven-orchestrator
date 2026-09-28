@@ -1,93 +1,41 @@
-//! Execute a Trigger guard command before a fire.
-//!
-//! A guard is a single shell command run via `sh -c "<cmd>"` before each fire
-//! (CONTEXT.md → *Trigger*). Its contract:
+//! The guard, run by `sh -c "<cmd>"` before a fire (CONTEXT.md → *Trigger*).
+//! Its contract:
 //!
 //! - CWD = the target repo (so `gh issue list`, `git log` work without paths);
 //! - inherits the daemon environment plus an injected `PDO_TARGET_REPO`;
-//! - a hard timeout (default 60 s) so a hung guard never freezes the scheduler;
+//! - a hard timeout so a hung guard never freezes the scheduler;
 //! - exit 0 fires with stdout as the resolved input, non-zero skips, and a spawn
 //!   failure or timeout records a guard-error outcome.
 //!
-//! This module is the side-effectful wrapper; the *decision* it feeds is the
-//! pure [`crate::fire_decision`]. Returning a [`GuardResult`] keeps the
-//! scheduler's branch matrix exhaustively unit-testable.
+//! This is the side-effectful wrapper; the *decision* it feeds is the pure
+//! [`crate::domain::fire_decision`].
 
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::fire_decision::GuardResult;
+use super::env::TARGET_REPO_ENV;
+use crate::application::ports::{BoxFuture, GuardRunner};
+use crate::domain::fire_decision::GuardResult;
+use crate::domain::guard::{cap_tail, GUARD_CAPTURE_LIMIT_BYTES};
 
-/// The hard timeout for a guard command. Run off the scheduler tick so a hung
-/// guard never freezes the scheduler.
-pub(crate) const GUARD_TIMEOUT_SECS: u64 = 60;
+/// The guard runner of the daemon: a real `sh`.
+pub struct ShellGuard;
 
-/// Test seam: override the guard timeout, in **milliseconds** (the stored and
-/// default values are seconds).
-pub const GUARD_TIMEOUT_MS_OVERRIDE_ENV: &str = "PDO_GUARD_TIMEOUT_MS";
-
-/// Injected into the guard process so a guard can reference the target repo
-/// without hardcoding a path.
-pub(crate) const TARGET_REPO_ENV: &str = "PDO_TARGET_REPO";
-
-/// Cap on the guard output we *capture* for the fire history (#244): each of
-/// stdout/stderr is tail-kept to at most this many bytes. This bounds the
-/// diagnostic blob stored per skip row; it is **never** applied to the `Pass`
-/// path, whose stdout is the actual Run input and must stay byte-for-byte.
-pub(crate) const GUARD_CAPTURE_LIMIT_BYTES: usize = 16 * 1024;
-
-/// Prefix prepended to a tail-capped stream so a reader knows the head was
-/// dropped (errors usually print last, so we keep the tail).
-const TRUNCATION_MARKER: &str = "…[truncated, showing last 16 KB]\n";
-
-/// Keep the last `limit` *bytes* of `s`, snapped forward to a UTF-8 char
-/// boundary so the result is always valid UTF-8. Counts bytes (it's a storage
-/// bound), not chars.
-fn cap_tail(s: &str, limit: usize) -> String {
-    if s.len() <= limit {
-        return s.to_string();
+impl GuardRunner for ShellGuard {
+    fn run<'a>(
+        &'a self,
+        command: &'a str,
+        cwd: &'a Path,
+        timeout: Duration,
+    ) -> BoxFuture<'a, GuardResult> {
+        Box::pin(run_guard(command, cwd, timeout))
     }
-    let mut start = s.len() - limit;
-    while start < s.len() && !s.is_char_boundary(start) {
-        start += 1;
-    }
-    format!("{TRUNCATION_MARKER}{}", &s[start..])
-}
-
-/// Resolve the guard timeout, `stored → env → default` (#129, ADR-0015).
-///
-/// **Unit care:** `stored_secs` is in **seconds** (the settings page unit),
-/// while the env seam [`GUARD_TIMEOUT_MS_OVERRIDE_ENV`] is in **milliseconds**.
-/// A stored value within `[1, 600]` seconds wins; otherwise the env override (in
-/// ms) applies; otherwise [`GUARD_TIMEOUT_SECS`]. An out-of-range stored value
-/// is ignored (fail-safe: the `PUT` handler already rejects it with `400`, so
-/// this is a defensive floor).
-///
-/// The guard timeout is read fresh on each tick, so a stored change takes effect
-/// on the next tick without a restart.
-pub(crate) fn guard_timeout_with(stored_secs: Option<u64>) -> Duration {
-    stored_secs
-        .filter(|&n| (1..=600).contains(&n))
-        .map(Duration::from_secs)
-        .or_else(|| env_guard_timeout_ms().map(Duration::from_millis))
-        .unwrap_or_else(|| Duration::from_secs(GUARD_TIMEOUT_SECS))
-}
-
-/// The guard timeout (**milliseconds**) contributed by
-/// [`GUARD_TIMEOUT_MS_OVERRIDE_ENV`] alone.
-///
-/// Exposed so `GET /settings` can disclose a shadowed env var and compute the
-/// winning tier identically to [`guard_timeout_with`] (#129, ADR-0015).
-pub(crate) fn env_guard_timeout_ms() -> Option<u64> {
-    std::env::var(GUARD_TIMEOUT_MS_OVERRIDE_ENV)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
 }
 
 /// Run a guard command and classify the outcome. Exceeding `timeout` yields
 /// [`GuardResult::Error`] rather than blocking.
-pub(crate) async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> GuardResult {
+pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> GuardResult {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(command)
@@ -179,6 +127,7 @@ async fn collect_stream(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::guard::TRUNCATION_MARKER;
 
     #[tokio::test]
     async fn exit_zero_with_stdout_passes_with_that_stdout() {
@@ -257,69 +206,6 @@ mod tests {
             }
             other => panic!("expected a prompt Skip, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn guard_timeout_precedence_stored_env_default() {
-        // Single test on purpose: `GUARD_TIMEOUT_MS_OVERRIDE_ENV` is
-        // process-global, so a second test mutating it concurrently would flake.
-        // Unit care (#129, ADR-0015): stored is SECONDS, env is MILLISECONDS.
-        let saved = std::env::var(GUARD_TIMEOUT_MS_OVERRIDE_ENV).ok();
-
-        std::env::remove_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV);
-        assert_eq!(
-            guard_timeout_with(None),
-            Duration::from_secs(GUARD_TIMEOUT_SECS)
-        );
-
-        // Env override (ms) applies when no stored value.
-        std::env::set_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV, "250");
-        assert_eq!(guard_timeout_with(None), Duration::from_millis(250));
-
-        // Stored (seconds) wins over env (ms).
-        assert_eq!(guard_timeout_with(Some(30)), Duration::from_secs(30));
-        // Out-of-range stored is ignored → falls through to env.
-        assert_eq!(guard_timeout_with(Some(0)), Duration::from_millis(250));
-        assert_eq!(guard_timeout_with(Some(601)), Duration::from_millis(250));
-        // Boundaries are in range.
-        assert_eq!(guard_timeout_with(Some(1)), Duration::from_secs(1));
-        assert_eq!(guard_timeout_with(Some(600)), Duration::from_secs(600));
-
-        // No stored and no env → default.
-        std::env::remove_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV);
-        assert_eq!(
-            guard_timeout_with(None),
-            Duration::from_secs(GUARD_TIMEOUT_SECS)
-        );
-
-        match saved {
-            Some(v) => std::env::set_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV, v),
-            None => std::env::remove_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV),
-        }
-    }
-
-    #[test]
-    fn cap_tail_keeps_the_last_bytes_with_a_marker() {
-        assert_eq!(cap_tail("short", 1024), "short");
-
-        let s: String = (0..1000).map(|_| 'a').collect();
-        let capped = cap_tail(&s, 100);
-        assert!(capped.starts_with(TRUNCATION_MARKER));
-        assert_eq!(capped.len(), TRUNCATION_MARKER.len() + 100);
-        assert!(capped.ends_with("aaaa"));
-    }
-
-    #[test]
-    fn cap_tail_snaps_to_a_utf8_char_boundary() {
-        // A multi-byte char straddling the cut must not panic and must yield
-        // valid UTF-8; we snap forward, so the cap is the *upper* bound.
-        let s = "é".repeat(100); // each 'é' is 2 bytes → 200 bytes
-        let capped = cap_tail(&s, 51); // 51 lands mid-codepoint
-                                       // Snapping forward drops the straddling byte, so ≤ 51 bytes of payload.
-        assert!(capped.starts_with(TRUNCATION_MARKER));
-        let payload = &capped[TRUNCATION_MARKER.len()..];
-        assert!(payload.chars().all(|c| c == 'é'));
-        assert!(payload.len() <= 51);
     }
 
     #[tokio::test]

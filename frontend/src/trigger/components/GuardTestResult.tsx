@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { TestGuardResponse } from "../api";
+import type { TestGuardResponse } from "../api/guard";
 import GuardOutput from "./GuardOutput";
 
 /** Guard dry-run verdict → label + status color (#350/#351). 1:1 with the three

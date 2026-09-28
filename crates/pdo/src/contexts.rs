@@ -43,6 +43,13 @@ use pdo_stats::adapters::run_files::DiskRunFiles;
 use pdo_stats::adapters::sqlite_absorptions::SqliteAbsorptions;
 use pdo_stats::adapters::transcripts::HarnessTranscripts;
 use pdo_stats::{Stats, StatsOptions, StatsPorts};
+use pdo_trigger::adapters::contexts::{
+    GitRepositories, LibraryPipelines, PlatformAudit as TriggerAudit, RunsOfTriggers,
+    StagingProfiles,
+};
+use pdo_trigger::adapters::guard_shell::ShellGuard;
+use pdo_trigger::adapters::sqlite::SqliteTriggers;
+use pdo_trigger::{Triggers, TriggersOptions, TriggersPorts};
 
 /// Wire every extracted context. Called once per daemon, at boot.
 pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) -> Contexts {
@@ -51,17 +58,27 @@ pub(crate) fn wire(resources: ContextResources, host: Arc<dyn ExtensionHost>) ->
     let review = review(&resources, &run, host.clone());
     let platform = platform(&resources, host.clone());
     let stats = stats(&resources, &platform, host.clone());
-    let pipelines = pipelines(&resources, &stats, host);
+    let pipelines = pipelines(&resources, &stats, host.clone());
+    let triggers = triggers(TriggerWiring {
+        db: resources.db.clone(),
+        repo_root: resources.repo_root.clone(),
+        legacy: resources.trigger.clone(),
+        run: &run,
+        platform: &platform,
+        host,
+    });
     Contexts {
         router: pdo_platform::router(platform.clone())
             .merge(pdo_session::router(session.clone()))
             .merge(pdo_pipeline::adapters::http::router(pipelines))
             .merge(pdo_review::router(review))
-            .merge(pdo_stats::router(stats.clone())),
+            .merge(pdo_stats::router(stats.clone()))
+            .merge(pdo_trigger::router(triggers.clone())),
         platform,
         session,
         run,
         stats,
+        triggers,
     }
 }
 
@@ -103,6 +120,43 @@ fn run(r: &ContextResources, session: &Arc<Session>, host: Arc<dyn ExtensionHost
             sandbox_home_override: legacy.sandbox_home_override,
             panic_on_stale_sweep: legacy.panic_on_stale_sweep,
             panic_on_spawn: legacy.panic_on_spawn,
+        },
+    )
+}
+
+/// What the trigger context is wired over.
+struct TriggerWiring<'a> {
+    db: sqlx::SqlitePool,
+    repo_root: std::path::PathBuf,
+    legacy: pdo_daemon::TriggerResources,
+    run: &'a Arc<Runs>,
+    platform: &'a Arc<Platform>,
+    host: Arc<dyn ExtensionHost>,
+}
+
+/// The `trigger` context: the Triggers over SQLite, the guard run by `sh`, the
+/// Runs of the run context, the library's pipelines on disk, the repositories
+/// through git, the staging profiles over SQLite, the platform's audit journal,
+/// the kernel's bus, and the instance settings the legacy daemon still holds.
+fn triggers(w: TriggerWiring<'_>) -> Arc<Triggers> {
+    Triggers::new(
+        TriggersPorts {
+            store: Arc::new(SqliteTriggers::new(w.db.clone())),
+            guards: Arc::new(ShellGuard),
+            settings: w.legacy.settings,
+            pipelines: Arc::new(LibraryPipelines {
+                repo_root: w.repo_root.clone(),
+            }),
+            repositories: Arc::new(GitRepositories),
+            sandbox_profiles: Arc::new(StagingProfiles(Arc::new(SqliteProfiles::new(w.db)))),
+            runs: Arc::new(RunsOfTriggers(w.run.clone())),
+            audit: Arc::new(TriggerAudit(w.platform.clone())),
+            bus: w.run.bus().clone(),
+            extensions: w.host,
+        },
+        TriggersOptions {
+            repo_root: w.repo_root,
+            panic_on_trigger_name: w.legacy.panic_on_trigger_name,
         },
     )
 }

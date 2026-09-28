@@ -1043,7 +1043,7 @@ pub fn lock_session_cap(value: impl AsRef<str>) -> EnvVarGuard {
 pub fn lock_guard_timeout_ms(value: impl AsRef<str>) -> EnvVarGuard {
     EnvVarGuard::acquire(
         &GUARD_TIMEOUT_LOCK,
-        pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV,
+        pdo_trigger::adapters::env::GUARD_TIMEOUT_MS_OVERRIDE_ENV,
         value.as_ref(),
     )
 }

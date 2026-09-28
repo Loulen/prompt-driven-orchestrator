@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.111.12 — Contexte `stats` : Overview, Cost, Performance, absorptions et synchronisation des prix (#928, spec #913)
+## 1.111.13 — Contexte `stats` : Overview, Cost, Performance, absorptions et synchronisation des prix (#928, spec #913)
 
 Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots
 HTTP et WS identiques ; `/stats/overview`, `/stats/cost`, `/stats/performance`,
@@ -43,6 +43,50 @@ comme avant, octet pour octet, sans extension).
 - Front : `StatsCharts` (3,8k lignes) est découpé par onglet (Overview, Cost, Performance)
   dans `frontend/src/stats/components/charts/`, avec `StatsModal`, `StatsAbsorption`,
   `StatsAbsorptionsPanel`, leurs hooks, leurs modèles et leur API (`frontend/src/stats/`).
+
+## 1.111.12 — Contexte `review` : diff, diff structuré, commentaires de relecture (#926, spec #913)
+
+Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots
+HTTP et WS identiques ; `GET /runs/{id}/diff`, `…/diff/structured` et `…/review/comments*`
+répondent comme avant, octet pour octet, sans extension).
+
+- La relecture d'un Run quitte `pdo-legacy` pour son crate, `crates/pdo-review` : le diff comme
+  donnée et son parseur, les règles des commentaires (ids, extrait, auteur d'une réponse,
+  filtre, re-map d'une ancre, effet d'une réponse ou d'une décision, message unique au manager)
+  dans `domain/` ; un use case par geste et par lecture dans `application/`, derrière trois
+  ports (`ReviewRuns` sur le contexte `run`, `ReviewGit` sur l'adaptateur git du contexte
+  `workspace`, `ReviewSettings` pour `review_agent_can_resolve`, encore implémenté côté legacy) ;
+  les routes, la CLI (`pdo review list`, `pdo review reply`) et les adaptateurs dans
+  `adapters/`. La composition root câble le contexte et fusionne son `router()`.
+- Chaque geste consulte d'abord l'Autorisation d'opération, avant même de lire le Run : envoi
+  (`review_comment` × `create`), réponse, résolution, réouverture (`review_comment` × `reply`,
+  `resolve`, `reopen` sur `<run>/<commentaire>`). L'auteur d'une réponse vient de l'Acteur posé
+  par `identify` (l'Agent de la session du manager ou d'un node). Un refus répond
+  `403 operation_refused` sans rien écrire.
+- Front : la relecture vit dans `frontend/src/review/` (`api/`, `model/`, `store/`,
+  `components/`) : la page Review découpée en stores (Run et paire, diff et re-map, direct,
+  mise en page, état, liste et gestes des commentaires) et en composants (barre du haut,
+  bandeaux, corps), l'onglet Diff, les cartes et l'en-tête de fichier, tous sous 400 lignes.
+- Tests : les use cases contre des ports en mémoire (`crates/pdo-review/tests/use_cases/`,
+  étage 2), le contexte sur ses vrais adaptateurs (git dans un dépôt temporaire, le vrai journal
+  du contexte `run`, `tests/lifecycle/`, étage 3), la couverture des refus d'extension étendue
+  aux quatre routes de mutation de la relecture. Déplacements et suppressions :
+  - les 16 tests internes du crate legacy (`run_diff_*`, `structured_diff_*`,
+    `run_refs_lists_deliveries_…`, `default_review_diff_…`, `send_review_comments_*`,
+    `review_reply_*`) sont déplacés tels quels dans `crates/pdo-review/tests/lifecycle/`
+    (`diff.rs`, `comments.rs`) ;
+  - les tests unitaires de `structured_diff.rs` (parseur) et de `review_comments.rs`
+    (ids, extrait, message, auteur, filtre, re-map) sont déplacés à côté de leur code dans
+    `domain/` ; ceux qui touchaient git (`compute_over_a_real_repo`, `compute_worktree_…`,
+    `snapshot_worktree_…`, `ref_and_path_safety`) dans `adapters/git.rs` ;
+  - `review_agent_can_resolve_stored_beats_env_and_defaults_off` est converti en test pur de
+    la résolution `stored → env → défaut` (`domain/comments/decision.rs`) : il ne dépend plus
+    de l'environnement du processus ;
+  - aucun test n'est supprimé.
+- Les cibles `RUST_LOG` changent avec le code : les handlers de relecture de `pdo_daemon`
+  deviennent `pdo_review::application::{run_diff, structured_diff, list_comments,
+  send_comments, reply, decide, comment_events}`, le collage au manager
+  `pdo_review::adapters::runs`.
 
 ## 1.111.11 — Contexte `run`, 3/3 : surfaces de Run et vues front des Runs (#925, spec #913)
 

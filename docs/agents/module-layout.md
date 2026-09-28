@@ -174,8 +174,8 @@ Contexts already out of the legacy crate:
   `pdo_run::application::{complete_node, fail_node, skip_node, start_node, stop_node,
   retry_node, release_completion, merge_resolver}`.
 - `run`, third slice (#925): the Run's surfaces join `crates/pdo-run`, and the legacy crate
-  holds no Run handler any more (the review of a Run, its diffs and its comments, waits for
-  #926). Every mutation is a use case on `Runs` that receives the Acteur and asks the
+  holds no Run handler any more (the review of a Run, its diffs and its comments, moved to
+  its own context with #926). Every mutation is a use case on `Runs` that receives the Acteur and asks the
   Autorisation d'opération before anything is written: `create_run` (`run` × `create`, in
   `application/create_run/`: the repositories, the pipeline, the provisioning and the
   isolation frozen, the `RunStarted` payload, the Run on disk, its start — one file per step),
@@ -217,6 +217,36 @@ Contexts already out of the legacy crate:
   a node's detail (`run/components/NodeDetailPanel.tsx` and `nodeDetail/`), the artifacts
   (`run/components/MarkdownArtifactModal.tsx` and `artifacts/`), the children
   (`OrchestrationTab`), a Run's repositories, and their models and stores.
+- `review` (#926): `crates/pdo-review`, `frontend/src/review/`. A Run's diff as data (files →
+  hunks → lines) and the parser of the unified patch (`domain/diff/`), and the rules of the
+  review comments (`domain/comments/`: the `rc-NNN` ids, the excerpt, the author of a reply, the
+  list's filter, the re-map of an anchor onto another pair, what a reply or a decision changes,
+  the one message a batch hands the Pipeline Manager) live in its `domain/`. The comments
+  themselves are Run events: their projection stays the run context's
+  (`pdo_run::domain::review_comment`). The use cases (`application/`: `run_diff`,
+  `structured_diff`, `list_comments`, `send_comments/`, `reply`, `decide`) read the Run through
+  the `ReviewRuns` port (`adapters/runs.rs`, over `pdo_run::Runs`: the log, the projection, the
+  Run's repository and worktree, the manager on demand, the paste into its session), git through
+  `ReviewGit` (`adapters/git.rs`, over the workspace's `adapters/git/revisions.rs`) and the
+  `review_agent_can_resolve` instance setting through `ReviewSettings` (the legacy crate's
+  `review_ports.rs` until the settings context moves out). Every gesture — send, reply,
+  resolve, reopen — receives the Acteur and asks the Autorisation d'opération before it reads
+  the Run (`review_comment` × `create`, or × `reply` / `resolve` / `reopen` on
+  `<run>/<comment>`); the author of a reply is the Acteur's node. The use cases answer a
+  `Failure` (status + the body the route always sent) that the HTTP adapter turns into the
+  response. The routes are its `router()`, merged by the composition root
+  (`crates/pdo/src/contexts.rs`); `pdo review list` / `reply` are `adapters/cli.rs`. Tests: the
+  use cases against in-memory ports (`tests/use_cases/`, stage 2), the context over the run
+  context's real log and git in temporary repositories (`tests/lifecycle/`, stage 3, the legacy
+  crate's in-crate tests of this code, moved; its harness reuses the run context's), the unit
+  tests beside their code. `RUST_LOG=pdo_daemon` (the review handlers) becomes
+  `RUST_LOG=pdo_review::application::{run_diff, structured_diff, list_comments, send_comments,
+  reply, decide, comment_events}`, and `pdo_review::adapters::runs` for the paste into the
+  manager. Front: the API (`review/api/{diff, comments}`), the drafts, the merged list, a
+  comment's status and the unread replies (`review/model/{drafts, entries, commentStatus,
+  seen}`), the Review page's stores (`review/store/useReview{Run, Diff, Live, Layout,
+  CommentState, Entries, Gestures}`), the page and its parts, the file cards, the comment cards
+  and the Diff tab (`review/components/`).
 - `stats` (#928): `crates/pdo-stats`, `frontend/src/stats/`. The three sections' folds
   (`domain/overview/`, `domain/cost/`, `domain/performance/`), the R-7 distribution, the
   absorptions (`domain/absorption/`: keys, the resolver and its order of resolution, the Run

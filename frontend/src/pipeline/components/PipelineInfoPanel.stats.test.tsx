@@ -5,8 +5,10 @@ import type { RunState } from "../../shared/generated/RunState";
 
 // The Diff tab (a sibling tab of the panel) fetches on open, but mock the api
 // module anyway so the unit test never touches the network.
-vi.mock("../../api", () => ({
+vi.mock("../../review/api/diff", () => ({
   fetchRunStructuredDiff: vi.fn().mockResolvedValue({ files: [], additions: 0, deletions: 0, files_changed: 0 }),
+}));
+vi.mock("../../api", () => ({
   // #803: the Info tab reads the Run's drift on mount. Unreadable here, so the
   // Source block never renders and these stay tests about the Stats block.
   fetchSourceDrift: vi.fn().mockRejectedValue(new Error("no drift in this test")),

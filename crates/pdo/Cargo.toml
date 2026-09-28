@@ -49,6 +49,7 @@ pdo-platform.workspace = true
 pdo-session.workspace = true
 pdo-pipeline.workspace = true
 pdo-run.workspace = true
+pdo-review.workspace = true
 pdo-sandbox.workspace = true
 pdo-stats.workspace = true
 anyhow.workspace = true

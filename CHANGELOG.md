@@ -10,11 +10,14 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.1.0 — `pdo::main_with(extensions)` : tout le binaire `pdo` pour les distributions (#23)
+## 2.1.0 — Distributions tierces : `main_with`, frontend préconstruit, canal de mise à jour, 404 sous `/ext` (#21, #22, #23, #24)
 
-Ajout rétrocompatible au contrat de `crates/pdo` : la CLI, ses codes de sortie et le daemon ne
+Seams découverts en écrivant la première distribution (`Loulen/pdo-extensions`). Ajout
+rétrocompatible au contrat de `crates/pdo` : la CLI, ses codes de sortie et le daemon ne
 bougent pas (sortie de `--help` identique pour chaque sous-commande). `pdo-extension-api` reste
 en 0.1.1.
+
+### `pdo::main_with(extensions)` (#23)
 
 - **`pdo::main_with(extensions)`**, couvert par le semver à côté de `serve`, `Config` et
   `Daemon` : parse de la ligne de commande, dispatch, code de sortie. Le binaire vanilla n'est plus
@@ -28,6 +31,38 @@ en 0.1.1.
   `uninstall` sont soumis à leur Autorisation d'opération. Sans extension, rien ne change.
 - Les codes de sortie de `pdo wait-user` (`3`) et `pdo run wait` (`2`) ont désormais leurs tests
   au niveau du binaire, comme ceux de `pdo complete`.
+
+### Frontend embarqué sans Node côté distribution (#21)
+
+- `crates/pdo/build.rs` construit le frontend dans `$OUT_DIR/frontend-dist`, plus jamais dans
+  `frontend/dist` ni dans le checkout cargo. **`PDO_FRONTEND_DIST=<chemin absolu>`** embarque un
+  `dist/` déjà construit, sans Node ni pnpm : c'est la voie d'une dépendance par tag git.
+- Sans `frontend/node_modules` ni `PDO_FRONTEND_DIST`, le build échoue avec un message qui nomme
+  les deux remèdes, au lieu de compter sur l'auto-install de pnpm.
+- **Cassant pour le dev du core** : `PDO_SKIP_FRONTEND_BUILD` (valeur non vide) n'embarque plus
+  `frontend/dist`, mais ce que `OUT_DIR` contient déjà. Pour embarquer `frontend/dist`, utiliser
+  `PDO_FRONTEND_DIST=$PWD/frontend/dist`. Un build release refuse un frontend vide.
+
+### `/ext/<id>` d'une extension absente répond 404 (#22)
+
+- Tout le préfixe `/ext/` répond `404` JSON quand l'extension n'est pas chargée ou ne sert pas de
+  route (`{"error":"extension_not_found","message":…,"id":…}`), quelle que soit la méthode, au
+  lieu du HTML de la SPA en `200`. Un chemin qu'une extension chargée ne sert pas répond
+  `{"error":"not_found",…}` (l'ancien corps `{"error":"not found"}` disparaît).
+
+### Canal de mise à jour configurable (#24)
+
+- **`Config::with_release_channel(ReleaseChannel { name, installed_version, source_url,
+  upgrade_command })`**, couvert par le semver : une distribution déclare sa source, sa version et
+  sa commande de mise à jour. Sans commande, Update est refusé (`409`) ; sans source, aucune
+  vérification.
+- La v2 vanilla ne pointait plus vers elle-même : source et installeur visaient le dépôt v1, et
+  Update lançait la formule v1. La commande Homebrew devient `brew update && brew upgrade
+  Loulen/pdo-v2/pdo-v2`, et **aucune vérification n'est faite par défaut** tant que `PDO-v2` ne
+  publie pas de releases (`PDO_UPDATE_SOURCE_URL` reste l'override).
+- `GET /update` ajoute `channel_name` et `core_version` ; `source`, `source_url` et
+  `manual_command` peuvent être `null`. Le bouton Update n'est proposé que si une version plus
+  récente est connue et que le daemon l'accepterait.
 
 ## 2.0.0 — PDO v2 : architecture extensible (spec #1, dépôt `Loulen/PDO-v2`)
 

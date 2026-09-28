@@ -38,7 +38,7 @@ pub(crate) fn parse_skills_arg(raw: &str) -> Result<serde_json::Value> {
 
 /// One-shot `pdo run create` (issue #721, ADR-0064): the thin CLI client of the
 /// daemon's `POST /runs`. Like the other one-shots, blocking `reqwest` and no
-/// tokio runtime (see `main.rs`); plain `Result` → `0`/`1` exit mapping — only
+/// tokio runtime (see `crates/pdo/src/entry.rs`); plain `Result` → `0`/`1` exit mapping — only
 /// `pdo complete` owns an exit-code contract (#490).
 ///
 /// The body is built field by field rather than by serialising a struct, so the

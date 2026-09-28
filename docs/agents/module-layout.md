@@ -191,8 +191,8 @@ Contexts already out of the legacy crate:
   price table's tiers and their parsing in `domain/prices/`, the harnesses' files in
   `adapters/run_cost/`, the price files in `adapters/price_files.rs`, and what a Run's detail
   reads from disk (LOC, cost, the run-scoped graph) in `adapters/disk_live_facts.rs`, which now
-  implements `LiveFacts`. The price sync (the egress to models.dev) stays with the instance
-  settings for #928. The git reads a Run's refs and the review share (`rev_parse`, the
+  implements `LiveFacts`. The price sync (the egress to models.dev) moved to the stats
+  context with #928. The git reads a Run's refs and the review share (`rev_parse`, the
   snapshot of a worktree, a file at a ref, the ref/path guards) live in the workspace's
   `adapters/git/revisions.rs`. New narrow ports: `RunPages` (the platform's page mounts an
   archive releases, implemented in `run_ports.rs` while the state owns the platform),
@@ -247,6 +247,32 @@ Contexts already out of the legacy crate:
   seen}`), the Review page's stores (`review/store/useReview{Run, Diff, Live, Layout,
   CommentState, Entries, Gestures}`), the page and its parts, the file cards, the comment cards
   and the Diff tab (`review/components/`).
+- `stats` (#928): `crates/pdo-stats`, `frontend/src/stats/`. The three sections' folds
+  (`domain/overview/`, `domain/cost/`, `domain/performance/`), the R-7 distribution, the
+  absorptions (`domain/absorption/`: keys, the resolver and its order of resolution, the Run
+  identity, the tallies, the frozen scope and the cascade of a removal) and the price sync's
+  normalisation and diff live in its `domain/`. The folds read the Runs' events through the run
+  context's ports, never the table: `EventStore` for one Run, and `EventWindows` for the reads
+  across Runs (counts per period, the cohort of a window, its Node starts, a Pipeline's
+  history), which `SqliteEventStore` implements (`pdo-run/src/adapters/sqlite_event_windows.rs`);
+  the context's own `RunEvents` port wraps both (`adapters/run_events.rs`). The absorptions'
+  store (`adapters/sqlite_absorptions/`) never reads `events`: a write reads the stored
+  absorptions and the Pipelines' history first, then writes in one transaction, under the one
+  lock of the absorption writes. The Performance fold reads the transcripts through
+  `SessionTranscripts` and the Runs' files through `RunFiles`; its memo belongs to the context
+  instance. Combine, Uncombine and the price sync are use cases that ask the Autorisation
+  d'opération (`stats_absorption` × `create` / `delete`, `price_table` × `sync`); the boot
+  refresh of the prices and the absorption a Pipeline rename leaves behind (the pipeline
+  context's `RenameLedger`, implemented by `adapters/rename_ledger.rs`) are transitions and never
+  ask. What the context reads of the contexts still legacy is a port the legacy crate
+  implements in `stats_ports.rs` (the Triggers' fires); the composition root wires the context.
+  Tests: the use cases against in-memory ports (`tests/use_cases/`, stage 2), the context over
+  its real adapters driven through its router (`tests/adapters/`, stage 3, the legacy crate's
+  in-crate tests of this code, moved), the unit tests beside their code.
+  `RUST_LOG=pdo_daemon` (the price sync and refresh) becomes
+  `RUST_LOG=pdo_stats::application::prices`. Front: the Stats modal and its tabs
+  (`stats/components/`, `StatsCharts` split by tab under `components/charts/`), the absorptions,
+  their hooks (`stats/store/`), models and API (`stats/api/`).
 While it still exists,
 `scripts/layout-ratchet.sh` keeps guarding its flat list. The ratchet disappears along with the
 legacy crate. The `pdo` binary lives in the composition root (`crates/pdo`, package

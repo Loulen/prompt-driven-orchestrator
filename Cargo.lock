@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -1993,6 +1993,7 @@ dependencies = [
  "pdo-run",
  "pdo-sandbox",
  "pdo-session",
+ "pdo-stats",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -2020,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "filetime",
  "pdo-kernel",
@@ -2036,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "chrono",
  "pdo-extension-api",
@@ -2048,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-legacy"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2076,6 +2077,7 @@ dependencies = [
  "pdo-sandbox",
  "pdo-session",
  "pdo-skill",
+ "pdo-stats",
  "pdo-workspace",
  "portable-pty",
  "pretty_assertions",
@@ -2100,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-pipeline"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2131,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2155,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-review"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2184,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-run"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2219,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-sandbox"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2241,7 +2243,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-session"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2262,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-skill"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2283,8 +2285,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdo-stats"
+version = "1.111.13"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "filetime",
+ "pdo-extension-api",
+ "pdo-harness",
+ "pdo-kernel",
+ "pdo-pipeline",
+ "pdo-platform",
+ "pdo-run",
+ "pdo-sandbox",
+ "pdo-workspace",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "ts-rs",
+]
+
+[[package]]
 name = "pdo-workspace"
-version = "1.111.12"
+version = "1.111.13"
 dependencies = [
  "anyhow",
  "axum",

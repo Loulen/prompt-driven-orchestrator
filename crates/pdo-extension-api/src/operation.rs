@@ -60,6 +60,10 @@ pub enum ResourceKind {
     Update,
     /// The daemon's OS service unit (`pdo service install` / `uninstall`).
     Service,
+    /// A Stats absorption: one row counting the data of others (Combine).
+    StatsAbsorption,
+    /// The price table the costs are priced with (its sync).
+    PriceTable,
 }
 
 /// What an [`Operation`] does to its resource.

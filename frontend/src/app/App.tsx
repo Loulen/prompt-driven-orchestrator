@@ -31,7 +31,7 @@ import { applyUpdate, fetchUpdateStatus } from "../platform/api/update";
 import { IDLE as UPDATE_IDLE, isUpdateInProgress, reduceUpdateFlow, type UpdateFlowEvent } from "../platform/model/updateFlow";
 import { useUpdateStatus } from "../platform/store/useUpdateStatus";
 import type { UpdateStatus } from "../platform/model/update";
-import StatsModal from "../components/StatsModal";
+import StatsModal from "../stats/components/StatsModal";
 import ConflictModal from "../components/ConflictModal";
 import SaveErrorModal from "../components/SaveErrorModal";
 import ConfirmCloseTabsModal from "../components/ConfirmCloseTabsModal";

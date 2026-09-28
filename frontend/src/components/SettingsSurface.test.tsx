@@ -86,14 +86,17 @@ vi.mock("../api", () => ({
   fetchAgentProfileReferents: vi.fn(),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
-  fetchStatsAbsorptions: (...args: unknown[]) =>
-    fetchStatsAbsorptionsMock(...args),
-  uncombineStatsMember: (...args: unknown[]) =>
-    uncombineStatsMemberMock(...args),
   ApiError: class ApiError extends Error {
     status?: number;
     body?: unknown;
   },
+}));
+// #891: Settings › General › Stats absorptions reads the stats context's API.
+vi.mock("../stats/api/absorptions", () => ({
+  fetchStatsAbsorptions: (...args: unknown[]) =>
+    fetchStatsAbsorptionsMock(...args),
+  uncombineStatsMember: (...args: unknown[]) =>
+    uncombineStatsMemberMock(...args),
 }));
 // #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
 vi.mock("../platform/api/update", () => ({

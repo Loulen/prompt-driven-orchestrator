@@ -3,7 +3,7 @@
  */
 
 import { Info, Box, Loader, CloudOff } from "lucide-react";
-import { SectionHead } from "../../components/InspectorPrimitives";
+import { SectionHead } from "./InspectorPrimitives";
 import type { RunState } from "../../shared/generated/RunState";
 import { isLiveRun } from "../../run/model/runStatus";
 import { formatDuration, useRunDuration } from "../../run/model/runDuration";

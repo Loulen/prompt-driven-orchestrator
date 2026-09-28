@@ -1,111 +1,48 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { ArrowLeft, GitFork } from "lucide-react";
-import { useDaemonSocket, type ConnectionStatus } from "../run/store/useDaemonSocket";
+import { useCallback, useState } from "react";
+import { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
-import { fetchRuns } from "../run/api/runs";
 import { useSelectedRun } from "../run/store/useSelectedRun";
 import { useDaemonSessions } from "../session/store/useDaemonSessions";
-import { fetchProjects } from "../workspace/api/projects";
-import { pickLatestLiveNode } from "../run/model/pickLatestLiveNode";
 import { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import { useLibassistLifecycle } from "../session/store/useLibassistLifecycle";
-import type { RunListEntry } from "../shared/generated/RunListEntry";
-import type { Trigger } from "../shared/generated/Trigger";
-import type { Project } from "../workspace/model/project";
-import type { DaemonStatus } from "../platform/model/daemon";
-import { shouldAutoSnapToLiveNode } from "../lib/autoSnap";
-import SessionCounter from "../run/components/SessionCounter";
-import ServiceHealthIndicator from "../components/ServiceHealthIndicator";
-import UnifiedLeftPanel from "../components/UnifiedLeftPanel";
-import NodeDetailPanel from "../run/components/NodeDetailPanel";
-import NewRunModal, { RUN_INTENT, type OpenIntent } from "../run/components/NewRunModal";
-import SettingsSurface, { type SettingsPosition, type StatsOpenIntent } from "../settings/components/SettingsSurface";
-import VersionBadge from "../platform/components/VersionBadge";
-import ChangelogModal from "../platform/components/ChangelogModal";
-import UpdateConfirmModal from "../platform/components/UpdateConfirmModal";
-import UpdateWaitingOverlay from "../platform/components/UpdateWaitingOverlay";
-import { applyUpdate, fetchUpdateStatus } from "../platform/api/update";
-import { IDLE as UPDATE_IDLE, isUpdateInProgress, reduceUpdateFlow, type UpdateFlowEvent } from "../platform/model/updateFlow";
+import UnifiedLeftPanel from "./UnifiedLeftPanel";
+import NewRunModal from "../run/components/NewRunModal";
+import SettingsSurface from "../settings/components/SettingsSurface";
 import { useUpdateStatus } from "../platform/store/useUpdateStatus";
-import type { UpdateStatus } from "../platform/model/update";
+import { useUpdateFlow } from "../platform/store/useUpdateFlow";
 import StatsModal from "../stats/components/StatsModal";
-import ConflictModal from "../components/ConflictModal";
-import SaveErrorModal from "../components/SaveErrorModal";
-import ConfirmCloseTabsModal from "../components/ConfirmCloseTabsModal";
-import { useRecentReposStore } from "../stores/recentReposStore";
-import type { TabId } from "../pipeline/components/PipelineInfoPanel";
-import EditCanvas from "../pipeline/components/EditCanvas";
-import TabBar from "../components/TabBar";
 import TopBar from "./TopBar";
-import NodeInspector from "../components/NodeInspector";
-import MergeInspector from "../components/MergeInspector";
-import PipelineInspector from "../components/PipelineInspector";
-import PipelineInfoPanel from "../pipeline/components/PipelineInfoPanel";
-import StartInspector from "../components/StartInspector";
-import EndInspector from "../components/EndInspector";
-import MarkerInspector from "../components/MarkerInspector";
-import { resolveNodeInspector } from "../lib/structuralMarkers";
-import EdgeDetailPanel from "../components/EdgeDetailPanel";
-import RegionInspector from "../components/RegionInspector";
-import NoteInspector from "../components/NoteInspector";
-import TriggerDetailPanel from "../trigger/components/TriggerDetailPanel";
 import { useTriggers } from "../trigger/store/useTriggers";
 import { useTriggersPause } from "../trigger/store/useTriggersPause";
-import { deriveEdgeTrigger } from "../lib/edgeTrigger";
-import { handleUndoRedoKeydown } from "../lib/undoRedoHotkeys";
-import InspectorTabs from "../components/InspectorTabs";
-import { useInspectorTab } from "../hooks/useInspectorTab";
 import { TooltipProvider } from "../shared/ui/tooltip";
 import { useEditStore } from "../pipeline/store/editStore";
-import TourHost from "../components/tour/TourHost";
-import { useTour } from "../hooks/useTour";
-import { loadTourOffered, markTourOffered, shouldOfferWelcome } from "../lib/tourMemory";
-import { findTour, fullTourSequence } from "../lib/tours";
+import TourHost from "./tour/TourHost";
 import {
   ResizablePanelGroup,
   ResizablePanel,
   ResizableHandle,
 } from "../shared/ui/resizable";
+import { useProjects, useRuns } from "./useAppData";
+import { useSurfaces } from "./useSurfaces";
+import { useAppTour } from "./useAppTour";
+import { useRunNavigation } from "./useRunNavigation";
+import { useEditorHotkeys } from "./useEditorHotkeys";
+import { useLaunchActions } from "./useLaunchActions";
+import { useShellRefresh } from "./useShellRefresh";
+import { useDaemonEvents } from "./useDaemonEvents";
+import { useInfoPanel } from "./useInfoPanel";
+import CenterPane from "./CenterPane";
+import RightPane from "./RightPane";
+import StatusBar from "./StatusBar";
+import UpdateModals from "./UpdateModals";
+import EditorModals from "./EditorModals";
 
 const PANEL_IDS = ["left", "center", "right"];
 const DEFAULT_SIZES = { left: 15, center: 60, right: 25 };
 
-function useRuns() {
-  const [runs, setRuns] = useState<RunListEntry[]>([]);
-  // #823: « no Run at all » is half of the welcome-modal rule, and an empty array
-  // before the first fetch means exactly the same thing as a Run-less instance.
-  // Without this flag the modal would flash on every load, everywhere.
-  const [loaded, setLoaded] = useState(false);
-
-  const refresh = useCallback(async () => {
-    try {
-      setRuns(await fetchRuns());
-      setLoaded(true);
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  return { runs, runsLoaded: loaded, refresh };
-}
-
-// #552 — Projets, hydrated on mount and refreshed on a `project_changed` WS push
-// (the daemon broadcasts one on every project mutation). Mirror of useTriggers.
-function useProjects() {
-  const [projects, setProjects] = useState<Project[]>([]);
-
-  const refresh = useCallback(async () => {
-    try {
-      setProjects(await fetchProjects());
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  return { projects, refresh };
-}
-
+/** The app shell: the Runs, Triggers and Projets on the left, the canvas in the
+ *  center, the inspector on the right, the status bar, and every global modal. */
 export default function App() {
   const { status, subscribe } = useDaemonSocket();
   const { entries: libraryEntries, refresh: refreshLibrary } = useLibrary();
@@ -123,11 +60,6 @@ export default function App() {
     hydrate: hydrateTriggersPause,
   } = useTriggersPause();
   const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(null);
-  // #368: mirror readable inside the stable WS callback (App.tsx subscribe
-  // effect) without widening its deps — same latest-value idiom as
-  // currentIdRef in useSelectedRun. A ref read during render is banned by
-  // react-hooks/refs (see note ~L148), but here read/write are outside render.
-  const selectedTriggerIdRef = useRef<string | null>(null);
   // #320: the tab id (=== pipeline_id) that selecting a Trigger opened in the
   // canvas. The reconciliation below reads it to tell the Trigger's OWN
   // openPipeline focus change apart from a genuine user canvas interaction.
@@ -139,195 +71,28 @@ export default function App() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [newRunModalOpen, setNewRunModalOpen] = useState(false);
-  // #698: the « What's new » changelog modal, opened from the status-bar version (and
-  // from Settings › Version & update). Lives here next to the other modals.
-  const [changelogOpen, setChangelogOpen] = useState(false);
-  // #699: the in-app update — a confirm (active Runs count, tmux survival), then the
-  // pure flow machine: applying → restarting → verifying → reload / failed.
-  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
-  const [updateStarting, setUpdateStarting] = useState(false);
-  const [updateFlow, dispatchUpdateFlow] = useReducer(reduceUpdateFlow, UPDATE_IDLE);
-  const startUpdate = useCallback(async () => {
-    setUpdateStarting(true);
-    try {
-      const fresh = updateStatus ?? (await fetchUpdateStatus());
-      const res = await applyUpdate();
-      dispatchUpdateFlow({
-        type: "applied",
-        attemptId: res.attempt_id,
-        fromVersion: res.from_version || fresh.installed_version,
-        now: Date.now(),
-      });
-    } catch (e) {
-      dispatchUpdateFlow({ type: "apply-failed", error: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setUpdateStarting(false);
-      setUpdateConfirmOpen(false);
-      setChangelogOpen(false);
-    }
-  }, [updateStatus]);
-  // Feed the machine: the socket's transitions, and a poll of `GET /update` for the
-  // whole in-progress window — while the old daemon still answers it reports a failed
-  // executor; once the new one answers, its `installed_version` is the verdict (reload
-  // when it differs from the one we started on). Polling rather than trusting the
-  // cached `/sessions` value: right after a reconnect the cache still holds the OLD
-  // version and would read as « nothing changed ».
-  useEffect(() => {
-    const ev: UpdateFlowEvent = { type: "socket", connected: status === "connected" };
-    dispatchUpdateFlow(ev);
-  }, [status]);
-  useEffect(() => {
-    if (!isUpdateInProgress(updateFlow)) return;
-    let cancelled = false;
-    const poll = () => {
-      fetchUpdateStatus()
-        .then((s) => {
-          if (cancelled) return;
-          dispatchUpdateFlow({ type: "status", status: s });
-          dispatchUpdateFlow({ type: "version", version: s.installed_version });
-        })
-        .catch(() => {
-          /* the daemon is down or restarting: the next tick retries */
-        });
-    };
-    poll();
-    const id = window.setInterval(poll, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [updateFlow]);
-  useEffect(() => {
-    if (updateFlow.phase !== "reload") return;
-    const t = window.setTimeout(() => window.location.reload(), 600);
-    return () => window.clearTimeout(t);
-  }, [updateFlow.phase]);
-  // #690: Settings and Stats are full-window surfaces on one shared shell, one open at a
-  // time. `openSettings` / `openStats` are the single openers: the gear and the chart icon
-  // call them bare, programmatic entries pass a position, which is applied by remounting
-  // the surface (`key`). Settings lands where the user last was — its state survives a
-  // close on purpose (page-session memory). Stats does the opposite (#819): it forgets
-  // its settings on close, and owns that itself (see `StatsModal`).
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsEntry, setSettingsEntry] = useState<{ key: number; position?: SettingsPosition }>(
-    { key: 0 },
-  );
-  const [statsOpen, setStatsOpen] = useState(false);
-  const [statsEntry, setStatsEntry] = useState<{ key: number; intent?: StatsOpenIntent }>({
-    key: 0,
-  });
-  const openSettings = useCallback((position?: SettingsPosition) => {
-    if (position) setSettingsEntry((entry) => ({ key: entry.key + 1, position }));
-    setStatsOpen(false);
-    setSettingsOpen(true);
-  }, []);
-  const openStats = useCallback((intent?: StatsOpenIntent) => {
-    // #819 — Stats opens on its defaults every time, so the entry is rebuilt on
-    // every open: the intent of a programmatic entry (Settings › Diagnostics →
-    // Cost › Pricing details) belongs to the open that carries it and must not
-    // survive into the next bare one. The `key` bump covers the case where Stats
-    // is already on screen, which no remount would otherwise reach.
-    setStatsEntry((entry) => ({ key: entry.key + 1, intent }));
-    setSettingsOpen(false);
-    setStatsOpen(true);
-  }, []);
-  // #823 — guided tours. The controller lives here because two surfaces start a
-  // tour (the welcome modal and Settings › Tutorials) and a tour outlives both.
-  // The run list is passed in rather than fetched: the tour observes what the UI
-  // already knows (ADR-0071 §3) — how many Runs there are, and which is newest.
-  // #825 adds the selected Run's detail, for the same reason and on the same
-  // terms: the reading steps need a node's status and its completion guard, and
-  // the inspector is already polling both.
-  const tour = useTour(runs, selectedRun);
-  const [tourOffered, setTourOffered] = useState(loadTourOffered);
-  const showWelcome = shouldOfferWelcome({
-    offered: tourOffered,
+  const updates = useUpdateFlow(updateStatus, status);
+  const { setChangelogOpen, setUpdateConfirmOpen } = updates;
+  const surfaces = useSurfaces();
+  const { openSettings, openStats } = surfaces;
+  const { tour, showWelcome, setTourOffered, startTourById, startFullTour } = useAppTour(
+    runs,
     runsLoaded,
-    runCount: runs.length,
-  });
-  const startTourById = useCallback(
-    (tourId: string) => {
-      // Starting a tour is also an answer to "have you been offered one?" — a
-      // reader who replays from Settings must not meet the modal on next load.
-      markTourOffered();
-      setTourOffered(true);
-      const def = findTour(tourId);
-      if (def) tour.start(def);
-    },
-    [tour],
+    selectedRun,
   );
-  const startFullTour = useCallback(() => {
-    markTourOffered();
-    setTourOffered(true);
-    // #824: two tours exist now, so « Full tour » finally means a sequence. The
-    // rest of the chain rides along, and each end card's primary runs the next.
-    const [first, ...rest] = fullTourSequence();
-    if (first) tour.start(first, rest);
-  }, [tour]);
-  // #386: how the always-mounted New Run modal should open. Drives a one-shot
-  // reset on every reopen so a dismissed "Edit trigger" can't leak into a fresh
-  // "New run" / "New trigger". Defaults to a plain run.
-  const [openIntent, setOpenIntent] = useState<OpenIntent>(RUN_INTENT);
-  // #341: manual "Run now" — a refused fire (409: disabled / broken reference)
-  // surfaces here as a dismissible banner.
-  const [runNowError, setRunNowError] = useState<string | null>(null);
   // #341: bumped on every `trigger_fired` WS message so an open TriggerDetail
   // panel refetches its fire history (it otherwise only fetches on trigger.id).
   const [firesRefreshKey, setFiresRefreshKey] = useState(0);
-  const [infoPanelOpen, setInfoPanelOpen] = useState(false);
-  const [infoPanelInitialTab, setInfoPanelInitialTab] = useState<TabId | undefined>(undefined);
-  const [infoPanelScrollToLine, setInfoPanelScrollToLine] = useState<number | undefined>(undefined);
-  const mountedRef = useRef(false);
-  const reloadPipeline = useEditStore((s) => s.reloadPipeline);
-  const loadPipelines = useEditStore((s) => s.loadPipelines);
-  const openRunPipeline = useEditStore((s) => s.openRunPipeline);
-  const openPipeline = useEditStore((s) => s.openPipeline);
   const selection = useEditStore((s) => s.selection);
-  const setSelection = useEditStore((s) => s.setSelection);
   const openTabs = useEditStore((s) => s.openTabs);
-  const editSave = useEditStore((s) => s.save);
-  const editUndo = useEditStore((s) => s.undo);
-  const editRedo = useEditStore((s) => s.redo);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
-  const resolveConflict = useEditStore((s) => s.resolveConflict);
-  const clearSaveError = useEditStore((s) => s.clearSaveError);
-  // #342: a single-tab open/replace parked because it would discard unsaved
-  // work — resolved by the global confirm modal below.
-  const pendingSingleTab = useEditStore((s) => s.pendingSingleTab);
-  const confirmPendingSingleTab = useEditStore((s) => s.confirmPendingSingleTab);
-  const cancelPendingSingleTab = useEditStore((s) => s.cancelPendingSingleTab);
   // Merged /pipelines list — used to derive the selected trigger's prompt-required
   // signal for the guard dry-run caveat (#351).
   const pipelines = useEditStore((s) => s.pipelines);
 
   const editTab = openTabs.find((t) => t.id === editActiveTabId);
-  const editNode = editTab && selection.kind === "node" && selection.id
-    ? editTab.pipeline.nodes.find((n) => n.id === selection.id) ?? null
-    : null;
-  const editNodeType = editNode?.type ?? null;
-
-  // Runtime trigger status for the selected edge (#147). Derived from the run
-  // state when editing a run; the canvas never renders it.
-  const selectedEdge =
-    editTab && selection.kind === "edge" && selection.edgeIndex != null
-      ? editTab.pipeline.edges[selection.edgeIndex] ?? null
-      : null;
-  const edgeTrigger =
-    selectedEdge && editTab?.scope === "run"
-      ? deriveEdgeTrigger(selectedRun, selectedEdge)
-      : null;
-
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
-  // #684: which pane a selected node gets. Markers (start/end) never reach the
-  // generic `NodeInspector` — outside a run they get a read-only pane.
-  const nodeInspectorKind = resolveNodeInspector({
-    nodeType: editNodeType,
-    isEditingRun,
-    hasRunStart: selectedRun?.start_node != null,
-    hasRunEnd: selectedRun?.end_node != null,
-  });
 
   // #302 / ADR-0048: the Assistant authors a library *template*, so it targets the
   // active edit tab's pipeline id + scope — never a run. `null` on a run tab hides
@@ -360,6 +125,10 @@ export default function App() {
   const isArchived = selectedRun?.status === "archived";
   const isActiveRunArchived =
     isEditingRun && editTab?.runId === selectedRun?.run_id && isArchived;
+  const conflictTab = openTabs.find((t) => t.conflict != null);
+  const saveErrorTab = openTabs.find((t) => t.saveError != null);
+  const info = useInfoPanel(saveErrorTab);
+  const { infoPanelOpen, setInfoPanelOpen, infoPanelInitialTab, handleCloseInfo } = info;
 
   // The Trigger backing the right-panel detail view (#162), the pane-owner
   // precedence (#247), the two render-time reconciliations (#320 canvas-reclaim,
@@ -367,6 +136,17 @@ export default function App() {
   // useRightPaneRouter (#359). It runs the setState-during-render reconciliations
   // in-body here (App owns `selectedTriggerId`/`infoPanelOpen`, passed in with
   // their setters) so no stale frame of a shadowed panel is painted.
+  const launch = useLaunchActions({
+    triggers,
+    triggersPaused,
+    selectRun,
+    setSelectedTriggerId,
+    setSelectedRunId,
+    setSelectedNodeId,
+    setTriggerOpenedTabId,
+  });
+  const { openNewRunModal, handleCloseNewRunModal, runNowError, setRunNowError } = launch;
+
   const { paneOwner, selectedTrigger, triggerPromptRequired, runNode } =
     useRightPaneRouter({
       selection,
@@ -382,226 +162,30 @@ export default function App() {
       selectedRun,
     });
 
-  const openNewRunModal = useCallback((intent: OpenIntent) => {
-    setOpenIntent(intent);
-    setNewRunModalOpen(true);
-  }, []);
+  useShellRefresh({
+    status,
+    selectedRun,
+    refreshRuns,
+    refreshSessions,
+    refreshTriggers,
+    refreshProjects,
+    hydrateTriggersPause,
+    refreshUpdateStatus,
+  });
 
-  const handleSelectTrigger = useCallback(
-    (triggerId: string) => {
-      // Selecting a Trigger clears the run/node selection so the detail panel
-      // wins the right pane.
-      setSelectedTriggerId(triggerId);
-      setSelectedRunId(null);
-      setSelectedNodeId(null);
-      selectRun(null);
-      // #320: also open the instance-owned pipeline this Trigger would launch.
-      const trig = triggers.find((t) => t.id === triggerId);
-      if (trig) {
-        setTriggerOpenedTabId(trig.pipeline_id);
-        openPipeline(trig.pipeline_id);
-      }
-    },
-    [selectRun, triggers, openPipeline],
-  );
-
-  // #341: "Run now" is a real fire (guard + overlap + audit row), not a
-  // prefilled New Run modal. Fire, then open the trigger detail (via
-  // handleSelectTrigger — the only path that survives the #320 reconciliation)
-  // where the new history row appears. A 409 (disabled / broken reference)
-  // surfaces as a banner.
-  const handleRunNowTrigger = useCallback(
-    async (t: Trigger) => {
-      // #348 (D3-A permissive): a manual fire still works while triggers are
-      // globally paused — but behind a confirmation, so it stays a deliberate
-      // escape hatch rather than a silent bypass of the kill-switch.
-      if (
-        triggersPaused &&
-        !window.confirm(`Triggers are globally paused. Fire "${t.name}" anyway?`)
-      ) {
-        return;
-      }
-      try {
-        const { fireTrigger } = await import("../trigger/api/triggers");
-        await fireTrigger(t.id);
-        setRunNowError(null);
-      } catch (e) {
-        setRunNowError(e instanceof Error ? e.message : String(e));
-      }
-      handleSelectTrigger(t.id);
-    },
-    [handleSelectTrigger, triggersPaused],
-  );
-
-  const handleCloseNewRunModal = useCallback(() => {
-    setNewRunModalOpen(false);
-    // Reset the intent to a plain run. Harmless while closed (the modal's reset
-    // only fires on open false→true), but keeps the next default-less open clean.
-    setOpenIntent(RUN_INTENT);
-  }, []);
-
-  const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
-    useInspectorTab(editActiveTabId, isEditingRun);
-  const nodeInspectorProvisioningProps = {
-    provisioningRepository: isEditingRun ? selectedRun?.target_repo ?? "" : "",
-    provisioningFrozenAt:
-      isEditingRun && selection.id
-        ? selectedRun?.nodes[selection.id]?.provisioning_frozen_at ?? undefined
-        : undefined,
-    inheritedProvisioning: isEditingRun
-      ? selectedRun?.provisioning_rules
-      : undefined,
-    provisioningGitRef:
-      isEditingRun && selectedRun ? `pdo/run-${selectedRun.run_id}` : "HEAD",
-    runNode:
-      isEditingRun && selection.id ? selectedRun?.nodes?.[selection.id] : null,
-    // #669: the Run tier's frozen skills, shown as inherited in the inspector.
-    runSkills: isEditingRun ? selectedRun?.skills ?? undefined : undefined,
-  };
-
-  // Both inspector panes are always rendered (with the inactive one hidden
-  // via the `hidden` attribute) so that switching tabs does not unmount the
-  // Run pane's `<NodeDetailPanel>` — which would tear the tmux WebSocket
-  // down and reattach, pushing terminal content upward on every flip.
-  function inspectorRunPane() {
-    if (isEditingRun && selectedRun && runNode) {
-      return (
-        <NodeDetailPanel
-          key={runNode.node_id}
-          node={runNode}
-          runId={selectedRun.run_id}
-          isArchived={isArchived}
-          nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
-          provisioningRepository={selectedRun.target_repo ?? ""}
-          inheritedProvisioning={selectedRun.provisioning_rules}
-          provisioningGitRef={`pdo/run-${selectedRun.run_id}`}
-          isOrchestratorNode={selectedRun.node_defs?.find((d) => d.id === selection.id)?.orchestrator ?? false}
-          onOpenChildRun={handleOpenChildRun}
-          initialDetailTab={landOnOrchestration === runNode.node_id ? "orchestration" : "io"}
-        />
-      );
-    }
-    if (isEditingRun && selectedRun) {
-      return <RunTabPlaceholder nodeId={selection.id} />;
-    }
-    return <NoRunPlaceholder />;
-  }
-
-  function inspectorEditPane() {
-    switch (editNodeType) {
-      case "merge": return <MergeInspector />;
-      // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
-      // and hides the model field for it.
-      // Without this case a script node would fall through and — before the
-      // in-inspector conditionals — render the wrong (agent) surface.
-      case "script":
-      default: return (
-        <NodeInspector
-          libraryEntries={libraryEntries}
-          onLibraryChanged={refreshLibrary}
-          readOnly={isActiveRunArchived}
-          {...nodeInspectorProvisioningProps}
-        />
-      );
-    }
-  }
-
-  const handleToggleInfo = useCallback(() => {
-    setInfoPanelOpen((prev) => {
-      if (!prev) {
-        setInfoPanelInitialTab(undefined);
-        setInfoPanelScrollToLine(undefined);
-      }
-      return !prev;
-    });
-  }, []);
-
-  const handleCloseInfo = useCallback(() => {
-    setInfoPanelOpen(false);
-  }, []);
-
-  // #302 / ADR-0048: the toolbar Bot glyph opens the info panel focused on the
-  // Assistant tab (the library authoring copilot). Same shape as `handleViewYaml`:
-  // set the initial tab, then open. The panel is keyed on `infoPanelInitialTab`,
-  // so this remounts it at the Assistant tab.
-  const handleOpenAssistant = useCallback(() => {
-    setInfoPanelInitialTab("assistant");
-    setInfoPanelScrollToLine(undefined);
-    setInfoPanelOpen(true);
-  }, []);
-
-  useEffect(() => {
-    if (!mountedRef.current) {
-      mountedRef.current = true;
-      refreshRuns();
-      refreshSessions();
-      refreshTriggers();
-      refreshProjects();
-      // #348: hydrate the global pause flag once — no trigger polling carries it,
-      // so without this a page reload would show the banner off while paused.
-      hydrateTriggersPause();
-      useRecentReposStore.getState().refresh();
-    }
-  }, [refreshRuns, refreshSessions, refreshTriggers, refreshProjects, hydrateTriggersPause]);
-
-  // A WS reconnect usually means the daemon restarted — possibly as a different
-  // binary, so the /sessions payload (version included, #139) may be stale. An
-  // idle daemon emits no event afterwards, so the subscribe-side refresh never
-  // fires; re-fetch on every transition to "connected".
-  useEffect(() => {
-    if (status === "connected") {
-      refreshSessions();
-      // #697: a reconnect is how a completed update becomes visible — and how a
-      // periodic check that landed while the socket was down reaches the badge.
-      refreshUpdateStatus();
-    }
-  }, [status, refreshSessions, refreshUpdateStatus]);
-
-  // On a live run with nothing selected, snap selection to the latest
-  // running (or awaiting_user) node so the user immediately sees its terminal.
-  // Re-fires whenever the user deselects on a still-live run — but never over a
-  // deliberate selection (a node, an inspector, or the Run-info sidebar, #465
-  // slice 2, F1). The gate is `shouldAutoSnapToLiveNode`; this effect only
-  // resolves the concrete node and applies it.
-  useEffect(() => {
-    if (!selectedRun) return;
-    if (!shouldAutoSnapToLiveNode(selection.kind, !!selection.id, selectedRun.status)) return;
-    const nodeId = pickLatestLiveNode(selectedRun);
-    if (!nodeId) return;
-    setSelection({ kind: "node", id: nodeId });
-  }, [selectedRun, selection.kind, selection.id, setSelection]);
-
-  // #723 — the way back from a child run opened in an Orchestration tab: parent
-  // run + orchestrator node. Declared before `handleSelectRun`, which clears
-  // both on any navigation — the bar's visibility is derived (child run
-  // selected), so no effect ever needs to reconcile them.
-  const [orchestratorReturn, setOrchestratorReturn] = useState<{
-    parentRunId: string;
-    parentRunName: string;
-    nodeId: string;
-    nodeName: string;
-    childRunId: string;
-  } | null>(null);
-  // One-shot landing: set by the back gesture, consumed by the remount of the
-  // orchestrator's NodeDetailPanel (I/O stays the default everywhere else).
-  const [landOnOrchestration, setLandOnOrchestration] = useState<string | null>(null);
-
-  const handleSelectRun = useCallback(
-    async (runId: string) => {
-      // #723: any navigation away from the child run ends the back-bar story
-      // and any pending Orchestration-tab landing — both are one gesture old.
-      // (Purely derived visibility does the rest: the bar only ever renders
-      // while the child run is the selected one.)
-      setOrchestratorReturn(null);
-      setLandOnOrchestration(null);
-      setSelectedTriggerId(null);
-      setSelectedRunId(runId);
-      selectRun(runId);
-      setSelectedNodeId(null);
-      await openRunPipeline(runId);
-    },
-    [selectRun, openRunPipeline, setOrchestratorReturn, setLandOnOrchestration],
-  );
+  const {
+    orchestratorReturn,
+    landOnOrchestration,
+    handleSelectRun,
+    handleOpenChildRun,
+    handleBackToOrchestrator,
+  } = useRunNavigation({
+    selectedRun,
+    selectRun,
+    setSelectedTriggerId,
+    setSelectedRunId,
+    setSelectedNodeId,
+  });
 
   const handleRunCreated = useCallback(
     (runId: string) => {
@@ -611,149 +195,23 @@ export default function App() {
     [refreshRuns, handleSelectRun],
   );
 
-  // #723 — opening a child run from the Orchestration tab: record the way back
-  // (parent run + orchestrator node) AFTER the navigation, so the shared
-  // `handleSelectRun`'s clear does not wipe it.
-  const handleOpenChildRun = useCallback(
-    async (childRunId: string) => {
-      if (!selectedRun || selection.kind !== "node" || !selection.id) return;
-      const entry = {
-        parentRunId: selectedRun.run_id,
-        parentRunName: selectedRun.name || selectedRun.pipeline_name,
-        nodeId: selection.id,
-        nodeName:
-          selectedRun.node_defs?.find((d) => d.id === selection.id)?.name ?? selection.id,
-        childRunId,
-      };
-      await handleSelectRun(childRunId);
-      setOrchestratorReturn(entry);
-    },
-    [selectedRun, selection, handleSelectRun, setOrchestratorReturn],
-  );
-  const handleBackToOrchestrator = useCallback(async () => {
-    if (!orchestratorReturn) return;
-    const { parentRunId, nodeId } = orchestratorReturn;
-    await handleSelectRun(parentRunId);
-    // One-shot landing: the panel remounts on this selection and seeds its
-    // detail tab from it — two gestures deep, two gestures back.
-    setLandOnOrchestration(nodeId);
-    setSelection({ kind: "node", id: nodeId });
-  }, [orchestratorReturn, handleSelectRun, setSelection, setLandOnOrchestration]);
+  useEditorHotkeys(hasEditTab, isActiveRunArchived);
 
-  useEffect(() => {
-    // #315: never fire a save for an archived run — the tab is read-only and a
-    // PUT would 404. `isActiveRunArchived` also removes this listener the moment
-    // the open run flips to archived (via refreshRun).
-    if (!hasEditTab || isActiveRunArchived) return;
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        if (editActiveTabId) editSave(editActiveTabId);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [hasEditTab, isActiveRunArchived, editActiveTabId, editSave]);
-
-  // Canvas undo/redo (ADR-0014 / #226): Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or
-  // Ctrl/Cmd+Y redo. Sibling to the Ctrl+S effect above, but — unlike Save — it
-  // MUST yield to native field undo while a text field is focused. The branch
-  // logic (and that input-focus guard) lives in `handleUndoRedoKeydown` so it's
-  // unit-testable without rendering the canvas; this effect just wires it up.
-  useEffect(() => {
-    // #315: undo/redo are edit affordances — off for a read-only archived run.
-    if (!hasEditTab || isActiveRunArchived) return;
-    const handler = (e: KeyboardEvent) => handleUndoRedoKeydown(e, editUndo, editRedo);
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [hasEditTab, isActiveRunArchived, editUndo, editRedo]);
-
-  // #368: keep the ref in step with the selected Trigger so the stable WS
-  // callback below reads the committed value, not the stale-null closure.
-  useEffect(() => {
-    selectedTriggerIdRef.current = selectedTriggerId;
-  }, [selectedTriggerId]);
-
-  useEffect(() => {
-    return subscribe((msg) => {
-      if (msg.type === "pipeline_changed" && msg.pipeline_id) {
-        reloadPipeline(msg.pipeline_id);
-        loadPipelines();
-        return;
-      }
-      // #348: global pause flip — reflect it live across every client. The
-      // per-Trigger `enabled` state (and hence the Triggers list) is untouched,
-      // so no refresh is needed; just mirror the flag.
-      if (msg.type === "triggers_paused") {
-        setTriggersPaused(!!msg.paused);
-        return;
-      }
-      // #552: a Projet mutation (name/harness/members) — refresh the Projet list
-      // so the Runs and Triggers regrouping is live across clients. The Runs /
-      // Triggers rows themselves are unchanged, so only the Projet list refetches.
-      if (msg.type === "project_changed") {
-        refreshProjects();
-        return;
-      }
-      // Trigger lifecycle (#160/#162): create/update/delete refreshes the
-      // Triggers list; a fire also creates a Run, so refresh both.
-      if (
-        msg.type === "trigger_created" ||
-        msg.type === "trigger_updated" ||
-        msg.type === "trigger_deleted" ||
-        msg.type === "trigger_fired"
-      ) {
-        refreshTriggers();
-        if (msg.type === "trigger_fired") {
-          refreshRuns();
-          // #341 + #368: only the OPEN trigger's panel refetches, so an
-          // unrelated fire doesn't flash/reload the currently-viewed history.
-          // Read the ref (not selectedTriggerId) to keep this stable callback
-          // out of the effect deps and dodge the stale-null closure.
-          if (msg.trigger_id === selectedTriggerIdRef.current) {
-            setFiresRefreshKey((v) => v + 1);
-          }
-        }
-        return;
-      }
-      // #315: an archived run's outputs are now preserved (ADR-0020) and its
-      // `/pipeline` endpoint keeps serving, so we no longer prune the open tab
-      // on `run_archived`. `refreshRun` below flips the run's status to
-      // `archived`, which turns the open canvas read-only in place — the run the
-      // user is watching stays put instead of vanishing.
-      refreshRuns();
-      refreshRun();
-      // Node start/complete/fail/waiting transitions change the live session
-      // count (#159) — keep the status-bar counter current.
-      refreshSessions();
-    });
-  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, setTriggersPaused, refreshProjects, reloadPipeline, loadPipelines]);
-
-  const selectedNode =
-    selectedNodeId && selectedRun
-      ? selectedRun.nodes[selectedNodeId] ?? null
-      : null;
-
-  const selectedNodeType = selectedRun?.node_defs?.find(
-    (d) => d.id === selectedNodeId,
-  )?.node_type ?? null;
+  const bumpFiresRefreshKey = useCallback(() => setFiresRefreshKey((v) => v + 1), []);
+  useDaemonEvents({
+    subscribe,
+    selectedTriggerId,
+    refreshRuns,
+    refreshRun,
+    refreshSessions,
+    refreshTriggers,
+    refreshProjects,
+    setTriggersPaused,
+    bumpFiresRefreshKey,
+  });
 
   const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES);
   const minSizePx = `${layout.minSizePx}px`;
-  const conflictTab = openTabs.find((t) => t.conflict != null);
-  const saveErrorTab = openTabs.find((t) => t.saveError != null);
-
-  const handleDismissSaveError = useCallback(() => {
-    if (saveErrorTab) clearSaveError(saveErrorTab.id);
-  }, [saveErrorTab, clearSaveError]);
-
-  const handleViewYaml = useCallback(() => {
-    if (!saveErrorTab) return;
-    setInfoPanelInitialTab("yaml");
-    setInfoPanelScrollToLine(saveErrorTab.saveError?.line);
-    setInfoPanelOpen(true);
-    clearSaveError(saveErrorTab.id);
-  }, [saveErrorTab, clearSaveError]);
 
   return (
     <TooltipProvider>
@@ -776,10 +234,10 @@ export default function App() {
               onNewRun={() => openNewRunModal({ kind: "run" })}
               triggers={triggers}
               selectedTriggerId={selectedTriggerId}
-              onSelectTrigger={handleSelectTrigger}
+              onSelectTrigger={launch.handleSelectTrigger}
               onNewTrigger={() => openNewRunModal({ kind: "new-trigger" })}
               onTriggersChanged={refreshTriggers}
-              onRunNowTrigger={handleRunNowTrigger}
+              onRunNowTrigger={launch.handleRunNowTrigger}
               onEditTrigger={(t) => openNewRunModal({ kind: "edit-trigger", trigger: t })}
               triggersPaused={triggersPaused}
               onTogglePause={handleTogglePause}
@@ -791,169 +249,48 @@ export default function App() {
           <ResizableHandle />
 
           <ResizablePanel defaultSize={layout.defaultLayout.center} id="center">
-            {hasEditTab ? (
-              <div className="flex h-full min-w-0 flex-col">
-                <TabBar />
-                {orchestratorReturn && selectedRun?.run_id === orchestratorReturn.childRunId && (
-                  <button
-                    type="button"
-                    data-testid="orchestrator-back-bar"
-                    onClick={handleBackToOrchestrator}
-                    className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-line bg-bg-2 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
-                    style={{ fontSize: "11px" }}
-                    title="Back to the orchestrator node, on its Orchestration tab"
-                  >
-                    <ArrowLeft size={12} />
-                    <span>
-                      Back to <span className="font-medium text-fg-2">{orchestratorReturn.nodeName}</span>
-                      <span className="text-fg-4"> · {orchestratorReturn.parentRunName}</span>
-                    </span>
-                    <span className="ml-auto flex items-center gap-1 text-fg-4" style={{ fontSize: "10px" }}>
-                      <GitFork size={10} /> child run
-                    </span>
-                  </button>
-                )}
-                <EditCanvas
-                  libraryEntries={libraryEntries}
-                  onLibraryDelete={async (name) => {
-                    const { deleteFromLibrary: delLib } = await import("../pipeline/api/library");
-                    await delLib(name);
-                    refreshLibrary();
-                  }}
-                  infoOpen={infoPanelOpen}
-                  onToggleInfo={handleToggleInfo}
-                  onCloseInfo={handleCloseInfo}
-                  assistantActive={infoPanelOpen && infoPanelInitialTab === "assistant"}
-                  onOpenAssistant={handleOpenAssistant}
-                  runState={selectedRun}
-                  onSelectRun={handleSelectRun}
-                />
-              </div>
-            ) : (
-              <div className="flex h-full items-center justify-center text-fg-4" style={{ fontSize: "12px" }}>
-                Select a run or open a pipeline to get started
-              </div>
-            )}
+            <CenterPane
+              hasEditTab={hasEditTab}
+              orchestratorReturn={orchestratorReturn}
+              onBackToOrchestrator={handleBackToOrchestrator}
+              libraryEntries={libraryEntries}
+              refreshLibrary={refreshLibrary}
+              infoPanelOpen={infoPanelOpen}
+              assistantActive={infoPanelOpen && infoPanelInitialTab === "assistant"}
+              onToggleInfo={info.handleToggleInfo}
+              onCloseInfo={handleCloseInfo}
+              onOpenAssistant={info.handleOpenAssistant}
+              selectedRun={selectedRun}
+              onSelectRun={handleSelectRun}
+            />
           </ResizablePanel>
 
           <ResizableHandle />
 
           <ResizablePanel defaultSize={layout.defaultLayout.right} minSize={minSizePx} id="right" className="panel-r">
-            {paneOwner === "trigger" && selectedTrigger ? (
-              <TriggerDetailPanel
-                key={selectedTrigger.id}
-                trigger={selectedTrigger}
-                onSelectRun={handleSelectRun}
-                refreshKey={firesRefreshKey}
-                promptRequired={triggerPromptRequired}
-              />
-            ) : paneOwner === "info" ? (
-              <PipelineInfoPanel
-                key={infoPanelInitialTab ?? "default"}
-                run={isEditingRun ? selectedRun : null}
-                pipeline={editTab?.pipeline ?? null}
-                onClose={handleCloseInfo}
-                initialTab={infoPanelInitialTab}
-                scrollToLine={infoPanelScrollToLine}
-                assistantId={assistantId}
-                onRefreshRun={refreshRun}
-                onOpenSettings={() => openSettings({ category: "agents", section: "pipeline-manager" })}
-              />
-            ) : paneOwner === "editTab" ? (
-              <>
-                {selection.kind === "node" && editNodeType != null && nodeInspectorKind === "node" ? (
-                  <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab}>
-                    <div hidden={inspectorTab !== "run"} className="h-full" data-testid="inspector-pane-run">
-                      {inspectorRunPane()}
-                    </div>
-                    <div hidden={inspectorTab !== "edit"} className="h-full" data-testid="inspector-pane-edit">
-                      {inspectorEditPane()}
-                    </div>
-                  </InspectorTabs>
-                ) : selection.kind === "node" && nodeInspectorKind === "run-start" && selectedRun?.start_node && selection.id ? (
-                  <StartInspector
-                    startNode={selectedRun.start_node}
-                    runId={selectedRun.run_id}
-                    nodeId={selection.id}
-                  />
-                ) : selection.kind === "node" && nodeInspectorKind === "run-end" && selectedRun?.end_node ? (
-                  <EndInspector
-                    endNode={selectedRun.end_node}
-                  />
-                ) : selection.kind === "node" && nodeInspectorKind === "marker" && editNode ? (
-                  <MarkerInspector key={editNode.id} node={editNode} />
-                ) : selection.kind === "node" ? (
-                  <NodeInspector
-                    libraryEntries={libraryEntries}
-                    onLibraryChanged={refreshLibrary}
-                    readOnly={isActiveRunArchived}
-                    {...nodeInspectorProvisioningProps}
-                  />
-                ) : selection.kind === "edge" ? (
-                  <EdgeDetailPanel trigger={edgeTrigger} />
-                ) : selection.kind === "region" ? (
-                  <RegionInspector />
-                ) : selection.kind === "note" ? (
-                  <NoteInspector />
-                ) : null}
-                {/* `"none"` reaches this on a terminal/paused run (deselect, or
-                    selecting the run — #503 red-dot panel). #752: the standalone
-                    Run-info sidebar is gone; the Run panel opens on Info, which
-                    now carries the failure / awaiting reason, and Repositories
-                    is one of its tabs (`Info | Diff | Repositories | Manager | YAML`). */}
-                {(selection.kind === "none" || selection.kind === "run") &&
-                  isEditingRun &&
-                  selectedRun && (
-                    <PipelineInfoPanel
-                      key={`run-panel-${selectedRun.run_id}`}
-                      run={selectedRun}
-                      pipeline={editTab?.pipeline ?? null}
-                      onClose={handleCloseInfo}
-                      initialTab="info"
-                      onRefreshRun={refreshRun}
-                      onOpenSettings={() => openSettings({ category: "agents", section: "pipeline-manager" })}
-                    />
-                  )}
-                {selection.kind === "none" && !isEditingRun && (
-                  <PipelineInspector />
-                )}
-              </>
-            ) : (
-              <>
-                {selectedNodeType === "start" && selectedRun?.start_node && (
-                  <StartInspector
-                    startNode={selectedRun.start_node}
-                    runId={selectedRun.run_id}
-                    nodeId={selectedNodeId!}
-                  />
-                )}
-                {selectedNodeType === "end" && selectedRun?.end_node && (
-                  <EndInspector
-                    endNode={selectedRun.end_node}
-                  />
-                )}
-                {selectedNode && selectedRun && selectedNodeType !== "start" && selectedNodeType !== "end" && (
-                  <NodeDetailPanel
-                    key={selectedNode.node_id}
-                    node={selectedNode}
-                    runId={selectedRun.run_id}
-                    isArchived={isArchived}
-                    nodeName={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.name}
-                    isOrchestratorNode={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.orchestrator ?? false}
-                    onOpenChildRun={handleOpenChildRun}
-                    initialDetailTab={landOnOrchestration === selectedNode.node_id ? "orchestration" : "io"}
-                  />
-                )}
-                {!selectedNode && selectedNodeType !== "start" && isArchived && selectedRun && (
-                  <aside className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4" style={{ fontSize: "12px" }}>
-                    <div className="text-center px-6">
-                      <div className="font-medium text-fg-3">Run archived</div>
-                      <div className="mt-1">No live state available. Select a node to view its final status.</div>
-                    </div>
-                  </aside>
-                )}
-              </>
-            )}
+            <RightPane
+              paneOwner={paneOwner}
+              selectedTrigger={selectedTrigger}
+              triggerPromptRequired={triggerPromptRequired}
+              firesRefreshKey={firesRefreshKey}
+              runNode={runNode}
+              editTab={editTab}
+              selectedRun={selectedRun}
+              selectedNodeId={selectedNodeId}
+              isArchived={isArchived}
+              isActiveRunArchived={isActiveRunArchived}
+              assistantId={assistantId}
+              infoPanelInitialTab={infoPanelInitialTab}
+              infoPanelScrollToLine={info.infoPanelScrollToLine}
+              onCloseInfo={handleCloseInfo}
+              libraryEntries={libraryEntries}
+              onLibraryChanged={refreshLibrary}
+              landOnOrchestration={landOnOrchestration}
+              onSelectRun={handleSelectRun}
+              onOpenChildRun={handleOpenChildRun}
+              onRefreshRun={refreshRun}
+              openSettings={openSettings}
+            />
           </ResizablePanel>
         </ResizablePanelGroup>
       </main>
@@ -963,41 +300,15 @@ export default function App() {
         update={updateStatus}
         onOpenVersion={() => setChangelogOpen(true)}
       />
-      {changelogOpen && (
-        <ChangelogModal
-          update={updateStatus}
-          onClose={() => setChangelogOpen(false)}
-          onOpenVersionSettings={() => {
-            setChangelogOpen(false);
-            openSettings({ category: "general", section: "version-update" });
-          }}
-          onRequestUpdate={() => setUpdateConfirmOpen(true)}
-        />
-      )}
-      {updateConfirmOpen && updateStatus && (
-        <UpdateConfirmModal
-          update={updateStatus}
-          busy={updateStarting}
-          onConfirm={() => void startUpdate()}
-          onCancel={() => setUpdateConfirmOpen(false)}
-        />
-      )}
-      <UpdateWaitingOverlay
-        flow={updateFlow}
-        onDismiss={() => dispatchUpdateFlow({ type: "dismiss" })}
-        onOpenVersionSettings={() => {
-          dispatchUpdateFlow({ type: "dismiss" });
-          openSettings({ category: "general", section: "version-update" });
-        }}
-      />
+      <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
       <NewRunModal
-        open={newRunModalOpen}
+        open={launch.newRunModalOpen}
         onClose={handleCloseNewRunModal}
         onCreated={(runId) => {
           handleCloseNewRunModal();
           handleRunCreated(runId);
         }}
-        openIntent={openIntent}
+        openIntent={launch.openIntent}
         onTriggerSaved={refreshTriggers}
         // #691: the one programmatic door into Settings from New Run — lands on the section,
         // pulses it once; New Run stays mounted underneath.
@@ -1014,12 +325,12 @@ export default function App() {
         // bare numeric key (both started at 0) collide in React 19's mapRemainingChildren,
         // which keys its lookup map by fiber.key alone; the wrong fiber wins the update and
         // the surface becomes permanently unclosable.
-        key={"settings-" + settingsEntry.key}
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        key={"settings-" + surfaces.settingsEntry.key}
+        open={surfaces.settingsOpen}
+        onClose={() => surfaces.setSettingsOpen(false)}
         liveSessions={sessions.live}
         onSaved={refreshSessions}
-        initialPosition={settingsEntry.position}
+        initialPosition={surfaces.settingsEntry.position}
         onOpenStats={openStats}
         onOpenChangelog={() => setChangelogOpen(true)}
         onRequestUpdate={() => setUpdateConfirmOpen(true)}
@@ -1028,35 +339,16 @@ export default function App() {
       />
       <StatsModal
         // #717: see the SettingsSurface key above — sibling keys must never collide.
-        key={"stats-" + statsEntry.key}
-        open={statsOpen}
-        onClose={() => setStatsOpen(false)}
-        initialTab={statsEntry.intent?.tab}
-        initialPricingOpen={statsEntry.intent?.pricingOpen}
+        key={"stats-" + surfaces.statsEntry.key}
+        open={surfaces.statsOpen}
+        onClose={() => surfaces.setStatsOpen(false)}
+        initialTab={surfaces.statsEntry.intent?.tab}
+        initialPricingOpen={surfaces.statsEntry.intent?.pricingOpen}
       />
-      <ConflictModal
-        open={conflictTab != null}
-        pipelineId={conflictTab?.id ?? ""}
-        onKeep={() => {
-          if (conflictTab) resolveConflict(conflictTab.id, "keep");
-        }}
-        onTake={() => {
-          if (conflictTab) resolveConflict(conflictTab.id, "take");
-        }}
-      />
-      <SaveErrorModal
-        open={saveErrorTab != null}
-        error={saveErrorTab?.saveError ?? null}
-        onDismiss={handleDismissSaveError}
-        onViewYaml={handleViewYaml}
-      />
-      {/* #342: single-tab open/replace (and enable-collapse) that would discard
-          unsaved work parks here for a global confirmation. */}
-      <ConfirmCloseTabsModal
-        open={pendingSingleTab != null}
-        tabs={pendingSingleTab?.victims ?? []}
-        onCancel={cancelPendingSingleTab}
-        onConfirm={confirmPendingSingleTab}
+      <EditorModals
+        conflictTab={conflictTab}
+        saveErrorTab={saveErrorTab}
+        onViewYaml={info.handleViewYaml}
       />
       {/* #823 — the Projecteur, the tour popover, the welcome modal and the two
           end cards. Mounted last so it paints over every surface above. */}
@@ -1084,84 +376,5 @@ export default function App() {
       )}
     </div>
     </TooltipProvider>
-  );
-}
-
-function RunTabPlaceholder({ nodeId }: { nodeId: string | null }) {
-  return (
-    <aside
-      className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4"
-      style={{ fontSize: "12px" }}
-      data-testid="pending-placeholder"
-    >
-      <div className="px-6 text-center">
-        <div className="font-medium text-fg-3">
-          <em>en attente d&apos;activation</em>
-        </div>
-        {nodeId && (
-          <div className="mt-1 font-mono" style={{ fontSize: "10px" }}>
-            {nodeId}
-          </div>
-        )}
-        <div className="mt-2 text-fg-4" style={{ fontSize: "11px" }}>
-          This node is waiting for upstream dependencies to complete.
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function NoRunPlaceholder() {
-  return (
-    <aside
-      className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4"
-      style={{ fontSize: "12px" }}
-    >
-      <div className="px-6 text-center">
-        <div className="font-medium text-fg-3">No active run</div>
-        <div className="mt-1">
-          Launch a run to see execution state in this tab.
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-const STATUS_CONFIG: Record<ConnectionStatus, { dot: string; label: string }> = {
-  connected: { dot: "bg-st-done", label: "Daemon: connected" },
-  reconnecting: { dot: "bg-st-await", label: "Daemon: reconnecting…" },
-  disconnected: { dot: "bg-st-failed", label: "Daemon: disconnected" },
-};
-
-function StatusBar({
-  status,
-  sessions,
-  update,
-  onOpenVersion,
-}: {
-  status: ConnectionStatus;
-  sessions: DaemonStatus;
-  update: UpdateStatus | null;
-  onOpenVersion: () => void;
-}) {
-  const { dot: dotClass, label } = STATUS_CONFIG[status];
-  // The version string comes from `/sessions` (refreshed on reconnect, #139) with the
-  // update payload as fallback — both are the daemon's own `CARGO_PKG_VERSION`.
-  const version = sessions.version ?? update?.installed_version;
-
-  return (
-    <footer
-      className="flex h-[22px] shrink-0 items-center gap-3.5 border-t border-line bg-bg-2 px-3 font-mono text-fg-3"
-      style={{ fontSize: "11px" }}
-    >
-      <span className="flex items-center gap-1.5">
-        <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
-        {label}
-      </span>
-      <span className="flex-1" />
-      <ServiceHealthIndicator service={sessions.service} />
-      <SessionCounter live={sessions.live} cap={sessions.cap} />
-      {version && <VersionBadge version={version} update={update} onClick={onOpenVersion} />}
-    </footer>
   );
 }

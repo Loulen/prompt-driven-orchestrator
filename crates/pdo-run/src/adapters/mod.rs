@@ -9,6 +9,7 @@ pub mod env;
 pub mod http;
 pub mod instance_defaults;
 pub mod manager_sessions;
+pub mod pipeline_runs;
 pub mod price_files;
 pub mod run_cost;
 pub mod run_dir_watch;

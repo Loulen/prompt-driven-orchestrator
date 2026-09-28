@@ -15,18 +15,9 @@ import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
 import type { NodeType } from "../shared/generated/NodeType";
 import type { PortSide } from "../shared/generated/PortSide";
 import type { Point } from "./orthogonalRouter";
-import {
-  anchorFromPoint,
-  anchorPoint,
-  approachPoint,
-  clipOutside,
-  landingConnector,
-  landingLeg,
-  dropAnchor,
-  handlePin,
-  landsByDrop,
-  type AnchorRect,
-} from "./anchorSide";
+import { anchorFromPoint, anchorPoint, dropAnchor, handlePin, landsByDrop, type AnchorRect } from "./anchorSide";
+import { approachPoint, landingConnector, landingLeg } from "./anchorLanding";
+import { clipOutside } from "./polylineCleanup";
 import {
   advanceTrace,
   freeContinuation,

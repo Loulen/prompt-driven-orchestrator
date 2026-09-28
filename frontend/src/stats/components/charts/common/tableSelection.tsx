@@ -1,4 +1,4 @@
-import SelectControl from "../../../../components/SelectControl";
+import SelectControl from "../../../../shared/ui/SelectControl";
 import { GlobalAbsorptionIcon } from "../../StatsAbsorption";
 import type { MasterSelection } from "../../../store/absorptionSelection";
 import type { CoupleRow } from "../../../model/statsAbsorption";

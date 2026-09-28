@@ -9,7 +9,8 @@ import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { PortSide } from "../shared/generated/PortSide";
 import type { Point } from "./orthogonalRouter";
-import { enforcePerpendicularEnds, landingLeg, storableWaypoints } from "./anchorSide";
+import { enforcePerpendicularEnds, landingLeg } from "./anchorLanding";
+import { storableWaypoints } from "./polylineCleanup";
 
 export interface DrawnEdgeInput {
   /** The polyline the preview drew, in flow coordinates. */

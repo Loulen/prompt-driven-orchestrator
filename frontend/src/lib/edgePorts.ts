@@ -75,7 +75,7 @@ export function defaultConditionPort(ports: string[]): string {
  * takes its own port's name — the emergent rule ("connecting
  * `debugger.repro_steps` creates a `repro_steps` input", CONTEXT.md).
  *
- * Mirrors `EdgeDef::emergent_inputs` in `crates/pdo-daemon/src/pipeline.rs`.
+ * Mirrors `EdgeDef::emergent_inputs` in `crates/pdo-pipeline/src/domain/pipeline/`.
  */
 export function emergentInputs(edge: EdgeDef): { port: string; input: string }[] {
   const ports = carriedPorts(edge.source);
@@ -108,10 +108,8 @@ export function inDeclarationOrder(ports: string[], declared: string[]): string[
  * Sorts the `ports` list of every edge source in a serialized pipeline object,
  * IN PLACE, so the semantic diff compares the carried ports as a SET (ADR-0073
  * §2): two pipelines differing only by `[a, b]` vs `[b, a]` are the same
- * pipeline. Mirrors `SourceProjection` in
- * `crates/pdo-daemon/src/pipeline_semantics.rs`, which sorts the same list for
- * the library content hash — the two must agree or the star and the diff
- * contradict each other on the same edit.
+ * pipeline. The library star compares the same projection, so the star and the
+ * diff never contradict each other on the same edit.
  *
  * Feed it the throwaway output of `pipelineToYamlObject`; it mutates.
  */

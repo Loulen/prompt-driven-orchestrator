@@ -9,7 +9,7 @@ import { projectLookup } from "../../workspace/model/projectLookup";
 import { useSelectionStore } from "../../stores/selectionStore";
 import { handleSelectionKeydown } from "../../lib/selectionKeys";
 import ProjectEditModal from "../../workspace/components/ProjectEditModal";
-import SelectControl from "../../components/SelectControl";
+import SelectControl from "../../shared/ui/SelectControl";
 import TriggerRow from "./triggersList/TriggerRow";
 import TriggersBulk, { type TriggerBulkKind } from "./triggersList/TriggersBulk";
 import TriggersListHeader from "./triggersList/TriggersListHeader";

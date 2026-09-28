@@ -10,6 +10,67 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.112.1 — Contract : le crate legacy, la suite de snapshots et le ratchet supprimés (#932, spec #913)
+
+Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas. La suite de
+snapshots temporaires a été jouée une dernière fois, verte, sur l'arbre final avant d'être
+supprimée. Seul changement à noter : **les cibles `RUST_LOG` en `pdo_daemon…` ne correspondent
+plus à rien.** La table ancienne cible → nouvelle cible est dans
+[`docs/reference/runbook.md`](docs/reference/runbook.md). Le filtre par défaut passe de
+`pdo_daemon=info,info` à `info`, ce qui revient au même.
+
+- Le crate legacy (`crates/pdo-daemon`, paquet `pdo-legacy`) n'existe plus. Il ne reste que les
+  douze crates de contexte, `pdo-kernel`, `pdo-extension-api` et la composition root
+  `crates/pdo`. Le reliquat a été réparti ainsi :
+  - dans la composition root : le démarrage du daemon (`src/daemon/` : base, fix-ups, boucles de
+    fond, handle et ses seams de test), le câblage de chaque contexte (`src/contexts/`, un
+    fichier par contexte), la CLI (`src/cli/`), le SPA embarqué (`src/spa.rs`, et le `build.rs`
+    qui construit le front), et les ports qui lisent plusieurs contextes (`src/ports/` : les
+    faits Run du contexte session, les montages que libère un archivage, les Runs vus par la
+    plateforme, les tirs de Triggers comptés par les Stats). L'état global cyclique (`AppState`)
+    disparaît : un contexte câblé après le port qui le lit est atteint par un handle `Late` ;
+  - dans `pdo-run` : les Runs qui utilisent une pipeline (`adapters/pipeline_runs.rs`) ;
+  - dans `pdo-settings` : qui nomme un skill, qui nomme un profil de staging, et le type réel de
+    ce que porte un Projet (`adapters/contexts/`).
+- La suite `crates/pdo/tests/snapshots_temporary/` (8 scénarios et le test de ses masques),
+  `scripts/layout-ratchet.sh` et son étape de CI sont supprimés, ainsi que la dépendance `insta`.
+- Tests : aucun test d'étage 4 perdu. Les tests internes du crate legacy passent dans la
+  composition root, contre les contextes câblés comme le daemon les câble sur une base en mémoire
+  (`contexts::testing`) : attente déclarée, pane, jauges de `/sessions`, doctrine du reaper, Run
+  historique `stale` (`ports/session/`), CLI (`cli/`), posture imbriquée et commande de relance
+  (`daemon/env.rs`), URL annoncée (`daemon/origins.rs`), SPA (`spa.rs`), tirs de Triggers
+  (`ports/trigger_fires.rs`) ; le type des réglages de Projet passe dans `pdo-settings`. Les deux
+  tests de santé du service ne forcent plus le superviseur (la probe le lit dans
+  l'environnement) : ils vérifient que la valeur relayée est celle de la plateforme. Le test
+  d'architecture vérifie désormais qu'il couvre exactement les douze contextes.
+- La baseline du test des 400 lignes est vide. Ont été découpés : `App.tsx` (hooks d'état et
+  panneaux de `app/`), `NodeInspector` (sections sous `pipeline/components/nodeInspector/`),
+  `EdgeDetailPanel`, `OrthogonalEdge`, `editNodeDerivation`, `anchorSide`, `serializePipeline`,
+  et les tours (`lib/tour.ts`, `lib/tours/*`, `TourCards`, `useTour`) ; le `lib.rs` du crate
+  legacy a été dissous.
+- Front : l'ancien dossier plat `frontend/src/components/` a disparu. L'éditeur de pipeline
+  rejoint `pipeline/components/`, les tours `app/tour/`, le panneau de gauche `app/`, les
+  composants génériques `shared/ui/` (`FullWindowShell`, `SelectControl`, `ConfirmDeleteModal`,
+  `ImageLightbox`, `MermaidDiagram`, `ThemeSelect`), `ServiceHealthIndicator` `platform/` et
+  `AgentControl` `settings/`.
+- Docs : `docs/agents/module-layout.md` décrit l'arbre final (la section « pendant la
+  migration » est retirée), `CONTRIBUTING.md` dit où vit le code, le runbook est nouveau
+  (`docs/reference/runbook.md`), et le proxy Vite dit où vit le routeur.
+- Specs Playwright : 45 d'entre elles échouaient déjà sur la branche d'intégration (même
+  liste avant et après ce ticket). Elles passent à nouveau, sans changement de produit sauf un
+  correctif :
+  - le harnais : l'onglet « Library » du panneau de gauche s'appelle « Pipelines » depuis #651,
+    et la modale d'accueil du tour guidé (#823), qu'affiche toute base sans Run, est marquée
+    comme déjà proposée (`storageState` de `playwright.config.ts`) ;
+  - des specs qui suivaient une ancienne UI : l'en-tête d'un groupe de branches porte son
+    compteur, le champ de pièces jointes n'a plus d'attribut `accept`, le Pipeline Manager
+    démarre à la demande, l'onglet YAML montre le document enregistré, la ligne témoin de la
+    relecture est choisie dans le README tel qu'il est ;
+  - un correctif (#844) : une arête automatique entre deux cartes en colonne sortait par la
+    droite et repassait à travers sa carte source ; tracée au-dessus des nodes (#845), elle
+    captait le clic sur le nom du node. Elle contourne désormais sa carte source par le couloir
+    le plus court (seules les routes automatiques, rien n'est persisté).
+
 ## 1.112.0 — API d'extension 0.1.1 : Attributs d'entité, événements, routes `/ext/` et Emplacements d'UI (#931, spec #913)
 
 Ajout de fonctionnalité, rétrocompatible : sans extension, le contrat HTTP/WS ne bouge pas

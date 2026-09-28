@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Combine } from "lucide-react";
-import BulkActionBar from "../../components/BulkActionBar";
+import BulkActionBar from "../../pipeline/components/BulkActionBar";
 import { CombineModal } from "../components/CombineModal";
 import {
   GlobalMembersModal,

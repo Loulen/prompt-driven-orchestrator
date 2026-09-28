@@ -4,7 +4,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { TooltipProvider } from "../../shared/ui/tooltip";
 import { EditNode } from "./EditNode";
 import { useEditStore } from "../store/editStore";
-import { deriveEditEdges } from "../../components/editNodeDerivation";
+import { deriveEditEdges } from "./editEdgeDerivation";
 import { landsByDrop } from "../../lib/anchorSide";
 import { droppedPath, hoverLanding, startGesture, type HoveredHandle, type HoveredNode } from "../../lib/wiringGesture";
 import { gridStep } from "../../lib/wiringGrid";

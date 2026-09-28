@@ -109,7 +109,7 @@ async function createRunAndSeedArtifact(baseURL: string) {
   runId = json.run_id;
 
   // The daemon resolves an html output port to
-  // `<node>/iter-1/<port>/output.html` (crates/pdo-daemon/src/blackboard.rs).
+  // `<node>/iter-1/<port>/output.html` (crates/pdo-run/src/domain/blackboard.rs).
   const portDir = path.join(
     WORKSPACE_ROOT,
     ".pdo",

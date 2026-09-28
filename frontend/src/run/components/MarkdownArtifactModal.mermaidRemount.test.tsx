@@ -17,7 +17,7 @@ import { useRef } from "react";
 // white-box measurement of the bug the reproduce doc (section B) prescribes.
 
 let mountCount = 0;
-vi.mock("../../components/MermaidDiagram", () => {
+vi.mock("../../shared/ui/MermaidDiagram", () => {
   function MermaidDiagramStub({ source }: { source: string }) {
     const mounted = useRef(false);
     if (!mounted.current) {

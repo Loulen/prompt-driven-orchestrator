@@ -7,7 +7,7 @@ import type { EditorPipelineDef } from "../model/pipeline";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { useCallback, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { type Node, type Connection, type FinalConnectionState } from "@xyflow/react";
-import { resolveTargetGeometrySide } from "../../components/editNodeDerivation";
+import { resolveTargetGeometrySide } from "../components/editEdgeDerivation";
 import { CARD_HEIGHT, CARD_WIDTH } from "../../lib/nodePlacement";
 import { anchorFromPoint, anchorPoint, anchorsByDropOnBody, landsByDrop, dropAnchor, sideFromRimHandle } from "../../lib/anchorSide";
 import { drawnEdgeLayout } from "../../lib/drawnEdge";

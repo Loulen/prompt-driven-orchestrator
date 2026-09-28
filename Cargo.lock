@@ -371,17 +371,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "console"
-version = "0.16.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
-dependencies = [
- "encode_unicode",
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -575,12 +564,6 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 dependencies = [
  "serde",
 ]
-
-[[package]]
-name = "encode_unicode"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "encoding_rs"
@@ -998,12 +981,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-range-header"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
-
-[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1290,19 +1267,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "insta"
-version = "1.47.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
-dependencies = [
- "console",
- "once_cell",
- "serde",
- "similar",
- "tempfile",
 ]
 
 [[package]]
@@ -1972,7 +1936,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1982,11 +1946,10 @@ dependencies = [
  "clap",
  "filetime",
  "futures-util",
- "insta",
+ "mime_guess",
  "pdo-extension-api",
  "pdo-harness",
  "pdo-kernel",
- "pdo-legacy",
  "pdo-pipeline",
  "pdo-platform",
  "pdo-review",
@@ -1994,10 +1957,13 @@ dependencies = [
  "pdo-sandbox",
  "pdo-session",
  "pdo-settings",
+ "pdo-skill",
  "pdo-stats",
  "pdo-trigger",
+ "pdo-workspace",
  "pretty_assertions",
  "reqwest",
+ "rust-embed",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2025,7 +1991,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "filetime",
  "pdo-kernel",
@@ -2041,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "chrono",
  "form_urlencoded",
@@ -2054,63 +2020,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "pdo-legacy"
-version = "1.112.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64",
- "chrono",
- "chrono-tz",
- "clap",
- "filetime",
- "futures-util",
- "insta",
- "libc",
- "mime_guess",
- "notify",
- "notify-debouncer-mini",
- "oxc_allocator",
- "oxc_ast",
- "oxc_parser",
- "oxc_span",
- "pdo-harness",
- "pdo-kernel",
- "pdo-pipeline",
- "pdo-platform",
- "pdo-review",
- "pdo-run",
- "pdo-sandbox",
- "pdo-session",
- "pdo-settings",
- "pdo-skill",
- "pdo-stats",
- "pdo-trigger",
- "pdo-workspace",
- "portable-pty",
- "pretty_assertions",
- "reqwest",
- "rust-embed",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
 name = "pdo-pipeline"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2141,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2165,7 +2076,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-review"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2194,7 +2105,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-run"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2229,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-sandbox"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2251,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-session"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2272,7 +2183,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-settings"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "axum",
  "chrono",
@@ -2302,7 +2213,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-skill"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2324,7 +2235,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-stats"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2352,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-trigger"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "axum",
  "chrono",
@@ -2382,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "1.112.0"
+version = "1.112.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -3195,12 +3106,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
-name = "similar"
-version = "2.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
-
-[[package]]
 name = "siphasher"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3757,19 +3662,10 @@ checksum = "a28f0d049ccfaa566e14e9663d304d8577427b368cb4710a20528690287a738b"
 dependencies = [
  "bitflags 2.11.1",
  "bytes",
- "futures-core",
  "futures-util",
  "http",
  "http-body",
- "http-body-util",
- "http-range-header",
- "httpdate",
- "mime",
- "mime_guess",
- "percent-encoding",
  "pin-project-lite",
- "tokio",
- "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",

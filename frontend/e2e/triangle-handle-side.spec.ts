@@ -19,7 +19,7 @@ import { runMultipart } from "./helpers";
 // strips instead.
 //
 // The daemon refuses to load a pipeline without exactly one start + one end node
-// (crates/pdo-daemon/src/pipeline.rs), so the seed wraps the checker between a
+// (crates/pdo-pipeline/src/domain/pipeline/), so the seed wraps the checker between a
 // start and an end. `POST /runs` is multipart/form-data post-refonte.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

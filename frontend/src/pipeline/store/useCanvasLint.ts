@@ -5,7 +5,7 @@
 import type { OpenPipeline } from "./editState";
 import { useMemo } from "react";
 import { collectionFanoutNudges } from "../../lib/loopRegions";
-import type { LintBannerItem } from "../../components/LintBanner";
+import type { LintBannerItem } from "../components/LintBanner";
 import { useDismissedNudges } from "../../hooks/useDismissedNudges";
 // #723 — orchestrator pastilles on the run-view node card.
 

@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use anyhow::Result;
-use pdo_daemon::{serve_with_config, DaemonConfig, DaemonHandle};
+use pdo::{serve_with_config, DaemonConfig, DaemonHandle};
 use tempfile::TempDir;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -467,7 +467,7 @@ impl TestDaemon {
     /// refreshes an EXISTING `fetched.json`, and a fresh tempdir has none — so a
     /// test that plants no cache proves "zero request" against production's own
     /// gate, and one that plants a stale cache drives the refresh through
-    /// [`pdo_daemon::DaemonHandle::run_price_refresh_tick`] rather than racing the
+    /// [`pdo::DaemonHandle::run_price_refresh_tick`] rather than racing the
     /// detached boot task.
     pub async fn spawn_with_price_source<F>(setup: F, price_source_url: String) -> Result<Self>
     where

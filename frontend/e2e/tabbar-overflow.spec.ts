@@ -72,9 +72,9 @@ test("tabbar overflows horizontally, Save stays visible, active tab scrolls into
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  // Post-refonte (#146): pipelines open into the edit canvas from the Library
+  // Post-refonte (#146): pipelines open into the edit canvas from the Pipelines
   // tab — there is no pencil "Toggle edit mode" anymore.
-  await page.getByRole("tab", { name: "Library" }).click();
+  await page.getByRole("tab", { name: "Pipelines" }).click();
 
   // Open all 12 pipelines as tabs by clicking their Library entries.
   for (let i = 0; i < TAB_COUNT; i++) {

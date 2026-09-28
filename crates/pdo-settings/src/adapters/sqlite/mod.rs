@@ -1,6 +1,7 @@
 //! The settings context over SQLite: the stored tier (`instance_config`) and
 //! the agentic profiles (`agent_profiles`), behind the context's ports. The
-//! free functions stay public for the readers the legacy crate still holds.
+//! free functions stay public for the readers of another tier (who names a
+//! skill or a staging profile, the sweep's TTLs in the composition root).
 
 pub mod agent_profiles;
 pub mod instance_config;

@@ -17,7 +17,7 @@ const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
 // Post-refonte the daemon refuses to load (and therefore to run) a pipeline
-// without exactly one start + one end node (crates/pdo-daemon/src/pipeline.rs
+// without exactly one start + one end node (crates/pdo-pipeline/src/domain/pipeline/
 // ~L572). The run's Start pseudo-node is the declared `start` node on the
 // canvas; selecting it opens the StartInspector.
 const SEED_YAML = `name: ${PIPELINE_NAME}

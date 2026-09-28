@@ -3,8 +3,8 @@ import { Power, Trash2 } from "lucide-react";
 import type { Trigger } from "../../../shared/generated/Trigger";
 import { type BulkItem, type BulkOutcome } from "../../../lib/bulk";
 import { useSelectionStore } from "../../../stores/selectionStore";
-import BulkActionBar from "../../../components/BulkActionBar";
-import BulkActionModal from "../../../components/BulkActionModal";
+import BulkActionBar from "../../../pipeline/components/BulkActionBar";
+import BulkActionModal from "../../../pipeline/components/BulkActionModal";
 import { deleteTrigger, updateTrigger } from "../../api/triggers";
 
 /** A pending bulk action of the Triggers tab. */

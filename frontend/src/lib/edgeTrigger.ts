@@ -2,7 +2,7 @@ import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EdgeInfo } from "../shared/generated/EdgeInfo";
 import type { EdgeTriggerStatus } from "../pipeline/model/pipeline";
 import type { RunState } from "../shared/generated/RunState";
-import { formatWhenPill } from "../components/editNodeDerivation";
+import { formatWhenPill } from "../pipeline/components/editEdgeDerivation";
 import { primaryPort } from "./edgePorts";
 
 /**

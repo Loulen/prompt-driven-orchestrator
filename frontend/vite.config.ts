@@ -15,6 +15,10 @@ export default defineConfig({
   },
   server: {
     host: true,
+    // Every top-level path prefix the daemon serves needs its entry here: the
+    // router is assembled in `crates/pdo/src/contexts/mod.rs`, one `router()`
+    // per bounded context (ADR-0079). A prefix missing here answers 200 with the
+    // SPA shell in `make dev`, and any smoke test lies.
     proxy: {
       // #564: the daemon checks the WebSocket `Origin` on BOTH WS routes as a
       // DNS-rebinding / CSWSH guard. In `make dev` the browser's Origin is the

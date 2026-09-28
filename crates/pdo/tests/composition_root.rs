@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use axum::extract::Request;
 use axum::middleware::{self, Next};
 use pdo::extension_api::{Extension, Manifest, RequestParts};
+use pdo::DaemonConfig;
 use pdo::{serve, Config, Daemon};
-use pdo_daemon::DaemonConfig;
 use pdo_kernel::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
 use pdo_kernel::Actor;
 

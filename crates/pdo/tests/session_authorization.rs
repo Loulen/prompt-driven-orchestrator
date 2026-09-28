@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use pdo::extension_api::{Actor, Authorization, Extension, Manifest, Operation, ResourceKind};
+use pdo::DaemonConfig;
 use pdo::{serve, Config};
-use pdo_daemon::DaemonConfig;
 
 /// Refuses every Operation on a session or a node, and records what it saw.
 struct NoSessions(Arc<Mutex<Vec<Operation>>>);

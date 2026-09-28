@@ -1,5 +1,5 @@
 import { useState } from "react";
-import FullWindowShell from "../../components/FullWindowShell";
+import FullWindowShell from "../ui/FullWindowShell";
 import ExtensionBoundary from "./ExtensionBoundary";
 import { useSlot, type SlotElement, type SlotProps } from "./slots";
 

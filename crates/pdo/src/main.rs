@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use pdo_daemon::{
-    run_docs, run_migrate, run_reap, run_review, run_run_create, Cli, Commands, RunAction,
-};
+use pdo::cli::{run_docs, run_migrate, Cli, Commands};
 use pdo_kernel::extension_host::NoExtensions;
 use pdo_platform::adapters::cli::{run_page, run_service};
-use pdo_run::adapters::cli::{run_complete, run_fail, run_run_wait, run_skip, run_wait_user};
+use pdo_review::adapters::cli::run_review;
+use pdo_run::adapters::cli::{
+    run_complete, run_fail, run_reap, run_run_create, run_run_wait, run_skip, run_wait_user,
+    RunAction,
+};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -37,7 +39,7 @@ fn main() -> ExitCode {
             tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| "pdo_daemon=info,info".into()),
+                        .unwrap_or_else(|_| "info".into()),
                 )
                 .with_writer(std::io::stderr)
                 .init();

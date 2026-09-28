@@ -92,7 +92,7 @@ pub fn archived_or_live_prompts_dir(
 
 /// The instance registry of the pipeline context. A test binary of the
 /// workspace (debug build, run from cargo's `deps/` directory: this crate's
-/// tests, the legacy crate's, the daemon's integration tests) keeps it inside
+/// tests, the composition root's, the daemon's integration tests) keeps it inside
 /// its temporary repository, as the pipeline context's own registry does (see
 /// [`pdo_pipeline::adapters::registry::instance_pipeline_dir`]): a test never
 /// reads the real `~/.pdo/pipelines`.

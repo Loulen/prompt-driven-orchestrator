@@ -132,9 +132,13 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
   await expect(managerTab).toBeVisible({ timeout: 3_000 });
   await managerTab.click();
 
-  // Assert the manager terminal is rendered (run is active)
+  // The manager starts on demand (the tab's Start button) unless the instance
+  // starts it with every Run; either way its terminal then renders.
   const terminal = infoPanel.getByTestId("tmux-terminal");
-  await expect(terminal).toBeVisible({ timeout: 5_000 });
+  const start = infoPanel.getByTestId("manager-start");
+  await expect(terminal.or(start)).toBeVisible({ timeout: 5_000 });
+  if (await start.isVisible()) await start.click();
+  await expect(terminal).toBeVisible({ timeout: 10_000 });
 
   // Close the panel
   await page.getByTestId("info-panel-close").click();
@@ -226,6 +230,12 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   await page.getByTestId("toolbar-add").click();
   await page.getByTestId("add-menu-node").click();
   await page.waitForTimeout(500);
+
+  // The YAML tab shows the document as the daemon saves it (#673), so the new
+  // node appears there once the pipeline is saved.
+  await dismissConflictIfPresent(page);
+  await page.getByTestId("save-button").click();
+  await expect(page.getByTestId("saved-ago")).toBeVisible({ timeout: 5_000 });
 
   // Re-open the info panel and check YAML tab reflects the new node
   await dismissConflictIfPresent(page);

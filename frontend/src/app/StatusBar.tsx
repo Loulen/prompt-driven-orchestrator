@@ -1,0 +1,46 @@
+import type { ConnectionStatus } from "../run/store/useDaemonSocket";
+import type { DaemonStatus } from "../platform/model/daemon";
+import type { UpdateStatus } from "../platform/model/update";
+import SessionCounter from "../run/components/SessionCounter";
+import ServiceHealthIndicator from "../platform/components/ServiceHealthIndicator";
+import VersionBadge from "../platform/components/VersionBadge";
+
+const STATUS_CONFIG: Record<ConnectionStatus, { dot: string; label: string }> = {
+  connected: { dot: "bg-st-done", label: "Daemon: connected" },
+  reconnecting: { dot: "bg-st-await", label: "Daemon: reconnecting…" },
+  disconnected: { dot: "bg-st-failed", label: "Daemon: disconnected" },
+};
+/** The status bar: the daemon connection, its service health, the live
+ *  session count and the installed version. */
+export default function StatusBar({
+  status,
+  sessions,
+  update,
+  onOpenVersion,
+}: {
+  status: ConnectionStatus;
+  sessions: DaemonStatus;
+  update: UpdateStatus | null;
+  onOpenVersion: () => void;
+}) {
+  const { dot: dotClass, label } = STATUS_CONFIG[status];
+  // The version string comes from `/sessions` (refreshed on reconnect, #139) with the
+  // update payload as fallback — both are the daemon's own `CARGO_PKG_VERSION`.
+  const version = sessions.version ?? update?.installed_version;
+
+  return (
+    <footer
+      className="flex h-[22px] shrink-0 items-center gap-3.5 border-t border-line bg-bg-2 px-3 font-mono text-fg-3"
+      style={{ fontSize: "11px" }}
+    >
+      <span className="flex items-center gap-1.5">
+        <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+        {label}
+      </span>
+      <span className="flex-1" />
+      <ServiceHealthIndicator service={sessions.service} />
+      <SessionCounter live={sessions.live} cap={sessions.cap} />
+      {version && <VersionBadge version={version} update={update} onClick={onOpenVersion} />}
+    </footer>
+  );
+}

@@ -155,10 +155,21 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
   const readmePath = path.join(wt, "README.md");
   const original = (await fs.readFile(readmePath, "utf8")).split("\n");
   expect(original.length).toBeGreaterThan(80);
-  // Line 13 sits between the two hunks (lines 3 and 62) and stays untouched:
-  // it is hidden until the context is expanded.
-  const HIDDEN_PROBE = original[12];
-  expect(HIDDEN_PROBE.length).toBeGreaterThan(20);
+  // A line between the two hunks (lines 3 and 62) and clear of their three
+  // lines of context stays untouched: it is hidden until the context is
+  // expanded. Picked from the README as it is — long enough to read, and unique
+  // so the card shows it once.
+  const probeIndex = original.findIndex(
+    (line, i) =>
+      i >= 6 &&
+      i <= 57 &&
+      line.length > 20 &&
+      line === line.trim() &&
+      original.indexOf(line) === i &&
+      original.lastIndexOf(line) === i,
+  );
+  expect(probeIndex).toBeGreaterThan(-1);
+  const HIDDEN_PROBE = original[probeIndex];
   await deliver(page, baseURL!, run_id, wt, "alpha", async () => {
     const lines = [...original];
     lines[2] = "alpha edited line 3 (#749 FP)";
@@ -186,6 +197,8 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
     "node:beta:1:before",
     "node:beta:1:after",
     "tip",
+    // #835: the Run's working tree is a ref while it exists, listed last.
+    "worktree",
   ]);
   const sha = (id: string) => refs.refs.find((r) => r.id === id)!.sha!;
   const alphaFiles = git(E2E_TARGET_REPO, [
@@ -203,7 +216,7 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
     .sort();
   expect(allFiles).toEqual(["README.md", "alpha-note.md", "beta-note.md"]);
 
-  // ===== Step 1 — Diff tab → « Expand and comment » → Review page, fork → tip.
+  // ===== Step 1 — Diff tab → « Expand and comment » → Review page, fork → working tree.
   await page.reload();
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openInfoPanel(page, run_id);
@@ -216,7 +229,9 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
   await expect(page).toHaveURL(new RegExp(`/runs/${run_id}/review$`));
   await expect(page.getByTestId("review-page")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("review-from")).toHaveText(/Fork point/, { timeout: 10_000 });
-  await expect(page.getByTestId("review-to")).toHaveText(/Run tip/);
+  // #835: while the Run's working tree exists it is the default destination; it
+  // holds the two deliveries and nothing more, so it lists the same files.
+  await expect(page.getByTestId("review-to")).toHaveText(/Working tree/);
   await expect(page.getByTestId("review-view-toggle")).toHaveAttribute("data-view", "split");
   const rows = page.getByTestId("review-file-row");
   await expect(rows).toHaveCount(3, { timeout: 10_000 });

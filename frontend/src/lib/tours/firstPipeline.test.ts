@@ -22,10 +22,12 @@ import {
   startTour,
   stepBody,
   stepNote,
-  type TourAppState,
-  type TourObservation,
-  type TourStep,
 } from "../tour";
+import type {
+  TourAppState,
+  TourObservation,
+  TourStep,
+} from "../tourDef";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
 import { carriedPorts, defaultConditionPort, withCarriedPorts } from "../edgePorts";

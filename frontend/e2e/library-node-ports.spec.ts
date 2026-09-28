@@ -16,7 +16,7 @@ const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
 // Post-refonte the daemon refuses to load a pipeline without exactly one
-// start + one end node (crates/pdo-daemon/src/pipeline.rs ~L572), so the
+// start + one end node (crates/pdo-pipeline/src/domain/pipeline/), so the
 // fixture wires reviewer between a start and an end. The test only saves the
 // reviewer node to the library.
 const SEED_YAML = `name: ${PIPELINE_NAME}

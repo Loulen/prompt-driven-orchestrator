@@ -65,7 +65,7 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
 
   // The hidden <input type=file> has no accept filter any more — any file goes.
   const input = page.getByTestId("image-file-input");
-  await expect(input).toHaveAttribute("accept", "");
+  await expect(input).not.toHaveAttribute("accept");
   await input.setInputFiles([
     {
       name: "SPEC-779.md",
@@ -96,18 +96,19 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
     page.waitForRequest((r) => r.url().endsWith("/runs") && r.method() === "POST"),
     page.getByTestId("launch-button").click(),
   ]);
-  const body = request.postData() ?? "";
+  // The browser streams a `FormData` holding files, so Playwright sees no body
+  // (`postData()` is empty): the split by MIME is read on the daemon's side,
+  // below, where each part landed.
   expect(request.headers()["content-type"]).toContain("multipart/form-data");
-  expect(body).toContain('name="images"; filename="proto.png"');
-  expect(body).toContain('name="files"; filename="SPEC-779.md"');
 
-  // The daemon wrote both into `_input/` and lists them on the Start node.
+  // The daemon wrote both into `_input/` and lists them on the Start node — the
+  // PNG as an image, the Markdown as a file.
   await expect
     .poll(
       async () => {
         const resp = await page.request.get(`${baseURL}/runs`);
-        const runs = (await resp.json()) as Array<{ run_id: string; pipeline: string }>;
-        const mine = runs.find((r) => r.pipeline === PIPELINE_NAME);
+        const runs = (await resp.json()) as Array<{ run_id: string; pipeline_name: string }>;
+        const mine = runs.find((r) => r.pipeline_name === PIPELINE_NAME);
         if (!mine) return null;
         const detail = await (await page.request.get(`${baseURL}/runs/${mine.run_id}`)).json();
         return {

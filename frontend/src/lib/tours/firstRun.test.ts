@@ -25,19 +25,21 @@ import {
   stepBody,
   stepNote,
   stepSoft,
-  type TourAppState,
-  type TourObservation,
   type TourRun,
-  type TourRunNode,
-  type TourStep,
 } from "../tour";
+import type {
+  TourAppState,
+  TourObservation,
+  TourRunNode,
+  TourStep,
+} from "../tourDef";
+import { FIRST_RUN_TOUR } from "./firstRun";
 import {
-  FIRST_RUN_TOUR,
   TUTORIAL_PROMPT,
   TUTORIAL_REPO_PATH,
   TUTORIAL_RUN_PIPELINE_ID,
   TUTORIAL_TERMINAL_LINE,
-} from "./firstRun";
+} from "./firstRunPreparation";
 import { CARD_HEIGHT, CARD_WIDTH } from "../nodePlacement";
 
 const TOUR = FIRST_RUN_TOUR;

@@ -26,6 +26,19 @@ export default defineConfig({
   use: {
     baseURL: `http://${HOST}:${PORT}`,
     trace: "retain-on-failure",
+    // #823: a daemon with no Run at all offers the guided tour in a modal that
+    // covers the whole app — and a fresh e2e database has no Run until a spec
+    // creates one. Mark the tour as already offered (`pdo.tour.offered`, see
+    // `src/lib/tourMemory.ts`) so no spec meets the modal; none is about it.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: `http://${HOST}:${PORT}`,
+          localStorage: [{ name: "pdo.tour.offered", value: "1" }],
+        },
+      ],
+    },
   },
   projects: [
     {

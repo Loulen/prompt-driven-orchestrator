@@ -11,7 +11,7 @@ import { gridStep, isAxisAligned } from "./wiringGrid";
 
 // Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
 const GRID_STEP = gridStep("L");
-import { enforcePerpendicularEnds, landingConnector, landingLeg } from "./anchorSide";
+import { enforcePerpendicularEnds, landingConnector, landingLeg } from "./anchorLanding";
 
 const STEP = GRID_STEP;
 const LEG = landingLeg(STEP);

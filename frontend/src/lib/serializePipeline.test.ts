@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { serializePipeline, exportNodeAsYaml } from "./serializePipeline";
+import { serializePipeline } from "./serializePipeline";
+import { exportNodeAsYaml } from "./exportNodeYaml";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 

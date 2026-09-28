@@ -173,7 +173,7 @@ async fn a_wiped_bank_folder_is_reseeded_by_the_next_start() {
     // Two daemons boot in turn over ONE tempdir (`serve_with_config` directly,
     // the same idiom as `skill_bank.rs`'s restart test): the first seeds, the
     // skill's folder is erased on disk, the second re-seeds it at startup.
-    use pdo_daemon::{serve_with_config, DaemonConfig};
+    use pdo::{serve_with_config, DaemonConfig};
     use std::net::SocketAddr;
 
     let tempdir = tempfile::tempdir().unwrap();

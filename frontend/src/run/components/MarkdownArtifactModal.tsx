@@ -5,7 +5,7 @@ import { fetchNodeIO, type FileInfo } from "../api/nodes";
 import { registerTransientOverlay } from "../../lib/overlays";
 import type { IterationInfo } from "../../shared/generated/IterationInfo";
 import type { PortType } from "../../shared/generated/PortType";
-import ImageLightbox from "../../components/ImageLightbox";
+import ImageLightbox from "../../shared/ui/ImageLightbox";
 import { stripFrontmatter } from "../model/frontmatter";
 import ArtifactBody from "./artifacts/ArtifactBody";
 import ArtifactHeader from "./artifacts/ArtifactHeader";

@@ -2,16 +2,6 @@
 # their size when the rule landed (#915). This list may only shrink: remove a
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.
-crates/pdo-daemon/src/lib.rs 1630
-frontend/src/app/App.tsx 1167
-frontend/src/components/EdgeDetailPanel.tsx 777
-frontend/src/components/NodeInspector.tsx 958
-frontend/src/components/OrthogonalEdge.tsx 577
-frontend/src/components/editNodeDerivation.ts 675
-frontend/src/components/tour/TourCards.tsx 464
-frontend/src/hooks/useTour.ts 658
-frontend/src/lib/anchorSide.ts 781
-frontend/src/lib/serializePipeline.ts 466
-frontend/src/lib/tour.ts 588
-frontend/src/lib/tours/firstPipeline.ts 624
-frontend/src/lib/tours/firstRun.ts 676
+#
+# Empty since the migration of spec #913 closed (#932): every production file is
+# within the limit. Keep it that way — split a file by responsibility instead.

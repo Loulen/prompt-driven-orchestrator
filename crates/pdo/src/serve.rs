@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use axum::Router;
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::{ExtensionHost, Extensions, HostServices};
+use pdo_platform::domain::release_channel::UpdateChannel;
 
 use crate::attributes::SqliteAttributes;
 use crate::contexts::{self, ContextResources};
@@ -23,6 +24,60 @@ pub struct Config {
     repo_root: PathBuf,
     daemon: DaemonConfig,
     inner_layer: Option<RouterLayer>,
+    release_channel: Option<ReleaseChannel>,
+}
+
+/// Where a binary checks for its updates, which version it declares installed,
+/// and how it updates itself: its release channel.
+///
+/// A distribution (a binary that calls [`serve`] with its own extensions) is
+/// not the vanilla `pdo`: its version is its own, its releases are published
+/// elsewhere, and the vanilla upgrade command would replace it with a `pdo`
+/// that has none of its extensions. It declares its channel with
+/// [`Config::with_release_channel`]; the daemon then never tries to detect how
+/// the binary was installed (Homebrew path, cargo-dist receipt).
+///
+/// ```no_run
+/// # async fn start() -> anyhow::Result<()> {
+/// let config = pdo::Config::from_cli(None, 5172)?.with_release_channel(pdo::ReleaseChannel {
+///     name: "pdo-dist".into(),
+///     installed_version: "0.3.0".into(),
+///     source_url: Some("https://api.github.com/repos/acme/pdo-dist/releases/latest".into()),
+///     upgrade_command: Some("brew update && brew upgrade acme/tap/pdo-dist".into()),
+/// });
+/// pdo::serve(config, vec![]).await?.wait().await
+/// # }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseChannel {
+    /// Shown in the UI (`pdo-dist`…), next to the version of the core the
+    /// binary is built on. `PDO` is the vanilla binary's name.
+    pub name: String,
+    /// The version compared with the releases of `source_url`: the
+    /// distribution's, not the core's.
+    pub installed_version: String,
+    /// An endpoint in the format of GitHub's `releases/latest` (a JSON object
+    /// with a `tag_name`); the release notes are read from the same URL without
+    /// its `/latest`. `None`: no version check. The operator's
+    /// `PDO_UPDATE_SOURCE_URL` still wins over it.
+    pub source_url: Option<String>,
+    /// The command the Update button shows and runs, detached from the daemon,
+    /// before the service is reinstalled and restarted. `None`: no Update
+    /// button, only the reason.
+    pub upgrade_command: Option<String>,
+}
+
+impl ReleaseChannel {
+    /// The platform's view of the channel. Not a `From` impl: that would put a
+    /// type of an uncovered crate into the semver-covered surface.
+    fn into_update_channel(self) -> UpdateChannel {
+        UpdateChannel::declared(
+            self.name,
+            self.installed_version,
+            self.source_url,
+            self.upgrade_command,
+        )
+    }
 }
 
 impl Config {
@@ -36,6 +91,7 @@ impl Config {
             repo_root,
             daemon: daemon_cli_config(bind, port),
             inner_layer: None,
+            release_channel: None,
         })
     }
 
@@ -47,7 +103,16 @@ impl Config {
             repo_root: repo_root.into(),
             daemon: DaemonConfig::from_env(),
             inner_layer: None,
+            release_channel: None,
         }
+    }
+
+    /// Declare the release channel of this binary. Without this call the daemon
+    /// is the vanilla `pdo`: named `PDO`, at the core's version, with no release
+    /// source, updated through the install method it detects.
+    pub fn with_release_channel(mut self, channel: ReleaseChannel) -> Self {
+        self.release_channel = Some(channel);
+        self
     }
 
     /// Not covered by semver: replace the daemon's knobs. The test suite
@@ -104,7 +169,11 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
         repo_root,
         mut daemon,
         inner_layer,
+        release_channel,
     } = config;
+    if let Some(channel) = release_channel {
+        daemon.release_channel = Some(channel.into_update_channel());
+    }
     compose(&mut daemon, extensions, inner_layer)?;
     let handle = serve_with_config(addr, repo_root, daemon).await?;
     Ok(Daemon { handle })

@@ -7,13 +7,15 @@ use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
-use super::update_context::{UpdateContext, IN_FLIGHT};
+use super::update_context::{UpdateContext, IN_FLIGHT, NO_SOURCE};
 use crate::domain::update_check::UPDATE_CHECK_INTERVAL;
 
 /// Why a check on demand did not produce a fresh answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckError {
     Refused(Denied),
+    /// The release channel declares no source (#24): there is nothing to ask.
+    NoSource(String),
     /// The `update_check` setting is off: no request leaves the daemon.
     Off,
     /// Another check is in flight.
@@ -44,6 +46,9 @@ impl CheckForUpdate {
         let operation = Operation::new(ResourceKind::Update, Verb::Action("check".into()));
         authorize(self.host.as_ref(), actor, &operation).map_err(CheckError::Refused)?;
         self.update.ensure_loaded().await;
+        if self.update.source_url().is_none() {
+            return Err(CheckError::NoSource(NO_SOURCE.to_string()));
+        }
         if !self.update.ports.setting.enabled().await {
             return Err(CheckError::Off);
         }
@@ -55,9 +60,13 @@ impl CheckForUpdate {
     }
 
     /// One periodic pass: loads the journal's cache if not yet done, then checks
-    /// ONLY if the setting is on and the cache is older than the interval.
+    /// ONLY if there is a source, the setting is on and the cache is older than
+    /// the interval.
     pub async fn periodic(&self) {
         self.update.ensure_loaded().await;
+        if self.update.source_url().is_none() {
+            return; // no source declared: nothing to ask
+        }
         if !self.update.ports.setting.enabled().await {
             return; // off: no request ever leaves the daemon
         }
@@ -76,6 +85,7 @@ impl CheckForUpdate {
 
     /// Check once now, whatever the cache says — what turning the setting back
     /// on triggers. The setting was just written, so it is not read again.
+    /// Without a source, nothing leaves the daemon.
     pub async fn now(&self) {
         let _ = self.update.perform_check().await;
     }

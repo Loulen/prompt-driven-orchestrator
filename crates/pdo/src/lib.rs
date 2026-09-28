@@ -9,9 +9,9 @@
 //! its extensions: the whole `pdo` binary, CLI and daemon. [`serve`] starts the
 //! daemon alone (ADR-0081).
 //!
-//! Only [`main_with`], [`serve`], [`Config`], [`Daemon`] and the re-exported
-//! [`extension_api`] are covered by semver. Everything else in the workspace
-//! promises nothing.
+//! Only [`main_with`], [`serve`], [`Config`], [`ReleaseChannel`], [`Daemon`] and
+//! the re-exported [`extension_api`] are covered by semver. Everything else in
+//! the workspace promises nothing.
 
 mod attributes;
 #[doc(hidden)]
@@ -34,7 +34,7 @@ pub use entry::main_from;
 pub use entry::main_with;
 #[doc(hidden)]
 pub use serve::{compose, composed_router_layer};
-pub use serve::{serve, Config, Daemon};
+pub use serve::{serve, Config, Daemon, ReleaseChannel};
 
 /// The extension API this build of PDO implements.
 pub use pdo_extension_api as extension_api;

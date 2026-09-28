@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::update_context::UpdateContext;
-use crate::domain::release::INSTALLED_VERSION;
+use crate::domain::release_channel::CORE_VERSION;
 use crate::domain::update_status::{update_status, StatusInputs, UpdateStatus};
 
 pub struct GetUpdateStatus {
@@ -22,6 +22,8 @@ impl GetUpdateStatus {
         let enabled = ports.setting.enabled().await;
         let cache = self.update.cached().await;
         let source_url = self.update.source_url();
+        let channel = self.update.channel();
+        let (method, manual_command) = self.update.upgrader();
         let active_runs = ports.runs.count_live().await;
         let last_attempt = if ports.journal.is_available() {
             ports.journal.read_attempt()
@@ -29,11 +31,14 @@ impl GetUpdateStatus {
             None
         };
         update_status(StatusInputs {
-            installed: INSTALLED_VERSION,
+            channel_name: &channel.name,
+            installed: &channel.installed_version,
+            core_version: CORE_VERSION,
             enabled,
             cache: cache.as_ref(),
-            source_url: &source_url,
-            method: ports.installation.method(),
+            source_url: source_url.as_deref(),
+            method,
+            manual_command: manual_command.as_deref(),
             supervision: ports.installation.supervision(),
             active_runs,
             last_attempt,

@@ -114,13 +114,14 @@ fn spawn_detached(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::install::{InstallMethod, Supervision};
+    use crate::domain::install::{InstallMethod, Supervision, SCRIPT_COMMAND};
     use std::path::PathBuf;
 
     fn plan(dir: &Path) -> UpdatePlan {
         UpdatePlan {
             attempt_id: "a1".into(),
             method: InstallMethod::Script,
+            upgrade_command: SCRIPT_COMMAND.into(),
             supervision: Supervision::None,
             exe: PathBuf::from("/usr/bin/pdo"),
             port: 5172,

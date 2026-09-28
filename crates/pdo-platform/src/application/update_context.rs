@@ -10,7 +10,9 @@ use tokio::sync::Mutex;
 use super::ports::{
     Installation, ReleaseSource, Runs, UpdateCheckSetting, UpdateExecutor, UpdateJournal,
 };
-use crate::domain::release::{Release, RELEASE_SOURCE_URL_DEFAULT};
+use crate::domain::install::InstallMethod;
+use crate::domain::release::Release;
+use crate::domain::release_channel::UpdateChannel;
 use crate::domain::update_check::UpdateCache;
 
 /// The ports the update use cases reach the outside through.
@@ -27,7 +29,11 @@ pub struct UpdatePorts {
 /// The per-daemon knobs of the update.
 #[derive(Debug, Clone, Default)]
 pub struct UpdateOptions {
-    /// The release source; `None` → the shipped GitHub Releases endpoint.
+    /// The release channel (#24): the vanilla one by default, or the one a
+    /// distribution declares.
+    pub channel: UpdateChannel,
+    /// The operator's release source (`PDO_UPDATE_SOURCE_URL`, the test seam):
+    /// wins over the channel's. `None` → the channel's source, if any.
     pub source_url: Option<String>,
     /// The port the daemon listens on (the relaunch and the unit keep it).
     pub port: u16,
@@ -65,12 +71,26 @@ impl UpdateContext {
         })
     }
 
-    /// The release-source URL: the per-daemon override, else the shipped one.
-    pub(crate) fn source_url(&self) -> String {
+    /// The release-source URL: the operator's override, else the channel's;
+    /// `None` when neither names one (nothing is checked).
+    pub(crate) fn source_url(&self) -> Option<String> {
         self.options
             .source_url
             .clone()
-            .unwrap_or_else(|| RELEASE_SOURCE_URL_DEFAULT.to_string())
+            .or_else(|| self.options.channel.source_url.clone())
+    }
+
+    pub(crate) fn channel(&self) -> &UpdateChannel {
+        &self.options.channel
+    }
+
+    /// The install method an Update delegates to and the command it runs: the
+    /// detected method's for the vanilla channel, the declared one otherwise
+    /// (the detection is then never consulted).
+    pub(crate) fn upgrader(&self) -> (InstallMethod, Option<String>) {
+        self.options
+            .channel
+            .upgrader(|| self.ports.installation.method())
     }
 
     /// Load the journal's cache into memory once (a no-op once loaded).
@@ -82,22 +102,29 @@ impl UpdateContext {
         *memo = self.ports.journal.read_cache();
     }
 
+    /// The last check of the current source. A cache written for another
+    /// source (the same home shared with another binary), or any cache when
+    /// there is no source, is no answer.
     pub(crate) async fn cached(&self) -> Option<UpdateCache> {
-        self.cache.lock().await.clone()
+        let url = self.source_url()?;
+        self.cache.lock().await.clone().filter(|c| c.is_for(&url))
     }
 
     /// Hit the release source once and record the outcome — success or failure —
     /// in memory and in the journal. Returns the recorded cache on success, the
     /// error message on failure. Does NOT consult the setting: the callers do,
-    /// each at its own edge.
+    /// each at its own edge. Without a source, nothing leaves the daemon.
     pub(crate) async fn perform_check(&self) -> Result<UpdateCache, String> {
+        let Some(url) = self.source_url() else {
+            return Err(NO_SOURCE.to_string());
+        };
         let Ok(_guard) = self.check_lock.try_lock() else {
             return Err(IN_FLIGHT.to_string());
         };
-        let url = self.source_url();
         let outcome = self.ports.source.latest(&url).await;
         let mut memo = self.cache.lock().await;
-        let mut cache = memo.clone().unwrap_or_default();
+        // The last good version of another source is not kept beside this one.
+        let mut cache = memo.clone().filter(|c| c.is_for(&url)).unwrap_or_default();
         cache.record(&url, pdo_kernel::clock::now_iso(), &outcome);
         if self.ports.journal.is_available() {
             if let Err(e) = self.ports.journal.write_cache(&cache) {
@@ -114,3 +141,7 @@ impl UpdateContext {
 
 /// The refusal of a check while another one is in flight.
 pub(crate) const IN_FLIGHT: &str = "a version check is already in flight";
+
+/// The refusal of a check when the release channel declares no source.
+pub(crate) const NO_SOURCE: &str =
+    "no release source is declared for this build: there is nothing to check";

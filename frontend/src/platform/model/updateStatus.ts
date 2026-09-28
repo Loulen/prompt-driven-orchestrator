@@ -25,6 +25,43 @@ export function upToDate(s: UpdateStatus | null | undefined): boolean {
   );
 }
 
+/** The name of the vanilla binary's release channel. */
+export const VANILLA_CHANNEL_NAME = "PDO";
+
+/**
+ * The binary is a distribution (#24): a build of PDO with its own extensions, its own
+ * version and its own release channel, named otherwise than `PDO`.
+ */
+export function isDistribution(s: UpdateStatus): boolean {
+  return s.channel_name !== VANILLA_CHANNEL_NAME;
+}
+
+/**
+ * How the installed version reads: `v2.0.0` for the vanilla binary, `pdo-dist 0.3.0
+ * (core 2.0.0)` for a distribution, whose version alone says nothing about the core.
+ */
+export function installedVersionLabel(s: UpdateStatus): string {
+  return isDistribution(s)
+    ? `${s.channel_name} ${s.installed_version} (core ${s.core_version})`
+    : `v${s.installed_version}`;
+}
+
+/**
+ * Offer the Update button only when it would do something: a newer release is known,
+ * and the daemon would accept the apply (known method or declared command, no attempt
+ * running). Never a « re-run » of the upgrade command on a guess.
+ */
+export function canOfferUpdate(s: UpdateStatus | null | undefined): boolean {
+  return !!s && s.can_apply && newerAvailable(s);
+}
+
+/** Why the Update button is not offered, for its tooltip. */
+export function updateNotOfferedReason(s: UpdateStatus): string | null {
+  if (s.apply_blocked_reason) return s.apply_blocked_reason;
+  if (!newerAvailable(s)) return "No newer version is known: nothing to update.";
+  return null;
+}
+
 export function relativeTime(iso: string, now: number = Date.now()): string {
   const diff = now - new Date(iso).getTime();
   const m = Math.round(diff / 60_000);
@@ -45,6 +82,7 @@ export const INSTALL_METHOD_LABEL: Record<UpdateStatus["install_method"], string
   homebrew: "Homebrew",
   script: "Install script (cargo-dist)",
   unknown: "Unknown",
+  declared: "Declared by the distribution",
 };
 
 export const SUPERVISION_LABEL: Record<UpdateStatus["supervision"], string> = {

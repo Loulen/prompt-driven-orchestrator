@@ -7,6 +7,7 @@ pub mod changelog;
 pub mod install;
 pub mod page_mount;
 pub mod release;
+pub mod release_channel;
 pub mod service_health;
 pub mod service_unit;
 pub mod update_check;

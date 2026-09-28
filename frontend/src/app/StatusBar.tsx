@@ -1,6 +1,7 @@
 import type { ConnectionStatus } from "../run/store/useDaemonSocket";
 import type { DaemonStatus } from "../platform/model/daemon";
 import type { UpdateStatus } from "../platform/model/update";
+import { installedVersionLabel, isDistribution } from "../platform/model/updateStatus";
 import SessionCounter from "../run/components/SessionCounter";
 import ServiceHealthIndicator from "../platform/components/ServiceHealthIndicator";
 import VersionBadge from "../platform/components/VersionBadge";
@@ -25,8 +26,14 @@ export default function StatusBar({
 }) {
   const { dot: dotClass, label } = STATUS_CONFIG[status];
   // The version string comes from `/sessions` (refreshed on reconnect, #139) with the
-  // update payload as fallback — both are the daemon's own `CARGO_PKG_VERSION`.
-  const version = sessions.version ?? update?.installed_version;
+  // update payload as fallback — both are the daemon's own `CARGO_PKG_VERSION`. A
+  // distribution (#24) is named by its release channel instead: its own name and
+  // version, then the core's, which `/sessions` alone would pass off as its own.
+  const distribution = update != null && isDistribution(update) ? update : null;
+  const version = distribution
+    ? distribution.installed_version
+    : (sessions.version ?? update?.installed_version);
+  const versionLabel = distribution ? installedVersionLabel(distribution) : undefined;
 
   return (
     <footer
@@ -40,7 +47,9 @@ export default function StatusBar({
       <span className="flex-1" />
       <ServiceHealthIndicator service={sessions.service} />
       <SessionCounter live={sessions.live} cap={sessions.cap} />
-      {version && <VersionBadge version={version} update={update} onClick={onOpenVersion} />}
+      {version && (
+        <VersionBadge version={version} label={versionLabel} update={update} onClick={onOpenVersion} />
+      )}
     </footer>
   );
 }

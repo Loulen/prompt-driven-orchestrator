@@ -14,6 +14,7 @@ use crate::domain::install::{
 pub struct HostInstallation {
     method_override: Option<InstallMethod>,
     supervision_override: Option<Supervision>,
+    config_home_override: Option<PathBuf>,
 }
 
 impl HostInstallation {
@@ -24,14 +25,28 @@ impl HostInstallation {
         Self {
             method_override,
             supervision_override,
+            config_home_override: None,
         }
+    }
+
+    /// Look for the cargo-dist receipt under `config_home` instead of
+    /// `$XDG_CONFIG_HOME` / `~/.config`: a daemon whose home is overridden (the
+    /// test seam) never reads the real one.
+    pub fn with_config_home(mut self, config_home: Option<PathBuf>) -> Self {
+        self.config_home_override = config_home;
+        self
     }
 }
 
 impl Installation for HostInstallation {
     fn method(&self) -> InstallMethod {
-        self.method_override
-            .unwrap_or_else(detect_install_method_from_env)
+        self.method_override.unwrap_or_else(|| {
+            detect_install_method_from_env(
+                self.config_home_override
+                    .clone()
+                    .or_else(resolve_config_home),
+            )
+        })
     }
 
     fn supervision(&self) -> Supervision {
@@ -49,12 +64,12 @@ impl Installation for HostInstallation {
 }
 
 /// Read the environment once and feed the pure detector.
-fn detect_install_method_from_env() -> InstallMethod {
+fn detect_install_method_from_env(config_home: Option<PathBuf>) -> InstallMethod {
     let exe = std::env::current_exe()
         .ok()
         .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
         .unwrap_or_default();
-    let receipt = resolve_config_home()
+    let receipt = config_home
         .map(|h| receipt_paths(&h).iter().any(|p| p.is_file()))
         .unwrap_or(false);
     let prefix = std::env::var_os("HOMEBREW_PREFIX").map(PathBuf::from);
@@ -88,6 +103,22 @@ mod tests {
             HostInstallation::new(Some(InstallMethod::Homebrew), Some(Supervision::Launchd));
         assert_eq!(forced.method(), InstallMethod::Homebrew);
         assert_eq!(forced.supervision(), Supervision::Launchd);
+    }
+
+    #[test]
+    fn the_receipt_is_looked_for_under_the_overridden_config_home() {
+        let config = tempfile::tempdir().unwrap();
+        let install =
+            HostInstallation::default().with_config_home(Some(config.path().to_path_buf()));
+        let without = install.method();
+        assert_ne!(without, InstallMethod::Script, "no receipt planted yet");
+        let receipt = &receipt_paths(config.path())[0];
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        std::fs::write(receipt, "{}").unwrap();
+        // A Homebrew path beats the receipt; anywhere else, the receipt says script.
+        if without == InstallMethod::Unknown {
+            assert_eq!(install.method(), InstallMethod::Script);
+        }
     }
 
     #[test]

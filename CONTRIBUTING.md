@@ -88,7 +88,7 @@ that folder at runtime. Two variables change what gets embedded:
 | Variable | Effect |
 | --- | --- |
 | `PDO_FRONTEND_DIST=<absolute path>` | Copies an already built frontend (a `dist/` holding `index.html`) instead of building one. No Node or pnpm needed. |
-| `PDO_SKIP_FRONTEND_BUILD=1` | Builds nothing and keeps whatever `OUT_DIR` already holds: an empty folder on a fresh `target/`, so the debug binary shows its dev placeholder. For Rust-only loops such as `make types`. |
+| `PDO_SKIP_FRONTEND_BUILD=1` (any non-empty value) | Builds nothing and keeps whatever `OUT_DIR` already holds: an empty folder on a fresh `target/`, so the debug binary shows its dev placeholder (a release build refuses to embed an empty one). For Rust-only loops such as `make types`. |
 
 Without either and without `frontend/node_modules`, the build stops and says which of the two to
 set up.

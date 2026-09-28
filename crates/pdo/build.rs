@@ -5,10 +5,11 @@
 //! 1. `PDO_FRONTEND_DIST=<absolute path>`: an already built UI (a Vite `dist/`) is
 //!    copied as is. No Node, no pnpm. This is the way for a binary that depends on
 //!    this crate by git tag (ADR-0081): cargo's checkout has no `node_modules`.
-//! 2. `PDO_SKIP_FRONTEND_BUILD` (any value): nothing is built, whatever
-//!    `$OUT_DIR/frontend-dist` already holds is embedded (created empty if absent,
-//!    which serves the dev placeholder in debug). For loops that only compile the
-//!    Rust (`make types`, the e2e run after a full build).
+//! 2. `PDO_SKIP_FRONTEND_BUILD` (any non-empty value; empty counts as unset):
+//!    nothing is built, whatever `$OUT_DIR/frontend-dist` already holds is
+//!    embedded (created empty if absent, which serves the dev placeholder in
+//!    debug; a release build refuses an empty one). For loops that only compile
+//!    the Rust (`make types`, the e2e run after a full build).
 //! 3. Otherwise `pnpm run build` in `frontend/` (`tsc -b && vite build`), Vite
 //!    writing to `$OUT_DIR/frontend-dist`. It needs `frontend/node_modules`: when
 //!    it is missing, the build fails here and names the fix, instead of `tsc`
@@ -44,9 +45,21 @@ fn main() {
 
     match std::env::var_os("PDO_FRONTEND_DIST").filter(|v| !v.is_empty()) {
         Some(dist) => copy_prebuilt(Path::new(&dist), &out),
-        None if std::env::var_os("PDO_SKIP_FRONTEND_BUILD").is_some() => {
+        None if std::env::var_os("PDO_SKIP_FRONTEND_BUILD")
+            .filter(|v| !v.is_empty())
+            .is_some() =>
+        {
             std::fs::create_dir_all(&out)
                 .unwrap_or_else(|e| panic!("build.rs: cannot create {}: {e}", out.display()));
+            // A release binary without its UI answers `frontend assets not found`:
+            // never ship one silently.
+            let empty = std::fs::read_dir(&out).map_or(true, |mut d| d.next().is_none());
+            assert!(
+                !(empty && std::env::var("PROFILE").as_deref() == Ok("release")),
+                "PDO_SKIP_FRONTEND_BUILD set on a release build with no frontend in {}: the \
+                 binary would have no UI. Unset it, or set PDO_FRONTEND_DIST.",
+                out.display()
+            );
             println!(
                 "cargo:warning=PDO_SKIP_FRONTEND_BUILD set; embedding the frontend already in {} \
                  (empty on a fresh build: the UI is then missing)",

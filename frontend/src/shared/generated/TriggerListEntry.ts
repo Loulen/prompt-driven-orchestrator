@@ -20,8 +20,8 @@ pipeline_id: string,
 pipeline_name: string, target_repo?: string, 
 /**
  * Read-only secondary repos to associate with fired Runs (ADR-0042), stored
- * as raw JSON TEXT (`[{repo, base_branch?}]`) so `trigger_store` stays
- * decoupled from lib's request types. `None`/blank → mono-repo fire. The
+ * as raw JSON TEXT (`[{repo, base_branch?}]`) so the Trigger stays
+ * decoupled from the Run's request types. `None`/blank → mono-repo fire. The
  * create chokepoint re-freezes each secondary's SHA at fire time.
  */
 target_repos?: string, source_branch?: string, input_template: string, 
@@ -55,7 +55,7 @@ sandbox?: string,
  * chain: a Trigger *is* a Run template, so this is read at fire time and
  * folded into the create request's `run` choice
  * (`nœud → Run → Projet → instance`). A cron tick and a "Run now" both route
- * through `fire_one_trigger`, so they freeze the SAME harness. Free text, no
+ * through the same fire, so they freeze the SAME harness. Free text, no
  * validation (ADR-0045): an unknown name fails fast at the first node spawn.
  */
 harness?: string, 
@@ -79,9 +79,9 @@ skills?: Array<SkillRef>,
 auto_name: boolean, enabled: boolean, 
 /**
  * The next scheduled fire, as **canonical UTC RFC3339-millis** (`…Z`).
- * Every writer (create/edit in `lib.rs`, the scheduler's `set_next_fire`)
+ * Every writer (create and edit, the scheduler's `set_next_fire`)
  * stores UTC, so a lexicographic string compare equals a chronological one.
- * The due query ([`due_triggers`]) is nonetheless tz-normalised so a legacy
+ * The due query (`TriggerRepository::due`) is nonetheless tz-normalised so a legacy
  * or stray-offset row can never silently go dormant (#222).
  */
 next_fire_at?: string, last_fired_at?: string, last_outcome?: string, };

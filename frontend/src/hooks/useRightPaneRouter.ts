@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { rightPaneOwner } from "../lib/rightPaneOwner";
 import type { RightPaneOwner } from "../lib/rightPaneOwner";
-import { shouldClearTriggerOnCanvasFocus } from "../lib/triggerCanvasReconcile";
+import { shouldClearTriggerOnCanvasFocus } from "../trigger/model/triggerCanvasReconcile";
 import { shouldCloseInfoOnTabChange } from "../lib/infoPanelReconcile";
 import type { Selection } from "../pipeline/store/editState";
 import type { Trigger } from "../shared/generated/Trigger";

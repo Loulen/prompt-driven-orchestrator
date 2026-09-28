@@ -142,8 +142,8 @@ cd "$(git rev-parse --show-toplevel)"
 #   OrchestrationTab, RunFilters, runFilter, ForgetRunModal, CleanupConfirmModal,
 #   RepositoriesSection, SecondaryRepoRow and their tests to frontend/src/run/.
 BASELINES='
-frontend/src/components 131
-crates/pdo-daemon/src 19
+frontend/src/components 125
+crates/pdo-daemon/src 15
 '
 
 fail=0

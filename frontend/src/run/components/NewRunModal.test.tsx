@@ -81,6 +81,15 @@ vi.mock("../../api", () => ({
     detail: null,
   }),
 }));
+// The trigger context's API answers with the mock of `../../api`.
+vi.mock("../../trigger/api/triggers", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
+vi.mock("../../trigger/api/guard", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../api")),
+}));
 // The run context's API answers with the mock of `../../api`.
 vi.mock("../api/createRun", async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -131,7 +140,9 @@ vi.mock("../../workspace/api/repos", async (importOriginal) => ({
   fetchRemotes: vi.fn(),
 }));
 
-const { createTrigger, updateTrigger, fetchSettings, testGuard } = await import("../../api");
+const { fetchSettings } = await import("../../api");
+const { createTrigger, updateTrigger } = await import("../../trigger/api/triggers");
+const { testGuard } = await import("../../trigger/api/guard");
 const { createRun } = await import("../api/createRun");
 const { fetchPipelines } = await import("../../pipeline/api/pipelines");
 const { validateRepo, listBranches, fetchRemotes } = await import("../../workspace/api/repos");

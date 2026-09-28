@@ -218,6 +218,44 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             format!("/runs/{RUN}/manager/stop"),
             None,
         ),
+        // The trigger context (#927): every gesture, "Run now" and the guard's
+        // dry-run included, refuses before looking the Trigger up.
+        call(
+            "POST",
+            "/triggers",
+            "/triggers".into(),
+            Some(json!({ "name": "nightly", "pipeline_id": "fixture-pipe", "cron": "0 3 * * *" })),
+        ),
+        call(
+            "PATCH",
+            "/triggers/{trigger_id}",
+            format!("/triggers/{TRIGGER}"),
+            Some(json!({ "enabled": false })),
+        ),
+        call(
+            "DELETE",
+            "/triggers/{trigger_id}",
+            format!("/triggers/{TRIGGER}"),
+            None,
+        ),
+        call(
+            "POST",
+            "/triggers/{trigger_id}/fire",
+            format!("/triggers/{TRIGGER}/fire"),
+            None,
+        ),
+        call(
+            "POST",
+            "/triggers/pause",
+            "/triggers/pause".into(),
+            Some(json!({ "paused": true })),
+        ),
+        call(
+            "POST",
+            "/triggers/guard/test",
+            "/triggers/guard/test".into(),
+            Some(json!({ "guard_command": "echo hi", "target_repo": repo })),
+        ),
         // The run context's gestures (#924) refuse before looking the Run up.
         call(
             "POST",
@@ -418,6 +456,9 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
 
 /// A Run id the session and run routes aim at: they refuse before looking it up.
 const RUN: &str = "20260101-000000-abcdef0";
+
+/// A Trigger id the trigger routes aim at: they refuse before looking it up.
+const TRIGGER: &str = "trg-20260101-000000-abcdef0";
 
 /// The reference file of the seeded skill.
 const SKILL_FILE: &str = "notes.md";

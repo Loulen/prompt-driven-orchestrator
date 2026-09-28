@@ -10,6 +10,35 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.12 — Contexte `trigger` : cron, guard, fires (#927, spec #913)
+
+Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots
+HTTP et WS identiques ; `/triggers*` répond comme avant, octet pour octet, sans extension).
+
+- Les Triggers quittent `pdo-legacy` pour `pdo-trigger` : le Trigger et son historique, le cron,
+  le prochain fire, la décision de fire et le plan d'un tick, les bornes du guard dans
+  `domain/` ; un use case par geste dans `application/` ; SQLite, `sh`, le heartbeat, les routes
+  et ce que le contexte lit des autres dans `adapters/`.
+- Chaque mutation consulte d'abord l'Autorisation d'opération : création, édition, suppression
+  (`trigger` × `create` / `update` / `delete`), pause globale (`trigger` × `pause`), dry-run du
+  guard (`trigger` × `test_guard`). Un fire est une Opération (`trigger` × `fire`) : « Run now »
+  la demande avec l'Acteur de la requête (refus : `403 operation_refused` avant tout effet), un
+  tick avec l'Acteur `Trigger` (refus : aucun Run, le slot est consommé, une ligne `error` dans
+  l'historique porte la raison). Décider qu'un Trigger est dû ne demande rien.
+- `GET /stale/health` est le balayage de liveness des Runs et reste dans `pdo-run`.
+- Tests : les use cases contre des ports en mémoire (étage 2) remplacent les tests `oneshot` du
+  crate legacy (routes `/triggers*` : création et audit, repoint, `target_repo` refusé, pause,
+  suppression, dry-run du guard) ; les tests du store (`trigger_store`) et du fetch avant coupe
+  passent en étage 3 (`crates/pdo-trigger/tests/adapters/`) ; la précédence du timeout du guard
+  devient un test pur, sans mutation d'environnement. La couverture des refus d'extension
+  s'étend aux six routes de mutation des Triggers, et un test d'étage 4 prouve qu'un fire cron
+  demande l'autorisation comme Acteur `Trigger`.
+- Les cibles `RUST_LOG` changent avec le code : `pdo_daemon` (handlers et tick des Triggers)
+  devient `pdo_trigger::application` (`::fire`, `::fire::tick`…), `pdo_daemon::guard_runner`
+  devient `pdo_trigger::adapters::guard_shell`.
+- Front : l'onglet Triggers, le panneau de détail, le verdict et la sortie du guard, les presets
+  cron et leur API passent dans `frontend/src/trigger/`, découpés sous 400 lignes par fichier.
+
 ## 1.111.11 — Contexte `run`, 3/3 : surfaces de Run et vues front des Runs (#925, spec #913)
 
 Refactor sans changement visible pour l'opérateur : le contrat HTTP/WS ne bouge pas (snapshots

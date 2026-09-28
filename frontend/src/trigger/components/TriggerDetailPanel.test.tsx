@@ -1,16 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import TriggerDetailPanel from "./TriggerDetailPanel";
-import type { Trigger } from "../shared/generated/Trigger";
-import type { TriggerFire } from "../shared/generated/TriggerFire";
+import type { Trigger } from "../../shared/generated/Trigger";
+import type { TriggerFire } from "../../shared/generated/TriggerFire";
 
 const fetchTriggerFires = vi.fn();
 const testGuard = vi.fn();
 const fetchSettings = vi.fn();
 
-vi.mock("../api", () => ({
+vi.mock("../api/triggers", () => ({
   fetchTriggerFires: (id: string) => fetchTriggerFires(id),
+}));
+vi.mock("../api/guard", () => ({
   testGuard: (cmd: string, repo?: string) => testGuard(cmd, repo),
+}));
+vi.mock("../../api", () => ({
   fetchSettings: () => fetchSettings(),
 }));
 

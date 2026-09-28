@@ -3,7 +3,6 @@ import { ArrowLeft, GitFork, Settings, BarChart3 } from "lucide-react";
 import { useDaemonSocket, type ConnectionStatus } from "../run/store/useDaemonSocket";
 import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
-import { fetchTriggers, fetchTriggersHealth, pauseTriggers } from "../api";
 import { fetchRuns } from "../run/api/runs";
 import { useSelectedRun } from "../run/store/useSelectedRun";
 import { useDaemonSessions } from "../session/store/useDaemonSessions";
@@ -13,7 +12,6 @@ import { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import { useLibassistLifecycle } from "../session/store/useLibassistLifecycle";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { Trigger } from "../shared/generated/Trigger";
-import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { Project } from "../workspace/model/project";
 import type { DaemonStatus } from "../platform/model/daemon";
 import { shouldAutoSnapToLiveNode } from "../lib/autoSnap";
@@ -50,7 +48,9 @@ import { resolveNodeInspector } from "../lib/structuralMarkers";
 import EdgeDetailPanel from "../components/EdgeDetailPanel";
 import RegionInspector from "../components/RegionInspector";
 import NoteInspector from "../components/NoteInspector";
-import TriggerDetailPanel from "../components/TriggerDetailPanel";
+import TriggerDetailPanel from "../trigger/components/TriggerDetailPanel";
+import { useTriggers } from "../trigger/store/useTriggers";
+import { useTriggersPause } from "../trigger/store/useTriggersPause";
 import { deriveEdgeTrigger } from "../lib/edgeTrigger";
 import { handleUndoRedoKeydown } from "../lib/undoRedoHotkeys";
 import InspectorTabs from "../components/InspectorTabs";
@@ -89,20 +89,6 @@ function useRuns() {
   return { runs, runsLoaded: loaded, refresh };
 }
 
-function useTriggers() {
-  const [triggers, setTriggers] = useState<TriggerListEntry[]>([]);
-
-  const refresh = useCallback(async () => {
-    try {
-      setTriggers(await fetchTriggers());
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  return { triggers, refresh };
-}
-
 // #552 — Projets, hydrated on mount and refreshed on a `project_changed` WS push
 // (the daemon broadcasts one on every project mutation). Mirror of useTriggers.
 function useProjects() {
@@ -128,10 +114,13 @@ export default function App() {
   const { status: updateStatus, refresh: refreshUpdateStatus } = useUpdateStatus();
   const { triggers, refresh: refreshTriggers } = useTriggers();
   const { projects, refresh: refreshProjects } = useProjects();
-  // #348: global Trigger pause. Lifted here (not in a per-panel hook) so the WS
-  // dispatcher can flip it live and every consumer stays in sync; hydrated on
-  // mount from GET /triggers/health since there is no trigger polling.
-  const [triggersPaused, setTriggersPaused] = useState(false);
+  // #348: global Trigger pause, held here so the WS dispatcher can flip it live.
+  const {
+    paused: triggersPaused,
+    setPaused: setTriggersPaused,
+    toggle: handleTogglePause,
+    hydrate: hydrateTriggersPause,
+  } = useTriggersPause();
   const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(null);
   // #368: mirror readable inside the stable WS callback (App.tsx subscribe
   // effect) without widening its deps — same latest-value idiom as
@@ -432,7 +421,7 @@ export default function App() {
         return;
       }
       try {
-        const { fireTrigger } = await import("../api");
+        const { fireTrigger } = await import("../trigger/api/triggers");
         await fireTrigger(t.id);
         setRunNowError(null);
       } catch (e) {
@@ -442,19 +431,6 @@ export default function App() {
     },
     [handleSelectTrigger, triggersPaused],
   );
-
-  // #348: flip the global kill-switch. Optimistic (the master switch reflects the
-  // intent immediately); the daemon's WS broadcast re-affirms it for every client,
-  // and a failure reverts so a dead switch can't mislead the operator.
-  const handleTogglePause = useCallback(async () => {
-    const next = !triggersPaused;
-    setTriggersPaused(next);
-    try {
-      await pauseTriggers(next);
-    } catch {
-      setTriggersPaused(!next);
-    }
-  }, [triggersPaused]);
 
   const handleCloseNewRunModal = useCallback(() => {
     setNewRunModalOpen(false);
@@ -562,12 +538,10 @@ export default function App() {
       refreshProjects();
       // #348: hydrate the global pause flag once — no trigger polling carries it,
       // so without this a page reload would show the banner off while paused.
-      fetchTriggersHealth()
-        .then((h) => setTriggersPaused(h.paused))
-        .catch(() => {});
+      hydrateTriggersPause();
       useRecentReposStore.getState().refresh();
     }
-  }, [refreshRuns, refreshSessions, refreshTriggers, refreshProjects]);
+  }, [refreshRuns, refreshSessions, refreshTriggers, refreshProjects, hydrateTriggersPause]);
 
   // A WS reconnect usually means the daemon restarted — possibly as a different
   // binary, so the /sessions payload (version included, #139) may be stale. An
@@ -752,7 +726,7 @@ export default function App() {
       // count (#159) — keep the status-bar counter current.
       refreshSessions();
     });
-  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, refreshProjects, reloadPipeline, loadPipelines]);
+  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, setTriggersPaused, refreshProjects, reloadPipeline, loadPipelines]);
 
   const selectedNode =
     selectedNodeId && selectedRun

@@ -19,7 +19,7 @@ use pdo_sandbox::application::profiles::SandboxProfiles;
 use pdo_sandbox::domain::mode::SandboxMode;
 use tracing::error;
 
-use crate::{instance_config, trigger_store, AppState};
+use crate::{instance_config, AppState};
 
 /// The staging profiles of `db`.
 pub(crate) fn profile_store(db: &sqlx::SqlitePool) -> SqliteProfiles {
@@ -57,7 +57,7 @@ async fn names_the_instance_default(db: &sqlx::SqlitePool, name: &str) -> bool {
 }
 
 async fn triggers_naming(db: &sqlx::SqlitePool, name: &str) -> Vec<TriggerReferent> {
-    match trigger_store::list(db).await {
+    match pdo_trigger::adapters::sqlite::list(db).await {
         Ok(list) => list
             .iter()
             .filter(|t| {

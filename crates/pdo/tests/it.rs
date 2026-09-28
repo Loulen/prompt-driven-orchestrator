@@ -65,6 +65,10 @@ mod extension_authorization;
 #[path = "extension_mutation_routes.rs"]
 mod extension_mutation_routes;
 
+// A Trigger fire is an Operation whose Acteur is the Trigger (#927).
+#[path = "extension_trigger_fire.rs"]
+mod extension_trigger_fire;
+
 #[path = "demo_daemon.rs"]
 mod demo_daemon;
 

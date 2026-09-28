@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import TriggersListPanel from "./TriggersListPanel";
-import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
+import type { TriggerListEntry } from "../../shared/generated/TriggerListEntry";
 
 const updateTrigger = vi.fn();
 const deleteTrigger = vi.fn();
 
-vi.mock("../api", () => ({
+vi.mock("../api/triggers", () => ({
   deleteTrigger: (id: string) => deleteTrigger(id),
   updateTrigger: (id: string, req: unknown) => updateTrigger(id, req),
 }));

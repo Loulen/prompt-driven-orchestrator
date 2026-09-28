@@ -86,6 +86,11 @@ vi.mock("../run/api/commands", () => ({
   retryAll: vi.fn().mockResolvedValue({ run_id: "offspring-1" }),
   renameRun: vi.fn().mockResolvedValue(undefined),
 }));
+// The trigger context's API answers with the mock of `../api` above.
+vi.mock("../trigger/api/triggers", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../api")),
+}));
 // The pipeline context's API answers with the mock of `../api` above.
 vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),

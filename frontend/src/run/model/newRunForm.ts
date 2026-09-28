@@ -1,5 +1,5 @@
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
-import { presetToCron, type CronPresetId } from "../../cronPresets";
+import { presetToCron, type CronPresetId } from "../../trigger/model/cronPresets";
 
 /**
  * The New Run / Trigger form's pure logic (#359), lifted out of `NewRunModal.tsx`.

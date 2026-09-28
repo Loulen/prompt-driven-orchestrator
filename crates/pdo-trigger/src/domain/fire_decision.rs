@@ -7,7 +7,7 @@
 /// The overlap policy of a Trigger: what to do when the Trigger's own previous
 /// Run is still live at fire time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OverlapPolicy {
+pub enum OverlapPolicy {
     /// Skip this tick while the previous Run is live (the default).
     Skip,
     /// Allow a concurrent fire — unbounded, or capped by `max_concurrent` (#239).
@@ -24,20 +24,17 @@ pub(crate) enum OverlapPolicy {
 ///
 /// The scheduler's guard-gate and `decide` both route through here so the cap can
 /// never drift between "should the guard run?" and "should we fire?".
-pub(crate) fn overlap_ceiling(
-    overlap: OverlapPolicy,
-    max_concurrent: Option<usize>,
-) -> Option<usize> {
+pub fn overlap_ceiling(overlap: OverlapPolicy, max_concurrent: Option<usize>) -> Option<usize> {
     match overlap {
         OverlapPolicy::Skip => Some(1),
         OverlapPolicy::Allow => max_concurrent.map(|m| m.max(1)),
     }
 }
 
-/// Outcome of running a guard command. The guard is live (wired in `lib.rs`);
+/// Outcome of running a guard command (the `GuardRunner` port runs it);
 /// cron-only triggers (no guard) pass `None` to the decision core.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GuardResult {
+pub enum GuardResult {
     /// Guard exited 0; its (possibly empty) stdout becomes the input source.
     Pass { stdout: String },
     /// Guard exited non-zero: no work to do, skip without error. Carries what the
@@ -54,7 +51,7 @@ pub(crate) enum GuardResult {
 
 /// Inputs to a firing decision — the trigger facts and the world at tick time.
 #[derive(Debug, Clone)]
-pub(crate) struct FireInputs<'a> {
+pub struct FireInputs<'a> {
     pub enabled: bool,
     pub due: bool,
     pub overlap: OverlapPolicy,
@@ -74,7 +71,7 @@ pub(crate) struct FireInputs<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FireDecision {
+pub enum FireDecision {
     /// Spawn a Run with this resolved input.
     Fire { input: String },
     /// Do nothing this tick (also covers disabled / not-due) and, when a
@@ -86,7 +83,7 @@ pub(crate) enum FireDecision {
 
 /// Why a tick was skipped (drives the `trigger_fires` audit outcome).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SkipReason {
+pub enum SkipReason {
     /// The Trigger's own previous Run is still active.
     OverlapPreviousRunLive,
     /// The Trigger is at its bounded-`allow` ceiling: `live` >= `max` (#239).
@@ -102,7 +99,7 @@ pub(crate) enum SkipReason {
     GuardError { detail: String },
 }
 
-pub(crate) fn decide(inputs: &FireInputs) -> FireDecision {
+pub fn decide(inputs: &FireInputs) -> FireDecision {
     // `reason: None` = no audit row: a disabled or not-due tick stays silent.
     if !inputs.enabled || !inputs.due {
         return FireDecision::Skip { reason: None };

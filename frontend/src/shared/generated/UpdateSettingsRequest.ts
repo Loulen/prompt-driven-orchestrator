@@ -77,7 +77,7 @@ review_agent_can_resolve?: boolean | null,
  * Set the Instance tier of the agentic-profile union (#563): `Some(None)`
  * clears it back to unset (legacy `default_harness`/`default_harness_model`
  * decide again); `Some(Some(choice))` sets it; `None` leaves it untouched.
- * Double-`Option`, mirroring [`crate::trigger_store::UpdateTrigger::harness`]
+ * Double-`Option`, mirroring [`pdo_trigger::domain::trigger::UpdateTrigger::harness`]
  * — this column, unlike the set-only numeric knobs, needs a genuine "clear"
  * path back to legacy precedence.
  */

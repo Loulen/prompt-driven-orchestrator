@@ -6,8 +6,8 @@
 //! back the [`Contexts`]. The ports a context needs from what is still legacy
 //! (the Runs, the templates, the instance settings) are implemented here for
 //! `platform`, in `session_ports` for `session`, in `pipeline_ports` for
-//! `pipeline` and in `run_ports` for `run`, and move to their own crates when
-//! those contexts are extracted.
+//! `pipeline`, in `run_ports` for `run` and in `trigger_ports` for `trigger`,
+//! and move to their own crates when those contexts are extracted.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
@@ -25,11 +25,13 @@ use pdo_session::application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunShells, SessionOwners, Templates,
 };
 use pdo_session::Session;
+use pdo_trigger::application::ports::TriggerSettings;
 use tokio::sync::broadcast;
 
 use crate::pipeline_ports::{LegacyActiveRuns, LegacyRenameLedger};
 use crate::run_ports::{LegacyInstanceSettings, LegacyRunPages};
 use crate::session_ports::LegacySessionPorts;
+use crate::trigger_ports::LegacyTriggerSettings;
 use crate::SelfWrites;
 use crate::{event_log, instance_config, AppState, SessionClaim};
 
@@ -64,6 +66,16 @@ pub struct ContextResources {
     pub pipeline: PipelineResources,
     /// What the run context needs from this daemon.
     pub run: RunResources,
+    /// What the trigger context needs from this daemon.
+    pub trigger: TriggerResources,
+}
+
+/// The trigger context's resources: the instance settings it reads (the pause,
+/// the guard timeout), still legacy, and the daemon's fault-injection knob.
+#[derive(Clone)]
+pub struct TriggerResources {
+    pub settings: Arc<dyn TriggerSettings>,
+    pub panic_on_trigger_name: Option<String>,
 }
 
 /// The run context's resources: the kernel's bus the daemon opened, the
@@ -134,6 +146,8 @@ pub struct Contexts {
     /// The run context. Its routes are merged by the legacy router, which the
     /// daemon's in-crate tests drive as is.
     pub run: Arc<pdo_run::Runs>,
+    /// The trigger context: the daemon starts its heartbeat.
+    pub triggers: Arc<pdo_trigger::Triggers>,
     pub router: Router,
 }
 
@@ -162,6 +176,7 @@ pub(crate) struct ContextResourcesSeed {
     pub sandbox_home_override: Option<PathBuf>,
     pub panic_on_stale_sweep: bool,
     pub panic_on_spawn: bool,
+    pub panic_on_trigger_name: Option<String>,
 }
 
 impl ContextResourcesSeed {
@@ -189,6 +204,12 @@ impl ContextResourcesSeed {
                 sandbox_home_override: self.sandbox_home_override,
                 panic_on_stale_sweep: self.panic_on_stale_sweep,
                 panic_on_spawn: self.panic_on_spawn,
+            },
+            trigger: TriggerResources {
+                settings: Arc::new(LegacyTriggerSettings {
+                    db: self.db.clone(),
+                }),
+                panic_on_trigger_name: self.panic_on_trigger_name,
             },
             session: SessionRunPorts::over(state),
             pipeline: PipelineResources {

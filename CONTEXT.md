@@ -618,6 +618,7 @@ Un Trigger **ne fire pas** si son propre Run précédent est encore vivant : le 
 - **Cron 5 champs, interprété en UTC** (#222). Presets UI + expression brute.
 - **Fires manqués = forward-only, pas de backfill** : daemon down pendant 50 slots ⇒ `next_fire` recalculé depuis *now*. Correct par construction : le dedup étant externe, un seul poll forward voit tout le travail accumulé. La ré-activation d'un Trigger saute le slot manqué (#372) ; la dé-pause globale rattrape le slot courant une fois, comme le boot (#348).
 - **Résilience** : un panic de tick est isolé, la boucle survit ; `GET /triggers/health` rend le scheduler observable (pause ≠ mort).
+- **Un fire est une Opération** (`trigger` × `fire`, #927) : un tick la demande avec l'**Acteur Trigger**, « Run now » avec l'Acteur de la requête. Décider qu'un Trigger est dû ne demande rien à personne. Un fire refusé par une Extension ne crée aucun Run : « Run now » répond `403`, un tick consomme le slot (le prochain est recalculé, comme un skip) et laisse une ligne `error` dans `trigger_fires` avec la raison.
 - **Daemon best-effort par défaut, persistant sur demande** : `pdo service install` installe une unité OS (ADR-0019) ; la status-bar signale un daemon éphémère.
 
 ### Persistence

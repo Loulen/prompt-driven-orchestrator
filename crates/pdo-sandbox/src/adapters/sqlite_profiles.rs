@@ -32,7 +32,7 @@ fn store_error(e: sqlx::Error) -> StoreError {
 /// The table was brand-new in #432, so `CREATE TABLE IF NOT EXISTS` was the whole
 /// migration then. **#468 was the first `ALTER`**, and it used the idempotent PRAGMA-guarded
 /// `ALTER TABLE … ADD COLUMN` idiom (precedent: `max_concurrent`, #239 in
-/// `trigger_store`), **never** a migration runner. #467 adds the second, by the
+/// the Triggers' store), **never** a migration runner. #467 adds the second, by the
 /// same idiom and for the same reasons — two divergent mechanics for two fields of the same
 /// profile would be the worst possible outcome. The `CREATE` above carries both columns too,
 /// so a fresh database takes the short path and an existing one — where the `CREATE` is a
@@ -107,7 +107,7 @@ async fn add_column_if_absent(
 /// opposite roles at resolution (subtract vs add) while the other two are not diffs at all
 /// (#468, #467), and a corrupt one degrades to its empty value **on its own** — a shared blob
 /// would take the whole profile down with it. Precedent: `variables JSON` in
-/// `trigger_store`.
+/// the Triggers' store.
 fn row_to_diff(row: &sqlx::sqlite::SqliteRow) -> ProfileDiff {
     let disabled: String = row.get("disabled");
     let extras: String = row.get("extras");

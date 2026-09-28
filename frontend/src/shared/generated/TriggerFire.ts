@@ -10,7 +10,7 @@ export type TriggerFire = { id: number, trigger_id: string, ts: string,
 outcome: string, reason?: string, run_id?: string, 
 /**
  * Guard diagnostics on a `guard-exit-nonzero` row. NULL on every other
- * outcome and on legacy rows; tail-capped to 16 KB each (`guard_runner`).
+ * outcome and on legacy rows; tail-capped to 16 KB each (`domain::guard`).
  */
 guard_stdout?: string, guard_stderr?: string, guard_exit_code?: number, 
 /**

@@ -1,6 +1,6 @@
 import { Clock } from "lucide-react";
-import GuardTestResult from "../../../components/GuardTestResult";
-import { CRON_PRESETS } from "../../../cronPresets";
+import GuardTestResult from "../../../trigger/components/GuardTestResult";
+import { CRON_PRESETS } from "../../../trigger/model/cronPresets";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
 
 /** Trigger mode only: name, schedule (#160), guard command (#161/#350), overlap policy (#239). */

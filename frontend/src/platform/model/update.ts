@@ -12,22 +12,32 @@ import type { UpdateAttemptStatus } from "../../shared/generated/UpdateAttemptSt
  * `GET /update` (#697): the daemon's cached version-check state. Every field is read
  * from the cache — a page load never triggers a request to the release source.
  * `latest_version` is `null` when unknown, unreachable at last check, or the check is
- * off; `reason` then says which. Never a false "up to date".
+ * off, or no release source is declared; `reason` then says which. Never a false
+ * "up to date".
  */
 export interface UpdateStatus {
+  /**
+   * The release channel's name (#24): `PDO` for the vanilla binary, the
+   * distribution's name (`pdo-dist`…) otherwise.
+   */
+  channel_name: string;
+  /** The version the channel declares, compared with its releases. */
   installed_version: string;
+  /** The version of the core the binary is built on (equal to `installed_version` for `PDO`). */
+  core_version: string;
   latest_version: string | null;
   /** `true` exactly when `latest_version` is strictly newer than the installed one. */
   newer_available: boolean;
   /** RFC3339 date of the last check, success or failure; `null` if never. */
   checked_at: string | null;
-  /** Human label of the source (`GitHub Releases`, or the override's host). */
-  source: string;
-  source_url: string;
+  /** Human label of the source (`GitHub Releases`, or the override's host); `null` without a source. */
+  source: string | null;
+  /** `null` when the channel declares no release source: nothing is checked. */
+  source_url: string | null;
   check_enabled: boolean;
   install_method: InstallMethod;
-  /** The exact command a manual update runs for this install method. */
-  manual_command: string;
+  /** The exact command a manual update runs; `null` when the channel declares none. */
+  manual_command: string | null;
   supervision: Supervision;
   /** Why `latest_version` is `null`, when it is. */
   reason: string | null;
@@ -35,9 +45,9 @@ export interface UpdateStatus {
   last_error: string | null;
   /** Live Runs (running / awaiting user / paused) — the confirm dialog's count (#699). Informational: never a block. */
   active_runs: number;
-  /** `POST /update/apply` would be accepted: a known install method and no attempt running. */
+  /** `POST /update/apply` would be accepted: a known install method or a declared command, and no attempt running. */
   can_apply: boolean;
-  /** Why `can_apply` is false, when it is (unknown method, attempt running). */
+  /** Why `can_apply` is false, when it is (unknown method, no declared command, attempt running). */
   apply_blocked_reason: string | null;
   /** The last update attempt journaled under `~/.pdo/update/`, including a failed one. */
   last_attempt: UpdateAttempt | null;

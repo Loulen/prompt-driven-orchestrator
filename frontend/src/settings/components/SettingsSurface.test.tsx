@@ -20,7 +20,9 @@ const fetchSandboxProfileReferentsMock = vi.fn();
 const fetchInstanceProvisioningMock = vi.fn();
 const fetchAgentProfilesMock = vi.fn().mockResolvedValue({ profiles: [] });
 const fetchUpdateStatusMock = vi.fn().mockResolvedValue({
+  channel_name: "PDO",
   installed_version: "1.58.1",
+  core_version: "1.58.1",
   latest_version: null,
   newer_available: false,
   checked_at: null,

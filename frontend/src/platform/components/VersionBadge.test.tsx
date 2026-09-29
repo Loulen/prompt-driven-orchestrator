@@ -5,7 +5,9 @@ import type { UpdateStatus } from "../model/update";
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
+    channel_name: "PDO",
     installed_version: "1.58.1",
+    core_version: "1.58.1",
     latest_version: "1.59.0",
     newer_available: true,
     checked_at: "2026-09-05T08:00:00Z",

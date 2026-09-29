@@ -528,6 +528,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1696,6 +1717,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "option-ext"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
 name = "owo-colors"
 version = "4.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1936,7 +1963,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1991,7 +2018,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "filetime",
  "pdo-kernel",
@@ -2007,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "form_urlencoded",
@@ -2021,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-pipeline"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2052,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2076,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-review"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2105,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-run"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2140,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-sandbox"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2162,7 +2189,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-session"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2183,7 +2210,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-settings"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2213,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-skill"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2235,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-stats"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2263,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-trigger"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2293,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2677,6 +2704,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_users"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
+dependencies = [
+ "libredox",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "regex-automata"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2798,6 +2835,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rust-embed-utils",
+ "shellexpand",
  "syn",
  "walkdir",
 ]
@@ -3072,6 +3110,15 @@ name = "shell-words"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
+
+[[package]]
+name = "shellexpand"
+version = "3.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
+dependencies = [
+ "dirs",
+]
 
 [[package]]
 name = "shlex"

@@ -20,7 +20,7 @@ impl PriceSource for HttpPriceSource {
 ///
 /// **Async, mandatorily**: `reqwest::blocking` panics when invoked from inside
 /// the runtime context, including from a `spawn_blocking` thread (those carry the
-/// context) — `main.rs:18-20` documents this for the CLI paths. This is the
+/// context) — `crates/pdo/src/entry.rs` documents this for the CLI paths. This is the
 /// crate's first async reqwest call, so there is no precedent to copy.
 async fn fetch_source(url: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()

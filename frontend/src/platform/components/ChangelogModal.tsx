@@ -5,6 +5,12 @@ import MarkdownArtifactModal from "../../run/components/MarkdownArtifactModal";
 import { fetchUpdateChangelog } from "../api/update";
 import type { UpdateChangelog } from "../../shared/generated/UpdateChangelog";
 import type { UpdateStatus } from "../model/update";
+import {
+  canOfferUpdate,
+  installedVersionLabel,
+  isDistribution,
+  updateNotOfferedReason,
+} from "../model/updateStatus";
 
 /**
  * « What's new » (#698): the changelog of the versions missed since the installed one,
@@ -81,7 +87,9 @@ export default function ChangelogModal({
           </span>
           {installed && (
             <span className="flex items-center gap-1.5 font-mono text-fg-4" style={{ fontSize: "11px" }}>
-              <span>v{installed}</span>
+              <span>
+                {update != null && isDistribution(update) ? installedVersionLabel(update) : `v${installed}`}
+              </span>
               {behind > 0 && latest && (
                 <>
                   <span>→</span>
@@ -186,7 +194,7 @@ function ChangelogFooter({
   );
 
   const copy = async () => {
-    if (!update) return;
+    if (!update?.manual_command) return;
     try {
       await navigator.clipboard.writeText(update.manual_command);
       setCopied(true);
@@ -197,7 +205,10 @@ function ChangelogFooter({
     }
   };
 
-  const unknown = update?.install_method === "unknown";
+  // Not updatable from here: the method is unknown, or the distribution (#24)
+  // declares no upgrade command.
+  const noCommand = update != null && update.manual_command == null;
+  const unknown = update?.install_method === "unknown" || noCommand;
 
   return (
     <div className="flex items-end justify-between gap-4" data-testid="changelog-footer">
@@ -208,11 +219,15 @@ function ChangelogFooter({
           <>
             <span className="flex items-center gap-1.5 text-fg-3">
               <TriangleAlert size={12} className="text-st-await" />
-              Install method not detected — PDO will not update itself.
+              {noCommand
+                ? `${update.channel_name} declares no update command — PDO will not update it.`
+                : "Install method not detected — PDO will not update itself."}
             </span>
-            <span className="text-fg-4" data-testid="changelog-manual-command">
-              {update.manual_command}
-            </span>
+            {update.manual_command != null && (
+              <span className="text-fg-4" data-testid="changelog-manual-command">
+                {update.manual_command}
+              </span>
+            )}
             {update.apply_blocked_reason && (
               <span className="text-fg-4" data-testid="changelog-apply-blocked">
                 {update.apply_blocked_reason}
@@ -264,21 +279,19 @@ function ChangelogFooter({
           <button
             type="button"
             onClick={onRequestUpdate}
-            disabled={!update.can_apply}
+            // Offered only when a newer release is known (never a « reinstall » on a guess).
+            disabled={!canOfferUpdate(update)}
             className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 disabled:opacity-40 ${
               upToDate
                 ? "border-line-strong bg-bg-3 text-fg-2 hover:border-acc"
                 : "border-acc bg-acc text-bg-0 hover:bg-acc/90"
             }`}
             style={{ fontSize: "11px" }}
-            title={
-              update.apply_blocked_reason ??
-              (upToDate ? "Re-run the install method's update command" : "Update PDO from the app")
-            }
+            title={updateNotOfferedReason(update) ?? `Update ${update.channel_name} from the app`}
             data-testid="changelog-update"
           >
             <Download size={12} />
-            {upToDate ? "Reinstall" : "Update"}
+            Update
           </button>
         )}
       </div>

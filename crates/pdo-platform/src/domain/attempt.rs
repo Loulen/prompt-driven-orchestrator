@@ -121,6 +121,28 @@ pub fn apply_gate(
     (true, None)
 }
 
+/// Can an update of the release channel `channel_name` start (#24)? A channel
+/// without an upgrade command (a distribution that declares none) never
+/// applies, whatever a receipt or a path suggests; otherwise [`apply_gate`].
+pub fn channel_apply_gate(
+    channel_name: &str,
+    method: InstallMethod,
+    command: Option<&str>,
+    last: Option<&UpdateAttempt>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (bool, Option<String>) {
+    if command.is_none() {
+        return (
+            false,
+            Some(format!(
+                "{channel_name} declares no update command: PDO will not guess how to replace \
+                 this binary. Update it the way it was installed, then restart the daemon."
+            )),
+        );
+    }
+    apply_gate(method, last, now)
+}
+
 /// An attempt id is filesystem-safe: ASCII letters, digits, `-` and `_`.
 pub fn is_valid_attempt_id(id: &str) -> bool {
     !id.is_empty()
@@ -156,6 +178,22 @@ mod tests {
         assert!(!ok);
         assert!(reason.unwrap().starts_with("Install method not detected"));
         assert_eq!(apply_gate(InstallMethod::Script, None, now), (true, None));
+    }
+
+    #[test]
+    fn a_channel_without_a_command_never_applies() {
+        let now = chrono::Utc::now();
+        let (ok, reason) = channel_apply_gate("acme", InstallMethod::Declared, None, None, now);
+        assert!(!ok);
+        assert!(reason
+            .unwrap()
+            .starts_with("acme declares no update command"));
+        assert_eq!(
+            channel_apply_gate("acme", InstallMethod::Declared, Some("acme-up"), None, now),
+            (true, None)
+        );
+        // With a command, the vanilla gate still rules.
+        assert!(!channel_apply_gate("PDO", InstallMethod::Unknown, Some("x"), None, now).0);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Update the daemon (#699): spawn the detached executor and answer at once with
-//! the attempt. Refused when the install method is unknown or an attempt is
-//! running; never refused for active Runs (the daemon restarts, tmux sessions
-//! survive — `KillMode=process`).
+//! the attempt. Refused when the install method is unknown, when the release
+//! channel declares no upgrade command (#24), or when an attempt is running;
+//! never refused for active Runs (the daemon restarts, tmux sessions survive —
+//! `KillMode=process`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,9 +12,8 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
 use super::update_context::UpdateContext;
-use crate::domain::attempt::{apply_gate, AttemptStatus, UpdateAttempt, ATTEMPT_SCHEMA};
+use crate::domain::attempt::{channel_apply_gate, AttemptStatus, UpdateAttempt, ATTEMPT_SCHEMA};
 use crate::domain::install::{InstallMethod, Supervision};
-use crate::domain::release::INSTALLED_VERSION;
 use crate::domain::update_plan::{
     default_relaunch, explicit_bind_from_relaunch, render_update_script, UpdatePlan,
 };
@@ -23,7 +23,7 @@ use crate::domain::update_plan::{
 pub struct StartedUpdate {
     pub attempt_id: String,
     pub method: InstallMethod,
-    pub command: &'static str,
+    pub command: String,
     pub supervision: Supervision,
     pub log_path: PathBuf,
     pub started_at: String,
@@ -34,10 +34,13 @@ pub struct StartedUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyError {
     Refused(Denied),
-    /// The gate is closed: unknown method, or an attempt already running.
+    /// The gate is closed: unknown method, no declared command, or an attempt
+    /// already running.
     Blocked {
         reason: Option<String>,
         method: InstallMethod,
+        /// What the user can run instead; `None` when the channel declares none.
+        manual_command: Option<String>,
     },
     /// No home directory to journal the attempt in.
     NoHome,
@@ -64,16 +67,30 @@ impl ApplyUpdate {
         let _serial = self.update.apply_lock.lock().await;
         let ports = &self.update.ports;
         let journal = &ports.journal;
-        let method = ports.installation.method();
+        let channel = self.update.channel();
+        let (method, command) = self.update.upgrader();
         let supervision = ports.installation.supervision();
         let last = journal
             .is_available()
             .then(|| journal.read_attempt())
             .flatten();
-        let (ok, reason) = apply_gate(method, last.as_ref(), chrono::Utc::now());
-        if !ok {
-            return Err(ApplyError::Blocked { reason, method });
-        }
+        let (ok, reason) = channel_apply_gate(
+            &channel.name,
+            method,
+            command.as_deref(),
+            last.as_ref(),
+            chrono::Utc::now(),
+        );
+        let upgrade_command = match command {
+            Some(command) if ok => command,
+            manual_command => {
+                return Err(ApplyError::Blocked {
+                    reason,
+                    method,
+                    manual_command,
+                })
+            }
+        };
         if !journal.is_available() {
             return Err(ApplyError::NoHome);
         }
@@ -91,6 +108,7 @@ impl ApplyUpdate {
         let plan = UpdatePlan {
             attempt_id: attempt_id.clone(),
             method,
+            upgrade_command,
             supervision,
             exe,
             port: options.port,
@@ -100,7 +118,7 @@ impl ApplyUpdate {
             relaunch,
             log_path: journal.log_path(&attempt_id),
             attempt_path: journal.attempt_path(),
-            from_version: INSTALLED_VERSION.to_string(),
+            from_version: channel.installed_version.clone(),
         };
         let mut attempt = UpdateAttempt {
             schema: ATTEMPT_SCHEMA.to_string(),
@@ -132,7 +150,7 @@ impl ApplyUpdate {
                 Ok(StartedUpdate {
                     attempt_id,
                     method,
-                    command: plan.upgrade_command(),
+                    command: plan.upgrade_command().to_string(),
                     supervision,
                     log_path: plan.log_path,
                     started_at: attempt.started_at,

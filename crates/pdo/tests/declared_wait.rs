@@ -15,7 +15,7 @@
 use crate::common::TestDaemon;
 
 pub(crate) const PARENT: &str = "wait-parent";
-const CHILD: &str = "wait-child";
+pub(crate) const CHILD: &str = "wait-child";
 
 /// `worker` is interactive AND an orchestrator: the story's FP needs both.
 const PARENT_YAML: &str = r#"name: wait-parent

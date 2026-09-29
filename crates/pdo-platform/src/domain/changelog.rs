@@ -118,7 +118,7 @@ mod tests {
             version: v.to_string(),
             published_at: Some(format!("2026-09-0{}T10:00:00Z", v.len() % 9 + 1)),
             html_url: Some(format!(
-                "https://github.com/Loulen/prompt-driven-orchestrator/releases/tag/v{v}"
+                "https://github.com/Loulen/PDO-v2/releases/tag/v{v}"
             )),
             body: body.to_string(),
         }

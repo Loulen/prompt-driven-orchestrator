@@ -13,7 +13,8 @@ use pdo_platform::application::update_context::{UpdateContext, UpdateOptions, Up
 use pdo_platform::domain::attempt::AttemptStatus;
 use pdo_platform::domain::changelog::ChangelogSource;
 use pdo_platform::domain::install::{InstallMethod, Supervision};
-use pdo_platform::domain::release::{Release, INSTALLED_VERSION};
+use pdo_platform::domain::release::Release;
+use pdo_platform::domain::release_channel::{UpdateChannel, CORE_VERSION as INSTALLED_VERSION};
 use pdo_platform::domain::update_check::UpdateCache;
 
 use crate::fakes::{Executor, FakeRuns, FixedInstallation, Host, Journal, Setting, Source};
@@ -40,6 +41,26 @@ fn world(
     method: InstallMethod,
     exit_code: Option<i32>,
 ) -> World {
+    let options = UpdateOptions {
+        channel: UpdateChannel::vanilla(),
+        source_url: Some("http://127.0.0.1:9/releases/latest".into()),
+        port: 5172,
+        working_dir: PathBuf::from("/home/u/.pdo/app"),
+        relaunch_command: None,
+    };
+    world_with(options, enabled, source, journal, method, exit_code)
+}
+
+/// A world whose update knobs (the release channel, the operator's source) are
+/// `options`.
+fn world_with(
+    options: UpdateOptions,
+    enabled: bool,
+    source: Source,
+    journal: Journal,
+    method: InstallMethod,
+    exit_code: Option<i32>,
+) -> World {
     let setting = Arc::new(Setting(AtomicBool::new(enabled)));
     let source = Arc::new(source);
     let journal = Arc::new(journal);
@@ -60,12 +81,7 @@ fn world(
                 ..FakeRuns::default()
             }),
         },
-        UpdateOptions {
-            source_url: Some("http://127.0.0.1:9/releases/latest".into()),
-            port: 5172,
-            working_dir: PathBuf::from("/home/u/.pdo/app"),
-            relaunch_command: None,
-        },
+        options,
     );
     World {
         setting,
@@ -116,7 +132,7 @@ async fn a_check_on_demand_records_the_answer_and_journals_it() {
     assert_eq!(status.latest_version, Some(newer()));
     assert!(status.newer_available);
     assert_eq!(status.active_runs, 2);
-    assert_eq!(status.source, "127.0.0.1:9");
+    assert_eq!(status.source.as_deref(), Some("127.0.0.1:9"));
     let journaled = w.journal.cache.lock().unwrap().clone().unwrap();
     assert_eq!(journaled.latest_version, Some(newer()));
     let asked = w.host.asked.lock().unwrap();
@@ -313,7 +329,7 @@ async fn an_unknown_method_never_applies_and_no_home_is_said() {
         Some(0),
     );
     match w.apply().execute(&Actor::LocalOperator).await {
-        Err(ApplyError::Blocked { reason, method }) => {
+        Err(ApplyError::Blocked { reason, method, .. }) => {
             assert_eq!(method, InstallMethod::Unknown);
             assert!(reason.unwrap().starts_with("Install method not detected"));
         }
@@ -348,7 +364,7 @@ async fn an_apply_spawns_the_plan_journals_it_and_records_the_exit() {
     let started = w.apply().execute(&Actor::LocalOperator).await.unwrap();
     assert_eq!(
         started.command,
-        "brew update && brew upgrade Loulen/tap/pdo"
+        "brew update && brew upgrade Loulen/pdo-v2/pdo-v2"
     );
     assert_eq!(started.from_version, INSTALLED_VERSION);
     let plans = w.executor.plans.lock().unwrap().clone();
@@ -420,4 +436,161 @@ async fn attempt_logs_are_read_by_a_safe_id_only() {
     let read = ReadAttemptLog::new(w.context.clone());
     assert_eq!(read.execute("../etc"), Err(LogError::InvalidId));
     assert_eq!(read.execute("a1"), Err(LogError::NotFound));
+}
+
+// ---- The release channel of a distribution (#24) ---------------------------
+
+fn channel_options(source_url: Option<&str>, upgrade_command: Option<&str>) -> UpdateOptions {
+    UpdateOptions {
+        channel: UpdateChannel::declared(
+            "acme",
+            "0.3.0",
+            source_url.map(str::to_string),
+            upgrade_command.map(str::to_string),
+        ),
+        source_url: None,
+        port: 5172,
+        working_dir: PathBuf::from("/home/u/.pdo/app"),
+        relaunch_command: None,
+    }
+}
+
+#[tokio::test]
+async fn a_declared_channel_compares_its_own_version_and_runs_its_own_command() {
+    // A Homebrew install detected on the host must not matter: the channel says.
+    let w = world_with(
+        channel_options(
+            Some("http://127.0.0.1:9/releases/latest"),
+            Some("acme-upgrade"),
+        ),
+        true,
+        source_ok("0.4.0"),
+        Journal::default(),
+        InstallMethod::Homebrew,
+        Some(0),
+    );
+    w.check().execute(&Actor::LocalOperator).await.unwrap();
+    let status = w.status().execute().await;
+    assert_eq!(status.channel_name, "acme");
+    assert_eq!(status.installed_version, "0.3.0");
+    assert_eq!(status.core_version, INSTALLED_VERSION);
+    assert_eq!(status.latest_version.as_deref(), Some("0.4.0"));
+    assert!(status.newer_available);
+    assert_eq!(status.install_method, InstallMethod::Declared);
+    assert_eq!(status.manual_command.as_deref(), Some("acme-upgrade"));
+    assert!(status.can_apply);
+
+    let started = w.apply().execute(&Actor::LocalOperator).await.unwrap();
+    assert_eq!(started.command, "acme-upgrade");
+    assert_eq!(started.method, InstallMethod::Declared);
+    assert_eq!(started.from_version, "0.3.0");
+    assert_eq!(
+        w.executor.plans.lock().unwrap()[0].upgrade_command,
+        "acme-upgrade"
+    );
+}
+
+#[tokio::test]
+async fn a_channel_without_a_command_never_applies() {
+    let w = world_with(
+        channel_options(Some("http://127.0.0.1:9/releases/latest"), None),
+        true,
+        source_ok("0.4.0"),
+        Journal::default(),
+        InstallMethod::Script,
+        Some(0),
+    );
+    let status = w.status().execute().await;
+    assert!(!status.can_apply);
+    assert!(status
+        .apply_blocked_reason
+        .is_some_and(|r| r.starts_with("acme declares no update command")));
+    match w.apply().execute(&Actor::LocalOperator).await {
+        Err(ApplyError::Blocked {
+            method,
+            manual_command,
+            ..
+        }) => {
+            assert_eq!(method, InstallMethod::Declared);
+            assert_eq!(manual_command, None);
+        }
+        other => panic!("expected a closed gate, got {other:?}"),
+    }
+    assert!(w.executor.plans.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn no_source_means_no_request_and_an_explicit_reason() {
+    let w = world_with(
+        channel_options(None, Some("acme-upgrade")),
+        true,
+        source_ok("0.4.0"),
+        Journal::default(),
+        InstallMethod::Script,
+        Some(0),
+    );
+    assert!(matches!(
+        w.check().execute(&Actor::LocalOperator).await,
+        Err(CheckError::NoSource(_))
+    ));
+    w.check().periodic().await;
+    w.check().now().await;
+    let changelog = w.changelog().execute().await;
+    assert_eq!(w.source.latest_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(w.source.releases_calls.load(Ordering::SeqCst), 0);
+    assert!(changelog.fallback_reason.is_some());
+    let status = w.status().execute().await;
+    assert_eq!(status.latest_version, None);
+    assert!(status.reason.is_some_and(|r| !r.is_empty()));
+    assert_eq!(status.source_url, None);
+}
+
+#[tokio::test]
+async fn the_operators_source_wins_over_the_channels() {
+    let mut options = channel_options(Some("http://channel.test/releases/latest"), None);
+    options.source_url = Some("http://127.0.0.1:9/releases/latest".into());
+    let w = world_with(
+        options,
+        true,
+        source_ok("0.4.0"),
+        Journal::default(),
+        InstallMethod::Script,
+        Some(0),
+    );
+    w.check().execute(&Actor::LocalOperator).await.unwrap();
+    let status = w.status().execute().await;
+    assert_eq!(
+        status.source_url.as_deref(),
+        Some("http://127.0.0.1:9/releases/latest")
+    );
+    assert_eq!(status.latest_version.as_deref(), Some("0.4.0"));
+}
+
+#[tokio::test]
+async fn a_cache_left_by_another_source_is_never_an_answer() {
+    // `~/.pdo/update/check.json` is shared by every binary of the same home.
+    let journal = Journal::default();
+    *journal.cache.lock().unwrap() = Some(UpdateCache {
+        schema: "update-check-v1".into(),
+        source: "https://api.github.com/repos/someone/else/releases/latest".into(),
+        checked_at: Some(pdo_kernel::clock::now_iso()),
+        latest_version: Some("9.0.0".into()),
+        error: None,
+    });
+    let w = world_with(
+        channel_options(Some("http://127.0.0.1:9/releases/latest"), None),
+        true,
+        source_ok("0.4.0"),
+        journal,
+        InstallMethod::Script,
+        Some(0),
+    );
+    assert_eq!(w.status().execute().await.latest_version, None);
+    // Fresh or not, another source's cache does not spare this source a check.
+    w.check().periodic().await;
+    assert_eq!(w.source.latest_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        w.status().execute().await.latest_version.as_deref(),
+        Some("0.4.0")
+    );
 }

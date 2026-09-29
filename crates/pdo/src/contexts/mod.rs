@@ -25,6 +25,7 @@ use pdo_kernel::event_bus::EventBus;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_pipeline::adapters::self_writes::SelfWrites;
 use pdo_platform::domain::install::{InstallMethod, Supervision};
+use pdo_platform::domain::release_channel::UpdateChannel;
 use pdo_platform::domain::service_health::ServiceHealthOverride;
 use pdo_platform::Platform;
 use pdo_run::application::ports::RunDirWatch;
@@ -51,6 +52,8 @@ pub struct ContextResources {
     /// `$HOME`; `None` when neither is set.
     pub home_root: Option<PathBuf>,
     pub update_source_url: Option<String>,
+    /// The distribution's release channel; `None` → the vanilla one.
+    pub release_channel: Option<UpdateChannel>,
     pub update_executor_override: Option<String>,
     pub install_method_override: Option<InstallMethod>,
     pub supervision_override: Option<Supervision>,
@@ -235,6 +238,7 @@ pub(crate) mod testing {
                 port: next_test_daemon_port(),
                 home_root: None,
                 update_source_url: None,
+                release_channel: None,
                 update_executor_override: None,
                 install_method_override: None,
                 supervision_override: None,

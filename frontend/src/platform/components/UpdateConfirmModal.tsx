@@ -44,7 +44,7 @@ export default function UpdateConfirmModal({
       <div className="w-[420px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg">
         <h3 className="flex items-center gap-2 font-medium text-fg" style={{ fontSize: "13px" }}>
           <Download size={14} className="text-acc" />
-          Update PDO to {target}?
+          Update {update.channel_name} to {target}?
         </h3>
         <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }}>
           PDO runs the command of your install method in a process detached from the daemon:

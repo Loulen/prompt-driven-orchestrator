@@ -124,7 +124,7 @@ impl UpdateJournal for FsUpdateJournal {
 mod tests {
     use super::*;
     use crate::domain::attempt::AttemptStatus;
-    use crate::domain::install::{InstallMethod, Supervision};
+    use crate::domain::install::{InstallMethod, Supervision, HOMEBREW_COMMAND};
     use crate::domain::update_plan::{render_update_script, UpdatePlan};
 
     fn journal() -> (tempfile::TempDir, FsUpdateJournal) {
@@ -208,6 +208,7 @@ mod tests {
         let plan = UpdatePlan {
             attempt_id: "20260905-120000-abc123".into(),
             method: InstallMethod::Homebrew,
+            upgrade_command: HOMEBREW_COMMAND.into(),
             supervision: Supervision::None,
             exe: PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo"),
             port: 5172,
@@ -243,7 +244,7 @@ mod tests {
         assert_eq!(a.status, AttemptStatus::Failed);
         assert_eq!(a.exit_code, Some(7));
         assert_eq!(a.attempt_id, plan.attempt_id);
-        assert_eq!(a.command, "brew update && brew upgrade Loulen/tap/pdo");
+        assert_eq!(a.command, HOMEBREW_COMMAND);
         assert_eq!(a.method, InstallMethod::Homebrew);
         assert_eq!(a.log_path, plan.log_path);
         assert!(a.finished_at.is_some());

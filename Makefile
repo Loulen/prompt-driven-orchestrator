@@ -16,9 +16,10 @@ GENERATED_TS := frontend/src/shared/generated
 TS_CHECK_DIR := $(CURDIR)/target/ts-rs-check
 # Each `#[ts(export)]` type owns one `export_bindings_*` test that writes its file.
 # PDO_SKIP_FRONTEND_BUILD: the crate's build.rs typechecks the frontend, which
-# imports these very files — generating them must not depend on them. An empty
-# dist/ is enough for rust-embed in a test build.
-EXPORT_TS := mkdir -p frontend/dist && PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet --workspace --lib export_bindings_ -- --test-threads=1
+# imports these very files — generating them must not depend on them. build.rs
+# then embeds whatever frontend its OUT_DIR already holds (an empty folder on a
+# fresh target/), which is enough for a test build.
+EXPORT_TS := PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet --workspace --lib export_bindings_ -- --test-threads=1
 
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git
@@ -29,13 +30,13 @@ PDO_BIN       ?= $(HOME)/.local/bin/pdo
 help:
 	@echo "Targets:"
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
-	@echo "  make build   cargo build + pnpm run build (frontend embedded into daemon)"
+	@echo "  make build   cargo build (build.rs runs pnpm run build, frontend embedded into daemon)"
 	@echo "  make test    cargo nextest + doctests + vitest"
 	@echo "  make check   cargo check + generated TS types current + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
 	@echo "  make types   Regenerate the TS types of the daemon's DTOs into $(GENERATED_TS)"
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
-	@echo "  make clean   cargo clean + rm frontend/dist"
+	@echo "  make clean   cargo clean (embedded frontend included) + rm a stray frontend/dist"
 	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
 	@echo "  make readme-media [SCENE=stats]   Record the README media (2 variants per scene) into .readme-media/ — see CONTRIBUTING"
 	@echo "  make readme-media-publish [SCENE=…]  Copy the selected variants into docs/assets/readme/"
@@ -60,8 +61,9 @@ dev:
 	  (cd frontend && PDO_PORT=$(PORT) pnpm run dev --port $(VITE_PORT)) & \
 	  wait
 
+# build.rs runs `pnpm run build` itself, into target/ (#21): a `pnpm run build`
+# here would only write a frontend/dist nothing embeds.
 build:
-	cd frontend && pnpm run build
 	cargo build
 
 # nextest : un process par test (isolation retrouvée depuis que les 50 binaires de
@@ -131,6 +133,8 @@ lint:
 fmt:
 	cargo fmt --all
 
+# The embedded frontend lives under target/ (cargo clean removes it); frontend/dist
+# only exists after a manual `pnpm run build` in frontend/.
 clean:
 	cargo clean
 	rm -rf frontend/dist

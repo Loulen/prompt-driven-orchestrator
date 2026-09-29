@@ -7,7 +7,8 @@
 //! à jour depuis l'app*: sharp tool, delegate to the installation method):
 //!
 //! 1. the **installation method's** upgrade command (`brew update && brew upgrade
-//!    Loulen/tap/pdo`, or the cargo-dist installer re-run);
+//!    Loulen/pdo-v2/pdo-v2`, the cargo-dist installer re-run, or the command a
+//!    distribution's release channel declares, #24);
 //! 2. if **supervised**: `pdo service install` (idempotent, port preserved — and,
 //!    since #699, writing the STABLE binary path so an existing unit pointing into
 //!    a versioned Cellar is repaired), then a service restart;
@@ -27,6 +28,9 @@ use super::install::{InstallMethod, Supervision};
 pub struct UpdatePlan {
     pub attempt_id: String,
     pub method: InstallMethod,
+    /// The upgrade command, verbatim: the detected method's, or the one the
+    /// release channel declares.
+    pub upgrade_command: String,
     pub supervision: Supervision,
     /// The stable path of the daemon binary (what `service install` and the
     /// relaunch invoke): Homebrew's `bin/pdo`, never `Cellar/pdo/<v>/bin/pdo`.
@@ -49,10 +53,10 @@ pub struct UpdatePlan {
 }
 
 impl UpdatePlan {
-    /// The method's upgrade command, verbatim — the same text the UI shows as the
-    /// manual command, so the button runs exactly what the user would type.
-    pub fn upgrade_command(&self) -> &'static str {
-        self.method.manual_command()
+    /// The upgrade command, verbatim — the same text the UI shows as the manual
+    /// command, so the button runs exactly what the user would type.
+    pub fn upgrade_command(&self) -> &str {
+        &self.upgrade_command
     }
 }
 
@@ -261,6 +265,7 @@ mod tests {
         UpdatePlan {
             attempt_id: "20260905-120000-abc123".into(),
             method,
+            upgrade_command: method.manual_command().unwrap_or("acme-upgrade").into(),
             supervision,
             exe: PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo"),
             port: 5172,
@@ -283,7 +288,7 @@ mod tests {
     fn homebrew_supervised_script_upgrades_reinstalls_the_unit_then_restarts() {
         let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Systemd));
         assert!(s.starts_with("#!/bin/sh\n"));
-        assert!(s.contains("sh -c 'brew update && brew upgrade Loulen/tap/pdo'"));
+        assert!(s.contains("sh -c 'brew update && brew upgrade Loulen/pdo-v2/pdo-v2'"));
         let up = s.find("brew upgrade").unwrap();
         let install = s
             .find("/home/linuxbrew/.linuxbrew/bin/pdo service install --port 5172")
@@ -360,6 +365,15 @@ mod tests {
             "no unit when not supervised"
         );
         assert!(!s.contains("systemctl"));
+    }
+
+    #[test]
+    fn a_declared_channel_runs_its_own_command() {
+        let s = render_update_script(&plan(InstallMethod::Declared, Supervision::Systemd));
+        assert!(s.contains("sh -c acme-upgrade\n"), "{s}");
+        assert!(s.contains("== method: declared"));
+        assert!(s.contains("\\\"method\\\":\\\"declared\\\""));
+        assert!(!s.contains("brew upgrade"), "never the vanilla command");
     }
 
     #[test]

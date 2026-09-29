@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use super::update_context::UpdateContext;
 use crate::domain::changelog::{assemble_changelog, embedded_changelog, Changelog};
-use crate::domain::release::{is_newer, releases_list_url, INSTALLED_VERSION};
+use crate::domain::release::{is_newer, releases_list_url};
 
 pub struct GetChangelog {
     update: Arc<UpdateContext>,
@@ -27,10 +27,17 @@ impl GetChangelog {
 
     pub async fn execute(&self) -> Changelog {
         self.update.ensure_loaded().await;
-        let installed = INSTALLED_VERSION;
+        let installed = self.update.channel().installed_version.as_str();
         let enabled = self.update.ports.setting.enabled().await;
         let cache = self.update.cached().await;
 
+        let Some(source_url) = self.update.source_url() else {
+            return embedded_changelog(
+                installed,
+                None,
+                "No release source is declared for this build.",
+            );
+        };
         if !enabled {
             return embedded_changelog(installed, None, "The update check is off.");
         }
@@ -50,7 +57,7 @@ impl GetChangelog {
         let releases = match memo {
             Some((for_latest, rels)) if for_latest == latest => Ok(rels),
             _ => {
-                let url = releases_list_url(&self.update.source_url());
+                let url = releases_list_url(&source_url);
                 let fetched = self.update.ports.source.releases(&url).await;
                 if let Ok(rels) = &fetched {
                     *self.update.releases.lock().await = Some((latest.clone(), rels.clone()));

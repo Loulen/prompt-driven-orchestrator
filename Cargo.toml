@@ -23,17 +23,19 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "2.0.0"
+version = "2.1.0"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
-repository = "https://github.com/Loulen/prompt-driven-orchestrator"
-homepage = "https://github.com/Loulen/prompt-driven-orchestrator"
+repository = "https://github.com/Loulen/PDO-v2"
+homepage = "https://github.com/Loulen/PDO-v2"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws", "multipart"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
-rust-embed = { version = "8", features = ["compression"] }
+# interpolate-folder-path: crates/pdo/src/spa.rs embeds `$PDO_FRONTEND_EMBED_DIR`,
+# the folder under OUT_DIR where crates/pdo/build.rs puts the frontend (#21).
+rust-embed = { version = "8", features = ["compression", "interpolate-folder-path"] }
 mime_guess = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

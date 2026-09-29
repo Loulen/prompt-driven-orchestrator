@@ -3,15 +3,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The default release source: the GitHub Releases API, latest non-prerelease.
-pub const RELEASE_SOURCE_URL_DEFAULT: &str =
-    "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest";
+/// Human label of a source on the GitHub API, shown next to the check date.
+pub const RELEASE_SOURCE_LABEL_GITHUB: &str = "GitHub Releases";
 
-/// Human label for the default source, shown next to the check date.
-pub const RELEASE_SOURCE_LABEL_DEFAULT: &str = "GitHub Releases";
-
-/// The version of this build.
-pub const INSTALLED_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The host of the GitHub API, whose sources read as [`RELEASE_SOURCE_LABEL_GITHUB`].
+const GITHUB_API_HOST: &str = "api.github.com";
 
 /// Parse `1.58.1`, `v1.58.1` or `pdo-v1.58.1` into a comparable triple; `None` on
 /// anything else (a pre-release suffix is dropped, not compared).
@@ -119,18 +115,19 @@ pub fn missed_releases(installed: &str, releases: &[Release]) -> Vec<Release> {
     out.into_iter().map(|(_, _, _, r)| r).collect()
 }
 
-/// Label a source URL for the UI: the shipped default reads "GitHub Releases", an
-/// override reads as its host so a test fixture is recognisable.
+/// Label a source URL for the UI: a GitHub API source reads "GitHub Releases",
+/// any other reads as its host so a test fixture is recognisable.
 pub fn source_label(url: &str) -> String {
-    if url == RELEASE_SOURCE_URL_DEFAULT {
-        return RELEASE_SOURCE_LABEL_DEFAULT.to_string();
-    }
-    url.split("://")
+    let host = url
+        .split("://")
         .nth(1)
         .and_then(|rest| rest.split('/').next())
-        .filter(|h| !h.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| url.to_string())
+        .filter(|h| !h.is_empty());
+    match host {
+        Some(GITHUB_API_HOST) => RELEASE_SOURCE_LABEL_GITHUB.to_string(),
+        Some(host) => host.to_string(),
+        None => url.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -142,7 +139,7 @@ mod tests {
             version: v.to_string(),
             published_at: Some(format!("2026-09-0{}T10:00:00Z", v.len() % 9 + 1)),
             html_url: Some(format!(
-                "https://github.com/Loulen/prompt-driven-orchestrator/releases/tag/v{v}"
+                "https://github.com/Loulen/PDO-v2/releases/tag/v{v}"
             )),
             body: body.to_string(),
         }
@@ -175,18 +172,21 @@ mod tests {
 
     #[test]
     fn source_labels() {
-        assert_eq!(source_label(RELEASE_SOURCE_URL_DEFAULT), "GitHub Releases");
+        assert_eq!(source_label(GITHUB_LATEST), "GitHub Releases");
         assert_eq!(
             source_label("http://127.0.0.1:4321/latest"),
             "127.0.0.1:4321"
         );
+        assert_eq!(source_label("not a url"), "not a url");
     }
+
+    const GITHUB_LATEST: &str = "https://api.github.com/repos/Loulen/PDO-v2/releases/latest";
 
     #[test]
     fn releases_list_url_drops_latest() {
         assert_eq!(
-            releases_list_url(RELEASE_SOURCE_URL_DEFAULT),
-            "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases"
+            releases_list_url(GITHUB_LATEST),
+            "https://api.github.com/repos/Loulen/PDO-v2/releases"
         );
         assert_eq!(
             releases_list_url("http://127.0.0.1:1/releases/latest/"),

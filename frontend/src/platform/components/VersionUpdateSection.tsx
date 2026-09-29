@@ -7,8 +7,11 @@ import {
   SUPERVISION_LABEL,
   absoluteTime,
   announceUpdateStatus,
+  canOfferUpdate,
+  installedVersionLabel,
   newerAvailable,
   relativeTime,
+  updateNotOfferedReason,
   upToDate,
 } from "../model/updateStatus";
 import { KeyValueRow } from "../../shared/ui/key-value-row";
@@ -22,8 +25,11 @@ import { KeyValueRow } from "../../shared/ui/key-value-row";
  * even when `GET /settings` failed (Trap A), since it does not depend on it.
  *
  * States: newer known → amber latest; up to date → green pill on the installed row;
- * unknown (off / unreachable / never) → `—` + the reason. The bar's badge follows via
- * the bus, so disabling the check removes it immediately.
+ * unknown (off / unreachable / never / no source) → `—` + the reason. The bar's badge
+ * follows via the bus, so disabling the check removes it immediately.
+ *
+ * A distribution (#24) shows its own name and version, then the core's; Update is
+ * offered only when a newer release is known and the daemon would run it.
  */
 export default function VersionUpdateSection({
   active,
@@ -111,7 +117,7 @@ export default function VersionUpdateSection({
   };
 
   const copy = async () => {
-    if (!status) return;
+    if (!status?.manual_command) return;
     try {
       await navigator.clipboard.writeText(status.manual_command);
       setCopied(true);
@@ -133,11 +139,16 @@ export default function VersionUpdateSection({
   const newer = newerAvailable(status);
   const current = upToDate(status);
   const enabled = status.check_enabled;
+  const hasSource = status.source_url != null;
+  const unknown = status.install_method === "unknown";
+  // A distribution that declares no upgrade command: nothing to run, nothing to copy.
+  const noCommand = status.manual_command == null;
+  const offerUpdate = canOfferUpdate(status);
 
   return (
     <div className="flex flex-col gap-1.5" data-testid="setting-version-update">
       <KeyValueRow label="Installed version" testId="setting-version-installed">
-        <span className="font-mono">v{status.installed_version}</span>
+        <span className="font-mono">{installedVersionLabel(status)}</span>
         {current && (
           <span
             className="ml-2 rounded-full bg-st-done-bg px-1.5 py-px text-st-done"
@@ -178,7 +189,8 @@ export default function VersionUpdateSection({
             {absoluteTime(status.checked_at)}
             <span className="text-fg-4">
               {" "}
-              · {relativeTime(status.checked_at)} · {status.source}
+              · {relativeTime(status.checked_at)}
+              {status.source && ` · ${status.source}`}
             </span>
           </>
         ) : (
@@ -196,13 +208,17 @@ export default function VersionUpdateSection({
       >
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="text-fg-4">
-            {status.install_method === "unknown"
-              ? "Install method not detected — PDO will not update itself. To update:"
-              : "To update manually (the Update button runs exactly this, detached from the daemon):"}
+            {noCommand
+              ? `${status.channel_name} declares no update command — PDO will not update it. Update it the way it was installed.`
+              : unknown
+                ? "Install method not detected — PDO will not update itself. To update:"
+                : "To update manually (the Update button runs exactly this, detached from the daemon):"}
           </span>
-          <code className="truncate font-mono text-fg-2">{status.manual_command}</code>
+          {status.manual_command != null && (
+            <code className="truncate font-mono text-fg-2">{status.manual_command}</code>
+          )}
         </div>
-        {status.install_method !== "unknown" && (
+        {!unknown && !noCommand && (
           <button
             type="button"
             onClick={copy}
@@ -216,7 +232,7 @@ export default function VersionUpdateSection({
           </button>
         )}
       </div>
-      {status.install_method === "unknown" && status.apply_blocked_reason && (
+      {(unknown || noCommand) && status.apply_blocked_reason && (
         <div
           className="flex items-start gap-1.5 text-fg-4"
           style={{ fontSize: "10.5px" }}
@@ -289,12 +305,9 @@ export default function VersionUpdateSection({
         <button
           type="button"
           onClick={() => onRequestUpdate?.()}
-          disabled={!status.can_apply || !onRequestUpdate}
+          disabled={!offerUpdate || !onRequestUpdate}
           data-testid="setting-version-update-button"
-          title={
-            status.apply_blocked_reason ??
-            (newer ? `Update to v${status.latest_version}` : "Re-run the install method's update command")
-          }
+          title={updateNotOfferedReason(status) ?? `Update to v${status.latest_version}`}
           className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 disabled:opacity-40 ${
             newer
               ? "border-acc bg-acc text-bg-0 hover:bg-acc/90"
@@ -308,9 +321,15 @@ export default function VersionUpdateSection({
         <button
           type="button"
           onClick={() => void checkNow()}
-          disabled={checking || !enabled}
+          disabled={checking || !enabled || !hasSource}
           data-testid="setting-version-check-now"
-          title={!enabled ? "Turn the update check on to check now." : undefined}
+          title={
+            !hasSource
+              ? "No release source is declared for this build: nothing to check."
+              : !enabled
+                ? "Turn the update check on to check now."
+                : undefined
+          }
           className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc disabled:opacity-40"
           style={{ fontSize: 11 }}
         >

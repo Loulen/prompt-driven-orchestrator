@@ -26,6 +26,9 @@ mod cli_complete_does_not_panic;
 #[path = "cli_run_create.rs"]
 mod cli_run_create;
 
+#[path = "cli_wait_exit_codes.rs"]
+mod cli_wait_exit_codes;
+
 #[path = "cost_prices.rs"]
 mod cost_prices;
 
@@ -62,6 +65,10 @@ mod test_extension;
 #[path = "extension_authorization.rs"]
 mod extension_authorization;
 
+// The whole `pdo` binary of a distribution, `main_with(extensions)` (#23).
+#[path = "main_with.rs"]
+mod main_with;
+
 #[path = "extension_mutation_routes.rs"]
 mod extension_mutation_routes;
 
@@ -72,6 +79,10 @@ mod extension_trigger_fire;
 // The rest of the extension API (#931): attributes, events, routes, `/ext`.
 #[path = "extension_hooks.rs"]
 mod extension_hooks;
+
+// `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
+#[path = "extension_not_found.rs"]
+mod extension_not_found;
 
 #[path = "demo_daemon.rs"]
 mod demo_daemon;
@@ -108,6 +119,8 @@ mod run_create_upload_errors;
 #[path = "stats_cost_by_model.rs"]
 mod stats_cost_by_model;
 
+#[path = "release_channel.rs"]
+mod release_channel;
 #[path = "update_apply.rs"]
 mod update_apply;
 #[path = "update_check.rs"]

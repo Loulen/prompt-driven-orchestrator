@@ -53,10 +53,15 @@ pub struct DaemonConfig {
     /// user has clicked "Sync costs" once (ADR-0034 — the click IS the consent).
     /// `PDO_PRICE_SYNC=off|0|""` disarms it.
     pub price_refresh_at_boot: bool,
-    /// Release-source URL for the version check (#697); `None` →
-    /// the shipped GitHub Releases endpoint. `Some(url)` points the check at
-    /// a local fixture, same seam as [`Self::price_source_url`].
+    /// Release-source URL for the version check (#697), the operator's
+    /// `PDO_UPDATE_SOURCE_URL`: wins over the release channel's source.
+    /// `Some(url)` points the check at a local fixture, same seam as
+    /// [`Self::price_source_url`]; `None` → the channel's source, if any.
     pub update_source_url: Option<String>,
+    /// The release channel a distribution declares (#24, set by
+    /// `Config::with_release_channel`); `None` → the vanilla channel (`PDO`, the
+    /// core's version, no source, the detected install method).
+    pub release_channel: Option<pdo_platform::domain::release_channel::UpdateChannel>,
     /// Run the boot check + 6 h periodic version-check loop. `true` in production;
     /// `false` in the layer-3 literals, which drive
     /// [`DaemonHandle::run_update_check_tick`] deterministically instead of racing

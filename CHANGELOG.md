@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## Non publié — Emplacements d'UI hébergés par une extension (#32)
+## 2.4.0 — Emplacements d'UI hébergés par une extension (#32)
 
 `pdo-extension-api` passe en **0.4.0**, par ajout : une extension écrite pour 0.1, 0.2 ou 0.3
 compile et tourne sans changement (ADR-0081, amendement #32 ; référence : `docs/reference/extension-ui.md`

@@ -1963,7 +1963,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2009,16 +2009,17 @@ dependencies = [
 
 [[package]]
 name = "pdo-extension-api"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "axum",
  "serde",
  "serde_json",
+ "ts-rs",
 ]
 
 [[package]]
 name = "pdo-harness"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "filetime",
  "pdo-kernel",
@@ -2034,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "form_urlencoded",
@@ -2048,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-pipeline"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2079,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2103,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-review"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2132,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-run"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2167,7 +2168,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-sandbox"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2189,7 +2190,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-session"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2210,7 +2211,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-settings"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2240,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-skill"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2262,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-stats"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2290,7 +2291,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-trigger"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2320,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "axum",

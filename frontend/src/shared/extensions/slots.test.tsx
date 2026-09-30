@@ -7,11 +7,18 @@ import type { Attributes } from "./attributes";
 import ExtensionDetailTab from "./ExtensionDetailTab";
 import ExtensionListFilters from "./ExtensionListFilters";
 import ExtensionSettingsPanels from "./ExtensionSettingsPanels";
+import { useDetailTabs } from "./catalogue";
+import type { ListFilterProps, TabProps } from "./contract";
+import { resetPages } from "./deepLink";
 import { hostReactMajor } from "./shared";
-import { useDetailTabs, type DetailTabProps, type ListFilterProps } from "./slots";
 import { resetExtensions, setBundleLoader, type BundleModule } from "./store";
 
-/** The test extension of the daemon's suite, as `GET /ext` declares it. */
+// The four locations of version 0.1 (#931), as an extension written for 0.1
+// fills them: the daemon maps its four slots onto `topbar/start`, `settings`,
+// `runs/filter` and `run/detail` (`UiSlot::contribution`), and they must show
+// as before (#29).
+
+/** The test extension of the daemon's suite, as `GET /ext` declares its 0.1 slots. */
 function testExtension(reactMajor = hostReactMajor()): ExtensionEntry {
   return {
     id: "test",
@@ -20,18 +27,19 @@ function testExtension(reactMajor = hostReactMajor()): ExtensionEntry {
     ui: {
       bundle_url: "/ext/test/ui.js",
       react_major: reactMajor,
-      slots: [
-        { slot: "navigation", id: "events", label: "Test events", component: "EventsPage" },
-        { slot: "settings_panel", id: "settings", label: "Test extension", component: "SettingsPanel" },
+      contributions: [
+        { location: "topbar/start", id: "events", label: "Test events", type: "page", component: "EventsPage" },
+        { location: "settings", id: "settings", label: "Test extension", type: "section", component: "SettingsPanel" },
         {
-          slot: "list_filter",
-          resource: "run",
+          location: "runs/filter",
           id: "started-by",
           label: "Started by",
+          type: "list_filter",
           component: "StartedByFilter",
         },
-        { slot: "detail_tab", resource: "run", id: "run-tab", label: "Test", component: "RunTab" },
+        { location: "run/detail", id: "run-tab", label: "Test", type: "tab", component: "RunTab" },
       ],
+      commands: [],
     },
   };
 }
@@ -45,7 +53,7 @@ const bundle: BundleModule = {
       only alice ({filter["test/started_by"] ?? "anyone"})
     </button>
   ),
-  RunTab: ({ entity }: DetailTabProps) => (
+  RunTab: ({ entity }: TabProps) => (
     <p>
       tab of {entity.kind} {entity.id}: {entity.attributes["test/started_by"]}
     </p>
@@ -71,6 +79,8 @@ let loader: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   resetExtensions();
+  resetPages();
+  window.history.replaceState(null, "", "/");
   loader = vi.fn(async () => bundle);
   setBundleLoader(loader as unknown as (url: string) => Promise<BundleModule>);
 });
@@ -111,15 +121,13 @@ describe("the UI slots", () => {
       const [filter, setFilter] = useState<Attributes>({});
       return (
         <>
-          <ExtensionListFilters resource="run" filter={filter} onChange={setFilter} />
-          <ExtensionListFilters resource="project" filter={filter} onChange={setFilter} />
+          <ExtensionListFilters filter={filter} onChange={setFilter} />
           <output data-testid="filter">{JSON.stringify(filter)}</output>
         </>
       );
     }
     render(<Host />);
     const control = await screen.findByText("only alice (anyone)");
-    expect(screen.queryByTestId("extension-filters-project")).toBeNull();
     fireEvent.click(control);
     expect(screen.getByTestId("filter")).toHaveTextContent('{"test/started_by":"alice"}');
     expect(screen.getByText("only alice (alice)")).toBeInTheDocument();
@@ -127,15 +135,12 @@ describe("the UI slots", () => {
 
   it("adds a tab to the detail of an entity", async () => {
     serve([testExtension()]);
+    const entity = { kind: "run", id: "r1", attributes: { "test/started_by": "alice" } };
     function Detail() {
-      const [tab] = useDetailTabs("run");
+      const { tabs, context } = useDetailTabs(entity);
+      const [tab] = tabs;
       if (!tab) return null;
-      return (
-        <ExtensionDetailTab
-          tab={tab}
-          entity={{ kind: "run", id: "r1", attributes: { "test/started_by": "alice" } }}
-        />
-      );
+      return <ExtensionDetailTab tab={tab} context={context} />;
     }
     render(<Detail />);
     expect(await screen.findByText("tab of run r1: alice")).toBeInTheDocument();

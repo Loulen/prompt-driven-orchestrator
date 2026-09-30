@@ -1,5 +1,6 @@
 //! The extensions' surface on HTTP: each extension's routes, nested under
-//! `/ext/<id>/`, and `GET /ext`, the index the front reads to fill its UI slots.
+//! `/ext/<id>/`, and `GET /ext`, the index the front reads to fill the
+//! catalogue's UI locations (`docs/reference/extension-ui.md`).
 //!
 //! Every path of an extension sits under its own `/ext/<id>` prefix, so an
 //! extension can never hide a route of the core, nor another extension's.
@@ -18,7 +19,7 @@
 //! ROUTER TRAP: `/ext` is a top-level prefix of the vite dev proxy whitelist
 //! (`frontend/vite.config.ts`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use axum::extract::{OriginalUri, State};
@@ -26,8 +27,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
-use pdo_extension_api::{Slot, UiContributions};
-use pdo_kernel::attributes::wire_kind;
+use pdo_extension_api::{UiCommand, UiContribution, UiContributions, UiElement};
 use pdo_kernel::extension_host::Extensions;
 use serde::Serialize;
 use ts_rs::TS;
@@ -45,71 +45,53 @@ pub struct ExtensionEntry {
     pub ui: Option<ExtensionUi>,
 }
 
-/// An extension's bundle and the slots it fills.
+/// An extension's bundle, what it adds to the catalogue's locations and the
+/// commands it exports.
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct ExtensionUi {
-    /// Where the bundle is served; no bundle, no slot rendered.
+    /// Where the bundle is served; no bundle, nothing rendered.
     pub bundle_url: Option<String>,
     /// The major of React the bundle was built against: a bundle whose major
     /// differs from the front's is never loaded.
     pub react_major: Option<u32>,
-    pub slots: Vec<ExtensionSlot>,
+    /// Its contributions, the 0.1 slots already mapped onto their locations,
+    /// in declaration order.
+    pub contributions: Vec<UiContribution>,
+    pub commands: Vec<UiCommand>,
 }
 
-/// The UI slots of the extension API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export)]
-pub enum SlotKind {
-    Navigation,
-    SettingsPanel,
-    ListFilter,
-    DetailTab,
-}
-
-/// One element an extension adds in one slot.
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct ExtensionSlot {
-    pub slot: SlotKind,
-    /// The kind of entity of a list filter or a detail tab (`run`, `project`…).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub resource: Option<String>,
-    pub id: String,
-    pub label: String,
-    /// The name the bundle exports the component under.
-    pub component: String,
-}
-
-/// The front's view of an extension's contributions. A slot this build does
-/// not know is left out.
-fn ui_entry(ui: UiContributions) -> ExtensionUi {
-    let slots = ui
-        .slots
+/// The front's view of extension `id`'s contributions ([`UiContributions::catalogue`]).
+/// Left out, with a warning: an element its location does not accept, an
+/// action naming no declared command, an id already taken.
+fn ui_entry(id: &str, ui: UiContributions) -> ExtensionUi {
+    let mut seen = BTreeSet::new();
+    let contributions = ui
+        .catalogue()
         .into_iter()
-        .filter_map(|slot| {
-            let (kind, resource) = match slot.slot {
-                Slot::Navigation => (SlotKind::Navigation, None),
-                Slot::SettingsPanel => (SlotKind::SettingsPanel, None),
-                Slot::ListFilter { resource } => (SlotKind::ListFilter, Some(wire_kind(resource))),
-                Slot::DetailTab { resource } => (SlotKind::DetailTab, Some(wire_kind(resource))),
-                _ => return None,
+        .filter(|c| {
+            let refused = if !c.location.accepts(&c.element) {
+                Some(format!("`{}` accepts no such element", c.location.id()))
+            } else if !seen.insert(c.id.clone()) {
+                Some("its id is already taken".to_string())
+            } else if let UiElement::Action { command } = &c.element {
+                (!ui.commands.iter().any(|k| &k.id == command)).then(|| {
+                    format!("it calls `{command}`, a command the extension does not declare")
+                })
+            } else {
+                None
             };
-            Some(ExtensionSlot {
-                slot: kind,
-                resource,
-                id: slot.id,
-                label: slot.label,
-                component: slot.component,
-            })
+            if let Some(why) = &refused {
+                tracing::warn!("extension `{id}`: contribution `{}` left out: {why}", c.id);
+            }
+            refused.is_none()
         })
         .collect();
     ExtensionUi {
         bundle_url: ui.bundle_url,
         react_major: ui.react_major,
-        slots,
+        contributions,
+        commands: ui.commands,
     }
 }
 
@@ -126,7 +108,7 @@ fn entries(extensions: &Extensions) -> Vec<ExtensionEntry> {
                     tracing::warn!("extension `{}` panicked in ui", manifest.id);
                     None
                 })
-                .map(ui_entry),
+                .map(|ui| ui_entry(&manifest.id, ui)),
         })
         .collect()
 }
@@ -138,7 +120,8 @@ pub fn router(extensions: Extensions) -> Router {
         .with_state(extensions)
 }
 
-/// `GET /ext`: the registered extensions and their UI contributions; `[]`
+/// `GET /ext`: the registered extensions and their UI contributions, in
+/// registration order (the order every location lists them in); `[]`
 /// without extension. Read on every call: an extension may change what it
 /// contributes while the daemon runs.
 async fn index(State(extensions): State<Extensions>) -> Response {
@@ -218,7 +201,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{header, Method, Request};
-    use pdo_extension_api::{Extension, Manifest, ResourceKind, UiSlot};
+    use pdo_extension_api::{Extension, Manifest, ResourceKind, Slot, UiLocation, UiSlot, When};
     use serde_json::Value;
     use tower::util::ServiceExt;
 
@@ -228,6 +211,7 @@ mod tests {
             Manifest::new("demo", "Demo", "1.0.0")
         }
         fn ui(&self) -> Option<UiContributions> {
+            let greet = UiCommand::new("demo.greet", "Greet", "greet");
             Some(
                 UiContributions::bundle("/ext/demo/ui.js", 19)
                     .with(UiSlot::new(Slot::Navigation, "events", "Events", "Events"))
@@ -238,7 +222,16 @@ mod tests {
                         "tab",
                         "Tab",
                         "Tab",
-                    )),
+                    ))
+                    .contribute(
+                        UiContribution::page(UiLocation::TopbarEnd, "home", "Demo", "Home")
+                            .with_icon("/ext/demo/icon.svg"),
+                    )
+                    .contribute(
+                        UiContribution::action(UiLocation::TopbarEnd, "greet", &greet)
+                            .when(When::has("run")),
+                    )
+                    .command(greet),
             )
         }
     }
@@ -251,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn the_index_lists_each_extension_and_its_slots() {
+    fn the_index_lists_each_extension_and_its_contributions() {
         let extensions =
             Extensions::register(vec![Box::new(Contributes), Box::new(Silent)]).unwrap();
         assert_eq!(
@@ -262,18 +255,87 @@ mod tests {
                     "ui": {
                         "bundle_url": "/ext/demo/ui.js",
                         "react_major": 19,
-                        "slots": [
-                            { "slot": "navigation", "id": "events", "label": "Events", "component": "Events" },
+                        // The 0.1 detail tab of an agentic profile maps onto no location.
+                        "contributions": [
                             {
-                                "slot": "detail_tab", "resource": "agent_profile", "id": "tab",
-                                "label": "Tab", "component": "Tab"
+                                "location": "topbar/start", "id": "events", "label": "Events",
+                                "type": "page", "component": "Events",
+                            },
+                            {
+                                "location": "topbar/end", "id": "home", "label": "Demo",
+                                "type": "page", "component": "Home", "icon": "/ext/demo/icon.svg",
+                            },
+                            {
+                                "location": "topbar/end", "id": "greet", "label": "Greet",
+                                "type": "action", "command": "demo.greet", "when": { "has": "run" },
                             },
                         ],
+                        "commands": [{ "id": "demo.greet", "title": "Greet", "export": "greet" }],
                     },
                 },
                 { "id": "silent", "name": "Silent", "version": "0.1.0" },
             ])
         );
+    }
+
+    /// Contributes a page to `topbar/end`, and what no location renders.
+    struct Second;
+    impl Extension for Second {
+        fn manifest(&self) -> Manifest {
+            Manifest::new("second", "Second", "1.0.0")
+        }
+        fn ui(&self) -> Option<UiContributions> {
+            let orphan = UiCommand::new("second.orphan", "Orphan", "orphan");
+            Some(
+                UiContributions::bundle("/ext/second/ui.js", 19)
+                    .contribute(UiContribution::page(UiLocation::TopbarEnd, "p", "P", "P"))
+                    // An action where only sections go, an action without its
+                    // command, an id already taken.
+                    .contribute(UiContribution::action(UiLocation::Settings, "a", &orphan))
+                    .contribute(UiContribution::action(UiLocation::TopbarEnd, "b", &orphan))
+                    .contribute(UiContribution::page(UiLocation::TopbarEnd, "p", "Q", "Q")),
+            )
+        }
+    }
+
+    #[test]
+    fn a_location_lists_every_extension_in_registration_order() {
+        let extensions =
+            Extensions::register(vec![Box::new(Contributes), Box::new(Second)]).unwrap();
+        let at_topbar_end: Vec<(String, String)> = entries(&extensions)
+            .into_iter()
+            .flat_map(|entry| {
+                let id = entry.id;
+                entry
+                    .ui
+                    .into_iter()
+                    .flat_map(|ui| ui.contributions)
+                    .filter(|c| c.location == UiLocation::TopbarEnd)
+                    .map(move |c| (id.clone(), c.label))
+            })
+            .collect();
+        assert_eq!(
+            at_topbar_end,
+            [
+                ("demo".to_string(), "Demo".to_string()),
+                ("demo".to_string(), "Greet".to_string()),
+                ("second".to_string(), "P".to_string()),
+            ]
+        );
+    }
+
+    /// The reference page of the catalogue, which extension authors read.
+    const REFERENCE: &str = include_str!("../../../docs/reference/extension-ui.md");
+
+    #[test]
+    fn the_reference_page_documents_every_location_of_the_catalogue() {
+        for location in UiLocation::ALL {
+            let heading = format!("### `{}`", location.id());
+            assert!(
+                REFERENCE.lines().any(|line| line == heading),
+                "docs/reference/extension-ui.md has no `{heading}` section"
+            );
+        }
     }
 
     /// Serves `/` and `/items` under `/ext/serves/`.

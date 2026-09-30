@@ -236,7 +236,11 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
       await waitFor(() => expect(fetchStatsOverviewMock).toHaveBeenCalledTimes(1));
       // The charts are code-split behind `React.lazy` (#928: now a tree of
       // modules): wait for the chunk rather than assume an earlier test loaded it.
-      expect(await screen.findByTestId("stats-charts-stub")).toBeInTheDocument();
+      // Its first import transforms the whole tree, well past `findBy`'s default
+      // second on a loaded machine.
+      expect(
+        await screen.findByTestId("stats-charts-stub", undefined, { timeout: 10_000 }),
+      ).toBeInTheDocument();
       const before = screen.getByTestId("stats-computed-at").textContent;
 
       await user.click(screen.getByTestId("stats-refresh"));

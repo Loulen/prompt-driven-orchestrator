@@ -28,10 +28,18 @@ pub use event::{OperationApplied, OPERATION_APPLIED};
 pub use extension::{Authorization, Extension, ExtensionContext, RequestParts};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
-pub use ui::{Slot, UiContributions, UiSlot};
+pub use ui::{
+    Slot, UiCommand, UiContribution, UiContributions, UiElement, UiLocation, UiSlot, When,
+};
 
 pub use axum;
 pub use serde_json;
 
 /// The version of this API an extension was compiled against.
 pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The oldest version of this API that [`API_VERSION`] still honours: an
+/// extension requiring any version from this one up to [`API_VERSION`] runs.
+/// In 0.x a minor may break; this is where the API says which ones did not
+/// (0.2 only added to 0.1, ADR-0081 amendment #29).
+pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

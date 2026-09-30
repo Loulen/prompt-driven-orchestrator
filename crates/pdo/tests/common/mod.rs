@@ -580,6 +580,11 @@ impl TestDaemon {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
+        // The `env` tier of the update check wins over every other: a daemon that
+        // runs the suite from its own node session exports `PDO_UPDATE_CHECK=0`,
+        // which would silence every check under test. Nothing in this binary sets
+        // it (nextest runs one process per test).
+        std::env::remove_var("PDO_UPDATE_CHECK");
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 

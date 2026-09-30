@@ -1,0 +1,106 @@
+/**
+ * The catalogue of UI locations (Emplacements d'UI, CONTEXT.md § Extensions;
+ * ADR-0081, amendment #29): what the loaded extensions contribute at one named
+ * location, with what renders each element.
+ *
+ * A location is a list: every extension's contributions add up there, in
+ * registration order, then in each extension's declaration order. An element is
+ * left out when its bundle is not ready, when the bundle does not export what it
+ * names (the component, or its command's function), or when its `when` clause
+ * is false on the location's context.
+ */
+
+import { useMemo, type ComponentType } from "react";
+import type { ExtensionEntry } from "../generated/ExtensionEntry";
+import type { UiCommand } from "../generated/UiCommand";
+import type { UiContribution } from "../generated/UiContribution";
+import type { UiLocation } from "../generated/UiLocation";
+import { useBaseContext } from "./context";
+import type {
+  EntityContext,
+  LocationContext,
+  SectionProps,
+  TabContext,
+  TabProps,
+} from "./contract";
+import { useExtensions, type BundleModule, type LoadedExtension } from "./store";
+import { evaluateWhen } from "./when";
+
+export interface ContributionElement<P = unknown> {
+  /** Unique across extensions: `<extension id>:<contribution id>`. */
+  key: string;
+  extension: ExtensionEntry;
+  contribution: UiContribution;
+  module: BundleModule;
+  /** What renders a component-backed element; `null` for an action. */
+  Component: ComponentType<P> | null;
+  /** The command an action calls; `null` for any other element. */
+  command: UiCommand | null;
+}
+
+/** Every element at `location`, `when` clauses not evaluated. */
+export function elementsAt<P>(
+  extensions: LoadedExtension[],
+  location: UiLocation,
+): ContributionElement<P>[] {
+  return extensions.flatMap(({ entry, status, module }) => {
+    if (status !== "ready" || !module || !entry.ui) return [];
+    const { contributions, commands } = entry.ui;
+    return contributions.flatMap((contribution): ContributionElement<P>[] => {
+      if (contribution.location !== location) return [];
+      const base = { key: `${entry.id}:${contribution.id}`, extension: entry, contribution, module };
+      if (contribution.type === "action") {
+        const command = commands.find((c) => c.id === contribution.command);
+        if (!command || typeof module[command.export] !== "function") return [];
+        return [{ ...base, Component: null, command }];
+      }
+      const Component = module[contribution.component];
+      if (typeof Component !== "function") return [];
+      return [{ ...base, Component: Component as ComponentType<P>, command: null }];
+    });
+  });
+}
+
+/** The context of `location`: the selected Run, its Projet, and `extra`. */
+export function useLocationContext<C extends LocationContext = LocationContext>(
+  location: UiLocation,
+  extra?: Omit<C, keyof LocationContext>,
+): C {
+  const base = useBaseContext();
+  return useMemo(() => ({ ...base, location, ...extra }) as C, [base, location, extra]);
+}
+
+/** The elements rendered at `location` on `context`. */
+export function useContributions<P = unknown>(
+  location: UiLocation,
+  context: LocationContext,
+): ContributionElement<P>[] {
+  const extensions = useExtensions();
+  return useMemo(
+    () =>
+      elementsAt<P>(extensions, location).filter((element) =>
+        evaluateWhen(element.contribution.when, context),
+      ),
+    [extensions, location, context],
+  );
+}
+
+/** The `settings` location's sections; none without a contribution. */
+export function useSettingsPanels(): ContributionElement<SectionProps>[] {
+  const context = useLocationContext("settings");
+  return useContributions<SectionProps>("settings", context);
+}
+
+/** The `run/detail` location's tabs for the Run `entity`, and their context. */
+export function useDetailTabs(entity: EntityContext | null): {
+  tabs: ContributionElement<TabProps>[];
+  context: TabContext;
+} {
+  const extra = useMemo(
+    () => ({ entity: entity ?? { kind: "run", id: "", attributes: {} } }),
+    [entity],
+  );
+  const context = useLocationContext<TabContext>("run/detail", extra);
+  const tabs = useContributions<TabProps>("run/detail", context);
+  return { tabs: entity ? tabs : [], context };
+}

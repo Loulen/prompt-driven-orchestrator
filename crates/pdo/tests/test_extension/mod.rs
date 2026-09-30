@@ -16,9 +16,15 @@
 //!   first ([`OnEvent`]).
 //! - **`start`**: remembers its data folder ([`Control::data_dir`]).
 //! - **`routes`** (`routes.rs`): `/ext/test` answers who it is, `/events` the
-//!   trace of the events, `/ui.js` its UI bundle, `/incompatible` switches the
-//!   bundle to a React major the front does not run.
-//! - **`ui`**: one element in each of the four UI slots (`ui.js`).
+//!   trace of the events, `/ui.js` its UI bundle, `/icon.svg` its icon,
+//!   `/commands` the trace of its command's calls (`POST` records one),
+//!   `/incompatible` switches the bundle to a React major the front does not run.
+//! - **`ui`** (`ui.js`): one element at each location of the catalogue. The
+//!   four locations of 0.1 through their 0.1 slots (`Navigation`,
+//!   `SettingsPanel`, `ListFilter`/`DetailTab` of the Runs), so they prove the
+//!   0.1 form still renders; `topbar/end` through 0.2 contributions: a page with
+//!   its icon, an action calling [`SHOW_CONTEXT`] while a Run is selected, and
+//!   an action whose `when` never holds.
 //!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
 
@@ -31,7 +37,8 @@ use std::time::Duration;
 
 use pdo::extension_api::{
     Actor, Attributes, Authorization, EntityRef, Extension, ExtensionContext, Manifest, Operation,
-    RequestParts, ResourceKind, Slot, UiContributions, UiSlot, Verb,
+    RequestParts, ResourceKind, Slot, UiCommand, UiContribution, UiContributions, UiLocation,
+    UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -45,6 +52,10 @@ pub const REACT_MAJOR: u32 = 19;
 
 /// The request header naming the caller.
 pub const ACTOR_HEADER: &str = "x-pdo-test-actor";
+
+/// The id of the test extension's command: it reports the context it was
+/// called with (a toast, and `POST /ext/test/commands`).
+pub const SHOW_CONTEXT: &str = "test.show-context";
 
 /// What the test extension refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +176,7 @@ pub struct Control {
     on_event: Arc<Mutex<OnEvent>>,
     data_dir: Arc<Mutex<Option<PathBuf>>>,
     incompatible: Arc<AtomicBool>,
+    commands: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Default for Control {
@@ -176,6 +188,7 @@ impl Default for Control {
             on_event: Arc::new(Mutex::new(OnEvent::Record)),
             data_dir: Arc::default(),
             incompatible: Arc::default(),
+            commands: Arc::default(),
         }
     }
 }
@@ -207,6 +220,15 @@ impl Control {
     /// Declare the bundle built for another major of React.
     pub fn set_incompatible(&self, incompatible: bool) {
         self.incompatible.store(incompatible, Ordering::Relaxed);
+    }
+
+    /// The contexts the bundle's command reported it was called with, in order.
+    pub fn commands(&self) -> Vec<Value> {
+        self.commands.lock().unwrap().clone()
+    }
+
+    fn record_command(&self, context: Value) {
+        self.commands.lock().unwrap().push(context);
     }
 
     fn incompatible(&self) -> bool {
@@ -306,6 +328,9 @@ impl Extension for TestExtension {
             REACT_MAJOR
         };
         let run = ResourceKind::Run;
+        // No icon: its button shows the fallback, a boxed « S ».
+        let show_context = UiCommand::new(SHOW_CONTEXT, "Show context", "showContext");
+        let never = UiCommand::new("test.never", "Never shown", "showContext");
         Some(
             UiContributions::bundle(format!("/ext/{ID}/ui.js"), major)
                 .with(UiSlot::new(
@@ -331,7 +356,21 @@ impl Extension for TestExtension {
                     "run-tab",
                     "Test",
                     "RunTab",
-                )),
+                ))
+                .contribute(
+                    UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
+                        .with_icon(format!("/ext/{ID}/icon.svg")),
+                )
+                .contribute(
+                    UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)
+                        .when(When::has("run")),
+                )
+                .contribute(
+                    UiContribution::action(UiLocation::TopbarEnd, "never", &never)
+                        .when(When::eq("run.status", "never-a-status")),
+                )
+                .command(show_context)
+                .command(never),
         )
     }
 

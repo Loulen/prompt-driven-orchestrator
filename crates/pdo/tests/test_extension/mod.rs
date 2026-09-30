@@ -30,10 +30,15 @@
 //! core hands them (amendment #34): the test extension sees their Operations
 //! in `authorize`, their events in `on_event`, stamps their entities.
 //!
+//! `hosted.rs` adds two more, **A** and **B**, for the locations an extension
+//! hosts (amendment #32): A hosts `a/panneau` and `a/actions`, B contributes.
+//! Their ids are those of the interop peers: a daemon loads one set or the other.
+//!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
 //!
 //! [`Host`]: pdo::extension_api::Host
 
+pub mod hosted;
 pub mod interop;
 mod routes;
 

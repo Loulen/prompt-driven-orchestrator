@@ -27,6 +27,8 @@ function testExtension(reactMajor = hostReactMajor()): ExtensionEntry {
     ui: {
       bundle_url: "/ext/test/ui.js",
       react_major: reactMajor,
+      ui_module_major: null,
+      locations: [],
       contributions: [
         { location: "topbar/start", id: "events", label: "Test events", type: "page", component: "EventsPage" },
         { location: "settings", id: "settings", label: "Test extension", type: "section", component: "SettingsPanel" },

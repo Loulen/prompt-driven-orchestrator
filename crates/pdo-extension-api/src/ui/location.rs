@@ -17,6 +17,11 @@ use super::UiElement;
 /// each of them, and `frontend/src/shared/generated/UiLocation.ts` is this very
 /// type in TypeScript.
 ///
+/// Besides the core's locations, an extension may **host** its own
+/// ([`UiLocation::Hosted`], declared by a [`HostedLocation`](super::HostedLocation)):
+/// the other extensions contribute there exactly as here, and the host renders
+/// them through the shared module `@pdo/extension-ui` (ADR-0081, amendment #32).
+///
 /// Non-exhaustive: adding a location is a minor evolution of the API.
 ///
 /// **Adding a location**: a variant here (its id in `serde(rename)`, its line
@@ -50,10 +55,18 @@ pub enum UiLocation {
     /// 0.1 `DetailTab { resource: Run }` slot.
     #[serde(rename = "run/detail")]
     RunDetail,
+    /// A location an extension hosts, by its id `<extension>/<name>`
+    /// (`pm/onglet`): what it accepts and hands over is the host's
+    /// [`HostedLocation`](super::HostedLocation) declaration. A contribution to
+    /// the location of an extension that is not loaded, or that does not
+    /// declare it, is left out without error.
+    #[serde(untagged)]
+    Hosted(#[cfg_attr(feature = "ts", ts(type = "`${string}/${string}`"))] &'static str),
 }
 
 impl UiLocation {
-    /// Every location of this version of the API, in the catalogue's order.
+    /// Every location of the core in this version of the API, in the
+    /// catalogue's order (the hosted ones are the extensions').
     pub const ALL: &'static [UiLocation] = &[
         UiLocation::TopbarStart,
         UiLocation::TopbarEnd,
@@ -71,11 +84,15 @@ impl UiLocation {
             UiLocation::Settings => "settings",
             UiLocation::RunsFilter => "runs/filter",
             UiLocation::RunDetail => "run/detail",
+            UiLocation::Hosted(id) => id,
         }
     }
 
     /// Whether this location renders `element`. The core leaves out, with a
-    /// warning in its log, a contribution a location does not accept.
+    /// warning in its log, a contribution a location does not accept. A
+    /// hosted location accepts the kind its host declares
+    /// ([`HostedLocation::accepts`](super::HostedLocation::accepts)): the core
+    /// checks it against the declaration, this answers `true`.
     pub fn accepts(self, element: &UiElement) -> bool {
         match self {
             UiLocation::TopbarStart => matches!(element, UiElement::Page { .. }),
@@ -85,6 +102,7 @@ impl UiLocation {
             UiLocation::Settings => matches!(element, UiElement::Section { .. }),
             UiLocation::RunsFilter => matches!(element, UiElement::ListFilter { .. }),
             UiLocation::RunDetail => matches!(element, UiElement::Tab { .. }),
+            UiLocation::Hosted(_) => true,
         }
     }
 }
@@ -118,5 +136,13 @@ mod tests {
         assert!(!UiLocation::TopbarStart.accepts(&action));
         assert!(!UiLocation::Settings.accepts(&page));
         assert!(!UiLocation::RunDetail.accepts(&action));
+    }
+
+    #[test]
+    fn a_hosted_location_serializes_as_its_id() {
+        let hosted = UiLocation::Hosted("pm/onglet");
+        assert_eq!(hosted.id(), "pm/onglet");
+        assert_eq!(serde_json::to_value(hosted).unwrap(), "pm/onglet");
+        assert!(!UiLocation::ALL.contains(&hosted));
     }
 }

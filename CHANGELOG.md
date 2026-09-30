@@ -10,6 +10,22 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.4.0 — Emplacements d'UI hébergés par une extension (#32)
+
+`pdo-extension-api` passe en **0.4.0**, par ajout : une extension écrite pour 0.1, 0.2 ou 0.3
+compile et tourne sans changement (ADR-0081, amendement #32 ; référence : `docs/reference/extension-ui.md`
+§ *Hosted locations*).
+
+- **Emplacements hébergés** (`HostedLocation`, `UiContributions::host`) : une extension déclare
+  ses propres emplacements, `<id>/<nom>`, avec le type de contribution accepté (`UiElementKind`)
+  et la forme de leur contexte. Les autres y contribuent par `UiLocation::Hosted("<id>/<nom>")`.
+  Une contribution à l'emplacement d'une extension absente est ignorée.
+- **Module partagé `@pdo/extension-ui`**, dans l'import map du front à côté de React :
+  `useHostedContributions`, `HostedContribution`, `HostedContributions`, `runHostedCommand`. Un
+  bundle qui l'importe le déclare (`UiContributions::importing_ui_module`) ; une autre majeure
+  n'est pas chargée, avec une bannière.
+- **Fil de `GET /ext`** : `ui.locations` et `ui.ui_module_major` s'ajoutent.
+
 ## 2.3.0 — Interopérabilité : ressource d'extension et Hôte (#34)
 
 `pdo-extension-api` passe en **0.3.0** (ADR-0081, amendement #34). Une extension fait passer ses

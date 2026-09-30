@@ -64,6 +64,36 @@ pub enum UiElement {
     ListFilter { component: String },
 }
 
+/// The kind of a [`UiElement`], without what renders it: what a
+/// [`HostedLocation`](super::HostedLocation) accepts. On the wire, the
+/// element's `type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[non_exhaustive]
+pub enum UiElementKind {
+    Page,
+    Action,
+    Tab,
+    Section,
+    Decoration,
+    ListFilter,
+}
+
+impl UiElement {
+    /// What kind of element this is.
+    pub fn kind(&self) -> UiElementKind {
+        match self {
+            UiElement::Page { .. } => UiElementKind::Page,
+            UiElement::Action { .. } => UiElementKind::Action,
+            UiElement::Tab { .. } => UiElementKind::Tab,
+            UiElement::Section { .. } => UiElementKind::Section,
+            UiElement::Decoration { .. } => UiElementKind::Decoration,
+            UiElement::ListFilter { .. } => UiElementKind::ListFilter,
+        }
+    }
+}
+
 impl UiContribution {
     fn new(location: UiLocation, id: &str, label: &str, element: UiElement) -> Self {
         Self {
@@ -180,6 +210,22 @@ mod tests {
                 "location": "topbar/end", "id": "home", "label": "Project",
                 "type": "page", "component": "HomePage", "icon": "/ext/pm/icon.svg",
             })
+        );
+    }
+
+    #[test]
+    fn an_element_kind_is_its_type_on_the_wire() {
+        let tab = UiContribution::tab(UiLocation::Hosted("pm/onglet"), "audit", "Audit", "Audit");
+        assert_eq!(tab.element.kind(), UiElementKind::Tab);
+        let wire = serde_json::to_value(&tab).unwrap();
+        assert_eq!(wire["location"], "pm/onglet");
+        assert_eq!(
+            wire["type"],
+            serde_json::to_value(UiElementKind::Tab).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(UiElementKind::ListFilter).unwrap(),
+            "list_filter"
         );
     }
 

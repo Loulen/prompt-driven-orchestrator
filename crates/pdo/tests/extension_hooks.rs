@@ -599,3 +599,76 @@ async fn an_extension_written_for_0_1_runs_and_keeps_its_four_locations() {
     assert_eq!(contributions(&index, 1), the_four_locations_of_0_1());
     assert_eq!(index[1]["ui"]["commands"], json!([]));
 }
+
+/// The daemon with the test extension, then B, then A (hosted.rs).
+async fn daemon_with_hosted(
+    with_host: bool,
+) -> (TestDaemon, test_extension::hosted::ContributorControl) {
+    use test_extension::hosted::{ContributorB, HostA};
+    let (ext, _control) = TestExtension::new(Refusal::Nothing);
+    let (b, panels) = ContributorB::new();
+    let mut extensions = ext.boxed();
+    extensions.push(Box::new(b));
+    if with_host {
+        extensions.push(Box::new(HostA));
+    }
+    let daemon = TestDaemon::spawn_with_extensions(seed, extensions)
+        .await
+        .unwrap();
+    (daemon, panels)
+}
+
+#[tokio::test]
+async fn ext_exposes_the_hosted_locations_and_their_contributions() {
+    use test_extension::hosted::{ACTIONS, PANEL};
+    let (daemon, panels) = daemon_with_hosted(true).await;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(ids(&index, "id"), ["test", "b", "a"]);
+    let host = &index[2]["ui"];
+    assert_eq!(host["ui_module_major"], pdo::extension_api::UI_MODULE_MAJOR);
+    assert_eq!(host["locations"][0]["id"], PANEL);
+    assert_eq!(host["locations"][0]["accepts"], "section");
+    assert_eq!(host["locations"][0]["context"][0]["key"], "item");
+    assert_eq!(host["locations"][1]["id"], ACTIONS);
+    assert_eq!(host["locations"][1]["accepts"], "action");
+    // B's contribution to `absent/panel` is ignored.
+    assert_eq!(
+        contributions(&index, 1),
+        [
+            triple(PANEL, "section", "panel"),
+            triple(ACTIONS, "action", "ping"),
+        ]
+    );
+    // Both bundles are served.
+    for id in ["a", "b"] {
+        let bundle = reqwest::get(format!("{}/ext/{id}/ui.js", daemon.url()))
+            .await
+            .unwrap();
+        assert_eq!(bundle.status(), 200);
+        assert_eq!(bundle.headers()["content-type"], "text/javascript");
+    }
+
+    // A second section of B: both are listed, in declaration order.
+    let (status, _) = post_json(&daemon, "/ext/b/panels", json!({ "count": 2 })).await;
+    assert_eq!(status, 200);
+    let _ = panels;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(
+        contributions(&index, 1),
+        [
+            triple(PANEL, "section", "panel"),
+            triple(PANEL, "section", "second-panel"),
+            triple(ACTIONS, "action", "ping"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn without_its_host_a_contribution_to_a_hosted_location_is_ignored() {
+    let (daemon, _panels) = daemon_with_hosted(false).await;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(ids(&index, "id"), ["test", "b"]);
+    assert_eq!(index[1]["ui"]["contributions"], json!([]));
+    // The rest of B still stands: its command, its bundle.
+    assert_eq!(index[1]["ui"]["commands"][0]["id"], "b.ping");
+}

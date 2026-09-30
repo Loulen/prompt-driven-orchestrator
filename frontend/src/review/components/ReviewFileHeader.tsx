@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions";
+import type { FileEntity } from "../../shared/extensions/contract";
 import { ChevronDown, ChevronRight, Copy, History, SquareArrowOutUpRight } from "lucide-react";
 import type { DiffFile } from "../../shared/generated/DiffFile";
 import { baseName, filePath, statusLetter } from "../../run/model/runRefs";
@@ -45,6 +47,11 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
       () => {},
     );
   };
+
+  const extensionExtra = useMemo(() => {
+    const entity: FileEntity = { kind: "file", id: path, path, status: file.status, attributes: {} };
+    return { entity, review: { from: pair.from, to: pair.to } };
+  }, [path, file.status, pair.from, pair.to]);
 
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
   const openHref =
@@ -123,6 +130,14 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
             <StateIcon state="resolved" size={10} /> {sentStates.resolved}
           </span>
         )}
+        {/* #30 — `review/file`: the extensions' icon buttons, before « Copy path ». */}
+        <ExtensionActionButtons
+          location="review/file"
+          extra={extensionExtra}
+          className="flex items-center gap-0.5"
+          buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+          iconSize={11}
+        />
         <button
           type="button"
           onClick={copyPath}

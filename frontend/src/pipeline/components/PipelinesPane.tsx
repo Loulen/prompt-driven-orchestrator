@@ -15,6 +15,10 @@ import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
 import ConfirmDeleteModal from "../../shared/ui/ConfirmDeleteModal";
 import LibraryRow from "./LibraryRow";
+import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions";
+import type { PipelineEntity } from "../../shared/extensions/contract";
+
+const NO_EXTRA = {};
 
 import ImportWorkflowModal from "./ImportWorkflowModal";
 import NewPipelineModal from "./NewPipelineModal";
@@ -148,9 +152,17 @@ export default function PipelinesPane() {
         style={{ fontSize: "11.5px" }}
       >
         Pipelines
+        {/* #30 — `pipelines/header`: the extensions' icon buttons, before the
+            core's. */}
+        <span className="ml-auto" />
+        <ExtensionActionButtons
+          location="pipelines/header"
+          extra={NO_EXTRA}
+          className="mr-1.5 flex items-center gap-0.5"
+        />
         <button
           onClick={() => setShowImportModal(true)}
-          className="ml-auto grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+          className="grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
           title="Import a workflow"
           data-testid="import-workflow-button"
         >
@@ -229,6 +241,7 @@ export default function PipelinesPane() {
               // the delete may cascade to its Library twin (#227).
               onDelete={() => setDeleteTarget(p)}
               deleteTitle="Delete pipeline"
+              menuEntity={pipelineEntity(p)}
             />
           ))}
         </div>
@@ -302,4 +315,9 @@ export default function PipelinesPane() {
       )}
     </>
   );
+}
+
+/** A row's Pipeline, as its menu's context hands it over (#30). */
+function pipelineEntity(p: PipelineListEntry): PipelineEntity {
+  return { kind: "pipeline", id: p.id, name: p.name, attributes: p.attributes ?? {} };
 }

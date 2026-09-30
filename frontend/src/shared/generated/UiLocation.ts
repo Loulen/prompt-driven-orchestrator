@@ -23,9 +23,12 @@
  *
  * Non-exhaustive: adding a location is a minor evolution of the API.
  *
+ * Since #30 the catalogue also holds the **Action locations**: the bars and
+ * menus of the interface ([`UiLocation::is_action_location`]).
+ *
  * **Adding a location**: a variant here (its id in `serde(rename)`, its line
  * in [`UiLocation::ALL`], [`UiLocation::id`] and [`UiLocation::accepts`]), its
  * section in the reference page, and its rendering in the front (a component
  * that calls `useContributions("<id>", context)`).
  */
-export type UiLocation = "topbar/start" | "topbar/end" | "settings" | "runs/filter" | "run/detail" | `${string}/${string}`;
+export type UiLocation = "topbar/start" | "topbar/end" | "settings" | "runs/filter" | "run/detail" | "runs/header" | "run/item/menu" | "runs/bulk" | "run/toolbar" | "canvas/node/menu" | "canvas/edge/menu" | "node/toolbar" | "trigger/item/menu" | "pipeline/item/menu" | "pipelines/header" | "tab/menu" | "review/toolbar" | "review/file" | "skill/menu" | `${string}/${string}`;

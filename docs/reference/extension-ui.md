@@ -1,6 +1,6 @@
 # Extension UI reference
 
-How an extension adds to PDO's interface (ADR-0081, amendments #29 and #32): a catalogue of
+How an extension adds to PDO's interface (ADR-0081, amendments #29, #30 and #32): a catalogue of
 **named locations**, a few **kinds of contribution**, **commands**, **`when` clauses**, and the
 locations an extension **hosts** in its own interface. The locations,
 what each accepts and the context each hands over are part of the semver of
@@ -34,6 +34,19 @@ fn ui(&self) -> Option<UiContributions> {
             .command(new_task),
     )
 }
+```
+
+An action goes to any Action location the same way, with a `when` on what that location hands
+over:
+
+```rust
+let link = UiCommand::new("pm.link-task", "Link to a task…", "linkTask");
+UiContributions::bundle("/ext/pm/ui.js", 19)
+    .contribute(
+        UiContribution::action(UiLocation::RunItemMenu, "link-task", &link)
+            .when(When::not(When::eq("entity.status", "archived"))),
+    )
+    .command(link)
 ```
 
 - The bundle (`bundle_url`) is one ES module. It imports `react`, `react/jsx-runtime` and
@@ -123,6 +136,145 @@ selected Run, or when its repository belongs to no Projet.
   The component also receives `entity`.
 - **0.1**: the `DetailTab { resource: Run }` slot.
 
+### The Action locations
+
+Every location below accepts **actions only** (amendment #30). The core renders each action and
+calls its command with the location's context; the `when` clause reads that same context.
+
+- **In a bar**: an icon button per action, before the core's buttons: the command's `icon`, or the
+  label's first letter, boxed; the label as tooltip and accessible name.
+- **In a menu**: a group per extension, titled with the extension's name, after the core's entries
+  and **before the destructive entry** (Delete, Cleanup…). Each entry shows the command's icon and
+  the label.
+- **Without a contribution**, a bar or a menu looks exactly as it did: no button, no group, no
+  separator.
+- **A command that fails** (a throw, a rejection) shows an error toast; the bar or the menu keeps
+  working. Every element sits in its own error boundary.
+
+The contexts they hand over, on top of `LocationContext`:
+
+```ts
+interface EntityContext { kind: string; id: string; attributes: Attributes }
+interface RunEntity extends EntityContext { kind: "run"; name: string | null; pipeline: string; status: string }
+interface TriggerEntity extends EntityContext { kind: "trigger"; name: string; pipeline: string; enabled: boolean }
+interface PipelineEntity extends EntityContext { kind: "pipeline"; name: string }
+interface NodeEntity extends EntityContext { kind: "node"; name: string | null; type: string | null; status: string | null }
+interface EdgeEntity extends EntityContext { kind: "edge"; from: string; to: string }   // id: "<from>.<port>-><to>.<port>"
+interface FileEntity extends EntityContext { kind: "file"; path: string; status: string } // id: the path
+interface SkillEntity extends EntityContext { kind: "skill" | "skill_folder"; name: string }
+
+interface ItemContext<E> extends LocationContext { entity: E }
+interface SelectionContext extends LocationContext { selection: { kind: "run"; ids: string[] } }
+interface CanvasItemContext<E> extends ItemContext<E> { pipeline: { id: string; name: string; run: string | null } }
+interface ReviewContext extends LocationContext { review: { from: string; to: string } }
+interface ReviewFileContext extends ReviewContext { entity: FileEntity }
+```
+
+`attributes` is `{}` for an entity that carries none. A command receives this context plus
+`extension` and `contribution` (see *Commands*).
+
+### `runs/header`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the Runs tab's title bar, before « Project » and
+  « New Run ».
+- **Context**: `LocationContext`.
+
+### `run/item/menu`
+
+- **Accepts**: action.
+- **Renders**: the « ⋯ » menu of a Run's row (a `MoreHorizontal` trigger after the row's hover
+  icons): Rename, Pause / Resume, Retry all, Open shell, Copy run id as the Run allows, the
+  extensions' groups, then Cleanup (Stop and archive) or Forget.
+- **Context**: `ItemContext<RunEntity>`: the row's Run, whatever the selection. Hide an action
+  on an archived Run with `When::not(When::eq("entity.status", "archived"))`.
+
+### `runs/bulk`
+
+- **Accepts**: action.
+- **Renders**: an entry per action in the bar of the Runs multi-selection, after Cleanup, Retry
+  and Pause.
+- **Context**: `SelectionContext`: the ids of the selected Runs.
+
+### `run/toolbar`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the toolbar of a Run's canvas, after its finished-run
+  group and before Review and Pipeline info. Not on a pipeline template's canvas.
+- **Context**: `LocationContext`, whose `run` is the Run on the canvas.
+
+### `canvas/node/menu`
+
+- **Accepts**: action.
+- **Renders**: the right-click menu of a node of the canvas (template or Run, not archived):
+  Duplicate, Fan out, Export as YAML…, the extensions' groups, then Delete.
+- **Context**: `CanvasItemContext<NodeEntity>`: the node (`status` on a Run's canvas, else
+  `null`) and the pipeline of the tab.
+
+### `canvas/edge/menu`
+
+- **Accepts**: action.
+- **Renders**: the right-click menu of an edge of the canvas: the extensions' groups, then
+  Delete edge.
+- **Context**: `CanvasItemContext<EdgeEntity>`.
+
+### `node/toolbar`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action at the right of the header of a node's detail, in a
+  Run.
+- **Context**: `ItemContext<NodeEntity>`: the node (`type` is `null` there) and, as `run`, the
+  selected Run.
+
+### `trigger/item/menu`
+
+- **Accepts**: action.
+- **Renders**: the « ⋯ » menu of a Trigger's row: Run now, Edit, Enable / Disable, Copy trigger
+  id, the extensions' groups, then Delete.
+- **Context**: `ItemContext<TriggerEntity>`.
+
+### `pipeline/item/menu`
+
+- **Accepts**: action.
+- **Renders**: the « ⋯ » menu of a row of the Pipelines tab: Open, Rename, Duplicate, the
+  extensions' groups, then Delete pipeline.
+- **Context**: `ItemContext<PipelineEntity>`.
+
+### `pipelines/header`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the Pipelines tab's title bar, before « Import a
+  workflow » and « New pipeline ».
+- **Context**: `LocationContext`.
+
+### `tab/menu`
+
+- **Accepts**: action.
+- **Renders**: the right-click menu of an editor tab: Close, Close others, Close to the right,
+  Close all, then the extensions' groups.
+- **Context**: `ItemContext<PipelineEntity>`: the tab's pipeline.
+
+### `review/toolbar`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the Review page's top bar, before « open in a new
+  tab ».
+- **Context**: `ReviewContext`, whose `run` is the Run under review (and `project` its Projet).
+
+### `review/file`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the header of a file of the Review page, before
+  « Copy path ». Clicking it does not fold the file.
+- **Context**: `ReviewFileContext`.
+
+### `skill/menu`
+
+- **Accepts**: action.
+- **Renders**: the « ⋮ » menu of a skill or a folder of the skill bank: its verbs, the
+  extensions' groups, then its delete (or « Managed by PDO » on a locked skill).
+- **Context**: `ItemContext<SkillEntity>`.
+
 ## Pages
 
 ```ts
@@ -176,8 +328,8 @@ error toast. An action whose command the bundle does not export is not rendered.
 ## `when` clauses
 
 A declarative condition on the location's context, evaluated by the core. A key is a dotted path:
-`run`, `run.status`, `project.name`, `run.attributes.<extension>/<key>`, `entity.kind`, `path`. An
-absent key reads as nothing.
+`run`, `run.status`, `project.name`, `run.attributes.<extension>/<key>`, `entity.kind`,
+`entity.status`, `selection.ids`, `review.to`, `path`. An absent key reads as nothing.
 
 | Rust | Wire | Holds when |
 | --- | --- | --- |

@@ -10,6 +10,22 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.6.0 — Emplacements d'Action, menus « ⋯ » des lignes, menus du core sur le `DropdownMenu` partagé (#30)
+
+`pdo-extension-api` passe en **0.6.0**, par ajout : une extension écrite pour 0.1 à 0.5 compile
+et tourne sans changement (ADR-0081, amendement #30 ; référence : `docs/reference/extension-ui.md`).
+
+- **Quatorze emplacements d'Action** : `runs/header`, `run/item/menu`, `runs/bulk`, `run/toolbar`,
+  `canvas/node/menu`, `canvas/edge/menu`, `node/toolbar`, `trigger/item/menu`,
+  `pipeline/item/menu`, `pipelines/header`, `tab/menu`, `review/toolbar`, `review/file`,
+  `skill/menu`. Chacun transmet, en plus du Run sélectionné et de son Projet, ce qui est en jeu
+  chez lui (`entity`, `selection`, `pipeline`, `review`).
+- **Menu « ⋯ »** sur les lignes de Run, de Trigger et de Pipeline : les verbes de la ligne, un
+  groupe par extension, puis l'entrée destructive.
+- **Menus contextuels** du canvas, de la barre d'onglets et de l'arbre des skills sur le
+  `DropdownMenu` partagé, mêmes entrées et même comportement ; une entrée désactivée y est
+  `aria-disabled` (focalisable au clavier) au lieu d'un `disabled` natif.
+
 ## 2.5.0 — Surface agent : `pdo ext <id>` et skills d'extension (#33)
 
 `pdo-extension-api` passe en **0.5.0**, par ajout : une extension écrite pour 0.1 à 0.4

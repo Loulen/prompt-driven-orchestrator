@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import type { RunState } from "../../shared/generated/RunState";
 import { PanelLeftOpen } from "lucide-react";
 import "@git-diff-view/react/styles/diff-view.css";
 import { filePath } from "../../run/model/runRefs";
@@ -15,6 +16,10 @@ import ReviewBanners from "./ReviewBanners";
 import ReviewDiffBody from "./ReviewDiffBody";
 import ReviewFileList from "./ReviewFileList";
 import ReviewTopBar from "./ReviewTopBar";
+import { useProjects, useRuns } from "../../app/useAppData";
+import ExtensionContextProvider from "../../shared/extensions/ExtensionContextProvider";
+import Toaster from "../../shared/ui/Toaster";
+import { TooltipProvider } from "../../shared/ui/tooltip";
 
 /**
  * The **Review page** (#749, ADR-0067; CONTEXT.md § "Relecture de diff"): a
@@ -234,6 +239,7 @@ export default function ReviewPage({ runId }: Props) {
   const { toast } = c;
   const { pairDrafts, sentCount } = entries;
   return (
+    <ReviewExtensions run={run}>
     <div className="pdo-review grid h-screen grid-rows-[36px_1fr] bg-bg-1 text-fg" data-testid="review-page">
       <ReviewTopBar
         runId={runId}
@@ -360,5 +366,29 @@ export default function ReviewPage({ runId }: Props) {
         </div>
       )}
     </div>
+    </ReviewExtensions>
+  );
+}
+
+/**
+ * What the extensions' actions of the Review page (#30) need around them: the
+ * page's Run as the selected Run, with its Projet (the Runs list's rule, hence
+ * the Runs and the Projets), the tooltips of their buttons and the toasts of
+ * their commands.
+ */
+function ReviewExtensions({ run, children }: { run: RunState | null; children: ReactNode }) {
+  const { runs, refresh: refreshRuns } = useRuns();
+  const { projects, refresh: refreshProjects } = useProjects();
+  useEffect(() => {
+    void refreshRuns();
+    void refreshProjects();
+  }, [refreshRuns, refreshProjects]);
+  return (
+    <TooltipProvider>
+      <ExtensionContextProvider selectedRun={run} runs={runs} projects={projects}>
+        {children}
+        <Toaster />
+      </ExtensionContextProvider>
+    </TooltipProvider>
   );
 }

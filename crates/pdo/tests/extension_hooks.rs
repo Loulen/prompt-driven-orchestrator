@@ -470,7 +470,35 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("topbar/end", "action", "show-context"),
         triple("topbar/end", "action", "never"),
     ]);
+    // One action at each Action location (#30), then the command that fails.
+    expected.extend(
+        test_extension::ACTION_LOCATIONS
+            .iter()
+            .map(|&l| triple(l.id(), "action", &test_extension::action_id(l))),
+    );
+    expected.push(triple("run/item/menu", "action", "fail"));
     assert_eq!(contributions(&index, 0), expected);
+    let contribution = |id: &str| {
+        ui["contributions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .cloned()
+            .unwrap()
+    };
+    let row_menu = contribution("at-run-item-menu");
+    assert_eq!(row_menu["label"], "Test run/item/menu");
+    assert_eq!(row_menu["command"], "test.at-run-item-menu");
+    assert_eq!(
+        row_menu["when"],
+        json!({ "not": { "eq": ["entity.status", "archived"] } })
+    );
+    assert_eq!(contribution("fail")["command"], test_extension::FAIL);
+    let commands = ui["commands"].as_array().unwrap();
+    assert!(commands.iter().any(|c| c["id"] == "test.at-runs-bulk"
+        && c["title"] == "Test runs/bulk"
+        && c["export"] == "showContext"));
     let page = &ui["contributions"][4];
     assert_eq!(page["icon"], "/ext/test/icon.svg");
     assert_eq!(page["component"], "TestPage");

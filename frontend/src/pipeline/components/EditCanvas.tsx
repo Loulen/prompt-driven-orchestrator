@@ -261,6 +261,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         onReopen={handleReopen}
         onRetryAll={() => setConfirmRetryAll(true)}
         onOpenShell={handleOpenShell}
+        run={activeRunState}
       />
       {/* #225: lint diagnostics are an edit-mode affordance — suppress on run tabs.
           NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
@@ -352,6 +353,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         contextMenu={contextMenu}
         setContextMenu={setContextMenu}
         pipeline={pipeline}
+        run={activeRunState}
         onExportNode={setExportNodeId}
       />
 

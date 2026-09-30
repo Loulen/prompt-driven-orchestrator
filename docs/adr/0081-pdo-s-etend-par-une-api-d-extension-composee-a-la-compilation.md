@@ -8,6 +8,7 @@
 > Amendé par #34 : la ressource d'extension et l'Hôte (§ *Amendement #34*).
 > Amendé par #32 : une extension héberge ses propres emplacements, rendus par un module partagé
 > (§ *Amendement #32*).
+> Amendé par #33 : la CLI d'une extension (`pdo ext`) et ses skills (§ *Amendement #33*).
 
 ## Contexte
 
@@ -293,3 +294,52 @@ une API d'enregistrement dynamique côté navigateur (les déclarations restent 
 d'UI, lisibles par `GET /ext` et vérifiées par le daemon) ; un identifiant `String` qui aurait
 retiré `Copy` à `UiLocation` et cassé le code 0.2 ; plusieurs types acceptés par emplacement
 hébergé, sans besoin connu.
+
+## Amendement #33 : la surface agent, `pdo ext <id>` et les skills d'extension
+
+Seams découverts en spécifiant l'extension Projet (`Loulen/pdo-extensions#4`) : un agent doit
+piloter une extension depuis sa session comme il pilote le core, et savoir le faire sans
+consigne du prompt.
+
+- **Deux hooks de plus, deux défauts neutres** : `cli()` déclare une ligne de commande (un
+  résumé, `None` par défaut) et `run_cli(invocation)` l'exécute ; `skills()` liste des skills
+  embarqués (un `SKILL.md` et ses fichiers, aucun par défaut). `pdo-extension-api` passe en
+  **0.5.0** (après 0.4.0, amendement #32) : ajout rétrocompatible au source d'une extension (une
+  extension 0.1 qui ne touche à rien compile et fonctionne), mais montée de mineure, donc rebuild
+  obligatoire en 0.x ; `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`.
+- **`pdo ext <id> <args…>` relaie, sans construire les extensions.** La CLI envoie au daemon
+  (`POST /ext-cli/<id>`, hors du préfixe `/ext/<id>` qui appartient à l'extension) les arguments
+  tels quels, flags compris, l'entrée standard si c'est un pipe ou un fichier, son répertoire de
+  travail, et l'identité de la session de node (`PDO_RUN_ID`, `PDO_NODE_ID`) comme les autres
+  commandes d'agent. Le daemon appelle `run_cli` avec l'Acteur établi par `identify` : l'Agent
+  `{run, node}` depuis une session de node, l'Opérateur local sinon. Les octets voyagent en
+  base64. `pdo complete` et `pdo ext` ne construisent toujours pas les extensions : c'est le
+  daemon qui les porte (amendement #23).
+- **Codes de sortie** : celui de l'extension, tel quel ; `1` si le daemon est injoignable ou si
+  l'extension échoue (panique : pas de verdict, comme `pdo complete`) ; **`127`**
+  (`EXIT_NO_CLI`) si le daemon n'a pas d'extension `<id>` ou si elle n'a pas de CLI, l'usage
+  du shell pour « commande introuvable ». `pdo ext` seul liste les extensions qui ont une CLI,
+  lues dans `GET /ext` (champ `cli`).
+- **`run_cli` tourne hors du chemin des requêtes** (`spawn_blocking`) : une commande peut durer
+  (un backup) sans ralentir le daemon, et piloter un appel async par
+  `Handle::current().block_on`. L'autorisation de ce qu'elle mute appartient à l'extension :
+  le relais n'est pas une mutation du core.
+- **Les skills d'une extension sont amorcés comme les skills natifs** (ADR-0062, #722) : à
+  chaque démarrage, dans un dossier de la banque au nom de l'extension, sous l'id stable
+  `ext-<extension>-<nom>`, verrouillés, marqués `extension: {id, version}` (l'UI affiche
+  « Extension `<id>` » et la version). Ils sont réécrits quand la version de l'extension ou
+  leur contenu change, retirés quand l'extension ne les fournit plus (liste vide comprise ;
+  une panique de `skills()` ne retire rien), et livrés aux worktrees
+  par les règles existantes dès qu'un tier les sélectionne. Un skill dont le `SKILL.md` ne passe
+  pas le filtre, dont le nom diffère du nom déclaré, ou dont le libellé appartient déjà à un
+  skill de l'opérateur est ignoré avec un avertissement, sans bloquer les autres. Les skills
+  d'une extension retirée du binaire restent dans la banque (verrouillés) : ils reviennent à
+  jour avec elle. `skills()` est appelé **avant** `start` (la banque est amorcée à
+  l'ouverture de la base) : la liste ne dépend pas du dossier de données.
+
+Écartés : un code dédié hors de la plage d'une extension (tout `u8` lui appartient ; `127` est
+documenté et une extension ne doit pas le rendre) ; `POST /ext/<id>/cli` (masquerait une route
+de l'extension) ; transporter stdin et stdout en texte (une Archive est binaire) ; lire
+l'entrée standard dès qu'elle n'est pas un terminal (l'outil shell d'un agent laisse ouverte
+une socket qui ne finit jamais : `pdo ext` attendait sans fin, relevé par le FP) ; un dossier
+« PDO » commun avec les skills natifs (le dossier dit qui fournit le skill).

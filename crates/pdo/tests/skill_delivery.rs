@@ -402,3 +402,80 @@ async fn a_selection_changed_before_spawn_is_snapshotted_additively() {
     assert!(worktree.join(".agents/skills/tdd/SKILL.md").is_file());
     assert_eq!(status_outside_pdo(&worktree), "");
 }
+
+/// #33 (ADR-0081): a skill an extension provides is in the bank at startup,
+/// marked as provided by it and locked, and a Run that selects it gets it in
+/// its worktree like any other skill.
+#[tokio::test]
+async fn an_extension_skill_is_seeded_locked_and_delivered_like_any_skill() {
+    use crate::test_extension::{self, Refusal, TestExtension};
+
+    let (ext, _) = TestExtension::new(Refusal::Nothing);
+    let daemon = TestDaemon::spawn_with_extensions(seed, ext.boxed())
+        .await
+        .unwrap();
+    let id = format!("ext-{}-{}", test_extension::ID, test_extension::SKILL_NAME);
+
+    let bank = daemon.get_json("/settings/skills").await;
+    let skill = bank["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == id.as_str())
+        .unwrap_or_else(|| panic!("the extension's skill is in the bank: {bank}"))
+        .clone();
+    assert_eq!(skill["name"], test_extension::SKILL_NAME);
+    assert_eq!(skill["locked"], true);
+    assert_eq!(
+        skill["extension"],
+        serde_json::json!({ "id": test_extension::ID, "version": test_extension::VERSION })
+    );
+    let folder = bank["folders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == skill["folder_id"])
+        .unwrap_or_else(|| panic!("its folder: {bank}"));
+    assert_eq!(folder["name"], "Test extension");
+
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/settings/skills/{id}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403, "an extension's skill is locked");
+
+    select_at_instance(
+        &daemon,
+        serde_json::json!([{ "id": id, "name": test_extension::SKILL_NAME }]),
+    )
+    .await;
+    let run_id = create_run(
+        &daemon,
+        serde_json::json!({
+            "pipeline": PIPELINE_NAME,
+            "input": "go",
+            "target_repo": daemon.target_repo(),
+        }),
+    )
+    .await;
+    let worktree = worktree_of(&daemon, &run_id);
+    let delivered = worktree
+        .join(".agents/skills")
+        .join(test_extension::SKILL_NAME);
+    assert_eq!(
+        std::fs::read_to_string(delivered.join("SKILL.md")).unwrap(),
+        test_extension::SKILL_MD
+    );
+    let (path, content) = test_extension::SKILL_REFERENCE;
+    assert_eq!(
+        std::fs::read_to_string(delivered.join(path)).unwrap(),
+        content
+    );
+    assert!(worktree
+        .join(".claude/skills")
+        .join(test_extension::SKILL_NAME)
+        .join("SKILL.md")
+        .is_file());
+    assert_eq!(status_outside_pdo(&worktree), "");
+}

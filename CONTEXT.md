@@ -1018,6 +1018,10 @@ PDO s'étend sans modifier son core, par une **API d'extension** versionnée à 
 
 **Lien profond d'extension** *(terme)* : une adresse `#/ext/<id>/<emplacement>/<chemin>` qui ouvre la Page de l'Extension à cet emplacement et lui transmet le chemin ; cliquable dans tout rendu markdown du core. Une Extension absente donne un message d'erreur, jamais une page blanche. _Éviter_ : « URL d'extension » (les routes HTTP `/ext/<id>/…` sont autre chose).
 
+**CLI d'extension** *(terme, #33)* : la ligne de commande qu'une Extension déclare, lancée par `pdo ext <id> <args…>`. La CLI du core ne l'exécute pas : elle relaie au daemon les arguments, l'entrée standard (un pipe ou un fichier, jamais un terminal ni la socket ouverte d'un outil shell d'agent) et l'identité de la session de node ; l'Extension voit l'**Agent** depuis une session de node, l'**Opérateur local** sinon. Sortie et code de sortie reviennent tels quels ; `127` dit « pas d'extension, ou pas de CLI ». _Éviter_ : « plugin CLI », « sous-commande » (une sous-commande appartient au core).
+
+**Skill d'extension** *(terme, #33)* : un skill qu'une Extension embarque et que le core amorce dans la Banque de skills à chaque démarrage, comme ses skills natifs : verrouillé, rangé dans le dossier de l'Extension, marqué comme fourni par elle, mis à jour avec sa version. Livré aux worktrees comme tout skill sélectionné. _Éviter_ : « skill importé » (un import vient d'une Source).
+
 ---
 
 ## Bibliothèque

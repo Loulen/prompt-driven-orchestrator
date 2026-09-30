@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, Weak};
 
 use pdo_extension_api::{
-    Attributes, Authorization, EntityRef, Extension, ExtensionContext, ExtensionEvent, Host,
-    Manifest, OperationApplied, RequestParts, EXTENSION_EVENT,
+    Attributes, Authorization, EntityRef, Extension, ExtensionContext, ExtensionEvent,
+    ExtensionSkill, Host, Manifest, OperationApplied, RequestParts, EXTENSION_EVENT,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -49,6 +49,20 @@ pub trait ExtensionHost: Send + Sync {
     fn attributes(&self) -> Arc<dyn AttributeStore> {
         Arc::new(NoAttributes)
     }
+
+    /// The skills each extension brings, in registration order, an empty list
+    /// included (it has stopped providing its skills); an extension that
+    /// panicked saying so is left out. None by default.
+    fn skills(&self) -> Vec<ProvidedSkills> {
+        Vec::new()
+    }
+}
+
+/// The skills one extension brings into the Banque de skills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvidedSkills {
+    pub manifest: Manifest,
+    pub skills: Vec<ExtensionSkill>,
 }
 
 /// The host of a daemon with no extension: the core's identification, everything
@@ -320,6 +334,29 @@ impl ExtensionHost for Extensions {
             None => Arc::new(NoAttributes),
         }
     }
+
+    fn skills(&self) -> Vec<ProvidedSkills> {
+        self.registered
+            .iter()
+            .filter_map(
+                // An empty list is kept: the seed removes what the extension
+                // provided before. A panic is no list at all: it removes nothing.
+                |r| match catch_unwind(AssertUnwindSafe(|| r.extension.skills())) {
+                    Ok(skills) => Some(ProvidedSkills {
+                        manifest: r.manifest.clone(),
+                        skills,
+                    }),
+                    Err(_) => {
+                        tracing::error!(
+                            "extension `{}` panicked in skills; it brings none",
+                            r.manifest.id
+                        );
+                        None
+                    }
+                },
+            )
+            .collect()
+    }
 }
 
 /// The [`Host`] of one extension, `id`.
@@ -558,6 +595,42 @@ mod tests {
             1
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skills_come_with_the_manifest_of_their_extension() {
+        struct Brings;
+        impl Extension for Brings {
+            fn manifest(&self) -> Manifest {
+                Manifest::new("brings", "Brings", "1.2.0")
+            }
+            fn skills(&self) -> Vec<ExtensionSkill> {
+                vec![ExtensionSkill::new("demo", "---\nname: demo\n---\n")]
+            }
+        }
+        struct PanicsInSkills;
+        impl Extension for PanicsInSkills {
+            fn manifest(&self) -> Manifest {
+                Manifest::new("broken", "Broken", "0.0.0")
+            }
+            fn skills(&self) -> Vec<ExtensionSkill> {
+                panic!("no skills today")
+            }
+        }
+        let host = Extensions::register(vec![
+            Box::new(Named("a")),
+            Box::new(Brings),
+            Box::new(PanicsInSkills),
+        ])
+        .unwrap();
+        let provided = host.skills();
+        assert_eq!(provided.len(), 2, "the panicking extension is left out");
+        assert_eq!(provided[0].manifest.id, "a");
+        assert!(provided[0].skills.is_empty(), "an empty list is kept");
+        assert_eq!(provided[1].manifest.id, "brings");
+        assert_eq!(provided[1].manifest.version, "1.2.0");
+        assert_eq!(provided[1].skills[0].name, "demo");
+        assert!(NoExtensions.skills().is_empty());
     }
 
     #[test]

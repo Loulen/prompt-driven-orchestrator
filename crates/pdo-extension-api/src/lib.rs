@@ -3,7 +3,8 @@
 //! An [`Extension`] is registered when the daemon starts (`pdo::serve(config,
 //! extensions)`) and plugs into the core's generic hooks: identify the [`Actor`]
 //! of a request, authorize or refuse an [`Operation`], stamp [`Attributes`] on a
-//! new entity, observe events, contribute routes and UI.
+//! new entity, observe events, contribute routes and UI, answer a command line
+//! (`pdo ext <id> <args…>`) and bring skills into the Banque de skills.
 //!
 //! An extension runs its **own** mutations through the same mechanisms, by the
 //! [`Host`] its [`ExtensionContext`] carries: its entities are a
@@ -21,15 +22,18 @@
 //! daemon already broadcasts on `/ws`, never an internal Rust enum.
 
 mod actor;
+mod cli;
 mod entity;
 mod event;
 mod extension;
 mod host;
 mod manifest;
 mod operation;
+mod skill;
 mod ui;
 
 pub use actor::Actor;
+pub use cli::{CliInvocation, CliOutput, CliSpec, EXIT_NO_CLI};
 pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
 pub use extension::{
@@ -38,6 +42,7 @@ pub use extension::{
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
+pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
     ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions, UiElement,
     UiElementKind, UiLocation, UiSlot, When, UI_MODULE, UI_MODULE_MAJOR,

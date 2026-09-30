@@ -163,8 +163,9 @@ impl fmt::Display for SkillError {
             }
             Self::Locked { id } => write!(
                 f,
-                "`{id}` is seeded and managed by PDO: it is recreated at every daemon start \
-                 and locked against editing and deletion"
+                "`{id}` is seeded and managed by PDO (its own skill, or one an extension \
+                 provides): it is recreated at every daemon start and locked against editing \
+                 and deletion"
             ),
             Self::Denied(denied) => write!(f, "{denied}"),
             Self::Storage(message) => write!(f, "{message}"),

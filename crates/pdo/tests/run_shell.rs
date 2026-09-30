@@ -214,6 +214,9 @@ async fn run_status(daemon: &TestDaemon, run_id: &str) -> Option<String> {
 /// command never runs, and polling content forever reads nothing. So re-send the
 /// command each iteration: it is `echo … > file`, idempotent, so a later send
 /// lands the instant bash is ready, and the marker's final content is unchanged.
+///
+/// 30 s, not 10: at load ~37 the marker took up to 12 s (measured), so 10 s
+/// failed `make test`. The poll returns as soon as the content is there.
 async fn wait_for_marker(
     socket: &str,
     session: &str,
@@ -221,7 +224,7 @@ async fn wait_for_marker(
     path: &std::path::Path,
     needle: &str,
 ) -> String {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut last = String::new();
     while std::time::Instant::now() < deadline {
         crate::common::tmux(socket).send_keys(session, command);

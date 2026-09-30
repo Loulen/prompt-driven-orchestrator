@@ -10,6 +10,29 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.5.0 — Surface agent : `pdo ext <id>` et skills d'extension (#33)
+
+`pdo-extension-api` passe en **0.5.0**, par ajout : une extension écrite pour 0.1 à 0.4
+compile et tourne sans changement si elle n'utilise pas les nouveaux hooks
+(ADR-0081, amendement #33).
+
+- **`pdo ext <id> <args…>`** : la CLI d'une extension, relayée par le daemon (`POST
+  /ext-cli/<id>`). Arguments et flags tels quels, entrée standard (pipe ou fichier seulement),
+  répertoire de travail, et identité de la session de node : l'extension voit `Actor::Agent{run, node}`
+  depuis une session, l'Opérateur local sinon. Stdout et stderr reviennent octet pour octet.
+  Codes : ceux de l'extension ; `1` daemon injoignable ou extension en échec ; `127` pas
+  d'extension `<id>`, ou pas de CLI. `pdo ext` seul liste les extensions qui en ont une.
+- **Hooks `cli()` / `run_cli()`** (`CliSpec`, `CliInvocation`, `CliOutput`, `EXIT_NO_CLI`) et
+  **`skills()`** (`ExtensionSkill`, `SkillFile`), neutres par défaut. `GET /ext` porte un champ
+  `cli` (`{summary}`) par extension qui en déclare une.
+- **Skills d'extension** : amorcés à chaque démarrage dans la Banque de skills, dans un dossier
+  au nom de l'extension, sous l'id `ext-<extension>-<nom>`, verrouillés et marqués
+  `extension: {id, version}` (badge « Extension `<id>` » et version dans le détail). Réécrits
+  quand la version de l'extension ou leur contenu change, retirés quand elle ne les fournit plus,
+  livrés aux worktrees comme tout skill sélectionné (ADR-0062). Deux colonnes additives sur
+  `skills` (`extension`, `extension_version`) : une base existante s'ouvre telle quelle.
+- `pdo complete`, `pdo ext` et toute la CLI d'agent ne construisent toujours pas les extensions.
+
 ## 2.4.0 — Emplacements d'UI hébergés par une extension (#32)
 
 `pdo-extension-api` passe en **0.4.0**, par ajout : une extension écrite pour 0.1, 0.2 ou 0.3

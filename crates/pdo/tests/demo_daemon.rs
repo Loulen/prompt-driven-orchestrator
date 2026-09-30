@@ -33,6 +33,11 @@
 //! With `--exact`, the filter is the full path `demo_daemon::demo_daemon`.
 //!
 //! The caller named by the `x-pdo-test-actor` header is the identified Actor.
+//!
+//! Its command line answers `PDO_DAEMON_URL=http://127.0.0.1:<port> pdo ext test
+//! echo salut` (stdout `salut`, stderr the Actor it sees), and its skill
+//! `test-extension-cli` is in the Banque de skills, in the « Test extension »
+//! folder.
 
 use std::net::{IpAddr, Ipv4Addr};
 

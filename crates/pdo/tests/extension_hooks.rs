@@ -342,7 +342,9 @@ async fn a_settings_change_is_followed_by_an_operation_applied() {
 async fn an_extension_that_sleeps_or_panics_in_on_event_never_delays_a_response() {
     let (daemon, control) = daemon().await;
     control.on_event(OnEvent::Sleep(Duration::from_secs(30)));
-    // Each creation hands an `OperationApplied` to the sleeping extension.
+    // Each creation hands an `OperationApplied` to the sleeping extension. The
+    // bound is half the sleep: a loaded machine can take seconds to answer a
+    // creation, never the 30 s a delayed response would.
     for name in ["one", "two", "three"] {
         let start = Instant::now();
         let (status, _) = post_json(&daemon, "/projects", json!({ "name": name })).await;

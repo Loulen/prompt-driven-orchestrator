@@ -6,7 +6,6 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
 use super::skills::Skills;
 use crate::domain::error::SkillError;
-use crate::domain::seed::refuse_locked;
 
 impl Skills {
     /// `false` when the id is unknown.
@@ -15,7 +14,7 @@ impl Skills {
             actor,
             Operation::new(ResourceKind::Skill, Verb::Delete).on(id),
         )?;
-        refuse_locked(id)?;
+        self.refuse_locked(id).await?;
         if !self.skills.remove(id).await? {
             return Ok(false);
         }

@@ -80,6 +80,9 @@ mod extension_trigger_fire;
 #[path = "extension_hooks.rs"]
 mod extension_hooks;
 
+// `pdo ext <id> <args…>` (#33): the agent's command line of an extension.
+#[path = "extension_cli.rs"]
+mod extension_cli;
 // An extension's own mutations through its Host (#34): refusable by any
 // extension, published on `/ws`, stamped by the others.
 #[path = "extension_interop.rs"]

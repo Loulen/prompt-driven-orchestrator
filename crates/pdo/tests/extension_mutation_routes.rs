@@ -36,6 +36,12 @@ const NOT_MUTATIONS: &[(&str, &str, &str)] = &[
         "/nodes/parse",
         "parses a pasted node into a canvas spec; stores nothing",
     ),
+    (
+        "POST",
+        "/ext-cli/{id}",
+        "relays `pdo ext <id>` to the extension (#33): the core stores nothing, and what the \
+         command mutates is the extension's to authorize",
+    ),
 ];
 
 /// One request aimed at a route: its method, its template, the concrete path

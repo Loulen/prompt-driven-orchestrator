@@ -67,9 +67,12 @@ pub enum SeedOutcome {
     Updated,
     /// Row and content already matched: nothing written.
     Unchanged,
-    /// The seed could not claim its identity (another skill owns the label):
-    /// nothing written, the daemon runs without the seed.
+    /// The seed could not claim its identity (another skill owns the label),
+    /// or an extension's skill does not pass the gate: nothing written, the
+    /// daemon runs without the seed.
     Skipped { reason: String },
+    /// An extension's skill it no longer provides: row and content removed.
+    Removed,
 }
 
 #[cfg(test)]

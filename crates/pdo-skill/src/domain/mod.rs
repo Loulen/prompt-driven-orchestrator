@@ -2,6 +2,7 @@
 
 pub mod delivery;
 pub mod error;
+pub mod extension_skill;
 pub mod file_path;
 pub mod folders;
 pub mod import;

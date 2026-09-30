@@ -95,10 +95,13 @@ pub async fn stamp(host: &dyn ExtensionHost, actor: &Actor, entity: EntityRef) -
 /// The attributes of every entity of `kind`, by id; none when the store
 /// cannot be read (logged): a list still answers.
 pub async fn of_kind(host: &dyn ExtensionHost, kind: ResourceKind) -> BTreeMap<String, Attributes> {
-    host.attributes().of_kind(kind).await.unwrap_or_else(|e| {
-        tracing::error!("failed to read the attributes of the {kind:?} entities: {e}");
-        BTreeMap::new()
-    })
+    host.attributes()
+        .of_kind(kind.clone())
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!("failed to read the attributes of the {kind:?} entities: {e}");
+            BTreeMap::new()
+        })
 }
 
 /// The attributes of one entity (none when it carries none).
@@ -194,7 +197,7 @@ impl AttributeStore for InMemoryAttributes {
         entity: &'a EntityRef,
         attributes: &'a Attributes,
     ) -> BoxFuture<'a, Result<(), String>> {
-        let key = (wire_kind(entity.kind), entity.id.clone());
+        let key = (wire_kind(&entity.kind), entity.id.clone());
         let mut stored = self.stored.lock().unwrap();
         stored.entry(key).or_default().extend(attributes.clone());
         Box::pin(async { Ok(()) })
@@ -204,7 +207,7 @@ impl AttributeStore for InMemoryAttributes {
         &self,
         kind: ResourceKind,
     ) -> BoxFuture<'_, Result<BTreeMap<String, Attributes>, String>> {
-        let kind = wire_kind(kind);
+        let kind = wire_kind(&kind);
         let found = self
             .stored
             .lock()
@@ -217,18 +220,15 @@ impl AttributeStore for InMemoryAttributes {
     }
 
     fn forget<'a>(&'a self, entity: &'a EntityRef) -> BoxFuture<'a, Result<(), String>> {
-        let key = (wire_kind(entity.kind), entity.id.clone());
+        let key = (wire_kind(&entity.kind), entity.id.clone());
         self.stored.lock().unwrap().remove(&key);
         Box::pin(async { Ok(()) })
     }
 }
 
 /// The wire name of a kind of entity, as the stores key it (`agent_profile`).
-pub fn wire_kind(kind: ResourceKind) -> String {
-    serde_json::to_value(kind)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default()
+pub fn wire_kind(kind: &ResourceKind) -> String {
+    kind.wire_name()
 }
 
 #[cfg(test)]

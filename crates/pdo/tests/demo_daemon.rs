@@ -15,6 +15,11 @@
 //! - `PDO_TEST_EXTENSION_INCOMPATIBLE`: `1` starts with the UI bundle declaring
 //!   a React major the front does not run (`POST /ext/test/incompatible` switches
 //!   it while the daemon runs).
+//! - `PDO_TEST_INTEROP`: `1` also loads the three interop peers `a`, `b`, `c`
+//!   (`test_extension/interop.rs`), which mutate their items through the Host:
+//!   `POST /ext/a/items {"name": …}` creates one, `GET /ext/a/items` lists
+//!   them, `POST /ext/b/refusal {"refuses": true}` has `b` refuse every
+//!   Operation on an extension's resource.
 //!
 //! The test extension keeps its data under `$HOME/.pdo/extensions/test/`: give
 //! the demo daemon a disposable `HOME`.
@@ -25,6 +30,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use crate::test_extension::interop::Peer;
 use crate::test_extension::{Refusal, TestExtension};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -53,7 +59,11 @@ async fn demo_daemon() {
     let (ext, control) = TestExtension::new(refusal.clone());
     control
         .set_incompatible(std::env::var("PDO_TEST_EXTENSION_INCOMPATIBLE").as_deref() == Ok("1"));
-    let daemon = pdo::serve(config, ext.boxed()).await.unwrap();
+    let mut extensions = ext.boxed();
+    if std::env::var("PDO_TEST_INTEROP").as_deref() == Ok("1") {
+        extensions.extend(Peer::trio().0);
+    }
+    let daemon = pdo::serve(config, extensions).await.unwrap();
     eprintln!(
         "demo daemon listening on http://{} (test extension refusing {refusal:?})",
         daemon.addr()

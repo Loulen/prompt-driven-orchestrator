@@ -10,6 +10,34 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.2.0 — Interopérabilité : ressource d'extension et Hôte (#34)
+
+`pdo-extension-api` passe en **0.2.0** (ADR-0081, amendement #34). Une extension fait passer ses
+propres mutations par les mécanismes du core, pour que deux extensions installées ensemble
+interopèrent sans se nommer.
+
+- **`ResourceKind::Extension { extension, kind }`** (`ResourceKind::extension("pm", "tache")`),
+  nommée `pm/tache` sur le fil. Les ressources du core gardent leur nom (`agent_profile`…).
+- **`Host`**, dans `ExtensionContext::host` à `start` : `authorize` (toutes les extensions,
+  l'émettrice comprise ; une panique refuse), `publish(ExtensionEvent)` (sur `/ws` et vers les
+  autres extensions, enveloppe `{"type": "extension_event", "extension", "name", "payload"}`),
+  `applied(OperationApplied)` après une mutation réussie, `on_create` (les Attributs des autres
+  extensions, préfixés, à stocker par l'extension). `NeutralHost` pour les tests d'une extension.
+- **`Denied`** et `OPERATION_REFUSED` passent dans l'API (`Authorization::into_result`) : une
+  extension répond ses refus avec le `403` du core.
+- **`OperationApplied` est diffusé sur `/ws`** dès qu'une extension est chargée. Sans extension,
+  `/ws` ne change pas.
+
+### Cassant pour une extension (0.1 -> 0.2)
+
+- `ResourceKind` n'est plus `Copy` : cloner là où une copie suffisait (`.clone()`, `.cloned()`).
+  Sa sérialisation est désormais écrite à la main ; les noms des ressources du core ne changent
+  pas.
+- `ExtensionContext` porte un champ `host` et n'implémente plus ses traits par `derive` (même
+  comportement, égalité comprise). `ExtensionContext::new(data_dir)` reste valable.
+- Une extension qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile sans changement ;
+  son manifeste exige alors l'API 0.2.
+
 ## 2.1.0 — Distributions tierces : `main_with`, frontend préconstruit, canal de mise à jour, 404 sous `/ext` (#21, #22, #23, #24)
 
 Seams découverts en écrivant la première distribution (`Loulen/pdo-extensions`). Ajout

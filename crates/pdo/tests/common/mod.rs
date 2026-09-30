@@ -1006,11 +1006,19 @@ impl EnvVarGuard {
     /// concurrent test had just set, and then "restore" that foreign value
     /// permanently once the other test had already removed it.
     fn acquire(lock: &'static Mutex<()>, key: &'static str, value: &str) -> Self {
+        Self::acquire_value(lock, key, Some(value))
+    }
+
+    /// [`EnvVarGuard::acquire`], `None` unsetting `key`.
+    fn acquire_value(lock: &'static Mutex<()>, key: &'static str, value: Option<&str>) -> Self {
         // Poisoning is tolerated on purpose: one panicking test must not cascade
         // into false failures in every other test that wants this var.
         let _lock = lock.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var(key).ok();
-        std::env::set_var(key, value);
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
         Self {
             key,
             previous,
@@ -1047,6 +1055,22 @@ pub fn lock_session_cap(value: impl AsRef<str>) -> EnvVarGuard {
         &SESSION_CAP_LOCK,
         pdo_run::domain::admission::SESSION_CAP_ENV,
         value.as_ref(),
+    )
+}
+
+/// Serialises `PDO_UPDATE_CHECK`, the `env` tier of the update check.
+static UPDATE_CHECK_LOCK: Mutex<()> = Mutex::new(());
+
+/// Unset `PDO_UPDATE_CHECK` for the lifetime of the returned guard, excluding
+/// any other test that also wants it. A test that expects the check on by
+/// default holds it: the test process may inherit `PDO_UPDATE_CHECK=0` (a PDO
+/// node session sets it), which would turn the check off.
+#[must_use = "PDO_UPDATE_CHECK is restored as soon as the guard is dropped"]
+pub fn lock_update_check_unset() -> EnvVarGuard {
+    EnvVarGuard::acquire_value(
+        &UPDATE_CHECK_LOCK,
+        pdo_platform::domain::update_check::UPDATE_CHECK_ENV,
+        None,
     )
 }
 

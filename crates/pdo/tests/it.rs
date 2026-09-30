@@ -80,6 +80,11 @@ mod extension_trigger_fire;
 #[path = "extension_hooks.rs"]
 mod extension_hooks;
 
+// An extension's own mutations through its Host (#34): refusable by any
+// extension, published on `/ws`, stamped by the others.
+#[path = "extension_interop.rs"]
+mod extension_interop;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;

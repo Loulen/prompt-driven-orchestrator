@@ -146,6 +146,7 @@ async fn post(base: &str, path: &str) -> reqwest::Response {
 
 #[tokio::test]
 async fn a_distribution_compares_its_own_version_and_updates_with_its_own_command() {
+    let _env = crate::common::lock_update_check_unset();
     let fixture = Fixture::spawn().await;
     let root = tempfile::tempdir().unwrap();
     let (_daemon, base) = start(
@@ -192,6 +193,7 @@ async fn a_distribution_compares_its_own_version_and_updates_with_its_own_comman
 
 #[tokio::test]
 async fn a_distribution_without_an_upgrade_command_never_applies_even_with_a_receipt() {
+    let _env = crate::common::lock_update_check_unset();
     let fixture = Fixture::spawn().await;
     let root = tempfile::tempdir().unwrap();
     // The receipt a cargo-dist install (of the vanilla v1, say) leaves behind, in
@@ -241,6 +243,7 @@ async fn a_distribution_without_an_upgrade_command_never_applies_even_with_a_rec
 
 #[tokio::test]
 async fn a_distribution_without_a_source_asks_nothing_and_says_why() {
+    let _env = crate::common::lock_update_check_unset();
     let fixture = Fixture::spawn().await;
     let root = tempfile::tempdir().unwrap();
     // What an earlier check of the fixture left in the cache the homes share.
@@ -286,6 +289,7 @@ async fn a_distribution_without_a_source_asks_nothing_and_says_why() {
 
 #[tokio::test]
 async fn the_operators_source_still_wins_over_the_channels() {
+    let _env = crate::common::lock_update_check_unset();
     let channel_source = Fixture::spawn().await;
     let operator_source = Fixture::spawn().await;
     let root = tempfile::tempdir().unwrap();
@@ -309,6 +313,7 @@ async fn the_operators_source_still_wins_over_the_channels() {
 
 #[tokio::test]
 async fn the_vanilla_binary_is_pdo_at_the_cores_version_with_no_source() {
+    let _env = crate::common::lock_update_check_unset();
     let root = tempfile::tempdir().unwrap();
     let (_daemon, base) = start(root.path(), quiet(&home(root.path())), None).await;
     let body = update_json(&base).await;

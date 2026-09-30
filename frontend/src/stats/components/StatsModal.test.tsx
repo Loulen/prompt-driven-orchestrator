@@ -102,6 +102,10 @@ import type { StatsCost } from "../../shared/generated/StatsCost";
 import type { StatsOverview } from "../../shared/generated/StatsOverview";
 import type { SyncCostPricesReport } from "../model/prices";
 
+// The charts are a `React.lazy` chunk: its first import in a file transforms a
+// tree of modules, longer than the default 1 s of `findBy*` on a loaded machine.
+const CHARTS_CHUNK = { timeout: 10_000 };
+
 const OVERVIEW: StatsOverview = {
   buckets: ["2026-07-30"],
   runs: [{ bucket: "2026-07-30", count: 1 }],
@@ -236,7 +240,7 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
       await waitFor(() => expect(fetchStatsOverviewMock).toHaveBeenCalledTimes(1));
       // The charts are code-split behind `React.lazy` (#928: now a tree of
       // modules): wait for the chunk rather than assume an earlier test loaded it.
-      expect(await screen.findByTestId("stats-charts-stub")).toBeInTheDocument();
+      expect(await screen.findByTestId("stats-charts-stub", {}, CHARTS_CHUNK)).toBeInTheDocument();
       const before = screen.getByTestId("stats-computed-at").textContent;
 
       await user.click(screen.getByTestId("stats-refresh"));
@@ -402,7 +406,7 @@ describe("StatsModal — per-tab filters, ephemeral (#819)", () => {
     // Overview: every run, so an error is never hidden by default.
     await waitFor(() => expect(fetchStatsOverviewMock).toHaveBeenCalled());
     expect(cohortOf(fetchStatsOverviewMock.mock.calls)).toBe(false);
-    expect(await screen.findByTestId("stats-charts-stub")).toHaveAttribute(
+    expect(await screen.findByTestId("stats-charts-stub", {}, CHARTS_CHUNK)).toHaveAttribute(
       "data-completed-only",
       "false",
     );
@@ -579,7 +583,7 @@ describe("StatsModal — absorptions (#890)", () => {
   it("refetches the tab on screen after a Combine, without forcing Performance past its memo", async () => {
     const user = userEvent.setup();
     render(<StatsModal open onClose={() => {}} initialTab="performance" />);
-    await screen.findByTestId("stats-charts-stub");
+    await screen.findByTestId("stats-charts-stub", {}, CHARTS_CHUNK);
     await waitFor(() => expect(fetchStatsPerformanceMock).toHaveBeenCalledTimes(1));
     const overviewCalls = fetchStatsOverviewMock.mock.calls.length;
 
@@ -593,7 +597,7 @@ describe("StatsModal — absorptions (#890)", () => {
 
   it("keeps the scrollbar gutter and paints no caret on the Stats pane", async () => {
     render(<StatsModal open onClose={() => {}} />);
-    await screen.findByTestId("stats-charts-stub");
+    await screen.findByTestId("stats-charts-stub", {}, CHARTS_CHUNK);
     const main = screen.getByRole("main");
     expect(main.className).toContain("[scrollbar-gutter:stable]");
     expect(main.className).toContain("[caret-color:transparent]");
@@ -681,7 +685,7 @@ describe("StatsModal — « Uncombined » (#891)", () => {
   it("re-reads the absorptions after a Combine, and keeps the chip while it is on", async () => {
     const user = userEvent.setup();
     render(<StatsModal open onClose={() => {}} initialTab="sessions" />);
-    const stub = await screen.findByTestId("stats-charts-stub");
+    const stub = await screen.findByTestId("stats-charts-stub", {}, CHARTS_CHUNK);
     await waitFor(() => expect(fetchStatsAbsorptionsMock).toHaveBeenCalledTimes(1));
     expect(stub).toHaveAttribute("data-show-uncombined", "false");
 

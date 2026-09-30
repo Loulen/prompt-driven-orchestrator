@@ -93,8 +93,8 @@ fn ui_entry(ui: UiContributions) -> ExtensionUi {
             let (kind, resource) = match slot.slot {
                 Slot::Navigation => (SlotKind::Navigation, None),
                 Slot::SettingsPanel => (SlotKind::SettingsPanel, None),
-                Slot::ListFilter { resource } => (SlotKind::ListFilter, Some(wire_kind(resource))),
-                Slot::DetailTab { resource } => (SlotKind::DetailTab, Some(wire_kind(resource))),
+                Slot::ListFilter { resource } => (SlotKind::ListFilter, Some(wire_kind(&resource))),
+                Slot::DetailTab { resource } => (SlotKind::DetailTab, Some(wire_kind(&resource))),
                 _ => return None,
             };
             Some(ExtensionSlot {

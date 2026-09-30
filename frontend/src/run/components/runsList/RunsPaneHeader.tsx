@@ -1,12 +1,16 @@
 import { Plus } from "lucide-react";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
+import { ExtensionActionButtons } from "../../../shared/extensions/ExtensionActions";
+
+const NO_EXTRA = {};
 
 interface Props {
   pane: RunsPaneState;
   onNewRun: () => void;
 }
 
-/** The Runs tab's title bar: the « Project » configurator and « New Run ». */
+/** The Runs tab's title bar: the extensions' `runs/header` actions (#30), the
+ *  « Project » configurator and « New Run ». */
 export default function RunsPaneHeader({ pane, onNewRun }: Props) {
   const { availableRepos, setProjectEditor, projectOf, openProjectEditor } = pane;
   return (
@@ -15,6 +19,13 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
       style={{ fontSize: "11.5px" }}
     >
       Runs
+      <div className="ml-auto flex items-center">
+      {/* #30 — `runs/header`: the extensions' icon buttons, before the core's. */}
+      <ExtensionActionButtons
+        location="runs/header"
+        extra={NO_EXTRA}
+        className="mr-1.5 flex items-center gap-0.5"
+      />
       {availableRepos.length > 0 && (
         <button
           type="button"
@@ -46,7 +57,7 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
                   },
             );
           }}
-          className="ml-auto cursor-pointer rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3 hover:border-acc hover:text-fg"
+          className="cursor-pointer rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3 hover:border-acc hover:text-fg"
           style={{ fontSize: "10.5px" }}
         >
           Project
@@ -55,12 +66,13 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
       <button
         onClick={onNewRun}
         data-testid="new-run-button"
-        className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
+        className={`${availableRepos.length > 0 ? "ml-1.5" : ""} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
         style={{ fontSize: "10.5px" }}
       >
         <Plus size={10} />
         New Run
       </button>
+      </div>
     </div>
   );
 }

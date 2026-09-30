@@ -166,6 +166,17 @@ pub fn live_iteration(state: &RunState, node_id: &str) -> Option<i64> {
         .max()
 }
 
+/// Whether iteration `iter` of `node_id` has started and not ended: `Running` or
+/// `AwaitingUser`. Unlike [`live_iteration`], a `waiting` node's reservation does
+/// not count — its re-drive is the spawn that starts it.
+pub fn started_iteration(state: &RunState, node_id: &str, iter: i64) -> bool {
+    state.nodes.get(node_id).is_some_and(|node| {
+        node.iterations.iter().any(|i| {
+            i.iter == iter && matches!(i.status, NodeStatus::Running | NodeStatus::AwaitingUser)
+        })
+    })
+}
+
 /// Validate a lifecycle event against the projected run state.
 ///
 /// Non-lifecycle kinds are always allowed: the guard governs node lifecycle

@@ -1,5 +1,6 @@
 import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal } from "lucide-react";
 import type { PendingTone } from "../../review/model/commentStatus";
+import type { RunState } from "../../shared/generated/RunState";
 import type { NodeType } from "../../shared/generated/NodeType";
 import type { LibraryEntry } from "../model/library";
 import { Tooltip } from "../../shared/ui/tooltip";
@@ -11,6 +12,7 @@ import {
   DropdownMenuItem,
 } from "../../shared/ui/dropdown-menu";
 import { useEditStore } from "../store/editStore";
+import RunToolbarActions from "./RunToolbarActions";
 
 interface Props {
   onAddNode: (type: NodeType) => void;
@@ -55,9 +57,12 @@ interface Props {
   onReopen?: () => void;
   onRetryAll?: () => void;
   onOpenShell?: () => void;
+  // #30: the Run of a Run's canvas: the extensions' `run/toolbar` actions sit
+  // after the finished-run group. Absent on a template's canvas.
+  run?: RunState | null;
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, run = null }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add/merge callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -233,6 +238,8 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
           )}
         </>
       )}
+
+      {run && <RunToolbarActions run={run} readOnly={readOnly} />}
 
       {/* #752: the Review quick access — navigation, not a toggle (no
           `aria-pressed`). The pill is the pending count; its tone is the nuance. */}

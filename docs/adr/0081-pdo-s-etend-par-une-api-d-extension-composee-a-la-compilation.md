@@ -184,3 +184,47 @@ des *contribution points* de VS Code : peu de types de contribution, beaucoup d'
 sérialise, se type en TypeScript et ne demande pas de grammaire ; un emplacement réservé à une
 extension, contraire à la règle de la liste ; un contexte calculé par le daemon, qui ne connaît
 pas la sélection de l'opérateur.
+
+## Amendement #30 : les emplacements d'Action, et les menus du core sur le `DropdownMenu` partagé
+
+Suite de l'amendement #29, préparée pour l'extension Projet (`pm`) et pour ADR-0001 de
+`pdo-extensions` (« mieux vaut trop de points d'extension que pas assez ») : toutes les barres
+d'outils et tous les menus du core accueillent des Actions.
+
+- **Quatorze emplacements d'Action**, qui n'acceptent que des Actions
+  (`UiLocation::is_action_location`) : `runs/header`, `run/item/menu`, `runs/bulk`, `run/toolbar`,
+  `canvas/node/menu`, `canvas/edge/menu`, `node/toolbar`, `trigger/item/menu`,
+  `pipeline/item/menu`, `pipelines/header`, `tab/menu`, `review/toolbar`, `review/file`,
+  `skill/menu`. Chacun est documenté dans `docs/reference/extension-ui.md`, avec son contexte.
+- **Contexte** : en plus du Run sélectionné et de son Projet, chaque emplacement transmet ce qui est
+  en jeu chez lui. Un menu ou une barre d'élément transmet l'élément en `entity` (`kind`, `id`,
+  `attributes`, et les champs du genre : `status` d'un Run, `enabled` d'un Trigger, `type` d'un
+  node, `from`/`to` d'une edge, `path` d'un fichier). `runs/bulk` transmet la sélection
+  (`selection: { kind: "run", ids }`). Les menus du canvas ajoutent le `pipeline` affiché (et le
+  Run d'un canvas de Run), la Review la paire comparée (`review: { from, to }`). La barre du canvas
+  d'un Run et la page Review donnent pour Run sélectionné le Run affiché. Une clause `when` lit ces
+  clés comme les autres (`entity.status`).
+- **Rendu** : dans une barre, un bouton icône par Action (l'icône de sa Commande, sinon la lettre
+  encadrée), avec son libellé en infobulle, placé avant les boutons du core. Dans un menu, un
+  groupe par extension, titré du nom de l'extension, après les entrées du core et **avant l'entrée
+  destructive**. Dans la barre de sélection multiple, une entrée par Action après celles du core.
+  Sans contribution, rien ne change : ni bouton, ni groupe, ni séparateur.
+- **Échec** : chaque élément a sa frontière d'erreur ; une Commande qui lève ou rejette affiche un
+  toast d'erreur, et la barre ou le menu continue de fonctionner.
+- **Menu « ⋯ » des lignes** : les lignes de Run, de Trigger et de Pipeline gagnent un déclencheur
+  `MoreHorizontal` après leurs icônes de survol (révélé avec elles, et gardé tant que le menu est
+  ouvert), qui ouvre le `DropdownMenu` partagé : les verbes de la ligne, les groupes d'extension,
+  puis l'entrée destructive. La ligne étant souvent un `<button>`, le déclencheur est un
+  `span role="button"`, et ses clics et touches ne remontent pas à la ligne.
+- **Migration** : les menus contextuels codés à la main (canvas, barre d'onglets, arbre des skills)
+  passent sur le `DropdownMenu` partagé, sans changement de comportement : mêmes entrées, même
+  ancrage (au pointeur pour un clic droit), même fermeture (Échap, clic ou clic droit ailleurs).
+  Une entrée désactivée devient `aria-disabled` et reste focalisable au clavier (le modèle de menu
+  de WAI-ARIA), au lieu d'un `disabled` natif ; elle ne fait toujours rien.
+- **Version** : `pdo-extension-api` gagne une mineure (ajout d'emplacements, non cassant). Une
+  extension 0.1 ou 0.2 continue de compiler et de tourner.
+
+Écartés : un type de contribution « entrée de menu » distinct de l'Action (une Action se rend déjà
+selon l'endroit où elle se trouve) ; un menu « ⋯ » affiché seulement quand une extension y
+contribue (la ligne gagnerait ou perdrait un déclencheur selon les extensions installées, et ses
+verbes y sont utiles sans extension).

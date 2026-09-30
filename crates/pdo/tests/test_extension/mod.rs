@@ -24,7 +24,10 @@
 //!   `SettingsPanel`, `ListFilter`/`DetailTab` of the Runs), so they prove the
 //!   0.1 form still renders; `topbar/end` through 0.2 contributions: a page with
 //!   its icon, an action calling [`SHOW_CONTEXT`] while a Run is selected, and
-//!   an action whose `when` never holds.
+//!   an action whose `when` never holds. Every Action location (#30) through
+//!   one action each ([`ACTION_LOCATIONS`]), titled `Test <location>`, calling
+//!   the same function; the one of `run/item/menu` only while the row's Run is
+//!   not archived, and that menu also offers [`FAIL`], a command that throws.
 //!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
 
@@ -56,6 +59,35 @@ pub const ACTOR_HEADER: &str = "x-pdo-test-actor";
 /// The id of the test extension's command: it reports the context it was
 /// called with (a toast, and `POST /ext/test/commands`).
 pub const SHOW_CONTEXT: &str = "test.show-context";
+
+/// The id of the test extension's command that always throws: its error
+/// reaches a toast, and the menu it sits in keeps working.
+pub const FAIL: &str = "test.fail";
+
+/// The Action locations (#30) the test extension contributes one action to,
+/// in declaration order.
+pub const ACTION_LOCATIONS: &[UiLocation] = &[
+    UiLocation::RunsHeader,
+    UiLocation::RunItemMenu,
+    UiLocation::RunsBulk,
+    UiLocation::RunToolbar,
+    UiLocation::CanvasNodeMenu,
+    UiLocation::CanvasEdgeMenu,
+    UiLocation::NodeToolbar,
+    UiLocation::TriggerItemMenu,
+    UiLocation::PipelineItemMenu,
+    UiLocation::PipelinesHeader,
+    UiLocation::TabMenu,
+    UiLocation::ReviewToolbar,
+    UiLocation::ReviewFile,
+    UiLocation::SkillMenu,
+];
+
+/// The id of the action the test extension contributes at `location`
+/// (`at-run-item-menu` for `run/item/menu`).
+pub fn action_id(location: UiLocation) -> String {
+    format!("at-{}", location.id().replace('/', "-"))
+}
 
 /// What the test extension refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,46 +363,66 @@ impl Extension for TestExtension {
         // No icon: its button shows the fallback, a boxed « S ».
         let show_context = UiCommand::new(SHOW_CONTEXT, "Show context", "showContext");
         let never = UiCommand::new("test.never", "Never shown", "showContext");
+        let mut ui = UiContributions::bundle(format!("/ext/{ID}/ui.js"), major)
+            .with(UiSlot::new(
+                Slot::Navigation,
+                "events",
+                "Test events",
+                "EventsPage",
+            ))
+            .with(UiSlot::new(
+                Slot::SettingsPanel,
+                "settings",
+                "Test extension",
+                "SettingsPanel",
+            ))
+            .with(UiSlot::new(
+                Slot::ListFilter { resource: run },
+                "started-by",
+                "Started by",
+                "StartedByFilter",
+            ))
+            .with(UiSlot::new(
+                Slot::DetailTab { resource: run },
+                "run-tab",
+                "Test",
+                "RunTab",
+            ))
+            .contribute(
+                UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
+                    .with_icon(format!("/ext/{ID}/icon.svg")),
+            )
+            .contribute(
+                UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)
+                    .when(When::has("run")),
+            )
+            .contribute(
+                UiContribution::action(UiLocation::TopbarEnd, "never", &never)
+                    .when(When::eq("run.status", "never-a-status")),
+            )
+            .command(show_context)
+            .command(never);
+        for &location in ACTION_LOCATIONS {
+            let id = action_id(location);
+            let command = UiCommand::new(
+                format!("test.{id}"),
+                format!("Test {}", location.id()),
+                "showContext",
+            );
+            let mut action = UiContribution::action(location, &id, &command);
+            if location == UiLocation::RunItemMenu {
+                action = action.when(When::not(When::eq("entity.status", "archived")));
+            }
+            ui = ui.contribute(action).command(command);
+        }
+        let fail = UiCommand::new(FAIL, "Fail on purpose", "failOnPurpose");
         Some(
-            UiContributions::bundle(format!("/ext/{ID}/ui.js"), major)
-                .with(UiSlot::new(
-                    Slot::Navigation,
-                    "events",
-                    "Test events",
-                    "EventsPage",
-                ))
-                .with(UiSlot::new(
-                    Slot::SettingsPanel,
-                    "settings",
-                    "Test extension",
-                    "SettingsPanel",
-                ))
-                .with(UiSlot::new(
-                    Slot::ListFilter { resource: run },
-                    "started-by",
-                    "Started by",
-                    "StartedByFilter",
-                ))
-                .with(UiSlot::new(
-                    Slot::DetailTab { resource: run },
-                    "run-tab",
-                    "Test",
-                    "RunTab",
-                ))
-                .contribute(
-                    UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
-                        .with_icon(format!("/ext/{ID}/icon.svg")),
-                )
-                .contribute(
-                    UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)
-                        .when(When::has("run")),
-                )
-                .contribute(
-                    UiContribution::action(UiLocation::TopbarEnd, "never", &never)
-                        .when(When::eq("run.status", "never-a-status")),
-                )
-                .command(show_context)
-                .command(never),
+            ui.contribute(UiContribution::action(
+                UiLocation::RunItemMenu,
+                "fail",
+                &fail,
+            ))
+            .command(fail),
         )
     }
 

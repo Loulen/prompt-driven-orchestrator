@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Save, X } from "lucide-react";
 import { useEditStore } from "../store/editStore";
 import { hasUnsavedWork } from "../store/editState";
 import type { OpenPipeline } from "../store/editState";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
+import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
+import type { PipelineEntity } from "../../shared/extensions/contract";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "../../shared/ui/dropdown-menu";
 
 function useRelativeTime(ts: number | undefined): string | null {
   const [now, setNow] = useState(() => Date.now());
@@ -176,11 +179,10 @@ export default function TabBar() {
 }
 
 /**
- * Right-click menu for a tab (#342). A local `fixed z-50` div in the house
- * style (clone of `EditCanvas`'s ContextMenu, not base-ui) — positioned in
- * viewport coords so it survives a scroll of the tab strip. Dismisses on a
- * backdrop click OR Escape (`LibraryDropdown` only handles mousedown; the menu
- * must also close on Escape).
+ * Right-click menu for a tab (#342), on the shared `DropdownMenu` (#30),
+ * anchored where the pointer was — viewport coords, so it survives a scroll of
+ * the tab strip. Dismisses on a backdrop click OR Escape. After the four close
+ * entries, the extensions' `tab/menu` groups, called with the tab's pipeline.
  */
 function TabContextMenu({
   x,
@@ -205,37 +207,66 @@ function TabContextMenu({
     return () => document.removeEventListener("keydown", handleKey);
   }, [onDismiss]);
 
+  const anchor = useMemo(
+    () => ({ getBoundingClientRect: () => DOMRect.fromRect({ x, y, width: 0, height: 0 }) }),
+    [x, y],
+  );
   const index = openTabs.findIndex((t) => t.id === tabId);
+  const tab = index >= 0 ? openTabs[index] : undefined;
   const single = openTabs.length <= 1;
   const isLast = index >= 0 && index === openTabs.length - 1;
   const otherIds = openTabs.filter((t) => t.id !== tabId).map((t) => t.id);
   const rightIds = index < 0 ? [] : openTabs.slice(index + 1).map((t) => t.id);
   const allIds = openTabs.map((t) => t.id);
+  const extra = useMemo(() => {
+    const entity: PipelineEntity = {
+      kind: "pipeline",
+      id: tabId,
+      name: tab?.pipeline.name ?? tabId,
+      attributes: {},
+    };
+    return { entity };
+  }, [tabId, tab?.pipeline.name]);
 
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onDismiss} />
-      <div
-        className="fixed z-50 rounded-lg border border-line bg-bg-4 py-1 shadow-lg"
-        style={{ left: x, top: y, fontSize: "11.5px", minWidth: 150 }}
-        data-testid="tab-context-menu"
+      <DropdownMenu
+        open
+        // The backdrop above holds the outside clicks, as it always did.
+        modal={false}
+        onOpenChange={(open) => {
+          if (!open) onDismiss();
+        }}
       >
-        <MenuItem testid="tab-ctx-close" onClick={() => onSelect([tabId])}>
-          Close
-        </MenuItem>
-        <MenuItem testid="tab-ctx-close-others" disabled={single} onClick={() => onSelect(otherIds)}>
-          Close others
-        </MenuItem>
-        <MenuItem testid="tab-ctx-close-right" disabled={isLast} onClick={() => onSelect(rightIds)}>
-          Close to the right
-        </MenuItem>
-        <MenuItem testid="tab-ctx-close-all" disabled={single} onClick={() => onSelect(allIds)}>
-          Close all
-        </MenuItem>
-      </div>
+        <DropdownMenuContent
+          anchor={anchor}
+          side="bottom"
+          align="start"
+          sideOffset={0}
+          className="w-auto min-w-[150px]"
+          data-testid="tab-context-menu"
+        >
+          <MenuItem testid="tab-ctx-close" onClick={() => onSelect([tabId])}>
+            Close
+          </MenuItem>
+          <MenuItem testid="tab-ctx-close-others" disabled={single} onClick={() => onSelect(otherIds)}>
+            Close others
+          </MenuItem>
+          <MenuItem testid="tab-ctx-close-right" disabled={isLast} onClick={() => onSelect(rightIds)}>
+            Close to the right
+          </MenuItem>
+          <MenuItem testid="tab-ctx-close-all" disabled={single} onClick={() => onSelect(allIds)}>
+            Close all
+          </MenuItem>
+          <ExtensionMenuGroups location="tab/menu" extra={extra} itemClassName={ITEM} />
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   );
 }
+
+const ITEM = "cursor-pointer px-2 py-1.5 text-[11.5px] text-fg-2";
 
 function MenuItem({
   testid,
@@ -248,14 +279,11 @@ function MenuItem({
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  // A disabled entry stays focusable for the arrow keys, `aria-disabled` (the
+  // menu pattern of WAI-ARIA), and does nothing when clicked.
   return (
-    <button
-      data-testid={testid}
-      disabled={disabled}
-      onClick={onClick}
-      className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-fg-2 hover:bg-bg-3 hover:text-fg disabled:pointer-events-none disabled:opacity-40"
-    >
+    <DropdownMenuItem data-testid={testid} disabled={disabled} onClick={onClick} className={ITEM}>
       {children}
-    </button>
+    </DropdownMenuItem>
   );
 }

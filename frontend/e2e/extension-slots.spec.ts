@@ -57,9 +57,51 @@ edges:
     target: { node: end, port: result }
 `;
 
+/** The Action locations (#30), in the test extension's declaration order (`ACTION_LOCATIONS`). */
+const ACTION_LOCATIONS = [
+  "runs/header",
+  "run/item/menu",
+  "runs/bulk",
+  "run/toolbar",
+  "canvas/node/menu",
+  "canvas/edge/menu",
+  "node/toolbar",
+  "trigger/item/menu",
+  "pipeline/item/menu",
+  "pipelines/header",
+  "tab/menu",
+  "review/toolbar",
+  "review/file",
+  "skill/menu",
+];
+
+/** The id of the test extension's action at `location` (`action_id`). */
+const actionId = (location: string) => `at-${location.replaceAll("/", "-")}`;
+
+/** Its action at each Action location, then the command that fails, and their commands. */
+function actionContributions() {
+  const contributions = ACTION_LOCATIONS.map((location) => ({
+    location,
+    id: actionId(location),
+    label: `Test ${location}`,
+    type: "action",
+    command: `test.${actionId(location)}`,
+    ...(location === "run/item/menu" ? { when: { not: { eq: ["entity.status", "archived"] } } } : {}),
+  }));
+  contributions.push({ location: "run/item/menu", id: "fail", label: "Fail on purpose", type: "action", command: "test.fail" });
+  const commands = ACTION_LOCATIONS.map((location) => ({
+    id: `test.${actionId(location)}`,
+    title: `Test ${location}`,
+    export: "showContext",
+  }));
+  commands.push({ id: "test.fail", title: "Fail on purpose", export: "failOnPurpose" });
+  return { contributions, commands };
+}
+
 /** `GET /ext` as the daemon answers it for the test extension (`extension_hooks.rs`). */
 function declaration(reactMajor: number) {
   const icon = "/ext/test/icon.svg";
+  const actions = actionContributions();
   return [
     {
       id: "test",
@@ -84,10 +126,12 @@ function declaration(reactMajor: number) {
             location: "topbar/end", id: "never", label: "Never shown", type: "action",
             command: "test.never", when: { eq: ["run.status", "never-a-status"] },
           },
+          ...actions.contributions,
         ],
         commands: [
           { id: "test.show-context", title: "Show context", export: "showContext" },
           { id: "test.never", title: "Never shown", export: "showContext" },
+          ...actions.commands,
         ],
       },
     },
@@ -256,6 +300,50 @@ test("topbar/end: an icon before Stats, its page with the context, a command, a 
   await expect(page.getByTestId("test-page-path")).toHaveText("Path: deep/path");
   await page.goto("/#/ext/audit/journal");
   await expect(page.getByTestId("toast-error")).toContainText("Extension “audit” is not installed");
+});
+
+test("Action locations: the header, a row's « ⋯ » menu with its when, a failing command, the bulk bar", async ({
+  page,
+}) => {
+  const played = await playTestExtension(page);
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+
+  // `runs/header`: its icon button, before « New Run ».
+  await page.getByTestId("extension-action-test:at-runs-header").click();
+  await expect(page.getByTestId("toast-info").first()).toContainText("runs/header");
+
+  // `run/item/menu`: the row's menu lists the core's verbs, the group titled
+  // « Test extension », then the destructive entry; the command gets the row's Run.
+  const row = page.locator(`[data-run-row="${runId}"]`);
+  await row.hover();
+  await row.getByTestId("run-row-menu").click();
+  const group = page.getByTestId("extension-menu-run/item/menu-test");
+  await expect(group).toContainText("Test extension");
+  await page.getByTestId("extension-action-test:at-run-item-menu").click();
+  await expect(page.getByTestId("toast-info").last()).toContainText(`run/item/menu · run ${runId}`);
+  expect(played.commands()).toContainEqual(
+    expect.objectContaining({ location: "run/item/menu", entity: expect.objectContaining({ id: runId }) }),
+  );
+
+  // A failing command: an error toast, and the menu still works.
+  await row.hover();
+  await row.getByTestId("run-row-menu").click();
+  await page.getByTestId("extension-action-test:fail").click();
+  await expect(page.getByTestId("toast-error")).toContainText("the test extension fails on purpose");
+  await row.hover();
+  await row.getByTestId("run-row-menu").click();
+  await expect(page.getByTestId("run-menu-copy-id")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // `runs/bulk`: the selection's ids reach the command.
+  await row.getByTestId("run-status-dot").hover();
+  await row.getByRole("button", { name: /^Select / }).click();
+  await page.getByTestId("bulk-action-test:at-runs-bulk").click();
+  expect(played.commands()).toContainEqual(
+    expect.objectContaining({ location: "runs/bulk", selection: { kind: "run", ids: [runId] } }),
+  );
+  await page.getByTestId("bulk-clear").click();
 });
 
 test("a bundle built for another React major is not loaded, and a banner says so", async ({

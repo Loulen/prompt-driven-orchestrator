@@ -1,12 +1,22 @@
 /**
- * The edit canvas's right-click menu.
+ * The edit canvas's right-click menu, on the shared `DropdownMenu` (#30),
+ * anchored where the pointer was. After the core's entries of a node or an
+ * edge, the extensions' `canvas/node/menu` or `canvas/edge/menu` groups.
  */
 
 import DestroyLoopModal from "./DestroyLoopModal";
 import { regionsDestroyedByEdgeRemoval } from "../../lib/loopRegions";
 import type { EditorPipelineDef } from "../model/pipeline";
 import { useEditStore } from "../store/editStore";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RunState } from "../../shared/generated/RunState";
+import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
+import { canvasMenuExtensions, type CanvasMenuExtensions } from "../model/canvasMenuExtensions";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "../../shared/ui/dropdown-menu";
 // #723 — orchestrator pastilles on the run-view node card.
 /** The context menu the canvas holds open: the element and where. */
 export interface CanvasMenu {
@@ -19,11 +29,14 @@ export interface CanvasMenu {
   fanoutFields?: string[];
 }
 
+const ITEM = "cursor-pointer px-2 py-1.5 text-[11.5px] text-fg-2";
+
 export function ContextMenu({
   x,
   y,
   type,
   fanoutFields,
+  extensions,
   onDeleteNode,
   onDeleteNote,
   onDuplicateNode,
@@ -36,6 +49,7 @@ export function ContextMenu({
   y: number;
   type: "node" | "edge" | "note";
   fanoutFields?: string[];
+  extensions?: CanvasMenuExtensions | null;
   onDeleteNode: () => void;
   onDeleteNote: () => void;
   onDuplicateNode: () => void;
@@ -44,88 +58,118 @@ export function ContextMenu({
   onDeleteEdge: () => void;
   onClose: () => void;
 }) {
+  // The menu closes once, whichever way: the menu's own dismissal (Escape
+  // inside it, a click away), the backdrop, or Escape anywhere.
+  const closed = useRef(false);
+  const closeOnce = useCallback(() => {
+    if (closed.current) return;
+    closed.current = true;
+    onClose();
+  }, [onClose]);
+
   // Escape dismisses the menu. Without it the full-screen backdrop below stayed
   // mounted after the menu was abandoned by keyboard, and silently swallowed the
   // next click on the canvas or the edge panel (#844 FP iter-2).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") closeOnce();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [closeOnce]);
+
+  // The pointer's position, as the element the menu is anchored to.
+  const anchor = useMemo(
+    () => ({ getBoundingClientRect: () => DOMRect.fromRect({ x, y, width: 0, height: 0 }) }),
+    [x, y],
+  );
 
   return (
     <>
       <div
         className="fixed inset-0 z-40"
         data-testid="context-menu-backdrop"
-        onClick={onClose}
+        onClick={closeOnce}
         onContextMenu={(e) => {
           e.preventDefault();
-          onClose();
+          closeOnce();
         }}
       />
-      <div
-        className="fixed z-50 rounded-md border border-line bg-bg-3 py-1 shadow-lg"
-        style={{ left: x, top: y, fontSize: "11.5px", minWidth: 140 }}
+      <DropdownMenu
+        open
+        // The backdrop above holds the outside clicks, as it always did.
+        modal={false}
+        onOpenChange={(open) => {
+          if (!open) closeOnce();
+        }}
       >
-        {type === "node" ? (
-          <>
-            <button
-              onClick={onDuplicateNode}
-              className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-fg-2 hover:bg-bg-4 hover:text-fg"
+        <DropdownMenuContent
+          anchor={anchor}
+          side="bottom"
+          align="start"
+          sideOffset={0}
+          className="w-auto min-w-[140px]"
+          data-testid="canvas-context-menu"
+        >
+          {type === "node" ? (
+            <>
+              <DropdownMenuItem className={ITEM} onClick={onDuplicateNode}>
+                Duplicate
+              </DropdownMenuItem>
+              {/* "Fan out over a collection" (#151 / #269): one entry per
+                  eligible `list` field flowing into the selection. Absent when
+                  nothing is eligible — the gesture stays discoverable via the
+                  lint-banner nudge. */}
+              {(fanoutFields ?? []).map((field) => (
+                <DropdownMenuItem
+                  key={field}
+                  data-testid={`ctx-fanout-${field}`}
+                  className={ITEM}
+                  onClick={() => onFanOut(field)}
+                >
+                  Fan out over "{field}"
+                </DropdownMenuItem>
+              ))}
+              {/* #345: front-only export of this node to YAML (no daemon). */}
+              <DropdownMenuItem data-testid="ctx-export-node" className={ITEM} onClick={onExportNode}>
+                Export as YAML…
+              </DropdownMenuItem>
+              {extensions?.location === "canvas/node/menu" && (
+                <ExtensionMenuGroups location="canvas/node/menu" extra={extensions.extra} itemClassName={ITEM} trailing />
+              )}
+              <DropdownMenuItem variant="destructive" data-testid="ctx-delete-node" className={ITEM} onClick={onDeleteNode}>
+                Delete
+              </DropdownMenuItem>
+            </>
+          ) : type === "note" ? (
+            // #307 trap #2: a note's Delete must call `deleteNote`, not
+            // `deleteNode` (which would no-op on an id absent from pipeline.nodes).
+            <DropdownMenuItem
+              variant="destructive"
+              data-testid="context-menu-delete"
+              className={ITEM}
+              onClick={onDeleteNote}
             >
-              Duplicate
-            </button>
-            {/* "Fan out over a collection" (#151 / #269): one entry per
-                eligible `list` field flowing into the selection. Absent when
-                nothing is eligible — the gesture stays discoverable via the
-                lint-banner nudge. */}
-            {(fanoutFields ?? []).map((field) => (
-              <button
-                key={field}
-                data-testid={`ctx-fanout-${field}`}
-                onClick={() => onFanOut(field)}
-                className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-fg-2 hover:bg-bg-4 hover:text-fg"
-              >
-                Fan out over "{field}"
-              </button>
-            ))}
-            {/* #345: front-only export of this node to YAML (no daemon). */}
-            <button
-              data-testid="ctx-export-node"
-              onClick={onExportNode}
-              className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-fg-2 hover:bg-bg-4 hover:text-fg"
-            >
-              Export as YAML…
-            </button>
-            <button
-              onClick={onDeleteNode}
-              className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"
-            >
-              Delete
-            </button>
-          </>
-        ) : type === "note" ? (
-          // #307 trap #2: a note's Delete must call `deleteNote`, not
-          // `deleteNode` (which would no-op on an id absent from pipeline.nodes).
-          <button
-            data-testid="context-menu-delete"
-            onClick={onDeleteNote}
-            className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"
-          >
-            Delete note
-          </button>
-        ) : (
-          <button
-            onClick={onDeleteEdge}
-            className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-st-failed hover:bg-bg-4"
-          >
-            Delete edge
-          </button>
-        )}
-      </div>
+              Delete note
+            </DropdownMenuItem>
+          ) : (
+            <>
+              {extensions?.location === "canvas/edge/menu" && (
+                <ExtensionMenuGroups
+                  location="canvas/edge/menu"
+                  extra={extensions.extra}
+                  itemClassName={ITEM}
+                  leading={false}
+                  trailing
+                />
+              )}
+              <DropdownMenuItem variant="destructive" data-testid="ctx-delete-edge" className={ITEM} onClick={onDeleteEdge}>
+                Delete edge
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   );
 }
@@ -136,13 +180,18 @@ export function CanvasContextMenuHost({
   contextMenu,
   setContextMenu,
   pipeline,
+  run = null,
   onExportNode,
 }: {
   contextMenu: CanvasMenu | null;
   setContextMenu: (menu: CanvasMenu | null) => void;
   pipeline: EditorPipelineDef;
+  /** The Run of a Run's canvas. */
+  run?: RunState | null;
   onExportNode: (nodeId: string) => void;
 }) {
+  // The open tab: the pipeline the extensions' entries receive.
+  const pipelineId = useEditStore((s) => s.activeTabId) ?? pipeline.name;
   const deleteNode = useEditStore((s) => s.deleteNode);
   const duplicateNode = useEditStore((s) => s.duplicateNode);
   const createCollectionRegion = useEditStore((s) => s.createCollectionRegion);
@@ -160,7 +209,10 @@ export function CanvasContextMenuHost({
     <>
       {contextMenu && (
         <ContextMenu
+          // A new right-click is a new menu.
+          key={`${contextMenu.type}:${contextMenu.id}:${contextMenu.x}:${contextMenu.y}`}
           {...contextMenu}
+          extensions={canvasMenuExtensions(contextMenu, pipeline, pipelineId, run)}
           onDeleteNode={() => {
             deleteNode(contextMenu.id);
             setContextMenu(null);

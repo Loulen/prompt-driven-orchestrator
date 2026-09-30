@@ -6,6 +6,7 @@ import { ChildCountPills } from "../OrchestrationTab";
 import SelectControl from "../../../shared/ui/SelectControl";
 import { STATUS_STYLES } from "./runsListTables";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
+import RunRowMenu from "./RunRowMenu";
 
 interface Props {
   node: RunTreeNode;
@@ -303,6 +304,15 @@ export default function RunRow({
           <Trash2 size={12} />
         </span>
       )}
+      <RunRowMenu
+        run={run}
+        pane={pane}
+        isRenaming={isRenaming}
+        canPause={canPause}
+        canResume={canResume}
+        canRetryAll={canRetryAll}
+        canCleanup={canCleanup}
+      />
       </div>
       {hasChildren && (
         <ChildCountPills
@@ -319,3 +329,4 @@ export default function RunRow({
     </button>
   );
 }
+

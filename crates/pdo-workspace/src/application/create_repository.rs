@@ -65,7 +65,7 @@ mod tests {
         assert!(f.git.created().is_empty());
         let asked = &f.host.asked()[0];
         assert_eq!(
-            (asked.resource, &asked.verb),
+            (asked.resource.clone(), &asked.verb),
             (ResourceKind::Repository, &Verb::Create)
         );
     }

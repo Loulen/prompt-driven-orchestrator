@@ -16,6 +16,11 @@ use crate::common::flow::{create_run, post_json, seed_solo};
 use crate::common::TestDaemon;
 use crate::test_extension::{self, OnEvent, Refusal, TestExtension, ACTOR_HEADER};
 
+/// How long a response may take while an extension sleeps 30 s in
+/// `on_event`: far below the sleep, far above a response on a loaded machine
+/// (the suite runs next to other builds).
+const RESPONSE_BUDGET: Duration = Duration::from_secs(15);
+
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     seed_solo(repo, &[("solo", false)])
 }
@@ -335,21 +340,17 @@ async fn a_settings_change_is_followed_by_an_operation_applied() {
 
 #[tokio::test]
 async fn an_extension_that_sleeps_or_panics_in_on_event_never_delays_a_response() {
-    // A response that waited for the sleep takes 30 s at least. The bound sits
-    // far below that and far above a loaded machine's slowest creation (6 s
-    // seen with the whole suite running beside other builds): a 5 s bound failed
-    // on load, not on a delay.
-    const SLEEP: Duration = Duration::from_secs(30);
-    const NOT_DELAYED: Duration = Duration::from_secs(15);
     let (daemon, control) = daemon().await;
-    control.on_event(OnEvent::Sleep(SLEEP));
-    // Each creation hands an `OperationApplied` to the sleeping extension.
+    control.on_event(OnEvent::Sleep(Duration::from_secs(30)));
+    // Each creation hands an `OperationApplied` to the sleeping extension. The
+    // bound is half the sleep: a loaded machine can take seconds to answer a
+    // creation, never the 30 s a delayed response would.
     for name in ["one", "two", "three"] {
         let start = Instant::now();
         let (status, _) = post_json(&daemon, "/projects", json!({ "name": name })).await;
         assert_eq!(status, 201);
         assert!(
-            start.elapsed() < NOT_DELAYED,
+            start.elapsed() < RESPONSE_BUDGET,
             "a sleeping on_event delayed the response: {:?}",
             start.elapsed()
         );
@@ -363,7 +364,7 @@ async fn an_extension_that_sleeps_or_panics_in_on_event_never_delays_a_response(
         let start = Instant::now();
         let (status, _) = post_json(&daemon, "/projects", json!({ "name": name })).await;
         assert_eq!(status, 201, "the daemon lives on");
-        assert!(start.elapsed() < NOT_DELAYED);
+        assert!(start.elapsed() < RESPONSE_BUDGET);
     }
     // Back to recording: the delivery thread survived the panics.
     control.on_event(OnEvent::Record);
@@ -596,7 +597,9 @@ impl Extension for Written01 {
                     "SettingsPanel",
                 ))
                 .with(UiSlot::new(
-                    Slot::ListFilter { resource: run },
+                    Slot::ListFilter {
+                        resource: run.clone(),
+                    },
                     "started-by",
                     "Started by",
                     "StartedByFilter",
@@ -625,4 +628,77 @@ async fn an_extension_written_for_0_1_runs_and_keeps_its_four_locations() {
     assert_eq!(index[1]["id"], "old");
     assert_eq!(contributions(&index, 1), the_four_locations_of_0_1());
     assert_eq!(index[1]["ui"]["commands"], json!([]));
+}
+
+/// The daemon with the test extension, then B, then A (hosted.rs).
+async fn daemon_with_hosted(
+    with_host: bool,
+) -> (TestDaemon, test_extension::hosted::ContributorControl) {
+    use test_extension::hosted::{ContributorB, HostA};
+    let (ext, _control) = TestExtension::new(Refusal::Nothing);
+    let (b, panels) = ContributorB::new();
+    let mut extensions = ext.boxed();
+    extensions.push(Box::new(b));
+    if with_host {
+        extensions.push(Box::new(HostA));
+    }
+    let daemon = TestDaemon::spawn_with_extensions(seed, extensions)
+        .await
+        .unwrap();
+    (daemon, panels)
+}
+
+#[tokio::test]
+async fn ext_exposes_the_hosted_locations_and_their_contributions() {
+    use test_extension::hosted::{ACTIONS, PANEL};
+    let (daemon, panels) = daemon_with_hosted(true).await;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(ids(&index, "id"), ["test", "b", "a"]);
+    let host = &index[2]["ui"];
+    assert_eq!(host["ui_module_major"], pdo::extension_api::UI_MODULE_MAJOR);
+    assert_eq!(host["locations"][0]["id"], PANEL);
+    assert_eq!(host["locations"][0]["accepts"], "section");
+    assert_eq!(host["locations"][0]["context"][0]["key"], "item");
+    assert_eq!(host["locations"][1]["id"], ACTIONS);
+    assert_eq!(host["locations"][1]["accepts"], "action");
+    // B's contribution to `absent/panel` is ignored.
+    assert_eq!(
+        contributions(&index, 1),
+        [
+            triple(PANEL, "section", "panel"),
+            triple(ACTIONS, "action", "ping"),
+        ]
+    );
+    // Both bundles are served.
+    for id in ["a", "b"] {
+        let bundle = reqwest::get(format!("{}/ext/{id}/ui.js", daemon.url()))
+            .await
+            .unwrap();
+        assert_eq!(bundle.status(), 200);
+        assert_eq!(bundle.headers()["content-type"], "text/javascript");
+    }
+
+    // A second section of B: both are listed, in declaration order.
+    let (status, _) = post_json(&daemon, "/ext/b/panels", json!({ "count": 2 })).await;
+    assert_eq!(status, 200);
+    let _ = panels;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(
+        contributions(&index, 1),
+        [
+            triple(PANEL, "section", "panel"),
+            triple(PANEL, "section", "second-panel"),
+            triple(ACTIONS, "action", "ping"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn without_its_host_a_contribution_to_a_hosted_location_is_ignored() {
+    let (daemon, _panels) = daemon_with_hosted(false).await;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(ids(&index, "id"), ["test", "b"]);
+    assert_eq!(index[1]["ui"]["contributions"], json!([]));
+    // The rest of B still stands: its command, its bundle.
+    assert_eq!(index[1]["ui"]["commands"][0]["id"], "b.ping");
 }

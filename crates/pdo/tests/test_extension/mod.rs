@@ -28,9 +28,25 @@
 //!   one action each ([`ACTION_LOCATIONS`]), titled `Test <location>`, calling
 //!   the same function; the one of `run/item/menu` only while the row's Run is
 //!   not archived, and that menu also offers [`FAIL`], a command that throws.
+//! - **`cli`** / **`run_cli`**: `pdo ext test echo|cat|exit|panic` (see
+//!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
+//! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
+//!   extension's version.
+//!
+//! Its peers of `interop.rs` run their own mutations through the [`Host`] the
+//! core hands them (amendment #34): the test extension sees their Operations
+//! in `authorize`, their events in `on_event`, stamps their entities.
+//!
+//! `hosted.rs` adds two more, **A** and **B**, for the locations an extension
+//! hosts (amendment #32): A hosts `a/panneau` and `a/actions`, B contributes.
+//! Their ids are those of the interop peers: a daemon loads one set or the other.
 //!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
+//!
+//! [`Host`]: pdo::extension_api::Host
 
+pub mod hosted;
+pub mod interop;
 mod routes;
 
 use std::path::PathBuf;
@@ -39,9 +55,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pdo::extension_api::{
-    Actor, Attributes, Authorization, EntityRef, Extension, ExtensionContext, Manifest, Operation,
-    RequestParts, ResourceKind, Slot, UiCommand, UiContribution, UiContributions, UiLocation,
-    UiSlot, Verb, When,
+    Actor, Attributes, Authorization, CliInvocation, CliOutput, CliSpec, EntityRef, Extension,
+    ExtensionContext, ExtensionSkill, Manifest, Operation, RequestParts, ResourceKind, Slot,
+    UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -55,6 +71,27 @@ pub const REACT_MAJOR: u32 = 19;
 
 /// The request header naming the caller.
 pub const ACTOR_HEADER: &str = "x-pdo-test-actor";
+
+/// The version of the test extension, which its skill is seeded at.
+pub const VERSION: &str = "0.0.0";
+
+/// The name of the skill the test extension provides.
+pub const SKILL_NAME: &str = "test-extension-cli";
+/// Its `SKILL.md`, and its one reference file.
+pub const SKILL_MD: &str = include_str!("skill/SKILL.md");
+pub const SKILL_REFERENCE: (&str, &str) = (
+    "references/commands.md",
+    include_str!("skill/references/commands.md"),
+);
+
+/// How the test extension names an actor on the stderr of its command line.
+pub fn actor_label(actor: &Actor) -> String {
+    match actor {
+        Actor::Agent { run_id, node_id } => format!("agent:{run_id}/{node_id}"),
+        Actor::Identified { namespace, id } => format!("identified:{namespace}/{id}"),
+        other => other.kind().to_string(),
+    }
+}
 
 /// The id of the test extension's command: it reports the context it was
 /// called with (a toast, and `POST /ext/test/commands`).
@@ -103,7 +140,8 @@ pub enum Refusal {
 impl Refusal {
     /// Read a refusal from its text form: `none`, `all`, `panic`, or
     /// `<resource>:<verb>` with the wire names of both (`project:update`,
-    /// `trigger:fire` for the action `fire`).
+    /// `trigger:fire` for the action `fire`, `a/item:create` for an
+    /// extension's resource).
     pub fn parse(text: &str) -> Result<Self, String> {
         match text.trim() {
             "none" => Ok(Refusal::Nothing),
@@ -113,11 +151,16 @@ impl Refusal {
                 let (resource, verb) = other.split_once(':').ok_or_else(|| {
                     format!("`{other}`: expected none, all, panic or resource:verb")
                 })?;
-                let resource = RESOURCES
-                    .iter()
-                    .copied()
-                    .find(|r| resource_name(*r) == resource)
-                    .ok_or_else(|| format!("unknown resource `{resource}`"))?;
+                let resource = match resource.split_once('/') {
+                    Some((extension, kind)) if !extension.is_empty() && !kind.is_empty() => {
+                        ResourceKind::extension(extension, kind)
+                    }
+                    _ => RESOURCES
+                        .iter()
+                        .find(|r| r.wire_name() == resource)
+                        .cloned()
+                        .ok_or_else(|| format!("unknown resource `{resource}`"))?,
+                };
                 let verb = match verb {
                     "create" => Verb::Create,
                     "update" => Verb::Update,
@@ -163,13 +206,6 @@ const RESOURCES: &[ResourceKind] = &[
     ResourceKind::PriceTable,
 ];
 
-fn resource_name(resource: ResourceKind) -> String {
-    serde_json::to_value(resource)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default()
-}
-
 fn verb_name(verb: &Verb) -> String {
     match verb {
         Verb::Create => "create".into(),
@@ -185,7 +221,7 @@ pub fn reason(operation: &Operation) -> String {
     format!(
         "the test extension refuses {} {}",
         verb_name(&operation.verb),
-        resource_name(operation.resource)
+        operation.resource
     )
 }
 
@@ -208,6 +244,7 @@ pub struct Control {
     on_event: Arc<Mutex<OnEvent>>,
     data_dir: Arc<Mutex<Option<PathBuf>>>,
     incompatible: Arc<AtomicBool>,
+    cli_calls: Arc<Mutex<Vec<CliInvocation>>>,
     commands: Arc<Mutex<Vec<Value>>>,
 }
 
@@ -220,6 +257,7 @@ impl Default for Control {
             on_event: Arc::new(Mutex::new(OnEvent::Record)),
             data_dir: Arc::default(),
             incompatible: Arc::default(),
+            cli_calls: Arc::default(),
             commands: Arc::default(),
         }
     }
@@ -242,6 +280,11 @@ impl Control {
 
     pub fn on_event(&self, behaviour: OnEvent) {
         *self.on_event.lock().unwrap() = behaviour;
+    }
+
+    /// Every `pdo ext test …` `run_cli` answered, in order.
+    pub fn cli_calls(&self) -> Vec<CliInvocation> {
+        self.cli_calls.lock().unwrap().clone()
     }
 
     /// The data folder `start` received.
@@ -312,7 +355,7 @@ impl TestExtension {
 
 impl Extension for TestExtension {
     fn manifest(&self) -> Manifest {
-        let manifest = Manifest::new(ID, "Test extension", "0.0.0");
+        let manifest = Manifest::new(ID, "Test extension", VERSION);
         match &self.api_version {
             Some(version) => manifest.requiring_api(version.clone()),
             None => manifest,
@@ -359,7 +402,7 @@ impl Extension for TestExtension {
         } else {
             REACT_MAJOR
         };
-        let run = ResourceKind::Run;
+        let run = || ResourceKind::Run;
         // No icon: its button shows the fallback, a boxed « S ».
         let show_context = UiCommand::new(SHOW_CONTEXT, "Show context", "showContext");
         let never = UiCommand::new("test.never", "Never shown", "showContext");
@@ -377,13 +420,13 @@ impl Extension for TestExtension {
                 "SettingsPanel",
             ))
             .with(UiSlot::new(
-                Slot::ListFilter { resource: run },
+                Slot::ListFilter { resource: run() },
                 "started-by",
                 "Started by",
                 "StartedByFilter",
             ))
             .with(UiSlot::new(
-                Slot::DetailTab { resource: run },
+                Slot::DetailTab { resource: run() },
                 "run-tab",
                 "Test",
                 "RunTab",
@@ -426,6 +469,42 @@ impl Extension for TestExtension {
         )
     }
 
+    fn cli(&self) -> Option<CliSpec> {
+        Some(CliSpec::new(
+            "Echo, cat, exit with a code: the test of `pdo ext`",
+        ))
+    }
+
+    /// `echo <words…>` writes the words; `cat` its standard input; `exit
+    /// <code>` exits with it; each writes the Actor on stderr. `panic`
+    /// panics; anything else exits `2`.
+    fn run_cli(&self, invocation: &CliInvocation) -> CliOutput {
+        self.control
+            .cli_calls
+            .lock()
+            .unwrap()
+            .push(invocation.clone());
+        let actor = format!("actor: {}\n", actor_label(&invocation.actor));
+        let args: Vec<&str> = invocation.args.iter().map(String::as_str).collect();
+        match args.as_slice() {
+            ["echo", words @ ..] => {
+                CliOutput::success(format!("{}\n", words.join(" "))).with_stderr(actor)
+            }
+            ["cat"] => CliOutput::success(invocation.stdin.clone()).with_stderr(actor),
+            ["exit", code] => match code.parse() {
+                Ok(code) => CliOutput::failure(code, actor),
+                Err(_) => CliOutput::failure(2, format!("`{code}` is not an exit code\n")),
+            },
+            ["panic"] => panic!("the test extension panics in run_cli"),
+            _ => CliOutput::failure(2, "unknown command\n"),
+        }
+    }
+
+    fn skills(&self) -> Vec<ExtensionSkill> {
+        let (path, content) = SKILL_REFERENCE;
+        vec![ExtensionSkill::new(SKILL_NAME, SKILL_MD).with_file(path, content)]
+    }
+
     fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
         self.control
             .seen
@@ -464,6 +543,13 @@ fn a_refusal_reads_from_its_text_form() {
         ))
     );
     assert_eq!(Refusal::parse("all"), Ok(Refusal::Everything));
+    assert_eq!(
+        Refusal::parse("a/item:create"),
+        Ok(Refusal::Only(
+            ResourceKind::extension("a", "item"),
+            Verb::Create
+        ))
+    );
     assert!(Refusal::parse("nope:update").is_err());
     assert!(Refusal::parse("project").is_err());
     assert_eq!(

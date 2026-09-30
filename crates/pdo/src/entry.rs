@@ -17,7 +17,7 @@ use pdo_run::adapters::cli::{
     RunAction,
 };
 
-use crate::cli::{run_docs, run_migrate, Cli, Commands};
+use crate::cli::{run_docs, run_ext, run_migrate, Cli, Commands};
 
 /// The whole `pdo` binary: parse the command line, run the subcommand, return
 /// its exit code.
@@ -27,7 +27,8 @@ use crate::cli::{run_docs, run_migrate, Cli, Commands};
 /// them (it calls `extensions` inside the daemon's tokio runtime), and
 /// `pdo service` submits its install and uninstall to their Autorisation
 /// d'opération (outside any runtime). The agent's CLI (`pdo complete`, `fail`,
-/// `wait-user`, `run create`…) never builds them.
+/// `wait-user`, `run create`, `ext`…) never builds them: `pdo ext` relays its
+/// call to the daemon, whose extensions answer it.
 ///
 /// The exit codes are a public contract, the same for every binary:
 ///
@@ -36,6 +37,9 @@ use crate::cli::{run_docs, run_migrate, Cli, Commands};
 ///   §4);
 /// - `pdo wait-user`: `3` refused, still your turn; `pdo run wait`: `2` timed
 ///   out, not a failure (ADR-0069);
+/// - `pdo ext <id> <args…>`: the extension's own code, relayed as is; `1` the
+///   daemon cannot be reached or the extension failed; `127` no extension
+///   `<id>`, or one without a command line (#33);
 /// - every other subcommand: `0` success, `1` error; `--help` and `--version`
 ///   exit `0`, a command line clap cannot read exits `2`.
 ///
@@ -141,6 +145,8 @@ where
         },
         Commands::Page { action } => exit(run_page(action)),
         Commands::Review { action } => exit(run_review(action)),
+        // `ext` owns its exit code: the extension's, relayed as is.
+        Commands::Ext { args } => run_ext(args),
     }
 }
 

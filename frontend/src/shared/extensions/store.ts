@@ -4,7 +4,8 @@
  *
  * A bundle built for another major of React than the front's is never imported
  * (`incompatible`): mixing two Reacts breaks hooks in ways a banner explains
- * better than a crash. A bundle that fails to import is `failed`. Neither
+ * better than a crash. The same holds for a bundle built against another major
+ * of the shared module `@pdo/extension-ui` (amendment #32). A bundle that fails to import is `failed`. Neither
  * affects the rest of the UI. A daemon without extension answers `[]`, and
  * nothing is added anywhere.
  */
@@ -14,6 +15,7 @@ import { create } from "zustand";
 import type { ExtensionEntry } from "../generated/ExtensionEntry";
 import { fetchExtensions } from "./api";
 import { hostReactMajor } from "./shared";
+import { UI_MODULE_MAJOR } from "./uiModuleVersion";
 
 /** What an ES bundle exports: its components, by name. */
 export type BundleModule = Record<string, unknown>;
@@ -29,10 +31,15 @@ export function setBundleLoader(loader?: BundleLoader): void {
 
 export type ExtensionStatus = "no-ui" | "loading" | "ready" | "incompatible" | "failed";
 
+/** What an `incompatible` bundle was built against that the front does not run. */
+export type Incompatibility = "react" | "ui-module";
+
 export interface LoadedExtension {
   entry: ExtensionEntry;
   status: ExtensionStatus;
   module: BundleModule | null;
+  /** Set when `incompatible`. */
+  incompatibility?: Incompatibility;
 }
 
 interface ExtensionsState {
@@ -47,7 +54,11 @@ async function loadOne(entry: ExtensionEntry): Promise<LoadedExtension> {
   const url = entry.ui?.bundle_url;
   if (!url) return { entry, status: "no-ui", module: null };
   if (entry.ui?.react_major !== hostReactMajor()) {
-    return { entry, status: "incompatible", module: null };
+    return { entry, status: "incompatible", module: null, incompatibility: "react" };
+  }
+  const moduleMajor = entry.ui?.ui_module_major;
+  if (moduleMajor !== null && moduleMajor !== undefined && moduleMajor !== UI_MODULE_MAJOR) {
+    return { entry, status: "incompatible", module: null, incompatibility: "ui-module" };
   }
   try {
     return { entry, status: "ready", module: await loadBundle(url) };

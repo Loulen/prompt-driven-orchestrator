@@ -288,6 +288,8 @@ fn the_agent_cli_never_builds_the_extensions() {
         &["skip", "--reason", "x"],
         &["wait-user"],
         &["run", "create", "some-pipeline"],
+        &["ext", "test", "echo", "salut"],
+        &["ext"],
     ] {
         let child = main_from(args, "panic", &session);
         assert!(!child.stderr.contains(FACTORY_PANIC), "{args:?}: {child}");

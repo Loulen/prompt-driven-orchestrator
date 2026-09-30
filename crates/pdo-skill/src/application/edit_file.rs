@@ -7,7 +7,6 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use super::skills::Skills;
 use crate::domain::error::SkillError;
 use crate::domain::file_path::{normalise_file_path, reference_file};
-use crate::domain::seed::refuse_locked;
 use crate::domain::skill::{Skill, SkillFile, SKILL_MD};
 use crate::domain::skill_md::validate_skill_md;
 
@@ -46,7 +45,7 @@ impl Skills {
         if self.skills.get(id).await?.is_none() {
             return Err(SkillError::NotFound);
         }
-        refuse_locked(id)?;
+        self.refuse_locked(id).await?;
         let rel = reference_file(&rel, false)?;
         if !self.content.is_file(id, &rel) {
             return Err(SkillError::FileNotFound(rel));
@@ -61,7 +60,7 @@ impl Skills {
     /// **nothing is written**. The row's `description` follows the new
     /// frontmatter; the label (`name`) does not — renaming is its own verb.
     async fn replace_skill_md(&self, id: &str, content: &str) -> Result<Skill, SkillError> {
-        refuse_locked(id)?;
+        self.refuse_locked(id).await?;
         let mut skill = self.skills.get(id).await?.ok_or(SkillError::NotFound)?;
         let parsed = validate_skill_md(content)?;
         self.content.write_skill_md(id, content)?;

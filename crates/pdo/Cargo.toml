@@ -58,9 +58,13 @@ pdo-skill.workspace = true
 pdo-workspace.workspace = true
 anyhow.workspace = true
 axum.workspace = true
+# The bytes of `pdo ext <id>` (stdin, stdout, stderr) travel in base64.
+base64 = "0.22"
 chrono.workspace = true
 clap.workspace = true
 mime_guess.workspace = true
+# `pdo ext <id>` relays its call to the daemon (blocking, outside any runtime).
+reqwest.workspace = true
 rust-embed.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -72,12 +76,10 @@ ts-rs.workspace = true
 
 [dev-dependencies]
 serde_yaml.workspace = true
-reqwest.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 sha2.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
-base64 = "0.22"
 futures-util = "0.3"
 tokio-tungstenite = "0.26"
 tower = { version = "0.5", features = ["util"] }

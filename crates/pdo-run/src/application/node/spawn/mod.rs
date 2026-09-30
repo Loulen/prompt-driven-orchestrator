@@ -187,6 +187,19 @@ pub async fn spawn_node(
         Ok(guard) => guard,
         Err(outcome) => return outcome,
     };
+    // The guards again, under the admission lock this time: every spawn appends
+    // its reservation under that lock, so a duplicate that queued behind its
+    // winner (a loaded machine) reads the Run as the winner left it: refused
+    // before any side effect when the node moved on (a retry already at the next
+    // iteration) or the winner's session is up, instead of failing its own append
+    // later and parking the iteration `spawn_aborted`. It narrows the race, it
+    // does not close it: a loser that takes the lock before the winner's session
+    // exists still passes, and `launch` keeps the duplicate-session branch for it
+    // (ADR-0050 §2). Its read of the Run replaces the pre-lock one.
+    let loaded = match guards::guard(deps, spawn_ctx, node, iter).await {
+        Ok(reloaded) => reloaded.or(loaded),
+        Err(outcome) => return outcome,
+    };
 
     let canonical_path = pipeline::canonical_prompt_path(spawn_ctx.pipeline_path, &node.id);
     let role_prompt = std::fs::read_to_string(&canonical_path).unwrap_or_default();

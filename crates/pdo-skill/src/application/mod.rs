@@ -17,6 +17,7 @@ mod queries;
 mod rescan_folder;
 mod scan_source;
 mod seed;
+mod seed_extension;
 mod skills;
 mod update_folder;
 mod update_from_source;

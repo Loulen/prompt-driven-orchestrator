@@ -82,7 +82,14 @@ function extension(id: string, name: string, contributions: UiContribution[]): E
     id,
     name,
     version: "1.0.0",
-    ui: { bundle_url: `/ext/${id}/ui.js`, react_major: hostReactMajor(), contributions, commands },
+    ui: {
+      bundle_url: `/ext/${id}/ui.js`,
+      react_major: hostReactMajor(),
+      ui_module_major: null,
+      contributions,
+      commands,
+      locations: [],
+    },
   };
 }
 

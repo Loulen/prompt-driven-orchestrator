@@ -93,7 +93,7 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
                 data-testid="tree-menu-locked"
               >
                 <Lock size={12} className="shrink-0" />
-                Managed by PDO
+                {row.skill?.extension ? `Provided by the extension ${row.skill.extension.id}` : "Managed by PDO"}
               </div>
             </>
           ) : (

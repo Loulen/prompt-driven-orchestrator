@@ -3,7 +3,14 @@
 //! An [`Extension`] is registered when the daemon starts (`pdo::serve(config,
 //! extensions)`) and plugs into the core's generic hooks: identify the [`Actor`]
 //! of a request, authorize or refuse an [`Operation`], stamp [`Attributes`] on a
-//! new entity, observe events, contribute routes and UI.
+//! new entity, observe events, contribute routes and UI, answer a command line
+//! (`pdo ext <id> <args…>`) and bring skills into the Banque de skills.
+//!
+//! An extension runs its **own** mutations through the same mechanisms, by the
+//! [`Host`] its [`ExtensionContext`] carries: its entities are a
+//! [`ResourceKind::Extension`], their Operations are refusable by every
+//! extension, its events reach `/ws` and the other extensions, and the other
+//! extensions stamp their attributes on its entities.
 //!
 //! **Every hook has a neutral default.** An extension overrides only what it does;
 //! with no extension installed, the caller is the local operator, everything is
@@ -15,21 +22,30 @@
 //! daemon already broadcasts on `/ws`, never an internal Rust enum.
 
 mod actor;
+mod cli;
 mod entity;
 mod event;
 mod extension;
+mod host;
 mod manifest;
 mod operation;
+mod skill;
 mod ui;
 
 pub use actor::Actor;
+pub use cli::{CliInvocation, CliOutput, CliSpec, EXIT_NO_CLI};
 pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
-pub use extension::{Authorization, Extension, ExtensionContext, RequestParts};
+pub use extension::{
+    Authorization, Denied, Extension, ExtensionContext, RequestParts, OPERATION_REFUSED,
+};
+pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
+pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
-    Slot, UiCommand, UiContribution, UiContributions, UiElement, UiLocation, UiSlot, When,
+    ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions, UiElement,
+    UiElementKind, UiLocation, UiSlot, When, UI_MODULE, UI_MODULE_MAJOR,
 };
 
 pub use axum;
@@ -41,5 +57,6 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The oldest version of this API that [`API_VERSION`] still honours: an
 /// extension requiring any version from this one up to [`API_VERSION`] runs.
 /// In 0.x a minor may break; this is where the API says which ones did not
-/// (0.2 only added to 0.1, ADR-0081 amendment #29).
+/// (0.2 only added to 0.1, ADR-0081 amendment #29; 0.3 broke only compilation,
+/// amendment #34; 0.4 only added to 0.3, amendment #32).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

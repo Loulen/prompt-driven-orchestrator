@@ -74,5 +74,7 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo page unmount <name>` | Remove a page mount. |
 | `pdo review list [--state <state>] [--run <id>]` | List review comments for a run. |
 | `pdo review reply <id> --text <markdown> [--resolved] [--run <id>]` | Reply to a review comment and optionally propose or record its resolution. |
+| `pdo ext` | List the extensions of the running daemon that have a command line, one `<id>\t<summary>` per line. Exit 1 when the daemon is unreachable. |
+| `pdo ext <id> <args…>` | Run the command line of extension `<id>` through the daemon. The arguments (flags included), the standard input (when it is a pipe or a file: `… | pdo ext <id>` or `pdo ext <id> < file`; a terminal, `/dev/null` or the socket an agent's shell tool leaves open relay nothing, so the command never waits for its input) and the node session the command runs in reach the extension, which sees the agent `agent:<run>/<node>` from a node session and the local operator otherwise. Its stdout and stderr come back byte for byte. Exit code: the extension's, as is; 1 when the daemon is unreachable or the extension fails; 127 when the daemon has no extension `<id>` or one without a command line. |
 
 Exposing the daemon beyond `localhost` is covered in [reverse-proxy.md](reverse-proxy.md).

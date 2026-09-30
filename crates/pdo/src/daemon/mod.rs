@@ -38,7 +38,7 @@ pub async fn serve_with_config(
     config: DaemonConfig,
 ) -> Result<DaemonHandle> {
     let (db, db_path) = storage::open(&repo_root).await?;
-    storage::prepare(&db, &db_path, &repo_root).await?;
+    storage::prepare(&db, &db_path, &repo_root, config.extension_host.0.as_ref()).await?;
 
     // The kernel's event bus (D20): every Run event and every announcement `/ws`
     // relays, as `/ws` relays it. One channel, sized for the two it replaced

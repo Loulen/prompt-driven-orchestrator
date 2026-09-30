@@ -1,7 +1,8 @@
 # Extension UI reference
 
-How an extension adds to PDO's interface (ADR-0081, amendments #29 and #30): a catalogue of **named
-locations**, a few **kinds of contribution**, **commands** and **`when` clauses**. The locations,
+How an extension adds to PDO's interface (ADR-0081, amendments #29, #30 and #32): a catalogue of
+**named locations**, a few **kinds of contribution**, **commands**, **`when` clauses**, and the
+locations an extension **hosts** in its own interface. The locations,
 what each accepts and the context each hands over are part of the semver of
 `pdo-extension-api`.
 
@@ -340,6 +341,98 @@ A declarative condition on the location's context, evaluated by the core. A key 
 
 An operator the front does not know is false: the element stays hidden.
 
+## Hosted locations
+
+An extension may host locations in its own interface (amendment #32): the other extensions
+contribute there exactly as to the core's catalogue, and the host renders their elements with the
+shared module `@pdo/extension-ui`. `pm` hosts `pm/onglet`, `pm/action-page`, `pm/badge-carte` and
+`pm/section-barre-laterale`; its own documentation lists what each hands over.
+
+### Declaring one
+
+```rust
+use pdo_extension_api::{HostedLocation, UiContributions, UiElementKind};
+
+pub const TAB: &str = "pm/onglet";
+
+fn ui(&self) -> Option<UiContributions> {
+    Some(
+        UiContributions::bundle("/ext/pm/ui.js", 19)
+            .importing_ui_module()
+            .host(
+                HostedLocation::new(TAB, UiElementKind::Tab)
+                    .describe("A tab of a Page or a Task, after History.")
+                    .context_key("page", "The Page shown: { id, title, kind }"),
+            ),
+    )
+}
+```
+
+- The id is `<extension id>/<name>`, the name in lowercase ASCII letters, digits and `-`. It is a
+  `&'static str`: a constant of the host's API.
+- A hosted location accepts **one** kind of element (`UiElementKind`): action, tab, section,
+  decoration or list filter. Never a page, which belongs to the core's shell.
+- `context_key` documents what the location adds to the context every location hands over.
+- The daemon leaves out, with a warning in its log, a declaration whose id does not start with
+  the host's id and `/`, that takes the id of a location of the core or one already declared, or
+  that accepts pages.
+- `GET /ext` lists the declarations in `ui.locations`: `{ id, accepts, description, context: [{
+  key, description }] }`.
+
+### Contributing to one
+
+```rust
+use pdo_extension_api::{UiContribution, UiLocation};
+
+UiContributions::bundle("/ext/audit/ui.js", 19)
+    .contribute(UiContribution::tab(UiLocation::Hosted("pm/onglet"), "audit", "Audit", "AuditTab"))
+```
+
+- The element's kind must be the one the host accepts; the daemon leaves out, with a warning,
+  any other.
+- A contribution to the location of an extension that is not loaded, or that does not declare
+  it, is **ignored without error**: the host is not installed, nothing shows.
+- The rule of the list holds: every contribution adds up, in registration order, then in
+  declaration order.
+
+### Rendering one: `@pdo/extension-ui`
+
+The front declares the shared module in its import map next to React (`/shared/pdo-extension-ui.js`).
+A bundle imports it as a bare specifier and never embeds it: with Vite, list it in
+`build.rollupOptions.external` with `react`, `react/jsx-runtime` and `react-dom`. Its types are
+`frontend/public/shared/pdo-extension-ui.d.ts` (served as `/shared/pdo-extension-ui.d.ts`).
+
+```ts
+import { HostedContribution, HostedContributions, useHostedContributions } from "@pdo/extension-ui";
+
+// Every element, in order; nothing at all without contribution.
+<HostedContributions location="pm/badge-carte" context={context} />
+
+// Or the list, to lay it out yourself (tab headers, then the selected tab's body).
+const tabs = useHostedContributions("pm/onglet", context);
+tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.label}</button>);
+<HostedContribution element={selected} />
+```
+
+| Export | What it does |
+| --- | --- |
+| `useHostedContributions(location, context?)` | The elements at `location` (`{ key, extension, id, label, type, context }`), `when` clauses applied on `context`. Empty without contribution, and for a location no loaded extension hosts |
+| `HostedContribution({ element, props? })` | One element: its component with `extension`, `context` and `props`, inside an error boundary; an action as a button (its command's icon and title) that calls it |
+| `HostedContributions({ location, context?, props?, wrap? })` | Every element through `HostedContribution`, each wrapped by `wrap(element, rendered)` when given; `null` without element |
+| `runHostedCommand(element)` | Call an action's command, as its button does |
+| `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
+
+- **Context**: an element receives the host's `context`, merged over the context every location
+  hands over (the selected Run, its Projet) and `location` (the hosted id). Pass a stable object
+  (`useMemo`): the list is recomputed when it changes. A `when` clause reads it by dotted keys
+  (`page.kind`).
+- **Errors**: a component that throws takes down its own element only; a command that throws or
+  rejects shows an error toast.
+- **No layout shift**: without an element, nothing is rendered, no wrapper box either.
+- **Version**: a bundle that imports the module declares it (`importing_ui_module()`, on the wire
+  `ui.ui_module_major`). A bundle built against another major than the front's is never loaded,
+  and a banner says so, as for React. The module's version is `pdo-extension-api`'s.
+
 ## Version 0.1
 
 An extension written for 0.1 keeps working: the daemon accepts an extension requiring any API
@@ -350,7 +443,8 @@ another resource than the Runs maps onto nothing: 0.1 never rendered them.
 
 ## Adding a location
 
-A location is added to the core, never by an extension:
+A location of the core is added to the core; an extension adds its own as a hosted location
+(above):
 
 1. A variant of `UiLocation` (its id in `serde(rename)`), its line in `UiLocation::ALL`,
    `UiLocation::id` and `UiLocation::accepts`, then `make types`.

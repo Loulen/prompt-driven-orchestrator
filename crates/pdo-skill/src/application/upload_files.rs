@@ -44,6 +44,10 @@ impl Skills {
             outcome.failure = Some(error);
             return outcome;
         }
+        if let Err(error) = self.refuse_locked(id).await {
+            outcome.failure = Some(error);
+            return outcome;
+        }
         for upload in uploads {
             match self.write_reference_file(id, &upload.path, &upload.data) {
                 Ok(file) => outcome.uploaded.push(file),
@@ -66,6 +70,7 @@ impl Skills {
         rel: Option<&str>,
     ) -> Result<SkillFile, SkillError> {
         self.edit_files(actor, id)?;
+        self.refuse_locked(id).await?;
         if !from.is_absolute() {
             return Err(SkillError::SourceNotAFile(from.display().to_string()));
         }

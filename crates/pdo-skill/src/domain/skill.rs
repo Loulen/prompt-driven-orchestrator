@@ -64,6 +64,16 @@ pub struct FolderProvenance {
     pub invalid: i64,
 }
 
+/// The extension a skill comes with (ADR-0081, #33): its id and the version
+/// the skill was seeded at. The skill is locked, and rewritten at startup when
+/// the extension's version or the skill's content changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "SkillExtension")]
+pub struct ProvidedBy {
+    pub id: String,
+    pub version: String,
+}
+
 /// One row of the bank's index. `folder_id` is `None` at the root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -73,10 +83,15 @@ pub struct Skill {
     pub description: String,
     #[serde(default)]
     pub folder_id: Option<String>,
-    /// Set on the skill PDO seeds at startup (#722): locked against edit and
-    /// delete, everywhere the bank is written.
+    /// Set on the skills PDO seeds at startup (#722), its own and its
+    /// extensions': locked against edit and delete, everywhere the bank is
+    /// written.
     #[serde(default)]
     pub locked: bool,
+    /// The extension that provides this skill. `None` for every other skill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub extension: Option<ProvidedBy>,
     /// Provenance of an import. `None` for a pasted skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

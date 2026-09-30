@@ -19,6 +19,7 @@ pub mod cli;
 mod contexts;
 mod daemon;
 mod entry;
+mod extension_cli;
 mod extensions;
 mod identify;
 mod ports;

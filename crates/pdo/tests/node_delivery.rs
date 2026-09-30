@@ -145,7 +145,10 @@ async fn wait_for_node_status(
 ) -> serde_json::Value {
     let started = std::time::Instant::now();
     let mut last = serde_json::Value::Null;
-    while started.elapsed() < Duration::from_secs(30) {
+    // A bound on a hang, not the nodes' pace: on a loaded host (a full `make
+    // test` beside other builds) two script nodes and their forks take well
+    // over 30 s.
+    while started.elapsed() < Duration::from_secs(90) {
         let run = get_run(daemon, run_id).await;
         if run["nodes"][node_id]["status"] == expected {
             return run;

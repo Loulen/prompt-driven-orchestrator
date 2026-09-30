@@ -5,6 +5,8 @@
 > Amendé par #21 : comment une distribution obtient le frontend embarqué (§ *Amendements*).
 > Amendé par #29 : les Emplacements d'UI deviennent un catalogue nommé, avec Commandes et
 > clauses `when` (§ *Amendement #29*).
+> Amendé par #32 : une extension héberge ses propres emplacements, rendus par un module partagé
+> (§ *Amendement #32*).
 
 ## Contexte
 
@@ -184,3 +186,50 @@ des *contribution points* de VS Code : peu de types de contribution, beaucoup d'
 sérialise, se type en TypeScript et ne demande pas de grammaire ; un emplacement réservé à une
 extension, contraire à la règle de la liste ; un contexte calculé par le daemon, qui ne connaît
 pas la sélection de l'opérateur.
+
+## Amendement #32 : des emplacements hébergés par une extension
+
+Seam découvert avec l'extension Projet (`pm`) : une autre extension doit pouvoir ajouter un
+onglet à une Page de `pm`, un badge à une Carte, une action dans la barre d'une Page, une section
+dans sa barre latérale, sans que `pm` la connaisse (ADR-0001 de `pdo-extensions` : « mieux vaut
+trop de points d'extension que pas assez »). Le catalogue du core n'y suffit pas : ces endroits
+sont dans l'interface de `pm`, que le core ne rend pas.
+
+- **Déclaration** : une extension déclare ses emplacements hébergés (`HostedLocation`) dans
+  `UiContributions::host` : un identifiant `<id de l'extension>/<nom>` (`pm/onglet`), le **type de
+  contribution** accepté (un seul, `UiElementKind`), une description et la **forme du contexte**
+  (les clés qu'il ajoute au contexte commun, décrites). `GET /ext` les expose dans
+  `ui.locations`. Le daemon écarte, avec un avertissement, une déclaration dont l'identifiant ne
+  commence pas par l'id de l'extension, qui reprend un emplacement du core ou un emplacement déjà
+  déclaré, ou qui accepte des Pages (une Page appartient au shell du core).
+- **Contribution** : une autre extension y contribue comme au catalogue du core, en nommant
+  l'emplacement (`UiLocation::Hosted("pm/onglet")`, sérialisé par son identifiant). La règle de la
+  liste vaut : toutes les contributions s'ajoutent, dans l'ordre d'enregistrement puis de
+  déclaration. Le daemon vérifie le type contre la déclaration de l'hôte. Une contribution à
+  l'emplacement d'une extension absente (ou qui ne le déclare pas) est **ignorée sans erreur** :
+  l'hôte n'est simplement pas installé.
+- **Module partagé** `@pdo/extension-ui` : le front le déclare dans son import map à côté de
+  React (`/shared/pdo-extension-ui.js`, qui relit ce que le front pose sur
+  `globalThis.__PDO_SHARED__`). Un bundle l'importe en spécificateur nu, jamais embarqué. Il liste
+  (`useHostedContributions(emplacement, contexte)`) et rend (`HostedContribution`,
+  `HostedContributions`) les contributions à un emplacement hébergé, avec les mêmes frontières
+  d'erreur et la même clause `when` que le core ; une Action y devient un bouton qui appelle sa
+  Commande. Le contexte d'un élément est celui de l'hôte, fusionné par-dessus le contexte commun
+  (Run sélectionné, Projet, `location`). Sans contribution, rien n'est rendu : la mise en page de
+  l'hôte ne bouge pas.
+- **Version** : le module est versionné avec l'API (sa version est `API_VERSION`) et vérifié par
+  majeure comme React : un bundle déclare la majeure qu'il importe
+  (`UiContributions::importing_ui_module`, `ui.ui_module_major`) ; une majeure différente de celle
+  du front, et le bundle n'est pas chargé, avec une bannière. En 0.x, la vérification de
+  `api_version` au démarrage refuse déjà une mineure incompatible. Un test du daemon échoue quand
+  la version déclarée par le front (`uiModuleVersion.ts`) s'écarte de celle du crate.
+- **Rétrocompatibilité** : `UiLocation` garde `Copy` et `id(self) -> &'static str` (l'identifiant
+  d'un emplacement hébergé est un `&'static str`, une constante de l'API de l'hôte) ; tout le reste
+  est ajouté. `pdo-extension-api` passe en **0.3.0**, `OLDEST_COMPATIBLE_API_VERSION` reste
+  `0.1.0`. Le fil de `GET /ext` gagne `ui.locations` et `ui.ui_module_major`.
+
+Écartés : un emplacement hébergé rendu par le core (il ne connaît pas l'interface de l'hôte) ;
+une API d'enregistrement dynamique côté navigateur (les déclarations restent dans le manifeste
+d'UI, lisibles par `GET /ext` et vérifiées par le daemon) ; un identifiant `String` qui aurait
+retiré `Copy` à `UiLocation` et cassé le code 0.2 ; plusieurs types acceptés par emplacement
+hébergé, sans besoin connu.

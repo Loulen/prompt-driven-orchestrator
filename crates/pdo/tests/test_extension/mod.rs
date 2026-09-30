@@ -26,8 +26,13 @@
 //!   its icon, an action calling [`SHOW_CONTEXT`] while a Run is selected, and
 //!   an action whose `when` never holds.
 //!
+//!
+//! `hosted.rs` adds two more, **A** and **B**, for the locations an extension
+//! hosts (amendment #32): A hosts `a/panneau` and `a/actions`, B contributes.
+//!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
 
+pub mod hosted;
 mod routes;
 
 use std::path::PathBuf;

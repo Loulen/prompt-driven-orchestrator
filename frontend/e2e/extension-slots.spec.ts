@@ -25,6 +25,8 @@ const PIPELINE_NAME = `e2e-extension-slots-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const REACT_MAJOR = 19;
+const HOST_A_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/host_a.js");
+const CONTRIBUTOR_B_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/contributor_b.js");
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
@@ -68,6 +70,8 @@ function declaration(reactMajor: number) {
       ui: {
         bundle_url: "/ext/test/ui.js",
         react_major: reactMajor,
+        ui_module_major: null,
+        locations: [],
         contributions: [
           // Its four 0.1 slots, mapped onto their locations.
           { location: "topbar/start", id: "events", label: "Test events", type: "page", component: "EventsPage" },
@@ -272,6 +276,86 @@ test("a bundle built for another React major is not loaded, and a banner says so
   await page.getByTestId("open-settings").click();
   await expect(page.getByTestId("settings-surface")).toBeVisible();
   await expect(page.getByTestId("settings-category-extensions")).toHaveCount(0);
+});
+
+/** `GET /ext` for A and B of `test_extension/hosted.rs`, B with `panels` sections. */
+function hostedDeclaration(panels: number, withB = true) {
+  const bundle = (id: string) => ({ bundle_url: `/ext/${id}/ui.js`, react_major: REACT_MAJOR });
+  const panel = (id: string, label: string, component: string) =>
+    ({ location: "a/panneau", id, label, type: "section", component });
+  const a = {
+    id: "a",
+    name: "Test host A",
+    version: "0.0.0",
+    ui: {
+      ...bundle("a"),
+      ui_module_major: 0,
+      contributions: [{ location: "topbar/end", id: "host", label: "Host A", type: "page", component: "HostPage" }],
+      commands: [],
+      locations: [
+        { id: "a/panneau", accepts: "section", description: "", context: [{ key: "item", description: "" }] },
+        { id: "a/actions", accepts: "action", description: "", context: [{ key: "item", description: "" }] },
+      ],
+    },
+  };
+  const b = {
+    id: "b",
+    name: "Test contributor B",
+    version: "0.0.0",
+    ui: {
+      ...bundle("b"),
+      ui_module_major: null,
+      contributions: [
+        panel("panel", "B panel", "BPanel"),
+        ...(panels >= 2 ? [panel("second-panel", "B second panel", "BSecondPanel")] : []),
+        { location: "a/actions", id: "ping", label: "Ping from B", type: "action", command: "b.ping" },
+      ],
+      commands: [{ id: "b.ping", title: "Ping from B", export: "ping" }],
+      locations: [],
+    },
+  };
+  return withB ? [b, a] : [a];
+}
+
+async function playHosted(page: Page, declaration: unknown[]) {
+  const hostA = await fs.readFile(HOST_A_PATH, "utf8");
+  const contributorB = await fs.readFile(CONTRIBUTOR_B_PATH, "utf8");
+  await page.route("**/ext", (route) => route.fulfill({ json: declaration }));
+  await page.route("**/ext/a/ui.js", (route) => route.fulfill({ body: hostA, contentType: "text/javascript" }));
+  await page.route("**/ext/b/ui.js", (route) =>
+    route.fulfill({ body: contributorB, contentType: "text/javascript" }),
+  );
+}
+
+test("hosted locations: A renders B's contributions through @pdo/extension-ui", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await playHosted(page, hostedDeclaration(1));
+  await page.goto("/#/ext/a/topbar/end");
+  // B's section under each of A's items, with the context A handed it.
+  await expect(page.getByTestId("b-panel-item-1")).toHaveText("b panel · a/panneau · First item");
+  await expect(page.getByTestId("b-panel-item-2")).toHaveText("b panel · a/panneau · Second item");
+  await expect(page.getByTestId("host-a-item-1-count")).toHaveText("Contributions: 1");
+  // B's action in A's header calls B's command with A's context.
+  await page.getByTestId("hosted-action-b:ping").click();
+  await expect(page.getByTestId("toast-info")).toContainText("B pinged from a/actions on First item");
+
+  // Two sections of B: both show.
+  await page.unrouteAll();
+  await playHosted(page, hostedDeclaration(2));
+  await page.reload();
+  await expect(page.getByTestId("b-second-panel-item-1")).toBeVisible();
+  await expect(page.getByTestId("b-panel-item-1")).toBeVisible();
+  await expect(page.getByTestId("host-a-item-1-count")).toHaveText("Contributions: 2");
+
+  // B removed: A's page shows without its elements.
+  await page.unrouteAll();
+  await playHosted(page, hostedDeclaration(1, false));
+  await page.reload();
+  await expect(page.getByTestId("host-a-item-1-count")).toHaveText("Contributions: 0");
+  await expect(page.getByTestId("b-panel-item-1")).toHaveCount(0);
+  await expect(page.getByTestId("host-a-actions")).toBeEmpty();
+  expect(errors).toEqual([]);
 });
 
 test("without extension, no element is added", async ({ page }) => {

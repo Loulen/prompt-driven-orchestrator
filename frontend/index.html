@@ -39,13 +39,16 @@
     <!-- The React the extensions' UI bundles import (ADR-0081): the front's own,
          shared through these shims (public/shared/), never a second copy. A
          bundle declaring another React major is not loaded at all
-         (src/shared/extensions/). -->
+         (src/shared/extensions/). `@pdo/extension-ui` is the shared module that
+         renders the locations an extension hosts (amendment #32), checked by
+         major the same way. -->
     <script type="importmap">
       {
         "imports": {
           "react": "/shared/react.js",
           "react/jsx-runtime": "/shared/react-jsx-runtime.js",
-          "react-dom": "/shared/react-dom.js"
+          "react-dom": "/shared/react-dom.js",
+          "@pdo/extension-ui": "/shared/pdo-extension-ui.js"
         }
       }
     </script>

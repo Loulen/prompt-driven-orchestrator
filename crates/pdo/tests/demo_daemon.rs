@@ -16,6 +16,13 @@
 //!   a React major the front does not run (`POST /ext/test/incompatible` switches
 //!   it while the daemon runs).
 //!
+//! - `PDO_DEMO_HOSTED`: which of the hosted-location test extensions
+//!   (`test_extension/hosted.rs`) to add after the test extension: `a,b` (A
+//!   hosts `a/panneau`, B contributes), `a` (B removed), none by default.
+//! - `PDO_DEMO_B_PANELS`: how many sections B contributes to `a/panneau`, `1`
+//!   by default (`POST /ext/b/panels {"count": n}` switches it while the
+//!   daemon runs).
+//!
 //! The test extension keeps its data under `$HOME/.pdo/extensions/test/`: give
 //! the demo daemon a disposable `HOME`.
 //!
@@ -25,6 +32,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use crate::test_extension::hosted::{ContributorB, HostA};
 use crate::test_extension::{Refusal, TestExtension};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -53,7 +61,22 @@ async fn demo_daemon() {
     let (ext, control) = TestExtension::new(refusal.clone());
     control
         .set_incompatible(std::env::var("PDO_TEST_EXTENSION_INCOMPATIBLE").as_deref() == Ok("1"));
-    let daemon = pdo::serve(config, ext.boxed()).await.unwrap();
+    let mut extensions = ext.boxed();
+    let hosted = std::env::var("PDO_DEMO_HOSTED").unwrap_or_default();
+    for id in hosted.split(',').map(str::trim).filter(|id| !id.is_empty()) {
+        match id {
+            "a" => extensions.push(Box::new(HostA)),
+            "b" => {
+                let (b, panels) = ContributorB::new();
+                if let Ok(count) = std::env::var("PDO_DEMO_B_PANELS") {
+                    panels.set_panels(count.parse().expect("PDO_DEMO_B_PANELS is a number"));
+                }
+                extensions.push(Box::new(b));
+            }
+            other => panic!("PDO_DEMO_HOSTED: unknown extension `{other}` (a, b)"),
+        }
+    }
+    let daemon = pdo::serve(config, extensions).await.unwrap();
     eprintln!(
         "demo daemon listening on http://{} (test extension refusing {refusal:?})",
         daemon.addr()

@@ -136,7 +136,7 @@ consigne du prompt.
   à rien compile et fonctionne), mais montée de mineure, donc rebuild obligatoire en 0.x.
 - **`pdo ext <id> <args…>` relaie, sans construire les extensions.** La CLI envoie au daemon
   (`POST /ext-cli/<id>`, hors du préfixe `/ext/<id>` qui appartient à l'extension) les arguments
-  tels quels, flags compris, l'entrée standard si ce n'est pas un terminal, son répertoire de
+  tels quels, flags compris, l'entrée standard si c'est un pipe ou un fichier, son répertoire de
   travail, et l'identité de la session de node (`PDO_RUN_ID`, `PDO_NODE_ID`) comme les autres
   commandes d'agent. Le daemon appelle `run_cli` avec l'Acteur établi par `identify` : l'Agent
   `{run, node}` depuis une session de node, l'Opérateur local sinon. Les octets voyagent en
@@ -166,5 +166,7 @@ consigne du prompt.
 
 Écartés : un code dédié hors de la plage d'une extension (tout `u8` lui appartient ; `127` est
 documenté et une extension ne doit pas le rendre) ; `POST /ext/<id>/cli` (masquerait une route
-de l'extension) ; transporter stdin et stdout en texte (une Archive est binaire) ; un dossier
+de l'extension) ; transporter stdin et stdout en texte (une Archive est binaire) ; lire
+l'entrée standard dès qu'elle n'est pas un terminal (l'outil shell d'un agent laisse ouverte
+une socket qui ne finit jamais : `pdo ext` attendait sans fin, relevé par le FP) ; un dossier
 « PDO » commun avec les skills natifs (le dossier dit qui fournit le skill).

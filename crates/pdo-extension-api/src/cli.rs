@@ -34,8 +34,9 @@ pub struct CliInvocation {
     /// The arguments after the id, verbatim (`pdo ext pm tache list --json`
     /// gives `["tache", "list", "--json"]`).
     pub args: Vec<String>,
-    /// Everything the command read on its standard input; empty when that
-    /// input is a terminal.
+    /// Everything the command read on its standard input when that input is a
+    /// pipe or a file; empty otherwise (a terminal, `/dev/null`, the socket an
+    /// agent's shell tool leaves open).
     pub stdin: Vec<u8>,
     /// Who runs the command: the agent of the node session it comes from, the
     /// local operator otherwise (or whom an extension's `identify` names).

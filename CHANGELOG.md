@@ -17,8 +17,8 @@ Ajout rétrocompatible au source d'une extension ; `pdo-extension-api` passe de 
 sans changer une ligne si elle n'utilise pas les nouveaux hooks). ADR-0081, amendement #33.
 
 - **`pdo ext <id> <args…>`** : la CLI d'une extension, relayée par le daemon (`POST
-  /ext-cli/<id>`). Arguments et flags tels quels, entrée standard (sauf terminal), répertoire
-  de travail, et identité de la session de node : l'extension voit `Actor::Agent{run, node}`
+  /ext-cli/<id>`). Arguments et flags tels quels, entrée standard (pipe ou fichier seulement),
+  répertoire de travail, et identité de la session de node : l'extension voit `Actor::Agent{run, node}`
   depuis une session, l'Opérateur local sinon. Stdout et stderr reviennent octet pour octet.
   Codes : ceux de l'extension ; `1` daemon injoignable ou extension en échec ; `127` pas
   d'extension `<id>`, ou pas de CLI. `pdo ext` seul liste les extensions qui en ont une.

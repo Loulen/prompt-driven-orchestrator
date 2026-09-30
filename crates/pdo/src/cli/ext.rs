@@ -1,8 +1,8 @@
 //! `pdo ext <id> <args…>` (#33, ADR-0081): an extension's command line,
 //! relayed to the daemon that runs it. The CLI never builds the extensions
-//! (amendment #23): it sends the arguments, its standard input and its working
-//! directory, with the node session it runs in (`PDO_RUN_ID`, `PDO_NODE_ID`),
-//! then writes the extension's stdout and stderr byte for byte and exits with
+//! (amendment #23): it sends the arguments, its standard input when it is a
+//! pipe or a file, its working directory, with the node session it runs in
+//! (`PDO_RUN_ID`, `PDO_NODE_ID`), then writes the extension's stdout and stderr byte for byte and exits with
 //! its code.
 //!
 //! Exit codes: the extension's, relayed as is; `1` when the daemon cannot be
@@ -10,7 +10,9 @@
 //! ([`EXIT_NO_CLI`]) when the daemon has no extension `<id>`, or one without a
 //! command line. `pdo ext` alone lists the extensions that have one.
 
-use std::io::{IsTerminal, Read, Write};
+#[cfg(not(unix))]
+use std::io::IsTerminal;
+use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -151,15 +153,35 @@ fn relay(daemon: &Daemon, id: &str, args: Vec<String>) -> ExitCode {
     }
 }
 
-/// Everything on the standard input, unless it is a terminal: nothing to
-/// relay then, and reading would wait for the operator.
+/// Everything on the standard input when it is a pipe (`… | pdo ext …`) or a
+/// file (`pdo ext … < file`), which both end; nothing otherwise. A terminal
+/// would wait for the operator, and an agent's shell tool hands its commands a
+/// standard input that never ends (a socket that stays open, in Claude Code's
+/// Bash tool): reading it would block `pdo ext` forever.
 fn read_stdin() -> std::io::Result<Vec<u8>> {
-    let mut stdin = std::io::stdin();
     let mut bytes = Vec::new();
-    if !stdin.is_terminal() {
-        stdin.read_to_end(&mut bytes)?;
+    if stdin_ends() {
+        std::io::stdin().read_to_end(&mut bytes)?;
     }
     Ok(bytes)
+}
+
+#[cfg(unix)]
+fn stdin_ends() -> bool {
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::FileTypeExt;
+    let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() else {
+        return false; // closed
+    };
+    match std::fs::File::from(fd).metadata() {
+        Ok(meta) => meta.file_type().is_fifo() || meta.file_type().is_file(),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn stdin_ends() -> bool {
+    !std::io::stdin().is_terminal()
 }
 
 fn write_answer(answer: &ExtensionCliResponse) -> ExitCode {

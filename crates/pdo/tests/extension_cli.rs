@@ -60,17 +60,39 @@ impl std::fmt::Display for Output {
 }
 
 /// `pdo <args>` against `url`, from the node session `session` if any, fed
-/// `stdin` (none: `/dev/null`), on a blocking task so the daemon keeps serving.
+/// `stdin` through a pipe (none: `/dev/null`).
 async fn pdo(
     url: &str,
     args: &[&str],
     session: Option<(&str, &str)>,
     stdin: Option<&[u8]>,
 ) -> Output {
+    let stdin = match stdin {
+        Some(bytes) => Stdin::Pipe(bytes.to_vec()),
+        None => Stdin::Null,
+    };
+    pdo_fed(url, args, session, stdin).await
+}
+
+/// What `pdo` reads on its standard input.
+enum Stdin {
+    Null,
+    /// A pipe that is written, then closed: `printf … | pdo ext …`.
+    Pipe(Vec<u8>),
+    /// A file: `pdo ext … < file`.
+    File(std::fs::File),
+    /// A socket that stays open and never sends anything: the standard input
+    /// of a command run by an agent's shell tool (Claude Code's Bash tool).
+    OpenSocket(std::os::unix::net::UnixStream),
+}
+
+/// [`pdo`], with any kind of standard input, on a blocking task so the daemon
+/// keeps serving. Killed after 30 s: a `pdo` that waits for its standard input
+/// fails the test instead of hanging it.
+async fn pdo_fed(url: &str, args: &[&str], session: Option<(&str, &str)>, stdin: Stdin) -> Output {
     let url = url.to_string();
     let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     let session = session.map(|(r, n)| (r.to_string(), n.to_string()));
-    let stdin = stdin.map(<[u8]>::to_vec);
     tokio::task::spawn_blocking(move || {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_pdo"));
         cmd.args(&args);
@@ -83,19 +105,36 @@ async fn pdo(
         if let Some((run, node)) = &session {
             cmd.env("PDO_RUN_ID", run).env("PDO_NODE_ID", node);
         }
-        cmd.stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        let (stdio, feed, _held) = match stdin {
+            Stdin::Null => (Stdio::null(), None, None),
+            Stdin::Pipe(bytes) => (Stdio::piped(), Some(bytes), None),
+            Stdin::File(file) => (Stdio::from(file), None, None),
+            Stdin::OpenSocket(ours) => {
+                let theirs = ours.try_clone().unwrap();
+                (Stdio::from(std::os::fd::OwnedFd::from(theirs)), None, Some(ours))
+            }
+        };
+        cmd.stdin(stdio)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = cmd.spawn().expect("spawn pdo");
-        if let Some(bytes) = stdin {
+        if let Some(bytes) = feed {
             let mut pipe = child.stdin.take().unwrap();
             pipe.write_all(&bytes).unwrap();
         }
+        let pid = child.id();
+        let (done, finished) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if finished
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .is_err()
+            {
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+            }
+        });
         let out = child.wait_with_output().unwrap();
+        let _ = done.send(());
+        watchdog.join().unwrap();
         Output {
             code: out.status.code(),
             stdout: out.stdout,
@@ -169,6 +208,36 @@ async fn exit_codes_flags_and_bytes_are_relayed_as_they_are() {
     let out = pdo(&url, &["ext", "test", "nope"], None, None).await;
     assert_eq!(out.code, Some(2), "{out}");
     assert_eq!(out.stderr, "unknown command\n", "{out}");
+}
+
+/// An agent's shell tool gives its commands a standard input that is neither
+/// a terminal nor ever closed (a socket, in Claude Code's Bash tool): `pdo ext`
+/// must not wait for it. A pipe or a file is relayed; anything else is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_standard_input_that_never_ends_is_not_waited_for() {
+    let (daemon, control) = daemon().await;
+    let url = daemon.url();
+    let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let started = std::time::Instant::now();
+    let out = pdo_fed(
+        &url,
+        &["ext", "test", "echo", "salut"],
+        Some(("run-1", "node-a")),
+        Stdin::OpenSocket(socket),
+    )
+    .await;
+    assert_eq!(out.code, Some(0), "an open socket on stdin blocks `pdo ext`: {out}");
+    assert_eq!(out.stdout(), "salut\n", "{out}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert!(control.cli_calls()[0].stdin.is_empty());
+
+    // `pdo ext … < file` still relays the file.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("body.md");
+    std::fs::write(&path, "# Titre\n").unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+    let out = pdo_fed(&url, &["ext", "test", "cat"], None, Stdin::File(file)).await;
+    assert_eq!((out.code, out.stdout()), (Some(0), "# Titre\n".into()), "{out}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

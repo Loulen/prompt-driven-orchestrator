@@ -1,11 +1,15 @@
 import { BarChart3, Settings } from "lucide-react";
 import ExtensionBanner from "../shared/extensions/ExtensionBanner";
 import ExtensionNavigation from "../shared/extensions/ExtensionNavigation";
+import ExtensionPageHost from "../shared/extensions/ExtensionPageHost";
+import ExtensionTopbarEnd from "../shared/extensions/ExtensionTopbarEnd";
 
 /**
- * The app's top bar: the PDO mark, the extensions' navigation entries, then
- * Stats and the Settings gear. Under it, the banner of the extensions whose
- * interface could not be loaded.
+ * The app's top bar: the PDO mark, the extensions' `topbar/start` entries, then
+ * the right-hand group: the extensions' `topbar/end` icons, Stats and the
+ * Settings gear. Under it, the banner of the extensions whose interface could
+ * not be loaded; over everything, the extension page open (by its entry or its
+ * deep link).
  */
 export default function TopBar({
   onOpenSettings,
@@ -35,11 +39,13 @@ export default function TopBar({
           PDO
         </div>
 
-        {/* ADR-0081: the extensions' navigation entries (none without extension). */}
+        {/* ADR-0081: the extensions' `topbar/start` entries (none without extension). */}
         <ExtensionNavigation />
 
-        {/* Right-aligned action group: stats (#377) then the settings gear (#129). */}
+        {/* Right-aligned action group: the extensions' `topbar/end` icons (#29), stats
+            (#377) then the settings gear (#129). */}
         <div className="ml-auto flex items-center gap-1">
+          <ExtensionTopbarEnd />
           <button
             onClick={onOpenStats}
             aria-label="Open stats"
@@ -60,6 +66,7 @@ export default function TopBar({
       </header>
       {/* ADR-0081: a UI bundle built for another React is not loaded: the banner says so. */}
       <ExtensionBanner />
+      <ExtensionPageHost />
     </>
   );
 }

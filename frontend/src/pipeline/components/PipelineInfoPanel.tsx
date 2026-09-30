@@ -2,7 +2,7 @@
  * The info panel beside the canvas: the pipeline's or the Run's Info, Diff, Repositories, Manager, YAML and Assistant tabs.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Info, Terminal, X, FileText, Code, Bot, FileDiff, FolderGit2 } from "lucide-react";
 import AssistantPanel from "../../session/components/AssistantPanel";
 import DiffTab from "../../review/components/DiffTab";
@@ -14,7 +14,7 @@ import type { LibraryPipelineEntry } from "../api/libraryPipelines";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
 import ExtensionDetailTab from "../../shared/extensions/ExtensionDetailTab";
-import { useDetailTabs } from "../../shared/extensions/slots";
+import { useDetailTabs } from "../../shared/extensions/catalogue";
 
 import { InfoTab } from "./InfoTab";
 import { ManagerTab } from "./ManagerTab";
@@ -100,8 +100,12 @@ export default function PipelineInfoPanel({
   // tab was last looked at. Recorded on entering and on leaving the tab.
   const deliverySig = run ? deliverySignature(run) : "";
   const [seenDeliverySig, setSeenDeliverySig] = useState(deliverySig);
-  // ADR-0081: the tabs extensions add to a Run's detail, after the core's.
-  const extensionTabs = useDetailTabs("run");
+  // ADR-0081: the tabs extensions add to a Run's detail (`run/detail`), after the core's.
+  const runEntity = useMemo(
+    () => (run ? { kind: "run", id: run.run_id, attributes: run.attributes ?? {} } : null),
+    [run],
+  );
+  const { tabs: extensionTabs, context: extensionTabContext } = useDetailTabs(runEntity);
   const [extensionTab, setExtensionTab] = useState<string | null>(null);
   const activeExtension = run ? (extensionTabs.find((t) => t.key === extensionTab) ?? null) : null;
   const shownTab = activeExtension ? null : resolvedTab;
@@ -216,7 +220,7 @@ export default function PipelineInfoPanel({
                   : "text-fg-3 hover:text-fg-2"
               }`}
             >
-              {t.slot.label}
+              {t.contribution.label}
             </button>
           ))}
       </div>
@@ -225,7 +229,7 @@ export default function PipelineInfoPanel({
         <ExtensionDetailTab
           key={`${activeExtension.key}:${run.run_id}`}
           tab={activeExtension}
-          entity={{ kind: "run", id: run.run_id, attributes: run.attributes }}
+          context={extensionTabContext}
         />
       )}
 

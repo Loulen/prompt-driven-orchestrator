@@ -38,6 +38,8 @@ export interface LoadedExtension {
 interface ExtensionsState {
   extensions: LoadedExtension[];
   started: boolean;
+  /** Every declared bundle was tried: each extension's status is final. */
+  loaded: boolean;
   load: () => Promise<void>;
 }
 
@@ -58,6 +60,7 @@ async function loadOne(entry: ExtensionEntry): Promise<LoadedExtension> {
 export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   extensions: [],
   started: false,
+  loaded: false,
   load: async () => {
     if (get().started) return;
     set({ started: true });
@@ -71,13 +74,13 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
     }
     set({ extensions: entries.map((entry) => ({ entry, status: "loading", module: null })) });
     const loaded = await Promise.all(entries.map(loadOne));
-    set({ extensions: loaded });
+    set({ extensions: loaded, loaded: true });
   },
 }));
 
 /** Forget what was loaded (tests). */
 export function resetExtensions(): void {
-  useExtensionsStore.setState({ extensions: [], started: false });
+  useExtensionsStore.setState({ extensions: [], started: false, loaded: false });
   setBundleLoader();
 }
 
@@ -88,4 +91,13 @@ export function useExtensions(): LoadedExtension[] {
     void useExtensionsStore.getState().load();
   }, []);
   return extensions;
+}
+
+/** Whether every extension's status is final (loading them on first use). */
+export function useExtensionsLoaded(): boolean {
+  const loaded = useExtensionsStore((s) => s.loaded);
+  useEffect(() => {
+    void useExtensionsStore.getState().load();
+  }, []);
+  return loaded;
 }

@@ -12,8 +12,9 @@ use crate::API_VERSION;
 ///
 /// `api_version` is the version of this API the extension requires. It defaults
 /// to the version the extension was compiled against; the daemon refuses to
-/// start when it does not implement a compatible one (same major, and same minor
-/// while the API is in 0.x, at least as recent).
+/// start when it does not implement a compatible one: the same major, at least
+/// as recent, and while the API is in 0.x, not older than
+/// [`OLDEST_COMPATIBLE_API_VERSION`](crate::OLDEST_COMPATIBLE_API_VERSION).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Manifest {

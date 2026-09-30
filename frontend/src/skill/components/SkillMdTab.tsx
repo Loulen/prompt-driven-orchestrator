@@ -1,8 +1,6 @@
 import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../../shared/markdown/plugins";
 import type { SkillDetail } from "../model/skill";
-
-const REMARK_PLUGINS = [remarkGfm];
 
 /**
  * The SKILL.md tab of a skill's detail: the frontmatter as a read-only table,
@@ -54,7 +52,7 @@ export default function SkillMdTab({
         </div>
       ) : (
         <div className="artifact-markdown prose-sm text-fg-2 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5" style={{ fontSize: "12.5px" }} data-testid="skill-body">
-          <Markdown remarkPlugins={REMARK_PLUGINS}>{current.body}</Markdown>
+          <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{current.body}</Markdown>
         </div>
       )}
     </div>

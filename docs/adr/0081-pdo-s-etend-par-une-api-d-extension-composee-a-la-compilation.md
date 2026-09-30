@@ -3,6 +3,8 @@
 > Statut : accepted (grilling du 2026-09-26, story « architecture extensible »). Vocabulaire :
 > CONTEXT.md § *Extensions*. S'appuie sur ADR-0079 (les mutations passent par des use cases).
 > Amendé par #21 : comment une distribution obtient le frontend embarqué (§ *Amendements*).
+> Amendé par #29 : les Emplacements d'UI deviennent un catalogue nommé, avec Commandes et
+> clauses `when` (§ *Amendement #29*).
 
 ## Contexte
 
@@ -121,3 +123,64 @@ hors de portée de `cargo clean`, builds parallèles qui se marchent dessus) et 
 asset par build.rs (casse les builds hors ligne ou vendorisés). Reste à faire : publier le `dist`
 en asset de release (`pdo-frontend-dist-<tag>.tar.gz`), téléchargé par la distribution et non par
 build.rs, et vérifier qu'un `dist` fourni correspond au tag.
+
+## Amendement #29 : un catalogue d'emplacements nommés, des Commandes, des clauses `when`
+
+Seam découvert en préparant l'extension Projet (`pm`, story `Loulen/pdo-extensions#3`) : quatre
+emplacements figés (navigation, panneau de réglages, filtre de liste, onglet de détail) ne
+suffisent pas, et chaque nouveau besoin aurait ajouté une variante à `Slot`. On suit le modèle
+des *contribution points* de VS Code : peu de types de contribution, beaucoup d'emplacements.
+
+- **Un catalogue d'emplacements nommés** (`UiLocation`, non exhaustif) : chaque emplacement a un
+  identifiant stable (`topbar/start`, `topbar/end`, `settings`, `runs/filter`, `run/detail`),
+  accepte certains types de contribution et transmet un contexte typé. Les identifiants, ce que
+  chaque emplacement accepte et le contexte qu'il transmet font partie du semver de l'API. Le
+  type est exporté en TypeScript (feature `ts` du crate d'API, activée par le daemon) et
+  documenté dans `docs/reference/extension-ui.md` ; un test échoue quand un emplacement n'y a pas
+  sa section.
+- **Six types de contribution** (`UiElement`, non exhaustif) : Page, Action, Onglet, Section,
+  Décoration, Filtre de liste. Une contribution (`UiContribution`) porte son emplacement, un id
+  unique dans l'extension, un libellé, et une clause `when` optionnelle.
+- **Un emplacement est une liste** : les contributions de toutes les extensions s'y ajoutent,
+  dans l'ordre d'enregistrement des extensions puis dans l'ordre de déclaration. Aucune n'est
+  exclusive.
+- **Contexte** : chaque composant reçoit `extension` et `context`, qui porte au minimum le Run
+  sélectionné et son Projet. Le Projet est déduit par le front du core, avec la règle de la liste
+  des Runs : le Projet dont les membres contiennent le dépôt de la racine du Run, comparé tel quel
+  (ADR-0033). Chaque emplacement ajoute ce qui est en jeu chez lui (le chemin d'une Page, l'entité
+  d'un Onglet, le filtre d'un Filtre de liste).
+- **Commandes** (`UiCommand` : id, titre, icône, nom de l'export) : le bundle exporte une fonction,
+  une Action la référence. Le core rend l'entrée, puis appelle `fonction(context, host)` avec le
+  contexte de l'emplacement de l'Action ; `host.notify` affiche un toast, `host.open` suit un lien
+  profond. Une exception ou une promesse rejetée donne un toast d'erreur. Une Action dont la
+  Commande n'est pas déclarée est écartée par le daemon (avec un avertissement dans son journal),
+  une Action dont le bundle n'exporte pas la fonction n'est pas rendue.
+- **Clause `when`** : une expression structurée (`has`, `eq`, `not`, `all`, `any`) sur des clés
+  pointées du contexte (`run.status`, `project.name`), évaluée par le front du core. Fausse, la
+  contribution n'est pas rendue. Un opérateur inconnu du front est faux.
+- **`topbar/end`** : une icône par Page ou Action dans le groupe de droite de la barre du haut,
+  avant Stats. L'icône est un SVG servi par l'extension, dessiné en masque dans la couleur du
+  texte ; sans icône, la première lettre du libellé, encadrée. Une Page `topbar/end` s'ouvre dans
+  `FullWindowShell` sans rail (le rail y devient optionnel) : l'en-tête du shell (icône, titre,
+  fil d'Ariane et actions fournis par la Page, ✕, Échap), la navigation étant celle de la Page.
+- **Lien profond** : `#/ext/<id>/<emplacement>/<chemin>` ouvre la première Page de l'extension à
+  cet emplacement et lui transmet le chemin ; la barre d'adresse suit la Page ouverte (Précédent
+  la ferme). Ces liens sont cliquables dans tous les rendus markdown du core (artefacts,
+  commentaires de Review, `SKILL.md`, notes de version), écrits en lien ou en texte brut. Un lien
+  vers une extension absente, non chargée ou sans Page à cet emplacement affiche un toast
+  d'erreur, jamais une page blanche.
+- **Rétrocompatibilité** : `Slot` et `UiSlot` restent acceptés ; le daemon convertit chaque slot
+  0.1 vers son emplacement (`UiSlot::contribution`) et le front ne connaît plus que le
+  catalogue. Les composants 0.1 reçoivent toujours leurs props (`entity`, `filter`,
+  `setFilter`, `resource`). Le fil de `GET /ext` change : `ui.slots` devient `ui.contributions` et
+  `ui.commands` ; le front et le daemon sont livrés ensemble.
+- **Version** : `pdo-extension-api` passe en **0.2.0**. En 0.x, une mineure peut casser ; l'API
+  déclare désormais la plus ancienne version qu'elle honore
+  (`OLDEST_COMPATIBLE_API_VERSION = "0.1.0"`), et le daemon accepte une extension qui exige une
+  version comprise entre celle-ci et la sienne. Une extension écrite pour 0.1 continue donc de
+  compiler et de tourner.
+
+Écartés : une clause `when` en chaîne à parser (à la VS Code), parce qu'une structure se
+sérialise, se type en TypeScript et ne demande pas de grammaire ; un emplacement réservé à une
+extension, contraire à la règle de la liste ; un contexte calculé par le daemon, qui ne connaît
+pas la sélection de l'opérateur.

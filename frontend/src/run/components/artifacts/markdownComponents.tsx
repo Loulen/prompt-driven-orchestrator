@@ -2,10 +2,12 @@ import { useMemo } from "react";
 import type { Components } from "react-markdown";
 import type { Element } from "hast";
 import MermaidDiagram from "../../../shared/ui/MermaidDiagram";
+import MarkdownLink from "../../../shared/markdown/MarkdownLink";
 
 /**
  * The markdown overrides of the artifact viewer: external links open a new tab,
- * an embedded image zooms, a ```mermaid fence renders as a diagram.
+ * deep links open their extension's page, an embedded image zooms, a ```mermaid
+ * fence renders as a diagram.
  */
 export function useMarkdownComponents(
   onZoom: (images: string[], index: number) => void,
@@ -17,20 +19,9 @@ export function useMarkdownComponents(
   // the routed <MermaidDiagram>, hence no flicker.
   return useMemo<Components>(
     () => ({
-      // #698: an absolute http(s) link leaves the app in a new tab — a release note
-      // pointing at GitHub must never navigate the SPA away. Relative links stay.
-      a: ({ href, children, ...rest }) => {
-        const external = typeof href === "string" && /^https?:\/\//i.test(href);
-        return (
-          <a
-            href={href}
-            {...rest}
-            {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
-          >
-            {children}
-          </a>
-        );
-      },
+      // #698: an absolute http(s) link leaves the app in a new tab; #29: a deep link
+      // (`#/ext/…`) opens its extension's page. Relative links stay.
+      a: MarkdownLink,
       img: ({ src, alt }) => {
         const url = typeof src === "string" ? src : undefined;
         return (

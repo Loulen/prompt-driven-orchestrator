@@ -49,7 +49,7 @@ export default function RunsPane({
           }
         />
       )}
-      <ExtensionListFilters resource="run" filter={attributeFilter} onChange={setAttributeFilter} />
+      <ExtensionListFilters filter={attributeFilter} onChange={setAttributeFilter} />
       <RunTreeList
         pane={pane}
         runs={runs}

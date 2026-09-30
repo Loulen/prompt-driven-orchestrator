@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## À paraître — Catalogue d'emplacements d'UI, Commandes, `when`, `topbar/end`, liens profonds (#29)
+## 2.2.0 — Catalogue d'emplacements d'UI, Commandes, `when`, `topbar/end`, liens profonds (#29)
 
 `pdo-extension-api` passe en **0.2.0**, par ajout : une extension écrite pour 0.1 compile et
 tourne sans changement (ADR-0081, amendement #29 ; référence : `docs/reference/extension-ui.md`).

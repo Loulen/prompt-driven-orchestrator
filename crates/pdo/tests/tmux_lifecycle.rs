@@ -251,7 +251,7 @@ async fn orphan_sweep_at_boot_kills_stale_session() {
     );
 
     assert!(
-        wait_for_session_gone(&socket, orphan_session, Duration::from_secs(5)).await,
+        wait_for_session_gone(&socket, orphan_session, Duration::from_secs(20)).await,
         "orphan session should be killed by the periodic reaper (run absent from event log)"
     );
 

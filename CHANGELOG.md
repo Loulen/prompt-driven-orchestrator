@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.3.0 — Catalogue d'emplacements : onglets, sections, décorations et filtres (#31)
+
+`pdo-extension-api` passe en **0.3.0**, par ajout : une extension écrite pour 0.1 ou 0.2 compile
+et tourne sans changement (ADR-0081, amendement #31 ; référence : `docs/reference/extension-ui.md`).
+
+- **Onglets** : `node/detail`, `trigger/detail`, `skill/detail`.
+- **Sections** : `project/edit` (à la création comme à l'édition d'un Projet), `run/new`,
+  `node/config`, `pipeline/config`, `run/info`. Une Section de `project/edit` ou de `run/new`
+  reçoit `form` (`SectionForm`) : elle garde un brouillon et l'applique dans `onSave`, appelé
+  après le Save de l'hôte avec l'entité enregistrée (son id compris) ; `onCancel` à l'annulation.
+- **Décorations** : `run/item` (ligne 2 de la colonne de droite), `trigger/item`,
+  `pipeline/item`, `canvas/node`, `port/item`, `review/file`, `statusbar`. Sans contribution,
+  rien n'est rendu.
+- **Filtres de liste** : `triggers/filter`, `pipelines/filter`, `projects/filter` (au-dessus des
+  listes de Runs et de Triggers, groupées par Projet).
+- **Slots 0.1** : `ListFilter` des Triggers, pipelines et Projets, `DetailTab` d'un node, d'un
+  Trigger, d'un skill et d'un Projet sont désormais rendus (convertis vers ces emplacements).
+- La barre d'onglets du panneau d'infos d'un Run défile au lieu de déborder.
+
 ## 2.2.0 — Catalogue d'emplacements d'UI, Commandes, `when`, `topbar/end`, liens profonds (#29)
 
 `pdo-extension-api` passe en **0.2.0**, par ajout : une extension écrite pour 0.1 compile et

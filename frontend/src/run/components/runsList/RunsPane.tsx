@@ -32,7 +32,7 @@ export default function RunsPane({
   onShowTriggers,
 }: Props) {
   const { runFilter, setRunFilter, allParentIds, allExpanded, setAllExpanded } = pane;
-  const { attributeFilter, setAttributeFilter } = pane;
+  const { attributeFilter, setAttributeFilter, projectFilter, setProjectFilter } = pane;
   return (
     <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
       <RunsPaneHeader pane={pane} onNewRun={onNewRun} />
@@ -50,6 +50,11 @@ export default function RunsPane({
         />
       )}
       <ExtensionListFilters filter={attributeFilter} onChange={setAttributeFilter} />
+      <ExtensionListFilters
+        location="projects/filter"
+        filter={projectFilter}
+        onChange={setProjectFilter}
+      />
       <RunTreeList
         pane={pane}
         runs={runs}

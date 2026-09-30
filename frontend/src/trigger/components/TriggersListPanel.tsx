@@ -13,6 +13,12 @@ import SelectControl from "../../shared/ui/SelectControl";
 import TriggerRow from "./triggersList/TriggerRow";
 import TriggersBulk, { type TriggerBulkKind } from "./triggersList/TriggersBulk";
 import TriggersListHeader from "./triggersList/TriggersListHeader";
+import ExtensionListFilters from "../../shared/extensions/ExtensionListFilters";
+import {
+  isAttributeFilterActive,
+  matchesAttributes,
+  type Attributes,
+} from "../../shared/extensions/attributes";
 
 interface Props {
   triggers: TriggerListEntry[];
@@ -35,7 +41,7 @@ interface Props {
 }
 
 export default function TriggersListPanel({
-  triggers,
+  triggers: allTriggers,
   selectedTriggerId,
   onSelectTrigger,
   onNewTrigger,
@@ -64,6 +70,25 @@ export default function TriggersListPanel({
   const clearSel = useSelectionStore((s) => s.clear);
   const selSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const [pending, setPending] = useState<TriggerBulkKind | null>(null);
+
+  // ADR-0081 (#31) — the extensions' list filters: `triggers/filter` on the
+  // Triggers' own attributes, `projects/filter` on the attributes of the Projet
+  // each Trigger's repository belongs to (the list's grouping rule).
+  const [attributeFilter, setAttributeFilter] = useState<Attributes>({});
+  const [projectFilter, setProjectFilter] = useState<Attributes>({});
+  const filterActive =
+    isAttributeFilterActive(attributeFilter) || isAttributeFilterActive(projectFilter);
+  const triggers = useMemo(() => {
+    if (!filterActive) return allTriggers;
+    const lookup = projectLookup(projects);
+    const byId = new Map(projects.map((p) => [p.id, p]));
+    return allTriggers.filter((t) => {
+      if (!matchesAttributes(t.attributes, attributeFilter)) return false;
+      if (!isAttributeFilterActive(projectFilter)) return true;
+      const ref = t.effective_repo ? lookup(t.effective_repo) : null;
+      return ref !== null && matchesAttributes(byId.get(ref.id)?.attributes, projectFilter);
+    });
+  }, [allTriggers, projects, attributeFilter, projectFilter, filterActive]);
 
   async function handleDelete(triggerId: string) {
     try {
@@ -98,9 +123,9 @@ export default function TriggersListPanel({
   );
   const availableRepos = useMemo(() => {
     const set = new Set<string>();
-    for (const t of triggers) if (t.effective_repo) set.add(t.effective_repo);
+    for (const t of allTriggers) if (t.effective_repo) set.add(t.effective_repo);
     return [...set];
-  }, [triggers]);
+  }, [allTriggers]);
 
   // Group the Triggers list by Projet (#552), falling back to the #258 per-path
   // grouping when nothing is named; `null` ⇒ the flat list.
@@ -176,7 +201,35 @@ export default function TriggersListPanel({
         onNewTrigger={onNewTrigger}
       />
 
-      {triggers.length === 0 ? (
+      <ExtensionListFilters
+        location="triggers/filter"
+        filter={attributeFilter}
+        onChange={setAttributeFilter}
+      />
+      <ExtensionListFilters
+        location="projects/filter"
+        filter={projectFilter}
+        onChange={setProjectFilter}
+      />
+
+      {allTriggers.length > 0 && triggers.length === 0 ? (
+        <div
+          className="px-3 py-4 text-center text-fg-4"
+          style={{ fontSize: "11px" }}
+          data-testid="trigger-filter-empty"
+        >
+          No triggers match filters
+          <button
+            className="mt-1 block w-full cursor-pointer text-acc hover:underline"
+            onClick={() => {
+              setAttributeFilter({});
+              setProjectFilter({});
+            }}
+          >
+            Clear filters
+          </button>
+        </div>
+      ) : triggers.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <Zap size={22} className="text-fg-4" />
           <div className="text-fg-3" style={{ fontSize: "12px" }}>

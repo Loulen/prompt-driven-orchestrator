@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Copy, Pencil, Trash2 } from "lucide-react";
 import SelectControl from "../../shared/ui/SelectControl";
 
@@ -46,6 +46,8 @@ interface Props {
    */
   checked?: boolean;
   onToggleSelect?: (e: MouseEvent) => void;
+  /** ADR-0081 (#31): the `pipeline/item` decorations, at the end of line 2. */
+  decorations?: ReactNode;
 }
 
 /**
@@ -75,6 +77,7 @@ export default function LibraryRow({
   checked = false,
   onToggleSelect,
   modified,
+  decorations,
 }: Props) {
   const body = (
     <>
@@ -117,6 +120,7 @@ export default function LibraryRow({
               <span>edited {new Date(modified).toLocaleDateString()}</span>
             </>
           )}
+          {decorations}
         </div>
       </div>
       {onRenameStart && !renaming && (

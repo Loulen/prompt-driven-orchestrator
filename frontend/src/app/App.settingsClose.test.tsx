@@ -496,7 +496,9 @@ describe("App — Settings surface closes (#717 sibling-key regression)", () => 
     await user.click(await screen.findByRole("button", { name: "Close settings" }));
     void surface;
     await expectClosed();
-  }, 20_000);
+    // The first test of the file pays for the cold imports (App, the lazy Stats
+    // chunk): on a loaded machine that alone can pass 20 s.
+  }, 60_000);
 
   it("closes via the Cancel button", async () => {
     const user = userEvent.setup();

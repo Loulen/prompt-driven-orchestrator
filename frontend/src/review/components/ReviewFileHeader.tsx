@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
+import type { ReviewFileContext } from "../../shared/extensions/contract";
 import { ChevronDown, ChevronRight, Copy, History, SquareArrowOutUpRight } from "lucide-react";
 import type { DiffFile } from "../../shared/generated/DiffFile";
 import { baseName, filePath, statusLetter } from "../../run/model/runRefs";
@@ -36,6 +38,14 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
   const path = filePath(file);
   const letter = statusLetter(file);
   const pureRename = file.status === "renamed" && file.hunks.length === 0;
+  // ADR-0081 (#31): what the `review/file` decorations mark.
+  const decorated = useMemo(
+    () => ({
+      entity: { kind: "file", id: path, name: baseName(path), attributes: {} },
+      file: { run: runId, path, status: file.status },
+    }),
+    [runId, path, file.status],
+  );
   const copyPath = () => {
     navigator.clipboard?.writeText(path).then(
       () => {
@@ -97,6 +107,7 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
         </span>
       )}
       <span className="ml-auto flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <ExtensionDecorations<ReviewFileContext> location="review/file" extra={decorated} />
         {nDrafts > 0 && <Badge kind="draft">✎ {plural(nDrafts, "draft")}</Badge>}
         {nOutdated > 0 && (
           <span

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Clock, FolderGit2, GitBranch, Layers, Zap } from "lucide-react";
 import type { Trigger } from "../../shared/generated/Trigger";
 import { fetchSettings } from "../../settings/api/settings";
@@ -8,6 +8,8 @@ import { tildify } from "../../lib/homePath";
 import ConfigRow from "./triggerDetail/ConfigRow";
 import FireHistory from "./triggerDetail/FireHistory";
 import GuardSection from "./triggerDetail/GuardSection";
+import ExtensionDetailTab from "../../shared/extensions/ExtensionDetailTab";
+import { useDetailTabs } from "../../shared/extensions/catalogue";
 
 interface Props {
   trigger: Trigger;
@@ -42,6 +44,20 @@ export default function TriggerDetailPanel({
 }: Props) {
   // The daemon's home, to read the repo as `~/code/…` (the title keeps the full path).
   const [home, setHome] = useState<string | null>(null);
+  // ADR-0081 (#31): the `trigger/detail` tabs extensions add, after Details.
+  // Without one, no tab bar at all: the panel stays as it was.
+  const entity = useMemo(
+    () => ({
+      kind: "trigger",
+      id: trigger.id,
+      name: trigger.name,
+      attributes: trigger.attributes ?? {},
+    }),
+    [trigger.id, trigger.name, trigger.attributes],
+  );
+  const { tabs, context } = useDetailTabs(entity, "trigger/detail");
+  const [tabKey, setTabKey] = useState<string | null>(null);
+  const activeTab = tabs.find((t) => t.key === tabKey) ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +95,32 @@ export default function TriggerDetailPanel({
         </div>
       </div>
 
+      {tabs.length > 0 && (
+        <div className="flex shrink-0 overflow-x-auto border-b border-line" style={{ fontSize: "11px" }}>
+          {[{ key: null, label: "Details" }, ...tabs.map((t) => ({ key: t.key, label: t.contribution.label }))].map(
+            ({ key, label }) => (
+              <button
+                key={key ?? "details"}
+                type="button"
+                data-testid={`trigger-tab-${key ?? "details"}`}
+                onClick={() => setTabKey(key)}
+                className={`shrink-0 cursor-pointer whitespace-nowrap px-2 py-1.5 transition-colors ${
+                  (activeTab?.key ?? null) === key
+                    ? "border-b-2 border-acc font-medium text-fg"
+                    : "text-fg-3 hover:text-fg-2"
+                }`}
+              >
+                {label}
+              </button>
+            ),
+          )}
+        </div>
+      )}
+
+      {activeTab ? (
+        <ExtensionDetailTab key={`${activeTab.key}:${trigger.id}`} tab={activeTab} context={context} />
+      ) : (
+      <>
       {/* Configuration */}
       <div className="flex flex-col gap-2 p-3" style={{ fontSize: "11.5px" }}>
         <span
@@ -149,6 +191,8 @@ export default function TriggerDetailPanel({
       </div>
 
       <FireHistory triggerId={trigger.id} refreshKey={refreshKey} onSelectRun={onSelectRun} />
+      </>
+      )}
     </aside>
   );
 }

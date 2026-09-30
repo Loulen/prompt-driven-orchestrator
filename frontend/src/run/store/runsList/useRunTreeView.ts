@@ -10,13 +10,19 @@ import {
   matchesAttributes,
   type Attributes,
 } from "../../../shared/extensions/attributes";
+import type { Project } from "../../../workspace/model/project";
+import { projectLookup } from "../../../workspace/model/projectLookup";
 
 /**
  * The Runs list's tree view: the client-side filters, the run tree split into
  * its active / archived sections, the expand / collapse state and the reveal
  * of the selected run.
  */
-export function useRunTreeView(runs: RunListEntry[], selectedRunId: string | null) {
+export function useRunTreeView(
+  runs: RunListEntry[],
+  selectedRunId: string | null,
+  projects: Project[] = [],
+) {
   // #336 — client-side run filters (project / pipeline / trigger), AND
   // semantics, session-only state. #783: applied to the TREE (a non-matching
   // parent is kept as a path to a matching descendant) and BEFORE the
@@ -26,14 +32,30 @@ export function useRunTreeView(runs: RunListEntry[], selectedRunId: string | nul
   // ADR-0081 — the attribute filter an extension's list filter sets: kept on
   // the same tree, with the same AND semantics.
   const [attributeFilter, setAttributeFilter] = useState<Attributes>({});
-  const filterActive = isFilterActive(runFilter) || isAttributeFilterActive(attributeFilter);
+  // ADR-0081 (#31) — the `projects/filter` of the list: it keeps the Runs whose
+  // root belongs to a Projet carrying every attribute asked for (the list
+  // groups by Projet on the root's repository, so does this).
+  const [projectFilter, setProjectFilter] = useState<Attributes>({});
+  const filterActive =
+    isFilterActive(runFilter) ||
+    isAttributeFilterActive(attributeFilter) ||
+    isAttributeFilterActive(projectFilter);
 
   // #783 — the run tree, built from ALL runs so a child follows its parent into
   // whatever section / group the ROOT lands in, whatever the child's own status
   // or repo. The archived split is on the root — and an archived run is always
   // a leaf (`buildRunTree` releases its children as roots, ADR-0064), so the
   // Archived section only ever holds archived runs, never a live child.
-  const tree = useMemo(() => buildRunTree(runs), [runs]);
+  const fullTree = useMemo(() => buildRunTree(runs), [runs]);
+  const tree = useMemo(() => {
+    if (!isAttributeFilterActive(projectFilter)) return fullTree;
+    const projectOf = projectLookup(projects);
+    const byId = new Map(projects.map((p) => [p.id, p]));
+    return fullTree.filter((n) => {
+      const ref = projectOf(n.run.effective_repo);
+      return ref !== null && matchesAttributes(byId.get(ref.id)?.attributes, projectFilter);
+    });
+  }, [fullTree, projects, projectFilter]);
   const { activeTree, archivedTree } = useMemo(() => {
     const match = (r: RunListEntry) =>
       runMatchesFilter(r, runFilter) && matchesAttributes(r.attributes, attributeFilter);
@@ -60,7 +82,7 @@ export function useRunTreeView(runs: RunListEntry[], selectedRunId: string | nul
     expandOverrides.get(runId) ?? (filterActive ? true : sessionDefault);
   const setExpanded = (runId: string, v: boolean) =>
     setExpandOverrides((m) => new Map(m).set(runId, v));
-  const allParentIds = useMemo(() => parentIds(tree), [tree]);
+  const allParentIds = useMemo(() => parentIds(fullTree), [fullTree]);
 
   // #725/#783 — reveal the selected run: when the selection CHANGES to a run
   // whose ancestors are collapsed (Orchestration tab, URL, back navigation),
@@ -146,6 +168,8 @@ export function useRunTreeView(runs: RunListEntry[], selectedRunId: string | nul
     setRunFilter,
     attributeFilter,
     setAttributeFilter,
+    projectFilter,
+    setProjectFilter,
     filterActive,
     activeTree,
     archivedTree,

@@ -23,4 +23,4 @@
  * section in the reference page, and its rendering in the front (a component
  * that calls `useContributions("<id>", context)`).
  */
-export type UiLocation = "topbar/start" | "topbar/end" | "settings" | "runs/filter" | "run/detail";
+export type UiLocation = "topbar/start" | "topbar/end" | "settings" | "runs/filter" | "run/detail" | "node/detail" | "trigger/detail" | "skill/detail" | "project/edit" | "run/new" | "node/config" | "pipeline/config" | "run/info" | "run/item" | "trigger/item" | "pipeline/item" | "canvas/node" | "port/item" | "review/file" | "statusbar" | "triggers/filter" | "pipelines/filter" | "projects/filter";

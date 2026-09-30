@@ -462,6 +462,25 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("topbar/end", "page", "page"),
         triple("topbar/end", "action", "show-context"),
         triple("topbar/end", "action", "never"),
+        triple("node/detail", "tab", "node-tab"),
+        triple("trigger/detail", "tab", "trigger-tab"),
+        triple("skill/detail", "tab", "skill-tab"),
+        triple("project/edit", "section", "project-section"),
+        triple("run/new", "section", "new-run-section"),
+        triple("node/config", "section", "node-section"),
+        triple("pipeline/config", "section", "pipeline-section"),
+        triple("run/info", "section", "run-section"),
+        triple("run/item", "decoration", "run-badge"),
+        triple("trigger/item", "decoration", "trigger-badge"),
+        triple("pipeline/item", "decoration", "pipeline-badge"),
+        triple("canvas/node", "decoration", "node-badge"),
+        triple("port/item", "decoration", "port-badge"),
+        triple("review/file", "decoration", "file-badge"),
+        triple("statusbar", "decoration", "status-badge"),
+        triple("statusbar", "decoration", "exploding"),
+        triple("triggers/filter", "list_filter", "triggers-started-by"),
+        triple("pipelines/filter", "list_filter", "pipelines-started-by"),
+        triple("projects/filter", "list_filter", "projects-started-by"),
     ]);
     assert_eq!(contributions(&index, 0), expected);
     let page = &ui["contributions"][4];
@@ -513,6 +532,44 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         index[0]["ui"]["react_major"],
         test_extension::REACT_MAJOR - 1
     );
+}
+
+#[tokio::test]
+async fn two_extensions_add_up_at_one_location_in_registration_order() {
+    let (ext, control) = TestExtension::new(Refusal::Nothing);
+    let mut extensions = ext.boxed();
+    extensions.push(Box::new(test_extension::SecondTestExtension));
+    let daemon = TestDaemon::spawn_with_extensions(seed, extensions)
+        .await
+        .unwrap();
+    let index = &daemon.get_json("/ext").await;
+    let at_project_edit: Vec<_> = (0..2)
+        .flat_map(|at| {
+            contributions(index, at)
+                .into_iter()
+                .filter(|(location, _, _)| location == "project/edit")
+                .map(move |(_, _, id)| (index[at]["id"].as_str().unwrap().to_string(), id))
+        })
+        .collect();
+    assert_eq!(
+        at_project_edit,
+        [
+            ("test".to_string(), "project-section".to_string()),
+            (test_extension::SECOND_ID.to_string(), "rights".to_string())
+        ]
+    );
+    let bundle = reqwest::get(format!("{}/ext/test2/ui.js", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(bundle.status(), 200);
+    assert!(bundle.text().await.unwrap().contains("SecondSection"));
+
+    // The sections' trace records what the bundle posts on its host's Save.
+    let saved = json!({ "location": "project/edit", "saved": { "kind": "project", "id": "p1" } });
+    let (status, _) = post_json(&daemon, "/ext/test/sections", saved.clone()).await;
+    assert_eq!(status, 200);
+    assert_eq!(control.sections(), std::slice::from_ref(&saved));
+    assert_eq!(daemon.get_json("/ext/test/sections").await, json!([saved]));
 }
 
 #[tokio::test]

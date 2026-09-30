@@ -1,4 +1,7 @@
+import { useMemo } from "react";
 import { Pencil, Play, Power, Trash2 } from "lucide-react";
+import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
+import type { DecorationContext } from "../../../shared/extensions/contract";
 import type { Trigger } from "../../../shared/generated/Trigger";
 import { repoGroupLabel } from "../../../lib/groupByRepo";
 import SelectControl from "../../../shared/ui/SelectControl";
@@ -37,6 +40,11 @@ export default function TriggerRow({
   onToggle,
 }: Props) {
   const dot = outcomeDot(t.last_outcome);
+  // ADR-0081 (#31): what the `trigger/item` decorations mark.
+  const decorated = useMemo(
+    () => ({ entity: { kind: "trigger", id: t.id, name: t.name, attributes: t.attributes ?? {} } }),
+    [t.id, t.name, t.attributes],
+  );
   return (
     <button
       onClick={onSelect}
@@ -79,6 +87,11 @@ export default function TriggerRow({
           <span className="shrink-0" data-testid="trigger-schedule">
             {humanizeCron(t.cron)}
           </span>
+          <ExtensionDecorations<DecorationContext>
+            location="trigger/item"
+            extra={decorated}
+            className="shrink-0 flex-nowrap"
+          />
         </div>
       </div>
       {!t.enabled && (

@@ -20,6 +20,7 @@ import NameInput from "./nodeInspector/NameInput";
 import PromptSection from "./nodeInspector/PromptSection";
 import StarButton from "./nodeInspector/StarButton";
 import WorkspaceSection from "./nodeInspector/WorkspaceSection";
+import { NodeConfigSections } from "./ExtensionInspectorSections";
 import { derivePooledInputs } from "../../lib/derivePooledInputs";
 import type { PooledInputSource } from "../../lib/derivePooledInputs";
 import { carriedPorts, withCarriedPorts } from "../../lib/edgePorts";
@@ -358,6 +359,15 @@ export default function NodeInspector({
             />
           ))}
         </div>
+
+        {/* ADR-0081 (#31): the `node/config` sections of the extensions. */}
+        <NodeConfigSections
+          nodeId={node.id}
+          nodeName={node.name ?? null}
+          pipelineId={tab.id}
+          pipelineName={tab.pipeline.name}
+          readOnly={readOnly === true}
+        />
       </div>
 
       <DestroyLoopModal

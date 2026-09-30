@@ -11,6 +11,34 @@ import { formatEstCost } from "../../run/model/costLabel";
 import type { EditorPipelineDef } from "../model/pipeline";
 
 import { SourceBlock } from "./SourceBlock";
+import { useMemo } from "react";
+import ExtensionSections, { type RenderedSection } from "../../shared/extensions/ExtensionSections";
+import type { RunInfoContext } from "../../shared/extensions/contract";
+
+function infoSection({ key, label, body }: RenderedSection) {
+  return (
+    <div className="border-b border-line px-3 py-3" style={{ fontSize: "11.5px" }} data-testid={`extension-section-${key}`}>
+      <SectionHead title={label} />
+      <div className="mt-2">{body}</div>
+    </div>
+  );
+}
+
+/** The `run/info` sections of the extensions (ADR-0081, #31), after the Run's stats. */
+function RunInfoSections({ run }: { run: RunState }) {
+  const extra = useMemo(
+    () => ({
+      entity: {
+        kind: "run",
+        id: run.run_id,
+        attributes: run.attributes ?? {},
+        ...(run.name ? { name: run.name } : {}),
+      },
+    }),
+    [run.run_id, run.attributes, run.name],
+  );
+  return <ExtensionSections<RunInfoContext> location="run/info" extra={extra} wrap={infoSection} />;
+}
 
 function StatRow({
   label,
@@ -317,6 +345,8 @@ export function InfoTab({
           </div>
         </div>
       )}
+
+      {run && <RunInfoSections run={run} />}
 
       <div className="px-3 py-3" style={{ fontSize: "11.5px" }}>
         <SectionHead title="Description" />

@@ -1006,7 +1006,15 @@ PDO s'étend sans modifier son core, par une **API d'extension** versionnée à 
 
 **Hôte** *(terme, #34)* : ce que le core remet à chaque Extension au démarrage pour faire passer **ses** mutations par ses mécanismes : autoriser une Opération auprès de **toutes** les Extensions (l'émettrice comprise), publier un **événement d'extension** sur `/ws` et vers les autres Extensions, annoncer l'`OperationApplied` d'une mutation réussie, obtenir les Attributs d'entité que les autres Extensions posent sur ses entités (qu'elle stocke elle-même). Deux Extensions interopèrent ainsi sans se nommer. _Éviter_ : « host » dans la prose française, « bus » (le bus est interne au core).
 
-**Emplacement d'UI** *(terme)* : un point générique de l'interface où une Extension peut ajouter un élément : entrée de navigation, panneau de réglages, filtre de liste, onglet de détail d'entité. _Éviter_ : « slot » dans la prose française.
+**Emplacement d'UI** *(terme)* : un point nommé de l'interface où les Extensions ajoutent des éléments, avec un identifiant stable (`topbar/end`, `run/detail`…) tiré du **catalogue** des emplacements (ADR-0081, amendement #29, `docs/reference/extension-ui.md`). Un emplacement accepte certains types de Contribution d'UI et transmet à chacune un contexte : au minimum le Run sélectionné et son Projet. **Un emplacement est une liste** : les contributions de toutes les Extensions s'y ajoutent dans l'ordre d'enregistrement, aucune n'est exclusive. _Éviter_ : « slot » dans la prose française (le mot reste le nom de la forme 0.1, `Slot`).
+
+**Contribution d'UI** *(terme)* : un élément qu'une Extension ajoute à un Emplacement d'UI : une **Page** (plein écran, joignable par lien profond), une **Action** (une entrée qui appelle une Commande d'extension), un **Onglet**, une **Section**, une **Décoration**, un **Filtre de liste**. Elle peut porter une **clause `when`**. _Éviter_ : « plugin UI », « widget ».
+
+**Commande d'extension** *(terme)* : une fonction qu'exporte le bundle d'une Extension, déclarée avec un id, un titre et une icône ; une Action la référence, et le core l'appelle avec le contexte de l'emplacement de l'Action. _Éviter_ : « commande » seul (réservé aux commandes de Run, `/commands`), « callback ».
+
+**Clause `when`** *(terme)* : condition déclarative (`has`, `eq`, `not`, `all`, `any`) sur le contexte d'un Emplacement d'UI, évaluée par le core ; fausse, la Contribution d'UI n'est pas rendue. _Éviter_ : « condition d'affichage » codée par l'Extension dans son composant.
+
+**Lien profond d'extension** *(terme)* : une adresse `#/ext/<id>/<emplacement>/<chemin>` qui ouvre la Page de l'Extension à cet emplacement et lui transmet le chemin ; cliquable dans tout rendu markdown du core. Une Extension absente donne un message d'erreur, jamais une page blanche. _Éviter_ : « URL d'extension » (les routes HTTP `/ext/<id>/…` sont autre chose).
 
 ---
 

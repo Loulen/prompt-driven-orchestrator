@@ -10,9 +10,9 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.2.0 — Interopérabilité : ressource d'extension et Hôte (#34)
+## 2.3.0 — Interopérabilité : ressource d'extension et Hôte (#34)
 
-`pdo-extension-api` passe en **0.2.0** (ADR-0081, amendement #34). Une extension fait passer ses
+`pdo-extension-api` passe en **0.3.0** (ADR-0081, amendement #34). Une extension fait passer ses
 propres mutations par les mécanismes du core, pour que deux extensions installées ensemble
 interopèrent sans se nommer.
 
@@ -28,15 +28,37 @@ interopèrent sans se nommer.
 - **`OperationApplied` est diffusé sur `/ws`** dès qu'une extension est chargée. Sans extension,
   `/ws` ne change pas.
 
-### Cassant pour une extension (0.1 -> 0.2)
+### Cassant pour une extension (0.2 -> 0.3)
 
 - `ResourceKind` n'est plus `Copy` : cloner là où une copie suffisait (`.clone()`, `.cloned()`).
   Sa sérialisation est désormais écrite à la main ; les noms des ressources du core ne changent
   pas.
 - `ExtensionContext` porte un champ `host` et n'implémente plus ses traits par `derive` (même
   comportement, égalité comprise). `ExtensionContext::new(data_dir)` reste valable.
-- Une extension qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile sans changement ;
-  son manifeste exige alors l'API 0.2.
+- Une extension qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile sans changement et
+  reste acceptée : `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`, la casse ne touchant que la
+  compilation.
+
+## 2.2.0 — Catalogue d'emplacements d'UI, Commandes, `when`, `topbar/end`, liens profonds (#29)
+
+`pdo-extension-api` passe en **0.2.0**, par ajout : une extension écrite pour 0.1 compile et
+tourne sans changement (ADR-0081, amendement #29 ; référence : `docs/reference/extension-ui.md`).
+
+- **Catalogue d'emplacements nommés** (`UiLocation`) : `topbar/start`, `topbar/end`, `settings`,
+  `runs/filter`, `run/detail`. Une extension y déclare des `UiContribution` (Page, Action,
+  Onglet, Section, Décoration, Filtre de liste) par `UiContributions::contribute`. Les quatre
+  slots 0.1 (`UiSlot`) restent acceptés et sont convertis vers leur emplacement.
+- **Commandes** (`UiCommand`, `UiContributions::command`) et **clauses `when`** (`When`).
+- **Contexte** : chaque composant reçoit `context`, avec le Run sélectionné et son Projet.
+- **`topbar/end`** : icônes avant Stats, Page plein écran sans rail ; `FullWindowShell` a un rail
+  optionnel.
+- **Liens profonds** `#/ext/<id>/<emplacement>/<chemin>`, cliquables dans tous les rendus
+  markdown du core.
+- **Compatibilité d'API** : l'API déclare `OLDEST_COMPATIBLE_API_VERSION` ; le daemon accepte une
+  extension qui exige une version entre celle-ci (0.1.0) et la sienne, au lieu de la seule même
+  mineure en 0.x.
+- **Fil de `GET /ext`** : `ui.slots` devient `ui.contributions` (les slots 0.1 déjà convertis) et
+  `ui.commands`. Seul le front du même binaire le lisait.
 
 ## 2.1.0 — Distributions tierces : `main_with`, frontend préconstruit, canal de mise à jour, 404 sous `/ext` (#21, #22, #23, #24)
 

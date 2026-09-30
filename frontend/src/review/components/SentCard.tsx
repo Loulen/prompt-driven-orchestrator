@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, CornerDownRight, History, Hourglass, Lock, MessageSquare, Undo2 } from "lucide-react";
 import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../../shared/markdown/plugins";
 import type { CommentState } from "../model/commentStatus";
 import { authorKind, authorLabel, commentState, firstWords, footerStatus, plural, relativeTime } from "../model/commentStatus";
 import { parseExcerpt } from "../model/entries";
@@ -14,8 +14,6 @@ import { DecisionButton, FooterStatusView } from "./commentFooter";
  * decision, and — once re-mapped — whether it moved or went outdated. See
  * `CommentCard` for the whole story.
  */
-
-const REMARK_PLUGINS = [remarkGfm];
 
 const STATE_COLOR: Record<CommentState, string> = {
   open: "var(--color-st-running)",
@@ -276,7 +274,7 @@ export default function SentCard({
                         style={{ fontSize: "11.5px", lineHeight: 1.5 }}
                         data-testid="review-reply-body"
                       >
-                        <Markdown remarkPlugins={REMARK_PLUGINS}>{r.text}</Markdown>
+                        <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{r.text}</Markdown>
                       </div>
                     </div>
                   </div>

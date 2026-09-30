@@ -12,9 +12,14 @@ use super::{Control, ID};
 /// front shares it.
 const BUNDLE: &str = include_str!("ui.js");
 
+/// The icon of its page and its command: a plain SVG drawn in `currentColor`.
+const ICON: &str = include_str!("icon.svg");
+
 pub(super) fn router(control: Control) -> Router {
     let events = control.clone();
     let switch = control.clone();
+    let commands = control.clone();
+    let record = control.clone();
     Router::new()
         .route(
             "/",
@@ -38,6 +43,21 @@ pub(super) fn router(control: Control) -> Router {
         .route(
             "/ui.js",
             get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], BUNDLE).into_response() }),
+        )
+        .route(
+            "/icon.svg",
+            get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], ICON).into_response() }),
+        )
+        .route(
+            "/commands",
+            get(move || {
+                let commands = commands.commands();
+                async move { Json(Value::Array(commands)) }
+            })
+            .post(move |Json(context): Json<Value>| {
+                record.record_command(context);
+                async move { Json(json!({ "recorded": true })) }
+            }),
         )
         .route(
             "/incompatible",

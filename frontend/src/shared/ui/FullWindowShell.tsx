@@ -15,18 +15,22 @@ export interface RailItem {
 
 interface Props {
   title: string;
+  /** Drawn before the title (an extension page's icon). */
+  titleIcon?: ReactNode;
   /** Rendered after the title, in the header row (Stats' period presets, etc.). */
   headerExtras?: ReactNode;
   /** Right-aligned header content, before the close button (hints, refresh…). */
   headerActions?: ReactNode;
-  rail: RailItem[];
-  activeRail: string;
-  onRailChange: (id: string) => void;
+  /** The left rail. Without one, the main slot spans the pane: an extension's
+   *  `topbar/end` page brings its own navigation (#29). */
+  rail?: RailItem[];
+  activeRail?: string;
+  onRailChange?: (id: string) => void;
   /** Rail width in px. Stats keeps 144; Settings needs 176 for "Sandbox & worktrees". */
   railWidth?: number;
-  railAriaLabel: string;
+  railAriaLabel?: string;
   /** `data-testid` prefix of a rail entry: `${prefix}-${id}`. */
-  railTestIdPrefix: string;
+  railTestIdPrefix?: string;
   /** Right-side drawer (Stats' pricing details, Settings' skill bank). */
   drawer?: ReactNode;
   /** Spans the pane, not the rail. Settings' Save footer. */
@@ -45,14 +49,18 @@ interface Props {
 }
 
 /**
- * The full-window surface Stats and Settings share (#690): overlay, header (title + ✕),
- * left rail navigated with ↑↓, main slot, optional right drawer and optional footer.
+ * The full-window surface Stats, Settings and the extensions' pages share (#690): overlay,
+ * header (title + ✕), optional left rail navigated with ↑↓, main slot, optional right drawer
+ * and optional footer.
  *
  * The shell owns Escape: ignored while a tooltip is open (the tooltip consumes it), else
  * delegated to `onEscape` (drawer first, then confirmation, then close — the host decides).
+ * It listens on `window`, so a layer inside (an extension page's own dialog) that handles
+ * Escape on `document` or on its elements, and calls `preventDefault()`, keeps the shell open.
  */
 export default function FullWindowShell({
   title,
+  titleIcon,
   headerExtras,
   headerActions,
   rail,
@@ -90,7 +98,10 @@ export default function FullWindowShell({
     <div className="fixed inset-0 z-50 bg-bg-2">
       <div className="relative flex h-screen w-screen flex-col bg-bg-4" data-testid={testId}>
         <header className="flex min-h-14 items-center gap-4 border-b border-line px-4">
-          <h2 className="font-semibold text-fg">{title}</h2>
+          <h2 className="flex items-center gap-2 font-semibold text-fg">
+            {titleIcon}
+            {title}
+          </h2>
           {headerExtras}
           <div className="ml-auto flex items-center gap-2">{headerActions}</div>
           <button
@@ -104,49 +115,51 @@ export default function FullWindowShell({
         </header>
 
         <div className="flex min-h-0 flex-1">
-          <nav
-            className="flex shrink-0 flex-col gap-1 border-r border-line bg-bg-3 p-3"
-            style={{ width: railWidth }}
-            role="tablist"
-            aria-label={railAriaLabel}
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-              event.preventDefault();
-              const index = rail.findIndex((item) => item.id === activeRail);
-              const delta = event.key === "ArrowDown" ? 1 : -1;
-              const next = rail[(index + delta + rail.length) % rail.length];
-              onRailChange(next.id);
-              document
-                .querySelector<HTMLElement>(`[data-testid='${railTestIdPrefix}-${next.id}']`)
-                ?.focus();
-            }}
-          >
-            {rail.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="tab"
-                aria-selected={activeRail === item.id}
-                tabIndex={activeRail === item.id ? 0 : -1}
-                data-testid={`${railTestIdPrefix}-${item.id}`}
-                data-dirty={item.dirty ? "true" : undefined}
-                onClick={() => onRailChange(item.id)}
-                className={`flex items-center justify-between gap-2 rounded px-3 py-2 text-left ${
-                  activeRail === item.id ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-4"
-                }`}
-              >
-                <span>{item.label}</span>
-                {item.dirty && (
-                  <span
-                    aria-label={item.dirtyLabel ?? "Unsaved changes"}
-                    title={item.dirtyLabel ?? "Unsaved changes"}
-                    data-testid={`${railTestIdPrefix}-${item.id}-dirty`}
-                    className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
-                  />
-                )}
-              </button>
-            ))}
-          </nav>
+          {rail && (
+            <nav
+              className="flex shrink-0 flex-col gap-1 border-r border-line bg-bg-3 p-3"
+              style={{ width: railWidth }}
+              role="tablist"
+              aria-label={railAriaLabel}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                event.preventDefault();
+                const index = rail.findIndex((item) => item.id === activeRail);
+                const delta = event.key === "ArrowDown" ? 1 : -1;
+                const next = rail[(index + delta + rail.length) % rail.length];
+                onRailChange?.(next.id);
+                document
+                  .querySelector<HTMLElement>(`[data-testid='${railTestIdPrefix}-${next.id}']`)
+                  ?.focus();
+              }}
+            >
+              {rail.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeRail === item.id}
+                  tabIndex={activeRail === item.id ? 0 : -1}
+                  data-testid={`${railTestIdPrefix}-${item.id}`}
+                  data-dirty={item.dirty ? "true" : undefined}
+                  onClick={() => onRailChange?.(item.id)}
+                  className={`flex items-center justify-between gap-2 rounded px-3 py-2 text-left ${
+                    activeRail === item.id ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-4"
+                  }`}
+                >
+                  <span>{item.label}</span>
+                  {item.dirty && (
+                    <span
+                      aria-label={item.dirtyLabel ?? "Unsaved changes"}
+                      title={item.dirtyLabel ?? "Unsaved changes"}
+                      data-testid={`${railTestIdPrefix}-${item.id}-dirty`}
+                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
+                    />
+                  )}
+                </button>
+              ))}
+            </nav>
+          )}
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <main className={mainClassName}>{children}</main>

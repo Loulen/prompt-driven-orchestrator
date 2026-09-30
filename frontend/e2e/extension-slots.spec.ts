@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupRuns, runMultipart, E2E_TARGET_REPO } from "./helpers";
 
-// Stage 5 (ADR-0080) — #931: the four UI slots (Emplacements d'UI) in a real
+// Stage 5 (ADR-0080) — #931, #29: the UI locations (Emplacements d'UI) in a real
 // browser, against the real embedded front.
 //
 // The e2e daemon is the shipped binary, with no extension: this spec plays the
@@ -20,6 +20,7 @@ import { cleanupRuns, runMultipart, E2E_TARGET_REPO } from "./helpers";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const BUNDLE_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/ui.js");
+const ICON_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/icon.svg");
 const PIPELINE_NAME = `e2e-extension-slots-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
@@ -56,7 +57,9 @@ edges:
     target: { node: end, port: result }
 `;
 
+/** `GET /ext` as the daemon answers it for the test extension (`extension_hooks.rs`). */
 function declaration(reactMajor: number) {
+  const icon = "/ext/test/icon.svg";
   return [
     {
       id: "test",
@@ -65,11 +68,26 @@ function declaration(reactMajor: number) {
       ui: {
         bundle_url: "/ext/test/ui.js",
         react_major: reactMajor,
-        slots: [
-          { slot: "navigation", id: "events", label: "Test events", component: "EventsPage" },
-          { slot: "settings_panel", id: "settings", label: "Test extension", component: "SettingsPanel" },
-          { slot: "list_filter", resource: "run", id: "started-by", label: "Started by", component: "StartedByFilter" },
-          { slot: "detail_tab", resource: "run", id: "run-tab", label: "Test", component: "RunTab" },
+        contributions: [
+          // Its four 0.1 slots, mapped onto their locations.
+          { location: "topbar/start", id: "events", label: "Test events", type: "page", component: "EventsPage" },
+          { location: "settings", id: "settings", label: "Test extension", type: "section", component: "SettingsPanel" },
+          { location: "runs/filter", id: "started-by", label: "Started by", type: "list_filter", component: "StartedByFilter" },
+          { location: "run/detail", id: "run-tab", label: "Test", type: "tab", component: "RunTab" },
+          // Its 0.2 contributions to `topbar/end`.
+          { location: "topbar/end", id: "page", label: "Test page", type: "page", component: "TestPage", icon },
+          {
+            location: "topbar/end", id: "show-context", label: "Show context", type: "action",
+            command: "test.show-context", when: { has: "run" },
+          },
+          {
+            location: "topbar/end", id: "never", label: "Never shown", type: "action",
+            command: "test.never", when: { eq: ["run.status", "never-a-status"] },
+          },
+        ],
+        commands: [
+          { id: "test.show-context", title: "Show context", export: "showContext" },
+          { id: "test.never", title: "Never shown", export: "showContext" },
         ],
       },
     },
@@ -111,6 +129,15 @@ async function playTestExtension(page: Page, reactMajor = REACT_MAJOR) {
     bundleRequests += 1;
     return route.fulfill({ body: bundle, contentType: "text/javascript" });
   });
+  const icon = await fs.readFile(ICON_PATH, "utf8");
+  await page.route("**/ext/test/icon.svg", (route) =>
+    route.fulfill({ body: icon, contentType: "image/svg+xml" }),
+  );
+  const commands: unknown[] = [];
+  await page.route("**/ext/test/commands", (route) => {
+    commands.push(route.request().postDataJSON());
+    return route.fulfill({ json: { recorded: true } });
+  });
   await page.route("**/ext/test/events", (route) =>
     route.fulfill({
       json: [
@@ -140,7 +167,7 @@ async function playTestExtension(page: Page, reactMajor = REACT_MAJOR) {
     const response = await route.fetch();
     return route.fulfill({ response, json: { ...(await response.json()), attributes } });
   });
-  return { bundleRequests: () => bundleRequests };
+  return { bundleRequests: () => bundleRequests, commands: () => commands };
 }
 
 test.beforeEach(async ({ page, baseURL }) => {
@@ -191,6 +218,44 @@ test("the four slots show the test extension's contributions", async ({ page }) 
   await expect(page.getByTestId("test-extension-settings")).toContainText(
     "Data folder: /home/pdo/.pdo/extensions/test",
   );
+});
+
+test("topbar/end: an icon before Stats, its page with the context, a command, a deep link", async ({
+  page,
+}) => {
+  const played = await playTestExtension(page);
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+
+  // The icon sits in the right-hand group, before Stats; the action whose
+  // `when` never holds is not there, the one that needs a Run neither (yet).
+  const icon = page.getByTestId("extension-topbar-end-test:page");
+  await expect(icon).toBeVisible();
+  const order = await page
+    .locator("header div.ml-auto button")
+    .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("data-testid")));
+  expect(order.indexOf("extension-topbar-end-test:page")).toBeLessThan(order.indexOf("open-stats"));
+  await expect(page.getByTestId("extension-topbar-end-test:never")).toHaveCount(0);
+  await expect(page.getByTestId("extension-topbar-end-test:show-context")).toHaveCount(0);
+
+  // Select the Run, open the page: it shows the Run.
+  await page.getByText(runId.slice(0, 20)).first().click({ position: { x: 5, y: 5 } });
+  await icon.click();
+  await expect(page.getByTestId("test-page-run")).toContainText(`Run ${runId}`);
+  await expect(page).toHaveURL(/#\/ext\/test\/topbar\/end$/);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("extension-page")).toHaveCount(0);
+
+  // The command receives the Run of its location's context.
+  await page.getByTestId("extension-topbar-end-test:show-context").click();
+  await expect(page.getByTestId("toast-info")).toContainText(`Run ${runId}`);
+  expect(played.commands()).toContainEqual(expect.objectContaining({ location: "topbar/end" }));
+
+  // A deep link opens the page on its path; one toward an absent extension says so.
+  await page.goto("/#/ext/test/topbar/end/deep/path");
+  await expect(page.getByTestId("test-page-path")).toHaveText("Path: deep/path");
+  await page.goto("/#/ext/audit/journal");
+  await expect(page.getByTestId("toast-error")).toContainText("Extension “audit” is not installed");
 });
 
 test("a bundle built for another React major is not loaded, and a banner says so", async ({

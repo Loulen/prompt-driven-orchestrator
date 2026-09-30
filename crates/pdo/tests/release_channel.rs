@@ -111,6 +111,11 @@ async fn start(
     daemon: DaemonConfig,
     channel: Option<ReleaseChannel>,
 ) -> (Daemon, String) {
+    // The `env` tier of the update check wins over every other: a daemon that
+    // runs this suite from its own node session exports `PDO_UPDATE_CHECK=0`,
+    // which would turn every check here into a `409`. Nothing in this binary
+    // sets it (nextest runs one process per test).
+    std::env::remove_var("PDO_UPDATE_CHECK");
     let repo = root.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     let mut config =

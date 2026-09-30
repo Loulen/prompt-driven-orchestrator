@@ -1,17 +1,11 @@
 import type { ReactNode } from "react";
 import Markdown from "react-markdown";
+import { REMARK_PLUGINS } from "../../../shared/markdown/plugins";
 import type { Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { FileInfo } from "../../api/nodes";
 import type { PortType } from "../../../shared/generated/PortType";
 import FrontmatterRow from "./FrontmatterRow";
 import ImageBody from "./ImageBody";
-
-// #369 (residual flicker): react-markdown remounts a custom component whenever the
-// `components` entry at its position changes IDENTITY. Hoisting `remarkPlugins` to
-// module scope (and memoising `components` per viewer instance) keeps those
-// identities stable, so a poll-driven re-render no longer remounts the diagram.
-const REMARK_PLUGINS = [remarkGfm];
 
 /** The artifact viewer's body: the images, the html in its sandbox, or the
  *  frontmatter card and the rendered markdown. */

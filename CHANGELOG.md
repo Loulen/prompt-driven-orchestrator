@@ -10,6 +10,13 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.5.1 — Correctif : le tag v2.5.0 ne compile pas
+
+Le merge de #33 dans `main` (v2.5.0) appelait `self.registered` au lieu de
+`self.registry.registered` dans `Extensions::skills` (`pdo-kernel`) : le crate ne compilait
+pas, donc aucun consommateur du tag (`pdo-extensions`) non plus. Aucun changement d'API :
+`pdo-extension-api` reste en **0.5.0**. Épingler `v2.5.1`, jamais `v2.5.0`.
+
 ## 2.5.0 — Surface agent : `pdo ext <id>` et skills d'extension (#33)
 
 `pdo-extension-api` passe en **0.5.0**, par ajout : une extension écrite pour 0.1 à 0.4

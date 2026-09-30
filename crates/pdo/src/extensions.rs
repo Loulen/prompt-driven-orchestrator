@@ -1,5 +1,6 @@
 //! The extensions' surface on HTTP: each extension's routes, nested under
-//! `/ext/<id>/`, and `GET /ext`, the index the front reads to fill its UI slots.
+//! `/ext/<id>/`, `GET /ext`, the index the front reads to fill its UI slots,
+//! and `POST /ext-cli/<id>`, the relay of `pdo ext <id>` (`extension_cli.rs`).
 //!
 //! Every path of an extension sits under its own `/ext/<id>` prefix, so an
 //! extension can never hide a route of the core, nor another extension's.
@@ -24,13 +25,15 @@ use std::sync::Arc;
 use axum::extract::{OriginalUri, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use pdo_extension_api::{Slot, UiContributions};
 use pdo_kernel::attributes::wire_kind;
 use pdo_kernel::extension_host::Extensions;
 use serde::Serialize;
 use ts_rs::TS;
+
+use crate::extension_cli::{self, ExtensionCli};
 
 /// One registered extension, as the front sees it.
 #[derive(Debug, Serialize, TS)]
@@ -43,6 +46,10 @@ pub struct ExtensionEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ui: Option<ExtensionUi>,
+    /// Its command line, `pdo ext <id>`; absent when it has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cli: Option<ExtensionCli>,
 }
 
 /// An extension's bundle and the slots it fills.
@@ -127,14 +134,18 @@ fn entries(extensions: &Extensions) -> Vec<ExtensionEntry> {
                     None
                 })
                 .map(ui_entry),
+            cli: extension_cli::spec(&manifest.id, extension.as_ref()).map(|spec| ExtensionCli {
+                summary: spec.summary,
+            }),
         })
         .collect()
 }
 
-/// The core's routes of the extensions: `GET /ext`.
+/// The core's routes of the extensions: `GET /ext` and `POST /ext-cli/<id>`.
 pub fn router(extensions: Extensions) -> Router {
     Router::new()
         .route("/ext", get(index))
+        .route("/ext-cli/{id}", post(extension_cli::run))
         .with_state(extensions)
 }
 

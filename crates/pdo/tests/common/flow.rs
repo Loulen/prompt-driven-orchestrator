@@ -245,3 +245,40 @@ pub fn tmux_session_exists(daemon: &TestDaemon, session: &str) -> bool {
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
+
+/// Whether `node_id` of `run_id` is live for good: projected `running`, its
+/// `node_started` in the event log, and its tmux session up.
+///
+/// The projected status alone is not enough on a loaded machine: it can read
+/// `running` while the spawn is still in flight, so a test that kills the
+/// session or snapshots the events there races the spawn's end (a late
+/// `node_started`, a session created after the kill).
+pub async fn node_is_live(daemon: &TestDaemon, run_id: &str, node_id: &str) -> bool {
+    let run = daemon.get_json(&format!("/runs/{run_id}")).await;
+    let node = &run["nodes"][node_id];
+    let Some(iter) = node["iter"].as_i64() else {
+        return false;
+    };
+    if node["status"] != "running" {
+        return false;
+    }
+    let events = daemon.get_json(&format!("/runs/{run_id}/events")).await;
+    let started = events.as_array().is_some_and(|events| {
+        events.iter().any(|e| {
+            e["kind"] == "node_started"
+                && e["node_id"] == node_id
+                && e["iter"].as_i64() == Some(iter)
+        })
+    });
+    started
+        && std::process::Command::new("tmux")
+            .args(["-L", &daemon.tmux_socket(), "has-session", "-t"])
+            .arg(format!("={}", session_name(run_id, node_id, iter)))
+            .output()
+            .is_ok_and(|out| out.status.success())
+}
+
+/// The tmux session of `node_id` at `iter` in `run_id`.
+pub fn session_name(run_id: &str, node_id: &str, iter: i64) -> String {
+    format!("pdo-{run_id}-{node_id}-iter-{iter}")
+}

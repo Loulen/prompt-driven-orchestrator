@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::{Actor, Attributes, EntityRef, Manifest, Operation, UiContributions};
+use crate::{
+    Actor, Attributes, CliInvocation, CliOutput, CliSpec, EntityRef, ExtensionSkill, Manifest,
+    Operation, UiContributions,
+};
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
 /// Never the body, which a hook must not consume.
@@ -60,7 +63,8 @@ impl ExtensionContext {
 /// panic in `authorize` is a refusal; `on_event` is called off the request path
 /// and can never slow the core down.
 ///
-/// When the daemon starts, it calls [`Extension::start`] once, then
+/// When the daemon starts, it calls [`Extension::skills`] once (to seed the
+/// Banque de skills, before `start`), then [`Extension::start`] once, then
 /// [`Extension::routes`] and [`Extension::ui`], before it serves anything.
 pub trait Extension: Send + Sync + 'static {
     /// Who this extension is.
@@ -122,6 +126,39 @@ pub trait Extension: Send + Sync + 'static {
     fn ui(&self) -> Option<UiContributions> {
         None
     }
+
+    /// The command line of the extension, `pdo ext <id> <args…>`. `None` (the
+    /// default): no command line, and `pdo ext <id>` exits
+    /// [`EXIT_NO_CLI`](crate::EXIT_NO_CLI).
+    fn cli(&self) -> Option<CliSpec> {
+        None
+    }
+
+    /// Run one `pdo ext <id> <args…>`, when [`Extension::cli`] declares a
+    /// command line. The CLI of the core relays the arguments, the standard
+    /// input and the caller's Actor (the agent of a node session, the local
+    /// operator otherwise), then writes the answer's stdout and stderr byte
+    /// for byte and exits with its code.
+    ///
+    /// Called on a blocking thread of the daemon's tokio runtime, never on its
+    /// request path: it may take its time, and drive an async call with
+    /// `tokio::runtime::Handle::current().block_on`. A panic answers exit code
+    /// `1`, like a daemon that gives no verdict. By default, exit `1` with a
+    /// message: declaring a command line without running it is a bug.
+    fn run_cli(&self, _invocation: &CliInvocation) -> CliOutput {
+        CliOutput::failure(
+            1,
+            "this extension declares a command line but does not run it\n",
+        )
+    }
+
+    /// The skills this extension brings, seeded into the Banque de skills
+    /// once, when the daemon starts: called **before** [`Extension::start`],
+    /// so the list must not depend on it (embed the files). A skill the list
+    /// no longer holds is removed from the bank. None by default.
+    fn skills(&self) -> Vec<ExtensionSkill> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +195,13 @@ mod tests {
         ext.on_event(&serde_json::json!({ "kind": "RunCreated" }));
         assert!(ext.routes().is_none());
         assert!(ext.ui().is_none());
+        assert!(ext.cli().is_none());
+        assert_eq!(
+            ext.run_cli(&CliInvocation::new(vec![], "", actor.clone()))
+                .code,
+            1
+        );
+        assert!(ext.skills().is_empty());
         assert_eq!(ext.manifest().id, "bare");
     }
 

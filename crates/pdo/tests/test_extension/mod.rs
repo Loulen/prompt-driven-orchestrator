@@ -19,6 +19,10 @@
 //!   trace of the events, `/ui.js` its UI bundle, `/incompatible` switches the
 //!   bundle to a React major the front does not run.
 //! - **`ui`**: one element in each of the four UI slots (`ui.js`).
+//! - **`cli`** / **`run_cli`**: `pdo ext test echo|cat|exit|panic` (see
+//!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
+//! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
+//!   extension's version.
 //!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
 
@@ -30,8 +34,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pdo::extension_api::{
-    Actor, Attributes, Authorization, EntityRef, Extension, ExtensionContext, Manifest, Operation,
-    RequestParts, ResourceKind, Slot, UiContributions, UiSlot, Verb,
+    Actor, Attributes, Authorization, CliInvocation, CliOutput, CliSpec, EntityRef, Extension,
+    ExtensionContext, ExtensionSkill, Manifest, Operation, RequestParts, ResourceKind, Slot,
+    UiContributions, UiSlot, Verb,
 };
 use serde_json::Value;
 
@@ -45,6 +50,27 @@ pub const REACT_MAJOR: u32 = 19;
 
 /// The request header naming the caller.
 pub const ACTOR_HEADER: &str = "x-pdo-test-actor";
+
+/// The version of the test extension, which its skill is seeded at.
+pub const VERSION: &str = "0.0.0";
+
+/// The name of the skill the test extension provides.
+pub const SKILL_NAME: &str = "test-extension-cli";
+/// Its `SKILL.md`, and its one reference file.
+pub const SKILL_MD: &str = include_str!("skill/SKILL.md");
+pub const SKILL_REFERENCE: (&str, &str) = (
+    "references/commands.md",
+    include_str!("skill/references/commands.md"),
+);
+
+/// How the test extension names an actor on the stderr of its command line.
+pub fn actor_label(actor: &Actor) -> String {
+    match actor {
+        Actor::Agent { run_id, node_id } => format!("agent:{run_id}/{node_id}"),
+        Actor::Identified { namespace, id } => format!("identified:{namespace}/{id}"),
+        other => other.kind().to_string(),
+    }
+}
 
 /// What the test extension refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +191,7 @@ pub struct Control {
     on_event: Arc<Mutex<OnEvent>>,
     data_dir: Arc<Mutex<Option<PathBuf>>>,
     incompatible: Arc<AtomicBool>,
+    cli_calls: Arc<Mutex<Vec<CliInvocation>>>,
 }
 
 impl Default for Control {
@@ -176,6 +203,7 @@ impl Default for Control {
             on_event: Arc::new(Mutex::new(OnEvent::Record)),
             data_dir: Arc::default(),
             incompatible: Arc::default(),
+            cli_calls: Arc::default(),
         }
     }
 }
@@ -197,6 +225,11 @@ impl Control {
 
     pub fn on_event(&self, behaviour: OnEvent) {
         *self.on_event.lock().unwrap() = behaviour;
+    }
+
+    /// Every `pdo ext test …` `run_cli` answered, in order.
+    pub fn cli_calls(&self) -> Vec<CliInvocation> {
+        self.cli_calls.lock().unwrap().clone()
     }
 
     /// The data folder `start` received.
@@ -258,7 +291,7 @@ impl TestExtension {
 
 impl Extension for TestExtension {
     fn manifest(&self) -> Manifest {
-        let manifest = Manifest::new(ID, "Test extension", "0.0.0");
+        let manifest = Manifest::new(ID, "Test extension", VERSION);
         match &self.api_version {
             Some(version) => manifest.requiring_api(version.clone()),
             None => manifest,
@@ -333,6 +366,42 @@ impl Extension for TestExtension {
                     "RunTab",
                 )),
         )
+    }
+
+    fn cli(&self) -> Option<CliSpec> {
+        Some(CliSpec::new(
+            "Echo, cat, exit with a code: the test of `pdo ext`",
+        ))
+    }
+
+    /// `echo <words…>` writes the words; `cat` its standard input; `exit
+    /// <code>` exits with it; each writes the Actor on stderr. `panic`
+    /// panics; anything else exits `2`.
+    fn run_cli(&self, invocation: &CliInvocation) -> CliOutput {
+        self.control
+            .cli_calls
+            .lock()
+            .unwrap()
+            .push(invocation.clone());
+        let actor = format!("actor: {}\n", actor_label(&invocation.actor));
+        let args: Vec<&str> = invocation.args.iter().map(String::as_str).collect();
+        match args.as_slice() {
+            ["echo", words @ ..] => {
+                CliOutput::success(format!("{}\n", words.join(" "))).with_stderr(actor)
+            }
+            ["cat"] => CliOutput::success(invocation.stdin.clone()).with_stderr(actor),
+            ["exit", code] => match code.parse() {
+                Ok(code) => CliOutput::failure(code, actor),
+                Err(_) => CliOutput::failure(2, format!("`{code}` is not an exit code\n")),
+            },
+            ["panic"] => panic!("the test extension panics in run_cli"),
+            _ => CliOutput::failure(2, "unknown command\n"),
+        }
+    }
+
+    fn skills(&self) -> Vec<ExtensionSkill> {
+        let (path, content) = SKILL_REFERENCE;
+        vec![ExtensionSkill::new(SKILL_NAME, SKILL_MD).with_file(path, content)]
     }
 
     fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {

@@ -611,6 +611,35 @@ describe("SkillBankPanel (#668)", () => {
     fireEvent.keyDown(tree, { key: "F2" });
     expect(screen.queryByTestId("rename-input")).toBeNull();
   });
+
+  it("a skill an extension provides (#33) is locked and names its extension and version", async () => {
+    const provided: Skill = {
+      ...skill("ext-pm-pm", "pm", "skf-ext-pm", "Drive the Projet extension."),
+      locked: true,
+      extension: { id: "pm", version: "0.3.0" },
+    };
+    const bank: SkillBank = {
+      root_path: "/home/user/.pdo/skills",
+      folders: [folder("skf-ext-pm", "Projet")],
+      skills: [provided],
+    };
+    fetchSkillMock.mockImplementation(async () => detailOf(provided));
+    setup(bank);
+
+    fireEvent.click(screen.getByLabelText("Expand Projet"));
+    fireEvent.click(screen.getByTestId("tree-skill-ext-pm-pm"));
+    await waitFor(() => expect(screen.getByTestId("skill-detail-extension")).toHaveTextContent("Extension pm"));
+    expect(screen.getByTestId("skill-detail-version")).toHaveTextContent("v0.3.0");
+    expect(screen.getByTestId("skill-detail-provided-by")).toHaveTextContent("provided by the extension pm");
+    expect(screen.getByTestId("skill-detail-locked-note")).toHaveTextContent("updates with the extension");
+    expect(screen.queryByTestId("skill-detail-locked")).toBeNull();
+    expect(screen.queryByTestId("skill-detail-delete")).toBeNull();
+    expect(screen.queryByTestId("skill-detail-rename")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("kebab-skill-ext-pm-pm"));
+    expect(screen.getByTestId("tree-menu-locked")).toHaveTextContent("Provided by the extension pm");
+    expect(screen.queryByRole("menuitem", { name: "Delete…" })).toBeNull();
+  });
 });
 
 

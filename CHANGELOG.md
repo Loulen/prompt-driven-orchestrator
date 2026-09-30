@@ -10,6 +10,29 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## Non publié — Surface agent : `pdo ext <id>` et skills d'extension (#33)
+
+Ajout rétrocompatible au source d'une extension ; `pdo-extension-api` passe de 0.1.1 à
+**0.2.0** (une montée de mineure en 0.x : une extension se recompile contre la nouvelle API,
+sans changer une ligne si elle n'utilise pas les nouveaux hooks). ADR-0081, amendement #33.
+
+- **`pdo ext <id> <args…>`** : la CLI d'une extension, relayée par le daemon (`POST
+  /ext-cli/<id>`). Arguments et flags tels quels, entrée standard (sauf terminal), répertoire
+  de travail, et identité de la session de node : l'extension voit `Actor::Agent{run, node}`
+  depuis une session, l'Opérateur local sinon. Stdout et stderr reviennent octet pour octet.
+  Codes : ceux de l'extension ; `1` daemon injoignable ou extension en échec ; `127` pas
+  d'extension `<id>`, ou pas de CLI. `pdo ext` seul liste les extensions qui en ont une.
+- **Hooks `cli()` / `run_cli()`** (`CliSpec`, `CliInvocation`, `CliOutput`, `EXIT_NO_CLI`) et
+  **`skills()`** (`ExtensionSkill`, `SkillFile`), neutres par défaut. `GET /ext` porte un champ
+  `cli` (`{summary}`) par extension qui en déclare une.
+- **Skills d'extension** : amorcés à chaque démarrage dans la Banque de skills, dans un dossier
+  au nom de l'extension, sous l'id `ext-<extension>-<nom>`, verrouillés et marqués
+  `extension: {id, version}` (badge « Extension `<id>` » et version dans le détail). Réécrits
+  quand la version de l'extension ou leur contenu change, retirés quand elle ne les fournit plus,
+  livrés aux worktrees comme tout skill sélectionné (ADR-0062). Deux colonnes additives sur
+  `skills` (`extension`, `extension_version`) : une base existante s'ouvre telle quelle.
+- `pdo complete`, `pdo ext` et toute la CLI d'agent ne construisent toujours pas les extensions.
+
 ## 2.1.0 — Distributions tierces : `main_with`, frontend préconstruit, canal de mise à jour, 404 sous `/ext` (#21, #22, #23, #24)
 
 Seams découverts en écrivant la première distribution (`Loulen/pdo-extensions`). Ajout

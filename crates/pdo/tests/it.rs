@@ -80,6 +80,10 @@ mod extension_trigger_fire;
 #[path = "extension_hooks.rs"]
 mod extension_hooks;
 
+// `pdo ext <id> <args…>` (#33): the agent's command line of an extension.
+#[path = "extension_cli.rs"]
+mod extension_cli;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;

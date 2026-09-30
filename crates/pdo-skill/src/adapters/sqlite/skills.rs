@@ -7,7 +7,7 @@ use sqlx::{Row, SqlitePool};
 use super::storage;
 use crate::application::ports::{BoxFuture, SkillIndex, StoreResult};
 use crate::domain::seed::is_seeded;
-use crate::domain::skill::{Provenance, Skill};
+use crate::domain::skill::{Provenance, ProvidedBy, Skill};
 
 /// The [`SkillIndex`] port over SQLite.
 pub struct SqliteSkillIndex {
@@ -22,12 +22,20 @@ impl SqliteSkillIndex {
 
 fn row_to_skill(row: &sqlx::sqlite::SqliteRow) -> Skill {
     let url: Option<String> = row.get("source");
+    let extension = row
+        .get::<Option<String>, _>("extension")
+        .map(|id| ProvidedBy {
+            id,
+            version: row
+                .get::<Option<String>, _>("extension_version")
+                .unwrap_or_default(),
+        });
     Skill {
         id: row.get("id"),
         name: row.get("name"),
         description: row.get("description"),
         folder_id: row.get("folder_id"),
-        locked: is_seeded(row.get("id")),
+        locked: is_seeded(row.get("id")) || extension.is_some(),
         source: url.map(|url| Provenance {
             url,
             git_ref: row.get("source_ref"),
@@ -36,6 +44,7 @@ fn row_to_skill(row: &sqlx::sqlite::SqliteRow) -> Skill {
                 .get::<Option<String>, _>("source_path")
                 .unwrap_or_default(),
         }),
+        extension,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
@@ -99,8 +108,8 @@ impl SkillIndex for SqliteSkillIndex {
             let source = skill.source.as_ref();
             sqlx::query(
                 "INSERT INTO skills (id, name, description, folder_id, source, source_ref, \
-                 source_commit, source_path, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 source_commit, source_path, extension, extension_version, created_at, \
+                 updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&skill.id)
             .bind(&skill.name)
@@ -110,6 +119,8 @@ impl SkillIndex for SqliteSkillIndex {
             .bind(source.and_then(|p| p.git_ref.as_ref()))
             .bind(source.and_then(|p| p.commit.as_ref()))
             .bind(source.map(|p| &p.path))
+            .bind(skill.extension.as_ref().map(|e| &e.id))
+            .bind(skill.extension.as_ref().map(|e| &e.version))
             .bind(&skill.created_at)
             .bind(&skill.updated_at)
             .execute(&self.db)
@@ -124,7 +135,8 @@ impl SkillIndex for SqliteSkillIndex {
             let source = skill.source.as_ref();
             sqlx::query(
                 "UPDATE skills SET name = ?, description = ?, folder_id = ?, source = ?, \
-                 source_ref = ?, source_commit = ?, source_path = ?, updated_at = ? WHERE id = ?",
+                 source_ref = ?, source_commit = ?, source_path = ?, extension = ?, \
+                 extension_version = ?, updated_at = ? WHERE id = ?",
             )
             .bind(&skill.name)
             .bind(&skill.description)
@@ -133,6 +145,8 @@ impl SkillIndex for SqliteSkillIndex {
             .bind(source.and_then(|p| p.git_ref.as_ref()))
             .bind(source.and_then(|p| p.commit.as_ref()))
             .bind(source.map(|p| &p.path))
+            .bind(skill.extension.as_ref().map(|e| &e.id))
+            .bind(skill.extension.as_ref().map(|e| &e.version))
             .bind(&skill.updated_at)
             .bind(&skill.id)
             .execute(&self.db)

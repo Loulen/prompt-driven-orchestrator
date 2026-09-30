@@ -7,6 +7,9 @@ use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 
+use crate::domain::error::SkillError;
+use crate::domain::seed::refuse_locked;
+
 use super::ports::{
     FolderIndex, SkillContent, SkillDelivery, SkillIndex, SkillReferents, SourceHistory,
     SourceScanner,
@@ -52,5 +55,16 @@ impl Skills {
     /// The Autorisation d'opération: every mutation goes through here first.
     pub(crate) fn authorize(&self, actor: &Actor, operation: Operation) -> Result<(), Denied> {
         authorize(self.host.as_ref(), actor, &operation)
+    }
+
+    /// The seed lock (#722, #33): refuse every write on a skill PDO seeds,
+    /// its own or one an extension provides. An unknown id passes: the use
+    /// case answers it.
+    pub(crate) async fn refuse_locked(&self, id: &str) -> Result<(), SkillError> {
+        refuse_locked(id)?;
+        match self.skills.get(id).await? {
+            Some(skill) if skill.locked => Err(SkillError::Locked { id: id.to_string() }),
+            _ => Ok(()),
+        }
     }
 }

@@ -227,6 +227,11 @@ where
 
 async fn wait_for_node_status(daemon: &TestDaemon, run_id: &str, node_id: &str, want: &str) {
     wait_until(&format!("{node_id} to become {want}"), || async {
+        // `running` also waits for the spawn to end: its `node_started`, its
+        // tmux session (see `node_is_live`).
+        if want == "running" {
+            return crate::common::flow::node_is_live(daemon, run_id, node_id).await;
+        }
         node_status(daemon, run_id, node_id).await == want
     })
     .await;

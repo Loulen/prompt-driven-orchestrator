@@ -78,6 +78,7 @@ impl Skills {
                     description: parsed.description,
                     folder_id: Some(folder_pk),
                     locked: true,
+                    extension: None,
                     source: None,
                     created_at: now.clone(),
                     updated_at: now,
@@ -98,7 +99,7 @@ impl Skills {
     /// The « PDO » folder: a fixed id, or an existing root folder already
     /// carrying the name (an operator's folder named PDO is adopted, not
     /// duplicated — the folder is a UI gesture, nothing references it).
-    async fn seed_folder(
+    pub(crate) async fn seed_folder(
         &self,
         folder_id: &str,
         folder_name: &str,

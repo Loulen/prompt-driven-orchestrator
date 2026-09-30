@@ -103,7 +103,9 @@ mod tests {
             (Slot::Navigation, "topbar/start", "page"),
             (Slot::SettingsPanel, "settings", "section"),
             (
-                Slot::ListFilter { resource: run },
+                Slot::ListFilter {
+                    resource: run.clone(),
+                },
                 "runs/filter",
                 "list_filter",
             ),

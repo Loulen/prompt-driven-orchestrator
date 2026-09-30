@@ -12,8 +12,8 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 
 ## Non publié — Emplacements d'UI hébergés par une extension (#32)
 
-`pdo-extension-api` passe en **0.3.0**, par ajout : une extension écrite pour 0.1 ou 0.2 compile
-et tourne sans changement (ADR-0081, amendement #32 ; référence : `docs/reference/extension-ui.md`
+`pdo-extension-api` passe en **0.4.0**, par ajout : une extension écrite pour 0.1, 0.2 ou 0.3
+compile et tourne sans changement (ADR-0081, amendement #32 ; référence : `docs/reference/extension-ui.md`
 § *Hosted locations*).
 
 - **Emplacements hébergés** (`HostedLocation`, `UiContributions::host`) : une extension déclare
@@ -25,6 +25,35 @@ et tourne sans changement (ADR-0081, amendement #32 ; référence : `docs/refere
   bundle qui l'importe le déclare (`UiContributions::importing_ui_module`) ; une autre majeure
   n'est pas chargée, avec une bannière.
 - **Fil de `GET /ext`** : `ui.locations` et `ui.ui_module_major` s'ajoutent.
+
+## 2.3.0 — Interopérabilité : ressource d'extension et Hôte (#34)
+
+`pdo-extension-api` passe en **0.3.0** (ADR-0081, amendement #34). Une extension fait passer ses
+propres mutations par les mécanismes du core, pour que deux extensions installées ensemble
+interopèrent sans se nommer.
+
+- **`ResourceKind::Extension { extension, kind }`** (`ResourceKind::extension("pm", "tache")`),
+  nommée `pm/tache` sur le fil. Les ressources du core gardent leur nom (`agent_profile`…).
+- **`Host`**, dans `ExtensionContext::host` à `start` : `authorize` (toutes les extensions,
+  l'émettrice comprise ; une panique refuse), `publish(ExtensionEvent)` (sur `/ws` et vers les
+  autres extensions, enveloppe `{"type": "extension_event", "extension", "name", "payload"}`),
+  `applied(OperationApplied)` après une mutation réussie, `on_create` (les Attributs des autres
+  extensions, préfixés, à stocker par l'extension). `NeutralHost` pour les tests d'une extension.
+- **`Denied`** et `OPERATION_REFUSED` passent dans l'API (`Authorization::into_result`) : une
+  extension répond ses refus avec le `403` du core.
+- **`OperationApplied` est diffusé sur `/ws`** dès qu'une extension est chargée. Sans extension,
+  `/ws` ne change pas.
+
+### Cassant pour une extension (0.2 -> 0.3)
+
+- `ResourceKind` n'est plus `Copy` : cloner là où une copie suffisait (`.clone()`, `.cloned()`).
+  Sa sérialisation est désormais écrite à la main ; les noms des ressources du core ne changent
+  pas.
+- `ExtensionContext` porte un champ `host` et n'implémente plus ses traits par `derive` (même
+  comportement, égalité comprise). `ExtensionContext::new(data_dir)` reste valable.
+- Une extension qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile sans changement et
+  reste acceptée : `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`, la casse ne touchant que la
+  compilation.
 
 ## 2.2.0 — Catalogue d'emplacements d'UI, Commandes, `when`, `topbar/end`, liens profonds (#29)
 

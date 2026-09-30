@@ -5,6 +5,7 @@
 > Amendé par #21 : comment une distribution obtient le frontend embarqué (§ *Amendements*).
 > Amendé par #29 : les Emplacements d'UI deviennent un catalogue nommé, avec Commandes et
 > clauses `when` (§ *Amendement #29*).
+> Amendé par #34 : la ressource d'extension et l'Hôte (§ *Amendement #34*).
 > Amendé par #32 : une extension héberge ses propres emplacements, rendus par un module partagé
 > (§ *Amendement #32*).
 
@@ -96,6 +97,65 @@ daemon » et l'init du tracing, en dépendant de crates hors semver.
   jour (#24). Appelée au plus une fois, par `pdo daemon` seul.
 - Ajout rétrocompatible : bump mineur du core (2.1.0), `pdo-extension-api` inchangé. Les
   sous-commandes une à une et `pdo::cli` restent hors contrat.
+
+## Amendement #34 : la ressource d'extension et l'Hôte
+
+Seam découvert en préparant l'extension `pm` (`Loulen/pdo-extensions#4`), qui a ses propres
+entités (Backlogs, Tâches, Pages…) et dont chaque mutation doit être refusable, observable et
+annotable par une autre extension, sans que l'une nomme l'autre (ADR-0001 de `pdo-extensions`).
+Les hooks ci-dessus ne couvrent que les mutations **du core**.
+
+- **Une ressource générique `ResourceKind::Extension { extension, kind }`**, avec les verbes
+  existants. Sur le fil, une ressource s'écrit par son nom : `run`, `agent_profile`… pour celles
+  du core, `<extension>/<kind>` pour celles d'une extension (`pm/tache`). Une extension de droits
+  refuse `pm/tache` × `update` sans rien connaître de `pm`.
+- **Un Hôte** (`Host`), remis dans `ExtensionContext::host` à `start`, un par extension. C'est
+  par lui qu'une extension fait passer **ses** mutations par les mécanismes du core :
+  - `authorize(acteur, opération)` consulte l'Autorisation d'opération de **toutes** les
+    extensions, **celle qui émet comprise** ; le premier refus gagne avec sa raison, une panique
+    est un refus. L'extension répond alors le `403` `operation_refused` du core (`Denied`,
+    désormais dans l'API) et ne change rien.
+  - `publish(événement)` diffuse l'événement sur `/ws` et vers `on_event` des **autres**
+    extensions, dans une enveloppe du core : `{"type": "extension_event", "extension": <id>,
+    "name": <nom>, "payload": <charge>}`. L'enveloppe est gelée comme le reste de `/ws` ; la
+    charge appartient à l'extension.
+  - `applied(OperationApplied)` : l'extension dit au core qu'une mutation autorisée a réussi, et
+    l'`OperationApplied` suit, comme pour une mutation du core. Seule l'extension sait si sa
+    mutation a réussi : le core ne le devine pas depuis la réponse HTTP, ce qui couvre aussi ce
+    qui n'est pas une requête (une session WebSocket, un thread).
+  - `on_create(acteur, entité)` appelle `on_create` des **autres** extensions et rend leurs
+    Attributs préfixés par leur id. **L'extension les stocke** et les renvoie avec ses entités :
+    le core ne garde pas les Attributs des entités qu'il ne connaît pas.
+- **`OperationApplied` passe sur `/ws`** dès qu'une extension est chargée, pour les mutations du
+  core comme pour celles des extensions : un seul chemin (le bus), donc le même ordre sur `/ws` et
+  dans `on_event`. Sans extension, `/ws` porte exactement ce qu'il portait. Le front ignore ces
+  messages (liste blanche de `useDaemonSocket`). Contrepartie : comme tout événement du bus, un
+  `OperationApplied` est perdu (et journalisé) pour un abonné qui prend trop de retard sur le bus,
+  alors qu'il allait avant directement dans la file de chaque extension.
+- L'Hôte ne retient les extensions que faiblement : une fois le daemon arrêté, il refuse tout et
+  ne publie rien. `publish` et `applied` n'attendent jamais une extension (même livraison
+  isolée que pour les événements du core) ; `authorize` et `on_create` appellent les hooks des
+  autres extensions sur le fil de l'appelant, comme le core pour ses propres mutations : ils sont
+  aussi rapides que ces hooks, qui doivent l'être. `NeutralHost` (tout autorisé, rien publié,
+  aucun Attribut) est celui d'un `ExtensionContext::new`, et le remplaçant d'un Hôte dans les
+  tests d'une extension.
+- **Montée de mineure de l'API : 0.2 -> 0.3** (une mineure est cassante en 0.x ; #34 suit #29,
+  qui avait pris la 0.2) : `ResourceKind`
+  n'est plus `Copy` (la variante porte des `String`), `ExtensionContext` porte un champ de plus
+  (`host`) et implémente `Debug`, `PartialEq` et `Eq` à la main (deux contextes sont égaux s'ils
+  nomment le même dossier et partagent le même Hôte).
+  Une extension 0.1 ou 0.2 qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile telle
+  quelle et reste acceptée : la casse est de compilation, pas de fil, donc
+  `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0` (amendement #29).
+- L'extension de test interne y gagne trois pairs (`a`, `b`, `c`, `interop.rs`) qui créent et
+  suppriment leurs `item` par l'Hôte ; le daemon de démo les charge avec `PDO_TEST_INTEROP=1`.
+
+Écartés : **faire enregistrer l'`OperationApplied` par le scope de la requête** (comme pour le
+core) : il ne couvre ni la session WebSocket de `pm` ni un écrit hors requête, et l'aurait publié
+en double avec un `applied` explicite. **Stocker les Attributs d'une entité d'extension dans le
+core** : le core devrait alors filtrer des listes qu'il ne sert pas ; l'extension les stocke comme
+le reste de ses entités. **Livrer ses propres événements à l'émettrice** : elle sait ce qu'elle a
+publié, et une extension qui réagit à ses propres événements bouclerait.
 
 ## Amendements (#21)
 
@@ -225,8 +285,8 @@ sont dans l'interface de `pm`, que le core ne rend pas.
   la version déclarée par le front (`uiModuleVersion.ts`) s'écarte de celle du crate.
 - **Rétrocompatibilité** : `UiLocation` garde `Copy` et `id(self) -> &'static str` (l'identifiant
   d'un emplacement hébergé est un `&'static str`, une constante de l'API de l'hôte) ; tout le reste
-  est ajouté. `pdo-extension-api` passe en **0.3.0**, `OLDEST_COMPATIBLE_API_VERSION` reste
-  `0.1.0`. Le fil de `GET /ext` gagne `ui.locations` et `ui.ui_module_major`.
+  est ajouté. `pdo-extension-api` passe en **0.4.0** (après 0.3.0, amendement #34),
+  `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`. Le fil de `GET /ext` gagne `ui.locations` et `ui.ui_module_major`.
 
 Écartés : un emplacement hébergé rendu par le core (il ne connaît pas l'interface de l'hôte) ;
 une API d'enregistrement dynamique côté navigateur (les déclarations restent dans le manifeste

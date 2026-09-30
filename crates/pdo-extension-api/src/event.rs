@@ -9,7 +9,11 @@ use crate::{Actor, EntityRef, Operation};
 pub const OPERATION_APPLIED: &str = "operation_applied";
 
 /// An authorized mutation that succeeded: who ran which Operation, on which
-/// entity. The one event of `on_event` that `/ws` does not carry.
+/// entity. Broadcast on `/ws` too once an extension is loaded (amendment #34):
+/// without extension, `/ws` carries exactly what it carried before the API.
+///
+/// The core builds it for its own mutations; an extension builds it for its
+/// own and hands it to [`Host::applied`](crate::Host::applied).
 ///
 /// On the wire: `{"type": "operation_applied", "actor": …, "operation": …,
 /// "entity": {"kind": …, "id": …} | null}`. The entity is the target of the

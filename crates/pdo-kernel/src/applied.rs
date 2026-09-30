@@ -9,6 +9,9 @@
 //! `identify` middleware does it for every HTTP request, a Trigger's cron tick
 //! for its fire.
 //!
+//! An extension's own mutations take another path: it tells its
+//! [`Host`](pdo_extension_api::Host) itself once one succeeded.
+//!
 //! [`stamp`]: crate::attributes::stamp
 
 use std::future::Future;
@@ -42,7 +45,7 @@ pub(crate) fn allowed(actor: &Actor, operation: &Operation) {
     let entity = operation
         .target
         .as_ref()
-        .map(|id| EntityRef::new(operation.resource, id.clone()));
+        .map(|id| EntityRef::new(operation.resource.clone(), id.clone()));
     let _ = RECORD.try_with(|record| {
         record.lock().unwrap().push(OperationApplied::new(
             actor.clone(),
@@ -67,7 +70,8 @@ pub(crate) fn created(entity: &EntityRef) {
     });
 }
 
-/// Hand the Operations of a successful gesture to the extensions, and drop the
+/// Hand the Operations of a successful gesture to the extensions (and to `/ws`
+/// once an extension is loaded, [`ExtensionHost::announce`]), and drop the
 /// attributes of the entities it deleted.
 pub fn publish(host: &dyn ExtensionHost, record: Vec<OperationApplied>) {
     for applied in record {
@@ -87,7 +91,7 @@ pub fn publish(host: &dyn ExtensionHost, record: Vec<OperationApplied>) {
                 }
             }
         }
-        host.publish(&applied.to_event());
+        host.announce(applied.to_event());
     }
 }
 

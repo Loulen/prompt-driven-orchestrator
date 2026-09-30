@@ -26,13 +26,20 @@
 //!   its icon, an action calling [`SHOW_CONTEXT`] while a Run is selected, and
 //!   an action whose `when` never holds.
 //!
+//! Its peers of `interop.rs` run their own mutations through the [`Host`] the
+//! core hands them (amendment #34): the test extension sees their Operations
+//! in `authorize`, their events in `on_event`, stamps their entities.
 //!
 //! `hosted.rs` adds two more, **A** and **B**, for the locations an extension
 //! hosts (amendment #32): A hosts `a/panneau` and `a/actions`, B contributes.
+//! Their ids are those of the interop peers: a daemon loads one set or the other.
 //!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
+//!
+//! [`Host`]: pdo::extension_api::Host
 
 pub mod hosted;
+pub mod interop;
 mod routes;
 
 use std::path::PathBuf;
@@ -76,7 +83,8 @@ pub enum Refusal {
 impl Refusal {
     /// Read a refusal from its text form: `none`, `all`, `panic`, or
     /// `<resource>:<verb>` with the wire names of both (`project:update`,
-    /// `trigger:fire` for the action `fire`).
+    /// `trigger:fire` for the action `fire`, `a/item:create` for an
+    /// extension's resource).
     pub fn parse(text: &str) -> Result<Self, String> {
         match text.trim() {
             "none" => Ok(Refusal::Nothing),
@@ -86,11 +94,16 @@ impl Refusal {
                 let (resource, verb) = other.split_once(':').ok_or_else(|| {
                     format!("`{other}`: expected none, all, panic or resource:verb")
                 })?;
-                let resource = RESOURCES
-                    .iter()
-                    .copied()
-                    .find(|r| resource_name(*r) == resource)
-                    .ok_or_else(|| format!("unknown resource `{resource}`"))?;
+                let resource = match resource.split_once('/') {
+                    Some((extension, kind)) if !extension.is_empty() && !kind.is_empty() => {
+                        ResourceKind::extension(extension, kind)
+                    }
+                    _ => RESOURCES
+                        .iter()
+                        .find(|r| r.wire_name() == resource)
+                        .cloned()
+                        .ok_or_else(|| format!("unknown resource `{resource}`"))?,
+                };
                 let verb = match verb {
                     "create" => Verb::Create,
                     "update" => Verb::Update,
@@ -136,13 +149,6 @@ const RESOURCES: &[ResourceKind] = &[
     ResourceKind::PriceTable,
 ];
 
-fn resource_name(resource: ResourceKind) -> String {
-    serde_json::to_value(resource)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default()
-}
-
 fn verb_name(verb: &Verb) -> String {
     match verb {
         Verb::Create => "create".into(),
@@ -158,7 +164,7 @@ pub fn reason(operation: &Operation) -> String {
     format!(
         "the test extension refuses {} {}",
         verb_name(&operation.verb),
-        resource_name(operation.resource)
+        operation.resource
     )
 }
 
@@ -332,7 +338,7 @@ impl Extension for TestExtension {
         } else {
             REACT_MAJOR
         };
-        let run = ResourceKind::Run;
+        let run = || ResourceKind::Run;
         // No icon: its button shows the fallback, a boxed « S ».
         let show_context = UiCommand::new(SHOW_CONTEXT, "Show context", "showContext");
         let never = UiCommand::new("test.never", "Never shown", "showContext");
@@ -351,13 +357,13 @@ impl Extension for TestExtension {
                     "SettingsPanel",
                 ))
                 .with(UiSlot::new(
-                    Slot::ListFilter { resource: run },
+                    Slot::ListFilter { resource: run() },
                     "started-by",
                     "Started by",
                     "StartedByFilter",
                 ))
                 .with(UiSlot::new(
-                    Slot::DetailTab { resource: run },
+                    Slot::DetailTab { resource: run() },
                     "run-tab",
                     "Test",
                     "RunTab",
@@ -417,6 +423,13 @@ fn a_refusal_reads_from_its_text_form() {
         ))
     );
     assert_eq!(Refusal::parse("all"), Ok(Refusal::Everything));
+    assert_eq!(
+        Refusal::parse("a/item:create"),
+        Ok(Refusal::Only(
+            ResourceKind::extension("a", "item"),
+            Verb::Create
+        ))
+    );
     assert!(Refusal::parse("nope:update").is_err());
     assert!(Refusal::parse("project").is_err());
     assert_eq!(

@@ -16,6 +16,11 @@ use crate::common::flow::{create_run, post_json, seed_solo};
 use crate::common::TestDaemon;
 use crate::test_extension::{self, OnEvent, Refusal, TestExtension, ACTOR_HEADER};
 
+/// How long a response may take while an extension sleeps 30 s in
+/// `on_event`: far below the sleep, far above a response on a loaded machine
+/// (the suite runs next to other builds).
+const RESPONSE_BUDGET: Duration = Duration::from_secs(15);
+
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     seed_solo(repo, &[("solo", false)])
 }
@@ -343,7 +348,7 @@ async fn an_extension_that_sleeps_or_panics_in_on_event_never_delays_a_response(
         let (status, _) = post_json(&daemon, "/projects", json!({ "name": name })).await;
         assert_eq!(status, 201);
         assert!(
-            start.elapsed() < Duration::from_secs(5),
+            start.elapsed() < RESPONSE_BUDGET,
             "a sleeping on_event delayed the response: {:?}",
             start.elapsed()
         );
@@ -357,7 +362,7 @@ async fn an_extension_that_sleeps_or_panics_in_on_event_never_delays_a_response(
         let start = Instant::now();
         let (status, _) = post_json(&daemon, "/projects", json!({ "name": name })).await;
         assert_eq!(status, 201, "the daemon lives on");
-        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(start.elapsed() < RESPONSE_BUDGET);
     }
     // Back to recording: the delivery thread survived the panics.
     control.on_event(OnEvent::Record);
@@ -562,7 +567,9 @@ impl Extension for Written01 {
                     "SettingsPanel",
                 ))
                 .with(UiSlot::new(
-                    Slot::ListFilter { resource: run },
+                    Slot::ListFilter {
+                        resource: run.clone(),
+                    },
                     "started-by",
                     "Started by",
                     "StartedByFilter",

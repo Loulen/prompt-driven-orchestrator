@@ -161,6 +161,7 @@ fn cache_path(daemon: &TestDaemon) -> std::path::PathBuf {
 
 #[tokio::test]
 async fn routes_are_registered_and_a_newer_release_is_reported() {
+    let _env = crate::common::lock_update_check_unset();
     let fixture = spawn_fixture(RELEASE_NEWER).await;
     let daemon = TestDaemon::spawn_with_update_source(seed, fixture.url())
         .await
@@ -226,6 +227,7 @@ async fn routes_are_registered_and_a_newer_release_is_reported() {
 
 #[tokio::test]
 async fn check_now_forces_a_hit_and_moves_the_date() {
+    let _env = crate::common::lock_update_check_unset();
     let fixture = spawn_fixture(RELEASE_NEWER).await;
     let daemon = TestDaemon::spawn_with_update_source(seed, fixture.url())
         .await
@@ -252,6 +254,7 @@ async fn check_now_forces_a_hit_and_moves_the_date() {
 
 #[tokio::test]
 async fn unreachable_source_is_null_with_a_reason_and_never_blocks() {
+    let _env = crate::common::lock_update_check_unset();
     let daemon = TestDaemon::spawn_with_update_source(seed, dead_url().await)
         .await
         .unwrap();
@@ -284,6 +287,7 @@ async fn unreachable_source_is_null_with_a_reason_and_never_blocks() {
 
 #[tokio::test]
 async fn disabling_the_check_stops_all_egress_and_persists() {
+    let _env = crate::common::lock_update_check_unset();
     let fixture = spawn_fixture(RELEASE_NEWER).await;
     let daemon = TestDaemon::spawn_with_update_source(seed, fixture.url())
         .await
@@ -368,6 +372,7 @@ async fn changelog(daemon: &TestDaemon) -> serde_json::Value {
 
 #[tokio::test]
 async fn changelog_assembles_missed_releases_newest_first_and_memoises_the_list() {
+    let _env = crate::common::lock_update_check_unset();
     let fixture = spawn_fixture(RELEASE_NEWER).await;
     let daemon = TestDaemon::spawn_with_update_source(seed, fixture.url())
         .await
@@ -421,6 +426,7 @@ async fn changelog_assembles_missed_releases_newest_first_and_memoises_the_list(
 
 #[tokio::test]
 async fn changelog_falls_back_to_the_embedded_file_with_a_reason() {
+    let _env = crate::common::lock_update_check_unset();
     // Check off: no egress at all, explicit reason.
     let fixture = spawn_fixture(RELEASE_NEWER).await;
     let daemon = TestDaemon::spawn_with_update_source(seed, fixture.url())
@@ -455,6 +461,7 @@ async fn changelog_falls_back_to_the_embedded_file_with_a_reason() {
 
 #[tokio::test]
 async fn changelog_on_an_up_to_date_daemon_says_so_with_the_embedded_body() {
+    let _env = crate::common::lock_update_check_unset();
     // The fixture publishes exactly the installed version.
     let latest: &'static str = Box::leak(
         format!(

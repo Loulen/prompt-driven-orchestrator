@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { Copy, Pencil, Play, Power, Trash2 } from "lucide-react";
+import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import { ExtensionMenuGroups } from "../../../shared/extensions/ExtensionActions";
-import type { TriggerEntity } from "../../../shared/extensions/contract";
+import type { DecorationContext, TriggerEntity } from "../../../shared/extensions/contract";
 import { DropdownMenuSeparator } from "../../../shared/ui/dropdown-menu";
 import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../../shared/ui/RowMenu";
 import { toast } from "../../../shared/ui/toast";
@@ -43,6 +44,11 @@ export default function TriggerRow({
   onToggle,
 }: Props) {
   const dot = outcomeDot(t.last_outcome);
+  // ADR-0081 (#31): what the `trigger/item` decorations mark.
+  const decorated = useMemo(
+    () => ({ entity: { kind: "trigger", id: t.id, name: t.name, attributes: t.attributes ?? {} } }),
+    [t.id, t.name, t.attributes],
+  );
   const extra = useMemo(() => ({ entity: triggerEntity(t) }), [t]);
   return (
     <button
@@ -87,6 +93,15 @@ export default function TriggerRow({
             {humanizeCron(t.cron)}
           </span>
         </div>
+        {/* Line 3: the `trigger/item` decorations (ADR-0081, #31). A line of
+            their own, as on a Run row, so a badge never truncates the
+            pipeline's name and several wrap; nothing at all without one. */}
+        <ExtensionDecorations<DecorationContext>
+          location="trigger/item"
+          extra={decorated}
+          block
+          className="mt-0.5"
+        />
       </div>
       {!t.enabled && (
         <span

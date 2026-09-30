@@ -7,6 +7,7 @@ export default function IOSection({
   kind,
   ports,
   runId,
+  nodeId,
   showFrontmatter,
   onOpenFile,
 }: {
@@ -16,6 +17,8 @@ export default function IOSection({
   kind: "input" | "output";
   ports: PortIO[];
   runId: string;
+  /** The node the ports belong to (the `port/item` decorations' context). */
+  nodeId?: string;
   showFrontmatter?: boolean;
   onOpenFile: (portName: string, files: FileInfo[], portType: PortType) => void;
 }) {
@@ -37,6 +40,7 @@ export default function IOSection({
             port={port}
             kind={kind}
             runId={runId}
+            nodeId={nodeId}
             showFrontmatter={showFrontmatter}
             onOpen={() => onOpenFile(port.port, port.files, port.port_type ?? "markdown")}
           />

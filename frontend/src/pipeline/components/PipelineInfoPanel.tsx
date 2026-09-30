@@ -161,9 +161,12 @@ export default function PipelineInfoPanel({
         </button>
       </div>
 
+      {/* #31: the tab bar scrolls sideways rather than overflow the panel (the
+          extension tabs add up after the core's); a picked tab scrolls into view. */}
       <div
-        className="flex border-b border-line"
+        className="flex shrink-0 overflow-x-auto border-b border-line [scrollbar-width:thin]"
         style={{ fontSize: "11px" }}
+        data-testid="pipeline-info-tabs"
       >
         {tabs
           .filter((t) => t.show)
@@ -171,8 +174,11 @@ export default function PipelineInfoPanel({
             <button
               key={t.id}
               data-testid={`info-tab-${t.id}`}
-              onClick={() => selectTab(t.id)}
-              className={`flex items-center gap-1.5 px-2 py-1.5 transition-colors cursor-pointer ${
+              onClick={(e) => {
+                e.currentTarget.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+                selectTab(t.id);
+              }}
+              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors cursor-pointer ${
                 shownTab === t.id
                   ? "border-b-2 border-acc text-fg font-medium"
                   : "text-fg-3 hover:text-fg-2"
@@ -213,8 +219,11 @@ export default function PipelineInfoPanel({
             <button
               key={t.key}
               data-testid={`info-tab-ext-${t.key}`}
-              onClick={() => setExtensionTab(t.key)}
-              className={`flex items-center gap-1.5 px-2 py-1.5 transition-colors cursor-pointer ${
+              onClick={(e) => {
+                e.currentTarget.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+                setExtensionTab(t.key);
+              }}
+              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors cursor-pointer ${
                 activeExtension?.key === t.key
                   ? "border-b-2 border-acc text-fg font-medium"
                   : "text-fg-3 hover:text-fg-2"

@@ -28,10 +28,17 @@
 //!   one action each ([`ACTION_LOCATIONS`]), titled `Test <location>`, calling
 //!   the same function; the one of `run/item/menu` only while the row's Run is
 //!   not archived, and that menu also offers [`FAIL`], a command that throws.
+//!   Since #31, one element at each other location: a tab (`EntityTab`), a
+//!   section (`EntitySection`, which records its host's Save in `/sections`), a
+//!   decoration (`EntityBadge`; plus one that throws, `Exploding`, on the status
+//!   bar) and a list filter (`StartedByFilter`) wherever the catalogue accepts
+//!   one.
 //! - **`cli`** / **`run_cli`**: `pdo ext test echo|cat|exit|panic` (see
 //!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
+//! - [`SecondTestExtension`] (`test2`): a second extension with a section at
+//!   `project/edit`, so two extensions share a location.
 //!
 //! Its peers of `interop.rs` run their own mutations through the [`Host`] the
 //! core hands them (amendment #34): the test extension sees their Operations
@@ -71,6 +78,9 @@ pub const REACT_MAJOR: u32 = 19;
 
 /// The request header naming the caller.
 pub const ACTOR_HEADER: &str = "x-pdo-test-actor";
+
+/// The id of the second test extension.
+pub const SECOND_ID: &str = "test2";
 
 /// The version of the test extension, which its skill is seeded at.
 pub const VERSION: &str = "0.0.0";
@@ -246,6 +256,7 @@ pub struct Control {
     incompatible: Arc<AtomicBool>,
     cli_calls: Arc<Mutex<Vec<CliInvocation>>>,
     commands: Arc<Mutex<Vec<Value>>>,
+    sections: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Default for Control {
@@ -259,6 +270,7 @@ impl Default for Control {
             incompatible: Arc::default(),
             cli_calls: Arc::default(),
             commands: Arc::default(),
+            sections: Arc::default(),
         }
     }
 }
@@ -300,6 +312,15 @@ impl Control {
     /// The contexts the bundle's command reported it was called with, in order.
     pub fn commands(&self) -> Vec<Value> {
         self.commands.lock().unwrap().clone()
+    }
+
+    /// What the bundle's sections reported their host saved, in order.
+    pub fn sections(&self) -> Vec<Value> {
+        self.sections.lock().unwrap().clone()
+    }
+
+    fn record_section(&self, saved: Value) {
+        self.sections.lock().unwrap().push(saved);
     }
 
     fn record_command(&self, context: Value) {
@@ -444,7 +465,123 @@ impl Extension for TestExtension {
                     .when(When::eq("run.status", "never-a-status")),
             )
             .command(show_context)
-            .command(never);
+            .command(never)
+            // #31: one element at each location the catalogue gained.
+            .contribute(UiContribution::tab(
+                UiLocation::NodeDetail,
+                "node-tab",
+                "Test",
+                "EntityTab",
+            ))
+            .contribute(UiContribution::tab(
+                UiLocation::TriggerDetail,
+                "trigger-tab",
+                "Test",
+                "EntityTab",
+            ))
+            .contribute(UiContribution::tab(
+                UiLocation::SkillDetail,
+                "skill-tab",
+                "Test",
+                "EntityTab",
+            ))
+            .contribute(UiContribution::section(
+                UiLocation::ProjectEdit,
+                "project-section",
+                "Test",
+                "EntitySection",
+            ))
+            .contribute(UiContribution::section(
+                UiLocation::RunNew,
+                "new-run-section",
+                "Test",
+                "EntitySection",
+            ))
+            .contribute(UiContribution::section(
+                UiLocation::NodeConfig,
+                "node-section",
+                "Test",
+                "EntitySection",
+            ))
+            .contribute(UiContribution::section(
+                UiLocation::PipelineConfig,
+                "pipeline-section",
+                "Test",
+                "EntitySection",
+            ))
+            .contribute(UiContribution::section(
+                UiLocation::RunInfo,
+                "run-section",
+                "Test",
+                "EntitySection",
+            ))
+            .contribute(UiContribution::decoration(
+                UiLocation::RunItem,
+                "run-badge",
+                "Test",
+                "EntityBadge",
+            ))
+            .contribute(UiContribution::decoration(
+                UiLocation::TriggerItem,
+                "trigger-badge",
+                "Test",
+                "EntityBadge",
+            ))
+            .contribute(UiContribution::decoration(
+                UiLocation::PipelineItem,
+                "pipeline-badge",
+                "Test",
+                "EntityBadge",
+            ))
+            .contribute(UiContribution::decoration(
+                UiLocation::CanvasNode,
+                "node-badge",
+                "Test",
+                "EntityBadge",
+            ))
+            .contribute(UiContribution::decoration(
+                UiLocation::PortItem,
+                "port-badge",
+                "Test",
+                "EntityBadge",
+            ))
+            .contribute(UiContribution::decoration(
+                UiLocation::ReviewFile,
+                "file-badge",
+                "Test",
+                "EntityBadge",
+            ))
+            .contribute(UiContribution::decoration(
+                UiLocation::Statusbar,
+                "status-badge",
+                "Test",
+                "EntityBadge",
+            ))
+            // Throws on every render: its error boundary keeps it to its own mark.
+            .contribute(UiContribution::decoration(
+                UiLocation::Statusbar,
+                "exploding",
+                "Exploding",
+                "Exploding",
+            ))
+            .contribute(UiContribution::list_filter(
+                UiLocation::TriggersFilter,
+                "triggers-started-by",
+                "Started by",
+                "StartedByFilter",
+            ))
+            .contribute(UiContribution::list_filter(
+                UiLocation::PipelinesFilter,
+                "pipelines-started-by",
+                "Started by",
+                "StartedByFilter",
+            ))
+            .contribute(UiContribution::list_filter(
+                UiLocation::ProjectsFilter,
+                "projects-started-by",
+                "Project started by",
+                "StartedByFilter",
+            ));
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);
             let command = UiCommand::new(
@@ -526,6 +663,48 @@ impl Extension for TestExtension {
         } else {
             Authorization::Allow
         }
+    }
+}
+
+/// A second test extension (`test2`): one section at `project/edit`, so the
+/// location lists two extensions' sections, in registration order.
+pub struct SecondTestExtension;
+
+impl SecondTestExtension {
+    /// Its bundle: one section, naming the Projet it edits.
+    const BUNDLE: &'static str = r#"import React from "react";
+export function SecondSection({ entity }) {
+  return React.createElement("p", { "data-testid": "test2-section" },
+    `Second extension · ${entity?.name || "(unnamed)"}`);
+}
+"#;
+}
+
+impl Extension for SecondTestExtension {
+    fn manifest(&self) -> Manifest {
+        Manifest::new(SECOND_ID, "Second test extension", "0.0.0")
+    }
+
+    fn routes(&self) -> Option<pdo::extension_api::axum::Router> {
+        use pdo::extension_api::axum::http::header;
+        use pdo::extension_api::axum::routing::get;
+        Some(pdo::extension_api::axum::Router::new().route(
+            "/ui.js",
+            get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], Self::BUNDLE) }),
+        ))
+    }
+
+    fn ui(&self) -> Option<UiContributions> {
+        Some(
+            UiContributions::bundle(format!("/ext/{SECOND_ID}/ui.js"), REACT_MAJOR).contribute(
+                UiContribution::section(
+                    UiLocation::ProjectEdit,
+                    "rights",
+                    "Rights",
+                    "SecondSection",
+                ),
+            ),
+        )
     }
 }
 

@@ -336,7 +336,8 @@ impl ExtensionHost for Extensions {
     }
 
     fn skills(&self) -> Vec<ProvidedSkills> {
-        self.registry.registered
+        self.registry
+            .registered
             .iter()
             .filter_map(
                 // An empty list is kept: the seed removes what the extension

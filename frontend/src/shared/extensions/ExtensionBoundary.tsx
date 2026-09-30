@@ -2,6 +2,8 @@ import { Component, type ReactNode } from "react";
 
 interface Props {
   extensionId: string;
+  /** A small mark instead of a sentence: where a sentence would break a row (a decoration). */
+  compact?: boolean;
   children: ReactNode;
 }
 
@@ -21,6 +23,18 @@ export default class ExtensionBoundary extends Component<Props, { failed: boolea
   }
 
   render() {
+    if (this.state.failed && this.props.compact) {
+      return (
+        <span
+          className="inline-grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full border border-line-strong text-fg-4"
+          style={{ fontSize: "9px", lineHeight: 1 }}
+          title={`This element of the extension ${this.props.extensionId} failed.`}
+          data-testid={`extension-failed-${this.props.extensionId}`}
+        >
+          !
+        </span>
+      );
+    }
     if (this.state.failed) {
       return (
         <span

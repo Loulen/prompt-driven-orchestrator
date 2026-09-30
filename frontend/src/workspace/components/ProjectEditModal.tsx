@@ -12,6 +12,9 @@ import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
 import SkillSelector from "../../skill/components/SkillSelector";
 import { useSkillBank } from "../../skill/store/useSkillBank";
 import { announceSkillTiersChanged, useSkillTiers } from "../../skill/store/useSkillTiers";
+import ExtensionSections from "../../shared/extensions/ExtensionSections";
+import type { ProjectEditContext } from "../../shared/extensions/contract";
+import { sectionSaveError, useSectionForm } from "../../shared/extensions/sectionForm";
 
 /**
  * The group-header pencil (#552, ADR-0046): name a Projet (or rename an existing
@@ -75,6 +78,26 @@ export default function ProjectEditModal({
   // each installed/not). The modal holds no settings of its own, so it fetches.
   const harnessCatalog = useHarnessCatalog();
   const { profiles: agentProfiles } = useAgentProfiles();
+  // ADR-0081 (#31): the extension sections of `project/edit`. They keep a draft
+  // and apply it once the core saved (a fresh Projet has its id only then);
+  // a failing section keeps the modal open, the Projet itself already saved.
+  const sections = useSectionForm();
+  const sectionContext = useMemo<Omit<ProjectEditContext, "location" | "run" | "project">>(
+    () => ({
+      entity: {
+        kind: "project",
+        id: editing?.id ?? null,
+        name: name.trim(),
+        attributes: editing?.attributes ?? {},
+      },
+      creating: editing == null,
+    }),
+    [editing, name],
+  );
+  function cancel() {
+    sections.cancel();
+    onClose();
+  }
 
   // path → name of the Projet that OWNS it, excluding the one being edited. A
   // candidate owned elsewhere cannot be attached here (AC: at most one Projet).
@@ -118,6 +141,7 @@ export default function ProjectEditModal({
       // extension refusing only updates still lets the group be named.
       let projectId: string;
       let current: Set<string>;
+      let attributes = editing?.attributes ?? {};
       if (editing) {
         projectId = editing.id;
         current = new Set(editing.members);
@@ -133,6 +157,7 @@ export default function ProjectEditModal({
         const project = await createProject(trimmedName, [...checked]);
         projectId = project.id;
         current = new Set(project.members);
+        attributes = project.attributes ?? {};
         setCreated(project);
         createdNow = true;
         const settings = {
@@ -154,6 +179,20 @@ export default function ProjectEditModal({
         if (!desired.has(path)) await removeProjectMember(projectId, path);
       }
       if (skillsChanged) announceSkillTiersChanged();
+      try {
+        await sections.save({
+          kind: "project",
+          id: projectId,
+          name: trimmedName,
+          attributes,
+        });
+      } catch (cause) {
+        // The Projet is saved: the list shows it; the section may retry.
+        onSaved();
+        setError(sectionSaveError(cause));
+        setSubmitting(false);
+        return;
+      }
       onSaved();
       onClose();
     } catch (e) {
@@ -174,10 +213,10 @@ export default function ProjectEditModal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
       data-testid="project-edit-backdrop"
-      onClick={onClose}
+      onClick={cancel}
     >
       <div
-        className="w-[440px] max-w-[90vw] rounded-lg border border-line bg-bg-4 p-4"
+        className="max-h-[92vh] w-[440px] max-w-[90vw] overflow-y-auto rounded-lg border border-line bg-bg-4 p-4"
         style={{ fontSize: "12px" }}
         role="dialog"
         aria-label="Edit project"
@@ -308,6 +347,14 @@ export default function ProjectEditModal({
           })}
         </div>
 
+        {/* ADR-0081 (#31): the `project/edit` sections, under the core's fields,
+            one per contribution in registration order. */}
+        <ExtensionSections<ProjectEditContext>
+          location="project/edit"
+          extra={sectionContext}
+          form={sections.form}
+        />
+
         {error && (
           <div
             className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
@@ -320,7 +367,7 @@ export default function ProjectEditModal({
 
         <div className="flex justify-end gap-2">
           <button
-            onClick={onClose}
+            onClick={cancel}
             className="cursor-pointer rounded border border-line-strong px-3 py-1 text-fg-3 transition-colors hover:bg-bg-3"
             style={{ fontSize: "11px" }}
             data-testid="project-edit-cancel"

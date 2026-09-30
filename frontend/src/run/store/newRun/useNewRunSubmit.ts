@@ -2,9 +2,13 @@ import { useCallback, useMemo } from "react";
 import { createTrigger, updateTrigger } from "../../../trigger/api/triggers";
 import { testGuard } from "../../../trigger/api/guard";
 import { createRun } from "../../api/createRun";
+import { fetchRun } from "../../api/runs";
 import * as newRunForm from "../../model/newRunForm";
 import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../../../workspace/model/provisioning";
 import type { NewRunState } from "./useNewRunState";
+import type { EntityContext } from "../../../shared/extensions/contract";
+import { sectionSaveError } from "../../../shared/extensions/sectionForm";
+import { toast } from "../../../shared/ui/toast";
 
 interface SubmitDeps {
   flushPendingSaves: () => Promise<void>;
@@ -12,6 +16,36 @@ interface SubmitDeps {
   onCreated: (runId: string) => void;
   onClose: () => void;
   onTriggerSaved?: () => void;
+  /** ADR-0081 (#31): the `run/new` sections' save, run once the Run or the Trigger exists. */
+  saveSections?: (saved: EntityContext | (() => Promise<EntityContext>)) => Promise<void>;
+}
+
+/**
+ * Run the sections' save on what the form just created. The Run (or the
+ * Trigger) exists whatever they answer: a failure is a toast, and the form
+ * closes as usual (a retry would create a second one).
+ */
+async function saveSectionsOf(
+  saveSections: SubmitDeps["saveSections"],
+  saved: EntityContext | (() => Promise<EntityContext>),
+): Promise<void> {
+  if (!saveSections) return;
+  try {
+    await saveSections(saved);
+  } catch (cause) {
+    toast(sectionSaveError(cause), "error");
+  }
+}
+
+/**
+ * The Run the form just created, as its `run/new` sections receive it. The
+ * create answers the id only: read the Run back for the Attributes the
+ * extensions stamped on it (their hooks ran on the create) and its name.
+ */
+export async function createdRun(runId: string, runName: string): Promise<EntityContext> {
+  const run = await fetchRun(runId);
+  const name = run.name ?? (runName.trim() || undefined);
+  return { kind: "run", id: runId, attributes: run.attributes ?? {}, ...(name ? { name } : {}) };
 }
 
 /**
@@ -21,7 +55,7 @@ interface SubmitDeps {
  */
 export function useNewRunSubmit(
   s: NewRunState,
-  { flushPendingSaves, attachmentsOverLimit, onCreated, onClose, onTriggerSaved }: SubmitDeps,
+  { flushPendingSaves, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections }: SubmitDeps,
 ) {
   const {
     selectedPipeline, sourceBranch, targetRepo, repoValid, runName, setRunName, autoName,
@@ -118,6 +152,7 @@ export function useNewRunSubmit(
         ...(hasProvisioningRules(provisioning) ? { provisioning } : {}),
       });
       onCreated(resp.run_id);
+      await saveSectionsOf(saveSections, () => createdRun(resp.run_id, runName));
       refreshRecentRepos();
       setRunName("");
       // #338: re-seed from the instance default, not a hard `true`. The modal closes here
@@ -136,7 +171,7 @@ export function useNewRunSubmit(
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, setAttachmentError, setAttachmentHint, setAttachments, setAutoName, setError, setInput, setOverrides, setProvisioning, setRunName, setSkills, setSubmitting]);
+  }, [saveSections, selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, setAttachmentError, setAttachmentHint, setAttachments, setAutoName, setError, setInput, setOverrides, setProvisioning, setRunName, setSkills, setSubmitting]);
 
   const canLaunch = provisioningValid && !attachmentsOverLimit && newRunForm.canLaunch({
     repoValid,
@@ -222,12 +257,16 @@ export function useNewRunSubmit(
 
     try {
       await flushPendingSaves();
-      if (editingTriggerId) {
-        await updateTrigger(editingTriggerId, newRunForm.buildTriggerUpdatePayload(fields));
-      } else {
-        await createTrigger(newRunForm.buildTriggerCreatePayload(fields));
-      }
+      const saved = editingTriggerId
+        ? await updateTrigger(editingTriggerId, newRunForm.buildTriggerUpdatePayload(fields))
+        : await createTrigger(newRunForm.buildTriggerCreatePayload(fields));
       onTriggerSaved?.();
+      await saveSectionsOf(saveSections, {
+        kind: "trigger",
+        id: saved?.id ?? editingTriggerId ?? "",
+        attributes: saved?.attributes ?? {},
+        name: saved?.name ?? triggerName,
+      });
       setTriggerName("");
       setInput("");
       setGuardCommand("");
@@ -249,6 +288,7 @@ export function useNewRunSubmit(
       setSubmitting(false);
     }
   }, [
+    saveSections,
     selectedPipeline,
     canCreateTrigger,
     editingTriggerId,

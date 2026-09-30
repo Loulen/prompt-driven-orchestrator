@@ -35,6 +35,7 @@ export default function RunTreeList({
     runsScrollRef, visibleRunIds, runSelIds, selectVisible, clearSel, cleanupItems, setRunBulkKind,
     filterActive, filteredRuns, setRunFilter, runGroups, activeTree, isExpanded, runSel, selectGroup,
     openProjectEditor, archivedCount, archivedOpen, setArchivedOpen, archivedTree, setAttributeFilter,
+    setProjectFilter,
   } = pane;
   const renderRunRow = (node: RunTreeNode) => (
     <RunRow
@@ -88,6 +89,7 @@ export default function RunTreeList({
             onClick={() => {
               setRunFilter(EMPTY_RUN_FILTER);
               setAttributeFilter({});
+              setProjectFilter({});
             }}
           >
             Clear filters

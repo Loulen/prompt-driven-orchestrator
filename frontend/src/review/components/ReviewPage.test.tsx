@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { configure, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import ReviewPage from "./ReviewPage";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
 import type { RunRefs } from "../../shared/generated/RunRefs";
@@ -10,6 +10,10 @@ import type { DiffFile } from "../../shared/generated/DiffFile";
 // The Review page (#749): pair from the URL, refs from the daemon, files from the
 // structured diff, the third-party body mocked to a marker (its own rendering is
 // the library's business; the e2e FP exercises the real one).
+
+// The page renders a whole diff per test: on a loaded machine the first paint
+// alone can take longer than the default second of `waitFor` / `findBy`.
+configure({ asyncUtilTimeout: 5000 });
 
 vi.mock("../../run/api/runs", () => ({
   fetchRun: vi.fn(),

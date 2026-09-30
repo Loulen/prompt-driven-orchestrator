@@ -1,4 +1,4 @@
-import { useMemo, type MouseEvent } from "react";
+import { useMemo, type MouseEvent, type ReactNode } from "react";
 import { Copy, FolderOpen, Pencil, Trash2 } from "lucide-react";
 import SelectControl from "../../shared/ui/SelectControl";
 import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
@@ -50,6 +50,8 @@ interface Props {
    */
   checked?: boolean;
   onToggleSelect?: (e: MouseEvent) => void;
+  /** ADR-0081 (#31): the `pipeline/item` decorations, at the end of line 2. */
+  decorations?: ReactNode;
   /**
    * #30 — present ⇒ the row grows a « ⋯ » menu after its hover icons: its verbs,
    * the extensions' `pipeline/item/menu` groups (handed this pipeline), then
@@ -85,6 +87,7 @@ export default function LibraryRow({
   checked = false,
   onToggleSelect,
   modified,
+  decorations,
   menuEntity,
 }: Props) {
   const body = (
@@ -128,6 +131,7 @@ export default function LibraryRow({
               <span>edited {new Date(modified).toLocaleDateString()}</span>
             </>
           )}
+          {decorations}
         </div>
       </div>
       {onRenameStart && !renaming && (

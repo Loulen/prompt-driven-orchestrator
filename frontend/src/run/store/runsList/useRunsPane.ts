@@ -60,7 +60,7 @@ export function useRunsPane({
   const runSel = useMemo(() => new Set(runSelIds), [runSelIds]);
   const [runBulkKind, setRunBulkKind] = useState<"cleanup" | "retry" | "pause" | null>(null);
 
-  const view = useRunTreeView(runs, selectedRunId);
+  const view = useRunTreeView(runs, selectedRunId, projects);
   const { activeTree, archivedTree, filteredRuns, isExpanded, archivedOpen } = view;
 
   // #552 — verbatim `path → Projet` lookup, and the candidate repos the pencil

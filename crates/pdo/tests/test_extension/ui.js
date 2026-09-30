@@ -79,15 +79,17 @@ export function SettingsPanel() {
   );
 }
 
-// List filter of the Runs: keep the Runs a given caller started.
-export function StartedByFilter({ filter, setFilter }) {
+// List filter (Runs, Triggers, Pipelines, Projects): keep what a given caller
+// started. Captioned by its declared label (a 0.1 slot passes none).
+export function StartedByFilter({ filter, setFilter, label }) {
+  const caption = label ?? "Started by";
   const value = filter["test/started_by"] ?? "";
   return h(
     "label",
     { style: { display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px" } },
-    "Started by",
+    caption,
     h("input", {
-      "aria-label": "Started by",
+      "aria-label": caption,
       value,
       placeholder: "anyone",
       style: { width: "90px", background: "transparent", border: "1px solid currentColor", borderRadius: "4px", padding: "0 4px" },
@@ -169,4 +171,87 @@ export async function showContext(context, host) {
 // Command `test.fail`: always throws, so the core's error toast shows.
 export function failOnPurpose() {
   throw new Error("the test extension fails on purpose");
+}
+
+// #31 — one component per kind of contribution, at every location that
+// accepts it.
+
+function describe(entity) {
+  if (!entity) return "nothing";
+  return `${entity.kind} ${entity.id ?? "(new)"}${entity.name ? ` · ${entity.name}` : ""}`;
+}
+
+// Tab of a detail (`node/detail`, `trigger/detail`, `skill/detail`): the entity
+// it details, and its attributes.
+export function EntityTab({ entity, context }) {
+  const attributes = Object.entries(entity?.attributes ?? {});
+  return h(
+    "div",
+    { style: box, "data-testid": `test-tab-${context.location.replace("/", "-")}` },
+    h("p", null, describe(entity)),
+    attributes.length === 0
+      ? h("p", { style: muted }, "No attribute.")
+      : h("ul", null, attributes.map(([key, value]) => h("li", { key }, `${key} = ${value}`))),
+  );
+}
+
+// Section (`project/edit`, `run/new`, `node/config`, `pipeline/config`,
+// `run/info`): the entity of its host, and — where the host has a Save — the
+// record of what the host saved, posted to `/ext/test/sections`.
+export function EntitySection({ context, entity, form }) {
+  const [saved, setSaved] = React.useState(null);
+  React.useEffect(() => {
+    if (!form) return undefined;
+    return form.onSave(async (what) => {
+      await fetch("/ext/test/sections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ location: context.location, saved: what }),
+      });
+      setSaved(what);
+    });
+  }, [form, context.location]);
+  const extra =
+    context.location === "run/new"
+      ? `${context.mode} · pipeline ${context.pipeline ?? "none"}`
+      : context.location === "node/config"
+        ? `pipeline ${context.pipeline?.name}`
+        : null;
+  return h(
+    "div",
+    { style: { ...box, fontSize: "11px" }, "data-testid": `test-section-${context.location.replace("/", "-")}` },
+    h("p", null, describe(entity)),
+    extra && h("p", { style: muted }, extra),
+    form && h("p", { style: muted }, saved ? `Saved: ${describe(saved)}` : "Takes part in Save"),
+  );
+}
+
+// Decoration (`run/item`, `trigger/item`, `pipeline/item`, `canvas/node`,
+// `port/item`, `review/file`, `statusbar`): a small boxed « T », the entity in
+// its tooltip.
+export function EntityBadge({ entity, context }) {
+  return h(
+    "span",
+    {
+      title: `Test · ${context.location} · ${describe(entity)}`,
+      "data-testid": `test-badge-${context.location.replace("/", "-")}`,
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        border: "1px solid currentColor",
+        borderRadius: "3px",
+        padding: "0 3px",
+        fontSize: "9px",
+        lineHeight: "12px",
+        opacity: 0.8,
+      },
+    },
+    "T",
+  );
+}
+
+// A decoration that throws: its boundary shows a mark in its place, and nothing
+// else of the status bar moves.
+export function Exploding() {
+  throw new Error("the test extension's exploding decoration");
 }

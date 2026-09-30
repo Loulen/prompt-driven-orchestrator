@@ -9,6 +9,8 @@
 > Amendé par #32 : une extension héberge ses propres emplacements, rendus par un module partagé
 > (§ *Amendement #32*).
 > Amendé par #33 : la CLI d'une extension (`pdo ext`) et ses skills (§ *Amendement #33*).
+> Amendé par #31 : le catalogue gagne les emplacements d'Onglet, de Section, de Décoration et de
+> Filtre de liste, et une Section participe au Save et au Cancel de son hôte (§ *Amendement #31*).
 
 ## Contexte
 
@@ -387,3 +389,55 @@ d'outils et tous les menus du core accueillent des Actions.
 selon l'endroit où elle se trouve) ; un menu « ⋯ » affiché seulement quand une extension y
 contribue (la ligne gagnerait ou perdrait un déclencheur selon les extensions installées, et ses
 verbes y sont utiles sans extension).
+
+## Amendement #31 : onglets, sections, décorations et filtres ; une Section participe au Save
+
+Suite de #29 pour l'extension Projet (`pm`) et ADR-0001 de `Loulen/pdo-extensions` (« mieux vaut
+trop de points d'extension que pas assez ») : le catalogue s'ouvre à tous les écrans où une
+extension a quelque chose à montrer. On étend le catalogue, sans nouveau type de contribution.
+
+- **Onglets** : `node/detail` (le volet d'un node de Run, après I/O et Orchestration),
+  `trigger/detail` (après « Details »), `skill/detail` (après « SKILL.md » et « Files »), en plus
+  de `run/detail`. Le contexte porte l'entité (`kind`, `id`, `attributes`, `name`). Sans
+  contribution, aucune barre d'onglets n'apparaît là où le core n'en a pas.
+- **Sections** : `project/edit` (l'éditeur de Projet, sous les champs du core, à la création
+  comme à l'édition), `run/new` (le formulaire de nouveau Run ou de Trigger), `node/config` et
+  `pipeline/config` (les inspecteurs du canvas), `run/info` (l'onglet Info d'un Run), en plus de
+  `settings`.
+- **Une Section participe au Save et au Cancel de son hôte** (`SectionForm`, prop `form`, présent
+  là où l'hôte a un Save : `project/edit`, `run/new`). La Section garde ses changements en
+  brouillon et les applique dans son `onSave` : rien ne s'applique avant le Save de l'hôte. L'hôte
+  enregistre d'abord ses propres champs, puis appelle les `onSave` dans l'ordre des Sections à
+  l'écran, chacun attendu, avec l'entité enregistrée : son id est connu à ce moment, ce qu'exige un
+  Projet créé par l'éditeur, qui n'a pas d'id avant le Save. Un échec garde le formulaire ouvert
+  avec son message (ce que le core a enregistré le reste) ; pour `run/new`, où le Run ou le
+  Trigger existe déjà, c'est un toast d'erreur. `onCancel` est appelé à l'annulation.
+- **Décorations** (badge ou pastille) : `run/item` (colonne de droite de la ligne, ligne 2, celle
+  des compteurs d'enfants, pour ne pas tronquer le nom de la pipeline), `trigger/item`,
+  `pipeline/item` (fin de la ligne 2), `canvas/node` (une ligne sous le titre de la carte),
+  `port/item` (à côté du nom du port), `review/file` (avant les compteurs de commentaires ;
+  cet emplacement d'Action de l'amendement #30 accepte aussi des Décorations),
+  `statusbar`. Le contexte porte l'entité et ses Attributs, que voit la clause `when`. **Sans
+  contribution, rien n'est rendu** : la ligne garde sa mise en page ; à plusieurs, les marques
+  s'alignent côte à côte et passent à la ligne plutôt que de pousser le texte.
+- **Filtres de liste** : `triggers/filter`, `pipelines/filter`, `projects/filter`, en plus de
+  `runs/filter`. La liste garde ce qui porte chaque Attribut du filtre, comme `?attr.` sur
+  l'endpoint. `projects/filter` se rend au-dessus des listes groupées par Projet (Runs et
+  Triggers) et garde les éléments dont le Projet porte les Attributs, par la règle du
+  regroupement.
+- **Frontière d'erreur** : chaque contribution reste derrière la sienne ; une Décoration qui
+  plante devient un petit « ! » dont l'infobulle nomme l'extension, sans toucher sa ligne.
+- **Rétrocompatibilité** : les slots 0.1 `ListFilter` des Triggers, des pipelines et des Projets
+  et `DetailTab` d'un node, d'un Trigger et d'un skill sont convertis vers ces emplacements ;
+  `DetailTab { Project }` devient une Section de `project/edit` (un Projet n'a pas de panneau de
+  détail) et son composant reçoit le Projet en `entity`. Une extension 0.1 ou 0.2 compile
+  toujours.
+- **Version** : `pdo-extension-api` passe en **0.7.0** (après 0.6.0, amendement #30 ; ajout :
+  des variantes de `UiLocation`, non exhaustif). Une extension 0.1 à 0.6 compile toujours.
+
+Au passage, la barre d'onglets du panneau d'infos d'un Run défile horizontalement au lieu de
+déborder : les Onglets des extensions s'ajoutent après ceux du core.
+
+Écartés : un type de contribution par emplacement (une « Section de formulaire »), parce que le
+contrat du Save est le même partout où l'hôte en a un ; un Save des Sections avant celui du core,
+impossible pour un Projet créé, qui n'a pas encore d'id.

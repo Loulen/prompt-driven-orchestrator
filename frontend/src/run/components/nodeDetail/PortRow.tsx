@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
+import type { PortItemContext } from "../../../shared/extensions/contract";
 import { artifactUrl } from "../../api/artifacts";
 import type { PortIO } from "../../api/nodes";
 import ImageLightbox from "../../../shared/ui/ImageLightbox";
@@ -8,12 +10,14 @@ export default function PortRow({
   port,
   kind,
   runId,
+  nodeId = "",
   showFrontmatter,
   onOpen,
 }: {
   port: PortIO;
   kind: "input" | "output";
   runId: string;
+  nodeId?: string;
   showFrontmatter?: boolean;
   onOpen: () => void;
 }) {
@@ -29,6 +33,14 @@ export default function PortRow({
   // the collapsed « N files » row would hide which ones — count them.
   const inheritedSome = inheritedCount > 0 && !inheritedOnly;
   const portType = port.port_type ?? "markdown";
+  // ADR-0081 (#31): what the `port/item` decorations mark.
+  const decorated = useMemo(
+    () => ({
+      entity: { kind: "port", id: `${nodeId}/${port.port}`, name: port.port, attributes: {} },
+      port: { run: runId, node: nodeId, name: port.port, direction: kind, type: portType },
+    }),
+    [nodeId, port.port, runId, kind, portType],
+  );
   // The ordered image list + clicked index currently shown fullscreen in the
   // lightbox, or null when it is closed (#312).
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
@@ -123,6 +135,7 @@ export default function PortRow({
               {inheritedCount} inherited
             </span>
           )}
+          <ExtensionDecorations<PortItemContext> location="port/item" extra={decorated} />
         </div>
         <div
           className="mt-0.5 truncate font-mono text-fg-3"

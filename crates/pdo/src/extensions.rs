@@ -205,8 +205,10 @@ fn entries(extensions: &Extensions) -> Vec<ExtensionEntry> {
                     let locations = hosted_locations(&manifest.id, &ui);
                     (ui, locations)
                 });
-            let cli = extension_cli::spec(&manifest.id, extension.as_ref())
-                .map(|spec| ExtensionCli { summary: spec.summary });
+            let cli =
+                extension_cli::spec(&manifest.id, extension.as_ref()).map(|spec| ExtensionCli {
+                    summary: spec.summary,
+                });
             (manifest, ui, cli)
         })
         .collect();

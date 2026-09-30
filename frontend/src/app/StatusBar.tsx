@@ -5,6 +5,11 @@ import { installedVersionLabel, isDistribution } from "../platform/model/updateS
 import SessionCounter from "../run/components/SessionCounter";
 import ServiceHealthIndicator from "../platform/components/ServiceHealthIndicator";
 import VersionBadge from "../platform/components/VersionBadge";
+import ExtensionDecorations from "../shared/extensions/ExtensionDecorations";
+import type { DecorationContext } from "../shared/extensions/contract";
+
+/** The status bar marks nothing in particular: its decorations get no entity. */
+const STATUSBAR_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { entity: null };
 
 const STATUS_CONFIG: Record<ConnectionStatus, { dot: string; label: string }> = {
   connected: { dot: "bg-st-done", label: "Daemon: connected" },
@@ -45,6 +50,12 @@ export default function StatusBar({
         {label}
       </span>
       <span className="flex-1" />
+      {/* ADR-0081 (#31): the `statusbar` decorations, before the service health. */}
+      <ExtensionDecorations<DecorationContext>
+        location="statusbar"
+        extra={STATUSBAR_ITEM}
+        className="flex-nowrap"
+      />
       <ServiceHealthIndicator service={sessions.service} />
       <SessionCounter live={sessions.live} cap={sessions.cap} />
       {version && (

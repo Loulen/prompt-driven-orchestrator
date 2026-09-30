@@ -53,7 +53,7 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
   const [importOpen, setImportOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
-  const [detailTab, setDetailTab] = useState<"skill" | "files">("skill");
+  const [detailTab, setDetailTab] = useState<string>("skill");
   const [renaming, setRenaming] = useState<TreeNodeRef | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);

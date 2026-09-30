@@ -4,6 +4,7 @@ import { gridStep, resolveGridSize, isGridSize } from "../../lib/wiringGrid";
 import type { VariableDef } from "../../shared/generated/VariableDef";
 import type { VariableType } from "../../shared/generated/VariableType";
 import { SectionHead, Field } from "./InspectorPrimitives";
+import { PipelineConfigSections } from "./ExtensionInspectorSections";
 import GridSizePicker from "./GridSizePicker";
 
 const VAR_TYPES = ["int", "float", "string", "bool", "list"] as const;
@@ -14,6 +15,7 @@ export default function PipelineInspector() {
   const selection = useEditStore((s) => s.selection);
   const updateMeta = useEditStore((s) => s.updatePipelineMeta);
   const globalGridSize = useWiringStore((s) => s.defaultGridSize);
+  const pipelines = useEditStore((s) => s.pipelines);
 
   const tab = openTabs.find((t) => t.id === activeTabId);
   if (!tab || selection.kind !== "none") return null;
@@ -129,6 +131,13 @@ export default function PipelineInspector() {
           <span>{pipeline.nodes.length} nodes</span>
           <span>{pipeline.edges.length} edges</span>
         </div>
+
+        {/* ADR-0081 (#31): the `pipeline/config` sections of the extensions. */}
+        <PipelineConfigSections
+          pipelineId={tab.id}
+          pipelineName={pipeline.name}
+          attributes={(pipelines ?? []).find((p) => p.id === tab.id)?.attributes}
+        />
       </div>
     </aside>
   );

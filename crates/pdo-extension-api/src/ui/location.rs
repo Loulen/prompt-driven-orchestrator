@@ -58,6 +58,77 @@ pub enum UiLocation {
     /// 0.1 `DetailTab { resource: Run }` slot.
     #[serde(rename = "run/detail")]
     RunDetail,
+    /// A tab of the detail of a node of a Run (its I/O pane): a
+    /// [`UiElement::Tab`] per contribution, after I/O and Orchestration.
+    #[serde(rename = "node/detail")]
+    NodeDetail,
+    /// A tab of the detail of a Trigger: a [`UiElement::Tab`] per contribution,
+    /// after the core's Details.
+    #[serde(rename = "trigger/detail")]
+    TriggerDetail,
+    /// A tab of the detail of a skill of the bank: a [`UiElement::Tab`] per
+    /// contribution, after SKILL.md and Files.
+    #[serde(rename = "skill/detail")]
+    SkillDetail,
+    /// A section of the Projet editor, under the core's fields, at creation as
+    /// at edition: a [`UiElement::Section`] per contribution, taking part in the
+    /// editor's Save and Cancel.
+    #[serde(rename = "project/edit")]
+    ProjectEdit,
+    /// A section of the New Run form (a Run or a Trigger), after the core's
+    /// fields: a [`UiElement::Section`] per contribution, taking part in the
+    /// form's Launch (or Create) and Cancel.
+    #[serde(rename = "run/new")]
+    RunNew,
+    /// A section of the inspector of a node of a pipeline, after Outputs: a
+    /// [`UiElement::Section`] per contribution.
+    #[serde(rename = "node/config")]
+    NodeConfig,
+    /// A section of the inspector of a pipeline (nothing selected on the
+    /// canvas), after Stats: a [`UiElement::Section`] per contribution.
+    #[serde(rename = "pipeline/config")]
+    PipelineConfig,
+    /// A section of the Info tab of a Run, after its stats: a
+    /// [`UiElement::Section`] per contribution.
+    #[serde(rename = "run/info")]
+    RunInfo,
+    /// A mark on a row of the Runs list, in its right-hand column, on the line
+    /// of the child counters: a [`UiElement::Decoration`] per contribution.
+    #[serde(rename = "run/item")]
+    RunItem,
+    /// A mark on a row of the Triggers list, on its second line: a
+    /// [`UiElement::Decoration`] per contribution.
+    #[serde(rename = "trigger/item")]
+    TriggerItem,
+    /// A mark on a row of the Pipelines list, on its second line: a
+    /// [`UiElement::Decoration`] per contribution.
+    #[serde(rename = "pipeline/item")]
+    PipelineItem,
+    /// A mark on a node card of the canvas, on a line under its title: a
+    /// [`UiElement::Decoration`] per contribution.
+    #[serde(rename = "canvas/node")]
+    CanvasNode,
+    /// A mark on a port row of a node's detail (Inputs and Outputs), next to
+    /// the port's name: a [`UiElement::Decoration`] per contribution.
+    #[serde(rename = "port/item")]
+    PortItem,
+    /// A mark in the status bar, before the service health: a
+    /// [`UiElement::Decoration`] per contribution.
+    #[serde(rename = "statusbar")]
+    Statusbar,
+    /// Above the list of the Triggers: a [`UiElement::ListFilter`] per
+    /// contribution. The 0.1 `ListFilter { resource: Trigger }` slot.
+    #[serde(rename = "triggers/filter")]
+    TriggersFilter,
+    /// Above the list of the Pipelines: a [`UiElement::ListFilter`] per
+    /// contribution. The 0.1 `ListFilter { resource: Pipeline }` slot.
+    #[serde(rename = "pipelines/filter")]
+    PipelinesFilter,
+    /// Above the Runs and Triggers lists, which group by Projet: a
+    /// [`UiElement::ListFilter`] per contribution, keeping the groups of the
+    /// Projets that match. The 0.1 `ListFilter { resource: Project }` slot.
+    #[serde(rename = "projects/filter")]
+    ProjectsFilter,
     // The Action locations (amendment #30): each renders an [`UiElement::Action`]
     // per contribution, as a button of a bar or an entry of a menu, and hands
     // over what is at stake there (an `entity`, a `selection`…).
@@ -107,9 +178,11 @@ pub enum UiLocation {
     /// button per action. Hands over the compared pair as `review`.
     #[serde(rename = "review/toolbar")]
     ReviewToolbar,
-    /// The header of a file of the Review page, before « Copy path »: an icon
-    /// button per action. Hands over the file as `entity` and the pair as
-    /// `review`.
+    /// The header of a file of the Review page: an icon button per
+    /// [`UiElement::Action`], before « Copy path », handing over the file as
+    /// `entity` and the pair as `review`; and a mark per
+    /// [`UiElement::Decoration`], before its comment counts (amendments #30
+    /// and #31).
     #[serde(rename = "review/file")]
     ReviewFile,
     /// The « ⋮ » menu of a skill or a folder of the skill bank. Hands over the
@@ -134,6 +207,23 @@ impl UiLocation {
         UiLocation::Settings,
         UiLocation::RunsFilter,
         UiLocation::RunDetail,
+        UiLocation::NodeDetail,
+        UiLocation::TriggerDetail,
+        UiLocation::SkillDetail,
+        UiLocation::ProjectEdit,
+        UiLocation::RunNew,
+        UiLocation::NodeConfig,
+        UiLocation::PipelineConfig,
+        UiLocation::RunInfo,
+        UiLocation::RunItem,
+        UiLocation::TriggerItem,
+        UiLocation::PipelineItem,
+        UiLocation::CanvasNode,
+        UiLocation::PortItem,
+        UiLocation::Statusbar,
+        UiLocation::TriggersFilter,
+        UiLocation::PipelinesFilter,
+        UiLocation::ProjectsFilter,
         UiLocation::RunsHeader,
         UiLocation::RunItemMenu,
         UiLocation::RunsBulk,
@@ -159,6 +249,23 @@ impl UiLocation {
             UiLocation::Settings => "settings",
             UiLocation::RunsFilter => "runs/filter",
             UiLocation::RunDetail => "run/detail",
+            UiLocation::NodeDetail => "node/detail",
+            UiLocation::TriggerDetail => "trigger/detail",
+            UiLocation::SkillDetail => "skill/detail",
+            UiLocation::ProjectEdit => "project/edit",
+            UiLocation::RunNew => "run/new",
+            UiLocation::NodeConfig => "node/config",
+            UiLocation::PipelineConfig => "pipeline/config",
+            UiLocation::RunInfo => "run/info",
+            UiLocation::RunItem => "run/item",
+            UiLocation::TriggerItem => "trigger/item",
+            UiLocation::PipelineItem => "pipeline/item",
+            UiLocation::CanvasNode => "canvas/node",
+            UiLocation::PortItem => "port/item",
+            UiLocation::Statusbar => "statusbar",
+            UiLocation::TriggersFilter => "triggers/filter",
+            UiLocation::PipelinesFilter => "pipelines/filter",
+            UiLocation::ProjectsFilter => "projects/filter",
             UiLocation::RunsHeader => "runs/header",
             UiLocation::RunItemMenu => "run/item/menu",
             UiLocation::RunsBulk => "runs/bulk",
@@ -188,9 +295,32 @@ impl UiLocation {
             UiLocation::TopbarEnd => {
                 matches!(element, UiElement::Page { .. } | UiElement::Action { .. })
             }
-            UiLocation::Settings => matches!(element, UiElement::Section { .. }),
-            UiLocation::RunsFilter => matches!(element, UiElement::ListFilter { .. }),
-            UiLocation::RunDetail => matches!(element, UiElement::Tab { .. }),
+            UiLocation::ReviewFile => {
+                matches!(
+                    element,
+                    UiElement::Decoration { .. } | UiElement::Action { .. }
+                )
+            }
+            UiLocation::Settings
+            | UiLocation::ProjectEdit
+            | UiLocation::RunNew
+            | UiLocation::NodeConfig
+            | UiLocation::PipelineConfig
+            | UiLocation::RunInfo => matches!(element, UiElement::Section { .. }),
+            UiLocation::RunsFilter
+            | UiLocation::TriggersFilter
+            | UiLocation::PipelinesFilter
+            | UiLocation::ProjectsFilter => matches!(element, UiElement::ListFilter { .. }),
+            UiLocation::RunDetail
+            | UiLocation::NodeDetail
+            | UiLocation::TriggerDetail
+            | UiLocation::SkillDetail => matches!(element, UiElement::Tab { .. }),
+            UiLocation::RunItem
+            | UiLocation::TriggerItem
+            | UiLocation::PipelineItem
+            | UiLocation::CanvasNode
+            | UiLocation::PortItem
+            | UiLocation::Statusbar => matches!(element, UiElement::Decoration { .. }),
             UiLocation::Hosted(_) => true,
             _ if self.is_action_location() => matches!(element, UiElement::Action { .. }),
             _ => false,
@@ -198,7 +328,8 @@ impl UiLocation {
     }
 
     /// Whether this location is one of the Action locations (amendment #30): a
-    /// bar or a menu that accepts only actions.
+    /// bar or a menu that accepts actions, and only actions except for
+    /// `review/file`, which also takes Decorations (amendment #31).
     pub fn is_action_location(self) -> bool {
         matches!(
             self,
@@ -249,6 +380,61 @@ mod tests {
         assert!(!UiLocation::TopbarStart.accepts(&action));
         assert!(!UiLocation::Settings.accepts(&page));
         assert!(!UiLocation::RunDetail.accepts(&action));
+        let section = UiElement::Section {
+            component: "S".into(),
+        };
+        let decoration = UiElement::Decoration {
+            component: "D".into(),
+        };
+        let tab = UiElement::Tab {
+            component: "T".into(),
+        };
+        let filter = UiElement::ListFilter {
+            component: "F".into(),
+        };
+        assert!(UiLocation::ProjectEdit.accepts(&section));
+        assert!(!UiLocation::ProjectEdit.accepts(&tab));
+        assert!(UiLocation::RunItem.accepts(&decoration));
+        assert!(UiLocation::Statusbar.accepts(&decoration));
+        assert!(!UiLocation::RunItem.accepts(&section));
+        assert!(UiLocation::SkillDetail.accepts(&tab));
+        assert!(UiLocation::ProjectsFilter.accepts(&filter));
+        assert!(!UiLocation::TriggersFilter.accepts(&decoration));
+        assert!(UiLocation::ReviewFile.accepts(&decoration));
+        assert!(UiLocation::ReviewFile.accepts(&action));
+        assert!(!UiLocation::ReviewFile.accepts(&section));
+    }
+
+    #[test]
+    fn every_location_accepts_one_kind_of_element_at_least() {
+        let kinds = [
+            UiElement::Page {
+                component: "P".into(),
+                icon: None,
+            },
+            UiElement::Action {
+                command: "c".into(),
+            },
+            UiElement::Tab {
+                component: "T".into(),
+            },
+            UiElement::Section {
+                component: "S".into(),
+            },
+            UiElement::Decoration {
+                component: "D".into(),
+            },
+            UiElement::ListFilter {
+                component: "F".into(),
+            },
+        ];
+        for location in UiLocation::ALL {
+            assert!(
+                kinds.iter().any(|k| location.accepts(k)),
+                "{}",
+                location.id()
+            );
+        }
     }
 
     #[test]

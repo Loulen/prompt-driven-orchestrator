@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Copy, FolderInput, Lock, Pencil, Puzzle, Trash2 } from "lucide-react";
 import type { Skill } from "../../shared/generated/Skill";
 import type { SkillDetail } from "../model/skill";
@@ -14,6 +14,8 @@ import SkillFilesTab from "./SkillFilesTab";
 import { DropOverlay } from "./SkillFileDropZone";
 import { ActionButton, FolderPicker, TabButton } from "./BankControls";
 import SkillMdTab from "./SkillMdTab";
+import ExtensionDetailTab from "../../shared/extensions/ExtensionDetailTab";
+import { useDetailTabs } from "../../shared/extensions/catalogue";
 
 /** A skill of the bank, read-only: its header, its actions, its SKILL.md and Files tabs (#668, #671). */
 export default function SkillDetailView({
@@ -45,8 +47,9 @@ export default function SkillDetailView({
   skill: Skill;
   detail: SkillDetail | null;
   folders: SkillFolder[];
-  tab: "skill" | "files";
-  onTab: (tab: "skill" | "files") => void;
+  /** `skill`, `files`, or the key of a `skill/detail` tab of an extension. */
+  tab: string;
+  onTab: (tab: string) => void;
   existingNames: string[];
   refreshDetail: () => void;
   onSkillChanged: () => Promise<void>;
@@ -70,6 +73,13 @@ export default function SkillDetailView({
   home: string | null;
 }) {
   const current = detail && detail.id === skill.id ? detail : null;
+  // ADR-0081 (#31): the `skill/detail` tabs extensions add, after Files.
+  const entity = useMemo(
+    () => ({ kind: "skill", id: skill.id, name: skill.name, attributes: {} }),
+    [skill.id, skill.name],
+  );
+  const { tabs: extensionTabs, context: extensionContext } = useDetailTabs(entity, "skill/detail");
+  const extensionTab = extensionTabs.find((t) => t.key === tab) ?? null;
   const fileCount = current?.files.length ?? 0;
   const files = useSkillFiles({
     skillId: skill.id,
@@ -249,9 +259,16 @@ export default function SkillDetailView({
             </>
           }
         />
+        {extensionTabs.map((t) => (
+          <TabButton key={t.key} active={tab === t.key} onClick={() => onTab(t.key)} label={t.contribution.label} />
+        ))}
       </div>
 
-      {tab === "skill" ? (
+      {extensionTab ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ExtensionDetailTab key={`${extensionTab.key}:${skill.id}`} tab={extensionTab} context={extensionContext} />
+        </div>
+      ) : tab === "skill" || tab !== "files" ? (
         <SkillMdTab current={current} frontmatter={frontmatter} frontmatterKeys={frontmatterKeys} />
       ) : (
         <SkillFilesTab files={files} pathLabel={pathLabel} leaveRequest={leaveRequest} onLeaveSettled={onLeaveSettled} locked={locked} />

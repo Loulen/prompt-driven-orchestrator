@@ -87,12 +87,16 @@ export default function TriggerRow({
           <span className="shrink-0" data-testid="trigger-schedule">
             {humanizeCron(t.cron)}
           </span>
-          <ExtensionDecorations<DecorationContext>
-            location="trigger/item"
-            extra={decorated}
-            className="shrink-0 flex-nowrap"
-          />
         </div>
+        {/* Line 3: the `trigger/item` decorations (ADR-0081, #31). A line of
+            their own, as on a Run row, so a badge never truncates the
+            pipeline's name and several wrap; nothing at all without one. */}
+        <ExtensionDecorations<DecorationContext>
+          location="trigger/item"
+          extra={decorated}
+          block
+          className="mt-0.5"
+        />
       </div>
       {!t.enabled && (
         <span

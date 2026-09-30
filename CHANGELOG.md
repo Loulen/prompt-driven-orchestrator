@@ -19,12 +19,14 @@ et tourne sans changement (ADR-0081, amendement #31 ; référence : `docs/refere
 - **Sections** : `project/edit` (à la création comme à l'édition d'un Projet), `run/new`,
   `node/config`, `pipeline/config`, `run/info`. Une Section de `project/edit` ou de `run/new`
   reçoit `form` (`SectionForm`) : elle garde un brouillon et l'applique dans `onSave`, appelé
-  après le Save de l'hôte avec l'entité enregistrée (son id compris) ; `onCancel` à l'annulation.
-- **Décorations** : `run/item` (ligne 2 de la colonne de droite), `trigger/item`,
-  `pipeline/item`, `canvas/node`, `port/item`, `review/file`, `statusbar`. Sans contribution,
+  après le Save de l'hôte avec l'entité enregistrée (son id et ses Attributs compris) ;
+  `onCancel` à l'annulation.
+- **Décorations** : `run/item` (ligne 2 de la colonne de droite), `trigger/item` (ligne 3,
+  sous le nom de pipeline), `pipeline/item`, `canvas/node`, `port/item`, `review/file`, `statusbar`. Sans contribution,
   rien n'est rendu.
 - **Filtres de liste** : `triggers/filter`, `pipelines/filter`, `projects/filter` (au-dessus des
-  listes de Runs et de Triggers, groupées par Projet).
+  listes de Runs et de Triggers, groupées par Projet, derrière une étiquette « Project »). Un
+  filtre reçoit `label`, le libellé déclaré de sa contribution.
 - **Slots 0.1** : `ListFilter` des Triggers, pipelines et Projets, `DetailTab` d'un node, d'un
   Trigger, d'un skill et d'un Projet sont désormais rendus (convertis vers ces emplacements).
 - La barre d'onglets du panneau d'infos d'un Run défile au lieu de déborder.

@@ -138,6 +138,8 @@ export interface ListFilterContext extends LocationContext {
 
 export interface ListFilterProps extends ContributionProps<ListFilterContext> {
   resource: string;
+  /** The contribution's declared label (#31): the control's caption. */
+  label: string;
   /** The attribute filter in force: prefixed key → value. */
   filter: Attributes;
   setFilter: (next: Attributes) => void;

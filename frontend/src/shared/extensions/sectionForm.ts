@@ -33,9 +33,12 @@ export interface SectionFormHost {
   /**
    * Run every section's save handler, in the sections' order, each awaited.
    * The first failure stops the run and rejects with its error: the host keeps
-   * the form open and shows it.
+   * the form open and shows it. `saved` may be a loader, called only when a
+   * section registered a handler (a host that must read the saved entity back,
+   * e.g. for the Attributes the extensions stamped on it, costs nothing
+   * without a section).
    */
-  save(saved: EntityContext): Promise<void>;
+  save(saved: EntityContext | (() => Promise<EntityContext>)): Promise<void>;
   /** Run every section's cancel handler; a failure is logged, never raised. */
   cancel(): void;
 }
@@ -75,7 +78,10 @@ export function useSectionForm(): SectionFormHost {
         onCancel: (handler, rank) => register(cancels.current, handler, rank),
       },
       save: async (saved) => {
-        for (const handler of inOrder(saves.current)) await handler(saved);
+        const handlers = inOrder(saves.current);
+        if (handlers.length === 0) return;
+        const entity = typeof saved === "function" ? await saved() : saved;
+        for (const handler of handlers) await handler(entity);
       },
       cancel: () => {
         for (const handler of inOrder(cancels.current)) {

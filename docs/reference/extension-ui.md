@@ -195,7 +195,8 @@ effect and return the unregistration.
 - **Context**: `RunNewContext` = `LocationContext` + `mode` (`"run"` or `"trigger"`) + `pipeline`
   (the id picked, or `null`) + `repository` (the target repository, as typed) + `trigger` (the id
   of the Trigger being edited, or `null`). `form` is present; `onSave` receives the Run launched
-  (`{ kind: "run", id }`) or the Trigger saved (`{ kind: "trigger", id, name, attributes }`). The
+  (`{ kind: "run", id, name?, attributes }`, read back so it carries the Attributes the
+  extensions stamped on the create) or the Trigger saved (`{ kind: "trigger", id, name, attributes }`). The
   Run or the Trigger exists whatever the handlers answer: a failure is an error toast, and the form
   closes.
 
@@ -244,7 +245,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 ### `trigger/item`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Triggers list, at the end of its second line (after the schedule).
+- **Renders**: a row of the Triggers list, on a third line of its own under the pipeline and the
+  schedule, so a badge never truncates the pipeline's name; several wrap.
 - **Context**: `DecorationContext`, `entity` = `{ kind: "trigger", id, name, attributes }`.
 
 ### `pipeline/item`
@@ -288,7 +290,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 ### List filters
 
 A list-filter location renders a row under the list's own filters, one control per contribution.
-The component receives `resource`, `filter` (prefixed key → value) and `setFilter(next)`, and
+The component receives `resource`, `label` (the contribution's declared label, its caption),
+`filter` (prefixed key → value) and `setFilter(next)`, and
 `context` = `ListFilterContext` (`LocationContext` + `resource` + `filter`). The list keeps what
 carries every attribute of the filter, as `?attr.<id>/<key>=<value>` does on the list endpoint.
 
@@ -313,7 +316,8 @@ carries every attribute of the filter, as `?attr.<id>/<key>=<value>` does on the
   list keeps its own filter); `resource` is `"project"`. A list keeps the items whose Projet
   carries every attribute of the filter (`GET /projects?attr.…`), by the grouping's rule: the
   Projet whose members hold the repository (of the Run's root, of the Trigger). An item outside
-  any Projet is left out while the filter is active.
+  any Projet is left out while the filter is active. The row opens on a « Project » tag, so its
+  controls never read as the list's own.
 - **0.1**: the `ListFilter { resource: Project }` slot.
 
 ## Pages

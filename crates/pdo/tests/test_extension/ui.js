@@ -79,15 +79,17 @@ export function SettingsPanel() {
   );
 }
 
-// List filter of the Runs: keep the Runs a given caller started.
-export function StartedByFilter({ filter, setFilter }) {
+// List filter (Runs, Triggers, Pipelines, Projects): keep what a given caller
+// started. Captioned by its declared label (a 0.1 slot passes none).
+export function StartedByFilter({ filter, setFilter, label }) {
+  const caption = label ?? "Started by";
   const value = filter["test/started_by"] ?? "";
   return h(
     "label",
     { style: { display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px" } },
-    "Started by",
+    caption,
     h("input", {
-      "aria-label": "Started by",
+      "aria-label": caption,
       value,
       placeholder: "anyone",
       style: { width: "90px", background: "transparent", border: "1px solid currentColor", borderRadius: "4px", padding: "0 4px" },

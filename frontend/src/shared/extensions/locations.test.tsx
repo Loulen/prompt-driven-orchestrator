@@ -83,8 +83,8 @@ const bundle: BundleModule = {
     useEffect(() => form?.onSave(() => Promise.reject(new Error("refused by the section"))), [form]);
     return <p>failing section</p>;
   },
-  StartedBy: ({ filter, setFilter, resource }: ListFilterProps) => (
-    <button type="button" onClick={() => setFilter({ ...filter, "test/started_by": "alice" })}>
+  StartedBy: ({ filter, setFilter, resource, label }: ListFilterProps) => (
+    <button type="button" title={label} onClick={() => setFilter({ ...filter, "test/started_by": "alice" })}>
       only alice ({resource})
     </button>
   ),
@@ -225,6 +225,34 @@ describe("a section location", () => {
     expect(cancels).toEqual([""]);
   });
 
+  it("loads the saved entity only when a section takes part in the Save", async () => {
+    serve([extension("pm", [at("project/edit", "section", "attach", "DraftSection")])]);
+    const load = vi.fn(async () => ({ kind: "run", id: "r-new", attributes: { "test/started_by": "alice" } }));
+    let host: ReturnType<typeof useSectionForm> | null = null;
+    const keep = (sections: ReturnType<typeof useSectionForm>) => {
+      host = sections;
+    };
+    function LazyHost({ withSection }: { withSection: boolean }) {
+      const sections = useSectionForm();
+      useEffect(() => keep(sections), [sections]);
+      return withSection ? (
+        <ExtensionSections location="project/edit" extra={{ entity: null, creating: true }} form={sections.form} />
+      ) : null;
+    }
+    const { rerender } = render(<LazyHost withSection={false} />);
+    await act(async () => {});
+    await host!.save(load);
+    expect(load).not.toHaveBeenCalled();
+
+    rerender(<LazyHost withSection />);
+    await screen.findByLabelText("draft");
+    await host!.save(load);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(saves).toEqual([
+      { saved: { kind: "run", id: "r-new", attributes: { "test/started_by": "alice" } }, draft: "" },
+    ]);
+  });
+
   it("gives no form where the host has none", async () => {
     serve([extension("pm", [at("run/info", "section", "info", "DraftSection")])]);
     render(
@@ -274,6 +302,11 @@ describe("the list filters of the Triggers list", () => {
       />,
     );
     expect(names()).toEqual(["Trigger t1", "Trigger t2", "Trigger t3"]);
+    // Each control gets its declared label; only the Projet's row is tagged.
+    expect(await screen.findByText("only alice (trigger)")).toHaveAttribute("title", "by");
+    expect(screen.getByText("only alice (project)")).toHaveAttribute("title", "by-project");
+    expect(within(screen.getByTestId("extension-filters-project")).getByTestId("extension-filters-project-tag")).toHaveTextContent("Project");
+    expect(within(screen.getByTestId("extension-filters-trigger")).queryByTestId("extension-filters-project-tag")).toBeNull();
     fireEvent.click(await screen.findByText("only alice (trigger)"));
     expect(names()).toEqual(["Trigger t1"]);
     fireEvent.click(screen.getByText("only alice (project)"));
@@ -283,6 +316,37 @@ describe("the list filters of the Triggers list", () => {
     fireEvent.click(screen.getByText("Clear filters"));
     fireEvent.click(screen.getByText("only alice (project)"));
     expect(names()).toEqual(["Trigger t2", "Trigger t3"]);
+  });
+});
+
+describe("the trigger/item decorations", () => {
+  it("sit on a line of their own, never on the pipeline's name line", async () => {
+    const t = {
+      id: "t1", name: "Nightly", pipeline_id: "p", pipeline_name: "fp-demo", target_repo: "/repos/a",
+      effective_repo: "/repos/a", variables: {}, cron: "0 9 * * *", overlap_policy: "skip", auto_name: true,
+      enabled: true,
+    } as unknown as TriggerListEntry;
+    const panel = (
+      <TriggersListPanel
+        triggers={[t]}
+        projects={[]}
+        selectedTriggerId={null}
+        onSelectTrigger={() => {}}
+        onNewTrigger={() => {}}
+        onTriggersChanged={() => {}}
+      />
+    );
+    serve([
+      extension("one", [at("trigger/item", "decoration", "b", "Badge")]),
+      extension("two", [at("trigger/item", "decoration", "b", "Badge")]),
+    ]);
+    render(panel);
+    await waitFor(() => expect(screen.getAllByTestId("badge")).toHaveLength(2));
+    const marks = screen.getByTestId("extension-decorations-trigger/item");
+    const nameLine = screen.getByText("fp-demo").parentElement!;
+    expect(nameLine.contains(marks)).toBe(false);
+    expect(marks.tagName).toBe("DIV");
+    expect(marks.className).toContain("flex-wrap");
   });
 });
 

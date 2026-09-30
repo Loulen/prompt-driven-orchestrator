@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { createTrigger, updateTrigger } from "../../../trigger/api/triggers";
 import { testGuard } from "../../../trigger/api/guard";
 import { createRun } from "../../api/createRun";
+import { fetchRun } from "../../api/runs";
 import * as newRunForm from "../../model/newRunForm";
 import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../../../workspace/model/provisioning";
 import type { NewRunState } from "./useNewRunState";
@@ -16,7 +17,7 @@ interface SubmitDeps {
   onClose: () => void;
   onTriggerSaved?: () => void;
   /** ADR-0081 (#31): the `run/new` sections' save, run once the Run or the Trigger exists. */
-  saveSections?: (saved: EntityContext) => Promise<void>;
+  saveSections?: (saved: EntityContext | (() => Promise<EntityContext>)) => Promise<void>;
 }
 
 /**
@@ -26,7 +27,7 @@ interface SubmitDeps {
  */
 async function saveSectionsOf(
   saveSections: SubmitDeps["saveSections"],
-  saved: EntityContext,
+  saved: EntityContext | (() => Promise<EntityContext>),
 ): Promise<void> {
   if (!saveSections) return;
   try {
@@ -34,6 +35,17 @@ async function saveSectionsOf(
   } catch (cause) {
     toast(sectionSaveError(cause), "error");
   }
+}
+
+/**
+ * The Run the form just created, as its `run/new` sections receive it. The
+ * create answers the id only: read the Run back for the Attributes the
+ * extensions stamped on it (their hooks ran on the create) and its name.
+ */
+export async function createdRun(runId: string, runName: string): Promise<EntityContext> {
+  const run = await fetchRun(runId);
+  const name = run.name ?? (runName.trim() || undefined);
+  return { kind: "run", id: runId, attributes: run.attributes ?? {}, ...(name ? { name } : {}) };
 }
 
 /**
@@ -140,12 +152,7 @@ export function useNewRunSubmit(
         ...(hasProvisioningRules(provisioning) ? { provisioning } : {}),
       });
       onCreated(resp.run_id);
-      await saveSectionsOf(saveSections, {
-        kind: "run",
-        id: resp.run_id,
-        attributes: {},
-        ...(runName.trim() ? { name: runName.trim() } : {}),
-      });
+      await saveSectionsOf(saveSections, () => createdRun(resp.run_id, runName));
       refreshRecentRepos();
       setRunName("");
       // #338: re-seed from the instance default, not a hard `true`. The modal closes here

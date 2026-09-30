@@ -16,11 +16,19 @@
  * each of them, and `frontend/src/shared/generated/UiLocation.ts` is this very
  * type in TypeScript.
  *
+ * Besides the core's locations, an extension may **host** its own
+ * ([`UiLocation::Hosted`], declared by a [`HostedLocation`](super::HostedLocation)):
+ * the other extensions contribute there exactly as here, and the host renders
+ * them through the shared module `@pdo/extension-ui` (ADR-0081, amendment #32).
+ *
  * Non-exhaustive: adding a location is a minor evolution of the API.
+ *
+ * Since #30 the catalogue also holds the **Action locations**: the bars and
+ * menus of the interface ([`UiLocation::is_action_location`]).
  *
  * **Adding a location**: a variant here (its id in `serde(rename)`, its line
  * in [`UiLocation::ALL`], [`UiLocation::id`] and [`UiLocation::accepts`]), its
  * section in the reference page, and its rendering in the front (a component
  * that calls `useContributions("<id>", context)`).
  */
-export type UiLocation = "topbar/start" | "topbar/end" | "settings" | "runs/filter" | "run/detail" | "node/detail" | "trigger/detail" | "skill/detail" | "project/edit" | "run/new" | "node/config" | "pipeline/config" | "run/info" | "run/item" | "trigger/item" | "pipeline/item" | "canvas/node" | "port/item" | "review/file" | "statusbar" | "triggers/filter" | "pipelines/filter" | "projects/filter";
+export type UiLocation = "topbar/start" | "topbar/end" | "settings" | "runs/filter" | "run/detail" | "node/detail" | "trigger/detail" | "skill/detail" | "project/edit" | "run/new" | "node/config" | "pipeline/config" | "run/info" | "run/item" | "trigger/item" | "pipeline/item" | "canvas/node" | "port/item" | "statusbar" | "triggers/filter" | "pipelines/filter" | "projects/filter" | "runs/header" | "run/item/menu" | "runs/bulk" | "run/toolbar" | "canvas/node/menu" | "canvas/edge/menu" | "node/toolbar" | "trigger/item/menu" | "pipeline/item/menu" | "pipelines/header" | "tab/menu" | "review/toolbar" | "review/file" | "skill/menu" | `${string}/${string}`;

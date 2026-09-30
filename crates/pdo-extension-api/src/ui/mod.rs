@@ -1,10 +1,13 @@
 //! What an extension adds to the interface (ADR-0081, amendment #29): a
 //! catalogue of named locations ([`UiLocation`]), a few kinds of contribution
 //! ([`UiElement`]), the commands a bundle exports ([`UiCommand`]) and `when`
-//! clauses ([`When`]). The reference page is `docs/reference/extension-ui.md`.
+//! clauses ([`When`]), and the locations an extension hosts itself
+//! ([`HostedLocation`], amendment #32). The reference page is
+//! `docs/reference/extension-ui.md`.
 
 mod command;
 mod contribution;
+mod hosted;
 mod location;
 mod slot;
 mod when;
@@ -12,10 +15,34 @@ mod when;
 use serde::Serialize;
 
 pub use command::UiCommand;
-pub use contribution::{UiContribution, UiElement};
+pub use contribution::{UiContribution, UiElement, UiElementKind};
+pub use hosted::{ContextKey, HostedLocation};
 pub use location::UiLocation;
 pub use slot::{Slot, UiSlot};
 pub use when::When;
+
+/// The bare specifier of the module the front shares with the bundles, next to
+/// React in its import map: it lists and renders the contributions to a hosted
+/// location (`useHostedContributions`, `HostedContribution`,
+/// `HostedContributions`). A bundle imports it, never embeds it.
+pub const UI_MODULE: &str = "@pdo/extension-ui";
+
+/// The major of the shared module [`UI_MODULE`]: versioned with this API, whose
+/// major it is. A bundle built against another major is never loaded, and a
+/// banner says so, as for React. While the API is in 0.x, the daemon's check of
+/// the manifest's `api_version` already refuses an incompatible minor.
+pub const UI_MODULE_MAJOR: u32 = parse_major(crate::API_VERSION);
+
+const fn parse_major(version: &str) -> u32 {
+    let bytes = version.as_bytes();
+    let mut major = 0;
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        major = major * 10 + (bytes[i] - b'0') as u32;
+        i += 1;
+    }
+    major
+}
 
 /// What an extension adds to the interface: one ES bundle it serves, the
 /// contributions that bundle renders and the commands it exports. Empty by
@@ -35,12 +62,17 @@ pub struct UiContributions {
     pub bundle_url: Option<String>,
     /// The major version of React the bundle was built against.
     pub react_major: Option<u32>,
+    /// The major of the shared module [`UI_MODULE`] the bundle imports; `None`
+    /// when it does not import it.
+    pub ui_module_major: Option<u32>,
     /// The slots of version 0.1 the bundle fills, still honoured.
     pub slots: Vec<UiSlot>,
     /// The contributions to the catalogue's locations, in declaration order.
     pub contributions: Vec<UiContribution>,
     /// The commands the bundle exports, for its actions.
     pub commands: Vec<UiCommand>,
+    /// The locations the extension hosts, in declaration order.
+    pub locations: Vec<HostedLocation>,
 }
 
 impl UiContributions {
@@ -69,6 +101,25 @@ impl UiContributions {
     /// The same contributions, the bundle exporting one more command.
     pub fn command(mut self, command: UiCommand) -> Self {
         self.commands.push(command);
+        self
+    }
+
+    /// The same contributions, the extension hosting one more location.
+    pub fn host(mut self, location: HostedLocation) -> Self {
+        self.locations.push(location);
+        self
+    }
+
+    /// The same contributions, the bundle importing the shared module
+    /// [`UI_MODULE`] of this version of the API ([`UI_MODULE_MAJOR`]).
+    pub fn importing_ui_module(self) -> Self {
+        self.importing_ui_module_major(UI_MODULE_MAJOR)
+    }
+
+    /// The same contributions, the bundle importing major `major` of the
+    /// shared module (a bundle built against another version of the API).
+    pub fn importing_ui_module_major(mut self, major: u32) -> Self {
+        self.ui_module_major = Some(major);
         self
     }
 
@@ -106,6 +157,7 @@ mod tests {
             serde_json::json!({
                 "bundle_url": "/ext/demo/ui.js",
                 "react_major": 19,
+                "ui_module_major": null,
                 "slots": [
                     { "slot": "navigation", "id": "events", "label": "Events", "component": "Events" },
                     {
@@ -115,8 +167,32 @@ mod tests {
                 ],
                 "contributions": [],
                 "commands": [],
+                "locations": [],
             })
         );
+    }
+
+    #[test]
+    fn declares_its_hosted_locations_and_the_shared_module_it_imports() {
+        let ui = UiContributions::bundle("/ext/pm/ui.js", 19)
+            .importing_ui_module()
+            .host(HostedLocation::new("pm/onglet", UiElementKind::Tab));
+        let wire = serde_json::to_value(&ui).unwrap();
+        assert_eq!(wire["ui_module_major"], UI_MODULE_MAJOR);
+        assert_eq!(wire["locations"][0]["id"], "pm/onglet");
+        assert_eq!(wire["locations"][0]["accepts"], "tab");
+    }
+
+    #[test]
+    fn the_shared_module_s_major_is_the_api_s() {
+        let major: u32 = crate::API_VERSION
+            .split('.')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(UI_MODULE_MAJOR, major);
+        assert_eq!(parse_major("12.3.4"), 12);
     }
 
     #[test]

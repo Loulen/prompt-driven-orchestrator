@@ -4,7 +4,7 @@ use pdo_skill::adapters::sqlite::{
     init, snapshot_names, SqliteFolderIndex, SqliteSkillIndex, SqliteSourceHistory,
 };
 use pdo_skill::application::ports::{FolderIndex, ScannedSource, SkillIndex, SourceHistory};
-use pdo_skill::domain::skill::{FolderProvenance, Provenance, Skill, SkillFolder};
+use pdo_skill::domain::skill::{FolderProvenance, Provenance, ProvidedBy, Skill, SkillFolder};
 use sqlx::SqlitePool;
 
 async fn db() -> SqlitePool {
@@ -21,6 +21,7 @@ fn skill(id: &str, name: &str, folder: Option<&str>) -> Skill {
         description: "d".into(),
         folder_id: folder.map(str::to_string),
         locked: false,
+        extension: None,
         source: None,
         created_at: format!("2026-01-01T00:00:00.00{}Z", id.len() % 10),
         updated_at: "2026-01-01T00:00:00.000Z".into(),
@@ -36,6 +37,26 @@ fn folder(id: &str, name: &str, parent: Option<&str>) -> SkillFolder {
         created_at: "2026-01-01T00:00:00.000Z".into(),
         updated_at: "2026-01-01T00:00:00.000Z".into(),
     }
+}
+
+#[tokio::test]
+async fn an_extension_skill_round_trips_its_extension_and_is_locked() {
+    let db = db().await;
+    let index = SqliteSkillIndex::new(db.clone());
+    let mut provided = skill("ext-pm-pm", "pm", None);
+    provided.locked = true;
+    provided.extension = Some(ProvidedBy {
+        id: "pm".into(),
+        version: "0.3.0".into(),
+    });
+    index.insert(&provided).await.unwrap();
+    assert_eq!(index.get("ext-pm-pm").await.unwrap().unwrap(), provided);
+    provided.extension = Some(ProvidedBy {
+        id: "pm".into(),
+        version: "0.4.0".into(),
+    });
+    index.save(&provided).await.unwrap();
+    assert_eq!(index.get("ext-pm-pm").await.unwrap().unwrap(), provided);
 }
 
 #[tokio::test]

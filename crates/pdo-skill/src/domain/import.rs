@@ -266,6 +266,7 @@ mod tests {
             description: String::new(),
             folder_id: Some("skf-1".into()),
             locked: false,
+            extension: None,
             source: provenance,
             created_at: String::new(),
             updated_at: String::new(),

@@ -1,6 +1,13 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { useSelectionStore } from "../stores/selectionStore";
+
+// `waitFor` / `findBy*` give up after 1 s by default. On a loaded machine (load
+// ~37, parallel workers) a first render with lazy imports takes longer:
+// ReviewPage's "loads fork → tip by default" failed `make test` at 2.5 s. 5 s,
+// under the 20 s `testTimeout`; a wait that succeeds still returns at once.
+configure({ asyncUtilTimeout: 5_000 });
 
 // Node ≥ 22 ships its own `localStorage` / `sessionStorage` on `globalThis`
 // (the experimental Web Storage, backed by `--localstorage-file`). Without that

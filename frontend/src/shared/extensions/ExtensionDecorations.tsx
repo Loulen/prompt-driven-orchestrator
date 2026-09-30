@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { UiLocation } from "../generated/UiLocation";
 import { useContributions, useLocationContext } from "./catalogue";
 import type { DecorationContext, DecorationProps, LocationContext } from "./contract";
@@ -26,7 +27,9 @@ export default function ExtensionDecorations<C extends DecorationContext>({
   block?: boolean;
 }) {
   const context = useLocationContext<C>(location, extra);
-  const decorations = useContributions<DecorationProps<C>>(location, context);
+  // `review/file` also takes actions (#30): those render as its buttons, not here.
+  const all = useContributions<DecorationProps<C>>(location, context);
+  const decorations = useMemo(() => all.filter((element) => element.Component !== null), [all]);
   if (decorations.length === 0) return null;
   const Wrapper = block ? "div" : "span";
   return (

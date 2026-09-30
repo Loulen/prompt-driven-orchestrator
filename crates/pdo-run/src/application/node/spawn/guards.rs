@@ -182,6 +182,32 @@ pub(super) async fn admit<'a>(
     // reusing the pre-lock projection above would reopen the check-and-reserve race
     // the lock exists to close.
     let admission_guard = deps.admission_lock.lock().await;
+
+    // ADR-0050 §2, the window the session probe of `guard` leaves open: a
+    // dispatch's `NodeStarted` is durable well before its tmux session exists
+    // (worktree, skills, prompt come in between). A second dispatch of the same
+    // `(node, iter)` in that window saw no session, passed, and then either lost
+    // the tmux race (a redundant `NodeStarted`) or won it after the first session
+    // was killed, which broke the `restart_node` that followed. The pipeline
+    // watcher's `advance_run`, racing a completion's own spawn on a loaded
+    // machine, did exactly that. Re-read under the admission lock, held until the
+    // reservation event is appended: a dispatch that finds its iteration already
+    // started is the benign loser. Only `restart_node` replaces a started
+    // iteration; a `waiting` one is still promoted by its re-drive.
+    if !deps.replaces_live_iteration {
+        if let Some((_, state)) = reload_run_state_with(deps.runs, run_id).await {
+            if transition_guard::started_iteration(&state, &node.id, iter) {
+                let reason = format!(
+                    "node {} iter {iter} is already started: duplicate spawn is a \
+                     benign no-op (ADR-0050 §2)",
+                    node.id
+                );
+                warn!("Run {run_id}: {reason}");
+                return Err(SpawnOutcome::Refused { reason });
+            }
+        }
+    }
+
     let cap = crate::adapters::env::configured_cap_with(stored_session_cap(deps.runs).await);
     let live = count_global_live_sessions_excluding(
         deps.runs,

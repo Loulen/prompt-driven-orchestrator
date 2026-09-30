@@ -8,6 +8,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 
+use pdo_kernel::extension_host::ExtensionHost;
+use pdo_skill::domain::extension_skill::ExtensionSkillSeed;
+use pdo_skill::domain::seed::SeedOutcome;
+use pdo_skill::domain::skill::ProvidedBy;
+
 use crate::contexts::skill::skills;
 
 /// Open `pdo.db` (created if absent) and every context's tables.
@@ -26,9 +31,15 @@ pub(super) async fn open(repo_root: &Path) -> Result<(sqlx::SqlitePool, std::pat
     Ok((db, db_path))
 }
 
-/// The boot's fix-ups: the Banque de skills' seed, the warning about the
-/// retired settings, the stranded prompts and the legacy pipeline registries.
-pub(super) async fn prepare(db: &sqlx::SqlitePool, db_path: &Path, repo_root: &Path) -> Result<()> {
+/// The boot's fix-ups: the Banque de skills' seed (PDO's skills, then the
+/// ones `host`'s extensions provide), the warning about the retired settings,
+/// the stranded prompts and the legacy pipeline registries.
+pub(super) async fn prepare(
+    db: &sqlx::SqlitePool,
+    db_path: &Path,
+    repo_root: &Path,
+    host: &dyn ExtensionHost,
+) -> Result<()> {
     // #722: the seeded skill lands at every startup — created if absent, its
     // content rewritten when the built-in copy (versioned with PDO) differs.
     // A failed seed is logged, never fatal: the daemon must come up even when
@@ -47,7 +58,7 @@ pub(super) async fn prepare(db: &sqlx::SqlitePool, db_path: &Path, repo_root: &P
                 Ok(outcomes) => {
                     for (id, outcome) in &outcomes {
                         match outcome {
-                            pdo_skill::domain::seed::SeedOutcome::Skipped { reason } => {
+                            SeedOutcome::Skipped { reason } => {
                                 warn!("skill seed `{id}` skipped: {reason}")
                             }
                             _ => info!("skill seed `{id}`: {outcome:?}"),
@@ -56,6 +67,7 @@ pub(super) async fn prepare(db: &sqlx::SqlitePool, db_path: &Path, repo_root: &P
                 }
                 Err(error) => error!("skill seed failed: {error}"),
             }
+            seed_extension_skills(&seeding, host).await;
             seed_db.close().await;
         }
         Err(error) => error!("skill seed connection failed: {error}"),
@@ -88,6 +100,48 @@ pub(super) async fn prepare(db: &sqlx::SqlitePool, db_path: &Path, repo_root: &P
     pdo_pipeline::adapters::registry::unify_legacy_registries(repo_root)
         .map_err(|error| anyhow::anyhow!("pipeline registry migration failed: {error}"))?;
     Ok(())
+}
+
+/// #33: the skills each extension provides land like PDO's own, rewritten when
+/// the extension's version or their content changes. Logged, never fatal.
+async fn seed_extension_skills(seeding: &pdo_skill::Skills, host: &dyn ExtensionHost) {
+    for provided in host.skills() {
+        let manifest = &provided.manifest;
+        let seeds: Vec<ExtensionSkillSeed> = provided
+            .skills
+            .into_iter()
+            .map(|skill| ExtensionSkillSeed {
+                extension: ProvidedBy {
+                    id: manifest.id.clone(),
+                    version: manifest.version.clone(),
+                },
+                extension_name: manifest.name.clone(),
+                name: skill.name,
+                skill_md: skill.skill_md,
+                files: skill
+                    .files
+                    .into_iter()
+                    .map(|file| (file.path, file.content))
+                    .collect(),
+            })
+            .collect();
+        match seeding.seed_extension(&manifest.id, &seeds).await {
+            Ok(outcomes) => {
+                for (id, outcome) in &outcomes {
+                    match outcome {
+                        SeedOutcome::Skipped { reason } => {
+                            warn!(
+                                "skill `{id}` of extension `{}` skipped: {reason}",
+                                manifest.id
+                            )
+                        }
+                        _ => info!("skill `{id}` of extension `{}`: {outcome:?}", manifest.id),
+                    }
+                }
+            }
+            Err(error) => error!("skills of extension `{}` failed: {error}", manifest.id),
+        }
+    }
 }
 
 pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {

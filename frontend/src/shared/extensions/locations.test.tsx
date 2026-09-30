@@ -34,7 +34,14 @@ function extension(id: string, contributions: UiContribution[]): ExtensionEntry 
     id,
     name: `Extension ${id}`,
     version: "1.0.0",
-    ui: { bundle_url: `/ext/${id}/ui.js`, react_major: hostReactMajor(), contributions, commands: [] },
+    ui: {
+      bundle_url: `/ext/${id}/ui.js`,
+      react_major: hostReactMajor(),
+      ui_module_major: null,
+      contributions,
+      commands: [],
+      locations: [],
+    },
   };
 }
 
@@ -158,6 +165,44 @@ describe("a decoration location", () => {
     const failed = screen.getByTestId("extension-failed-demo");
     expect(failed).toHaveTextContent("!");
     expect(failed).toHaveAttribute("title", "This element of the extension demo failed.");
+  });
+});
+
+describe("the review/file location, which takes actions and decorations", () => {
+  const FILE = {
+    entity: { kind: "file", id: "src/a.ts", name: "a.ts", path: "src/a.ts", status: "modified", attributes: {} },
+    file: { run: "r1", path: "src/a.ts", status: "modified" },
+    review: { from: "main", to: "r1" },
+  };
+  function withAction(contributions: UiContribution[]): ExtensionEntry {
+    const entry = extension("demo", [
+      ...contributions,
+      { location: "review/file", id: "open", label: "Open", type: "action", command: "demo.open" } as UiContribution,
+    ]);
+    entry.ui!.commands = [{ id: "demo.open", title: "Open", export: "open" }] as NonNullable<ExtensionEntry["ui"]>["commands"];
+    return entry;
+  }
+
+  beforeEach(() => setBundleLoader(async () => ({ ...bundle, open: () => {} })));
+
+  it("renders its decorations, not its actions", async () => {
+    serve([withAction([at("review/file", "decoration", "b", "Badge")])]);
+    render(<ExtensionDecorations<DecorationContext> location="review/file" extra={FILE} />);
+    expect(await screen.findByTestId("badge")).toHaveTextContent("review/file:src/a.ts");
+    const marks = screen.getByTestId("extension-decorations-review/file");
+    expect(within(marks).getAllByTestId(/^extension-decoration-/)).toHaveLength(1);
+  });
+
+  it("renders nothing at all when it holds an action only", async () => {
+    serve([withAction([])]);
+    const { container } = render(
+      <div data-testid="header">
+        <ExtensionDecorations<DecorationContext> location="review/file" extra={FILE} />
+      </div>,
+    );
+    await act(async () => {});
+    expect(screen.getByTestId("header")).toBeEmptyDOMElement();
+    expect(container.querySelector("[data-testid^=extension-decorations]")).toBeNull();
   });
 });
 

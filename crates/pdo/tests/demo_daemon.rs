@@ -15,6 +15,17 @@
 //! - `PDO_TEST_EXTENSION_INCOMPATIBLE`: `1` starts with the UI bundle declaring
 //!   a React major the front does not run (`POST /ext/test/incompatible` switches
 //!   it while the daemon runs).
+//! - `PDO_TEST_INTEROP`: `1` also loads the three interop peers `a`, `b`, `c`
+//!   (`test_extension/interop.rs`), which mutate their items through the Host:
+//!   `POST /ext/a/items {"name": …}` creates one, `GET /ext/a/items` lists
+//!   them, `POST /ext/b/refusal {"refuses": true}` has `b` refuse every
+//!   Operation on an extension's resource.
+//! - `PDO_DEMO_HOSTED`: which of the hosted-location test extensions
+//!   (`test_extension/hosted.rs`) to add after the test extension: `a,b` (A
+//!   hosts `a/panneau`, B contributes), `a` (B removed), none by default.
+//! - `PDO_DEMO_B_PANELS`: how many sections B contributes to `a/panneau`, `1`
+//!   by default (`POST /ext/b/panels {"count": n}` switches it while the
+//!   daemon runs). Its ids are the interop peers': not with `PDO_TEST_INTEROP`.
 //!
 //! The test extension keeps its data under `$HOME/.pdo/extensions/test/`: give
 //! the demo daemon a disposable `HOME`.
@@ -25,9 +36,16 @@
 //!
 //! A second test extension (`test2`) is registered after it: it adds a section
 //! to `project/edit`, so that location shows two extensions' sections.
+//!
+//! Its command line answers `PDO_DAEMON_URL=http://127.0.0.1:<port> pdo ext test
+//! echo salut` (stdout `salut`, stderr the Actor it sees), and its skill
+//! `test-extension-cli` is in the Banque de skills, in the « Test extension »
+//! folder.
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use crate::test_extension::hosted::{ContributorB, HostA};
+use crate::test_extension::interop::Peer;
 use crate::test_extension::{Refusal, SecondTestExtension, TestExtension};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -58,6 +76,28 @@ async fn demo_daemon() {
         .set_incompatible(std::env::var("PDO_TEST_EXTENSION_INCOMPATIBLE").as_deref() == Ok("1"));
     let mut extensions = ext.boxed();
     extensions.push(Box::new(SecondTestExtension));
+    let hosted = std::env::var("PDO_DEMO_HOSTED").unwrap_or_default();
+    let interop = std::env::var("PDO_TEST_INTEROP").as_deref() == Ok("1");
+    assert!(
+        !(interop && !hosted.trim().is_empty()),
+        "PDO_TEST_INTEROP and PDO_DEMO_HOSTED both load extensions `a` and `b`: pick one"
+    );
+    for id in hosted.split(',').map(str::trim).filter(|id| !id.is_empty()) {
+        match id {
+            "a" => extensions.push(Box::new(HostA)),
+            "b" => {
+                let (b, panels) = ContributorB::new();
+                if let Ok(count) = std::env::var("PDO_DEMO_B_PANELS") {
+                    panels.set_panels(count.parse().expect("PDO_DEMO_B_PANELS is a number"));
+                }
+                extensions.push(Box::new(b));
+            }
+            other => panic!("PDO_DEMO_HOSTED: unknown extension `{other}` (a, b)"),
+        }
+    }
+    if interop {
+        extensions.extend(Peer::trio().0);
+    }
     let daemon = pdo::serve(config, extensions).await.unwrap();
     eprintln!(
         "demo daemon listening on http://{} (test extension refusing {refusal:?})",

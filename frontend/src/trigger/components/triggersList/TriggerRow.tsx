@@ -1,7 +1,11 @@
 import { useMemo } from "react";
-import { Pencil, Play, Power, Trash2 } from "lucide-react";
+import { Copy, Pencil, Play, Power, Trash2 } from "lucide-react";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
-import type { DecorationContext } from "../../../shared/extensions/contract";
+import { ExtensionMenuGroups } from "../../../shared/extensions/ExtensionActions";
+import type { DecorationContext, TriggerEntity } from "../../../shared/extensions/contract";
+import { DropdownMenuSeparator } from "../../../shared/ui/dropdown-menu";
+import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../../shared/ui/RowMenu";
+import { toast } from "../../../shared/ui/toast";
 import type { Trigger } from "../../../shared/generated/Trigger";
 import { repoGroupLabel } from "../../../lib/groupByRepo";
 import SelectControl from "../../../shared/ui/SelectControl";
@@ -45,6 +49,7 @@ export default function TriggerRow({
     () => ({ entity: { kind: "trigger", id: t.id, name: t.name, attributes: t.attributes ?? {} } }),
     [t.id, t.name, t.attributes],
   );
+  const extra = useMemo(() => ({ entity: triggerEntity(t) }), [t]);
   return (
     <button
       onClick={onSelect}
@@ -145,6 +150,31 @@ export default function TriggerRow({
           <Trash2 size={12} />
         </span>
       </span>
+      {/* #30 — the « ⋯ » menu: the row's verbs, the extensions'
+          `trigger/item/menu` groups, then Delete. */}
+      <RowMenu label={`More actions for ${t.name}`} testId="trigger-row-menu">
+        {onRunNow && (
+          <RowMenuItem data-testid="trigger-menu-run-now" onClick={onRunNow}>
+            <Play /> Run now
+          </RowMenuItem>
+        )}
+        {onEdit && (
+          <RowMenuItem data-testid="trigger-menu-edit" onClick={onEdit}>
+            <Pencil /> Edit
+          </RowMenuItem>
+        )}
+        <RowMenuItem data-testid="trigger-menu-toggle" onClick={onToggle}>
+          <Power /> {t.enabled ? "Disable" : "Enable"}
+        </RowMenuItem>
+        <RowMenuItem data-testid="trigger-menu-copy-id" onClick={() => copyTriggerId(t.id)}>
+          <Copy /> Copy trigger id
+        </RowMenuItem>
+        <ExtensionMenuGroups location="trigger/item/menu" extra={extra} itemClassName={ROW_MENU_EXTENSION_ITEM} />
+        <DropdownMenuSeparator />
+        <RowMenuItem variant="destructive" data-testid="trigger-menu-delete" onClick={onDelete}>
+          <Trash2 /> Delete
+        </RowMenuItem>
+      </RowMenu>
       {/* Enable/disable toggle — always visible so paused state is reversible. */}
       <span
         role="switch"
@@ -163,5 +193,24 @@ export default function TriggerRow({
         <Power size={12} />
       </span>
     </button>
+  );
+}
+
+/** A row's Trigger, as its menu's context hands it over. */
+function triggerEntity(t: Trigger): TriggerEntity {
+  return {
+    kind: "trigger",
+    id: t.id,
+    name: t.name,
+    pipeline: t.pipeline_name,
+    enabled: t.enabled,
+    attributes: t.attributes ?? {},
+  };
+}
+
+function copyTriggerId(id: string) {
+  navigator.clipboard?.writeText(id).then(
+    () => toast("Trigger id copied"),
+    () => toast("The clipboard is not available", "error"),
   );
 }

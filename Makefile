@@ -66,13 +66,20 @@ dev:
 build:
 	cargo build
 
+# Les `PDO_*` de l'environnement appelant, retirés des tests Rust : lancée depuis une
+# session de node PDO, la suite héritait de `PDO_UPDATE_CHECK=0`, `PDO_RUN_ID`,
+# `PDO_DAEMON_URL`… et ses daemons de test les lisaient (check de mise à jour coupé,
+# release_channel rouge). Un test qui veut une variable la pose lui-même. Les
+# réglages du build (`PDO_FRONTEND_DIST`, `PDO_SKIP_FRONTEND_BUILD`) restent.
+NO_PDO_ENV := env $(foreach v,$(filter-out PDO_FRONTEND_DIST PDO_SKIP_FRONTEND_BUILD,$(filter PDO_%,$(.VARIABLES))),-u $(v))
+
 # nextest : un process par test (isolation retrouvée depuis que les 50 binaires de
 # tests sont fusionnés en un seul, cf. crates/pdo/tests/it.rs) et un pool
 # global au lieu d'un pool par binaire. nextest NE LANCE PAS les doctests, d'où la
 # ligne `--doc` séparée : la retirer ferait disparaître leur couverture en silence.
 test:
-	cargo nextest run --workspace
-	cargo test --workspace --doc
+	$(NO_PDO_ENV) cargo nextest run --workspace
+	$(NO_PDO_ENV) cargo test --workspace --doc
 	cd frontend && pnpm test
 	node --disable-warning=ExperimentalWarning --test 'scripts/readme-media/test/*.test.mjs'
 

@@ -9,6 +9,7 @@ import { STATUS_STYLES } from "./runsListTables";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { DecorationContext } from "../../../shared/extensions/contract";
+import RunRowMenu from "./RunRowMenu";
 
 interface Props {
   node: RunTreeNode;
@@ -318,6 +319,15 @@ export default function RunRow({
           <Trash2 size={12} />
         </span>
       )}
+      <RunRowMenu
+        run={run}
+        pane={pane}
+        isRenaming={isRenaming}
+        canPause={canPause}
+        canResume={canResume}
+        canRetryAll={canRetryAll}
+        canCleanup={canCleanup}
+      />
       </div>
       {/* Line 2: the `run/item` decorations (ADR-0081, #31), then the child
           counts. Here and not by the name, so a badge never truncates the
@@ -340,3 +350,4 @@ export default function RunRow({
     </button>
   );
 }
+

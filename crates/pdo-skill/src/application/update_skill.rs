@@ -7,7 +7,6 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use super::skills::Skills;
 use crate::domain::error::SkillError;
 use crate::domain::folders::folder_ref;
-use crate::domain::seed::refuse_locked;
 use crate::domain::skill::Skill;
 
 impl Skills {
@@ -24,7 +23,7 @@ impl Skills {
             actor,
             Operation::new(ResourceKind::Skill, Verb::Update).on(id),
         )?;
-        refuse_locked(id)?;
+        self.refuse_locked(id).await?;
         let mut skill = self.skills.get(id).await?.ok_or(SkillError::NotFound)?;
         if let Some(candidate) = name {
             skill.name = self.unique_label(candidate, Some(id)).await?;

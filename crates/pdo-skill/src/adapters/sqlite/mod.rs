@@ -64,6 +64,9 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
         ("skill_folders", "source_imported_at", "TEXT"),
         ("skill_folders", "source_found", "INTEGER"),
         ("skill_folders", "source_invalid", "INTEGER"),
+        // #33: the extension a skill comes with, and the version it was seeded at.
+        ("skills", "extension", "TEXT"),
+        ("skills", "extension_version", "TEXT"),
     ] {
         add_column_if_missing(db, table, column, ty).await?;
     }

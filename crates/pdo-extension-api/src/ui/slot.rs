@@ -60,7 +60,7 @@ impl UiSlot {
     /// location of the catalogue stands for it.
     pub fn contribution(&self) -> Option<UiContribution> {
         let (id, label, component) = (&self.id, &self.label, self.component.clone());
-        Some(match self.slot {
+        Some(match &self.slot {
             Slot::Navigation => UiContribution::page(UiLocation::TopbarStart, id, label, component),
             Slot::SettingsPanel => {
                 UiContribution::section(UiLocation::Settings, id, label, component)
@@ -133,7 +133,9 @@ mod tests {
             (Slot::Navigation, "topbar/start", "page"),
             (Slot::SettingsPanel, "settings", "section"),
             (
-                Slot::ListFilter { resource: run },
+                Slot::ListFilter {
+                    resource: run.clone(),
+                },
                 "runs/filter",
                 "list_filter",
             ),

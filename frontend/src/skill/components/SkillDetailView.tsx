@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { Copy, FolderInput, Lock, Pencil, Trash2 } from "lucide-react";
+import { Copy, FolderInput, Lock, Pencil, Puzzle, Trash2 } from "lucide-react";
 import type { Skill } from "../../shared/generated/Skill";
 import type { SkillDetail } from "../model/skill";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
@@ -99,6 +99,8 @@ export default function SkillDetailView({
   // the pane with the drop overlay (#671 design 02/05) — never on a locked
   // skill, whose files refuse every write.
   const locked = isLocked(skill);
+  // #33: a skill an extension provides, seeded with the extension's version.
+  const provider = skill.extension ?? null;
   const { dragging, handlers: dropHandlers } = useFileDropTarget(
     locked
       ? () => {}
@@ -125,7 +127,28 @@ export default function SkillDetailView({
         <h3 className="truncate font-semibold text-fg" style={{ fontSize: "17px" }} data-testid="skill-detail-name">
           {skill.name}
         </h3>
-        {locked && (
+        {locked && provider && (
+          <span
+            className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3"
+            style={{ fontSize: "9.5px" }}
+            data-testid="skill-detail-extension"
+            title={`Provided by the extension “${provider.id}”: locked against editing and deletion`}
+          >
+            <Puzzle size={10} />
+            Extension {provider.id}
+          </span>
+        )}
+        {locked && provider && (
+          <span
+            className="shrink-0 rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-4"
+            style={{ fontSize: "9.5px" }}
+            data-testid="skill-detail-version"
+            title="Version of the extension: PDO rewrites the skill at startup when it changes"
+          >
+            v{provider.version}
+          </span>
+        )}
+        {locked && !provider && (
           <span
             className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3"
             style={{ fontSize: "9.5px" }}
@@ -136,7 +159,7 @@ export default function SkillDetailView({
             Managed by PDO
           </span>
         )}
-        {locked && frontmatter?.skill_version != null && (
+        {locked && !provider && frontmatter?.skill_version != null && (
           <span
             className="shrink-0 rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-4"
             style={{ fontSize: "9.5px" }}
@@ -188,6 +211,8 @@ export default function SkillDetailView({
               </span>
             )}
           </span>
+        ) : provider ? (
+          <span data-testid="skill-detail-provided-by">provided by the extension {provider.id}</span>
         ) : (
           <span>created by paste</span>
         )}
@@ -197,7 +222,9 @@ export default function SkillDetailView({
       <div className="mt-3 flex items-center gap-2">
         {locked ? (
           <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="skill-detail-locked-note">
-            Seeded by PDO at startup — it updates itself; editing and deletion are refused.
+            {provider
+              ? `Provided by the extension ${provider.id} — it updates with the extension; editing and deletion are refused.`
+              : "Seeded by PDO at startup — it updates itself; editing and deletion are refused."}
           </span>
         ) : (
           <>

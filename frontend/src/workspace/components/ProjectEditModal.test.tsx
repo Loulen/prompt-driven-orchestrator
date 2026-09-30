@@ -337,6 +337,8 @@ describe("ProjectEditModal — the project/edit sections", () => {
       ui: {
         bundle_url: "/ext/pm/ui.js",
         react_major: hostReactMajor(),
+        ui_module_major: null,
+        locations: [],
         commands: [],
         contributions: components.map((component) => ({
           location: "project/edit",

@@ -153,7 +153,7 @@ export interface EntityContext {
   /** Its attributes; `{}` for an entity that carries none (a node, a skill). */
   attributes: Attributes;
   /** What the interface calls it, when it has a name. */
-  name?: string;
+  name?: string | null;
 }
 
 /** A tab (`run/detail`, `node/detail`, `trigger/detail`, `skill/detail`): the entity it details. */
@@ -187,16 +187,132 @@ export interface PortItemContext extends DecorationContext {
   port: { run: string; node: string; name: string; direction: "input" | "output"; type: string };
 }
 
-/** `review/file`: a file of the Review page. */
-export interface ReviewFileContext extends DecorationContext {
-  entity: EntityContext;
-  file: { run: string; path: string; status: string };
-}
-
 export interface DecorationProps<C extends DecorationContext = DecorationContext>
   extends ContributionProps<C> {
   entity: EntityContext | null;
 }
+
+// The Action locations (amendment #30): a bar or a menu, an entry per action.
+// Each hands over what is at stake where it sits.
+
+/** A Run, as a row of the Runs list shows it (`run/item/menu`). */
+export interface RunEntity extends EntityContext {
+  kind: "run";
+  name: string | null;
+  pipeline: string;
+  status: string;
+}
+
+/** A Trigger, as a row of the Triggers tab shows it (`trigger/item/menu`). */
+export interface TriggerEntity extends EntityContext {
+  kind: "trigger";
+  name: string;
+  pipeline: string;
+  enabled: boolean;
+}
+
+/** A Pipeline: a row of the Pipelines tab, or an editor tab (`pipeline/item/menu`, `tab/menu`). */
+export interface PipelineEntity extends EntityContext {
+  kind: "pipeline";
+  name: string;
+}
+
+/** A node: of the canvas (`canvas/node/menu`) or of a Run's detail (`node/toolbar`). */
+export interface NodeEntity extends EntityContext {
+  kind: "node";
+  name: string | null;
+  /** `agent`, `script`, `merge`… on the canvas; `null` where unknown. */
+  type: string | null;
+  /** In a Run: the node's status; `null` on a pipeline template. */
+  status: string | null;
+}
+
+/** An edge of the canvas (`canvas/edge/menu`); its id is `<from node>.<port>-><to node>.<port>`. */
+export interface EdgeEntity extends EntityContext {
+  kind: "edge";
+  from: string;
+  to: string;
+}
+
+/** A file of the Review page (`review/file`); its id is its path. */
+export interface FileEntity extends EntityContext {
+  kind: "file";
+  path: string;
+  /** `added`, `modified`, `deleted` or `renamed`. */
+  status: string;
+}
+
+/** A skill or a folder of the skill bank (`skill/menu`). */
+export interface SkillEntity extends EntityContext {
+  kind: "skill" | "skill_folder";
+  name: string;
+}
+
+/** An item's menu or bar: the item it acts on. */
+export interface ItemContext<E extends EntityContext = EntityContext> extends LocationContext {
+  entity: E;
+}
+
+/** The multi-selection bar (`runs/bulk`): the ids of the selected items. */
+export interface SelectionContext extends LocationContext {
+  selection: { kind: "run"; ids: string[] };
+}
+
+/** The pipeline a canvas shows; `run` is the Run of a Run's canvas, else `null`. */
+export interface CanvasPipeline {
+  id: string;
+  name: string;
+  run: string | null;
+}
+
+/** A menu of the canvas (`canvas/node/menu`, `canvas/edge/menu`). */
+export interface CanvasItemContext<E extends EntityContext> extends ItemContext<E> {
+  pipeline: CanvasPipeline;
+}
+
+/** The pair of Run refs the Review page compares (`review/toolbar`, `review/file`). */
+export interface ReviewPair {
+  from: string;
+  to: string;
+}
+
+export interface ReviewContext extends LocationContext {
+  review: ReviewPair;
+}
+
+/**
+ * `review/file`: a file of the Review page, for its actions (#30) and its
+ * decorations (#31). `file.run` names the Run under review.
+ */
+export interface ReviewFileContext extends ReviewContext {
+  entity: FileEntity;
+  file: { run: string; path: string; status: string };
+}
+
+/** What each Action location hands over, beyond the selected Run and its Projet. */
+export interface ActionContexts {
+  "topbar/end": LocationContext;
+  "runs/header": LocationContext;
+  "run/item/menu": ItemContext<RunEntity>;
+  "runs/bulk": SelectionContext;
+  "run/toolbar": LocationContext;
+  "canvas/node/menu": CanvasItemContext<NodeEntity>;
+  "canvas/edge/menu": CanvasItemContext<EdgeEntity>;
+  "node/toolbar": ItemContext<NodeEntity>;
+  "trigger/item/menu": ItemContext<TriggerEntity>;
+  "pipeline/item/menu": ItemContext<PipelineEntity>;
+  "pipelines/header": LocationContext;
+  "tab/menu": ItemContext<PipelineEntity>;
+  "review/toolbar": ReviewContext;
+  "review/file": ReviewFileContext;
+  "skill/menu": ItemContext<SkillEntity>;
+}
+
+export type ActionLocation = keyof ActionContexts;
+
+/** What an Action location adds to the base context: its `extra`. */
+export type ActionExtra<L extends ActionLocation> = Omit<ActionContexts[L], "location" | "run" | "project"> &
+  Partial<Pick<LocationContext, "run" | "project">>;
 
 /** What a command is called with: its action's location context. */
 export interface CommandContext extends LocationContext {

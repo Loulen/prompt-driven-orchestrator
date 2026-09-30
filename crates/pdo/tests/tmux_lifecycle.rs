@@ -250,8 +250,11 @@ async fn orphan_sweep_at_boot_kills_stale_session() {
         "pre-condition: fake session should exist on daemon's socket"
     );
 
+    // The reaper ticks every second, but a loaded host (a full `make test`
+    // beside other builds) can delay a tick and its sweep by several seconds:
+    // the deadline bounds a hang, not the reaper's cadence.
     assert!(
-        wait_for_session_gone(&socket, orphan_session, Duration::from_secs(20)).await,
+        wait_for_session_gone(&socket, orphan_session, Duration::from_secs(30)).await,
         "orphan session should be killed by the periodic reaper (run absent from event log)"
     );
 

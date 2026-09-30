@@ -63,19 +63,24 @@ describe("TabBar context menu (#342)", () => {
     seed([tab("a"), tab("b"), tab("c")], "a");
     render(<TabBar />);
     rightClickTab("c");
-    expect(screen.getByTestId("tab-ctx-close-right")).toBeDisabled();
+    // #30: a disabled entry of the shared menu is `aria-disabled` and inert.
+    expect(screen.getByTestId("tab-ctx-close-right")).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByTestId("tab-ctx-close-right"));
+    expect(useEditStore.getState().openTabs).toHaveLength(3);
     fireEvent.keyDown(document, { key: "Escape" });
     rightClickTab("a");
-    expect(screen.getByTestId("tab-ctx-close-right")).not.toBeDisabled();
+    expect(screen.getByTestId("tab-ctx-close-right")).not.toHaveAttribute("aria-disabled");
   });
 
   it("disables 'Close others' / 'Close all' when a single tab is open", () => {
     seed([tab("only")], "only");
     render(<TabBar />);
     rightClickTab("only");
-    expect(screen.getByTestId("tab-ctx-close-others")).toBeDisabled();
-    expect(screen.getByTestId("tab-ctx-close-all")).toBeDisabled();
-    expect(screen.getByTestId("tab-ctx-close")).not.toBeDisabled();
+    expect(screen.getByTestId("tab-ctx-close-others")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("tab-ctx-close-all")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("tab-ctx-close")).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(screen.getByTestId("tab-ctx-close-all"));
+    expect(useEditStore.getState().openTabs).toHaveLength(1);
   });
 
   it("Escape dismisses the menu without closing anything", () => {

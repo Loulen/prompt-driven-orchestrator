@@ -66,6 +66,11 @@ pub struct SpawnDeps<'a> {
     /// #672: the skill context — the Banque de skills and the delivery of a
     /// node's skills into the tree it works in.
     pub skills: &'a dyn crate::application::ports::NodeSkills,
+    /// Whether this spawn REPLACES the live iteration it targets: `restart_node`
+    /// alone, which kills that iteration's session first. Every other caller
+    /// dispatches, and a dispatch that finds its iteration already started is a
+    /// racing duplicate, refused before any side effect (ADR-0050 §2).
+    pub replaces_live_iteration: bool,
 }
 
 impl<'a> SpawnDeps<'a> {
@@ -81,7 +86,15 @@ impl<'a> SpawnDeps<'a> {
             docker_cmd_override: state.docker_cmd_override.as_deref(),
             home_override: state.sandbox_home_override.as_deref(),
             skills: state.skills.as_ref(),
+            replaces_live_iteration: false,
         }
+    }
+
+    /// The same deps, for the spawn that replaces its live iteration
+    /// (`restart_node`, after it killed that iteration's session).
+    pub fn replacing_live_iteration(mut self) -> Self {
+        self.replaces_live_iteration = true;
+        self
     }
 }
 
@@ -172,6 +185,19 @@ pub async fn spawn_node(
 
     let admission_guard = match guards::admit(deps, run_id, node, iter).await {
         Ok(guard) => guard,
+        Err(outcome) => return outcome,
+    };
+    // The guards again, under the admission lock this time: every spawn appends
+    // its reservation under that lock, so a duplicate that queued behind its
+    // winner (a loaded machine) reads the Run as the winner left it: refused
+    // before any side effect when the node moved on (a retry already at the next
+    // iteration) or the winner's session is up, instead of failing its own append
+    // later and parking the iteration `spawn_aborted`. It narrows the race, it
+    // does not close it: a loser that takes the lock before the winner's session
+    // exists still passes, and `launch` keeps the duplicate-session branch for it
+    // (ADR-0050 §2). Its read of the Run replaces the pre-lock one.
+    let loaded = match guards::guard(deps, spawn_ctx, node, iter).await {
+        Ok(reloaded) => reloaded.or(loaded),
         Err(outcome) => return outcome,
     };
 

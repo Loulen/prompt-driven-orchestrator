@@ -248,7 +248,8 @@ pub(super) async fn restart_node(
     // Read the `SpawnOutcome`. It is not `#[must_use]` and must not become
     // one (fire-and-forget schedulers drop it on purpose), but THIS caller has
     // a client waiting on an answer.
-    let outcome = spawn_node(SpawnDeps::from_state(&state), &spawn_ctx, node, iter).await;
+    let deps = SpawnDeps::from_state(&state).replacing_live_iteration();
+    let outcome = spawn_node(deps, &spawn_ctx, node, iter).await;
     let verdict = match outcome {
         SpawnOutcome::Spawned {
             reused_sub_worktree,

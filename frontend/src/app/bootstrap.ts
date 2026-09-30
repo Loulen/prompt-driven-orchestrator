@@ -1,5 +1,6 @@
 import { initTheme } from "../hooks/useTheme";
-import { shareReactWithExtensions } from "../shared/extensions/shared";
+import { extensionUiModule } from "../shared/extensions/uiModule";
+import { shareWithExtensions } from "../shared/extensions/shared";
 
 /**
  * Process-wide setup that must run once, before the first render.
@@ -9,10 +10,10 @@ import { shareReactWithExtensions } from "../shared/extensions/shared";
  * takes ownership of it, so a later `prefers-color-scheme` flip is honoured
  * while the preference is `system`.
  *
- * ADR-0081: share the front's React with the extensions' UI bundles before any
- * of them can load.
+ * ADR-0081: share the front's React, and the shared module `@pdo/extension-ui`
+ * (amendment #32), with the extensions' UI bundles before any of them can load.
  */
 export function bootstrap(): void {
   initTheme();
-  shareReactWithExtensions();
+  shareWithExtensions(extensionUiModule);
 }

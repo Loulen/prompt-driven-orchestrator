@@ -1,7 +1,8 @@
 # Extension UI reference
 
-How an extension adds to PDO's interface (ADR-0081, amendments #29 and #31): a catalogue of **named
-locations**, a few **kinds of contribution**, **commands** and **`when` clauses**. The locations,
+How an extension adds to PDO's interface (ADR-0081, amendments #29, #30, #31 and #32): a
+catalogue of **named locations**, a few **kinds of contribution**, **commands**, **`when`
+clauses**, and the locations an extension **hosts** in its own interface. The locations,
 what each accepts and the context each hands over are part of the semver of
 `pdo-extension-api`.
 
@@ -33,6 +34,19 @@ fn ui(&self) -> Option<UiContributions> {
             .command(new_task),
     )
 }
+```
+
+An action goes to any Action location the same way, with a `when` on what that location hands
+over:
+
+```rust
+let link = UiCommand::new("pm.link-task", "Link to a task…", "linkTask");
+UiContributions::bundle("/ext/pm/ui.js", 19)
+    .contribute(
+        UiContribution::action(UiLocation::RunItemMenu, "link-task", &link)
+            .when(When::not(When::eq("entity.status", "archived"))),
+    )
+    .command(link)
 ```
 
 - The bundle (`bundle_url`) is one ES module. It imports `react`, `react/jsx-runtime` and
@@ -275,11 +289,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 
 ### `review/file`
 
-- **Accepts**: decoration.
-- **Renders**: the header of a file of the Review page, before its comment counts.
-- **Context**: `ReviewFileContext` = `DecorationContext` + `file` (`{ run, path, status }`),
-  `entity` = `{ kind: "file", id: <path>, name: <basename>, attributes: {} }`. The Review page
-  selects no Run: `context.run` is `null`, `file.run` names the Run.
+Accepts decorations as well as actions: see [`review/file`](#reviewfile) among the Action
+locations.
 
 ### `statusbar`
 
@@ -319,6 +330,149 @@ carries every attribute of the filter, as `?attr.<id>/<key>=<value>` does on the
   any Projet is left out while the filter is active. The row opens on a « Project » tag, so its
   controls never read as the list's own.
 - **0.1**: the `ListFilter { resource: Project }` slot.
+### The Action locations
+
+Every location below accepts **actions only** (amendment #30), except `review/file`, which
+also takes decorations (amendment #31). The core renders each action and
+calls its command with the location's context; the `when` clause reads that same context.
+
+- **In a bar**: an icon button per action, before the core's buttons: the command's `icon`, or the
+  label's first letter, boxed; the label as tooltip and accessible name.
+- **In a menu**: a group per extension, titled with the extension's name, after the core's entries
+  and **before the destructive entry** (Delete, Cleanup…). Each entry shows the command's icon and
+  the label.
+- **Without a contribution**, a bar or a menu looks exactly as it did: no button, no group, no
+  separator.
+- **A command that fails** (a throw, a rejection) shows an error toast; the bar or the menu keeps
+  working. Every element sits in its own error boundary.
+
+The contexts they hand over, on top of `LocationContext`:
+
+```ts
+interface EntityContext { kind: string; id: string; attributes: Attributes; name?: string | null }
+interface RunEntity extends EntityContext { kind: "run"; name: string | null; pipeline: string; status: string }
+interface TriggerEntity extends EntityContext { kind: "trigger"; name: string; pipeline: string; enabled: boolean }
+interface PipelineEntity extends EntityContext { kind: "pipeline"; name: string }
+interface NodeEntity extends EntityContext { kind: "node"; name: string | null; type: string | null; status: string | null }
+interface EdgeEntity extends EntityContext { kind: "edge"; from: string; to: string }   // id: "<from>.<port>-><to>.<port>"
+interface FileEntity extends EntityContext { kind: "file"; path: string; status: string } // id: the path
+interface SkillEntity extends EntityContext { kind: "skill" | "skill_folder"; name: string }
+
+interface ItemContext<E> extends LocationContext { entity: E }
+interface SelectionContext extends LocationContext { selection: { kind: "run"; ids: string[] } }
+interface CanvasItemContext<E> extends ItemContext<E> { pipeline: { id: string; name: string; run: string | null } }
+interface ReviewContext extends LocationContext { review: { from: string; to: string } }
+interface ReviewFileContext extends ReviewContext { entity: FileEntity; file: { run: string; path: string; status: string } }
+```
+
+`attributes` is `{}` for an entity that carries none. A command receives this context plus
+`extension` and `contribution` (see *Commands*).
+
+### `runs/header`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the Runs tab's title bar, before « Project » and
+  « New Run ».
+- **Context**: `LocationContext`.
+
+### `run/item/menu`
+
+- **Accepts**: action.
+- **Renders**: the « ⋯ » menu of a Run's row (a `MoreHorizontal` trigger after the row's hover
+  icons): Rename, Pause / Resume, Retry all, Open shell, Copy run id as the Run allows, the
+  extensions' groups, then Cleanup (Stop and archive) or Forget.
+- **Context**: `ItemContext<RunEntity>`: the row's Run, whatever the selection. Hide an action
+  on an archived Run with `When::not(When::eq("entity.status", "archived"))`.
+
+### `runs/bulk`
+
+- **Accepts**: action.
+- **Renders**: an entry per action in the bar of the Runs multi-selection, after Cleanup, Retry
+  and Pause.
+- **Context**: `SelectionContext`: the ids of the selected Runs.
+
+### `run/toolbar`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the toolbar of a Run's canvas, after its finished-run
+  group and before Review and Pipeline info. Not on a pipeline template's canvas.
+- **Context**: `LocationContext`, whose `run` is the Run on the canvas.
+
+### `canvas/node/menu`
+
+- **Accepts**: action.
+- **Renders**: the right-click menu of a node of the canvas (template or Run, not archived):
+  Duplicate, Fan out, Export as YAML…, the extensions' groups, then Delete.
+- **Context**: `CanvasItemContext<NodeEntity>`: the node (`status` on a Run's canvas, else
+  `null`) and the pipeline of the tab.
+
+### `canvas/edge/menu`
+
+- **Accepts**: action.
+- **Renders**: the right-click menu of an edge of the canvas: the extensions' groups, then
+  Delete edge.
+- **Context**: `CanvasItemContext<EdgeEntity>`.
+
+### `node/toolbar`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action at the right of the header of a node's detail, in a
+  Run.
+- **Context**: `ItemContext<NodeEntity>`: the node (`type` is `null` there) and, as `run`, the
+  selected Run.
+
+### `trigger/item/menu`
+
+- **Accepts**: action.
+- **Renders**: the « ⋯ » menu of a Trigger's row: Run now, Edit, Enable / Disable, Copy trigger
+  id, the extensions' groups, then Delete.
+- **Context**: `ItemContext<TriggerEntity>`.
+
+### `pipeline/item/menu`
+
+- **Accepts**: action.
+- **Renders**: the « ⋯ » menu of a row of the Pipelines tab: Open, Rename, Duplicate, the
+  extensions' groups, then Delete pipeline.
+- **Context**: `ItemContext<PipelineEntity>`.
+
+### `pipelines/header`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the Pipelines tab's title bar, before « Import a
+  workflow » and « New pipeline ».
+- **Context**: `LocationContext`.
+
+### `tab/menu`
+
+- **Accepts**: action.
+- **Renders**: the right-click menu of an editor tab: Close, Close others, Close to the right,
+  Close all, then the extensions' groups.
+- **Context**: `ItemContext<PipelineEntity>`: the tab's pipeline.
+
+### `review/toolbar`
+
+- **Accepts**: action.
+- **Renders**: an icon button per action in the Review page's top bar, before « open in a new
+  tab ».
+- **Context**: `ReviewContext`, whose `run` is the Run under review (and `project` its Projet).
+
+### `review/file`
+
+- **Accepts**: action and decoration (amendments #30 and #31), the one Action location that takes
+  something else.
+- **Renders**: in the header of a file of the Review page, an icon button per action before
+  « Copy path » (clicking it does not fold the file), and the decorations before its comment
+  counts.
+- **Context**: `ReviewFileContext`, for both: `entity` = `{ kind: "file", id: <path>, name:
+  <basename>, path, status, attributes: {} }`, `file` = `{ run, path, status }`, `review` the
+  compared pair; `run` is the Run under review (and `project` its Projet).
+
+### `skill/menu`
+
+- **Accepts**: action.
+- **Renders**: the « ⋮ » menu of a skill or a folder of the skill bank: its verbs, the
+  extensions' groups, then its delete (or « Managed by PDO » on a locked skill).
+- **Context**: `ItemContext<SkillEntity>`.
 
 ## Pages
 
@@ -373,8 +527,8 @@ error toast. An action whose command the bundle does not export is not rendered.
 ## `when` clauses
 
 A declarative condition on the location's context, evaluated by the core. A key is a dotted path:
-`run`, `run.status`, `project.name`, `run.attributes.<extension>/<key>`, `entity.kind`, `path`. An
-absent key reads as nothing.
+`run`, `run.status`, `project.name`, `run.attributes.<extension>/<key>`, `entity.kind`,
+`entity.status`, `selection.ids`, `review.to`, `path`. An absent key reads as nothing.
 
 | Rust | Wire | Holds when |
 | --- | --- | --- |
@@ -385,6 +539,98 @@ absent key reads as nothing.
 | `When::any([…])` | `{"any": […]}` | one clause holds (false when empty) |
 
 An operator the front does not know is false: the element stays hidden.
+
+## Hosted locations
+
+An extension may host locations in its own interface (amendment #32): the other extensions
+contribute there exactly as to the core's catalogue, and the host renders their elements with the
+shared module `@pdo/extension-ui`. `pm` hosts `pm/onglet`, `pm/action-page`, `pm/badge-carte` and
+`pm/section-barre-laterale`; its own documentation lists what each hands over.
+
+### Declaring one
+
+```rust
+use pdo_extension_api::{HostedLocation, UiContributions, UiElementKind};
+
+pub const TAB: &str = "pm/onglet";
+
+fn ui(&self) -> Option<UiContributions> {
+    Some(
+        UiContributions::bundle("/ext/pm/ui.js", 19)
+            .importing_ui_module()
+            .host(
+                HostedLocation::new(TAB, UiElementKind::Tab)
+                    .describe("A tab of a Page or a Task, after History.")
+                    .context_key("page", "The Page shown: { id, title, kind }"),
+            ),
+    )
+}
+```
+
+- The id is `<extension id>/<name>`, the name in lowercase ASCII letters, digits and `-`. It is a
+  `&'static str`: a constant of the host's API.
+- A hosted location accepts **one** kind of element (`UiElementKind`): action, tab, section,
+  decoration or list filter. Never a page, which belongs to the core's shell.
+- `context_key` documents what the location adds to the context every location hands over.
+- The daemon leaves out, with a warning in its log, a declaration whose id does not start with
+  the host's id and `/`, that takes the id of a location of the core or one already declared, or
+  that accepts pages.
+- `GET /ext` lists the declarations in `ui.locations`: `{ id, accepts, description, context: [{
+  key, description }] }`.
+
+### Contributing to one
+
+```rust
+use pdo_extension_api::{UiContribution, UiLocation};
+
+UiContributions::bundle("/ext/audit/ui.js", 19)
+    .contribute(UiContribution::tab(UiLocation::Hosted("pm/onglet"), "audit", "Audit", "AuditTab"))
+```
+
+- The element's kind must be the one the host accepts; the daemon leaves out, with a warning,
+  any other.
+- A contribution to the location of an extension that is not loaded, or that does not declare
+  it, is **ignored without error**: the host is not installed, nothing shows.
+- The rule of the list holds: every contribution adds up, in registration order, then in
+  declaration order.
+
+### Rendering one: `@pdo/extension-ui`
+
+The front declares the shared module in its import map next to React (`/shared/pdo-extension-ui.js`).
+A bundle imports it as a bare specifier and never embeds it: with Vite, list it in
+`build.rollupOptions.external` with `react`, `react/jsx-runtime` and `react-dom`. Its types are
+`frontend/public/shared/pdo-extension-ui.d.ts` (served as `/shared/pdo-extension-ui.d.ts`).
+
+```ts
+import { HostedContribution, HostedContributions, useHostedContributions } from "@pdo/extension-ui";
+
+// Every element, in order; nothing at all without contribution.
+<HostedContributions location="pm/badge-carte" context={context} />
+
+// Or the list, to lay it out yourself (tab headers, then the selected tab's body).
+const tabs = useHostedContributions("pm/onglet", context);
+tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.label}</button>);
+<HostedContribution element={selected} />
+```
+
+| Export | What it does |
+| --- | --- |
+| `useHostedContributions(location, context?)` | The elements at `location` (`{ key, extension, id, label, type, context }`), `when` clauses applied on `context`. Empty without contribution, and for a location no loaded extension hosts |
+| `HostedContribution({ element, props? })` | One element: its component with `extension`, `context` and `props`, inside an error boundary; an action as a button (its command's icon and title) that calls it |
+| `HostedContributions({ location, context?, props?, wrap? })` | Every element through `HostedContribution`, each wrapped by `wrap(element, rendered)` when given; `null` without element |
+| `runHostedCommand(element)` | Call an action's command, as its button does |
+| `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
+
+- **Context**: an element receives the host's `context`, merged over the context every location
+  hands over (the selected Run, its Projet) and `location` (the hosted id). Pass a stable object
+  (`useMemo`): the list is recomputed when it changes. A `when` clause reads it by dotted keys
+  (`page.kind`).
+- **Errors**: a component that throws takes down its own element only; a command that throws or
+  rejects shows an error toast.
+- **No layout shift**: without an element, nothing is rendered, no wrapper box either.
+- **Version**: a bundle that imports the module declares it (`importing_ui_module()`, on the wire
+  `ui.ui_module_major`). A bundle built against another major than the front's is never loaded,
+  and a banner says so, as for React. The module's version is `pdo-extension-api`'s.
 
 ## Version 0.1
 
@@ -398,7 +644,8 @@ nothing.
 
 ## Adding a location
 
-A location is added to the core, never by an extension:
+A location of the core is added to the core; an extension adds its own as a hosted location
+(above):
 
 1. A variant of `UiLocation` (its id in `serde(rename)`), its line in `UiLocation::ALL`,
    `UiLocation::id` and `UiLocation::accepts`, then `make types`.

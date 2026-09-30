@@ -143,15 +143,34 @@ export function TestPage({ context, navigate, shell }) {
   );
 }
 
-// Command `test.show-context`: records the context it was called with, then
-// tells the operator.
+// What an action's context says, in one line: its location, then what is at
+// stake there (the entity, the selection, the pipeline, the Review pair), then
+// the selected Run and its Projet.
+function describe(context) {
+  const parts = [context.location ?? "?"];
+  const entity = context.entity;
+  if (entity) parts.push(`${entity.kind} ${entity.id}${entity.status ? ` (${entity.status})` : ""}`);
+  if (context.selection) parts.push(`${context.selection.ids.length} selected: ${context.selection.ids.join(", ")}`);
+  if (context.pipeline) parts.push(`pipeline ${context.pipeline.id}`);
+  if (context.review) parts.push(`review ${context.review.from} → ${context.review.to}`);
+  parts.push(`Run ${context.run?.id ?? "none"}`, `Project ${context.project?.name ?? "none"}`);
+  return parts.join(" · ");
+}
+
+// Command `test.show-context`, and every `Test <location>` action's: records
+// the context it was called with, then tells the operator.
 export async function showContext(context, host) {
   await fetch("/ext/test/commands", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(context),
   });
-  host.notify(`Run ${context.run?.id ?? "none"} · Project ${context.project?.name ?? "none"}`);
+  host.notify(describe(context));
+}
+
+// Command `test.fail`: always throws, so the core's error toast shows.
+export function failOnPurpose() {
+  throw new Error("the test extension fails on purpose");
 }
 
 // #31 — one component per kind of contribution, at every location that

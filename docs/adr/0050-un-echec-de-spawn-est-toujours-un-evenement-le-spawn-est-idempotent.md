@@ -54,3 +54,19 @@ ADR-0032) rouvre la course de #592 ou re-heurte la branche de #498. À livrer en
 
 #498, #592, #196/#201/#212, #279 (la classe « spawn abort silencieux »), ADR-0037, ADR-0009
 (la primitive de spawn de référence porte les gardes), ADR-0038 (réservation avant session).
+
+## Amendement (#30) : le perdant est écarté sous le verrou d'admission
+
+La sonde du perdant bénin (§2) testait la session tmux du gagnant. Or le `NodeStarted` du gagnant
+est durable bien avant sa session (sous-worktree, skills, prompt entre les deux). Un second
+dispatch du même `(node, iter)` dans cette fenêtre ne voyait aucune session et passait : il
+ajoutait un `NodeStarted` redondant, ou gagnait la course tmux si la première session venait
+d'être tuée, ce qui faisait refuser le `restart_node` suivant. C'est ce qu'a montré le
+`advance_run` du watcher de pipeline (l'écho débouncé de la création du Run), en course avec le
+spawn d'une complétion sur une machine chargée.
+
+Désormais, sous le verrou d'admission (tenu jusqu'à l'ajout de l'événement de réservation), un
+dispatch qui trouve son itération déjà démarrée (`Running` ou `AwaitingUser`) est le perdant
+bénin, écarté avant tout effet de bord. Seul `restart_node` remplace une itération démarrée
+(`SpawnDeps::replacing_live_iteration`, après avoir tué sa session) ; une itération `waiting` reste
+promue par sa relance.

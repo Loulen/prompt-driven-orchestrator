@@ -17,7 +17,15 @@ use super::UiElement;
 /// each of them, and `frontend/src/shared/generated/UiLocation.ts` is this very
 /// type in TypeScript.
 ///
+/// Besides the core's locations, an extension may **host** its own
+/// ([`UiLocation::Hosted`], declared by a [`HostedLocation`](super::HostedLocation)):
+/// the other extensions contribute there exactly as here, and the host renders
+/// them through the shared module `@pdo/extension-ui` (ADR-0081, amendment #32).
+///
 /// Non-exhaustive: adding a location is a minor evolution of the API.
+///
+/// Since #30 the catalogue also holds the **Action locations**: the bars and
+/// menus of the interface ([`UiLocation::is_action_location`]).
 ///
 /// **Adding a location**: a variant here (its id in `serde(rename)`, its line
 /// in [`UiLocation::ALL`], [`UiLocation::id`] and [`UiLocation::accepts`]), its
@@ -104,10 +112,6 @@ pub enum UiLocation {
     /// the port's name: a [`UiElement::Decoration`] per contribution.
     #[serde(rename = "port/item")]
     PortItem,
-    /// A mark on the header of a file of the Review page, before its comment
-    /// counts: a [`UiElement::Decoration`] per contribution.
-    #[serde(rename = "review/file")]
-    ReviewFile,
     /// A mark in the status bar, before the service health: a
     /// [`UiElement::Decoration`] per contribution.
     #[serde(rename = "statusbar")]
@@ -125,10 +129,78 @@ pub enum UiLocation {
     /// Projets that match. The 0.1 `ListFilter { resource: Project }` slot.
     #[serde(rename = "projects/filter")]
     ProjectsFilter,
+    // The Action locations (amendment #30): each renders an [`UiElement::Action`]
+    // per contribution, as a button of a bar or an entry of a menu, and hands
+    // over what is at stake there (an `entity`, a `selection`…).
+    /// The title bar of the Runs tab, before « Project » and « New Run »: an
+    /// icon button per action.
+    #[serde(rename = "runs/header")]
+    RunsHeader,
+    /// The « ⋯ » menu of a Run's row: a group per extension, before the
+    /// destructive entry. Hands over the row's Run as `entity`.
+    #[serde(rename = "run/item/menu")]
+    RunItemMenu,
+    /// The bar of the Runs multi-selection: an entry per action, after the
+    /// core's. Hands over the selected Runs as `selection`.
+    #[serde(rename = "runs/bulk")]
+    RunsBulk,
+    /// The toolbar of a Run's canvas, before the info group: an icon button
+    /// per action.
+    #[serde(rename = "run/toolbar")]
+    RunToolbar,
+    /// The right-click menu of a node of the canvas. Hands over the node as
+    /// `entity` and its `pipeline`.
+    #[serde(rename = "canvas/node/menu")]
+    CanvasNodeMenu,
+    /// The right-click menu of an edge of the canvas. Hands over the edge as
+    /// `entity` and its `pipeline`.
+    #[serde(rename = "canvas/edge/menu")]
+    CanvasEdgeMenu,
+    /// The header of a node's detail in a Run: an icon button per action.
+    /// Hands over the node as `entity`.
+    #[serde(rename = "node/toolbar")]
+    NodeToolbar,
+    /// The « ⋯ » menu of a Trigger's row. Hands over the Trigger as `entity`.
+    #[serde(rename = "trigger/item/menu")]
+    TriggerItemMenu,
+    /// The « ⋯ » menu of a Pipeline's row. Hands over the Pipeline as `entity`.
+    #[serde(rename = "pipeline/item/menu")]
+    PipelineItemMenu,
+    /// The title bar of the Pipelines tab, before « Import » and « New »: an
+    /// icon button per action.
+    #[serde(rename = "pipelines/header")]
+    PipelinesHeader,
+    /// The right-click menu of an editor tab. Hands over the tab's Pipeline as
+    /// `entity`.
+    #[serde(rename = "tab/menu")]
+    TabMenu,
+    /// The top bar of the Review page, before « open in a new tab »: an icon
+    /// button per action. Hands over the compared pair as `review`.
+    #[serde(rename = "review/toolbar")]
+    ReviewToolbar,
+    /// The header of a file of the Review page: an icon button per
+    /// [`UiElement::Action`], before « Copy path », handing over the file as
+    /// `entity` and the pair as `review`; and a mark per
+    /// [`UiElement::Decoration`], before its comment counts (amendments #30
+    /// and #31).
+    #[serde(rename = "review/file")]
+    ReviewFile,
+    /// The « ⋮ » menu of a skill or a folder of the skill bank. Hands over the
+    /// skill or the folder as `entity`.
+    #[serde(rename = "skill/menu")]
+    SkillMenu,
+    /// A location an extension hosts, by its id `<extension>/<name>`
+    /// (`pm/onglet`): what it accepts and hands over is the host's
+    /// [`HostedLocation`](super::HostedLocation) declaration. A contribution to
+    /// the location of an extension that is not loaded, or that does not
+    /// declare it, is left out without error.
+    #[serde(untagged)]
+    Hosted(#[cfg_attr(feature = "ts", ts(type = "`${string}/${string}`"))] &'static str),
 }
 
 impl UiLocation {
-    /// Every location of this version of the API, in the catalogue's order.
+    /// Every location of the core in this version of the API, in the
+    /// catalogue's order (the hosted ones are the extensions').
     pub const ALL: &'static [UiLocation] = &[
         UiLocation::TopbarStart,
         UiLocation::TopbarEnd,
@@ -148,11 +220,24 @@ impl UiLocation {
         UiLocation::PipelineItem,
         UiLocation::CanvasNode,
         UiLocation::PortItem,
-        UiLocation::ReviewFile,
         UiLocation::Statusbar,
         UiLocation::TriggersFilter,
         UiLocation::PipelinesFilter,
         UiLocation::ProjectsFilter,
+        UiLocation::RunsHeader,
+        UiLocation::RunItemMenu,
+        UiLocation::RunsBulk,
+        UiLocation::RunToolbar,
+        UiLocation::CanvasNodeMenu,
+        UiLocation::CanvasEdgeMenu,
+        UiLocation::NodeToolbar,
+        UiLocation::TriggerItemMenu,
+        UiLocation::PipelineItemMenu,
+        UiLocation::PipelinesHeader,
+        UiLocation::TabMenu,
+        UiLocation::ReviewToolbar,
+        UiLocation::ReviewFile,
+        UiLocation::SkillMenu,
     ];
 
     /// The stable id: what the wire, the deep links (`#/ext/<extension>/<id>/…`)
@@ -177,21 +262,44 @@ impl UiLocation {
             UiLocation::PipelineItem => "pipeline/item",
             UiLocation::CanvasNode => "canvas/node",
             UiLocation::PortItem => "port/item",
-            UiLocation::ReviewFile => "review/file",
             UiLocation::Statusbar => "statusbar",
             UiLocation::TriggersFilter => "triggers/filter",
             UiLocation::PipelinesFilter => "pipelines/filter",
             UiLocation::ProjectsFilter => "projects/filter",
+            UiLocation::RunsHeader => "runs/header",
+            UiLocation::RunItemMenu => "run/item/menu",
+            UiLocation::RunsBulk => "runs/bulk",
+            UiLocation::RunToolbar => "run/toolbar",
+            UiLocation::CanvasNodeMenu => "canvas/node/menu",
+            UiLocation::CanvasEdgeMenu => "canvas/edge/menu",
+            UiLocation::NodeToolbar => "node/toolbar",
+            UiLocation::TriggerItemMenu => "trigger/item/menu",
+            UiLocation::PipelineItemMenu => "pipeline/item/menu",
+            UiLocation::PipelinesHeader => "pipelines/header",
+            UiLocation::TabMenu => "tab/menu",
+            UiLocation::ReviewToolbar => "review/toolbar",
+            UiLocation::ReviewFile => "review/file",
+            UiLocation::SkillMenu => "skill/menu",
+            UiLocation::Hosted(id) => id,
         }
     }
 
     /// Whether this location renders `element`. The core leaves out, with a
-    /// warning in its log, a contribution a location does not accept.
+    /// warning in its log, a contribution a location does not accept. A
+    /// hosted location accepts the kind its host declares
+    /// ([`HostedLocation::accepts`](super::HostedLocation::accepts)): the core
+    /// checks it against the declaration, this answers `true`.
     pub fn accepts(self, element: &UiElement) -> bool {
         match self {
             UiLocation::TopbarStart => matches!(element, UiElement::Page { .. }),
             UiLocation::TopbarEnd => {
                 matches!(element, UiElement::Page { .. } | UiElement::Action { .. })
+            }
+            UiLocation::ReviewFile => {
+                matches!(
+                    element,
+                    UiElement::Decoration { .. } | UiElement::Action { .. }
+                )
             }
             UiLocation::Settings
             | UiLocation::ProjectEdit
@@ -212,9 +320,34 @@ impl UiLocation {
             | UiLocation::PipelineItem
             | UiLocation::CanvasNode
             | UiLocation::PortItem
-            | UiLocation::ReviewFile
             | UiLocation::Statusbar => matches!(element, UiElement::Decoration { .. }),
+            UiLocation::Hosted(_) => true,
+            _ if self.is_action_location() => matches!(element, UiElement::Action { .. }),
+            _ => false,
         }
+    }
+
+    /// Whether this location is one of the Action locations (amendment #30): a
+    /// bar or a menu that accepts actions, and only actions except for
+    /// `review/file`, which also takes Decorations (amendment #31).
+    pub fn is_action_location(self) -> bool {
+        matches!(
+            self,
+            UiLocation::RunsHeader
+                | UiLocation::RunItemMenu
+                | UiLocation::RunsBulk
+                | UiLocation::RunToolbar
+                | UiLocation::CanvasNodeMenu
+                | UiLocation::CanvasEdgeMenu
+                | UiLocation::NodeToolbar
+                | UiLocation::TriggerItemMenu
+                | UiLocation::PipelineItemMenu
+                | UiLocation::PipelinesHeader
+                | UiLocation::TabMenu
+                | UiLocation::ReviewToolbar
+                | UiLocation::ReviewFile
+                | UiLocation::SkillMenu
+        )
     }
 }
 
@@ -267,6 +400,9 @@ mod tests {
         assert!(UiLocation::SkillDetail.accepts(&tab));
         assert!(UiLocation::ProjectsFilter.accepts(&filter));
         assert!(!UiLocation::TriggersFilter.accepts(&decoration));
+        assert!(UiLocation::ReviewFile.accepts(&decoration));
+        assert!(UiLocation::ReviewFile.accepts(&action));
+        assert!(!UiLocation::ReviewFile.accepts(&section));
     }
 
     #[test]
@@ -299,5 +435,56 @@ mod tests {
                 location.id()
             );
         }
+    }
+
+    #[test]
+    fn the_action_locations_accept_only_actions() {
+        let page = UiElement::Page {
+            component: "P".into(),
+            icon: None,
+        };
+        let tab = UiElement::Tab {
+            component: "T".into(),
+        };
+        let action = UiElement::Action {
+            command: "c".into(),
+        };
+        let actions: Vec<_> = UiLocation::ALL
+            .iter()
+            .filter(|l| l.is_action_location())
+            .map(|l| l.id())
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                "runs/header",
+                "run/item/menu",
+                "runs/bulk",
+                "run/toolbar",
+                "canvas/node/menu",
+                "canvas/edge/menu",
+                "node/toolbar",
+                "trigger/item/menu",
+                "pipeline/item/menu",
+                "pipelines/header",
+                "tab/menu",
+                "review/toolbar",
+                "review/file",
+                "skill/menu",
+            ]
+        );
+        for location in UiLocation::ALL.iter().filter(|l| l.is_action_location()) {
+            assert!(location.accepts(&action), "{}", location.id());
+            assert!(!location.accepts(&page), "{}", location.id());
+            assert!(!location.accepts(&tab), "{}", location.id());
+        }
+    }
+
+    #[test]
+    fn a_hosted_location_serializes_as_its_id() {
+        let hosted = UiLocation::Hosted("pm/onglet");
+        assert_eq!(hosted.id(), "pm/onglet");
+        assert_eq!(serde_json::to_value(hosted).unwrap(), "pm/onglet");
+        assert!(!UiLocation::ALL.contains(&hosted));
     }
 }

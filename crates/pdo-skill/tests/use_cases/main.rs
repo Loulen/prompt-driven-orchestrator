@@ -10,5 +10,6 @@ mod files;
 mod folders;
 mod import;
 mod seed;
+mod seed_extension;
 mod sidecar;
 mod update;

@@ -4,6 +4,7 @@
 //! declares them, plus the two that belong to no context (`docs`, `migrate`).
 
 mod docs;
+mod ext;
 mod migrate;
 
 use std::net::IpAddr;
@@ -14,6 +15,7 @@ use pdo_review::adapters::cli::ReviewAction;
 use pdo_run::adapters::cli::RunAction;
 
 pub use docs::run_docs;
+pub use ext::run_ext;
 pub use migrate::run_migrate;
 
 const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
@@ -133,6 +135,17 @@ pub enum Commands {
     Page {
         #[command(subcommand)]
         action: PageAction,
+    },
+    /// Run an extension's command line through the daemon: `pdo ext <id>
+    /// <args…>`. Arguments and standard input go to the extension with the
+    /// node session the command runs in; its stdout, stderr and exit code
+    /// come back as they are. `pdo ext` alone lists the extensions that have
+    /// a command line. Exits 1 when the daemon cannot be reached, 127 when it
+    /// has no extension `<id>` or one without a command line.
+    Ext {
+        /// The extension's id, then its arguments, verbatim.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Read and answer the review comments a human left on this Run's diff
     /// (#751, ADR-0067 §4). Run from a node or manager session: the Run id comes

@@ -227,6 +227,11 @@ where
 
 async fn wait_for_node_status(daemon: &TestDaemon, run_id: &str, node_id: &str, want: &str) {
     wait_until(&format!("{node_id} to become {want}"), || async {
+        // `running` also waits for the spawn to end: its `node_started`, its
+        // tmux session (see `node_is_live`).
+        if want == "running" {
+            return crate::common::flow::node_is_live(daemon, run_id, node_id).await;
+        }
         node_status(daemon, run_id, node_id).await == want
     })
     .await;
@@ -272,6 +277,24 @@ fn kill_session(daemon: &TestDaemon, run_id: &str, node_id: &str, iter: i64) {
             &format!("pdo-{run_id}-{node_id}-iter-{iter}"),
         ])
         .output();
+}
+
+/// Kill the session of a node the log says is running, once it exists: its
+/// `NodeStarted` is durable before the spawn creates the session, so a kill
+/// right after « running » could land first, kill nothing, and leave the late
+/// session to collide with the restart that follows.
+async fn kill_started_session(daemon: &TestDaemon, run_id: &str, node_id: &str, iter: i64) {
+    let session = format!("pdo-{run_id}-{node_id}-iter-{iter}");
+    let socket = daemon.tmux_socket();
+    let (session_ref, socket_ref) = (&session, &socket);
+    wait_until(&format!("the session {session}"), move || async move {
+        std::process::Command::new("tmux")
+            .args(["-L", socket_ref, "has-session", "-t", session_ref])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
+    .await;
+    kill_session(daemon, run_id, node_id, iter);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -709,7 +732,7 @@ async fn a_restart_inventories_every_interrupted_git_op_and_routes_it_to_the_pre
     // The dead session mid git-op: kill it, then plant the markers a SIGKILL
     // during the `git commit` that concludes a merge leaves behind, plus an
     // uncommitted file (the work the reuse exists to protect).
-    kill_session(&daemon, &run_id, "impl-1", 1);
+    kill_started_session(&daemon, &run_id, "impl-1", 1).await;
     let sub_wt = daemon
         .repo_root()
         .join(".pdo/runs")

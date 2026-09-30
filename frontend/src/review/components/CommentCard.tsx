@@ -1,12 +1,11 @@
 import { Pencil, Trash2 } from "lucide-react";
 import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../../shared/markdown/plugins";
 import type { ReviewEntry } from "../model/entries";
 import { relativeTime } from "../model/commentStatus";
 import { anchorLabel } from "../model/drafts";
 import { Badge, Spinner } from "./commentBits";
 import SentCard from "./SentCard";
-
 
 /**
  * One review comment rendered under its diff line (#750): a **draft** card
@@ -67,8 +66,6 @@ interface Props {
   movedFrom?: number;
 }
 
-const REMARK_PLUGINS = [remarkGfm];
-
 export default function CommentCard({
   entry,
   sending,
@@ -94,7 +91,7 @@ export default function CommentCard({
       style={{ fontSize: "11.5px", lineHeight: 1.5 }}
       data-testid="review-comment-body"
     >
-      <Markdown remarkPlugins={REMARK_PLUGINS}>{text}</Markdown>
+      <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{text}</Markdown>
     </div>
   );
 

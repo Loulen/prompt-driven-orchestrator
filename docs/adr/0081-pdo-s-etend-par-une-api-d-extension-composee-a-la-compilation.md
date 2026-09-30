@@ -3,6 +3,11 @@
 > Statut : accepted (grilling du 2026-09-26, story « architecture extensible »). Vocabulaire :
 > CONTEXT.md § *Extensions*. S'appuie sur ADR-0079 (les mutations passent par des use cases).
 > Amendé par #21 : comment une distribution obtient le frontend embarqué (§ *Amendements*).
+> Amendé par #29 : les Emplacements d'UI deviennent un catalogue nommé, avec Commandes et
+> clauses `when` (§ *Amendement #29*).
+> Amendé par #34 : la ressource d'extension et l'Hôte (§ *Amendement #34*).
+> Amendé par #32 : une extension héberge ses propres emplacements, rendus par un module partagé
+> (§ *Amendement #32*).
 > Amendé par #33 : la CLI d'une extension (`pdo ext`) et ses skills (§ *Amendement #33*).
 
 ## Contexte
@@ -94,6 +99,65 @@ daemon » et l'init du tracing, en dépendant de crates hors semver.
 - Ajout rétrocompatible : bump mineur du core (2.1.0), `pdo-extension-api` inchangé. Les
   sous-commandes une à une et `pdo::cli` restent hors contrat.
 
+## Amendement #34 : la ressource d'extension et l'Hôte
+
+Seam découvert en préparant l'extension `pm` (`Loulen/pdo-extensions#4`), qui a ses propres
+entités (Backlogs, Tâches, Pages…) et dont chaque mutation doit être refusable, observable et
+annotable par une autre extension, sans que l'une nomme l'autre (ADR-0001 de `pdo-extensions`).
+Les hooks ci-dessus ne couvrent que les mutations **du core**.
+
+- **Une ressource générique `ResourceKind::Extension { extension, kind }`**, avec les verbes
+  existants. Sur le fil, une ressource s'écrit par son nom : `run`, `agent_profile`… pour celles
+  du core, `<extension>/<kind>` pour celles d'une extension (`pm/tache`). Une extension de droits
+  refuse `pm/tache` × `update` sans rien connaître de `pm`.
+- **Un Hôte** (`Host`), remis dans `ExtensionContext::host` à `start`, un par extension. C'est
+  par lui qu'une extension fait passer **ses** mutations par les mécanismes du core :
+  - `authorize(acteur, opération)` consulte l'Autorisation d'opération de **toutes** les
+    extensions, **celle qui émet comprise** ; le premier refus gagne avec sa raison, une panique
+    est un refus. L'extension répond alors le `403` `operation_refused` du core (`Denied`,
+    désormais dans l'API) et ne change rien.
+  - `publish(événement)` diffuse l'événement sur `/ws` et vers `on_event` des **autres**
+    extensions, dans une enveloppe du core : `{"type": "extension_event", "extension": <id>,
+    "name": <nom>, "payload": <charge>}`. L'enveloppe est gelée comme le reste de `/ws` ; la
+    charge appartient à l'extension.
+  - `applied(OperationApplied)` : l'extension dit au core qu'une mutation autorisée a réussi, et
+    l'`OperationApplied` suit, comme pour une mutation du core. Seule l'extension sait si sa
+    mutation a réussi : le core ne le devine pas depuis la réponse HTTP, ce qui couvre aussi ce
+    qui n'est pas une requête (une session WebSocket, un thread).
+  - `on_create(acteur, entité)` appelle `on_create` des **autres** extensions et rend leurs
+    Attributs préfixés par leur id. **L'extension les stocke** et les renvoie avec ses entités :
+    le core ne garde pas les Attributs des entités qu'il ne connaît pas.
+- **`OperationApplied` passe sur `/ws`** dès qu'une extension est chargée, pour les mutations du
+  core comme pour celles des extensions : un seul chemin (le bus), donc le même ordre sur `/ws` et
+  dans `on_event`. Sans extension, `/ws` porte exactement ce qu'il portait. Le front ignore ces
+  messages (liste blanche de `useDaemonSocket`). Contrepartie : comme tout événement du bus, un
+  `OperationApplied` est perdu (et journalisé) pour un abonné qui prend trop de retard sur le bus,
+  alors qu'il allait avant directement dans la file de chaque extension.
+- L'Hôte ne retient les extensions que faiblement : une fois le daemon arrêté, il refuse tout et
+  ne publie rien. `publish` et `applied` n'attendent jamais une extension (même livraison
+  isolée que pour les événements du core) ; `authorize` et `on_create` appellent les hooks des
+  autres extensions sur le fil de l'appelant, comme le core pour ses propres mutations : ils sont
+  aussi rapides que ces hooks, qui doivent l'être. `NeutralHost` (tout autorisé, rien publié,
+  aucun Attribut) est celui d'un `ExtensionContext::new`, et le remplaçant d'un Hôte dans les
+  tests d'une extension.
+- **Montée de mineure de l'API : 0.2 -> 0.3** (une mineure est cassante en 0.x ; #34 suit #29,
+  qui avait pris la 0.2) : `ResourceKind`
+  n'est plus `Copy` (la variante porte des `String`), `ExtensionContext` porte un champ de plus
+  (`host`) et implémente `Debug`, `PartialEq` et `Eq` à la main (deux contextes sont égaux s'ils
+  nomment le même dossier et partagent le même Hôte).
+  Une extension 0.1 ou 0.2 qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile telle
+  quelle et reste acceptée : la casse est de compilation, pas de fil, donc
+  `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0` (amendement #29).
+- L'extension de test interne y gagne trois pairs (`a`, `b`, `c`, `interop.rs`) qui créent et
+  suppriment leurs `item` par l'Hôte ; le daemon de démo les charge avec `PDO_TEST_INTEROP=1`.
+
+Écartés : **faire enregistrer l'`OperationApplied` par le scope de la requête** (comme pour le
+core) : il ne couvre ni la session WebSocket de `pm` ni un écrit hors requête, et l'aurait publié
+en double avec un `applied` explicite. **Stocker les Attributs d'une entité d'extension dans le
+core** : le core devrait alors filtrer des listes qu'il ne sert pas ; l'extension les stocke comme
+le reste de ses entités. **Livrer ses propres événements à l'émettrice** : elle sait ce qu'elle a
+publié, et une extension qui réagit à ses propres événements bouclerait.
+
 ## Amendements (#21)
 
 **Une distribution fournit le frontend déjà construit.** `pdo-daemon` embarque l'UI à la
@@ -123,6 +187,114 @@ asset par build.rs (casse les builds hors ligne ou vendorisés). Reste à faire 
 en asset de release (`pdo-frontend-dist-<tag>.tar.gz`), téléchargé par la distribution et non par
 build.rs, et vérifier qu'un `dist` fourni correspond au tag.
 
+## Amendement #29 : un catalogue d'emplacements nommés, des Commandes, des clauses `when`
+
+Seam découvert en préparant l'extension Projet (`pm`, story `Loulen/pdo-extensions#3`) : quatre
+emplacements figés (navigation, panneau de réglages, filtre de liste, onglet de détail) ne
+suffisent pas, et chaque nouveau besoin aurait ajouté une variante à `Slot`. On suit le modèle
+des *contribution points* de VS Code : peu de types de contribution, beaucoup d'emplacements.
+
+- **Un catalogue d'emplacements nommés** (`UiLocation`, non exhaustif) : chaque emplacement a un
+  identifiant stable (`topbar/start`, `topbar/end`, `settings`, `runs/filter`, `run/detail`),
+  accepte certains types de contribution et transmet un contexte typé. Les identifiants, ce que
+  chaque emplacement accepte et le contexte qu'il transmet font partie du semver de l'API. Le
+  type est exporté en TypeScript (feature `ts` du crate d'API, activée par le daemon) et
+  documenté dans `docs/reference/extension-ui.md` ; un test échoue quand un emplacement n'y a pas
+  sa section.
+- **Six types de contribution** (`UiElement`, non exhaustif) : Page, Action, Onglet, Section,
+  Décoration, Filtre de liste. Une contribution (`UiContribution`) porte son emplacement, un id
+  unique dans l'extension, un libellé, et une clause `when` optionnelle.
+- **Un emplacement est une liste** : les contributions de toutes les extensions s'y ajoutent,
+  dans l'ordre d'enregistrement des extensions puis dans l'ordre de déclaration. Aucune n'est
+  exclusive.
+- **Contexte** : chaque composant reçoit `extension` et `context`, qui porte au minimum le Run
+  sélectionné et son Projet. Le Projet est déduit par le front du core, avec la règle de la liste
+  des Runs : le Projet dont les membres contiennent le dépôt de la racine du Run, comparé tel quel
+  (ADR-0033). Chaque emplacement ajoute ce qui est en jeu chez lui (le chemin d'une Page, l'entité
+  d'un Onglet, le filtre d'un Filtre de liste).
+- **Commandes** (`UiCommand` : id, titre, icône, nom de l'export) : le bundle exporte une fonction,
+  une Action la référence. Le core rend l'entrée, puis appelle `fonction(context, host)` avec le
+  contexte de l'emplacement de l'Action ; `host.notify` affiche un toast, `host.open` suit un lien
+  profond. Une exception ou une promesse rejetée donne un toast d'erreur. Une Action dont la
+  Commande n'est pas déclarée est écartée par le daemon (avec un avertissement dans son journal),
+  une Action dont le bundle n'exporte pas la fonction n'est pas rendue.
+- **Clause `when`** : une expression structurée (`has`, `eq`, `not`, `all`, `any`) sur des clés
+  pointées du contexte (`run.status`, `project.name`), évaluée par le front du core. Fausse, la
+  contribution n'est pas rendue. Un opérateur inconnu du front est faux.
+- **`topbar/end`** : une icône par Page ou Action dans le groupe de droite de la barre du haut,
+  avant Stats. L'icône est un SVG servi par l'extension, dessiné en masque dans la couleur du
+  texte ; sans icône, la première lettre du libellé, encadrée. Une Page `topbar/end` s'ouvre dans
+  `FullWindowShell` sans rail (le rail y devient optionnel) : l'en-tête du shell (icône, titre,
+  fil d'Ariane et actions fournis par la Page, ✕, Échap), la navigation étant celle de la Page.
+- **Lien profond** : `#/ext/<id>/<emplacement>/<chemin>` ouvre la première Page de l'extension à
+  cet emplacement et lui transmet le chemin ; la barre d'adresse suit la Page ouverte (Précédent
+  la ferme). Ces liens sont cliquables dans tous les rendus markdown du core (artefacts,
+  commentaires de Review, `SKILL.md`, notes de version), écrits en lien ou en texte brut. Un lien
+  vers une extension absente, non chargée ou sans Page à cet emplacement affiche un toast
+  d'erreur, jamais une page blanche.
+- **Rétrocompatibilité** : `Slot` et `UiSlot` restent acceptés ; le daemon convertit chaque slot
+  0.1 vers son emplacement (`UiSlot::contribution`) et le front ne connaît plus que le
+  catalogue. Les composants 0.1 reçoivent toujours leurs props (`entity`, `filter`,
+  `setFilter`, `resource`). Le fil de `GET /ext` change : `ui.slots` devient `ui.contributions` et
+  `ui.commands` ; le front et le daemon sont livrés ensemble.
+- **Version** : `pdo-extension-api` passe en **0.2.0**. En 0.x, une mineure peut casser ; l'API
+  déclare désormais la plus ancienne version qu'elle honore
+  (`OLDEST_COMPATIBLE_API_VERSION = "0.1.0"`), et le daemon accepte une extension qui exige une
+  version comprise entre celle-ci et la sienne. Une extension écrite pour 0.1 continue donc de
+  compiler et de tourner.
+
+Écartés : une clause `when` en chaîne à parser (à la VS Code), parce qu'une structure se
+sérialise, se type en TypeScript et ne demande pas de grammaire ; un emplacement réservé à une
+extension, contraire à la règle de la liste ; un contexte calculé par le daemon, qui ne connaît
+pas la sélection de l'opérateur.
+
+## Amendement #32 : des emplacements hébergés par une extension
+
+Seam découvert avec l'extension Projet (`pm`) : une autre extension doit pouvoir ajouter un
+onglet à une Page de `pm`, un badge à une Carte, une action dans la barre d'une Page, une section
+dans sa barre latérale, sans que `pm` la connaisse (ADR-0001 de `pdo-extensions` : « mieux vaut
+trop de points d'extension que pas assez »). Le catalogue du core n'y suffit pas : ces endroits
+sont dans l'interface de `pm`, que le core ne rend pas.
+
+- **Déclaration** : une extension déclare ses emplacements hébergés (`HostedLocation`) dans
+  `UiContributions::host` : un identifiant `<id de l'extension>/<nom>` (`pm/onglet`), le **type de
+  contribution** accepté (un seul, `UiElementKind`), une description et la **forme du contexte**
+  (les clés qu'il ajoute au contexte commun, décrites). `GET /ext` les expose dans
+  `ui.locations`. Le daemon écarte, avec un avertissement, une déclaration dont l'identifiant ne
+  commence pas par l'id de l'extension, qui reprend un emplacement du core ou un emplacement déjà
+  déclaré, ou qui accepte des Pages (une Page appartient au shell du core).
+- **Contribution** : une autre extension y contribue comme au catalogue du core, en nommant
+  l'emplacement (`UiLocation::Hosted("pm/onglet")`, sérialisé par son identifiant). La règle de la
+  liste vaut : toutes les contributions s'ajoutent, dans l'ordre d'enregistrement puis de
+  déclaration. Le daemon vérifie le type contre la déclaration de l'hôte. Une contribution à
+  l'emplacement d'une extension absente (ou qui ne le déclare pas) est **ignorée sans erreur** :
+  l'hôte n'est simplement pas installé.
+- **Module partagé** `@pdo/extension-ui` : le front le déclare dans son import map à côté de
+  React (`/shared/pdo-extension-ui.js`, qui relit ce que le front pose sur
+  `globalThis.__PDO_SHARED__`). Un bundle l'importe en spécificateur nu, jamais embarqué. Il liste
+  (`useHostedContributions(emplacement, contexte)`) et rend (`HostedContribution`,
+  `HostedContributions`) les contributions à un emplacement hébergé, avec les mêmes frontières
+  d'erreur et la même clause `when` que le core ; une Action y devient un bouton qui appelle sa
+  Commande. Le contexte d'un élément est celui de l'hôte, fusionné par-dessus le contexte commun
+  (Run sélectionné, Projet, `location`). Sans contribution, rien n'est rendu : la mise en page de
+  l'hôte ne bouge pas.
+- **Version** : le module est versionné avec l'API (sa version est `API_VERSION`) et vérifié par
+  majeure comme React : un bundle déclare la majeure qu'il importe
+  (`UiContributions::importing_ui_module`, `ui.ui_module_major`) ; une majeure différente de celle
+  du front, et le bundle n'est pas chargé, avec une bannière. En 0.x, la vérification de
+  `api_version` au démarrage refuse déjà une mineure incompatible. Un test du daemon échoue quand
+  la version déclarée par le front (`uiModuleVersion.ts`) s'écarte de celle du crate.
+- **Rétrocompatibilité** : `UiLocation` garde `Copy` et `id(self) -> &'static str` (l'identifiant
+  d'un emplacement hébergé est un `&'static str`, une constante de l'API de l'hôte) ; tout le reste
+  est ajouté. `pdo-extension-api` passe en **0.4.0** (après 0.3.0, amendement #34),
+  `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`. Le fil de `GET /ext` gagne `ui.locations` et `ui.ui_module_major`.
+
+Écartés : un emplacement hébergé rendu par le core (il ne connaît pas l'interface de l'hôte) ;
+une API d'enregistrement dynamique côté navigateur (les déclarations restent dans le manifeste
+d'UI, lisibles par `GET /ext` et vérifiées par le daemon) ; un identifiant `String` qui aurait
+retiré `Copy` à `UiLocation` et cassé le code 0.2 ; plusieurs types acceptés par emplacement
+hébergé, sans besoin connu.
+
 ## Amendement #33 : la surface agent, `pdo ext <id>` et les skills d'extension
 
 Seams découverts en spécifiant l'extension Projet (`Loulen/pdo-extensions#4`) : un agent doit
@@ -132,8 +304,9 @@ consigne du prompt.
 - **Deux hooks de plus, deux défauts neutres** : `cli()` déclare une ligne de commande (un
   résumé, `None` par défaut) et `run_cli(invocation)` l'exécute ; `skills()` liste des skills
   embarqués (un `SKILL.md` et ses fichiers, aucun par défaut). `pdo-extension-api` passe en
-  **0.2.0** : ajout rétrocompatible au source d'une extension (une extension 0.1 qui ne touche
-  à rien compile et fonctionne), mais montée de mineure, donc rebuild obligatoire en 0.x.
+  **0.5.0** (après 0.4.0, amendement #32) : ajout rétrocompatible au source d'une extension (une
+  extension 0.1 qui ne touche à rien compile et fonctionne), mais montée de mineure, donc rebuild
+  obligatoire en 0.x ; `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`.
 - **`pdo ext <id> <args…>` relaie, sans construire les extensions.** La CLI envoie au daemon
   (`POST /ext-cli/<id>`, hors du préfixe `/ext/<id>` qui appartient à l'extension) les arguments
   tels quels, flags compris, l'entrée standard si c'est un pipe ou un fichier, son répertoire de

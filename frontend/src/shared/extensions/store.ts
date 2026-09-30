@@ -4,7 +4,8 @@
  *
  * A bundle built for another major of React than the front's is never imported
  * (`incompatible`): mixing two Reacts breaks hooks in ways a banner explains
- * better than a crash. A bundle that fails to import is `failed`. Neither
+ * better than a crash. The same holds for a bundle built against another major
+ * of the shared module `@pdo/extension-ui` (amendment #32). A bundle that fails to import is `failed`. Neither
  * affects the rest of the UI. A daemon without extension answers `[]`, and
  * nothing is added anywhere.
  */
@@ -14,6 +15,7 @@ import { create } from "zustand";
 import type { ExtensionEntry } from "../generated/ExtensionEntry";
 import { fetchExtensions } from "./api";
 import { hostReactMajor } from "./shared";
+import { UI_MODULE_MAJOR } from "./uiModuleVersion";
 
 /** What an ES bundle exports: its components, by name. */
 export type BundleModule = Record<string, unknown>;
@@ -29,15 +31,22 @@ export function setBundleLoader(loader?: BundleLoader): void {
 
 export type ExtensionStatus = "no-ui" | "loading" | "ready" | "incompatible" | "failed";
 
+/** What an `incompatible` bundle was built against that the front does not run. */
+export type Incompatibility = "react" | "ui-module";
+
 export interface LoadedExtension {
   entry: ExtensionEntry;
   status: ExtensionStatus;
   module: BundleModule | null;
+  /** Set when `incompatible`. */
+  incompatibility?: Incompatibility;
 }
 
 interface ExtensionsState {
   extensions: LoadedExtension[];
   started: boolean;
+  /** Every declared bundle was tried: each extension's status is final. */
+  loaded: boolean;
   load: () => Promise<void>;
 }
 
@@ -45,7 +54,11 @@ async function loadOne(entry: ExtensionEntry): Promise<LoadedExtension> {
   const url = entry.ui?.bundle_url;
   if (!url) return { entry, status: "no-ui", module: null };
   if (entry.ui?.react_major !== hostReactMajor()) {
-    return { entry, status: "incompatible", module: null };
+    return { entry, status: "incompatible", module: null, incompatibility: "react" };
+  }
+  const moduleMajor = entry.ui?.ui_module_major;
+  if (moduleMajor !== null && moduleMajor !== undefined && moduleMajor !== UI_MODULE_MAJOR) {
+    return { entry, status: "incompatible", module: null, incompatibility: "ui-module" };
   }
   try {
     return { entry, status: "ready", module: await loadBundle(url) };
@@ -58,6 +71,7 @@ async function loadOne(entry: ExtensionEntry): Promise<LoadedExtension> {
 export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   extensions: [],
   started: false,
+  loaded: false,
   load: async () => {
     if (get().started) return;
     set({ started: true });
@@ -71,13 +85,13 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
     }
     set({ extensions: entries.map((entry) => ({ entry, status: "loading", module: null })) });
     const loaded = await Promise.all(entries.map(loadOne));
-    set({ extensions: loaded });
+    set({ extensions: loaded, loaded: true });
   },
 }));
 
 /** Forget what was loaded (tests). */
 export function resetExtensions(): void {
-  useExtensionsStore.setState({ extensions: [], started: false });
+  useExtensionsStore.setState({ extensions: [], started: false, loaded: false });
   setBundleLoader();
 }
 
@@ -88,4 +102,13 @@ export function useExtensions(): LoadedExtension[] {
     void useExtensionsStore.getState().load();
   }, []);
   return extensions;
+}
+
+/** Whether every extension's status is final (loading them on first use). */
+export function useExtensionsLoaded(): boolean {
+  const loaded = useExtensionsStore((s) => s.loaded);
+  useEffect(() => {
+    void useExtensionsStore.getState().load();
+  }, []);
+  return loaded;
 }

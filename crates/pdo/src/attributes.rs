@@ -52,7 +52,7 @@ impl AttributeStore for SqliteAttributes {
     ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             let db = self.ready().await?;
-            let kind = wire_kind(entity.kind);
+            let kind = wire_kind(&entity.kind);
             let mut tx = db.begin().await.map_err(|e| e.to_string())?;
             for (key, value) in attributes {
                 sqlx::query(
@@ -81,7 +81,7 @@ impl AttributeStore for SqliteAttributes {
             let rows = sqlx::query(
                 "SELECT entity_id, key, value FROM entity_attributes WHERE entity_kind = ?",
             )
-            .bind(wire_kind(kind))
+            .bind(wire_kind(&kind))
             .fetch_all(db)
             .await
             .map_err(|e| e.to_string())?;
@@ -100,7 +100,7 @@ impl AttributeStore for SqliteAttributes {
         Box::pin(async move {
             let db = self.ready().await?;
             sqlx::query("DELETE FROM entity_attributes WHERE entity_kind = ? AND entity_id = ?")
-                .bind(wire_kind(entity.kind))
+                .bind(wire_kind(&entity.kind))
                 .bind(&entity.id)
                 .execute(db)
                 .await

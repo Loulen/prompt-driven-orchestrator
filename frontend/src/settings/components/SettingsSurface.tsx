@@ -6,7 +6,7 @@ import VersionUpdateSection from "../../platform/components/VersionUpdateSection
 import SkillBankPanel from "../../skill/components/SkillBankPanel";
 import { announceSkillsChanged, useSkillBank } from "../../skill/store/useSkillBank";
 import ExtensionSettingsPanels from "../../shared/extensions/ExtensionSettingsPanels";
-import { useSettingsPanels } from "../../shared/extensions/slots";
+import { useSettingsPanels } from "../../shared/extensions/catalogue";
 import StatsAbsorptionsPanel from "../../stats/components/StatsAbsorptionsPanel";
 import { updateSettings } from "../api/settings";
 import {

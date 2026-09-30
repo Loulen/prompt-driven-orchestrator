@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use pdo_extension_api::{Manifest, API_VERSION};
+use pdo_extension_api::{Manifest, API_VERSION, OLDEST_COMPATIBLE_API_VERSION};
 
 /// Why the daemon refused to start with an extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +70,7 @@ pub fn check_manifests<'m>(
                 id: manifest.id.clone(),
             });
         }
-        check_api_version(manifest, API_VERSION)?;
+        check_api_version(manifest, API_VERSION, OLDEST_COMPATIBLE_API_VERSION)?;
     }
     Ok(())
 }
@@ -88,18 +88,24 @@ fn check_id(id: &str) -> Result<(), RegistrationError> {
     }
 }
 
-/// Whether `implemented` honours what `manifest` requires: the same major, the
-/// same minor while in 0.x (where a minor is a breaking change), and at least as
-/// recent.
-fn check_api_version(manifest: &Manifest, implemented: &str) -> Result<(), RegistrationError> {
+/// Whether `implemented` honours what `manifest` requires: the same major, and
+/// at least as recent. From 1.0, any older minor of that major. In 0.x, where a
+/// minor may break, nothing older than `oldest`, the oldest version the API
+/// declares it still honours (`OLDEST_COMPATIBLE_API_VERSION`).
+fn check_api_version(
+    manifest: &Manifest,
+    implemented: &str,
+    oldest: &str,
+) -> Result<(), RegistrationError> {
     let unreadable = || RegistrationError::UnreadableApiVersion {
         id: manifest.id.clone(),
         required: manifest.api_version.clone(),
     };
     let required = parse(&manifest.api_version).ok_or_else(unreadable)?;
     let host = parse(implemented).expect("the API's own version is MAJOR.MINOR.PATCH");
+    let oldest = parse(oldest).expect("the oldest compatible version is MAJOR.MINOR.PATCH");
     let compatible = if required.0 == 0 {
-        host.0 == 0 && host.1 == required.1 && host.2 >= required.2
+        host.0 == 0 && oldest <= required && required <= host
     } else {
         host.0 == required.0 && (host.1, host.2) >= (required.1, required.2)
     };
@@ -135,7 +141,7 @@ mod tests {
     }
 
     fn verdict(required: &str, implemented: &str) -> Result<(), RegistrationError> {
-        check_api_version(&requiring(required), implemented)
+        check_api_version(&requiring(required), implemented, "0.1.0")
     }
 
     #[test]
@@ -147,14 +153,24 @@ mod tests {
     }
 
     #[test]
-    fn in_0_x_the_minor_must_match_and_the_patch_be_reached() {
+    fn in_0_x_the_version_must_be_reached_and_not_older_than_the_oldest_honoured() {
         assert!(verdict("0.1.0", "0.1.0").is_ok());
         assert!(verdict("0.1", "0.1.3").is_ok());
         assert!(verdict("0.1.2", "0.1.3").is_ok());
         assert!(verdict("0.1.4", "0.1.3").is_err());
         assert!(verdict("0.2.0", "0.1.3").is_err());
-        assert!(verdict("0.1.0", "0.2.0").is_err());
         assert!(verdict("1.0.0", "0.1.0").is_err());
+        // 0.2 honours 0.1 (it only added to it), never what 0.1.0 broke before.
+        assert!(verdict("0.1.1", "0.2.0").is_ok());
+        assert!(verdict("0.2.0", "0.2.0").is_ok());
+        assert!(check_api_version(&requiring("0.1.1"), "0.2.0", "0.2.0").is_err());
+        assert!(verdict("0.0.9", "0.2.0").is_err());
+    }
+
+    #[test]
+    fn this_build_honours_an_extension_written_for_0_1() {
+        assert_eq!(check_manifests([&requiring("0.1.1")]), Ok(()));
+        assert_eq!(check_manifests([&requiring(API_VERSION)]), Ok(()));
     }
 
     #[test]

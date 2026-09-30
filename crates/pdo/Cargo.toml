@@ -42,7 +42,7 @@ name = "it"
 path = "tests/it.rs"
 
 [dependencies]
-pdo-extension-api.workspace = true
+pdo-extension-api = { workspace = true, features = ["ts"] }
 pdo-kernel.workspace = true
 pdo-harness.workspace = true
 pdo-platform.workspace = true

@@ -3,7 +3,7 @@ name = "pdo-extension-api"
 # The public contract of PDO's extensions (ADR-0081). Versioned on its own, 0.x
 # until a real extension runs on the published API alone (D22). Every other crate
 # of the workspace follows the product version and promises nothing.
-version = "0.2.0"
+version = "0.5.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -18,3 +18,13 @@ publish = false
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# `ts`: the UI contract's types derive ts-rs, so the daemon exports them to the
+# front's TypeScript (`frontend/src/shared/generated/`). Off by default: an
+# extension needs none of it.
+ts-rs = { workspace = true, optional = true }
+
+[features]
+ts = ["dep:ts-rs"]
+
+[dev-dependencies]
+tokio.workspace = true

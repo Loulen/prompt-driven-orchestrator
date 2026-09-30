@@ -1,4 +1,5 @@
-// The UI bundle of the internal test extension: one component per UI slot.
+// The UI bundle of the internal test extension: one component per location it
+// contributes to, and the function of its command.
 // A plain ES module, no build step: `react` is the front's own, shared through
 // its import map.
 import React from "react";
@@ -115,4 +116,38 @@ export function RunTab({ entity }) {
           attributes.map(([key, value]) => h("li", { key }, `${key} = ${value}`)),
         ),
   );
+}
+
+// Page of `topbar/end`: the context it is opened with (the selected Run and its
+// Projet) and the path of the deep link, in the shell's breadcrumb too.
+export function TestPage({ context, navigate, shell }) {
+  const run = context?.run ?? null;
+  const project = context?.project ?? null;
+  const path = context?.path ?? "";
+  React.useEffect(() => {
+    shell?.setBreadcrumb(path ? path.split("/") : []);
+  }, [shell, path]);
+  return h(
+    "div",
+    { style: { ...box, padding: "20px 28px" }, "data-testid": "test-extension-page" },
+    h("p", { "data-testid": "test-page-run" }, run ? `Run ${run.id} (${run.status})` : "No Run selected"),
+    h("p", { "data-testid": "test-page-project" }, project ? `Project ${project.name}` : "No Project"),
+    h("p", { "data-testid": "test-page-path" }, `Path: ${path || "(none)"}`),
+    h(
+      "button",
+      { type: "button", onClick: () => navigate("deep/inside"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
+      "Go to deep/inside",
+    ),
+  );
+}
+
+// Command `test.show-context`: records the context it was called with, then
+// tells the operator.
+export async function showContext(context, host) {
+  await fetch("/ext/test/commands", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(context),
+  });
+  host.notify(`Run ${context.run?.id ?? "none"} · Project ${context.project?.name ?? "none"}`);
 }

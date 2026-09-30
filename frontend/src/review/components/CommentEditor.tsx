@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../../shared/markdown/plugins";
 import type { Anchor } from "../model/drafts";
 import { anchorLabel, sideLabel } from "../model/drafts";
 
@@ -27,8 +27,6 @@ interface Props {
   onSend: (text: string) => void;
   onCancel: () => void;
 }
-
-const REMARK_PLUGINS = [remarkGfm];
 
 function readWip(key: string): string {
   try {
@@ -145,7 +143,7 @@ export default function CommentEditor({ anchor, initial, wipKey, sendDisabledRea
           data-testid="review-editor-preview-body"
         >
           {text.trim() ? (
-            <Markdown remarkPlugins={REMARK_PLUGINS}>{text}</Markdown>
+            <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{text}</Markdown>
           ) : (
             <span className="italic text-fg-4">Nothing to preview</span>
           )}

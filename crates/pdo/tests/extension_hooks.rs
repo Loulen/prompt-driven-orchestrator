@@ -7,12 +7,19 @@
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use pdo::extension_api::{Actor, Attributes, EntityRef, Extension, Manifest};
+use pdo::extension_api::{
+    Actor, Attributes, EntityRef, Extension, Manifest, ResourceKind, Slot, UiContributions, UiSlot,
+};
 use serde_json::{json, Value};
 
 use crate::common::flow::{create_run, post_json, seed_solo};
 use crate::common::TestDaemon;
 use crate::test_extension::{self, OnEvent, Refusal, TestExtension, ACTOR_HEADER};
+
+/// How long a response may take while an extension sleeps 30 s in
+/// `on_event`: far below the sleep, far above a response on a loaded machine
+/// (the suite runs next to other builds).
+const RESPONSE_BUDGET: Duration = Duration::from_secs(15);
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     seed_solo(repo, &[("solo", false)])
@@ -343,7 +350,7 @@ async fn an_extension_that_sleeps_or_panics_in_on_event_never_delays_a_response(
         let (status, _) = post_json(&daemon, "/projects", json!({ "name": name })).await;
         assert_eq!(status, 201);
         assert!(
-            start.elapsed() < Duration::from_secs(15),
+            start.elapsed() < RESPONSE_BUDGET,
             "a sleeping on_event delayed the response: {:?}",
             start.elapsed()
         );
@@ -357,7 +364,7 @@ async fn an_extension_that_sleeps_or_panics_in_on_event_never_delays_a_response(
         let start = Instant::now();
         let (status, _) = post_json(&daemon, "/projects", json!({ "name": name })).await;
         assert_eq!(status, 201, "the daemon lives on");
-        assert!(start.elapsed() < Duration::from_secs(15));
+        assert!(start.elapsed() < RESPONSE_BUDGET);
     }
     // Back to recording: the delivery thread survived the panics.
     control.on_event(OnEvent::Record);
@@ -421,8 +428,35 @@ async fn the_extension_routes_answer_under_ext_and_hide_no_core_route() {
     assert!(jsonl.contains("operation_applied"), "{jsonl}");
 }
 
+/// `(location, type, id)` of each contribution `/ext` lists for the extension at `index`.
+fn contributions(index: &Value, at: usize) -> Vec<(String, String, String)> {
+    index[at]["ui"]["contributions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let text = |key: &str| c[key].as_str().unwrap().to_string();
+            (text("location"), text("type"), text("id"))
+        })
+        .collect()
+}
+
+fn triple(location: &str, kind: &str, id: &str) -> (String, String, String) {
+    (location.into(), kind.into(), id.into())
+}
+
+/// The four locations of 0.1, as the test extension's 0.1 slots fill them.
+fn the_four_locations_of_0_1() -> Vec<(String, String, String)> {
+    vec![
+        triple("topbar/start", "page", "events"),
+        triple("settings", "section", "settings"),
+        triple("runs/filter", "list_filter", "started-by"),
+        triple("run/detail", "tab", "run-tab"),
+    ]
+}
+
 #[tokio::test]
-async fn ext_lists_each_extension_and_its_ui_slots() {
+async fn ext_lists_each_extension_and_its_ui_contributions() {
     let (daemon, control) = daemon().await;
     let index = daemon.get_json("/ext").await;
     assert_eq!(index[0]["id"], "test");
@@ -430,20 +464,47 @@ async fn ext_lists_each_extension_and_its_ui_slots() {
     let ui = &index[0]["ui"];
     assert_eq!(ui["bundle_url"], "/ext/test/ui.js");
     assert_eq!(ui["react_major"], test_extension::REACT_MAJOR);
-    let slots: Vec<(&str, Option<&str>)> = ui["slots"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|s| (s["slot"].as_str().unwrap(), s["resource"].as_str()))
-        .collect();
+    let mut expected = the_four_locations_of_0_1();
+    expected.extend([
+        triple("topbar/end", "page", "page"),
+        triple("topbar/end", "action", "show-context"),
+        triple("topbar/end", "action", "never"),
+    ]);
+    assert_eq!(contributions(&index, 0), expected);
+    let page = &ui["contributions"][4];
+    assert_eq!(page["icon"], "/ext/test/icon.svg");
+    assert_eq!(page["component"], "TestPage");
+    let action = &ui["contributions"][5];
+    assert_eq!(action["command"], test_extension::SHOW_CONTEXT);
+    assert_eq!(action["label"], "Show context");
+    assert_eq!(action["when"], json!({ "has": "run" }));
     assert_eq!(
-        slots,
-        vec![
-            ("navigation", None),
-            ("settings_panel", None),
-            ("list_filter", Some("run")),
-            ("detail_tab", Some("run")),
-        ]
+        ui["commands"][0],
+        json!({
+            "id": test_extension::SHOW_CONTEXT, "title": "Show context",
+            "export": "showContext",
+        })
+    );
+
+    // The icon its page declares is served, as an SVG.
+    let icon = reqwest::get(format!("{}/ext/test/icon.svg", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(icon.status(), 200);
+    assert_eq!(icon.headers()["content-type"], "image/svg+xml");
+
+    // Its command's trace records what the bundle posts.
+    let (status, _) = post_json(
+        &daemon,
+        "/ext/test/commands",
+        json!({ "location": "topbar/end", "run": { "id": "r1" } }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(control.commands()[0]["run"]["id"], "r1");
+    assert_eq!(
+        daemon.get_json("/ext/test/commands").await[0]["location"],
+        "topbar/end"
     );
 
     let (status, switched) = post_json(
@@ -480,4 +541,136 @@ async fn without_extension_ext_is_empty_and_the_entities_carry_no_attribute() {
         .await
         .get("attributes")
         .is_none());
+}
+
+/// An extension written for 0.1: it requires the API 0.1 and fills only the
+/// four slots of 0.1.
+struct Written01;
+
+impl Extension for Written01 {
+    fn manifest(&self) -> Manifest {
+        Manifest::new("old", "Written for 0.1", "0.1.0").requiring_api("0.1.1")
+    }
+
+    fn ui(&self) -> Option<UiContributions> {
+        let run = ResourceKind::Run;
+        Some(
+            UiContributions::bundle("/ext/old/ui.js", test_extension::REACT_MAJOR)
+                .with(UiSlot::new(
+                    Slot::Navigation,
+                    "events",
+                    "Events",
+                    "EventsPage",
+                ))
+                .with(UiSlot::new(
+                    Slot::SettingsPanel,
+                    "settings",
+                    "Old",
+                    "SettingsPanel",
+                ))
+                .with(UiSlot::new(
+                    Slot::ListFilter {
+                        resource: run.clone(),
+                    },
+                    "started-by",
+                    "Started by",
+                    "StartedByFilter",
+                ))
+                .with(UiSlot::new(
+                    Slot::DetailTab { resource: run },
+                    "run-tab",
+                    "Old",
+                    "RunTab",
+                )),
+        )
+    }
+}
+
+#[tokio::test]
+async fn an_extension_written_for_0_1_runs_and_keeps_its_four_locations() {
+    let (ext, _control) = TestExtension::new(Refusal::Nothing);
+    let mut extensions = ext.requiring_api("0.1.1").boxed();
+    extensions.push(Box::new(Written01));
+    let daemon = TestDaemon::spawn_with_extensions(seed, extensions)
+        .await
+        .unwrap();
+    let index = daemon.get_json("/ext").await;
+    // Registration order: the test extension, then the one written for 0.1.
+    assert_eq!(index[0]["id"], "test");
+    assert_eq!(index[1]["id"], "old");
+    assert_eq!(contributions(&index, 1), the_four_locations_of_0_1());
+    assert_eq!(index[1]["ui"]["commands"], json!([]));
+}
+
+/// The daemon with the test extension, then B, then A (hosted.rs).
+async fn daemon_with_hosted(
+    with_host: bool,
+) -> (TestDaemon, test_extension::hosted::ContributorControl) {
+    use test_extension::hosted::{ContributorB, HostA};
+    let (ext, _control) = TestExtension::new(Refusal::Nothing);
+    let (b, panels) = ContributorB::new();
+    let mut extensions = ext.boxed();
+    extensions.push(Box::new(b));
+    if with_host {
+        extensions.push(Box::new(HostA));
+    }
+    let daemon = TestDaemon::spawn_with_extensions(seed, extensions)
+        .await
+        .unwrap();
+    (daemon, panels)
+}
+
+#[tokio::test]
+async fn ext_exposes_the_hosted_locations_and_their_contributions() {
+    use test_extension::hosted::{ACTIONS, PANEL};
+    let (daemon, panels) = daemon_with_hosted(true).await;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(ids(&index, "id"), ["test", "b", "a"]);
+    let host = &index[2]["ui"];
+    assert_eq!(host["ui_module_major"], pdo::extension_api::UI_MODULE_MAJOR);
+    assert_eq!(host["locations"][0]["id"], PANEL);
+    assert_eq!(host["locations"][0]["accepts"], "section");
+    assert_eq!(host["locations"][0]["context"][0]["key"], "item");
+    assert_eq!(host["locations"][1]["id"], ACTIONS);
+    assert_eq!(host["locations"][1]["accepts"], "action");
+    // B's contribution to `absent/panel` is ignored.
+    assert_eq!(
+        contributions(&index, 1),
+        [
+            triple(PANEL, "section", "panel"),
+            triple(ACTIONS, "action", "ping"),
+        ]
+    );
+    // Both bundles are served.
+    for id in ["a", "b"] {
+        let bundle = reqwest::get(format!("{}/ext/{id}/ui.js", daemon.url()))
+            .await
+            .unwrap();
+        assert_eq!(bundle.status(), 200);
+        assert_eq!(bundle.headers()["content-type"], "text/javascript");
+    }
+
+    // A second section of B: both are listed, in declaration order.
+    let (status, _) = post_json(&daemon, "/ext/b/panels", json!({ "count": 2 })).await;
+    assert_eq!(status, 200);
+    let _ = panels;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(
+        contributions(&index, 1),
+        [
+            triple(PANEL, "section", "panel"),
+            triple(PANEL, "section", "second-panel"),
+            triple(ACTIONS, "action", "ping"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn without_its_host_a_contribution_to_a_hosted_location_is_ignored() {
+    let (daemon, _panels) = daemon_with_hosted(false).await;
+    let index = daemon.get_json("/ext").await;
+    assert_eq!(ids(&index, "id"), ["test", "b"]);
+    assert_eq!(index[1]["ui"]["contributions"], json!([]));
+    // The rest of B still stands: its command, its bundle.
+    assert_eq!(index[1]["ui"]["commands"][0]["id"], "b.ping");
 }

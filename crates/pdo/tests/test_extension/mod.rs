@@ -16,16 +16,34 @@
 //!   first ([`OnEvent`]).
 //! - **`start`**: remembers its data folder ([`Control::data_dir`]).
 //! - **`routes`** (`routes.rs`): `/ext/test` answers who it is, `/events` the
-//!   trace of the events, `/ui.js` its UI bundle, `/incompatible` switches the
-//!   bundle to a React major the front does not run.
-//! - **`ui`**: one element in each of the four UI slots (`ui.js`).
+//!   trace of the events, `/ui.js` its UI bundle, `/icon.svg` its icon,
+//!   `/commands` the trace of its command's calls (`POST` records one),
+//!   `/incompatible` switches the bundle to a React major the front does not run.
+//! - **`ui`** (`ui.js`): one element at each location of the catalogue. The
+//!   four locations of 0.1 through their 0.1 slots (`Navigation`,
+//!   `SettingsPanel`, `ListFilter`/`DetailTab` of the Runs), so they prove the
+//!   0.1 form still renders; `topbar/end` through 0.2 contributions: a page with
+//!   its icon, an action calling [`SHOW_CONTEXT`] while a Run is selected, and
+//!   an action whose `when` never holds.
 //! - **`cli`** / **`run_cli`**: `pdo ext test echo|cat|exit|panic` (see
 //!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //!
+//! Its peers of `interop.rs` run their own mutations through the [`Host`] the
+//! core hands them (amendment #34): the test extension sees their Operations
+//! in `authorize`, their events in `on_event`, stamps their entities.
+//!
+//! `hosted.rs` adds two more, **A** and **B**, for the locations an extension
+//! hosts (amendment #32): A hosts `a/panneau` and `a/actions`, B contributes.
+//! Their ids are those of the interop peers: a daemon loads one set or the other.
+//!
 //! `demo_daemon.rs` serves it as a demo daemon for the Feature Paths.
+//!
+//! [`Host`]: pdo::extension_api::Host
 
+pub mod hosted;
+pub mod interop;
 mod routes;
 
 use std::path::PathBuf;
@@ -36,7 +54,7 @@ use std::time::Duration;
 use pdo::extension_api::{
     Actor, Attributes, Authorization, CliInvocation, CliOutput, CliSpec, EntityRef, Extension,
     ExtensionContext, ExtensionSkill, Manifest, Operation, RequestParts, ResourceKind, Slot,
-    UiContributions, UiSlot, Verb,
+    UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -72,6 +90,10 @@ pub fn actor_label(actor: &Actor) -> String {
     }
 }
 
+/// The id of the test extension's command: it reports the context it was
+/// called with (a toast, and `POST /ext/test/commands`).
+pub const SHOW_CONTEXT: &str = "test.show-context";
+
 /// What the test extension refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
@@ -86,7 +108,8 @@ pub enum Refusal {
 impl Refusal {
     /// Read a refusal from its text form: `none`, `all`, `panic`, or
     /// `<resource>:<verb>` with the wire names of both (`project:update`,
-    /// `trigger:fire` for the action `fire`).
+    /// `trigger:fire` for the action `fire`, `a/item:create` for an
+    /// extension's resource).
     pub fn parse(text: &str) -> Result<Self, String> {
         match text.trim() {
             "none" => Ok(Refusal::Nothing),
@@ -96,11 +119,16 @@ impl Refusal {
                 let (resource, verb) = other.split_once(':').ok_or_else(|| {
                     format!("`{other}`: expected none, all, panic or resource:verb")
                 })?;
-                let resource = RESOURCES
-                    .iter()
-                    .copied()
-                    .find(|r| resource_name(*r) == resource)
-                    .ok_or_else(|| format!("unknown resource `{resource}`"))?;
+                let resource = match resource.split_once('/') {
+                    Some((extension, kind)) if !extension.is_empty() && !kind.is_empty() => {
+                        ResourceKind::extension(extension, kind)
+                    }
+                    _ => RESOURCES
+                        .iter()
+                        .find(|r| r.wire_name() == resource)
+                        .cloned()
+                        .ok_or_else(|| format!("unknown resource `{resource}`"))?,
+                };
                 let verb = match verb {
                     "create" => Verb::Create,
                     "update" => Verb::Update,
@@ -146,13 +174,6 @@ const RESOURCES: &[ResourceKind] = &[
     ResourceKind::PriceTable,
 ];
 
-fn resource_name(resource: ResourceKind) -> String {
-    serde_json::to_value(resource)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default()
-}
-
 fn verb_name(verb: &Verb) -> String {
     match verb {
         Verb::Create => "create".into(),
@@ -168,7 +189,7 @@ pub fn reason(operation: &Operation) -> String {
     format!(
         "the test extension refuses {} {}",
         verb_name(&operation.verb),
-        resource_name(operation.resource)
+        operation.resource
     )
 }
 
@@ -192,6 +213,7 @@ pub struct Control {
     data_dir: Arc<Mutex<Option<PathBuf>>>,
     incompatible: Arc<AtomicBool>,
     cli_calls: Arc<Mutex<Vec<CliInvocation>>>,
+    commands: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Default for Control {
@@ -204,6 +226,7 @@ impl Default for Control {
             data_dir: Arc::default(),
             incompatible: Arc::default(),
             cli_calls: Arc::default(),
+            commands: Arc::default(),
         }
     }
 }
@@ -240,6 +263,15 @@ impl Control {
     /// Declare the bundle built for another major of React.
     pub fn set_incompatible(&self, incompatible: bool) {
         self.incompatible.store(incompatible, Ordering::Relaxed);
+    }
+
+    /// The contexts the bundle's command reported it was called with, in order.
+    pub fn commands(&self) -> Vec<Value> {
+        self.commands.lock().unwrap().clone()
+    }
+
+    fn record_command(&self, context: Value) {
+        self.commands.lock().unwrap().push(context);
     }
 
     fn incompatible(&self) -> bool {
@@ -338,7 +370,10 @@ impl Extension for TestExtension {
         } else {
             REACT_MAJOR
         };
-        let run = ResourceKind::Run;
+        let run = || ResourceKind::Run;
+        // No icon: its button shows the fallback, a boxed « S ».
+        let show_context = UiCommand::new(SHOW_CONTEXT, "Show context", "showContext");
+        let never = UiCommand::new("test.never", "Never shown", "showContext");
         Some(
             UiContributions::bundle(format!("/ext/{ID}/ui.js"), major)
                 .with(UiSlot::new(
@@ -354,17 +389,31 @@ impl Extension for TestExtension {
                     "SettingsPanel",
                 ))
                 .with(UiSlot::new(
-                    Slot::ListFilter { resource: run },
+                    Slot::ListFilter { resource: run() },
                     "started-by",
                     "Started by",
                     "StartedByFilter",
                 ))
                 .with(UiSlot::new(
-                    Slot::DetailTab { resource: run },
+                    Slot::DetailTab { resource: run() },
                     "run-tab",
                     "Test",
                     "RunTab",
-                )),
+                ))
+                .contribute(
+                    UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
+                        .with_icon(format!("/ext/{ID}/icon.svg")),
+                )
+                .contribute(
+                    UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)
+                        .when(When::has("run")),
+                )
+                .contribute(
+                    UiContribution::action(UiLocation::TopbarEnd, "never", &never)
+                        .when(When::eq("run.status", "never-a-status")),
+                )
+                .command(show_context)
+                .command(never),
         )
     }
 
@@ -442,6 +491,13 @@ fn a_refusal_reads_from_its_text_form() {
         ))
     );
     assert_eq!(Refusal::parse("all"), Ok(Refusal::Everything));
+    assert_eq!(
+        Refusal::parse("a/item:create"),
+        Ok(Refusal::Only(
+            ResourceKind::extension("a", "item"),
+            Verb::Create
+        ))
+    );
     assert!(Refusal::parse("nope:update").is_err());
     assert!(Refusal::parse("project").is_err());
     assert_eq!(

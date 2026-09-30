@@ -10,11 +10,11 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## Non publié — Surface agent : `pdo ext <id>` et skills d'extension (#33)
+## 2.5.0 — Surface agent : `pdo ext <id>` et skills d'extension (#33)
 
-Ajout rétrocompatible au source d'une extension ; `pdo-extension-api` passe de 0.1.1 à
-**0.2.0** (une montée de mineure en 0.x : une extension se recompile contre la nouvelle API,
-sans changer une ligne si elle n'utilise pas les nouveaux hooks). ADR-0081, amendement #33.
+`pdo-extension-api` passe en **0.5.0**, par ajout : une extension écrite pour 0.1 à 0.4
+compile et tourne sans changement si elle n'utilise pas les nouveaux hooks
+(ADR-0081, amendement #33).
 
 - **`pdo ext <id> <args…>`** : la CLI d'une extension, relayée par le daemon (`POST
   /ext-cli/<id>`). Arguments et flags tels quels, entrée standard (pipe ou fichier seulement),
@@ -32,6 +32,72 @@ sans changer une ligne si elle n'utilise pas les nouveaux hooks). ADR-0081, amen
   livrés aux worktrees comme tout skill sélectionné (ADR-0062). Deux colonnes additives sur
   `skills` (`extension`, `extension_version`) : une base existante s'ouvre telle quelle.
 - `pdo complete`, `pdo ext` et toute la CLI d'agent ne construisent toujours pas les extensions.
+
+## 2.4.0 — Emplacements d'UI hébergés par une extension (#32)
+
+`pdo-extension-api` passe en **0.4.0**, par ajout : une extension écrite pour 0.1, 0.2 ou 0.3
+compile et tourne sans changement (ADR-0081, amendement #32 ; référence : `docs/reference/extension-ui.md`
+§ *Hosted locations*).
+
+- **Emplacements hébergés** (`HostedLocation`, `UiContributions::host`) : une extension déclare
+  ses propres emplacements, `<id>/<nom>`, avec le type de contribution accepté (`UiElementKind`)
+  et la forme de leur contexte. Les autres y contribuent par `UiLocation::Hosted("<id>/<nom>")`.
+  Une contribution à l'emplacement d'une extension absente est ignorée.
+- **Module partagé `@pdo/extension-ui`**, dans l'import map du front à côté de React :
+  `useHostedContributions`, `HostedContribution`, `HostedContributions`, `runHostedCommand`. Un
+  bundle qui l'importe le déclare (`UiContributions::importing_ui_module`) ; une autre majeure
+  n'est pas chargée, avec une bannière.
+- **Fil de `GET /ext`** : `ui.locations` et `ui.ui_module_major` s'ajoutent.
+
+## 2.3.0 — Interopérabilité : ressource d'extension et Hôte (#34)
+
+`pdo-extension-api` passe en **0.3.0** (ADR-0081, amendement #34). Une extension fait passer ses
+propres mutations par les mécanismes du core, pour que deux extensions installées ensemble
+interopèrent sans se nommer.
+
+- **`ResourceKind::Extension { extension, kind }`** (`ResourceKind::extension("pm", "tache")`),
+  nommée `pm/tache` sur le fil. Les ressources du core gardent leur nom (`agent_profile`…).
+- **`Host`**, dans `ExtensionContext::host` à `start` : `authorize` (toutes les extensions,
+  l'émettrice comprise ; une panique refuse), `publish(ExtensionEvent)` (sur `/ws` et vers les
+  autres extensions, enveloppe `{"type": "extension_event", "extension", "name", "payload"}`),
+  `applied(OperationApplied)` après une mutation réussie, `on_create` (les Attributs des autres
+  extensions, préfixés, à stocker par l'extension). `NeutralHost` pour les tests d'une extension.
+- **`Denied`** et `OPERATION_REFUSED` passent dans l'API (`Authorization::into_result`) : une
+  extension répond ses refus avec le `403` du core.
+- **`OperationApplied` est diffusé sur `/ws`** dès qu'une extension est chargée. Sans extension,
+  `/ws` ne change pas.
+
+### Cassant pour une extension (0.2 -> 0.3)
+
+- `ResourceKind` n'est plus `Copy` : cloner là où une copie suffisait (`.clone()`, `.cloned()`).
+  Sa sérialisation est désormais écrite à la main ; les noms des ressources du core ne changent
+  pas.
+- `ExtensionContext` porte un champ `host` et n'implémente plus ses traits par `derive` (même
+  comportement, égalité comprise). `ExtensionContext::new(data_dir)` reste valable.
+- Une extension qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile sans changement et
+  reste acceptée : `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`, la casse ne touchant que la
+  compilation.
+
+## 2.2.0 — Catalogue d'emplacements d'UI, Commandes, `when`, `topbar/end`, liens profonds (#29)
+
+`pdo-extension-api` passe en **0.2.0**, par ajout : une extension écrite pour 0.1 compile et
+tourne sans changement (ADR-0081, amendement #29 ; référence : `docs/reference/extension-ui.md`).
+
+- **Catalogue d'emplacements nommés** (`UiLocation`) : `topbar/start`, `topbar/end`, `settings`,
+  `runs/filter`, `run/detail`. Une extension y déclare des `UiContribution` (Page, Action,
+  Onglet, Section, Décoration, Filtre de liste) par `UiContributions::contribute`. Les quatre
+  slots 0.1 (`UiSlot`) restent acceptés et sont convertis vers leur emplacement.
+- **Commandes** (`UiCommand`, `UiContributions::command`) et **clauses `when`** (`When`).
+- **Contexte** : chaque composant reçoit `context`, avec le Run sélectionné et son Projet.
+- **`topbar/end`** : icônes avant Stats, Page plein écran sans rail ; `FullWindowShell` a un rail
+  optionnel.
+- **Liens profonds** `#/ext/<id>/<emplacement>/<chemin>`, cliquables dans tous les rendus
+  markdown du core.
+- **Compatibilité d'API** : l'API déclare `OLDEST_COMPATIBLE_API_VERSION` ; le daemon accepte une
+  extension qui exige une version entre celle-ci (0.1.0) et la sienne, au lieu de la seule même
+  mineure en 0.x.
+- **Fil de `GET /ext`** : `ui.slots` devient `ui.contributions` (les slots 0.1 déjà convertis) et
+  `ui.commands`. Seul le front du même binaire le lisait.
 
 ## 2.1.0 — Distributions tierces : `main_with`, frontend préconstruit, canal de mise à jour, 404 sous `/ext` (#21, #22, #23, #24)
 

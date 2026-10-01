@@ -1,6 +1,6 @@
 # Les médias du README sont joués par de vrais agents sur une instance de démo isolée
 
-> Statut : accepted (grilling #852), amendé au 2ᵉ grilling de #852 (§6). Vocabulaire : CONTEXT.md § « Médias du README ».
+> Statut : accepted (grilling #852), amendé au 2ᵉ grilling de #852 (§6) et par #36 (§7 : un repo tiers est un consommateur). Vocabulaire : CONTEXT.md § « Médias du README ».
 
 ## Contexte
 
@@ -57,6 +57,23 @@ en page du mainteneur sur le contenu versionné (appariement fragile, pour un de
 rarement). Le contenu et la mise en page ont été fusionnés **une fois**, validés à l'écran, et le
 fichier entier fait foi depuis.
 
+**7. Un repo tiers est un consommateur de l'outillage, par sa propre config** (amendement, #36 ; 2ᵉ
+grilling de la story `Loulen/pdo-extensions#3`, Q8 et Q9). Le README d'un repo d'extensions veut
+ses GIF, filmés de la même façon. L'outillage reste dans le core et devient paramétrable : une
+**Config des médias**, une par repo consommateur, déclare ce qui était figé au core (le binaire que
+démarre l'instance de démo, le dossier des Scènes, la fixture, le fichier de sélection, le dossier
+de revue, la destination des médias publiés, l'**amorçage** de l'instance et d'où se résout
+Playwright). Le core est le **premier consommateur** de sa propre config : ses Scènes, ses médias
+publiés et ses commandes `make` ne changent pas, et une régression de l'outillage se voit chez lui
+d'abord. L'historique moqué (§3) devient l'amorçage du core ; un autre repo crée ses données par la
+CLI ou l'API de l'instance de démo. Un repo tiers lance l'outil depuis un checkout du core à un tag
+qu'il épingle (`make readme-media CONFIG=<fichier>`). Les §4 et §5 tiennent pour tout consommateur :
+instance étanche (répertoire, `HOME`, port à elle, démontée sur tout arrêt), deux variantes par
+Scène, sélection versionnée ; une config incomplète ou un binaire absent échoue en nommant le champ
+ou le chemin. Écartées : recopier l'outillage dans chaque repo (deux copies divergent au premier
+correctif), et le sortir du core dans un paquet à part (un dépôt et une release de plus, pour un
+seul consommateur tiers aujourd'hui).
+
 ## Conséquences
 
 - Régénérer les médias coûte une session d'agents réelle : on ne le fait que quand une scène change
@@ -68,3 +85,7 @@ fichier entier fait foi depuis.
   dans l'éditeur part avec le fichier.
 - Les cibles suivent le modèle d'arêtes du produit : un changement de ce modèle impose de les
   redessiner ou de les migrer.
+- La forme de la config et l'API que l'outil donne aux Scènes et à l'amorçage (`ctx`, `instance`)
+  deviennent un contrat pour les repos tiers : les changer est une casse pour eux, signalée au
+  CHANGELOG du core ; le consommateur s'adapte quand il monte le tag qu'il épingle. Les pipelines cibles (`make
+  readme-media-export` / `-import`) restent propres au core.

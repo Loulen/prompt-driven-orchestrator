@@ -5,6 +5,10 @@ Each **scene** is filmed on the real UI of a **demo instance** ([ADR-0074](../..
 CONTEXT.md « Médias du README »). The prerequisites, what a regeneration costs and when to run one
 are in [CONTRIBUTING](../../CONTRIBUTING.md#readme-media).
 
+What the tool films comes from a **media config** ([The config](#the-config)): the core's own,
+`readme-media.config.mjs`, unless `CONFIG=` names another repo's
+([From another repo](#from-another-repo)).
+
 ```bash
 make readme-media                 # every scene → .readme-media/ (not versioned)
 make readme-media SCENE=stats     # one scene (comma-separated for several)
@@ -12,19 +16,107 @@ make readme-media SCENE=stats VARIANT=b   # one variant, while tuning a scene
 make readme-media-publish         # selected variants → docs/assets/readme/<scene>.gif + .jpg
 make readme-media-export          # the target pipelines → your library, as readme-* (to redraw them)
 make readme-media-import          # your readme-* pipelines → fixture/targets/
+make readme-media CONFIG=/path/to/media.config.mjs           # another repo's scenes, from this checkout
+make readme-media-publish CONFIG=/path/to/media.config.mjs   # … into that repo's destination
+```
+
+## The config
+
+A config is an ES module whose default export lists what a consumer owns (`lib/config.mjs`). Every
+relative path resolves from **the config file's folder**, never from the caller's cwd.
+
+| Field | Required | What | The core's (`readme-media.config.mjs`) |
+| --- | --- | --- | --- |
+| `binary` | yes | the PDO binary the demo daemon runs, and the `pdo` first on its sessions' `PATH` | `../../target/debug/pdo` |
+| `scenes` | yes | the folder of the scene files (`<name>.mjs`; `_*.mjs` are helpers) | `./scenes` |
+| `selection` | yes | the selection file, `<scene> <variant>` per line | `./selection.txt` |
+| `review` | yes | the review folder: two variants per scene, `manifest.json`, the raw takes under `.work/` | `../../.readme-media` |
+| `destination` | yes | where `publish` copies the selected `<scene>.gif` + `.jpg` | `../../docs/assets/readme` |
+| `fixture.repo` | no | a folder copied as a fresh git repo to `~/code/<its name>` of the demo `HOME` (`instance.repo`; null without it) | `./fixture/shop-app` |
+| `fixture.pipelines` | no | the demo library: a folder copied as is into `~/.pdo/pipelines` (`<name>.yaml`, `<name>.prompts/`), or a `function(libraryDir)` | the target pipelines, installed as drawn |
+| `seed` | no | the **bootstrap**: `async (instance, scene) => {}`, run on each scene's fresh instance, before its `setup` | the mocked history, for the scenes with `needs: ["history"]` |
+| `playwright` | no | the folder `@playwright/test` resolves from | `../../frontend` (also the default) |
+
+A config with a missing or misspelt field, a path that does not exist, or (for `record`) a binary
+that is absent or not executable fails at once, with the config file, the field and the resolved
+path in the message. `record` checks the binary before it starts a browser; `publish` does not need
+one.
+
+The bootstrap gets the started instance: `instance.api(method, route, body)` calls the demo daemon's
+HTTP API, and `instance.exec(command, args)` runs a command against it (the demo `pdo` first on the
+`PATH`, the demo `HOME`, `PDO_PORT` and `PDO_DAEMON_URL` set, every `PDO_*` of the caller dropped,
+from the fixture repo, or the demo `HOME` without one) and resolves to its stdout. A scene reaches
+the same instance as `ctx.instance`, so `pdo …` can run while the browser films.
+
+## From another repo
+
+A repo of extensions keeps its scenes, selection, fixture and config, and calls the tool from a
+checkout of the core at the tag it pins. Nothing of the tool is copied:
+
+```text
+my-extensions/
+  media/
+    media.config.mjs    # binary, scenes, selection, review, destination, seed
+    seed.sh             # the bootstrap's data, by `pdo ext …`
+    scenes/board.mjs
+    selection.txt
+  docs/media/           # the published GIFs and posters
+```
+
+```js
+// media/media.config.mjs
+import { fileURLToPath } from "node:url";
+
+export default {
+  binary: "../target/release/pdo",       // your build: never the core's
+  scenes: "./scenes",
+  selection: "./selection.txt",
+  review: "../.readme-media",            // add it to your .gitignore
+  destination: "../docs/media",
+  async seed(instance) {
+    // Your data, through the demo instance's CLI or API (no mocked history):
+    // here a script of yours that calls `pdo ext <id> …`, aimed at the demo daemon.
+    await instance.exec(fileURLToPath(new URL("./seed.sh", import.meta.url)));
+  },
+};
+```
+
+```bash
+git clone --branch v<tag> git@github.com:Loulen/PDO-v2.git ../pdo-core
+(cd ../pdo-core/frontend && pnpm install && pnpm exec playwright install chromium)
+make -C ../pdo-core readme-media CONFIG=$PWD/media/media.config.mjs
+make -C ../pdo-core readme-media-publish CONFIG=$PWD/media/media.config.mjs
+```
+
+`CONFIG` takes an absolute path, or one relative to the core checkout. With `CONFIG`, `make
+readme-media` does not build the core: the binary is yours. Everything else holds as for the core:
+one sealed demo instance per scene (its own cwd, `HOME` and port, torn down on any exit), two
+variants per scene in **your** review folder, and only the variant your selection names published,
+into **your** destination. `make readme-media-export` / `-import` move the core's target pipelines
+and refuse another config.
+
+A scene of another repo only talks to `ctx` (the table in [Adding a scene](#adding-a-scene)). To
+reuse a helper of the tool, import it from the checkout the tool runs from, given in
+`README_MEDIA_TOOL`:
+
+```js
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const { forbidAgentLaunch, assertNoAgent } = await import(pathToFileURL(path.join(process.env.README_MEDIA_TOOL, "scenes", "_no-agent.mjs")).href);
 ```
 
 ## What a run does
 
 For each scene, in its own throwaway instance:
 
-1. **Demo instance** (`lib/demo-instance.mjs`). It runs the checkout's `target/debug/pdo daemon` from a
+1. **Demo instance** (`lib/demo-instance.mjs`). It runs the config's binary (the core's: the checkout's `target/debug/pdo`) as `daemon` from a
    throwaway working directory (the event log follows the cwd), with a throwaway `HOME` (pipelines,
    skill bank, profiles, prices, transcripts) and a free port (the tmux socket `pdo-<port>` follows the
-   port). The cwd sits where an installed PDO runs (`~/.pdo/app` of the demo `HOME`). Every `PDO_*` variable of the calling shell is dropped. A `pdo` pointing at the checkout's
-   binary comes first on the node sessions' `PATH`. The library gets the **target pipelines** as is
+   port). The cwd sits where an installed PDO runs (`~/.pdo/app` of the demo `HOME`). Every `PDO_*` variable of the calling shell is dropped. A `pdo` pointing at that
+   binary comes first on the node sessions' `PATH`. The library is the config's `fixture.pipelines`;
+   the core's gets the **target pipelines** as is
    (see [Target pipelines](#target-pipelines)): `implement-review` complete and `prod-check`, and
-   `fixture/shop-app/` is copied as a fresh git repo to `~/code/shop-app` of the demo `HOME`: the UI
+   its `fixture.repo`, `fixture/shop-app/`, is copied as a fresh git repo to `~/code/shop-app` of the demo `HOME`: the UI
    reads it `~/code/shop-app`, like on a real machine. The first `GET /settings` (host probes, slow
    on a busy machine) is paid off camera before the scene.
    The demo `HOME` gets a `.tmux.conf` (focus events on, so Claude Code prints no tmux hint on
@@ -35,7 +127,7 @@ For each scene, in its own throwaway instance:
    recorded in `state.json` **before** it is written. The demo `~/.claude/settings.json` (not a
    secret) also sets Claude Code's status line to the model the session runs, so the filmed terminal
    reads `Opus 5.5 · claude-opus-5-5`.
-3. **Mocked history** (`needs: ["history"]`, `lib/history-plan.mjs` + `lib/history-write.mjs`). About
+3. **Bootstrap** (the config's `seed`). The core's is its **mocked history** (`needs: ["history"]`, `lib/history-plan.mjs` + `lib/history-write.mjs`). About
    205 runs of `implement-review` over the last 30 days (their run snapshot is derived from the
    complete target, `lib/demo-pipeline.mjs`), with synthetic claude/copilot/pi transcripts and
    a manual price table. Apart from them, 100 fires of the (disabled) `prod-health-check` trigger, each
@@ -70,7 +162,7 @@ For each scene, in its own throwaway instance:
    failure, uncaught error, Ctrl+C, SIGTERM. A run killed with SIGKILL leaves its `state.json`, and
    the next start finishes the teardown. `KEEP_DEMO=1` keeps the root for inspection (auth still wiped).
 
-Output: `.readme-media/<scene>/<variant>.gif|.jpg`, `.readme-media/manifest.json` (per variant:
+Output (in the config's `review` folder; the core's is `.readme-media/`): `.readme-media/<scene>/<variant>.gif|.jpg`, `.readme-media/manifest.json` (per variant:
 duration, weight, dimensions, markers, warnings), and the raw takes with their cut plan
 (`timeline.json`) under `.readme-media/.work/`.
 
@@ -173,7 +265,7 @@ What `play(ctx)` gets:
 
 | | |
 | --- | --- |
-| `ctx.page`, `ctx.instance` | the Playwright page, and the demo instance (`url`, `repo`, `home`, `api(method, route, body)`) |
+| `ctx.page`, `ctx.instance` | the Playwright page, and the demo instance (`url`, `repo`, `home`, `api(method, route, body)`, `exec(command, args)`) |
 | `ctx.goto(route)` | open a route of the demo UI; the cursor stays where it was |
 | `ctx.moveTo(target)`, `ctx.click(target)`, `ctx.hover(target)`, `ctx.drag(from, to)`, `ctx.scroll(dy)` | eased, real mouse gestures. `target` is a locator or `{x, y}`. The cursor shows a green ring on click, is pressed (×0.88) during a drag, and draws a dashed orange line. It follows the real pointer with no transition: a transition retargeted on every move froze it during a canvas connection drag |
 | `ctx.mark(name, { before, after })` | a key moment. The GIF keeps `before`/`after` ms around it (default 1.2 s / 1.8 s) |
@@ -342,7 +434,10 @@ socket must hold no session.
 
 ## Tests
 
-`make test` runs `node --test scripts/readme-media/test/*.test.mjs`. That covers the targets
+`make test` runs `node --test scripts/readme-media/test/*.test.mjs`. That covers the config
+(`test/config.test.mjs`: the core's resolves to today's paths; another repo's resolves from its own
+folder; each missing or wrong field and each absent path is named; `publish` with another config
+lands in its destination and leaves the core's assets alone), the targets
 (installed byte for byte but `name:`, the run snapshot derived from them, the export / import round
 trip and the refused overwrite, on a throwaway `HOME`), the history plan,
 the prod-check fires (about 10 % real incidents, each run on the branch of its `Incident_found`, the
@@ -351,9 +446,10 @@ cut plan, selection and publication, scene discovery (and the markers of each sc
 building scenes (the start state is the target minus what `pipelines` and `routing` draw, and a
 simulated drift lands in the manifest), the manifest (and a variant's atomic landing), a SIGINT mid-encode, the video/timeline alignment, and a
 real demo instance
-(its library is the targets as is, Stats API ratios, teardown after success / Ctrl+C / crash / hard kill, and an agent that outlives
+(its library is the targets as is; another repo's instance with no fixture repo, its own library folder, and `exec` aimed at the demo daemon; Stats API ratios, teardown after success / Ctrl+C / crash / hard kill, and an agent that outlives
 the hangup; needs `cargo build`), plus
 the settings scenes' declarations and fixtures (the guard's exit codes and report, the skills repo).
-The full recordings (Stats, and triggers + profiles + skills) are opt-in: `READMEMEDIA_E2E=1`.
+The full recordings (Stats, triggers + profiles + skills, and a minimal scene recorded and published
+from another repo's config) are opt-in: `READMEMEDIA_E2E=1`.
 The targets are parsed with `js-yaml`, resolved from `frontend/` like Playwright: run
 `cd frontend && pnpm install` once.

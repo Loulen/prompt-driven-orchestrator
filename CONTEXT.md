@@ -1092,3 +1092,11 @@ _Éviter_ : « pipeline de test ».
 **Pipeline cible** :
 Le YAML d'un pipeline de démo **dessiné par le mainteneur** dans l'éditeur PDO, à l'état où une scène doit le laisser. L'outil l'installe **tel quel** (positions, ancres, tracés, labels) : il n'invente aucune mise en page. Une scène qui construit à l'écran part de la cible privée de ce qu'elle dessine, et son dernier plan est la cible exacte (ADR-0074 §6).
 _Éviter_ : « layout généré », « pipeline source » (ambigu avec la source d'un edge).
+
+**Config des médias** :
+Le module qui déclare, pour un repo consommateur de l'outillage des médias du README, ce que l'instance de démo démarre et ce qu'elle filme : le binaire PDO, le dossier des Scènes, la fixture (dépôt et pipelines), le fichier de sélection, le dossier de revue, la destination des médias publiés, l'**amorçage** et d'où se résout Playwright. Une par repo consommateur : le core est le premier (`scripts/readme-media/readme-media.config.mjs`) ; un autre repo lance l'outil depuis un checkout du core avec la sienne (`make readme-media CONFIG=<fichier>`, ADR-0074 §7).
+_Éviter_ : « profil », « preset » (déjà pris par PDO).
+
+**Amorçage** :
+Ce que la config des médias fait sur l'instance de démo démarrée, avant chaque Scène (champ `seed`). Celui du core pose l'historique moqué pour les Scènes qui le demandent ; celui d'un autre repo crée ses données par la CLI ou l'API de l'instance de démo (`instance.exec("pdo", …)`, `instance.api(…)`).
+_Éviter_ : « fixture » (la fixture est le dépôt et les pipelines copiés, l'amorçage ce qu'on joue ensuite).

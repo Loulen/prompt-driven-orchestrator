@@ -12,13 +12,14 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { demoOptions, loadConfig } from "../lib/config.mjs";
 import { DemoInstance, isAlive, sweepStaleInstances } from "../lib/demo-instance.mjs";
-import { seedHistory } from "../lib/seed.mjs";
-import { parseYaml, readTarget, TARGETS } from "../lib/targets.mjs";
+import { parseYaml, readTarget, TARGETS, withName } from "../lib/targets.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "..", "..", "..");
-const binary = path.join(repoRoot, "target", "debug", "pdo");
+// The core's own config: the checkout's binary, its fixture, its targets.
+const core = await loadConfig();
+const binary = core.binary;
 const skip = fs.existsSync(binary) ? false : `no ${binary} — run \`cargo build\` first`;
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "readme-media-it-"));
@@ -61,9 +62,10 @@ describe("demo instance: Stats API over the mocked history", { skip }, () => {
   const q = "from=1970-01-01T00:00:00Z&to=2100-01-01T00:00:00Z&bucket=day";
 
   before(async () => {
-    instance = new DemoInstance({ repoRoot, tmpRoot, hostHome: fakeHostHome(), liveHarnesses: ["claude"], log: () => {} });
+    instance = new DemoInstance({ ...demoOptions(core), tmpRoot, hostHome: fakeHostHome(), liveHarnesses: ["claude"], log: () => {} });
     await instance.start();
-    await seedHistory(instance);
+    // The core's bootstrap, through its config: the mocked history.
+    await core.seed(instance, { name: "stats", needs: ["history"] });
     cost = await instance.api("GET", `/stats/cost?${q}`);
     performance = await instance.api("GET", `/stats/performance?${q}&completed_only=false`);
   });
@@ -174,6 +176,59 @@ describe("demo instance: Stats API over the mocked history", { skip }, () => {
     const state = structuredClone(instance.state);
     instance.teardown();
     assertGone(state);
+  });
+});
+
+// Another repo's config (#36): its own binary path, no fixture repo, a library
+// folder of its own, its bootstrap through the demo's CLI — never the user's.
+describe("demo instance: another repo's config", { skip }, () => {
+  let instance;
+  let consumer;
+  let seeded;
+
+  before(async () => {
+    consumer = fs.mkdtempSync(path.join(tmpRoot, "consumer-"));
+    fs.mkdirSync(path.join(consumer, "bin"));
+    fs.symlinkSync(binary, path.join(consumer, "bin", "pdo-other"));
+    const library = path.join(consumer, "pipelines");
+    fs.mkdirSync(library);
+    fs.writeFileSync(path.join(library, "board.yaml"), withName(readTarget("prod-check").yaml, "board"));
+    instance = new DemoInstance({ binary: path.join(consumer, "bin", "pdo-other"), pipelines: library, tmpRoot, log: () => {} });
+    await instance.start();
+    // A consumer's seed: the demo CLI, aimed at the demo daemon.
+    seeded = await instance.exec("pdo", ["ext"]);
+  });
+  after(() => instance?.teardown());
+
+  test("no fixture repo, and the library is the consumer's folder as is", async () => {
+    assert.equal(instance.repo, null);
+    assert.ok(!fs.existsSync(path.join(instance.home, "code")), "no repo copied");
+    assert.deepEqual(fs.readdirSync(instance.libraryDir), ["board.yaml"]);
+    const { pipeline } = await instance.api("GET", "/pipelines/board");
+    assert.equal(pipeline.name, "board");
+  });
+
+  test("the demo daemon runs the config's binary", () => {
+    const exe = fs.readlinkSync(`/proc/${instance.state.daemonPid}/exe`);
+    assert.equal(exe, fs.realpathSync(binary));
+    assert.equal(fs.readlinkSync(path.join(instance.state.bin, "pdo")), path.join(consumer, "bin", "pdo-other"));
+  });
+
+  test("exec: the demo's pdo, HOME, port and daemon URL, no PDO_* of the caller", async () => {
+    assert.equal(typeof seeded, "string");
+    const env = Object.fromEntries(
+      (await instance.exec("env"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+    );
+    assert.equal(env.HOME, instance.home);
+    assert.equal(env.PDO_DAEMON_URL, instance.url);
+    assert.equal(env.PDO_PORT, String(instance.state.port));
+    assert.equal(env.PDO_RUN_ID, undefined);
+    assert.equal((await instance.exec("sh", ["-c", "command -v pdo"])).trim(), path.join(instance.state.bin, "pdo"));
+    assert.equal((await instance.exec("pwd")).trim(), instance.home, "from the demo HOME without a fixture repo");
+    await assert.rejects(instance.exec("pdo", ["ext", "no-such-extension"]), /pdo ext no-such-extension failed/);
   });
 });
 

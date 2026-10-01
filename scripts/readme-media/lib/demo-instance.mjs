@@ -4,8 +4,12 @@
 //   - its own working directory (the event log `.pdo/pdo.db` follows the cwd);
 //   - its own HOME (pipelines, skill bank, profiles, prices, transcripts);
 //   - its own port (the tmux socket `pdo-<port>` follows the port);
-//   - the checkout's binary, and a `pdo` first on the node sessions' PATH that
+//   - the binary its consumer's config names (the core's: the checkout's
+//     `target/debug/pdo`), and a `pdo` first on the node sessions' PATH that
 //     points at it.
+//
+// What it is filled with comes from the config too (lib/config.mjs): the
+// fixture repo, the library, then the consumer's `seed` (run by the caller).
 //
 // Nothing here reads or writes the user's `~/.pdo`, `~/.claude` (except the
 // auth files it COPIES for a live harness), daemon or tmux sessions.
@@ -15,23 +19,27 @@
 // wipes the staged auth files and removes the throwaway root. A run killed hard
 // (SIGKILL, power loss) leaves a `state.json` behind; the next start sweeps it.
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { stageCredentials, wipeCredentials } from "./credentials.mjs";
-import { installTargets } from "./targets.mjs";
 
 const ROOT_PREFIX = "pdo-readme-media-";
 /** The user's usual ports, never taken even when free. */
-const RESERVED_PORTS = new Set([5172, 5173, 5174, 6160, 6172]);
+const RESERVED_PORTS = new Set([5172, 5173, 5174, 5272, 6160, 6172]);
 
 export class DemoInstance {
-  /** `hostHome` is where live-harness auth is copied FROM (the user's home;
-   *  tests pass a fake one). `tmpRoot` holds the throwaway roots. */
-  constructor({ repoRoot, liveHarnesses = [], keep = false, log = console.log, tmpRoot = os.tmpdir(), hostHome = os.homedir() }) {
-    this.repoRoot = repoRoot;
+  /** `binary` is the PDO the daemon runs. `fixtureRepo` (a folder, optional)
+   *  is copied as a fresh git repo to `~/code/<its name>`; `pipelines` fills
+   *  the library: a folder copied as is, or a function(libraryDir). `hostHome`
+   *  is where live-harness auth is copied FROM (the user's home; tests pass a
+   *  fake one). `tmpRoot` holds the throwaway roots. */
+  constructor({ binary, fixtureRepo = null, pipelines = null, liveHarnesses = [], keep = false, log = console.log, tmpRoot = os.tmpdir(), hostHome = os.homedir() }) {
+    this.binary = binary;
+    this.fixtureRepo = fixtureRepo;
+    this.pipelines = pipelines;
     this.liveHarnesses = liveHarnesses;
     this.keep = keep;
     this.log = log;
@@ -52,6 +60,7 @@ export class DemoInstance {
   get dbPath() {
     return path.join(this.state.cwd, ".pdo", "pdo.db");
   }
+  /** The fixture repo in the demo HOME, or null when the config has none. */
   get repo() {
     return this.state.repo;
   }
@@ -61,8 +70,8 @@ export class DemoInstance {
 
   async start() {
     sweepStaleInstances(this.tmpRoot, this.log);
-    const binary = path.join(this.repoRoot, "target", "debug", "pdo");
-    if (!fs.existsSync(binary)) throw new Error(`no PDO binary at ${binary}: run \`make build\` first`);
+    const binary = this.binary;
+    if (!binary || !fs.existsSync(binary)) throw new Error(`no PDO binary at ${binary}: build it first (\`make build\` for the core)`);
 
     const root = fs.mkdtempSync(path.join(this.tmpRoot, ROOT_PREFIX));
     const port = await freePort();
@@ -76,7 +85,7 @@ export class DemoInstance {
       bin: path.join(root, "bin"),
       // Under the demo HOME, where a real machine keeps it: the UI (and Claude
       // Code) read it `~/code/shop-app`, never the throwaway root (#883).
-      repo: path.join(root, "home", "code", "shop-app"),
+      repo: this.fixtureRepo ? path.join(root, "home", "code", path.basename(this.fixtureRepo)) : null,
       port,
       daemonPid: null,
       authFiles: [],
@@ -98,7 +107,7 @@ export class DemoInstance {
       path.join(this.state.home, ".claude", "CLAUDE.md"),
       "Your shell already starts in your working directory. Never `cd` to an absolute path, and never type an absolute path in a command: use paths relative to the current directory.\n",
     );
-    this.installFixtureRepo();
+    if (this.state.repo) this.installFixtureRepo();
     this.installLibrary();
 
     if (this.liveHarnesses.length > 0) {
@@ -106,7 +115,7 @@ export class DemoInstance {
         harnesses: this.liveHarnesses,
         hostHome: this.hostHome,
         demoHome: this.state.home,
-        trustedDirs: [this.state.repo],
+        trustedDirs: this.state.repo ? [this.state.repo] : [],
         onStaged: (file) => {
           this.state.authFiles.push(file);
           this.saveState();
@@ -137,7 +146,8 @@ export class DemoInstance {
     for (const [key, value] of Object.entries(process.env)) {
       if (!key.startsWith("PDO_")) env[key] = value;
     }
-    const userPath = `${this.state.bin}:${interactivePath()}`;
+    this.userPath ??= interactivePath();
+    const userPath = `${this.state.bin}:${this.userPath}`;
     Object.assign(env, {
       HOME: this.state.home,
       PDO_PORT: String(this.state.port),
@@ -159,10 +169,30 @@ export class DemoInstance {
     return env;
   }
 
+  /** The environment of a `pdo` command aimed at the demo daemon: the
+   *  daemon's, plus `PDO_DAEMON_URL` (the CLI's default is the user's port). */
+  cliEnv() {
+    return { ...this.daemonEnv(), PDO_DAEMON_URL: this.url };
+  }
+
+  /**
+   * Run a command against the demo instance — `pdo …` (the demo binary, first
+   * on the PATH) or a script of the consumer — with the demo HOME, port and
+   * daemon URL, from the fixture repo (the demo HOME without one). Resolves
+   * to its stdout; rejects with its stderr. For a `seed`, or a scene's gesture.
+   */
+  exec(command, args = [], { cwd = this.state.repo ?? this.state.home, env = {}, timeoutMs = 60_000 } = {}) {
+    return new Promise((resolve, reject) => {
+      execFile(command, args, { cwd, env: { ...this.cliEnv(), ...env }, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+        if (error) reject(new Error(`${[command, ...args].join(" ")} failed (${error.code ?? error.signal}): ${stderr.trim() || error.message}`));
+        else resolve(stdout);
+      });
+    });
+  }
+
   installFixtureRepo() {
-    const source = path.join(this.repoRoot, "scripts", "readme-media", "fixture", "shop-app");
     fs.mkdirSync(path.dirname(this.state.repo), { recursive: true });
-    fs.cpSync(source, this.state.repo, { recursive: true });
+    fs.cpSync(this.fixtureRepo, this.state.repo, { recursive: true });
     fs.writeFileSync(path.join(this.state.repo, ".gitignore"), ".pdo/\n");
     const git = (...args) => execFileSync("git", args, { cwd: this.state.repo, stdio: "ignore", env: { ...process.env, HOME: this.state.home } });
     git("init", "-q", "-b", "main");
@@ -173,13 +203,17 @@ export class DemoInstance {
     git("commit", "-q", "-m", "shop-app: initial static shop");
   }
 
-  /** The demo library: the target pipelines, as is (lib/targets.mjs). */
+  /** The demo library (`~/.pdo/pipelines` of the demo HOME). */
   get libraryDir() {
     return path.join(this.state.home, ".pdo", "pipelines");
   }
 
+  /** The config's pipelines: the core's targets as drawn (lib/targets.mjs), or
+   *  a consumer's library folder copied as is. */
   installLibrary() {
-    installTargets(this.libraryDir);
+    fs.mkdirSync(this.libraryDir, { recursive: true });
+    if (typeof this.pipelines === "function") this.pipelines(this.libraryDir);
+    else if (this.pipelines) fs.cpSync(this.pipelines, this.libraryDir, { recursive: true });
   }
 
   async waitReady(timeoutMs = 60_000) {

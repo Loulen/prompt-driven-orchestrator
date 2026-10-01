@@ -1,4 +1,7 @@
+import { useMemo } from "react";
 import type { NodeState } from "../../../shared/generated/NodeState";
+import { ExtensionActionButtons } from "../../../shared/extensions/ExtensionActions";
+import type { NodeEntity } from "../../../shared/extensions/contract";
 import type { ScopedProvisioningRules } from "../../../shared/generated/ScopedProvisioningRules";
 import { formatCostAmount, nodeCostTitle } from "../../model/costLabel";
 import ProvisioningRulesEditor from "../../../workspace/components/ProvisioningRulesEditor";
@@ -10,7 +13,8 @@ import IterSelector from "./IterSelector";
 import { formatTime } from "../../model/nodeDetailFormat";
 import { STATUS_LABELS } from "./labels";
 
-/** The panel header: name, status, frozen harness, iter selector, times, cost. */
+/** The panel header: name, status, frozen harness, the extensions' `node/toolbar`
+ *  actions (#30), iter selector, times, cost. */
 export default function NodeDetailHeader({
   node,
   nodeName,
@@ -24,6 +28,17 @@ export default function NodeDetailHeader({
   selectedIter: number;
   onSelectIter: (iter: number) => void;
 }) {
+  const extra = useMemo(() => {
+    const entity: NodeEntity = {
+      kind: "node",
+      id: node.node_id,
+      name: nodeName ?? null,
+      type: null,
+      status: node.status,
+      attributes: {},
+    };
+    return { entity };
+  }, [node.node_id, node.status, nodeName]);
   return (
     <div className="border-b border-line px-3 py-2">
       <div className="flex items-center gap-2">
@@ -50,6 +65,11 @@ export default function NodeDetailHeader({
             {node.harness}
           </span>
         )}
+        <ExtensionActionButtons
+          location="node/toolbar"
+          extra={extra}
+          className="ml-auto flex items-center gap-0.5"
+        />
       </div>
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {node.node_id}

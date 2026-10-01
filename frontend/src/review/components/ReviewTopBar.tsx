@@ -1,5 +1,7 @@
 import { ArrowLeftRight, ArrowLeft, Columns2, History, ListMinus, Rows3, SquareArrowOutUpRight } from "lucide-react";
 import { isDefaultPair, reviewUrl } from "../../run/model/runRefs";
+import { useMemo } from "react";
+import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions";
 import RefPicker from "./RefPicker";
 import ReviewCommentPills from "./ReviewCommentPills";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
@@ -81,6 +83,7 @@ export default function ReviewTopBar({
   toggleShowResolved,
   showResolved,
 }: Props) {
+  const extensionExtra = useMemo(() => ({ review: { from: pair.from, to: pair.to } }), [pair.from, pair.to]);
   const pairIsDefault = isDefaultPair(pair, defaults);
   const defaultLabel = `${defaults.from} → ${defaults.to}`;
   return (
@@ -233,6 +236,14 @@ export default function ReviewTopBar({
         pairStates={pairStates}
         toggleShowResolved={toggleShowResolved}
         showResolved={showResolved}
+      />
+      {/* #30 — `review/toolbar`: the extensions' icon buttons, before « open in a new tab ». */}
+      <ExtensionActionButtons
+        location="review/toolbar"
+        extra={extensionExtra}
+        className="flex shrink-0 items-center gap-1"
+        buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 hover:text-fg-2"
+        iconSize={11}
       />
       <a
         href={reviewUrl(runId, pair, defaults)}

@@ -9,6 +9,8 @@
 > Amendé par #32 : une extension héberge ses propres emplacements, rendus par un module partagé
 > (§ *Amendement #32*).
 > Amendé par #33 : la CLI d'une extension (`pdo ext`) et ses skills (§ *Amendement #33*).
+> Amendé par #31 : le catalogue gagne les emplacements d'Onglet, de Section, de Décoration et de
+> Filtre de liste, et une Section participe au Save et au Cancel de son hôte (§ *Amendement #31*).
 
 ## Contexte
 
@@ -343,3 +345,99 @@ de l'extension) ; transporter stdin et stdout en texte (une Archive est binaire)
 l'entrée standard dès qu'elle n'est pas un terminal (l'outil shell d'un agent laisse ouverte
 une socket qui ne finit jamais : `pdo ext` attendait sans fin, relevé par le FP) ; un dossier
 « PDO » commun avec les skills natifs (le dossier dit qui fournit le skill).
+
+## Amendement #30 : les emplacements d'Action, et les menus du core sur le `DropdownMenu` partagé
+
+Suite de l'amendement #29, préparée pour l'extension Projet (`pm`) et pour ADR-0001 de
+`pdo-extensions` (« mieux vaut trop de points d'extension que pas assez ») : toutes les barres
+d'outils et tous les menus du core accueillent des Actions.
+
+- **Quatorze emplacements d'Action**, qui n'acceptent que des Actions
+  (`UiLocation::is_action_location`) : `runs/header`, `run/item/menu`, `runs/bulk`, `run/toolbar`,
+  `canvas/node/menu`, `canvas/edge/menu`, `node/toolbar`, `trigger/item/menu`,
+  `pipeline/item/menu`, `pipelines/header`, `tab/menu`, `review/toolbar`, `review/file`,
+  `skill/menu`. Chacun est documenté dans `docs/reference/extension-ui.md`, avec son contexte.
+- **Contexte** : en plus du Run sélectionné et de son Projet, chaque emplacement transmet ce qui est
+  en jeu chez lui. Un menu ou une barre d'élément transmet l'élément en `entity` (`kind`, `id`,
+  `attributes`, et les champs du genre : `status` d'un Run, `enabled` d'un Trigger, `type` d'un
+  node, `from`/`to` d'une edge, `path` d'un fichier). `runs/bulk` transmet la sélection
+  (`selection: { kind: "run", ids }`). Les menus du canvas ajoutent le `pipeline` affiché (et le
+  Run d'un canvas de Run), la Review la paire comparée (`review: { from, to }`). La barre du canvas
+  d'un Run et la page Review donnent pour Run sélectionné le Run affiché. Une clause `when` lit ces
+  clés comme les autres (`entity.status`).
+- **Rendu** : dans une barre, un bouton icône par Action (l'icône de sa Commande, sinon la lettre
+  encadrée), avec son libellé en infobulle, placé avant les boutons du core. Dans un menu, un
+  groupe par extension, titré du nom de l'extension, après les entrées du core et **avant l'entrée
+  destructive**. Dans la barre de sélection multiple, une entrée par Action après celles du core.
+  Sans contribution, rien ne change : ni bouton, ni groupe, ni séparateur.
+- **Échec** : chaque élément a sa frontière d'erreur ; une Commande qui lève ou rejette affiche un
+  toast d'erreur, et la barre ou le menu continue de fonctionner.
+- **Menu « ⋯ » des lignes** : les lignes de Run, de Trigger et de Pipeline gagnent un déclencheur
+  `MoreHorizontal` après leurs icônes de survol (révélé avec elles, et gardé tant que le menu est
+  ouvert), qui ouvre le `DropdownMenu` partagé : les verbes de la ligne, les groupes d'extension,
+  puis l'entrée destructive. La ligne étant souvent un `<button>`, le déclencheur est un
+  `span role="button"`, et ses clics et touches ne remontent pas à la ligne.
+- **Migration** : les menus contextuels codés à la main (canvas, barre d'onglets, arbre des skills)
+  passent sur le `DropdownMenu` partagé, sans changement de comportement : mêmes entrées, même
+  ancrage (au pointeur pour un clic droit), même fermeture (Échap, clic ou clic droit ailleurs).
+  Une entrée désactivée devient `aria-disabled` et reste focalisable au clavier (le modèle de menu
+  de WAI-ARIA), au lieu d'un `disabled` natif ; elle ne fait toujours rien.
+- **Version** : `pdo-extension-api` passe en **0.6.0** (après 0.5.0, amendement #33) : ajout
+  d'emplacements, non cassant. Une extension 0.1 à 0.5 continue de compiler et de tourner.
+
+Écartés : un type de contribution « entrée de menu » distinct de l'Action (une Action se rend déjà
+selon l'endroit où elle se trouve) ; un menu « ⋯ » affiché seulement quand une extension y
+contribue (la ligne gagnerait ou perdrait un déclencheur selon les extensions installées, et ses
+verbes y sont utiles sans extension).
+
+## Amendement #31 : onglets, sections, décorations et filtres ; une Section participe au Save
+
+Suite de #29 pour l'extension Projet (`pm`) et ADR-0001 de `Loulen/pdo-extensions` (« mieux vaut
+trop de points d'extension que pas assez ») : le catalogue s'ouvre à tous les écrans où une
+extension a quelque chose à montrer. On étend le catalogue, sans nouveau type de contribution.
+
+- **Onglets** : `node/detail` (le volet d'un node de Run, après I/O et Orchestration),
+  `trigger/detail` (après « Details »), `skill/detail` (après « SKILL.md » et « Files »), en plus
+  de `run/detail`. Le contexte porte l'entité (`kind`, `id`, `attributes`, `name`). Sans
+  contribution, aucune barre d'onglets n'apparaît là où le core n'en a pas.
+- **Sections** : `project/edit` (l'éditeur de Projet, sous les champs du core, à la création
+  comme à l'édition), `run/new` (le formulaire de nouveau Run ou de Trigger), `node/config` et
+  `pipeline/config` (les inspecteurs du canvas), `run/info` (l'onglet Info d'un Run), en plus de
+  `settings`.
+- **Une Section participe au Save et au Cancel de son hôte** (`SectionForm`, prop `form`, présent
+  là où l'hôte a un Save : `project/edit`, `run/new`). La Section garde ses changements en
+  brouillon et les applique dans son `onSave` : rien ne s'applique avant le Save de l'hôte. L'hôte
+  enregistre d'abord ses propres champs, puis appelle les `onSave` dans l'ordre des Sections à
+  l'écran, chacun attendu, avec l'entité enregistrée : son id est connu à ce moment, ce qu'exige un
+  Projet créé par l'éditeur, qui n'a pas d'id avant le Save. Un échec garde le formulaire ouvert
+  avec son message (ce que le core a enregistré le reste) ; pour `run/new`, où le Run ou le
+  Trigger existe déjà, c'est un toast d'erreur. `onCancel` est appelé à l'annulation.
+- **Décorations** (badge ou pastille) : `run/item` (colonne de droite de la ligne, ligne 2, celle
+  des compteurs d'enfants, pour ne pas tronquer le nom de la pipeline), `trigger/item`,
+  `pipeline/item` (fin de la ligne 2), `canvas/node` (une ligne sous le titre de la carte),
+  `port/item` (à côté du nom du port), `review/file` (avant les compteurs de commentaires ;
+  cet emplacement d'Action de l'amendement #30 accepte aussi des Décorations),
+  `statusbar`. Le contexte porte l'entité et ses Attributs, que voit la clause `when`. **Sans
+  contribution, rien n'est rendu** : la ligne garde sa mise en page ; à plusieurs, les marques
+  s'alignent côte à côte et passent à la ligne plutôt que de pousser le texte.
+- **Filtres de liste** : `triggers/filter`, `pipelines/filter`, `projects/filter`, en plus de
+  `runs/filter`. La liste garde ce qui porte chaque Attribut du filtre, comme `?attr.` sur
+  l'endpoint. `projects/filter` se rend au-dessus des listes groupées par Projet (Runs et
+  Triggers) et garde les éléments dont le Projet porte les Attributs, par la règle du
+  regroupement.
+- **Frontière d'erreur** : chaque contribution reste derrière la sienne ; une Décoration qui
+  plante devient un petit « ! » dont l'infobulle nomme l'extension, sans toucher sa ligne.
+- **Rétrocompatibilité** : les slots 0.1 `ListFilter` des Triggers, des pipelines et des Projets
+  et `DetailTab` d'un node, d'un Trigger et d'un skill sont convertis vers ces emplacements ;
+  `DetailTab { Project }` devient une Section de `project/edit` (un Projet n'a pas de panneau de
+  détail) et son composant reçoit le Projet en `entity`. Une extension 0.1 ou 0.2 compile
+  toujours.
+- **Version** : `pdo-extension-api` passe en **0.7.0** (après 0.6.0, amendement #30 ; ajout :
+  des variantes de `UiLocation`, non exhaustif). Une extension 0.1 à 0.6 compile toujours.
+
+Au passage, la barre d'onglets du panneau d'infos d'un Run défile horizontalement au lieu de
+déborder : les Onglets des extensions s'ajoutent après ceux du core.
+
+Écartés : un type de contribution par emplacement (une « Section de formulaire »), parce que le
+contrat du Save est le même partout où l'hôte en a un ; un Save des Sections avant celui du core,
+impossible pour un Projet créé, qui n'a pas encore d'id.

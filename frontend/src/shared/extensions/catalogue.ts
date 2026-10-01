@@ -91,16 +91,26 @@ export function useSettingsPanels(): ContributionElement<SectionProps>[] {
   return useContributions<SectionProps>("settings", context);
 }
 
-/** The `run/detail` location's tabs for the Run `entity`, and their context. */
-export function useDetailTabs(entity: EntityContext | null): {
+/** The locations that render tabs: a detail's. */
+export type TabLocation = "run/detail" | "node/detail" | "trigger/detail" | "skill/detail";
+
+/**
+ * The tabs of the detail `location` shows for `entity`, and their context;
+ * none while there is no entity.
+ */
+export function useDetailTabs(
+  entity: EntityContext | null,
+  location: TabLocation = "run/detail",
+): {
   tabs: ContributionElement<TabProps>[];
   context: TabContext;
 } {
+  const kind = location.slice(0, location.indexOf("/"));
   const extra = useMemo(
-    () => ({ entity: entity ?? { kind: "run", id: "", attributes: {} } }),
-    [entity],
+    () => ({ entity: entity ?? { kind, id: "", attributes: {} } }),
+    [entity, kind],
   );
-  const context = useLocationContext<TabContext>("run/detail", extra);
-  const tabs = useContributions<TabProps>("run/detail", context);
+  const context = useLocationContext<TabContext>(location, extra);
+  const tabs = useContributions<TabProps>(location, context);
   return { tabs: entity ? tabs : [], context };
 }

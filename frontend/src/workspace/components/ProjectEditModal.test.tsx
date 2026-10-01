@@ -1,4 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { useEffect } from "react";
+import type { ExtensionEntry } from "../../shared/generated/ExtensionEntry";
+import type { UiContribution } from "../../shared/generated/UiContribution";
+import type { SectionProps } from "../../shared/extensions/contract";
+import { hostReactMajor } from "../../shared/extensions/shared";
+import { resetExtensions, setBundleLoader } from "../../shared/extensions/store";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ProjectEditModal from "./ProjectEditModal";
@@ -293,5 +299,110 @@ describe("ProjectEditModal", () => {
   it("disables Save when the name is blank", () => {
     renderModal({ initialName: "  " });
     expect(screen.getByTestId("project-edit-save")).toBeDisabled();
+  });
+});
+
+// ADR-0081 (#31): the `project/edit` sections of the extensions take part in
+// the modal's Save and Cancel.
+describe("ProjectEditModal — the project/edit sections", () => {
+  const saved: unknown[] = [];
+  const cancelled: string[] = [];
+  const bundle = {
+    AttachSection: ({ entity, form }: SectionProps) => {
+      useEffect(() => {
+        if (!form) return undefined;
+        const offSave = form.onSave((what) => {
+          saved.push(what);
+        });
+        const offCancel = form.onCancel(() => {
+          cancelled.push("attach");
+        });
+        return () => {
+          offSave();
+          offCancel();
+        };
+      }, [form]);
+      return <p>{`Attach to ${entity?.name} (${entity?.id ?? "new"})`}</p>;
+    },
+    RefusingSection: ({ form }: SectionProps) => {
+      useEffect(() => form?.onSave(() => Promise.reject(new Error("no backlog"))), [form]);
+      return <p>refusing</p>;
+    },
+  };
+  function serveSections(components: string[]) {
+    const entry: ExtensionEntry = {
+      id: "pm",
+      name: "Project",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/pm/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        locations: [],
+        commands: [],
+        contributions: components.map((component) => ({
+          location: "project/edit",
+          id: component,
+          label: "Project",
+          type: "section",
+          component,
+        })) as UiContribution[],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(JSON.stringify([entry]), { status: 200, headers: { "Content-Type": "application/json" } })
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+  }
+
+  beforeEach(() => {
+    saved.length = 0;
+    cancelled.length = 0;
+    resetExtensions();
+    setBundleLoader(async () => bundle);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetExtensions();
+  });
+
+  it("shows the section at creation, then hands it the created Projet's id once the core saved", async () => {
+    serveSections(["AttachSection"]);
+    createProject.mockResolvedValue({ id: "p9", name: "front", harness: null, members: ["/repos/front"] });
+    const { onClose } = renderModal();
+    expect(await screen.findByText("Attach to front (new)")).toBeInTheDocument();
+    // The name follows the field.
+    fireEvent.change(screen.getByTestId("project-name-input"), { target: { value: "Front" } });
+    expect(screen.getByText("Attach to Front (new)")).toBeInTheDocument();
+    expect(saved).toEqual([]);
+
+    fireEvent.click(screen.getByTestId("project-edit-save"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(saved).toEqual([{ kind: "project", id: "p9", name: "Front", attributes: {} }]);
+  });
+
+  it("keeps the modal open with the section's error, and runs the cancels on Cancel", async () => {
+    serveSections(["AttachSection", "RefusingSection"]);
+    const project = {
+      id: "p1", name: "front", harness: null, members: ["/repos/front"], attributes: { "pm/x": "1" },
+    } as unknown as Project;
+    updateProject.mockResolvedValue({});
+    const { onClose, onSaved } = renderModal({ initialProject: project });
+    expect(await screen.findByText("Attach to front (p1)")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("project-edit-save"));
+    expect(await screen.findByTestId("project-edit-error")).toHaveTextContent(
+      "An extension section could not save: no backlog",
+    );
+    expect(onSaved).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(saved).toEqual([{ kind: "project", id: "p1", name: "front", attributes: { "pm/x": "1" } }]);
+
+    fireEvent.click(screen.getByTestId("project-edit-cancel"));
+    expect(cancelled).toEqual(["attach"]);
+    expect(onClose).toHaveBeenCalled();
   });
 });

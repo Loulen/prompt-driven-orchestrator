@@ -3,23 +3,32 @@ import type { Attributes } from "./attributes";
 import { useContributions, useLocationContext } from "./catalogue";
 import type { ListFilterContext, ListFilterProps } from "./contract";
 import ExtensionBoundary from "./ExtensionBoundary";
+import { LIST_FILTERS, type ListFilterLocation } from "./listFilters";
 
 /**
- * The `runs/filter` location (the 0.1 list-filter slot of the Runs): a row
- * under the list's own filters, one control per element. Nothing without a
- * contribution.
+ * A list-filter location (`runs/filter`, the 0.1 list-filter slot of the Runs;
+ * `triggers/filter`, `pipelines/filter`, `projects/filter`): a row under the
+ * list's own filters, one control per element. Nothing without a
+ * contribution. The list keeps what carries every attribute of `filter`, as
+ * `?attr.<id>/<key>=<value>` does on its endpoint.
+ *
+ * `projects/filter` sits above lists of another resource (the Runs, the
+ * Triggers): its row opens on a « Project » tag, so its controls never read as
+ * the list's own.
  */
 export default function ExtensionListFilters({
+  location = "runs/filter",
   filter,
   onChange,
 }: {
+  location?: ListFilterLocation;
   filter: Attributes;
   onChange: (next: Attributes) => void;
 }) {
-  const resource = "run";
-  const extra = useMemo(() => ({ resource, filter }), [filter]);
-  const context = useLocationContext<ListFilterContext>("runs/filter", extra);
-  const filters = useContributions<ListFilterProps>("runs/filter", context);
+  const resource = LIST_FILTERS[location];
+  const extra = useMemo(() => ({ resource, filter }), [resource, filter]);
+  const context = useLocationContext<ListFilterContext>(location, extra);
+  const filters = useContributions<ListFilterProps>(location, context);
   if (filters.length === 0) return null;
   return (
     <div
@@ -27,13 +36,24 @@ export default function ExtensionListFilters({
       style={{ fontSize: "10px" }}
       data-testid={`extension-filters-${resource}`}
     >
-      {filters.map(({ key, extension, Component }) =>
+      {location === "projects/filter" && (
+        <span
+          className="shrink-0 rounded border border-line-strong px-1 py-px uppercase tracking-wide text-fg-4"
+          style={{ fontSize: "9px" }}
+          title="These filters apply to the Project the items belong to"
+          data-testid="extension-filters-project-tag"
+        >
+          Project
+        </span>
+      )}
+      {filters.map(({ key, extension, contribution, Component }) =>
         Component ? (
           <ExtensionBoundary key={key} extensionId={extension.id}>
             <Component
               extension={{ id: extension.id, name: extension.name }}
               context={context}
               resource={resource}
+              label={contribution.label}
               filter={filter}
               setFilter={onChange}
             />

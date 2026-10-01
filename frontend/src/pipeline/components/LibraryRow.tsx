@@ -1,6 +1,10 @@
-import type { MouseEvent } from "react";
-import { Copy, Pencil, Trash2 } from "lucide-react";
+import { useMemo, type MouseEvent, type ReactNode } from "react";
+import { Copy, FolderOpen, Pencil, Trash2 } from "lucide-react";
 import SelectControl from "../../shared/ui/SelectControl";
+import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
+import type { PipelineEntity } from "../../shared/extensions/contract";
+import { DropdownMenuSeparator } from "../../shared/ui/dropdown-menu";
+import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../shared/ui/RowMenu";
 
 interface Props {
   name: string;
@@ -46,6 +50,14 @@ interface Props {
    */
   checked?: boolean;
   onToggleSelect?: (e: MouseEvent) => void;
+  /** ADR-0081 (#31): the `pipeline/item` decorations, at the end of line 2. */
+  decorations?: ReactNode;
+  /**
+   * #30 — present ⇒ the row grows a « ⋯ » menu after its hover icons: its verbs,
+   * the extensions' `pipeline/item/menu` groups (handed this pipeline), then
+   * the delete. Only the Pipelines tab's rows offer it.
+   */
+  menuEntity?: PipelineEntity;
 }
 
 /**
@@ -75,6 +87,8 @@ export default function LibraryRow({
   checked = false,
   onToggleSelect,
   modified,
+  decorations,
+  menuEntity,
 }: Props) {
   const body = (
     <>
@@ -117,6 +131,7 @@ export default function LibraryRow({
               <span>edited {new Date(modified).toLocaleDateString()}</span>
             </>
           )}
+          {decorations}
         </div>
       </div>
       {onRenameStart && !renaming && (
@@ -161,6 +176,16 @@ export default function LibraryRow({
           className="text-fg-4 transition-colors hover:text-st-failed"
         />
       </span>
+      {menuEntity && (
+        <PipelineRowMenu
+          entity={menuEntity}
+          onOpen={onOpen}
+          onRenameStart={renaming ? undefined : onRenameStart}
+          onDuplicate={showDuplicate ? onDuplicate : undefined}
+          onDelete={onDelete}
+          deleteTitle={deleteTitle}
+        />
+      )}
     </>
   );
 
@@ -193,5 +218,48 @@ export default function LibraryRow({
     >
       {body}
     </div>
+  );
+}
+
+/** The Pipelines row's « ⋯ » menu (#30). */
+function PipelineRowMenu({
+  entity,
+  onOpen,
+  onRenameStart,
+  onDuplicate,
+  onDelete,
+  deleteTitle,
+}: {
+  entity: PipelineEntity;
+  onOpen?: () => void;
+  onRenameStart?: () => void;
+  onDuplicate?: () => void;
+  onDelete: () => void;
+  deleteTitle: string;
+}) {
+  const extra = useMemo(() => ({ entity }), [entity]);
+  return (
+    <RowMenu label={`More actions for ${entity.name}`} testId="pipeline-row-menu">
+      {onOpen && (
+        <RowMenuItem data-testid="pipeline-menu-open" onClick={onOpen}>
+          <FolderOpen /> Open
+        </RowMenuItem>
+      )}
+      {onRenameStart && (
+        <RowMenuItem data-testid="pipeline-menu-rename" onClick={onRenameStart}>
+          <Pencil /> Rename
+        </RowMenuItem>
+      )}
+      {onDuplicate && (
+        <RowMenuItem data-testid="pipeline-menu-duplicate" onClick={onDuplicate}>
+          <Copy /> Duplicate
+        </RowMenuItem>
+      )}
+      <ExtensionMenuGroups location="pipeline/item/menu" extra={extra} itemClassName={ROW_MENU_EXTENSION_ITEM} />
+      <DropdownMenuSeparator />
+      <RowMenuItem variant="destructive" data-testid="pipeline-menu-delete" onClick={onDelete}>
+        <Trash2 /> {deleteTitle}
+      </RowMenuItem>
+    </RowMenu>
   );
 }

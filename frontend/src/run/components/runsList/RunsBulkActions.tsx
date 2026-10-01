@@ -1,16 +1,22 @@
+import { useMemo } from "react";
 import { Pause, RotateCcw, Trash2 } from "lucide-react";
+import { useExtensionBulkActions } from "../../../shared/extensions/useActions";
 import { cleanupRun, pauseRun, retryAll } from "../../api/commands";
 import BulkActionBar from "../../../pipeline/components/BulkActionBar";
 import BulkActionModal from "../../../pipeline/components/BulkActionModal";
 import { cleanupTitle } from "./runsListTables";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 
-/** The Runs tab's bulk-action bar and the confirm / progress modal it opens. */
+/** The Runs tab's bulk-action bar and the confirm / progress modal it opens.
+ *  After the core's actions, the extensions' `runs/bulk` ones (#30), called
+ *  with the selected Runs. */
 export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
   const {
     runSelIds, runningWillStop, cleanupItems, retryItems, pauseItems, setRunBulkKind, clearSel,
     runBulkKind, cleanupCascade, handleRunsSettled,
   } = pane;
+  const extra = useMemo(() => ({ selection: { kind: "run" as const, ids: runSelIds } }), [runSelIds]);
+  const extensionActions = useExtensionBulkActions("runs/bulk", extra);
   return (
     <>
       {/* #577 — floating bulk-action bar for the Runs tab. */}
@@ -41,6 +47,7 @@ export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
               disabled: pauseItems.length === 0,
               onClick: () => setRunBulkKind("pause"),
             },
+            ...extensionActions,
           ]}
           onClear={() => clearSel("runs")}
         />

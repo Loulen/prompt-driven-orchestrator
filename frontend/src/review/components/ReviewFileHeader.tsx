@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
+import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions";
+import type { FileEntity, ReviewFileContext } from "../../shared/extensions/contract";
 import { ChevronDown, ChevronRight, Copy, History, SquareArrowOutUpRight } from "lucide-react";
 import type { DiffFile } from "../../shared/generated/DiffFile";
 import { baseName, filePath, statusLetter } from "../../run/model/runRefs";
@@ -45,6 +48,12 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
       () => {},
     );
   };
+
+  // ADR-0081: what `review/file` hands its actions (#30) and its decorations (#31).
+  const extensionExtra = useMemo(() => {
+    const entity: FileEntity = { kind: "file", id: path, name: baseName(path), path, status: file.status, attributes: {} };
+    return { entity, file: { run: runId, path, status: file.status }, review: { from: pair.from, to: pair.to } };
+  }, [runId, path, file.status, pair.from, pair.to]);
 
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
   const openHref =
@@ -97,6 +106,7 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
         </span>
       )}
       <span className="ml-auto flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <ExtensionDecorations<ReviewFileContext> location="review/file" extra={extensionExtra} />
         {nDrafts > 0 && <Badge kind="draft">✎ {plural(nDrafts, "draft")}</Badge>}
         {nOutdated > 0 && (
           <span
@@ -123,6 +133,14 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
             <StateIcon state="resolved" size={10} /> {sentStates.resolved}
           </span>
         )}
+        {/* #30 — `review/file`: the extensions' icon buttons, before « Copy path ». */}
+        <ExtensionActionButtons
+          location="review/file"
+          extra={extensionExtra}
+          className="flex items-center gap-0.5"
+          buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+          iconSize={11}
+        />
         <button
           type="button"
           onClick={copyPath}

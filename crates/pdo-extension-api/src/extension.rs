@@ -7,8 +7,8 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::{
-    Actor, Attributes, CliInvocation, CliOutput, CliSpec, EntityRef, ExtensionSkill, Host, Manifest,
-    NeutralHost, Operation, UiContributions,
+    Actor, Attributes, CliInvocation, CliOutput, CliSpec, EntityRef, ExtensionSkill, Host,
+    Manifest, NeutralHost, Operation, UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.

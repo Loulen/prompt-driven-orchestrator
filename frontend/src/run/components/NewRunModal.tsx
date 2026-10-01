@@ -8,6 +8,10 @@ import HowSection from "./newRun/HowSection";
 import WhatSection from "./newRun/WhatSection";
 import VariableOverrides from "./newRun/VariableOverrides";
 import NewRunFooter from "./newRun/NewRunFooter";
+import { useMemo } from "react";
+import ExtensionSections from "../../shared/extensions/ExtensionSections";
+import type { RunNewContext } from "../../shared/extensions/contract";
+import { useSectionForm } from "../../shared/extensions/sectionForm";
 
 // `OpenIntent` / `RUN_INTENT` live in `newRun/openIntent.ts`; re-exported so the existing
 // importers (`app/App.tsx`) keep importing them from here.
@@ -37,11 +41,23 @@ interface Props {
 }
 
 export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved, onManageStagingProfiles, repoExplorerStartPath }: Props) {
-  const form = useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerSaved });
+  // ADR-0081 (#31): the `run/new` extension sections take part in Launch
+  // (or Create) and Cancel.
+  const sections = useSectionForm();
+  const form = useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerSaved, sections });
   const {
     sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, setProvisioningValid,
-    handlePaste, requestClose, triggerInputRejectReason,
+    handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
   } = form;
+  const sectionContext = useMemo<Omit<RunNewContext, "location" | "run" | "project">>(
+    () => ({
+      mode,
+      pipeline: selectedPipelineId || null,
+      repository: targetRepo,
+      trigger: editingTriggerId ?? null,
+    }),
+    [mode, selectedPipelineId, targetRepo, editingTriggerId],
+  );
 
   if (!open) return null;
 
@@ -78,6 +94,15 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
           {/* ── CONFIG ── Variable overrides accordion */}
           <VariableOverrides form={form} />
+
+          {/* ADR-0081 (#31): the extensions' sections, after the core's fields. */}
+          <div className="mt-3 empty:hidden">
+            <ExtensionSections<RunNewContext>
+              location="run/new"
+              extra={sectionContext}
+              form={sections.form}
+            />
+          </div>
 
           {mode === "trigger" && triggerInputRejectReason && !error && (
             <div

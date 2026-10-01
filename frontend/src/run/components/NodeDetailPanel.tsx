@@ -61,7 +61,8 @@ export default function NodeDetailPanel({
   const [terminalSpectating, setTerminalSpectating] = useState(false);
   // #723 — an orchestrator NodeRun splits its lower pane into I/O | Orchestration.
   // I/O stays the default; the choice is per mounted node (remount = back to I/O).
-  const [detailTab, setDetailTab] = useState<"io" | "orchestration">(initialDetailTab);
+  // `io`, `orchestration`, or the key of a `node/detail` tab of an extension.
+  const [detailTab, setDetailTab] = useState<string>(initialDetailTab);
   // The children read polls with the run view cadence (never pushed), whether or
   // not the tab is open — the tab-header pastilles count from the same read.
   const childrenData = useRunChildren(runId, isOrchestratorNode);
@@ -275,6 +276,7 @@ export default function NodeDetailPanel({
             runId={runId}
             isArchived={isArchived}
             isOrchestratorNode={isOrchestratorNode}
+            nodeName={nodeName ?? null}
             detailTab={detailTab}
             onSelectTab={setDetailTab}
             childCounts={childCounts}

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { ChevronDown, ChevronRight, Pause, Pencil, Play, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun } from "../../model/runStatus";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
@@ -6,6 +7,9 @@ import { ChildCountPills } from "../OrchestrationTab";
 import SelectControl from "../../../shared/ui/SelectControl";
 import { STATUS_STYLES } from "./runsListTables";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
+import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
+import type { DecorationContext } from "../../../shared/extensions/contract";
+import RunRowMenu from "./RunRowMenu";
 
 interface Props {
   node: RunTreeNode;
@@ -40,6 +44,18 @@ export default function RunRow({
     visibleRunIds,
   } = pane;
   const run = node.run;
+  // ADR-0081 (#31): what the `run/item` decorations mark.
+  const decorated = useMemo(
+    () => ({
+      entity: {
+        kind: "run",
+        id: run.run_id,
+        attributes: run.attributes ?? {},
+        ...(run.name ? { name: run.name } : {}),
+      },
+    }),
+    [run.run_id, run.attributes, run.name],
+  );
   const hasChildren = node.children.length > 0;
   const expanded = hasChildren && isExpanded(run.run_id);
   const isSelected = run.run_id === selectedRunId;
@@ -303,7 +319,21 @@ export default function RunRow({
           <Trash2 size={12} />
         </span>
       )}
+      <RunRowMenu
+        run={run}
+        pane={pane}
+        isRenaming={isRenaming}
+        canPause={canPause}
+        canResume={canResume}
+        canRetryAll={canRetryAll}
+        canCleanup={canCleanup}
+      />
       </div>
+      {/* Line 2: the `run/item` decorations (ADR-0081, #31), then the child
+          counts. Here and not by the name, so a badge never truncates the
+          pipeline's name; nothing at all without either. */}
+      <div className="flex items-center gap-1 empty:hidden">
+      <ExtensionDecorations<DecorationContext> location="run/item" extra={decorated} />
       {hasChildren && (
         <ChildCountPills
           counts={node.counts}
@@ -316,6 +346,8 @@ export default function RunRow({
         />
       )}
       </div>
+      </div>
     </button>
   );
 }
+

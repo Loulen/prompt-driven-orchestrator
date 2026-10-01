@@ -111,7 +111,11 @@ async fn pdo_fed(url: &str, args: &[&str], session: Option<(&str, &str)>, stdin:
             Stdin::File(file) => (Stdio::from(file), None, None),
             Stdin::OpenSocket(ours) => {
                 let theirs = ours.try_clone().unwrap();
-                (Stdio::from(std::os::fd::OwnedFd::from(theirs)), None, Some(ours))
+                (
+                    Stdio::from(std::os::fd::OwnedFd::from(theirs)),
+                    None,
+                    Some(ours),
+                )
             }
         };
         cmd.stdin(stdio)
@@ -226,7 +230,11 @@ async fn a_standard_input_that_never_ends_is_not_waited_for() {
         Stdin::OpenSocket(socket),
     )
     .await;
-    assert_eq!(out.code, Some(0), "an open socket on stdin blocks `pdo ext`: {out}");
+    assert_eq!(
+        out.code,
+        Some(0),
+        "an open socket on stdin blocks `pdo ext`: {out}"
+    );
     assert_eq!(out.stdout(), "salut\n", "{out}");
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
     assert!(control.cli_calls()[0].stdin.is_empty());
@@ -237,7 +245,11 @@ async fn a_standard_input_that_never_ends_is_not_waited_for() {
     std::fs::write(&path, "# Titre\n").unwrap();
     let file = std::fs::File::open(&path).unwrap();
     let out = pdo_fed(&url, &["ext", "test", "cat"], None, Stdin::File(file)).await;
-    assert_eq!((out.code, out.stdout()), (Some(0), "# Titre\n".into()), "{out}");
+    assert_eq!(
+        (out.code, out.stdout()),
+        (Some(0), "# Titre\n".into()),
+        "{out}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

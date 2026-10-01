@@ -6,6 +6,7 @@ import { useNewRunState } from "./useNewRunState";
 import { useOpenIntentSeeding } from "./useOpenIntentSeeding";
 import { useAttachments } from "./useAttachments";
 import { useNewRunSubmit } from "./useNewRunSubmit";
+import type { SectionFormHost } from "../../../shared/extensions/sectionForm";
 
 interface NewRunFormArgs {
   open: boolean;
@@ -13,6 +14,8 @@ interface NewRunFormArgs {
   onClose: () => void;
   onCreated: (runId: string) => void;
   onTriggerSaved?: () => void;
+  /** ADR-0081 (#31): the Save and Cancel of the `run/new` extension sections. */
+  sections?: SectionFormHost;
 }
 
 /**
@@ -20,7 +23,7 @@ interface NewRunFormArgs {
  * and handlers. The sub-hooks run in the order the component body declared them, so the
  * hook order, the effect timing and the memo deps are those of the pre-split component.
  */
-export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerSaved }: NewRunFormArgs) {
+export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerSaved, sections }: NewRunFormArgs) {
   const state = useNewRunState(open);
   useOpenIntentSeeding(open, openIntent, state);
   const {
@@ -62,13 +65,19 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
     setOverrides((prev) => ({ ...prev, [key]: value }));
   }, [setOverrides]);
 
-  const attachmentState = useAttachments(state, onClose);
+  // Closing without launching is the sections' Cancel.
+  const cancel = useCallback(() => {
+    sections?.cancel();
+    onClose();
+  }, [sections, onClose]);
+  const attachmentState = useAttachments(state, cancel);
   const submit = useNewRunSubmit(state, {
     flushPendingSaves,
     attachmentsOverLimit: attachmentState.attachmentsOverLimit,
     onCreated,
     onClose,
     onTriggerSaved,
+    saveSections: sections?.save,
   });
 
   return {

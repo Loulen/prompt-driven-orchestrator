@@ -34,6 +34,9 @@
 //!
 //! The caller named by the `x-pdo-test-actor` header is the identified Actor.
 //!
+//! A second test extension (`test2`) is registered after it: it adds a section
+//! to `project/edit`, so that location shows two extensions' sections.
+//!
 //! Its command line answers `PDO_DAEMON_URL=http://127.0.0.1:<port> pdo ext test
 //! echo salut` (stdout `salut`, stderr the Actor it sees), and its skill
 //! `test-extension-cli` is in the Banque de skills, in the « Test extension »
@@ -43,7 +46,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use crate::test_extension::hosted::{ContributorB, HostA};
 use crate::test_extension::interop::Peer;
-use crate::test_extension::{Refusal, TestExtension};
+use crate::test_extension::{Refusal, SecondTestExtension, TestExtension};
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "serves until killed: the demo daemon of the Feature Paths"]
@@ -72,6 +75,7 @@ async fn demo_daemon() {
     control
         .set_incompatible(std::env::var("PDO_TEST_EXTENSION_INCOMPATIBLE").as_deref() == Ok("1"));
     let mut extensions = ext.boxed();
+    extensions.push(Box::new(SecondTestExtension));
     let hosted = std::env::var("PDO_DEMO_HOSTED").unwrap_or_default();
     let interop = std::env::var("PDO_TEST_INTEROP").as_deref() == Ok("1");
     assert!(

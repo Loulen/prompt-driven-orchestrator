@@ -20,6 +20,8 @@ pub(super) fn router(control: Control) -> Router {
     let switch = control.clone();
     let commands = control.clone();
     let record = control.clone();
+    let sections = control.clone();
+    let saved = control.clone();
     Router::new()
         .route(
             "/",
@@ -56,6 +58,17 @@ pub(super) fn router(control: Control) -> Router {
             })
             .post(move |Json(context): Json<Value>| {
                 record.record_command(context);
+                async move { Json(json!({ "recorded": true })) }
+            }),
+        )
+        .route(
+            "/sections",
+            get(move || {
+                let sections = sections.sections();
+                async move { Json(Value::Array(sections)) }
+            })
+            .post(move |Json(body): Json<Value>| {
+                saved.record_section(body);
                 async move { Json(json!({ "recorded": true })) }
             }),
         )

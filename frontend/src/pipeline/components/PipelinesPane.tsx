@@ -15,9 +15,43 @@ import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
 import ConfirmDeleteModal from "../../shared/ui/ConfirmDeleteModal";
 import LibraryRow from "./LibraryRow";
+import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions";
+import type { PipelineEntity } from "../../shared/extensions/contract";
+
+const NO_EXTRA = {};
 
 import ImportWorkflowModal from "./ImportWorkflowModal";
 import NewPipelineModal from "./NewPipelineModal";
+import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
+import ExtensionListFilters from "../../shared/extensions/ExtensionListFilters";
+import type { DecorationContext } from "../../shared/extensions/contract";
+import {
+  isAttributeFilterActive,
+  matchesAttributes,
+  type Attributes,
+} from "../../shared/extensions/attributes";
+
+/** The `pipeline/item` decorations of one row (ADR-0081, #31). */
+function PipelineItemDecorations({ pipeline }: { pipeline: PipelineListEntry }) {
+  const extra = useMemo(
+    () => ({
+      entity: {
+        kind: "pipeline",
+        id: pipeline.id,
+        name: pipeline.name,
+        attributes: pipeline.attributes ?? {},
+      },
+    }),
+    [pipeline.id, pipeline.name, pipeline.attributes],
+  );
+  return (
+    <ExtensionDecorations<DecorationContext>
+      location="pipeline/item"
+      extra={extra}
+      className="shrink-0 flex-nowrap"
+    />
+  );
+}
 
 export default function PipelinesPane() {
   // #774 — inline rename of a Pipelines-tab row. Same pattern as the run rows
@@ -26,7 +60,17 @@ export default function PipelinesPane() {
   const [renamingPipelineId, setRenamingPipelineId] = useState<string | null>(null);
   const [pipelineRenameValue, setPipelineRenameValue] = useState("");
 
-  const pipelines = useEditStore((s) => s.pipelines);
+  const allPipelines = useEditStore((s) => s.pipelines);
+  // ADR-0081 (#31) — the `pipelines/filter` of the extensions: the list keeps
+  // the pipelines carrying every attribute asked for.
+  const [attributeFilter, setAttributeFilter] = useState<Attributes>({});
+  const pipelines = useMemo(
+    () =>
+      isAttributeFilterActive(attributeFilter)
+        ? allPipelines.filter((p) => matchesAttributes(p.attributes, attributeFilter))
+        : allPipelines,
+    [allPipelines, attributeFilter],
+  );
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   const openPipeline = useEditStore((s) => s.openPipeline);
   const removePipeline = useEditStore((s) => s.removePipeline);
@@ -148,9 +192,17 @@ export default function PipelinesPane() {
         style={{ fontSize: "11.5px" }}
       >
         Pipelines
+        {/* #30 — `pipelines/header`: the extensions' icon buttons, before the
+            core's. */}
+        <span className="ml-auto" />
+        <ExtensionActionButtons
+          location="pipelines/header"
+          extra={NO_EXTRA}
+          className="mr-1.5 flex items-center gap-0.5"
+        />
         <button
           onClick={() => setShowImportModal(true)}
-          className="ml-auto grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+          className="grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
           title="Import a workflow"
           data-testid="import-workflow-button"
         >
@@ -165,6 +217,12 @@ export default function PipelinesPane() {
           <Plus size={12} />
         </button>
       </div>
+
+      <ExtensionListFilters
+        location="pipelines/filter"
+        filter={attributeFilter}
+        onChange={setAttributeFilter}
+      />
 
         <div
           className="flex-1 overflow-y-auto outline-none"
@@ -187,7 +245,15 @@ export default function PipelinesPane() {
               className="px-3 py-4 text-center text-fg-4"
               style={{ fontSize: "11px" }}
             >
-              No pipelines found
+              {allPipelines.length > 0 ? "No pipelines match filters" : "No pipelines found"}
+              {allPipelines.length > 0 && (
+                <button
+                  className="mt-1 block w-full cursor-pointer text-acc hover:underline"
+                  onClick={() => setAttributeFilter({})}
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
           )}
           {pipelines.map((p) => (
@@ -217,6 +283,7 @@ export default function PipelinesPane() {
               // library file-stem — duplicateLibraryPipeline resolves it.
               showDuplicate
               modified={p.modified}
+              decorations={<PipelineItemDecorations pipeline={p} />}
               onOpen={() => openPipeline(p.id)}
               onDuplicate={() => handleDuplicate(p.id)}
               onRenameStart={() => startPipelineRename(p)}
@@ -229,6 +296,7 @@ export default function PipelinesPane() {
               // the delete may cascade to its Library twin (#227).
               onDelete={() => setDeleteTarget(p)}
               deleteTitle="Delete pipeline"
+              menuEntity={pipelineEntity(p)}
             />
           ))}
         </div>
@@ -302,4 +370,9 @@ export default function PipelinesPane() {
       )}
     </>
   );
+}
+
+/** A row's Pipeline, as its menu's context hands it over (#30). */
+function pipelineEntity(p: PipelineListEntry): PipelineEntity {
+  return { kind: "pipeline", id: p.id, name: p.name, attributes: p.attributes ?? {} };
 }

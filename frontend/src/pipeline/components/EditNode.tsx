@@ -3,7 +3,9 @@
  * status and orchestrator pastilles.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
+import type { CanvasNodeContext } from "../../shared/extensions/contract";
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
 import type { LoopKind } from "../../shared/generated/LoopKind";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
@@ -84,6 +86,14 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
   // Zustand single-selection tracks.
   const isSelected = selected || (selection.kind === "node" && selection.id === id);
   const isDropTarget = useIsDropTarget(id);
+  // ADR-0081 (#31): what the `canvas/node` decorations mark.
+  const decorated = useMemo(
+    () => ({
+      entity: { kind: "node", id: data.nodeId, name: data.label, attributes: {} },
+      node: { type: data.nodeType, status: data.status },
+    }),
+    [data.nodeId, data.label, data.nodeType, data.status],
+  );
   const reached = data.reached ?? false;
   // A reached start/end marker borrows the green "completed" cadre (border +
   // faint green fill) so the inline run view signals end-reached the same way
@@ -221,6 +231,14 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
           <ChildCountPills counts={data.childCounts} size="xs" testId="node-child-pills" />
         </div>
       )}
+      {/* ADR-0081 (#31) — the `canvas/node` decorations: a row under the
+          title, omitted entirely without one. */}
+      <ExtensionDecorations<CanvasNodeContext>
+        location="canvas/node"
+        extra={decorated}
+        block
+        className="mt-1.5 pl-[22px]"
+      />
       {inputImages.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5" data-testid="start-node-images">
           {inputImages.map((name) => (

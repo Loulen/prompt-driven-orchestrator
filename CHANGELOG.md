@@ -47,6 +47,13 @@ et tourne sans changement (ADR-0081, amendement #30 ; référence : `docs/refere
   `DropdownMenu` partagé, mêmes entrées et même comportement ; une entrée désactivée y est
   `aria-disabled` (focalisable au clavier) au lieu d'un `disabled` natif.
 
+## 2.5.1 — Correctif : le tag v2.5.0 ne compile pas
+
+Le merge de #33 dans `main` (v2.5.0) appelait `self.registered` au lieu de
+`self.registry.registered` dans `Extensions::skills` (`pdo-kernel`) : le crate ne compilait
+pas, donc aucun consommateur du tag (`pdo-extensions`) non plus. Aucun changement d'API :
+`pdo-extension-api` reste en **0.5.0**. Épingler `v2.5.1`, jamais `v2.5.0`.
+
 ## 2.5.0 — Surface agent : `pdo ext <id>` et skills d'extension (#33)
 
 `pdo-extension-api` passe en **0.5.0**, par ajout : une extension écrite pour 0.1 à 0.4

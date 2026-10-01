@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
   AlertCircle,
@@ -39,6 +39,9 @@ import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { ArtifactSource } from "./MarkdownArtifactModal";
 import ImageLightbox from "./ImageLightbox";
 import TmuxTerminal from "./TmuxTerminal";
+import { Tooltip } from "./ui/tooltip";
+import { STATUS_BG, STATUS_BORDER, STATUS_DOT, STATUS_TEXT } from "../nodeStyles";
+import { useTerminalOverlayStore } from "../stores/terminalOverlayStore";
 import { formatCostAmount, nodeCostTitle } from "../lib/costLabel";
 import { nodeReviewTarget, reviewUrl } from "../lib/runRefs";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
@@ -87,12 +90,23 @@ interface Props {
 
 // The terminal inset has three mutually exclusive display modes (#346):
 //   - "split"     : terminal ~45% / detail pane ~55% (default for a live node)
-//   - "expanded"  : terminal full-frame, detail pane hidden (user gesture, #270)
+//   - "expanded"  : the « Terminal agrandi » (#968): the same terminal lifted
+//                   over the whole app, 16px from the window edges, on a dimmed
+//                   backdrop (user gesture, never persisted)
 //   - "minimized" : terminal collapsed to a thin bar, Outputs take the full
 //                   height (default when opening a node whose session ended)
 // An enum (not two orthogonal booleans) makes the illegal
 // `{minimized + expanded}` state unrepresentable.
 type TerminalView = "minimized" | "split" | "expanded";
+
+/** #968: the enlarged terminal's drop shadow and backdrop — `RunShellModal`'s. */
+const OVERLAY_SHADOW = "0 30px 80px rgba(0,0,0,0.6)";
+const OVERLAY_BACKDROP = { background: "rgba(5,7,10,0.66)", backdropFilter: "blur(4px)" } as const;
+/** #968: the light halo an awaiting frame adds, at 18% of the status colour. */
+const AWAIT_HALO = "0 0 0 3px color-mix(in srgb, var(--color-st-await) 18%, transparent)";
+const RELEASE_LABEL = "Mark ready for completion";
+const RELEASED_LABEL = "Completion released";
+const MARK_COMPLETE_LABEL = "Mark complete · take the artifacts as they are";
 
 /**
  * Three tones, because the three answers demand three different reactions:
@@ -621,6 +635,153 @@ export default function NodeDetailPanel({
   // remount, no flicker).
   const closeModal = useCallback(() => setModal(null), []);
 
+  // #968 — the « Terminal agrandi ». The terminal's own wrapper switches to
+  // `position: fixed` (same element, same React parent, no portal), so the
+  // xterm instance and its WebSocket survive the round trip; the existing
+  // ResizeObserver resizes the grid both ways.
+  const expanded = terminalView === "expanded";
+  const terminalFrameRef = useRef<HTMLDivElement>(null);
+  // Closing on the backdrop needs the press AND the release there: a selection
+  // started in the terminal and released over the backdrop must not close it.
+  const backdropPressed = useRef(false);
+  // The verdict of a gesture made from the enlarged bar, shown in a popover
+  // under it — the panel's verdict regions are hidden beneath the overlay.
+  const [gesturePopover, setGesturePopover] = useState<"release" | "mark" | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  if (!expanded && gesturePopover !== null) setGesturePopover(null);
+
+  // The app's panel groups stop resizing while the overlay covers them.
+  useEffect(() => {
+    if (!expanded) return;
+    const { opened, closed } = useTerminalOverlayStore.getState();
+    opened();
+    return closed;
+  }, [expanded]);
+
+  // On open, the keyboard goes to the agent straight away.
+  useEffect(() => {
+    if (!expanded) return;
+    terminalFrameRef.current
+      ?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+      ?.focus();
+  }, [expanded]);
+
+  // While enlarged, the app behind it gets no keystroke: Escape closes the
+  // overlay, every other key stops here (canvas shortcuts, the tour's Escape).
+  // Capture phase on `window`, so we run before anyone else — but a keystroke
+  // aimed at the terminal's textarea is the agent's (Escape interrupts Claude
+  // Code), and passes untouched, the rule of `RunShellModal`.
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      const active = document.activeElement;
+      if (active && active.classList.contains("xterm-helper-textarea")) return;
+      e.stopImmediatePropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setTerminalView("split");
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [expanded]);
+
+  // The gesture popover closes on any press outside it.
+  useEffect(() => {
+    if (gesturePopover === null) return;
+    const onDown = (e: PointerEvent) => {
+      if (e.target instanceof Node && popoverRef.current?.contains(e.target)) return;
+      setGesturePopover(null);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [gesturePopover]);
+
+  const showExpandedGestures =
+    expanded &&
+    !isArchived &&
+    (selectedIterStatus === "awaiting_user" || nodeAwaitsOnLatestIter);
+
+  const toolbarIdentity = expanded ? (
+    <span className="flex items-center gap-1.5" data-testid="term-identity">
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[node.status]}${
+          node.status === "running" ? " animate-pulse" : ""
+        }`}
+      />
+      <span
+        className="text-fg"
+        style={{ fontSize: "12px", fontWeight: 500 }}
+        data-testid="term-identity-name"
+      >
+        {nodeName ?? node.node_id}
+      </span>
+      <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+        iter {selectedIter}
+      </span>
+      <span
+        className={`rounded border px-1.5 py-px transition-colors duration-[250ms] ${STATUS_BORDER[node.status]} ${STATUS_BG[node.status]} ${STATUS_TEXT[node.status]}`}
+        style={{ fontSize: "10px", fontWeight: 500 }}
+        data-testid="term-identity-status"
+        data-status={node.status}
+      >
+        {STATUS_LABELS[node.status] ?? node.status}
+      </span>
+    </span>
+  ) : undefined;
+
+  const releaseLabel = completionReleased ? RELEASED_LABEL : RELEASE_LABEL;
+  const toolbarActions = showExpandedGestures ? (
+    <>
+      {canReleaseCompletion && (
+        <Tooltip content={releaseLabel}>
+          <button
+            onClick={() => {
+              setGesturePopover("release");
+              void releaseCompletion();
+            }}
+            disabled={isReleasing}
+            aria-label={releaseLabel}
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-await transition-colors hover:bg-st-await-bg disabled:cursor-wait"
+            data-testid="term-release-completion"
+          >
+            {isReleasing ? (
+              <LoaderCircle size={12} className="animate-spin" />
+            ) : completionReleased ? (
+              <CheckCircle size={12} />
+            ) : (
+              <LockOpen size={12} />
+            )}
+          </button>
+        </Tooltip>
+      )}
+      <Tooltip content={MARK_COMPLETE_LABEL}>
+        <button
+          onClick={() => {
+            setGesturePopover("mark");
+            void markComplete();
+          }}
+          aria-label={MARK_COMPLETE_LABEL}
+          className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-done transition-colors hover:bg-st-done-bg"
+          data-testid="term-mark-complete"
+        >
+          <CheckCircle size={12} />
+        </button>
+      </Tooltip>
+    </>
+  ) : undefined;
+
+  const popoverVerdict =
+    gesturePopover === "release" ? (
+      completionReleased ? (
+        <ReleaseCompletionVerdict verdict={{ kind: "released" }} />
+      ) : releaseVerdict && releaseVerdict.iter === selectedIter ? (
+        <ReleaseCompletionVerdict verdict={releaseVerdict} />
+      ) : null
+    ) : gesturePopover === "mark" && markVerdict && markVerdict.iter === selectedIter ? (
+      <MarkCompleteVerdict verdict={markVerdict} />
+    ) : null;
+
   return (
     <aside className="flex h-full flex-col bg-bg-2">
       {/* Header */}
@@ -998,18 +1159,45 @@ export default function NodeDetailPanel({
       )}
 
       {(() => {
+        // #968: one element in both modes — only its classes change — so the
+        // terminal under it is never remounted. Fixed positioning needs no
+        // ancestor with a `transform` / `filter` / `contain` (none today).
         const terminalPane = (
           <div
-            className="flex h-full flex-col overflow-hidden"
-            data-testid="terminal-pane-wrapper"
+            ref={terminalFrameRef}
+            className={
+              expanded
+                ? `fixed inset-4 z-[41] flex flex-col overflow-hidden rounded-lg border-[1.5px] bg-bg-2 transition-[border-color,box-shadow] duration-[250ms] ${STATUS_BORDER[node.status]}`
+                : "flex h-full flex-col overflow-hidden"
+            }
+            style={
+              expanded
+                ? {
+                    boxShadow:
+                      node.status === "awaiting_user"
+                        ? `${AWAIT_HALO}, ${OVERLAY_SHADOW}`
+                        : OVERLAY_SHADOW,
+                  }
+                : undefined
+            }
+            data-testid={expanded ? "terminal-fullsize" : "terminal-pane-wrapper"}
+            data-status={expanded ? node.status : undefined}
+            role={expanded ? "dialog" : undefined}
+            aria-modal={expanded ? true : undefined}
+            aria-label={expanded ? `Terminal of ${nodeName ?? node.node_id}` : undefined}
+            onPointerDownCapture={() => {
+              backdropPressed.current = false;
+            }}
           >
             {showTerminal ? (
               <TmuxTerminal
                 session={sessionName}
-                expanded={terminalView === "expanded"}
+                expanded={expanded}
                 onExpand={() =>
                   setTerminalView((v) => (v === "expanded" ? "split" : "expanded"))
                 }
+                toolbarIdentity={toolbarIdentity}
+                toolbarActions={toolbarActions}
                 status={selectedIterStatus}
                 // #617: the iteration this panel is showing, so a terminal one can
                 // read back the pane PDO froze when it reaped the session. The
@@ -1035,8 +1223,35 @@ export default function NodeDetailPanel({
                 </div>
               </div>
             )}
+            {expanded && popoverVerdict && (
+              <div
+                ref={popoverRef}
+                className="absolute right-2 top-9 z-10 w-[330px] rounded-lg border border-line-strong bg-bg-2 p-1.5 shadow-lg"
+                data-testid="term-gesture-popover"
+              >
+                {popoverVerdict}
+              </div>
+            )}
           </div>
         );
+
+        // #968: the dimmed backdrop, a sibling under the frame. Not
+        // interactive beyond closing: press and release must both land on it.
+        const backdrop = expanded ? (
+          <div
+            className="fixed inset-0 z-40"
+            style={OVERLAY_BACKDROP}
+            data-testid="terminal-overlay-backdrop"
+            onPointerDown={(e) => {
+              backdropPressed.current = e.target === e.currentTarget;
+            }}
+            onPointerUp={(e) => {
+              const pressed = backdropPressed.current;
+              backdropPressed.current = false;
+              if (pressed && e.target === e.currentTarget) setTerminalView("split");
+            }}
+          />
+        ) : null;
 
         const detailsPane = (
           <div
@@ -1236,38 +1451,27 @@ export default function NodeDetailPanel({
           );
         }
 
-        // Keep `TmuxTerminal` mounted across the fullscreen toggle: render
-        // the same `<ResizablePanelGroup>` parent in both modes and only
-        // conditionally render the details panel + handle. React's reconciler
-        // matches the terminal panel at position 0 in both renders, so the
-        // WebSocket and xterm instance survive the toggle. Conditional panels
-        // with stable `id` + `order` props are the documented pattern for
-        // react-resizable-panels.
+        // Keep `TmuxTerminal` mounted across the enlarge toggle (#968): the
+        // split layout stays as it is underneath, and only the terminal's own
+        // wrapper lifts out of it (`position: fixed`). The tree is identical in
+        // both modes — the backdrop's slot is merely empty in split — so the
+        // WebSocket and xterm instance survive the toggle.
         return (
           <ResizablePanelGroup
             orientation="vertical"
             className="min-h-0 flex-1"
-            data-testid={terminalView === "expanded" ? "terminal-fullsize" : undefined}
+            // The overlay lives inside this group: without this, a drag
+            // across the hidden separator would resize the split underneath.
+            disabled={expanded}
           >
-            <ResizablePanel
-              id="terminal"
-              defaultSize={terminalView === "expanded" ? 100 : 45}
-              minSize="100px"
-            >
+            <ResizablePanel id="terminal" defaultSize={45} minSize="100px">
+              {backdrop}
               {terminalPane}
             </ResizablePanel>
-            {terminalView !== "expanded" && (
-              <>
-                <ResizableHandle />
-                <ResizablePanel
-                  id="details"
-                  defaultSize={55}
-                  minSize="100px"
-                >
-                  {detailsPane}
-                </ResizablePanel>
-              </>
-            )}
+            <ResizableHandle />
+            <ResizablePanel id="details" defaultSize={55} minSize="100px">
+              {detailsPane}
+            </ResizablePanel>
           </ResizablePanelGroup>
         );
       })()}

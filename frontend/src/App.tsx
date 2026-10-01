@@ -30,6 +30,7 @@ import ConflictModal from "./components/ConflictModal";
 import SaveErrorModal from "./components/SaveErrorModal";
 import ConfirmCloseTabsModal from "./components/ConfirmCloseTabsModal";
 import { useRecentReposStore } from "./stores/recentReposStore";
+import { useTerminalOverlayOpen } from "./stores/terminalOverlayStore";
 import type { TabId } from "./components/PipelineInfoPanel";
 import { infoPanelButtons, toggleAssistantTab, toggleInfoTab } from "./lib/infoPanelReconcile";
 import EditCanvas from "./components/EditCanvas";
@@ -193,6 +194,8 @@ export default function App() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // #968: an enlarged node terminal covers the app — its panels stop resizing.
+  const terminalOverlayOpen = useTerminalOverlayOpen();
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
   // #698: the « What's new » changelog modal, opened from the status-bar version (and
   // from Settings › Version & update). Lives here next to the other modals.
@@ -907,6 +910,8 @@ export default function App() {
           orientation="horizontal"
           defaultLayout={layout.defaultLayout}
           onLayoutChanged={persistLayout}
+          // #968: no resizing under an enlarged node terminal.
+          disabled={terminalOverlayOpen}
         >
           <ResizablePanel defaultSize={layout.defaultLayout.left} minSize={minSizePx} id="left">
             <UnifiedLeftPanel

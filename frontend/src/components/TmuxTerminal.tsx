@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -54,7 +54,18 @@ interface Props {
    *  terminal, so the awaiting banner says « take control to reply » instead of
    *  « reply below ». */
   onSpectatingChange?: (spectating: boolean) => void;
+  /** #968: the node's identity (status dot, name, iteration, status badge), at
+   *  the head of the toolbar. Replaces the connection dot — the « attached ·
+   *  live » badge still says how the socket is doing. */
+  toolbarIdentity?: ReactNode;
+  /** #968: extra gestures at the right of the toolbar, before Copy, followed by
+   *  a separator. */
+  toolbarActions?: ReactNode;
 }
+
+/** #968: the exits of the enlarged terminal, named on its collapse button. */
+const COLLAPSE_LABEL = "Collapse terminal · Esc · click outside";
+const EXPAND_LABEL = "Expand terminal";
 
 // A node iteration in one of these states has had its tmux session reaped on the
 // terminal transition (#205, the one-live-iteration invariant), so attaching a PTY
@@ -118,6 +129,8 @@ export default function TmuxTerminal({
   paneSource,
   onLiveSocketChange,
   onSpectatingChange,
+  toolbarIdentity,
+  toolbarActions,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -566,7 +579,14 @@ export default function TmuxTerminal({
         style={{ fontSize: "11px" }}
         data-testid="term-toolbar"
       >
-        <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+        {toolbarIdentity ? (
+          <>
+            {toolbarIdentity}
+            <span className="mx-1 h-3 w-px bg-line-strong" aria-hidden />
+          </>
+        ) : (
+          <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+        )}
         <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
           {session}
         </span>
@@ -621,6 +641,12 @@ export default function TmuxTerminal({
             </span>
           </Tooltip>
         )}
+        {toolbarActions && (
+          <>
+            {toolbarActions}
+            <span className="mx-1 h-3 w-px bg-line-strong" aria-hidden />
+          </>
+        )}
         {/* #772: copy the browser-side selection; the tooltip doubles as the
             discoverable hint for the keyboard shortcuts. */}
         <Tooltip
@@ -648,11 +674,7 @@ export default function TmuxTerminal({
           </button>
         </Tooltip>
         {onExpand && (
-          <Tooltip
-            content={
-              expanded ? "Collapse terminal" : "Expand terminal"
-            }
-          >
+          <Tooltip content={expanded ? COLLAPSE_LABEL : EXPAND_LABEL}>
             <button
               onClick={onExpand}
               className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"

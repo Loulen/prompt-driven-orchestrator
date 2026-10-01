@@ -103,9 +103,10 @@ Features validated while crossing the run screens (grafted from retired per-issu
     you go`) → it lists the floor entry by entry, and its **Image** control offers
     `default` / `dockerfile` / `registry`, the `default` option saying in one sentence that the tag is
     the SHA-256 of the seeded Dockerfile's bytes.
-14. **Four-way harness pin.** Seed a **four-node** pipeline: four parallel nodes, each asked for a
+14. **Five-way harness pin.** Seed a **five-node** pipeline: five parallel nodes, each asked for a
     single line of output. In the **node inspector**, pin the first node's harness to **`claude`**, the
-    second's to **`opencode`**, the third's to **`copilot`** and the fourth's to **`pi`**; each node's
+    second's to **`opencode`**, the third's to **`copilot`**, the fourth's to **`pi`** and the fifth's
+    to **`vibe`**; each node's
     inspector reads back which harness it **resolves** to. On the `opencode` node, also set a **model**
     through the picker's `Custom…` escape hatch — a `provider/model` slug that supports tool use (e.g.
     `openrouter/anthropic/claude-haiku-4.5`). **This is not optional**, and the notes say why. On the
@@ -113,15 +114,18 @@ Features validated while crossing the run screens (grafted from retired per-issu
     installed binary (ADR-0053), and reading them is the cheapest proof the served catalogue reached
     the UI. Its **model** control is a free-text field, not a list — see the checks. On the `pi` node,
     the effort picker offers pi's `--thinking` stops and the cost column is live (pi reports its cost
-    in dollars, #707).
+    in dollars, #707). On the `vibe` node, the model picker lists the aliases of its own
+    `config.toml` and the effort picker is **greyed** (no effort axis); its cost arrives once the sweep
+    has **learned** its session (ADR-0080, within ~30 s), reported in dollars per session (#962).
 15. Open **New Run** on it. Set the Run's **Harness** field to **`claude`** and sandbox to **`off`**,
-    then Launch. Setting the Run tier to `claude` is what turns the other two pins into a real proof:
-    they must still run `opencode`, `copilot` and `pi` *against* the tier above them. All four nodes
-    start, all four reach **completed**, and the Run reaches **Completed** with the End `result` port
-    **received**: one Run, four harnesses, one outcome. Run it **sandboxed** too (a profile whose image
-    carries all four binaries): the `claude` and `pi` nodes both complete, and Stats shows a cost slice
-    for each **while the Run lives and after it ends** — pi's sessions are harvested back from the
-    container (ADR-0063). A sandboxed Run whose image lacks `pi` leaves the `pi` node **Interrupted**
+    then Launch. Setting the Run tier to `claude` is what turns the other pins into a real proof:
+    they must still run `opencode`, `copilot`, `pi` and `vibe` *against* the tier above them. All five
+    nodes start, all five reach **completed**, and the Run reaches **Completed** with the End `result`
+    port **received**: one Run, five harnesses, one outcome. Run it **sandboxed** too (a profile whose
+    image carries all five binaries): the `claude`, `pi` and `vibe` nodes complete, and Stats shows a
+    cost slice for each **while the Run lives and after it ends** — pi's and vibe's sessions are
+    harvested back from the container (ADR-0063; vibe's `.env` key travels with its staged home,
+    #963). A sandboxed Run whose image lacks `pi` leaves the `pi` node **Interrupted**
     with « binary absent from the image », said once in the Run.
 16. **The `copilot` node, end to end.** Watch that node specifically, without touching it: it starts,
     its pane shows an **interactive** `copilot` session (not a one-shot that exits), and when its turn
@@ -173,9 +177,9 @@ Features validated while crossing the run screens (grafted from retired per-issu
   floor entry by entry, offers the three-way **Image** control, warns on credential-bearing entries,
   and lists a profile's referents before confirming its deletion.
 
-#### Harness four-way pin (steps 14-16)
+#### Harness five-way pin (steps 14-16)
 
-- The node inspector offers **Default / claude / opencode / copilot / pi** and reads back the **resolved**
+- The node inspector offers **Default / claude / opencode / copilot / pi / vibe** and reads back the **resolved**
   harness, saying whether that is a **pin** or the **floor** ("Resolved: opencode (pinned)" vs
   "Resolved: claude (floor — no pin)").
 - Saving writes the pin as the node's own `pin_harness`, and the custom model under the **resolved

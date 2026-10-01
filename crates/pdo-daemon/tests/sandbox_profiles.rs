@@ -820,22 +820,27 @@ async fn an_entry_under_claude_adds_no_mount() {
     assert!(wait_until(|| log_text(&log).contains("create")).await);
 
     let specs = mount_specs(&log);
-    // The 4 FIXED mounts + pi's empty home root anchor (#708, ADR-0063 §3), which is a
-    // PDO mount, not a profile `$HOME` exception.
+    // The 4 FIXED mounts + pi's and vibe's empty home root anchors (#708, ADR-0063 §3;
+    // #963), which are PDO mounts, not profile `$HOME` exceptions.
     assert_eq!(
         specs.len(),
-        5,
-        "the 4 FIXED mounts + pi's home root; specs={specs:?}"
+        6,
+        "the 4 FIXED mounts + pi's and vibe's home roots; specs={specs:?}"
     );
     assert!(
         specs.iter().any(|s| s.contains("/home/.pi/agent:")),
         "pi's home root is mounted empty; specs={specs:?}"
     );
-    // The only thing under `<staging>/home` is pi's anchor — no profile exception.
+    assert!(
+        specs.iter().any(|s| s.contains("/home/.vibe:")),
+        "vibe's home root is mounted empty; specs={specs:?}"
+    );
+    // The only things under `<staging>/home` are the harness anchors — no profile exception.
     assert!(
         staged_extras(&daemon, &run_id).join(".pi/agent").is_dir()
+            && staged_extras(&daemon, &run_id).join(".vibe").is_dir()
             && !staged_extras(&daemon, &run_id).join(".gitconfig").exists(),
-        "no `$HOME` exception ⇒ nothing under <staging>/home but pi's anchor"
+        "no `$HOME` exception ⇒ nothing under <staging>/home but the harness anchors"
     );
 }
 

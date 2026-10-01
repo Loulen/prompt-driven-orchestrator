@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupRuns, runMultipart } from "./helpers";
@@ -23,7 +24,9 @@ const SOCKET = `pdo-${PORT}`;
 const SHOTS = process.env.PDO_FP_SHOTS_DIR ?? path.join(WORKSPACE_ROOT, "fp-shots");
 
 const PIPELINE_NAME = `e2e-interrupted-fp-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // A single worker node with a live session. The stale detector only probes

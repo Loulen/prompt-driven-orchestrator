@@ -44,7 +44,7 @@ export const COST_REPORTED_NOTE =
  * PDO summed it with a conversion constant of 1.0 — so no `~`.
  */
 export const COST_REPORTED_IN_USD_NOTE =
-  "Reported by the harness in dollars per message (conversion constant 1.0) — not an estimate, not re-derived from tokens.";
+  "Reported by the harness in dollars — per message (pi) or per session (vibe), conversion constant 1.0 — not an estimate, not re-derived from tokens.";
 
 export function nodeCostTitle(cost: NodeCost): string {
   const base =

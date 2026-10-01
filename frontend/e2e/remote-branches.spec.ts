@@ -3,7 +3,6 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { cleanupRuns, pickPipeline } from "./helpers";
 
 // Layer 3b (real browser ↔ real daemon) for #571. The New Run source-branch
@@ -16,10 +15,10 @@ import { cleanupRuns, pickPipeline } from "./helpers";
 // instance-level, not per-target-repo), the git fixture into os.tmpdir(), and
 // the Run is pointed at that fixture.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-remote-branches-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -120,8 +119,9 @@ test("offers remote branches grouped, defaults local, launches one verbatim", as
   await expect(picker).toBeVisible();
 
   // Two groups: Local (main, local-branch) and Remote (origin/feature-remote-only).
-  await expect(picker.getByText("Local", { exact: true })).toHaveCount(1);
-  await expect(picker.getByText("Remote", { exact: true })).toHaveCount(1);
+  // A group header reads its label followed by its row count (« Local 2 »).
+  await expect(picker.getByText(/^Local\s*\d+$/)).toHaveCount(1);
+  await expect(picker.getByText(/^Remote\s*\d+$/)).toHaveCount(1);
   const option = (name: string) =>
     picker.locator(`[data-testid="source-branch-option"][data-branch="${name}"]`);
   await expect(option("main")).toHaveCount(1);

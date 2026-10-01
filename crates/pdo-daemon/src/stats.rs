@@ -16,7 +16,7 @@
 //! runs (an unpriced model) and null-cost runs (no transcript) are counted
 //! separately so a bucket is never silently undercounted (ADR-0001 honesty).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -431,6 +431,29 @@ async fn session_stats(
     .bind(&q.to)
     .fetch_all(&state.db)
     .await?;
+    // #962 / ADR-0080: the ids the sweep LEARNED for harnesses that name their own
+    // sessions (`vibe`), keyed by (run, node, iter); the latest row wins, so a fresh
+    // relaunch's id supersedes. Read once for the whole cohort.
+    let learned_rows = sqlx::query_as::<_, (String, Option<String>, Option<i64>, Option<String>)>(
+        "SELECT run_id, node_id, iter, payload FROM events \
+         WHERE kind = 'node_session_learned' ORDER BY id",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let mut learned = HashMap::<(String, String, Option<i64>), String>::new();
+    for (run_id, node_id, iter, payload) in learned_rows {
+        let sid = payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+            .and_then(|p| {
+                p.get("session_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            });
+        if let (Some(node_id), Some(sid)) = (node_id, sid) {
+            learned.insert((run_id, node_id, iter), sid);
+        }
+    }
 
     let mut periods = BTreeMap::<String, HarnessCount>::new();
     let mut session_periods = BTreeMap::<String, i64>::new();
@@ -475,11 +498,14 @@ async fn session_stats(
             .filter(|harness| !harness.is_empty())
             .unwrap_or("claude")
             .to_string();
+        let learned_id = learned.get(&(run_id.clone(), node_id.clone(), iter));
         let execution = crate::run_cost::frozen_execution_identity(
             &harness,
             event_payload
                 .get("session_id")
-                .and_then(|value| value.as_str()),
+                .and_then(|value| value.as_str())
+                .filter(|s| !s.is_empty())
+                .or(learned_id.map(String::as_str)),
             Some(&node_id),
             iter,
             event_id,

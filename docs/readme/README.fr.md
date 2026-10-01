@@ -188,6 +188,7 @@ Fonctionne avec **n'importe quel harnais** : s'il tourne dans un terminal, un de
   <a href="https://opencode.ai/docs/cli/"><kbd><img src="https://www.google.com/s2/favicons?domain=opencode.ai&amp;sz=64" alt="OpenCode logo" width="16" valign="middle" /> OpenCode</kbd></a> &nbsp;
   <a href="https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli"><kbd><img src="https://www.google.com/s2/favicons?domain=github.com&amp;sz=64" alt="GitHub Copilot logo" width="16" valign="middle" /> GitHub Copilot</kbd></a> &nbsp;
   <a href="https://pi.dev"><kbd><img src="https://www.google.com/s2/favicons?domain=pi.dev&amp;sz=64" alt="Pi logo" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
+  <a href="https://pypi.org/project/mistral-vibe/"><kbd><img src="https://www.google.com/s2/favicons?domain=mistral.ai&amp;sz=64" alt="Mistral Vibe logo" width="16" valign="middle" /> Mistral Vibe</kbd></a> &nbsp;
   <a href="../../docs/reference/harnesses.md"><kbd>+ n'importe quel harnais</kbd></a>
 </p>
 

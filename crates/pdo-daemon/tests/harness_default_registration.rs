@@ -41,7 +41,7 @@ async fn put_default_harness(daemon: &TestDaemon, name: &str) -> reqwest::Respon
 #[tokio::test]
 async fn an_embedded_default_harness_is_accepted() {
     let daemon = TestDaemon::spawn(seed()).await.unwrap();
-    for name in ["claude", "opencode", "copilot", "pi"] {
+    for name in ["claude", "opencode", "copilot", "pi", "vibe"] {
         let resp = put_default_harness(&daemon, name).await;
         assert_eq!(
             resp.status(),

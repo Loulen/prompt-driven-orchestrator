@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 // Layer 3b — TabBar horizontal overflow scroll (#70).
 // Verifies:
@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 // 2. Tab list has horizontal scroll when overflowed.
 // 3. Clicking a far-right tab auto-scrolls it into view.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const TAB_COUNT = 12;
 const PREFIX = `e2e-tabbar-${process.pid}-${Date.now()}`;
 
@@ -73,8 +73,9 @@ test("tabbar overflows horizontally, Save stays visible, active tab scrolls into
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Post-refonte (#146): pipelines open into the edit canvas from the Library
-  // tab — there is no pencil "Toggle edit mode" anymore.
-  await page.getByRole("tab", { name: "Library" }).click();
+  // tab — there is no pencil "Toggle edit mode" anymore. Aimed at by test id:
+  // the tab reads « Pipelines » now (see helpers.ts `openPipelineForEdit`).
+  await page.getByTestId("left-tab-library").click();
 
   // Open all 12 pipelines as tabs by clicking their Library entries.
   for (let i = 0; i < TAB_COUNT; i++) {

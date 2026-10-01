@@ -118,7 +118,10 @@ fn write_live_docker() -> (TempDir, String, PathBuf) {
     // container name, then exec the remaining argv (`bash -lc '<tail>'`). No arg
     // before the container name starts with `pdo-sbx-` (the session marker is
     // `PDO_SBX_SESSION=pdo-<run>-<node>-…`, a distinct prefix), so the match is
-    // unambiguous.
+    // unambiguous. The harness binary probe (`bash -lc 'command -v -- <bin>'`, ADR-0063
+    // §5) answers "present" without running: the faked image carries the harness, and
+    // running the probe on the host would make the verdict depend on the host's `PATH`
+    // (green on a dev box with `claude` installed, `harness_binary_missing` on CI).
     let script = format!(
         "#!/usr/bin/env bash\n\
          printf '%s\\n' \"$@\" >> {log}\n\
@@ -133,6 +136,7 @@ fn write_live_docker() -> (TempDir, String, PathBuf) {
          *) shift ;;\n\
          esac\n\
          done\n\
+         case \"$3\" in \"command -v -- \"*) exit 0 ;; esac\n\
          exec \"$@\"\n\
          ;;\n\
          *) exit 0 ;;\n\

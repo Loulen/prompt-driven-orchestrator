@@ -146,8 +146,10 @@ test("Edit project with provisioning open stays in the window; the body scrolls 
   await expect(modal.getByText("Edit project", { exact: true })).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
 
-  await modal.getByRole("button", { name: "Configure worktree provisioning…" }).click();
-  await expect(modal.getByTestId("provisioning-project")).toBeVisible();
+  // The Project provisioning block renders collapsed (Notion #7): expand it.
+  const provisioning = modal.getByTestId("provisioning-project");
+  await provisioning.getByTestId("provisioning-toggle").click();
+  await expect(provisioning.getByTestId("provisioning-body")).toBeVisible();
 
   // The panel never leaves the window: bounded to 85vh (510px at 600px).
   const box = (await modal.boundingBox())!;

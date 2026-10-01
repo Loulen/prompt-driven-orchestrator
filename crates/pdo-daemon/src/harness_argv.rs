@@ -49,6 +49,44 @@ impl Holes {
     }
 }
 
+/// The values substituted into a descriptor's **env** holes (#961, ADR-0045 as
+/// amended by #960): a harness that takes its model from a variable rather than a
+/// flag (`vibe`: `VIBE_ACTIVE_MODEL={model}`, no `--model`) declares the hole in an
+/// env value, and the same drop rule applies — an EMPTY hole removes the variable.
+///
+/// Deliberately a second struct, **raw** where [`Holes`] is shell-quoted: the env
+/// export path quotes its values itself (`wrap_with_env` → `sh_quote_arg`), so
+/// handing it an already-quoted `'devstral-small'` would export `''devstral-small''`.
+/// Only the holes that can sensibly ride in an env value are here — no prompt (a
+/// file read), no settings path, no resume selector.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct EnvHoles {
+    pub model: String,
+    pub effort: String,
+    pub session_id: String,
+}
+
+impl EnvHoles {
+    fn resolve(&self, name: &str) -> &str {
+        match name {
+            "model" => &self.model,
+            "effort" => &self.effort,
+            "session_id" => &self.session_id,
+            _ => "",
+        }
+    }
+}
+
+/// Render a descriptor's env block against `holes`: a variable whose value carries a
+/// hole that resolves to empty is **dropped** (not exported empty), every other
+/// variable is kept verbatim. Identity for an env block with no hole, so `claude`'s
+/// and `pi`'s exports stay byte-identical (the #550 gate extends to the env).
+pub(crate) fn render_env(env: &[(String, String)], holes: &EnvHoles) -> Vec<(String, String)> {
+    env.iter()
+        .filter_map(|(k, v)| render_with(v, &|name| holes.resolve(name)).map(|v| (k.clone(), v)))
+        .collect()
+}
+
 /// Render a descriptor's argv-token template into a single tail string.
 ///
 /// A token is dropped **entirely** if any `{hole}` it contains resolves to empty.
@@ -64,6 +102,12 @@ pub(crate) fn render(tokens: &[String], holes: &Holes) -> String {
 }
 
 fn render_token(token: &str, holes: &Holes) -> Option<String> {
+    render_with(token, &|name| holes.resolve(name))
+}
+
+/// The one substitution rule, shared by argv tokens and env values: `None` when any
+/// `{hole}` in `token` resolves to empty.
+fn render_with<'h>(token: &str, resolve: &dyn Fn(&str) -> &'h str) -> Option<String> {
     let mut out = String::with_capacity(token.len());
     let mut rest = token;
     loop {
@@ -84,7 +128,7 @@ fn render_token(token: &str, holes: &Holes) -> Option<String> {
         };
         let close = open + 1 + rel_close;
         out.push_str(&rest[..open]);
-        let value = holes.resolve(&rest[open + 1..close]);
+        let value = resolve(&rest[open + 1..close]);
         if value.is_empty() {
             return None;
         }
@@ -352,6 +396,85 @@ mod tests {
         // identity, CONTEXT.md § "Harnais agentique").
         let d = harness_registry::resolve("pi").unwrap();
         assert_eq!(render(&d.resume, &Holes::default()), "exec pi -a");
+    }
+
+    // #961 (story #960): `vibe` — no `--model` flag; the model travels in the env
+    // (`VIBE_ACTIVE_MODEL={model}`, ADR-0045 as amended). The argv never carries it.
+
+    #[test]
+    fn vibe_launch_is_the_bare_resident_launch_whatever_the_model() {
+        let d = harness_registry::resolve("vibe").unwrap();
+        let holes = Holes {
+            prompt: prompt_hole("/tmp/p.md"),
+            model: "'devstral-small'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.launch, &holes),
+            "exec vibe --legacy-harness --trust --auto-approve \"$(cat '/tmp/p.md')\""
+        );
+    }
+
+    #[test]
+    fn vibe_env_exports_the_model_when_posed_and_drops_the_variable_when_not() {
+        let d = harness_registry::resolve("vibe").unwrap();
+        let posed = render_env(
+            &d.env,
+            &EnvHoles {
+                model: "devstral-small".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(posed.contains(&(
+            "VIBE_ACTIVE_MODEL".to_string(),
+            "devstral-small".to_string()
+        )));
+
+        let unposed = render_env(&d.env, &EnvHoles::default());
+        assert!(unposed.iter().all(|(k, _)| k != "VIBE_ACTIVE_MODEL"));
+        // The hygiene constants survive either way (no update check, no auto-update,
+        // no telemetry, no exit confirmation).
+        for k in [
+            "VIBE_ENABLE_UPDATE_CHECKS",
+            "VIBE_ENABLE_AUTO_UPDATE",
+            "VIBE_ENABLE_TELEMETRY",
+            "VIBE_ASK_CONFIRMATION_ON_EXIT",
+        ] {
+            assert!(
+                unposed.iter().any(|(key, v)| key == k && v == "false"),
+                "{k}"
+            );
+            assert!(posed.iter().any(|(key, v)| key == k && v == "false"), "{k}");
+        }
+    }
+
+    #[test]
+    fn vibe_resume_is_by_identity_only() {
+        let d = harness_registry::resolve("vibe").unwrap();
+        let holes = Holes {
+            resume: "--resume 'fa56c7a5-d045-cc1d-3ac0-5eb6beb20945'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.resume, &holes),
+            "exec vibe --legacy-harness --trust --auto-approve --resume 'fa56c7a5-d045-cc1d-3ac0-5eb6beb20945'"
+        );
+        // No identity ⇒ no resume flag at all: `-c` follows the last-written session
+        // across every working dir (ADR-0080), never a blind continue.
+        assert_eq!(
+            render(&d.resume, &Holes::default()),
+            "exec vibe --legacy-harness --trust --auto-approve"
+        );
+        assert_eq!(d.resume_blind, "");
+        assert_eq!(d.resume_by_id, "--resume");
+    }
+
+    #[test]
+    fn claude_and_pi_env_carry_no_hole_so_render_env_is_identity() {
+        for name in ["claude", "pi", "copilot"] {
+            let d = harness_registry::resolve(name).unwrap();
+            assert_eq!(render_env(&d.env, &EnvHoles::default()), d.env, "{name}");
+        }
     }
 
     #[test]

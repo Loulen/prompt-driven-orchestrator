@@ -1,0 +1,8 @@
+{"role": "user", "content": "Initial prompt", "injected": false, "message_id": "m1"}
+{"role": "assistant", "content": "Working.", "injected": false, "message_id": "m2", "tool_calls": [{"id": "c1"}]}
+{"role": "tool", "content": "ok", "injected": false, "name": "bash", "tool_call_id": "c1"}
+{"role": "user", "content": "[skill loaded]", "injected": true, "message_id": "m3"}
+{"role": "user", "content": "Steer once", "injected": false, "message_id": "m4"}
+{"role": "assistant", "content": "Done.", "injected": false, "message_id": "m5"}
+{"role": "user", "content": "Steer twice", "injected": false, "message_id": "m6"}
+{"role": "assistant", "content": "Done again.", "injected": false, "message_id": "m7"}

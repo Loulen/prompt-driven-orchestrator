@@ -10,6 +10,23 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.115.0 — `vibe` (Mistral), cinquième harnais first-party (story #960, tickets #961–#964)
+
+- `vibe` rejoint `claude`, `opencode`, `copilot` et `pi` dans le picker **Built-in**, le tableau de
+  support et la ligne « Default model per harness ». Validé sur `vibe 2.25.8`.
+- **Identité de session apprise** (ADR-0080) : `vibe` nomme ses sessions ; PDO apprend l'id
+  (première session du répertoire de travail créée après le spawn) au balayage et à la complétion
+  du nœud, le gèle dans un événement `node_session_learned`, et lit coût, modèle observé, contexte
+  et pilotage par cet id. Reprise par `--resume <id>`, jamais `-c`.
+- **Le fichier de configuration du home entre dans l'échelle du catalogue** (ADR-0056 §1 ter) :
+  les modèles offerts sont les `[[models]]` de `~/.vibe/config.toml`.
+- **Un trou peut vivre dans une valeur d'env** (ADR-0045) : `VIBE_ACTIVE_MODEL={model}`.
+- Fin de tour par hook `post_agent` écrit dans `<worktree>/.vibe/hooks.toml` ; staging set `.vibe`
+  (clé incluse, logs et historique exclus).
+- Descripteur épinglé sur `--legacy-harness` : le store « Unified Harness » de vibe n'est pas lu.
+- Note : un modèle inconnu de son catalogue fait retomber `vibe` en silence sur le premier modèle
+  du fichier ; PDO montre l'écart demandé/observé, il ne garde pas.
+
 ## 1.114.0
 **Copier le contenu brut d'un output en un clic** (#965, story Notion PDO-12).
 

@@ -4,7 +4,7 @@ members = ["crates/pdo-daemon"]
 
 [workspace.package]
 edition = "2021"
-version = "1.114.0"
+version = "1.115.0"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -24,6 +24,8 @@ clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_yaml = "0.9"
+# #961: vibe's offered catalogue is read from its own `config.toml` (ADR-0056 §1 ter).
+toml = "0.8"
 # Workflow importer (#155 / ADR-0016): parse Claude Code workflow .js via an AST,
 # never executing untrusted JS. Pinned to =0.133.0 — the last release whose MSRV
 # (rust-version 1.93.0) matches this machine's floating nightly; 0.134+ bumps the

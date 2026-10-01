@@ -937,6 +937,8 @@ const OBSERVED_HOW: Record<"model" | "effort", Record<string, string>> = {
     claude: "observed — each message in the transcript",
     pi: "observed — each message in the session",
     copilot: "observed — session open, then each usage point",
+    // #962: vibe reports one active model per session (no effort axis).
+    vibe: "observed — the session's active model",
   },
   effort: {
     pi: "observed — thinking-level change event",

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 3b — Inline xterm.js terminal (refs #55, ADR 0004).
@@ -10,10 +10,10 @@ import { cleanupRuns, runMultipart } from "./helpers";
 // 2. The terminal connects via WebSocket and shows live status.
 // 3. Typing into the terminal echoes back through the PTY bridge.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-inline-terminal-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Post-refonte the parser requires exactly one start node (zero inputs, one

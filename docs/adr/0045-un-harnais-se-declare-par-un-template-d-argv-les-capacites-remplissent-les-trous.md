@@ -15,11 +15,18 @@ défaut (un coût illisible affiché `$0`).
 > **Amendé par ADR-0054** : « PDO ne valide pas un descripteur » gagne une exception, unique et
 > nommée — le template de lancement doit faire du binaire déclaré le leader du pane, faute de quoi le
 > critère d'éligibilité posé ici est silencieusement faux.
+> **Amendé le 2026-09-30 (#960, `vibe`)** : un trou vit dans l'argv **ou dans une valeur du bloc
+> d'env**, même règle — une variable dont la valeur contient un trou vide n'est **pas exportée**.
+> Mesuré : `vibe` n'a pas de `--model` et lit `VIBE_ACTIVE_MODEL` ; un descripteur porte donc
+> `VIBE_ACTIVE_MODEL={model}`, et un nœud sans modèle laisse `vibe` sur son `active_model` (le défaut
+> du compte). L'alternative `exec env VAR={model} <binaire>` est écartée : elle détrône le binaire de
+> la place de leader qu'ADR-0054 impose.
 
 ## Ce qu'on décide
 
 1. **Un harnais se déclare par deux templates d'argv** (lancement, reprise) et un bloc d'env. Règle
-   unique : **un token contenant un trou vide est supprimé en entier**. Les trous sont le prompt, le
+   unique : **un token contenant un trou vide est supprimé en entier** — un token d'argv, ou une
+   variable d'env dont la valeur porte le trou (#960). Les trous sont le prompt, le
    modèle, l'effort, l'identité de session et le fichier de réglages.
 2. **Les capacités remplissent les trous.** Une capacité est du **code** écrit harnais par harnais :
    coût, résolution du transcript, complétion sur fin de tour, détection de menu de limite, plancher

@@ -155,10 +155,14 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
   const readmePath = path.join(wt, "README.md");
   const original = (await fs.readFile(readmePath, "utf8")).split("\n");
   expect(original.length).toBeGreaterThan(80);
-  // Line 13 sits between the two hunks (lines 3 and 62) and stays untouched:
-  // it is hidden until the context is expanded.
-  const HIDDEN_PROBE = original[12];
-  expect(HIDDEN_PROBE.length).toBeGreaterThan(20);
+  // The probe sits between the two hunks (lines 3 and 62), outside their context
+  // lines, and stays untouched: it is hidden until the context is expanded. Picked
+  // as the first distinctive line of that gap rather than a fixed index, since the
+  // README's head keeps being rewritten.
+  const HIDDEN_PROBE = original
+    .slice(10, 55)
+    .find((line) => line.trim().length > 20 && original.indexOf(line) === original.lastIndexOf(line)) ?? "";
+  expect(HIDDEN_PROBE.length, "a distinctive README line between the hunks").toBeGreaterThan(20);
   await deliver(page, baseURL!, run_id, wt, "alpha", async () => {
     const lines = [...original];
     lines[2] = "alpha edited line 3 (#749 FP)";
@@ -186,6 +190,8 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
     "node:beta:1:before",
     "node:beta:1:after",
     "tip",
+    // #835: the Run's working tree is a ref while it exists, listed last.
+    "worktree",
   ]);
   const sha = (id: string) => refs.refs.find((r) => r.id === id)!.sha!;
   const alphaFiles = git(E2E_TARGET_REPO, [
@@ -216,7 +222,9 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
   await expect(page).toHaveURL(new RegExp(`/runs/${run_id}/review$`));
   await expect(page.getByTestId("review-page")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("review-from")).toHaveText(/Fork point/, { timeout: 10_000 });
-  await expect(page.getByTestId("review-to")).toHaveText(/Run tip/);
+  // #835: while the Run's worktree exists, the default destination is the
+  // working tree (commits + uncommitted edits), no longer the Run tip.
+  await expect(page.getByTestId("review-to")).toHaveText(/Working tree/);
   await expect(page.getByTestId("review-view-toggle")).toHaveAttribute("data-view", "split");
   const rows = page.getByTestId("review-file-row");
   await expect(rows).toHaveCount(3, { timeout: 10_000 });

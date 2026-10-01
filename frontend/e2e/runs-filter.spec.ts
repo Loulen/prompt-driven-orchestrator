@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { cleanupRuns } from "./helpers";
 
 // Layer 4 (e2e) per ADR 0004 — proves #336 end-to-end in a browser: the Runs
@@ -11,12 +10,12 @@ import { cleanupRuns } from "./helpers";
 // Trigger) with AND semantics, an "All" default, a Manual trigger option, and a
 // clear control. Filtering also drives the #258 grouped/flat flip.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const TAG = `${process.pid}-${Date.now()}`;
 const PIPE_A = `e2e-filter-a-${TAG}`;
 const PIPE_B = `e2e-filter-b-${TAG}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 
 // `prompt_required: false` so a cron-only trigger with no input template is
 // accepted at creation (same seed as runs-triggers-by-repo.spec.ts).

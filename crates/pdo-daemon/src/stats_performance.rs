@@ -1266,9 +1266,19 @@ fn main_session_steering(
     let Some(session_id) = session_id.filter(|s| !s.is_empty()) else {
         return (None, Some("no session identity".to_string()));
     };
-    let text = match already_read {
-        Some(text) => Some(text.to_string()),
-        None => session_file_text(harness, root, working_dir, Some(session_id)),
+    // #962: a harness whose steering file differs from the one the context read
+    // resolved (`vibe`: `messages.jsonl` beside `meta.json`) reads its own file;
+    // every other harness reuses the text already loaded.
+    let resolved =
+        crate::harness_probes::resolve_transcript(harness, root, working_dir, Some(session_id));
+    let steering_file = resolved
+        .as_deref()
+        .map(|p| crate::harness_probes::messages_transcript(harness, p));
+    let text = match (already_read, resolved.as_deref(), steering_file.as_deref()) {
+        (Some(text), Some(r), Some(sf)) if r == sf => Some(text.to_string()),
+        (_, _, Some(sf)) => std::fs::read_to_string(sf).ok(),
+        (Some(text), _, None) => Some(text.to_string()),
+        (None, _, None) => session_file_text(harness, root, working_dir, Some(session_id)),
     };
     let Some(text) = text else {
         return (None, Some("no attributable transcript".to_string()));
@@ -2154,7 +2164,13 @@ fn fold_performance(
                         .and_then(|p| p.get("session_id"))
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.is_empty())
-                        .map(str::to_string);
+                        .map(str::to_string)
+                        // #962 / ADR-0080: else the id the sweep learned (`vibe`).
+                        .or_else(|| {
+                            event.iter.and_then(|i| {
+                                crate::event_log::learned_session_id(&events, &node_id, i)
+                            })
+                        });
                     // The requested model × effort, frozen at spawn (ADR-0046) —
                     // the « By model » axis's fallback when the source is mute
                     // (ADR-0065 §1). Same payload fields the cost fold reads.

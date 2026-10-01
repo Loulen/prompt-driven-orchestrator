@@ -399,6 +399,19 @@ fn recover_response(
             )
                 .into_response()
         }
+        // #962: re-attached into a fresh session — said in the response, never silent.
+        ReattachOutcome::ResumedFresh { reason } => {
+            info!("recover_node: re-attached {node_id} iter {iter} in run {run_id} into a fresh session: {reason}");
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "mechanism": mechanism.as_str(),
+                    "reattached": [{ "node_id": node_id, "iter": iter, "fresh_session": reason }],
+                })),
+            )
+                .into_response()
+        }
         // A re-attach IS a (re)spawn, so the cap can queue it. A `2xx` and not a
         // no-op: the caller must not re-issue.
         ReattachOutcome::CapReached { live, cap } => (

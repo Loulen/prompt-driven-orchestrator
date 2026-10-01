@@ -865,16 +865,20 @@ async fn full_never_mounts_the_real_host_claude() {
         }
     }
     // The `full` default declares nothing outside `~/.claude`, so the profile extra-mount
-    // queue is empty: the 4 fixed mounts + pi's empty home root anchor (#708), whose
-    // source is a staged path, never the host.
+    // queue is empty: the 4 fixed mounts + pi's and vibe's empty home root anchors (#708,
+    // #963), whose sources are staged paths, never the host.
     assert_eq!(
         specs.len(),
-        5,
-        "`full` adds no `$HOME`-exception mount, only pi's home root; specs={specs:?}"
+        6,
+        "`full` adds no `$HOME`-exception mount, only pi's and vibe's home roots; specs={specs:?}"
     );
     assert!(
         specs.iter().any(|s| s.contains("/home/.pi/agent:")),
         "pi's home root is mounted empty; specs={specs:?}"
+    );
+    assert!(
+        specs.iter().any(|s| s.contains("/home/.vibe:")),
+        "vibe's home root is mounted empty; specs={specs:?}"
     );
 }
 

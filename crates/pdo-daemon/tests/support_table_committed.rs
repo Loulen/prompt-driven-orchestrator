@@ -67,6 +67,11 @@ fn the_harness_reference_carries_the_harness_prerequisites() {
         "An installed version",
         "trust cascades to subdirectories",
         "does not stage any harness's home",
+        // #964: vibe's prerequisites — the key, the silent model fallback, `save_dir`.
+        "`vibe`'s key",
+        "first model of its configuration file",
+        "`save_dir`",
+        "`vibe` in the sandbox image",
     ] {
         assert!(
             document.contains(expected),

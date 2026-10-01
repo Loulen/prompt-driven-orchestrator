@@ -46,7 +46,7 @@ dev:
 	@mkdir -p $(SANDBOX)
 	@cargo build
 	@trap 'kill 0' EXIT INT TERM; \
-	  (cd $(SANDBOX) && PDO_PORT=$(PORT) $(CURDIR)/target/debug/pdo daemon) & \
+	  (cd $(SANDBOX) && PDO_PORT=$(PORT) "$(CURDIR)/target/debug/pdo" daemon) & \
 	  (cd frontend && PDO_PORT=$(PORT) pnpm run dev --port $(VITE_PORT)) & \
 	  wait
 
@@ -71,12 +71,12 @@ check:
 	# capability declaration in crates/pdo-daemon/src/harness_probes.rs (#617). A
 	# hand-edited table would be wrong at the next capability; this fails and names
 	# the drift instead. Fix it with `make support-table`, never by editing the block.
-	cargo run --quiet -p pdo-daemon -- docs support-table --check --file $(CURDIR)/$(SUPPORT_TABLE)
+	cargo run --quiet -p pdo-daemon -- docs support-table --check --file "$(CURDIR)/$(SUPPORT_TABLE)"
 
 # Rewrite the generated block of docs/reference/harnesses.md from the code. Run it
 # after adding a harness, adding a capability, or moving a "last validated version".
 support-table:
-	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/$(SUPPORT_TABLE)
+	cargo run --quiet -p pdo-daemon -- docs support-table --write --file "$(CURDIR)/$(SUPPORT_TABLE)"
 
 # README media (ADR-0074): a sealed demo instance, real UI, real agents for the
 # live scenes. Costs an agent session per live scene — regenerate only when a

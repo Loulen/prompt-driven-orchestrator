@@ -5,8 +5,10 @@ qu'un binaire qui y décrit `--model` en prose « n'a pas de catalogue » alors 
 ailleurs.
 
 > Statut : accepted (2026-08-26, sous-ticket #629 de la spec « copilot, deuxième harnais
-> first-party » ; amendé le 2026-09-05 par #702 : `--list-models` entre dans l'échelle). **Amende ADR-0053 §1** : le catalogue reste déduit du binaire installé ; ce qu'on
-> décide ici, c'est *où* on le lit dans ce binaire, et dans quel ordre.
+> first-party » ; amendé le 2026-09-05 par #702 : `--list-models` entre dans l'échelle ; amendé le
+> 2026-09-30 par #960 : le **fichier de configuration du home** entre dans l'échelle, cf. §1 ter).
+> **Amende ADR-0053 §1** : le catalogue reste déduit de l'**installation** ; ce qu'on
+> décide ici, c'est *où* on le lit dans cette installation, et dans quel ordre.
 
 ## Contexte
 
@@ -40,6 +42,30 @@ secondes à chaque re-sondage de claude, dont un **dans une réponse `/settings`
 
 L'ordre d'exécution est donc indépendant de l'ordre de préférence : `--help` tourne en premier, et sa
 réponse se plie en dernier. Coût mesuré : `claude` un sous-process, `copilot` deux, `opencode` deux.
+
+### 1 ter. Le fichier de configuration du home est une source, déclarée par le descripteur
+
+Mesuré sur `vibe 2.25.8` (#960) : `--help` n'annonce ni `completion`, ni `--list-models`, ni `help
+config`, et ne nomme aucun modèle. Le catalogue vit dans `$VIBE_HOME/config.toml`, section
+`[[models]]` (nom, provider, alias, prix par million, `thinking`), et c'est ce fichier que le binaire
+lit lui-même pour savoir ce qu'il adresse. Ne pas le lire aurait conclu « pas de catalogue » — la
+même erreur que #629, une troisième fois.
+
+Le **fichier de configuration du home** entre donc dans l'échelle, **après** les sources générées et
+**avant** la prose de `--help` : il est écrit pour être lu par un programme (le binaire), mais reflète
+*une* installation (y compris un modèle local ajouté à la main), pas le catalogue embarqué du
+binaire. Deux garde-fous :
+
+- **Déclaré, jamais deviné.** Seul un descripteur **first-party** nomme le chemin et le format
+  (`vibe` : `$VIBE_HOME/config.toml`, `VIBE_HOME` honoré, `~/.vibe` par défaut). Un descripteur sur
+  disque n'a pas cette source ; on ne cherche aucun fichier « probable ».
+- **Absent = catalogue vide, pas erreur.** Un harnais jamais lancé n'a pas encore son fichier :
+  retombée texte libre, comme un binaire qui n'énumère nulle part.
+
+Le **nom offert** au picker est celui que le binaire accepte pour choisir le modèle : pour `vibe`,
+l'`alias` s'il existe, sinon `name` (ce qu'attend `VIBE_ACTIVE_MODEL`). La fraîcheur reste la version
+du binaire (ADR-0053 §3) ; un fichier édité entre deux versions n'est relu qu'au re-sondage, limite
+acceptée ci-dessous.
 
 ### 2. La source générée est préférée à la prose
 
@@ -84,6 +110,9 @@ qu'un générateur de complétion, et elle ne porte pas `auto`.
   libre reste le chemin qui ne peut pas casser.
 - **Jusqu'à trois sous-process** au premier sondage d'un harnais qui déclare les deux sous-commandes
   et n'énumère nulle part. Bornés par le même timeout, hors du chemin résident.
+- **Le fichier de configuration périme sans changement de version.** Un modèle ajouté à
+  `config.toml` n'apparaît dans le picker qu'au prochain re-sondage (redémarrage du daemon ou mise à
+  jour du binaire) ; le texte libre reste le chemin immédiat.
 - **La déclaration d'une sous-commande se lit dans de la prose, elle aussi.** Le test est
   volontairement lâche : un faux positif coûte un sondage borné, un faux négatif coûte le catalogue.
   Les deux formes mesurées sont couvertes — `  completion <shell>` et `  opencode completion`.

@@ -17,7 +17,9 @@ Les trois font porter à l'utilisateur ou au code de claude ce qui appartient au
 1. **Chaque harnais first-party déclare un *staging set*** : les entrées de `$HOME` et les variables
    d'env qui font qu'une session dans le conteneur se comporte comme sur l'hôte — authentification,
    réglages, catalogue de modèles, extensions, skills. Une entrée peut être marquée **transcripts** :
-   exclue à l'aller, **rapatriée** au merge-back (`.claude/projects/`, `.pi/agent/sessions/`). Le
+   exclue à l'aller, **rapatriée** au merge-back (`.claude/projects/`, `.pi/agent/sessions/`,
+   `.vibe/logs/session/` — #960 ; la clé API de `vibe` vit dans `.vibe/.env` et entre dans le set
+   comme l'`auth.json` de `pi` : l'auth fait partie de « se comporter comme sur l'hôte »). Le
    staging set est du code, comme les autres capacités (ADR-0045) ; `None` est une valeur explicite
    (ADR-0051), publiée dans le tableau de support.
 2. **Les *autonomy fixups* sont une seconde chose, distincte** : les écritures qui désarment un

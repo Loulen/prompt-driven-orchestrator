@@ -167,6 +167,42 @@ const WINDOW: usize = 800;
 /// so this separates the two without parsing the layout.
 const OPTION_INDENT: usize = 8;
 
+/// Parse vibe's `config.toml` into its offered catalogue (#961, ADR-0056 §1 ter).
+/// PURE: the file text in, a [`Catalogue`] out. Each `[[models]]` entry is offered
+/// under the name vibe itself accepts in `VIBE_ACTIVE_MODEL`: its `alias` when
+/// present and non-empty, else its `name`. File order kept, duplicates dropped. No
+/// effort axis (the per-model `thinking` field is fixed in the file, not a launch
+/// lever) and no context window (vibe has none — its `context_window` event field is
+/// the model's compaction threshold). Not TOML, or no `models` array ⇒
+/// [`Catalogue::default`]: a declared absence, the free-text fallback.
+pub(crate) fn parse_vibe_config_toml(text: &str) -> Catalogue {
+    let Ok(doc) = text.parse::<toml::Table>() else {
+        return Catalogue::default();
+    };
+    let Some(models) = doc.get("models").and_then(|m| m.as_array()) else {
+        return Catalogue::default();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for m in models {
+        let Some(t) = m.as_table() else { continue };
+        let non_empty = |k: &str| {
+            t.get(k)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        };
+        if let Some(offered) = non_empty("alias").or_else(|| non_empty("name")) {
+            if !out.iter().any(|o| o == offered) {
+                out.push(offered.to_string());
+            }
+        }
+    }
+    Catalogue {
+        models: out,
+        ..Default::default()
+    }
+}
+
 /// Parse a binary's `--help` text into its offered catalogue. PURE and
 /// harness-agnostic: every CLI in play spells the flags `--model` / `--effort`, and
 /// the enumeration conventions are shared, so the same reader serves `claude`,
@@ -903,6 +939,60 @@ mod tests {
     /// concrete ones (the full table is 366 rows on this host's providers).
     const PI_LIST_MODELS: &str =
         include_str!("../tests/fixtures/catalogue/pi-0.85.1-list-models.txt");
+
+    /// The real `vibe --help` of 2.25.8, captured verbatim (#961).
+    const VIBE_HELP: &str = include_str!("../tests/fixtures/catalogue/vibe-2.25.8-help.txt");
+    /// A real `~/.vibe/config.toml` written by vibe 2.25.8 (paths anonymised; the
+    /// API key never lives in this file, it lives in `.env`). Three `[[models]]`:
+    /// two Mistral-hosted with aliases, one local llama.cpp at price 0.
+    const VIBE_CONFIG: &str = include_str!("../tests/fixtures/catalogue/vibe-2.25.8-config.toml");
+
+    #[test]
+    fn vibe_help_declares_no_catalogue_source_at_all() {
+        // #961 / ADR-0056 §1 ter: vibe announces neither a subcommand source nor
+        // `--list-models`, and describes no model anywhere — its catalogue lives in
+        // its configuration file, not in the binary's output.
+        assert!(!advertises_subcommand(VIBE_HELP, "completion"));
+        assert!(!advertises_subcommand(VIBE_HELP, "help"));
+        assert!(!advertises_flag(VIBE_HELP, "--list-models"));
+        assert!(!rpc_probe_allowed(VIBE_HELP));
+        assert_eq!(parse_help(VIBE_HELP), Catalogue::default());
+    }
+
+    #[test]
+    fn vibe_config_offers_each_model_under_the_name_vibe_accepts() {
+        // The offered name is the `alias` when there is one, else `name` — what
+        // `VIBE_ACTIVE_MODEL` takes. File order kept; no effort axis (the per-model
+        // `thinking` field is not a launch lever); no context window (vibe has none).
+        let cat = parse_vibe_config_toml(VIBE_CONFIG);
+        assert_eq!(
+            cat.models,
+            vec!["mistral-medium-3.5", "devstral-small", "local"]
+        );
+        assert!(cat.efforts.is_empty());
+        assert!(cat.model_contexts.is_empty());
+        assert!(cat.model_efforts.is_empty());
+        assert!(!cat.has_effort_axis());
+    }
+
+    #[test]
+    fn vibe_config_falls_back_to_name_without_alias_and_to_empty_when_unreadable() {
+        let cat = parse_vibe_config_toml(
+            "active_model = \"x\"\n[[models]]\nname = \"devstral-2\"\nprovider = \"mistral\"\n\
+             [[models]]\nname = \"ignored-no-name\"\nalias = \"\"\n",
+        );
+        assert_eq!(cat.models, vec!["devstral-2", "ignored-no-name"]);
+        // Not TOML, or TOML without a `models` array: a declared absence, never an error.
+        assert_eq!(
+            parse_vibe_config_toml("this is = not [ toml"),
+            Catalogue::default()
+        );
+        assert_eq!(
+            parse_vibe_config_toml("active_model = \"x\"\n"),
+            Catalogue::default()
+        );
+        assert_eq!(parse_vibe_config_toml(""), Catalogue::default());
+    }
 
     #[test]
     fn pi_help_declares_list_models_but_neither_subcommand_source() {

@@ -157,6 +157,14 @@ pub enum EventKind {
     /// Behaviour-preserving no-op in projection — the node stays Running;
     /// recovery is deferred (Slice 2/3). Wire form: `"node_blocked_on_limit"`.
     NodeBlockedOnLimit,
+    /// Informational (#962, ADR-0080): the sweep **learned** the agent session id of a
+    /// node whose harness names its own sessions (`vibe`) — the first session of the
+    /// node's working directory created after its spawn. Payload:
+    /// `{ "session_id": "<uuid>", "harness": "<name>", "store_dir": "<path>" }`. The
+    /// latest one for `(node, iter)` is the id every reader resolves by
+    /// ([`session_id_for`]); a later one supersedes (a fresh relaunch after an
+    /// unreadable session). No-op in projection. Wire form: `"node_session_learned"`.
+    NodeSessionLearned,
     /// Informational, **no producer since #469**. Don't delete the variant: the
     /// log is append-only, and a Run that recorded one before #469 would fail to
     /// deserialise, so `project()` would return `None` and the Run would vanish
@@ -256,6 +264,59 @@ pub struct Event {
     pub node_id: Option<String>,
     pub iter: Option<i64>,
     pub payload: Option<serde_json::Value>,
+}
+
+/// The latest event of `kind` for `(node_id, iter)`, with its index in `events`.
+fn latest_for<'e>(
+    events: &'e [Event],
+    kind: &EventKind,
+    node_id: &str,
+    iter: i64,
+) -> Option<(usize, &'e Event)> {
+    events.iter().enumerate().rev().find(|(_, e)| {
+        e.kind == *kind && e.node_id.as_deref() == Some(node_id) && e.iter == Some(iter)
+    })
+}
+
+fn payload_str(e: &Event, key: &str) -> Option<String> {
+    e.payload
+        .as_ref()
+        .and_then(|p| p.get(key))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// The agent session id of `(node_id, iter)` — **imposed or learned** (ADR-0080).
+///
+/// The latest `NodeStarted` payload's `session_id` when the harness let PDO impose one
+/// (`claude`, `copilot`, `pi`); else the latest [`EventKind::NodeSessionLearned`] for
+/// the same iteration (`vibe`), whatever its position relative to the `NodeStarted`:
+/// a resurrection re-clones `NodeStarted` with a null id while the learned session is
+/// still the one the harness reopens, and a fresh relaunch appends a newer learned id
+/// that supersedes. `None` ⇒ nothing to resolve by yet.
+pub(crate) fn session_id_for(events: &[Event], node_id: &str, iter: i64) -> Option<String> {
+    latest_for(events, &EventKind::NodeStarted, node_id, iter)
+        .and_then(|(_, e)| payload_str(e, "session_id"))
+        .or_else(|| learned_session_id(events, node_id, iter))
+}
+
+/// The latest **learned** session id of `(node_id, iter)`, or `None`.
+pub(crate) fn learned_session_id(events: &[Event], node_id: &str, iter: i64) -> Option<String> {
+    latest_for(events, &EventKind::NodeSessionLearned, node_id, iter)
+        .and_then(|(_, e)| payload_str(e, "session_id"))
+}
+
+/// Whether the sweep should try to **learn** a session for `(node_id, iter)`: no
+/// learned id yet, or the latest `NodeStarted` (a relaunch) is newer than the latest
+/// learned one — the relaunch may have opened a fresh session. Returns the spawn
+/// timestamp to learn against (that `NodeStarted`'s `ts`), else `None`.
+pub(crate) fn learning_spawn_ts(events: &[Event], node_id: &str, iter: i64) -> Option<String> {
+    let (started_at, started) = latest_for(events, &EventKind::NodeStarted, node_id, iter)?;
+    match latest_for(events, &EventKind::NodeSessionLearned, node_id, iter) {
+        Some((learned_at, _)) if learned_at > started_at => None,
+        _ => Some(started.ts.clone()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1649,7 +1710,9 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
             }
 
             // Informational only: the node stays Running, no node/run state touched.
-            EventKind::NodeBlockedOnLimit | EventKind::NodeAutoCompleteObserved => {}
+            EventKind::NodeBlockedOnLimit
+            | EventKind::NodeAutoCompleteObserved
+            | EventKind::NodeSessionLearned => {}
 
             // Informational only (manager on demand): the manager's existence is
             // an observed tmux fact, never projected — see the variants' docs.
@@ -3340,6 +3403,91 @@ pub(crate) fn collect_cycle_extensions(events: &[Event]) -> HashMap<String, i64>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ev(kind: EventKind, node: &str, iter: i64, ts: &str, sid: Option<&str>) -> Event {
+        Event {
+            id: None,
+            run_id: "r".into(),
+            ts: ts.into(),
+            kind,
+            node_id: Some(node.into()),
+            iter: Some(iter),
+            payload: Some(serde_json::json!({ "session_id": sid })),
+        }
+    }
+
+    /// #962 / ADR-0080: an imposed id wins; else the LATEST learned id serves, whatever
+    /// its position relative to a re-cloned `NodeStarted`; learning is asked for only
+    /// while no learned id is newer than the latest spawn.
+    #[test]
+    fn session_id_is_imposed_or_learned_and_learning_follows_the_latest_spawn() {
+        // Imposed (claude/pi): the payload id, no learning.
+        let imposed = vec![ev(
+            EventKind::NodeStarted,
+            "n",
+            1,
+            "2026-09-30T10:00:00.000Z",
+            Some("imp"),
+        )];
+        assert_eq!(session_id_for(&imposed, "n", 1).as_deref(), Some("imp"));
+        assert_eq!(
+            learning_spawn_ts(&imposed, "n", 1).as_deref(),
+            Some("2026-09-30T10:00:00.000Z")
+        );
+
+        // vibe: null id at spawn ⇒ nothing yet, learning asked against the spawn ts.
+        let mut events = vec![ev(
+            EventKind::NodeStarted,
+            "n",
+            1,
+            "2026-09-30T10:00:00.000Z",
+            None,
+        )];
+        assert_eq!(session_id_for(&events, "n", 1), None);
+        assert_eq!(
+            learning_spawn_ts(&events, "n", 1).as_deref(),
+            Some("2026-09-30T10:00:00.000Z")
+        );
+
+        // Learned once ⇒ served, and no more learning.
+        events.push(ev(
+            EventKind::NodeSessionLearned,
+            "n",
+            1,
+            "2026-09-30T10:00:05.000Z",
+            Some("aaa"),
+        ));
+        assert_eq!(session_id_for(&events, "n", 1).as_deref(), Some("aaa"));
+        assert_eq!(learning_spawn_ts(&events, "n", 1), None);
+
+        // A resurrection re-clones NodeStarted (null id): the old id still serves, but
+        // learning is asked again against the NEW spawn ts (a fresh session may exist).
+        events.push(ev(
+            EventKind::NodeStarted,
+            "n",
+            1,
+            "2026-09-30T11:00:00.000Z",
+            None,
+        ));
+        assert_eq!(session_id_for(&events, "n", 1).as_deref(), Some("aaa"));
+        assert_eq!(
+            learning_spawn_ts(&events, "n", 1).as_deref(),
+            Some("2026-09-30T11:00:00.000Z")
+        );
+
+        // A newer learned id supersedes (fresh relaunch after an unreadable session).
+        events.push(ev(
+            EventKind::NodeSessionLearned,
+            "n",
+            1,
+            "2026-09-30T11:00:04.000Z",
+            Some("bbb"),
+        ));
+        assert_eq!(session_id_for(&events, "n", 1).as_deref(), Some("bbb"));
+        assert_eq!(learned_session_id(&events, "n", 1).as_deref(), Some("bbb"));
+        // Another iteration is untouched.
+        assert_eq!(session_id_for(&events, "n", 2), None);
+    }
     use pretty_assertions::assert_eq;
 
     fn make_event(kind: EventKind, node_id: Option<&str>, iter: Option<i64>) -> Event {
@@ -6759,6 +6907,7 @@ mod tests {
             EventKind::NodeStale,
             EventKind::NodeBlockedOnLimit,
             EventKind::NodeAutoCompleteObserved,
+            EventKind::NodeSessionLearned,
             EventKind::MergeResolvedInNodeFavour,
             EventKind::RunPaused,
             EventKind::RunResumed,
@@ -6769,6 +6918,7 @@ mod tests {
             "\"node_stale\"",
             "\"node_blocked_on_limit\"",
             "\"node_auto_complete_observed\"",
+            "\"node_session_learned\"",
             "\"merge_resolved_in_node_favour\"",
             "\"run_paused\"",
             "\"run_resumed\"",

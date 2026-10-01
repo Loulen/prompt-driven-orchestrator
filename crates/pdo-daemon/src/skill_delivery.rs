@@ -314,7 +314,7 @@ pub(crate) fn exclusions_of(repo_root: &Path, run_id: &str) -> Vec<String> {
     out
 }
 
-fn add_exclusions(worktree: &Path, run_id: &str, patterns: &[String]) -> Result<()> {
+pub(crate) fn add_exclusions(worktree: &Path, run_id: &str, patterns: &[String]) -> Result<()> {
     let Some(exclude) = exclude_path(worktree)? else {
         anyhow::bail!(
             "{} is not inside a Git work tree; cannot exclude delivered skills",

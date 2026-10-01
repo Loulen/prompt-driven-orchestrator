@@ -81,6 +81,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The e2e daemon is the real binary: a node's delivery is a `git commit` in the
+      # Run's worktree, which needs an identity the bare runner does not have.
+      - run: |
+          git config --global user.name "PDO e2e"
+          git config --global user.email "e2e@pdo.invalid"
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2

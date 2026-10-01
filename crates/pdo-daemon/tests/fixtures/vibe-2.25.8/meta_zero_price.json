@@ -1,0 +1,92 @@
+{
+ "session_id": "11111111-2222-3333-4444-555555555555",
+ "parent_session_id": null,
+ "start_time": "2026-09-30T12:39:02.981533+00:00",
+ "end_time": "2026-09-30T12:39:04.663412+00:00",
+ "git_commit": null,
+ "git_branch": null,
+ "environment": {
+  "working_directory": "/work/repo"
+ },
+ "origin_directory": "/private/tmp",
+ "username": "user",
+ "child_sessions": [],
+ "loops": [],
+ "title": null,
+ "title_source": "auto",
+ "bumped_at": "2026-09-30T12:39:03.060154+00:00",
+ "pinned_at": null,
+ "archived_at": null,
+ "unseen_at": null,
+ "seen_at": null,
+ "experiments": null,
+ "config": {
+  "active_model": "local",
+  "models": {
+   "mistral-medium-3.5": {
+    "name": "mistral-vibe-cli-latest",
+    "provider": "mistral",
+    "alias": "mistral-medium-3.5",
+    "input_price": 1.5,
+    "output_price": 7.5
+   },
+   "local": {
+    "name": "devstral",
+    "provider": "llamacpp",
+    "alias": "local",
+    "input_price": 0.0,
+    "output_price": 0.0
+   },
+   "devstral-small": {
+    "name": "devstral-small-latest",
+    "provider": "mistral",
+    "alias": "devstral-small",
+    "input_price": 0.1,
+    "output_price": 0.3
+   }
+  }
+ },
+ "import_provenance": null,
+ "created_worktree": null,
+ "stats": {
+  "steps": 2,
+  "session_prompt_tokens": 5033,
+  "session_completion_tokens": 45,
+  "session_cached_tokens": 0,
+  "tool_calls_agreed": 0,
+  "tool_calls_rejected": 0,
+  "tool_calls_hook_denied": 0,
+  "tool_calls_failed": 0,
+  "tool_calls_succeeded": 0,
+  "context_tokens": 5078,
+  "last_turn_prompt_tokens": 5033,
+  "last_turn_completion_tokens": 45,
+  "last_turn_cached_tokens": 0,
+  "last_turn_duration": 1.5805093749950174,
+  "tokens_per_second": 28.471833645492843,
+  "input_price_per_million": 0.0,
+  "output_price_per_million": 0.0,
+  "cached_input_price_per_million": null,
+  "session_total_llm_tokens": 5078,
+  "last_turn_total_tokens": 5078,
+  "session_cost": 0.0
+ },
+ "total_messages": 2,
+ "last_message_fingerprint": "411e6f79b7b6aab55457454232f8beaad354b213fb3ae6efe521fdb1ba668601",
+ "agent_profile": {
+  "name": "accept-edits",
+  "overrides": {
+   "disabled_tools": [
+    "exit_plan_mode"
+   ],
+   "tools": {
+    "write_file": {
+     "permission": "always"
+    },
+    "edit": {
+     "permission": "always"
+    }
+   }
+  }
+ }
+}

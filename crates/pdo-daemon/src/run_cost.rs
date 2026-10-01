@@ -280,10 +280,18 @@ fn collect_executions(
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .unwrap_or(crate::harness_registry::CLAUDE);
+        // #962 / ADR-0080: an imposed id from the payload, else the id the sweep
+        // LEARNED for this iteration (`vibe`), so its executions dedupe by session.
+        let learned_session_id = event
+            .node_id
+            .as_deref()
+            .zip(event.iter)
+            .and_then(|(n, i)| crate::event_log::learned_session_id(events, n, i));
         let session_id = payload
             .and_then(|p| p.get("session_id"))
             .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .or(learned_session_id.as_deref());
         let requested_model = payload
             .and_then(|p| p.get("model"))
             .and_then(|v| v.as_str())
@@ -444,12 +452,72 @@ fn reported_execution(
             ),
         };
     }
+    if execution.harness == crate::harness_registry::VIBE {
+        // #962 / ADR-0080: by the LEARNED identity, one figure per session: the
+        // `meta.json`'s `stats.session_cost` (already dollars) and its active model.
+        // A price declared zero is a genuine `$0.00`; absent stats/prices are « — ».
+        let text = crate::harness_probes::resolve_transcript(
+            &execution.harness,
+            &stores.vibe,
+            execution.working_dir.as_deref().unwrap_or(Path::new("")),
+            Some(session_id),
+        )
+        .and_then(|path| std::fs::read_to_string(path).ok());
+        let Some(text) = text else {
+            return (
+                None,
+                Some("no reported cost reading".to_string()),
+                true,
+                Vec::new(),
+            );
+        };
+        return match crate::vibe_session::reported_cost(&text) {
+            crate::vibe_session::ReportedCost::Usd(usd) => (
+                Some(usd),
+                None,
+                true,
+                observed_slices_from_vibe(&text, Some(usd), None),
+            ),
+            crate::vibe_session::ReportedCost::Unavailable { reason } => (
+                None,
+                Some(reason.clone()),
+                true,
+                observed_slices_from_vibe(&text, None, Some(reason)),
+            ),
+        };
+    }
     (
         None,
         Some("harness has no reported cost".to_string()),
         false,
         Vec::new(),
     )
+}
+
+/// The observed [`ModelEffortSlice`] of one `vibe` session (#962): a single slice —
+/// the session's active model with its provider, the effort left to the requested
+/// value (no effort axis) — carrying the reported dollars, or the reason they are « — ».
+fn observed_slices_from_vibe(
+    text: &str,
+    usd: Option<f64>,
+    reason: Option<String>,
+) -> Vec<ModelEffortSlice> {
+    crate::vibe_session::observed_model(text)
+        .map(|m| ModelEffortSlice {
+            model: m.model,
+            model_observed: true,
+            effort: None,
+            effort_observed: None,
+            provider: m.provider,
+            usd,
+            estimated: false,
+            partial: false,
+            executions: 1,
+            unpriced_models: Vec::new(),
+            missing_reasons: reason.into_iter().collect(),
+        })
+        .into_iter()
+        .collect()
 }
 
 /// The observed [`ModelEffortSlice`]s of one `pi` session (#736): one per
@@ -3088,6 +3156,155 @@ mod tests {
             body,
         )
         .unwrap();
+    }
+
+    /// Write a `vibe` session folder under `vibe_root` (`<prefix>_<ts>_<id8>`): what
+    /// [`crate::vibe_session::resolve_by_id`] finds by the full id in `meta.json`.
+    fn seed_vibe_session(vibe_root: &Path, dirname: &str, meta: &str) {
+        let dir = vibe_root.join(dirname);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), meta).unwrap();
+        std::fs::write(
+            dir.join("messages.jsonl"),
+            "{\"role\":\"user\",\"content\":\"p\",\"injected\":false}\n",
+        )
+        .unwrap();
+    }
+
+    fn vibe_events(run_id: &str, learned: &str, relaunches: usize) -> Vec<Event> {
+        let started = |ts: &str| Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: ts.into(),
+            kind: EventKind::NodeStarted,
+            node_id: Some("worker".into()),
+            iter: Some(1),
+            payload: Some(serde_json::json!({
+                "node_type": "agent", "isolated_worktree": false,
+                "harness": "vibe", "session_id": null, "model": "devstral-small"
+            })),
+        };
+        let mut events = vec![started("2026-09-30T12:00:00.000Z")];
+        events.push(Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: "2026-09-30T12:00:05.000Z".into(),
+            kind: EventKind::NodeSessionLearned,
+            node_id: Some("worker".into()),
+            iter: Some(1),
+            payload: Some(serde_json::json!({ "session_id": learned, "harness": "vibe" })),
+        });
+        for _ in 0..relaunches {
+            events.push(started("2026-09-30T13:00:00.000Z"));
+        }
+        events
+    }
+
+    /// #962 / ADR-0080: a vibe execution is costed by its LEARNED session: one
+    /// reported figure per session, in dollars (no `~`), one observed slice — the
+    /// session's active model with its provider. A resurrection's re-cloned
+    /// `NodeStarted` (null id) dedupes onto the same learned session: one execution.
+    #[test]
+    fn a_vibe_session_is_costed_once_by_its_learned_identity_with_its_active_model() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude").join("projects");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "vibe-learned";
+        seed_vibe_session(
+            &stores.vibe,
+            "session_20260930_123902_7a76feb5",
+            include_str!("../tests/fixtures/vibe-2.25.8/meta_priced.json"),
+        );
+        let events = vibe_events(run_id, "7a76feb5-f3a0-af82-ae5c-481ab27fdafd", 1);
+        let breakdown =
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
+        let node = breakdown
+            .contributions
+            .iter()
+            .find(|c| c.scope == CostScope::Node)
+            .unwrap();
+        assert_eq!(node.usd, Some(0.0005168), "the session's reported cost");
+        assert_eq!(
+            node.executions, 1,
+            "two NodeStarted, one learned session: one execution"
+        );
+        assert_eq!(node.model_slices.len(), 1);
+        let slice = &node.model_slices[0];
+        assert_eq!(slice.model, "devstral-small");
+        assert!(slice.model_observed);
+        assert_eq!(slice.provider.as_deref(), Some("mistral"));
+        assert_eq!(slice.effort, None, "vibe has no effort axis");
+        assert!(!slice.estimated, "reported, never a ~estimate");
+        assert!(
+            node.unavailable_reasons.is_empty(),
+            "{:?}",
+            node.unavailable_reasons
+        );
+    }
+
+    /// A model priced 0 by vibe's catalogue (local llama.cpp) is a declared zero:
+    /// `$0.00`, not « — » (CONTEXT.md § "Coût rapporté en dollars"); a session
+    /// without prices is « — » with vibe's reason, its model still observed.
+    #[test]
+    fn a_vibe_declared_zero_is_zero_dollars_and_absent_prices_are_dash() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude").join("projects");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
+        let repo = tempfile::tempdir().unwrap();
+
+        seed_vibe_session(
+            &stores.vibe,
+            "session_20260930_130000_11111111",
+            include_str!("../tests/fixtures/vibe-2.25.8/meta_zero_price.json"),
+        );
+        let events = vibe_events("vibe-zero", "11111111-2222-3333-4444-555555555555", 0);
+        let b = compute_run_cost_breakdown(
+            &events,
+            &claude,
+            &stores,
+            repo.path(),
+            "vibe-zero",
+            &builtin(),
+        );
+        let node = b
+            .contributions
+            .iter()
+            .find(|c| c.scope == CostScope::Node)
+            .unwrap();
+        assert_eq!(node.usd, Some(0.0), "a declared zero is a reading of zero");
+        assert_eq!(node.model_slices[0].model, "local");
+        assert_eq!(node.model_slices[0].provider.as_deref(), Some("llamacpp"));
+
+        seed_vibe_session(
+            &stores.vibe,
+            "session_20260930_140000_aaaaaaaa",
+            include_str!("../tests/fixtures/vibe-2.25.8/meta_no_prices.json"),
+        );
+        let events = vibe_events("vibe-noprice", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 0);
+        let b = compute_run_cost_breakdown(
+            &events,
+            &claude,
+            &stores,
+            repo.path(),
+            "vibe-noprice",
+            &builtin(),
+        );
+        let node = b
+            .contributions
+            .iter()
+            .find(|c| c.scope == CostScope::Node)
+            .unwrap();
+        assert_eq!(node.usd, None, "never $0 when vibe reported no prices");
+        assert!(
+            node.unavailable_reasons
+                .iter()
+                .any(|r| r == crate::vibe_session::PRICES_ABSENT_REASON),
+            "{:?}",
+            node.unavailable_reasons
+        );
+        assert_eq!(node.model_slices.len(), 1, "the model is still observed");
+        assert_eq!(node.model_slices[0].usd, None);
     }
 
     #[test]

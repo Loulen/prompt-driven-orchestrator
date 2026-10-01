@@ -123,6 +123,9 @@ pub const OPENCODE: &str = "opencode";
 pub const COPILOT: &str = "copilot";
 /// The `pi` harness name — PDO's third first-party harness (#705, story #702).
 pub const PI: &str = "pi";
+/// The `vibe` harness name — Mistral's coding agent, PDO's fifth first-party
+/// harness (#961, story #960).
+pub const VIBE: &str = "vibe";
 
 /// The `claude` build PDO's capabilities were last measured against.
 pub const CLAUDE_VALIDATED_VERSION: &str = "2.1.246";
@@ -139,6 +142,10 @@ pub const COPILOT_VALIDATED_VERSION: &str = "1.0.80";
 /// declares the same launch surface (`-a`, `--session-id`, `--thinking`, `-e`,
 /// `--list-models`) — no divergence found between the two on the tokens PDO uses.
 pub const PI_VALIDATED_VERSION: &str = "0.85.1";
+/// The `vibe` build the #960 grilling measured — its `--help`, its Python source
+/// (hooks, session store, skills discovery) and real runs, including the silent
+/// fallback to the catalogue's first model on an unknown `VIBE_ACTIVE_MODEL`.
+pub const VIBE_VALIDATED_VERSION: &str = "2.25.8";
 
 /// The **last validated version** of `name`'s binary — the release PDO's knowledge
 /// of that harness was measured against (#617). `None` for a data-declared harness:
@@ -157,6 +164,7 @@ pub fn validated_version(name: &str) -> Option<&'static str> {
         OPENCODE => Some(OPENCODE_VALIDATED_VERSION),
         COPILOT => Some(COPILOT_VALIDATED_VERSION),
         PI => Some(PI_VALIDATED_VERSION),
+        VIBE => Some(VIBE_VALIDATED_VERSION),
         _ => None,
     }
 }
@@ -404,10 +412,100 @@ pub fn pi() -> HarnessDescriptor {
     }
 }
 
+/// The `vibe` descriptor — Mistral Vibe as PDO's fifth first-party harness (#961,
+/// story #960; measured on 2.25.8). Embedded for the same reason as `pi`: the picker
+/// decides provenance by name, and the support table publishes its row.
+///
+/// Its capabilities are declared in [`crate::harness_probes`] — all **explicitly
+/// absent** in this ticket (identity, cost, transcript, end of turn, usage-limit
+/// anchor, context usage, staging): the descriptor lands first, the instrumentation
+/// follows (#962, #963). What this ticket *does* carry is the offered catalogue, read
+/// from vibe's own configuration file (ADR-0056 §1 ter).
+///
+/// The launch enters vibe's **resident TUI** with the prompt as the positional
+/// initial message (`vibe [PROMPT]`), so the harness stays attachable after the turn
+/// (CONTEXT.md § "Harnais agentique", ADR-0012). `-p` is deliberately *not* used: it
+/// exits at turn end (ineligible, ADR-0032). The tokens:
+/// - `--legacy-harness` pins vibe's **session store format**. Measured on 2.25.8
+///   (#961 FP): an interactive session may be routed by a GrowthBook rollout to the
+///   "Unified Harness" backend, whose store (`logs/session/unified/<uuid>/` — RPC
+///   journal, no `config.active_model`, no `stats`) is not the one the #960 grilling
+///   measured and ADR-0080 / #962 read (`session_<ts>_<id>/{meta.json,messages.jsonl}`).
+///   The flag forces the legacy Python harness, so what PDO reads is deterministic.
+///   Watch it at the next validated version: the flag may go when the rollout ends;
+///   the Unified Harness stays out of scope (#960);
+/// - `--trust` trusts the working dir for this invocation only (never persisted to
+///   `trusted_folders.toml`) — the "dossier de travail approuvé" prerequisite met by
+///   argv, and what makes vibe read the project's `.vibe/hooks.toml` and
+///   `.agents/skills` (#963);
+/// - `--auto-approve` approves every tool call — vibe's autonomy flag, like pi's `-a`;
+/// - **no `--model` token**: vibe has no such flag. The model rides in the env as
+///   `VIBE_ACTIVE_MODEL={model}` (ADR-0045 as amended by #960: a hole may live in an
+///   env value, same drop rule) — unset, vibe keeps the `active_model` of its
+///   configuration file, the "account default";
+/// - **no `{effort}` hole**: vibe has no effort axis (the per-model `thinking` field
+///   of its configuration is not a launch-time lever) — the picker greys;
+/// - **no `{session_id}` hole**: vibe names its own sessions. PDO *learns* the
+///   identity after the fact (ADR-0080, #962) instead of imposing it;
+/// - **no `{settings}` hole**: vibe has no flag to point at a hooks file; the turn-end
+///   hook is a fixed-path file in the worktree (#963), not an argv token.
+///
+/// Resume is **by learned identity only** (`--resume <uuid>`). `resume_blind` is
+/// empty on purpose: `-c` re-enters the session whose transcript was written last,
+/// across every working dir — the collision ADR-0080 refuses.
+///
+/// Env: the four hygiene constants (`VIBE_*` overrides any config field, per
+/// `--help`) — no update check (measured: a network timeout with a traceback in
+/// `vibe.log`), no auto-update mid-Run, no telemetry, no "quit?" dialog on exit —
+/// plus the model hole.
+///
+/// **Prerequisites (not PDO code):** the Mistral key in vibe's `.env` or provider env
+/// var, and the `vibe` binary on the *user's* PATH (ADR-0055).
+pub fn vibe() -> HarnessDescriptor {
+    HarnessDescriptor {
+        name: VIBE.to_string(),
+        binary: "vibe".to_string(),
+        launch: [
+            "exec",
+            "vibe",
+            "--legacy-harness",
+            "--trust",
+            "--auto-approve",
+            "{prompt}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        resume: [
+            "exec",
+            "vibe",
+            "--legacy-harness",
+            "--trust",
+            "--auto-approve",
+            "{resume}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        resume_by_id: "--resume".to_string(),
+        resume_blind: String::new(),
+        env: vec![
+            ("VIBE_ENABLE_UPDATE_CHECKS".to_string(), "false".to_string()),
+            ("VIBE_ENABLE_AUTO_UPDATE".to_string(), "false".to_string()),
+            ("VIBE_ENABLE_TELEMETRY".to_string(), "false".to_string()),
+            (
+                "VIBE_ASK_CONFIRMATION_ON_EXIT".to_string(),
+                "false".to_string(),
+            ),
+            ("VIBE_ACTIVE_MODEL".to_string(), "{model}".to_string()),
+        ],
+    }
+}
+
 /// The embedded floor: the harnesses PDO ships compiled in, in precedence-neutral
 /// declaration order.
 pub fn embedded_floor() -> Vec<HarnessDescriptor> {
-    vec![claude(), opencode(), copilot(), pi()]
+    vec![claude(), opencode(), copilot(), pi(), vibe()]
 }
 
 /// Merge a user-declared disk tier over the embedded floor, **by name**: a disk
@@ -1082,7 +1180,8 @@ mod tests {
                 CLAUDE.to_string(),
                 OPENCODE.to_string(),
                 COPILOT.to_string(),
-                PI.to_string()
+                PI.to_string(),
+                VIBE.to_string()
             ]
         );
     }
@@ -1229,12 +1328,13 @@ mod tests {
     #[test]
     fn builtin_listing_is_the_floor_as_builtin() {
         let listing = HarnessRegistry::builtin().listing();
-        assert_eq!(listing.len(), 4);
+        assert_eq!(listing.len(), 5);
         assert!(listing.iter().all(|h| h.source == HarnessSource::Builtin));
         assert_eq!(listing[0].name, CLAUDE);
         assert_eq!(listing[1].name, OPENCODE);
         assert_eq!(listing[2].name, COPILOT);
         assert_eq!(listing[3].name, PI);
+        assert_eq!(listing[4].name, VIBE);
     }
 
     #[test]

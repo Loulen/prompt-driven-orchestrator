@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 // Layer 3b — Typed `when:` clauses E2E (refs #64).
 //
@@ -14,10 +14,10 @@ import { fileURLToPath } from "node:url";
 // dropdown is populated from the upstream output schema and the value dropdown
 // from the selected enum field's allowed values.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-switch-typed-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Nodes share one x so the conditional reviewer→end edge is a straight vertical

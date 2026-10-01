@@ -134,11 +134,12 @@ readme-media-publish:
 # The target pipelines of the README scenes (ADR-0074 §6), between the fixture
 # and your library (~/.pdo/pipelines): export as readme-*, redraw them in the
 # editor, import. The export never overwrites a readme-* you modified.
+# Core-only: `CONFIG` is passed on so another repo's config is refused.
 readme-media-export:
-	$(README_MEDIA) export
+	$(README_MEDIA) export $(README_MEDIA_CONFIG)
 
 readme-media-import:
-	$(README_MEDIA) import
+	$(README_MEDIA) import $(README_MEDIA_CONFIG)
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

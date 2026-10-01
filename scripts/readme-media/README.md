@@ -138,6 +138,9 @@ For each scene, in its own throwaway instance:
    their own seeded stream, so the `implement-review` history is the same with or without them. The
    plan is pure and deterministic (seeded); its targets are tested (`test/history-plan.test.mjs`) and
    so is the Stats API reading it (`test/demo-instance.test.mjs`).
+   It is anchored on the recording time, though: each take shifts the dates, and the 30-day Stats
+   window keeps a slightly different share of the runs, so the amounts filmed in `stats` change from
+   one take to the next. A `make readme-media-publish` rewrites `stats.*` with the new figures.
 4. **Recording** (`lib/recorder.mjs`). Playwright films each variant. The synthetic cursor
    (`lib/cursor.mjs`) is injected before the app on every document. Markers, kept windows and ×8
    stretches build the timeline. The page opens on a dark, ticking page, so the video starts at the

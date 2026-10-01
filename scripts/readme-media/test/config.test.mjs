@@ -216,6 +216,15 @@ describe("the command line with another repo's config", () => {
     }
   });
 
+  test("make readme-media-export / -import pass CONFIG on, so they refuse another repo's config too", () => {
+    const { file } = consumerRepo();
+    for (const target of ["readme-media-export", "readme-media-import"]) {
+      const out = spawnSync("make", ["--no-print-directory", "-C", repoRoot, target, `CONFIG=${file}`], { encoding: "utf8", timeout: 60_000 });
+      assert.notEqual(out.status, 0, `${target} with CONFIG must fail:\n${out.stdout}`);
+      assert.match(out.stderr, /moves the core's target pipelines only/);
+    }
+  });
+
   test("an unknown option is refused", () => {
     const out = run(["publish", "--cfg", "x"]);
     assert.equal(out.status, 1);

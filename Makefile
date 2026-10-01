@@ -10,6 +10,10 @@ SUPPORT_TABLE := docs/reference/harnesses.md
 # The README media tool (#856, ADR-0074). `node:sqlite` is still flagged
 # experimental: its warning is noise here.
 README_MEDIA := node --disable-warning=ExperimentalWarning scripts/readme-media/readme-media.mjs
+# The media config (scripts/readme-media/lib/config.mjs): the core's own
+# (scripts/readme-media/readme-media.config.mjs) unless CONFIG names another
+# repo's — an absolute path, or relative to this checkout.
+README_MEDIA_CONFIG = $(if $(CONFIG),--config "$(CONFIG)")
 # The TypeScript generated from the daemon's DTOs by ts-rs (#915). Never edit it
 # by hand: `make types` rewrites it, `make check` fails when it drifts.
 GENERATED_TS := frontend/src/shared/generated
@@ -40,6 +44,7 @@ help:
 	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
 	@echo "  make readme-media [SCENE=stats]   Record the README media (2 variants per scene) into .readme-media/ — see CONTRIBUTING"
 	@echo "  make readme-media-publish [SCENE=…]  Copy the selected variants into docs/assets/readme/"
+	@echo "    … CONFIG=<file>             Same, for another repo's media config (its binary, scenes, selection, destination)"
 	@echo "  make readme-media-export   Copy the README target pipelines into your library as readme-* (to redraw them)"
 	@echo "  make readme-media-import   Bring your readme-* pipelines back into scripts/readme-media/fixture/targets/"
 	@echo ""
@@ -117,21 +122,24 @@ support-table:
 # README media (ADR-0074): a sealed demo instance, real UI, real agents for the
 # live scenes. Costs an agent session per live scene — regenerate only when a
 # scene visibly changed. `SCENE=a,b` limits the run; `VARIANT=a` one variant.
+# `CONFIG=<file>`: another repo's media config; its binary is its own, so the
+# core is not built.
 readme-media:
-	cargo build
-	SCENE=$(SCENE) VARIANT=$(VARIANT) KEEP_DEMO=$(KEEP_DEMO) $(README_MEDIA) record
+	$(if $(CONFIG),,cargo build)
+	SCENE=$(SCENE) VARIANT=$(VARIANT) KEEP_DEMO=$(KEEP_DEMO) $(README_MEDIA) record $(README_MEDIA_CONFIG)
 
 readme-media-publish:
-	SCENE=$(SCENE) $(README_MEDIA) publish
+	SCENE=$(SCENE) $(README_MEDIA) publish $(README_MEDIA_CONFIG)
 
 # The target pipelines of the README scenes (ADR-0074 §6), between the fixture
 # and your library (~/.pdo/pipelines): export as readme-*, redraw them in the
 # editor, import. The export never overwrites a readme-* you modified.
+# Core-only: `CONFIG` is passed on so another repo's config is refused.
 readme-media-export:
-	$(README_MEDIA) export
+	$(README_MEDIA) export $(README_MEDIA_CONFIG)
 
 readme-media-import:
-	$(README_MEDIA) import
+	$(README_MEDIA) import $(README_MEDIA_CONFIG)
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

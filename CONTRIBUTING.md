@@ -193,6 +193,25 @@ agent process to exit, wipes the copied auth files and removes the demo root: no
 `/tmp`, and no `claude` outlives the command. How it works, and how to add a scene (one file under `scripts/readme-media/scenes/`):
 [scripts/readme-media/README.md](scripts/readme-media/README.md).
 
+**The media config.** What the tool films is declared by a config
+(`scripts/readme-media/readme-media.config.mjs` for the core): the PDO binary the demo instance
+starts, the scenes folder, the fixture (repo and pipelines), the selection file, the review folder,
+the destination of the published media, the demo instance's bootstrap (`seed`: the core's is the
+mocked history) and where Playwright resolves from. The core is its first consumer; its scenes,
+media and `make` commands are the ones above. **Another repo** (a repo of extensions) keeps its own
+config, scenes and selection, and calls the tool from a checkout of the core at the tag it pins:
+
+```bash
+make -C <core checkout> readme-media CONFIG=/abs/path/to/media.config.mjs [SCENE=…]
+make -C <core checkout> readme-media-publish CONFIG=/abs/path/to/media.config.mjs
+```
+
+Its variants land in its review folder and its selected media in its destination, never in the
+core's; with `CONFIG`, the core is not built (the binary is the consumer's). A missing field or an
+absent binary fails with the field and the path. The fields, the bootstrap API (`instance.exec`,
+`instance.api`) and a worked example:
+[scripts/readme-media/README.md § From another repo](scripts/readme-media/README.md#from-another-repo).
+
 ## Architecture
 
 | Resource | Content |

@@ -10,6 +10,16 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.114.0
+**Terminal de nœud agrandi en overlay quasi plein écran** (#968, spec #967).
+
+- Le bouton Expand du terminal de nœud ouvre un overlay quasi plein écran (marge de 16 px, fond
+  assombri), cadré à la couleur du statut, avec une barre nom + itération + statut. Le terminal
+  n'est pas remonté : aucune nouvelle WebSocket, la saisie en cours est conservée.
+- Fermeture par clic sur le fond ou Échap (hors du terminal ; Échap dans le terminal part à
+  l'agent). En `awaiting_user`, la barre porte les gestes compacts (libérer, marquer terminé)
+  par le même chemin que le panneau. L'agrandi n'est jamais persisté.
+
 ## 1.113.1
 **Terminal : fin du saut de ligne à chaque changement de node** (#946, spec #945, story Notion #1).
 

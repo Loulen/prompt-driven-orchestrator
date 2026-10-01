@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.8.0 — Médias du README paramétrables par une config (#36)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. L'outillage des médias du
+README (ADR-0074) se règle par une config (binaire de l'instance de démo, Scènes, fixture,
+amorçage, sélection, destination, résolution de Playwright) : un autre repo l'appelle depuis
+un checkout du core, `make readme-media CONFIG=<fichier>` puis
+`make readme-media-publish CONFIG=<fichier>` (référence : `scripts/readme-media/README.md`).
+Le core passe par sa propre config : ses commandes et ses médias publiés ne changent pas.
+`make readme-media-export` / `-import` restent propres au core et refusent une config tierce.
+`pdo-extensions` épingle `v2.8.0`.
+
 ## 2.7.0 — Catalogue d'emplacements : onglets, sections, décorations et filtres (#31)
 
 `pdo-extension-api` passe en **0.7.0**, par ajout : une extension écrite pour 0.1 à 0.6 compile

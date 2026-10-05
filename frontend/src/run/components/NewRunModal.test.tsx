@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import NewRunModal from "./NewRunModal";
 import { mergeAttachments, overLimitIndices } from "../model/attachments";
@@ -148,6 +148,7 @@ const { testGuard } = await import("../../trigger/api/guard");
 const { createRun } = await import("../api/createRun");
 const { fetchPipelines } = await import("../../pipeline/api/pipelines");
 const { validateRepo, listBranches, fetchRemotes } = await import("../../workspace/api/repos");
+const { previewProvisioning } = await import("../../workspace/api/provisioning");
 
 const noop = () => {};
 
@@ -1246,17 +1247,68 @@ describe("NewRunModal — attachment budget rules (#779)", () => {
 });
 
 describe("NewRunModal — form persistence across close/reopen", () => {
+  it("explains on the disabled Launch that provisioning has a mode conflict (Notion #7)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    vi.mocked(previewProvisioning).mockImplementation(async (_repo, _level, rules) => ({
+      entries: [],
+      rules: [],
+      conflicts:
+        rules.copy.includes(".env") && rules.symlink.includes(".env")
+          ? [{ scope: "run", relative_path: ".env", modes: ["copy", "symlink"] }]
+          : [],
+    }));
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    expect(screen.getByTestId("launch-button-wrapper")).not.toHaveAttribute("tabindex");
+
+    const toggle = screen.getByRole("button", { name: /^Provisioning/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    fireEvent.change(screen.getByLabelText("Copy patterns"), { target: { value: ".env" } });
+    fireEvent.change(screen.getByLabelText("Symlink patterns"), { target: { value: ".env" } });
+
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+    expect(screen.getByTestId("launch-button")).toHaveAccessibleDescription(
+      "Provisioning has a mode conflict",
+    );
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // The disabled button takes no focus: its wrapper does, and shows the reason.
+    act(() => screen.getByTestId("launch-button-wrapper").focus());
+    await waitFor(() =>
+      expect(screen.getByTestId("tooltip-content")).toHaveTextContent(
+        "Provisioning has a mode conflict",
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Symlink patterns"), { target: { value: "" } });
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    expect(screen.getByTestId("launch-button")).not.toHaveAccessibleDescription();
+    expect(screen.getByTestId("launch-button-wrapper")).not.toHaveAttribute("tabindex");
+    vi.mocked(previewProvisioning).mockReset();
+    vi.mocked(previewProvisioning).mockResolvedValue({ entries: [], rules: [], conflicts: [] });
+  });
+
   it("clears run provisioning across close/reopen", async () => {
     const { rerender } = render(
       <NewRunModal open={true} onClose={noop} onCreated={noop} />,
     );
 
+    await userEvent.click(screen.getByRole("button", { name: /^Provisioning/ }));
     await userEvent.type(screen.getByLabelText("Symlink patterns"), "conflicting-draft");
     expect(screen.getByLabelText("Symlink patterns")).toHaveValue("conflicting-draft");
 
     rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
     rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
 
+    // Notion #7: reopened collapsed (no remembered state), and emptied.
+    const toggle = screen.getByRole("button", { name: /^Provisioning/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("Provisioning · none");
+    await userEvent.click(toggle);
     expect(screen.getByLabelText("Symlink patterns")).toHaveValue("");
   });
 

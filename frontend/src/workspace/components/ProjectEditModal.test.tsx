@@ -56,6 +56,13 @@ vi.mock("../api/projects", async (importOriginal) => ({
   removeProjectMember: (id: string, path: string) => removeProjectMember(id, path),
 }));
 
+// Notion #7: the provisioning block (collapsed) loads and previews on open.
+vi.mock("../api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/provisioning")>()),
+  fetchProjectProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
+  previewProvisioning: vi.fn().mockResolvedValue({ entries: [], rules: [], conflicts: [] }),
+}));
+
 beforeEach(() => {
   createProject.mockReset();
   updateProject.mockReset();
@@ -294,6 +301,25 @@ describe("ProjectEditModal", () => {
     expect(onSaved).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
+  });
+
+  it("renders the Project provisioning block collapsed, without a Configure button (Notion #7)", async () => {
+    renderModal({
+      initialProject: { id: "p1", name: "Product", members: ["/repos/front"] },
+      initialName: "Product",
+    });
+
+    const toggle = screen.getByRole("button", { name: /^Provisioning/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await waitFor(() => expect(toggle).toHaveTextContent("Provisioning · none"));
+    expect(
+      screen.queryByRole("button", { name: /Configure worktree provisioning/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Copy patterns")).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(screen.getByLabelText("Copy patterns")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save provisioning" })).toBeInTheDocument();
   });
 
   it("disables Save when the name is blank", () => {

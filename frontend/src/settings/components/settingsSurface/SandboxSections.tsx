@@ -98,7 +98,7 @@ export default function SandboxSections({
     </Section>
     <Section section={sections[2]}>
       {/* The instance-scope editor IS the section; its own Save provisioning stays. */}
-      <PersistedProvisioningEditor scope="instance" />
+      <PersistedProvisioningEditor scope="instance" defaultExpanded />
     </Section>
     </>
   );

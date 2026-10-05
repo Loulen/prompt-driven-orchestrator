@@ -24,7 +24,8 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     resetRepo, setAutoName, setInput, setOverrides, setMode, editingTriggerId,
     setEditingTriggerId, setTriggerName, setCronPresetId, setDailyHour, setDailyMinute,
     setRawCron, setGuardCommand, setGuardTest, setGuardTestError, setAllowOverlap,
-    setMaxConcurrent, setError, setProvisioning, setProvisioningValid, setSecondaryRepos,
+    setMaxConcurrent, setError, setProvisioning, setProvisioningValid, setProvisioningBlockReason,
+    setSecondaryRepos,
     settings, setSettings, setSettingsFailed, setSandbox, setHarness, setAgentChoice,
     setSkills, recentRepos,
   } = s;
@@ -56,6 +57,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     setError(null);
     setProvisioning(EMPTY_PROVISIONING_RULES);
     setProvisioningValid(true);
+    setProvisioningBlockReason(undefined);
 
     // One-shot reset: the `openPrefillDone` ref gates this to a single run per
     // open, so the setState cascade is bounded and does not re-fire. The

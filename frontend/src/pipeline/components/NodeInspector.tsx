@@ -73,7 +73,6 @@ export default function NodeInspector({
   const asideRef = useRef<HTMLElement>(null);
   const [highlightedPort, setHighlightedPort] = useState<string | null>(null);
   const [provisioningPreviewRepository, setProvisioningPreviewRepository] = useState("");
-  const [provisioningOpenFor, setProvisioningOpenFor] = useState<string | null>(null);
   // Pending destroy-loop confirmation (#339, mirrors EditCanvas #150): set when
   // deleting an input source would remove a bounded region's last cycle.
   const [pendingDestroy, setPendingDestroy] = useState<{
@@ -120,7 +119,6 @@ export default function NodeInspector({
   );
 
   if (!tab || !node) return null;
-  const provisioningOpen = provisioningOpenFor === node.id;
   const resolvedHarness = resolveEditorHarness(node);
   const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
   // #798: the effort picker's offer is read against the node's SELECTED model —
@@ -269,8 +267,6 @@ export default function NodeInspector({
             isolationFrozen={isolationFrozen}
             readOnly={readOnly}
             runNode={runNode}
-            provisioningOpen={provisioningOpen}
-            setProvisioningOpenFor={setProvisioningOpenFor}
             provisioningPreviewRepository={provisioningPreviewRepository}
             setProvisioningPreviewRepository={setProvisioningPreviewRepository}
             provisioningRepository={provisioningRepository}

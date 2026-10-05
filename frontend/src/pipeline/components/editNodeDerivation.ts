@@ -69,22 +69,6 @@ export function deriveEditNodes(
     // gives no position for is on screen all the same, and a new card must not
     // land on it.
     const fallback = fallbackNodeSpot(i);
-    if (n.type === "merge") {
-      return {
-        id: n.id,
-        type: "merge",
-        position: {
-          x: n.view?.x ?? fallback.x,
-          y: n.view?.y ?? fallback.y,
-        },
-        data: {
-          label: n.name ?? n.id,
-          nodeId: n.id,
-          status,
-          inputSide: n.inputs[0]?.side ?? "left",
-        },
-      };
-    }
     return {
       id: n.id,
       type: "edit",
@@ -99,8 +83,6 @@ export function deriveEditNodes(
         // #653/ADR-0060: the canvas marker's input. On a live Run the FROZEN
         // answer wins — the marker has to say where the NodeRun works, and an
         // edit that has not launched yet moved the document, not the session.
-        // `merge` renders through its own component, so this only ever answers
-        // for agent/script/structural.
         isolated: runState?.nodes?.[n.id]?.isolated_worktree ?? isNodeIsolated(n),
         status,
         reached: markerReached(n.type, runState),

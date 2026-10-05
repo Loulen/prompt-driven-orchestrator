@@ -47,7 +47,7 @@ fn a_starred_node_is_listed_instantiated_and_deleted_once() {
 }
 
 /// #655 — the entry always states where it works: a silent Agent is stamped
-/// with its type's default, a Merge carries no isolation at all.
+/// with its type's default, a Switch carries no isolation at all.
 #[test]
 fn the_library_states_each_entrys_isolation() {
     let world = World::new();
@@ -61,11 +61,11 @@ fn the_library_states_each_entrys_isolation() {
         .save_to_library(&operator(), entry("Script", NodeType::Script, None))
         .unwrap();
     assert_eq!(script.isolated_worktree, Some(false));
-    let merge = world
+    let switch = world
         .pipelines
-        .save_to_library(&operator(), entry("Merge", NodeType::Merge, Some(true)))
+        .save_to_library(&operator(), entry("Router", NodeType::Switch, Some(true)))
         .unwrap();
-    assert_eq!(merge.isolated_worktree, None);
+    assert_eq!(switch.isolated_worktree, None);
     assert_eq!(
         world
             .pipelines

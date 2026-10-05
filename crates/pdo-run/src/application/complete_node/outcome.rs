@@ -136,7 +136,7 @@ impl CompletionSource {
 /// What one pass through [`complete_node_iteration`] did.
 ///
 /// Don't collapse these three: a single "aborted" variant conflated a refusal, a
-/// legal no-op and — at the merge-resolver site — an outright *success*, which is why
+/// legal no-op and — at the retired merge-resolver site — an outright *success*, which is why
 /// "an aborted attempt is never a 2xx" used to be false by construction. `Refused`
 /// carries a [`completion_refusal::CompletionRefusal`], a type that owns no status,
 /// so the invariant is enforced by the compiler.

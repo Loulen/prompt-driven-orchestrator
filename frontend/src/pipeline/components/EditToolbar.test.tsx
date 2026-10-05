@@ -40,7 +40,8 @@ describe("EditToolbar", () => {
     renderToolbar();
     expect(screen.getByTestId("toolbar-add")).toBeInTheDocument();
     expect(screen.getByTestId("toolbar-library")).toBeInTheDocument();
-    expect(screen.getByTestId("toolbar-merge")).toBeInTheDocument();
+    // No Merge button (ADR-0082): convergence is wired onto any node.
+    expect(screen.queryByTestId("toolbar-merge")).toBeNull();
     // The Switch node was removed (ADR-0011): conditional routing now lives on
     // the edge, authored via the edge detail panel (#147).
     expect(screen.queryByTestId("toolbar-switch")).toBeNull();
@@ -91,12 +92,6 @@ describe("EditToolbar", () => {
     expect(onAddNode).not.toHaveBeenCalled();
   });
 
-  it("merge button calls onAddNode with merge", () => {
-    renderToolbar();
-    fireEvent.click(screen.getByTestId("toolbar-merge"));
-    expect(onAddNode).toHaveBeenCalledWith("merge");
-  });
-
   it("script button calls onAddNode with script (#248)", () => {
     renderToolbar();
     expect(screen.getByTestId("toolbar-script")).toBeInTheDocument();
@@ -108,7 +103,7 @@ describe("EditToolbar", () => {
     const user = userEvent.setup();
     renderToolbar();
 
-    // #307: the `+` is now a dropdown trigger (no tooltip); the library/merge
+    // #307: the `+` is now a dropdown trigger (no tooltip); the library/script
     // sibling buttons keep their tooltips.
     await user.hover(screen.getByTestId("toolbar-library"));
     await waitFor(() => {
@@ -120,9 +115,11 @@ describe("EditToolbar", () => {
       expect(screen.queryByTestId("tooltip-content")).not.toBeInTheDocument();
     });
 
-    await user.hover(screen.getByTestId("toolbar-merge"));
+    await user.hover(screen.getByTestId("toolbar-script"));
     await waitFor(() => {
-      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Merge node");
+      expect(screen.getByTestId("tooltip-content")).toHaveTextContent(
+        "Script node (deterministic bash)",
+      );
     });
   });
 
@@ -133,7 +130,6 @@ describe("EditToolbar", () => {
     const NAMES: [string, string][] = [
       ["toolbar-add", "Add"],
       ["toolbar-library", "Library · L"],
-      ["toolbar-merge", "Merge node"],
       ["toolbar-script", "Script node (deterministic bash)"],
       ["toolbar-undo", "Undo · Ctrl+Z"],
       ["toolbar-redo", "Redo · Ctrl+Y"],
@@ -211,7 +207,7 @@ describe("EditToolbar", () => {
     it("adds no button — the core count is unchanged — and the old toggle is gone", () => {
       renderToolbar({ reviewHref: "/runs/r1/review", onToggleInfo: vi.fn() });
       const buttons = [...screen.getByTestId("edit-toolbar").querySelectorAll("button")];
-      expect(buttons).toHaveLength(7); // 7 core; Review is a link
+      expect(buttons).toHaveLength(6); // 6 core; Review is a link
       expect(screen.queryByTestId("toolbar-run-info")).toBeNull();
     });
   });
@@ -260,7 +256,7 @@ describe("EditToolbar", () => {
       const buttons = [
         ...screen.getByTestId("edit-toolbar").querySelectorAll("button"),
       ];
-      expect(buttons).toHaveLength(8); // 7 core + assistant
+      expect(buttons).toHaveLength(7); // 6 core + assistant
       for (const b of buttons) expect(b).toHaveAccessibleName(/\S/);
     });
 

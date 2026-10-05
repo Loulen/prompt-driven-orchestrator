@@ -1,26 +1,27 @@
 import { test, expect } from "@playwright/test";
 import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 // Layer 3b — Node icons E2E (refs #67).
 // Post canvas-refonte (ADR-0011 / #146 / #151 / #171) the first-class node
-// types are only start / end / merge — `switch`, `loop` and `for-each` were
-// removed as node TYPES (a fan-out / cycle is now a loop *region*, not a node).
+// types are only start / end — `switch`, `loop` and `for-each` were removed as
+// node TYPES (a fan-out / cycle is now a loop *region*, not a node), and `merge`
+// followed (ADR-0082: convergence is carried by any node).
 // The backend still parses the legacy variants but migrates them onto generic
 // agent nodes, so they render with the agent icon and no code/doc marker.
 //
 // This spec seeds start + two Agents (one sharing the Run worktree, one
-// isolated) + merge + end and asserts: structural icons for start/end/merge, the
-// agent icon for both Agents, no text pills, and the isolation marker on exactly
-// the nodes that fork a worktree of their own (#653: the isolated Agent and the
-// Merge, which is isolated by construction).
+// isolated) converging on a third, isolated Agent + end and asserts: structural
+// icons for start/end, the agent icon for all three Agents, no Merge icon, no
+// text pills, and the isolation marker on exactly the nodes that fork a
+// worktree of their own (#653).
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-node-icons-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -56,15 +57,12 @@ nodes:
       - name: out
         side: right
     view: { x: 250, y: 400 }
-  - id: merger
-    name: Merger
-    type: merge
-    inputs:
-      - name: branches
-        repeated: true
-        side: left
+  - id: gather
+    name: Gather
+    type: agent
+    isolated_worktree: true
     outputs:
-      - name: merged
+      - name: summary
         side: right
     view: { x: 750, y: 400 }
   - id: end
@@ -81,10 +79,10 @@ edges:
   - source: { node: start, port: user_prompt }
     target: { node: implementer, port: in }
   - source: { node: planner, port: plan }
-    target: { node: merger, port: branches }
+    target: { node: gather, port: branches }
   - source: { node: implementer, port: out }
-    target: { node: merger, port: branches }
-  - source: { node: merger, port: merged }
+    target: { node: gather, port: branches }
+  - source: { node: gather, port: summary }
     target: { node: end, port: result }
 `;
 
@@ -93,6 +91,7 @@ test.beforeAll(async () => {
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
   await fs.writeFile(path.join(PROMPTS_DIR, "planner.md"), "Plan the work.\n");
   await fs.writeFile(path.join(PROMPTS_DIR, "implementer.md"), "Implement the plan.\n");
+  await fs.writeFile(path.join(PROMPTS_DIR, "gather.md"), "Summarise both branches.\n");
 });
 
 test.afterAll(async () => {
@@ -117,11 +116,13 @@ test("each node type renders its structural icon", async ({ page }) => {
   // First-class structural icons.
   await expect(page.locator("[data-testid='node-icon-start']").first()).toBeVisible({ timeout: 3_000 });
   await expect(page.locator("[data-testid='node-icon-end']").first()).toBeVisible({ timeout: 3_000 });
-  await expect(page.locator("[data-testid='node-icon-merge']").first()).toBeVisible({ timeout: 3_000 });
+  // No Merge type any more (ADR-0082), hence no Merge icon.
+  await expect(page.locator("[data-testid='node-icon-merge']")).toHaveCount(0);
 
-  // Both Agents render the agent icon, whatever their workspace.
+  // Every Agent renders the agent icon, whatever its workspace — the
+  // convergence node included.
   const agentIcons = page.locator("[data-testid='node-icon-agent']");
-  await expect(agentIcons).toHaveCount(2, { timeout: 3_000 });
+  await expect(agentIcons).toHaveCount(3, { timeout: 3_000 });
 
   expect(consoleErrors.filter((e) => !/Failed to load resource/.test(e))).toEqual([]);
 });
@@ -168,7 +169,7 @@ test("the isolation marker rides only the nodes that fork a worktree (#653)", as
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // Two markers: the isolated Agent, and the Merge (isolated by construction).
+  // Two markers: the isolated Agent, and the isolated convergence Agent.
   // The Agent that shares the Run worktree carries none — absence IS the signal.
   const markers = page.locator("[data-testid='isolation-marker']");
   await expect(markers).toHaveCount(2, { timeout: 3_000 });
@@ -177,7 +178,7 @@ test("the isolation marker rides only the nodes that fork a worktree (#653)", as
     page.getByTestId("rf__node-implementer").getByTestId("isolation-marker"),
   ).toHaveCount(1);
   await expect(
-    page.getByTestId("rf__node-merger").getByTestId("isolation-marker"),
+    page.getByTestId("rf__node-gather").getByTestId("isolation-marker"),
   ).toHaveCount(1);
   await expect(
     page.getByTestId("rf__node-planner").getByTestId("isolation-marker"),

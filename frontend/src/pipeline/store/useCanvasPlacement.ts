@@ -13,7 +13,6 @@ import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../../l
 import type { EditorNodeDef } from "../model/pipeline";
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "agent": "implementer",
-  "merge": "merge",
   "script": "script",
 };
 
@@ -90,13 +89,6 @@ export function useCanvasPlacement({
     const view = computeDropPosition();
     let newNode: EditorNodeDef;
     switch (type) {
-      case "merge":
-        newNode = {
-          id, name, type, interactive: false, view,
-          inputs: [{ name: "branches", repeated: true, side: "left" }],
-          outputs: [{ name: "merged", repeated: false, side: "right" }],
-        };
-        break;
       case "script":
         // #248: a script node's inputs are emergent (edge-derived), like a work
         // node — it declares none. One default output for its `output.md`.

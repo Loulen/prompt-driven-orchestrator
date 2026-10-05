@@ -66,7 +66,7 @@ pub fn collect_executions(
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(matches!(
                     node.get("node_type").and_then(serde_json::Value::as_str),
-                    Some("agent") | Some("merge")
+                    Some("agent")
                 ));
             Some((id, isolated))
         })

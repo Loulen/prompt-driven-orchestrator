@@ -104,7 +104,6 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
     node_defs: [],
     start_node: undefined,
     end_node: undefined,
-    merge_resolver: undefined,
     ...overrides,
   };
 }

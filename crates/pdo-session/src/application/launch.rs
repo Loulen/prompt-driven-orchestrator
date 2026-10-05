@@ -43,7 +43,7 @@ pub fn spawn(
     // file beside the prompt and reference it via `claude --settings`, so a `Stop`
     // hook runs `pdo complete --auto` at every turn end. Same lifecycle as the
     // prompt (gitignored under `.pdo/`, resolves identically host and container).
-    // Callers pass `false` for `script`/manager/merge-resolver sessions; the tail
+    // Callers pass `false` for `script`/manager sessions; the tail
     // selector in `build_tmux_script` is the belt-and-suspenders guard.
     //
     // #613/ADR-0051 (correctif 8): write the claude-format settings file ONLY for a

@@ -53,9 +53,9 @@ export function useCanvasWiring({
         sourceNode?.outputs[0]?.name ??
         "out";
       // Inputs are emergent (#149): dropping on a node's body creates an input
-      // named after the SOURCE document. Structural nodes (merge) still expose
-      // declared target handles, so honour an explicit `targetHandle`; otherwise
-      // the emergent name is inherited from the source.
+      // named after the SOURCE document. A declared target handle is honoured
+      // when one is named; otherwise the emergent name is inherited from the
+      // source.
       // The body anchor handles (#168) are LAYOUT, not semantic ports — ignore
       // them here so the emergent input name still comes from the source.
       const declaredHandle = anchorsByDropOnBody(connection.targetHandle)
@@ -137,8 +137,8 @@ export function useCanvasWiring({
       };
       if (rect.width === 0 || rect.height === 0) return;
 
-      // Structural nodes (merge) keep their declared, fixed-side handle — never
-      // re-anchor those. Work nodes and End (#840) land where dropped. Keyed on
+      // A node with a declared, fixed-side handle is never re-anchored. Work
+      // nodes and End (#840) land where dropped. Keyed on
       // node TYPE: a work node carrying a vestigial declared `in` still anchors
       // (#175).
       const anchorsByDrop = targetDef != null && landsByDrop(targetDef.type);

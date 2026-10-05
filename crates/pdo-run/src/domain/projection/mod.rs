@@ -2353,7 +2353,9 @@ mod tests {
     }
 
     #[test]
-    fn merge_resolver_full_lifecycle_conflict_to_completion() {
+    fn an_archived_resolver_lifecycle_still_projects() {
+        // ADR-0082: the resolver is retired, its events are history. An archived
+        // Run that recorded them reopens and projects; they move no state.
         let events = vec![
             make_event_with_payload(
                 EventKind::RunStarted,
@@ -2388,21 +2390,10 @@ mod tests {
         assert_eq!(state.status, RunStatus::Completed);
         assert_eq!(state.nodes["impl-a"].status, NodeStatus::Completed);
         assert_eq!(state.nodes["impl-b"].status, NodeStatus::Completed);
-
-        let mr = state.merge_resolver.as_ref().unwrap();
-        assert_eq!(mr.status, NodeStatus::Completed);
-        assert_eq!(mr.conflicting_node_id, "impl-b");
-        assert_eq!(mr.iter, 1);
-        assert_eq!(
-            mr.session_name.as_deref(),
-            Some("pdo-run-1-__merge_resolver__-iter-1")
-        );
-        assert!(mr.completed_at.is_some());
-        assert!(mr.failure_reason.is_none());
     }
 
     #[test]
-    fn merge_resolver_failure_preserves_info_on_run_failed() {
+    fn an_archived_failed_resolver_still_projects_the_failed_run() {
         let events = vec![
             make_event_with_payload(
                 EventKind::RunStarted,
@@ -2437,41 +2428,6 @@ mod tests {
 
         let state = project(&events).unwrap();
         assert_eq!(state.status, RunStatus::Failed);
-
-        let mr = state.merge_resolver.as_ref().unwrap();
-        assert_eq!(mr.status, NodeStatus::Failed);
-        assert_eq!(mr.conflicting_node_id, "impl-a");
-        assert_eq!(mr.session_name.as_deref(), Some("resolver-session"));
-        assert_eq!(
-            mr.failure_reason.as_deref(),
-            Some("conflict markers remain")
-        );
-    }
-
-    #[test]
-    fn merge_conflict_without_resolver_has_no_merge_resolver_info() {
-        let events = vec![
-            make_event_with_payload(
-                EventKind::RunStarted,
-                None,
-                serde_json::json!({ "pipeline_name": "no-resolver" }),
-            ),
-            make_event(EventKind::NodeStarted, Some("impl-1"), Some(1)),
-            make_event(EventKind::NodeCompleted, Some("impl-1"), Some(1)),
-            make_event_with_payload(
-                EventKind::MergeConflictDetected,
-                Some("impl-1"),
-                serde_json::json!({ "reason": "conflict" }),
-            ),
-            make_event(EventKind::RunFailed, None, None),
-        ];
-
-        let state = project(&events).unwrap();
-        assert_eq!(state.status, RunStatus::Failed);
-        assert!(
-            state.merge_resolver.is_none(),
-            "no resolver should be present when merge is handled by Merge node"
-        );
     }
 
     #[test]
@@ -4114,8 +4070,9 @@ mod tests {
     }
 
     #[test]
-    fn not_stalled_when_merge_resolver_active() {
-        // A running merge resolver is forward progress even if a node is stale.
+    fn a_retired_resolver_event_does_not_hold_off_the_stale_verdict() {
+        // The merge resolver is retired (ADR-0082): an archived `MergeResolverStarted`
+        // is history, not forward progress.
         let events = vec![
             make_event_with_payload(
                 EventKind::RunStarted,
@@ -4131,13 +4088,9 @@ mod tests {
             ),
         ];
         let state = project(&events).unwrap();
-        assert_eq!(
-            state.merge_resolver.as_ref().unwrap().status,
-            NodeStatus::Running
-        );
         assert!(
-            !is_stalled(&state),
-            "an active merge resolver means the run is still progressing"
+            is_stalled(&state),
+            "a retired resolver's event (ADR-0082) no longer counts as progress"
         );
     }
 
@@ -4599,15 +4552,6 @@ mod tests {
                 "region1": { "break_received": true, "current_iter": 2, "done": true, "loop_node_id": "region1", "max_iter": 3 },
                 "region2": { "break_received": false, "current_iter": 1, "done": true, "loop_node_id": "region2", "max_iter": 0 }
             },
-            "merge_resolver": {
-                "completed_at": "2026-02-01T00:06:02.000Z",
-                "conflicting_node_id": "worker",
-                "failure_reason": null,
-                "iter": 2,
-                "session_name": "pdo-run-golden-__merge_resolver__-iter-2",
-                "started_at": "2026-02-01T00:06:01.000Z",
-                "status": "completed"
-            },
             "name": "Golden Run (final)",
             "node_defs": [
                 { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt", "side": "right" } ], "view_x": null, "view_y": null },
@@ -4875,7 +4819,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_merge_event_runs_resolver_lifecycle_in_isolation() {
+    fn apply_merge_event_projects_nothing_for_the_retired_resolver() {
+        // ADR-0082: the events stay readable, and move no state.
         let mut state = RunState::new("r".into(), String::new());
         apply_merge_event(
             &mut state,
@@ -4885,18 +4830,12 @@ mod tests {
                 serde_json::json!({ "conflicting_node_id": "x", "iter": 1 }),
             ),
         );
-        assert_eq!(
-            state.merge_resolver.as_ref().unwrap().status,
-            NodeStatus::Running
-        );
         apply_merge_event(
             &mut state,
             &make_event(EventKind::MergeResolverCompleted, None, None),
         );
-        assert_eq!(
-            state.merge_resolver.as_ref().unwrap().status,
-            NodeStatus::Completed
-        );
+        assert!(state.nodes.is_empty());
+        assert_eq!(state.status, RunStatus::Running);
     }
 
     #[test]

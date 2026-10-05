@@ -1,4 +1,4 @@
-import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal } from "lucide-react";
+import { Plus, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal } from "lucide-react";
 import type { PendingTone } from "../../review/model/commentStatus";
 import type { RunState } from "../../shared/generated/RunState";
 import type { NodeType } from "../../shared/generated/NodeType";
@@ -45,7 +45,7 @@ interface Props {
   reviewTone?: PendingTone;
   reviewTitle?: string;
   // #315: an archived run's canvas is read-only — hide every editing control
-  // (add node/note, library insert, merge/script, undo/redo). Only the
+  // (add node/note, library insert, script, undo/redo). Only the
   // Pipeline-info button survives so the archived pipeline stays inspectable.
   readOnly?: boolean;
   // #598 / ADR-0049: the "finished-run" action group — the three ways to
@@ -66,7 +66,7 @@ interface Props {
 
 export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, run = null }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
-  // component-local dependency, unlike the prop-drilled add/merge callbacks, so
+  // component-local dependency, unlike the prop-drilled add callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
   // derived (reactive) rather than stored — no duplicated state to keep in sync.
   const undo = useEditStore((s) => s.undo);
@@ -91,7 +91,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         <>
           {/* #307: the `+` is now a dropdown — create a Node (current behaviour)
               or a canvas Note. The trigger keeps `data-testid="toolbar-add"`;
-              the sibling merge/script buttons are unchanged. */}
+              the sibling script button is unchanged. */}
           <DropdownMenu>
             <DropdownMenuTrigger
               data-testid="toolbar-add"
@@ -147,15 +147,8 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
               list field, not by adding a node. Mirrors the Loop button removal
               (#171). */}
 
-          <Tooltip content="Merge node">
-            <button
-              data-testid="toolbar-merge"
-              onClick={() => onAddNode("merge")}
-              className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
-            >
-              <GitMerge size={14} />
-            </button>
-          </Tooltip>
+          {/* No Merge add-button either (ADR-0082): convergence is drawn by
+              wiring several edges into any node. */}
 
           <Tooltip content="Script node (deterministic bash)">
             <button

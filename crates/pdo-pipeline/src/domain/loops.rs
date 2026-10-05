@@ -341,7 +341,7 @@ mod tests {
     fn a_collection_region_is_never_destroyed_by_edge_removal() {
         // A `collection` region has no topological cycle to lose; removing any
         // edge never pops the bounded-region destroy confirmation.
-        let (mut pipeline, _region) = collection_fanout_merge();
+        let (mut pipeline, _region) = collection_fanout_convergence();
         pipeline.loops = vec![LoopRegion {
             id: "per-issue".into(),
             kind: LoopKind::Collection,
@@ -359,9 +359,10 @@ mod tests {
 
     // ── Collection region engine (ADR-0011 / #151) ──────────────────────────
 
-    /// triage -> fixer (single-member collection over `issues`) -> merge -> end.
-    /// The barrier edge leaves the region (fixer:fix -> merge:branches).
-    fn collection_fanout_merge() -> (PipelineDef, LoopRegion) {
+    /// triage -> fixer (single-member collection over `issues`) -> gather -> end.
+    /// The barrier edge leaves the region (fixer:fix -> gather:branches); `gather`
+    /// is an ordinary agent converging the laps (ADR-0082).
+    fn collection_fanout_convergence() -> (PipelineDef, LoopRegion) {
         let pipeline = PipelineDef {
             name: "cfm".into(),
             version: None,
@@ -370,18 +371,14 @@ mod tests {
                 node("start", &[], &["user_prompt"]),
                 node("triage", &["task"], &["plan"]),
                 node("fixer", &["in"], &["fix"]),
-                {
-                    let mut m = node("merge", &["branches"], &["merged"]);
-                    m.node_type = NodeType::Merge;
-                    m
-                },
+                node("gather", &["branches"], &["merged"]),
                 node("end", &["result"], &[]),
             ],
             edges: vec![
                 edge("start", "user_prompt", "triage", "task"),
                 edge("triage", "plan", "fixer", "in"),
-                edge("fixer", "fix", "merge", "branches"),
-                edge("merge", "merged", "end", "result"),
+                edge("fixer", "fix", "gather", "branches"),
+                edge("gather", "merged", "end", "result"),
             ],
             loops: vec![],
             notes: Vec::new(),

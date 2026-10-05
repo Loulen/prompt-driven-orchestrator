@@ -1767,7 +1767,11 @@ nodes:
     }
 
     #[test]
-    fn parses_merge_node() {
+    fn legacy_merge_node_parses_as_an_isolated_agent_with_its_ports() {
+        // ADR-0082: `merge` is retired with no alias and no migrator. It takes
+        // the generic unknown-type path (like `doc-only` / `code-mutating`,
+        // #653): an isolated `agent`, the ordinary warning, ports untouched so
+        // edges and prompts naming `branches` / `merged` keep working.
         let yaml = with_start_end(
             r#"
 name: merge-test
@@ -1789,7 +1793,19 @@ nodes:
             .iter()
             .find(|n| n.id == "ab000001")
             .unwrap();
-        assert_eq!(mg.node_type, NodeType::Merge);
+        assert_eq!(mg.node_type, NodeType::Agent);
+        assert!(mg.is_isolated());
+        assert_eq!(mg.isolated_worktree, Some(true));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Warning
+                    && d.message
+                        == "node 'ab000001': unknown node type 'merge', defaulting to 'agent'"),
+            "{:?}",
+            result.diagnostics
+        );
         assert_eq!(mg.inputs.len(), 1);
         assert_eq!(mg.inputs[0].name, "branches");
         assert!(mg.inputs[0].repeated);
@@ -2142,90 +2158,6 @@ nodes:
         // at resolution time (`pdo_harness::agent_choice`), it does not erase them.
         assert_eq!(node.pin_harness.as_deref(), Some("claude"));
         assert!(node.harnesses.contains_key("claude"));
-    }
-
-    #[test]
-    fn merge_node_rejects_wrong_input_name() {
-        let yaml = with_start_end(
-            r#"
-name: bad-merge
-nodes:
-  - id: ab000001
-    name: bad-merge
-    type: merge
-    inputs:
-      - name: in
-        repeated: true
-    outputs:
-      - name: merged
-"#,
-        );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("branches"),
-            "error should mention 'branches': {msg}"
-        );
-    }
-
-    #[test]
-    fn merge_node_rejects_non_repeated_input() {
-        let yaml = with_start_end(
-            r#"
-name: bad-merge
-nodes:
-  - id: ab000001
-    name: bad-merge
-    type: merge
-    inputs:
-      - name: branches
-    outputs:
-      - name: merged
-"#,
-        );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("repeated"),
-            "error should mention 'repeated': {msg}"
-        );
-    }
-
-    #[test]
-    fn merge_node_rejects_wrong_output_name() {
-        let yaml = with_start_end(
-            r#"
-name: bad-merge
-nodes:
-  - id: ab000001
-    name: bad-merge
-    type: merge
-    inputs:
-      - name: branches
-        repeated: true
-    outputs:
-      - name: out
-"#,
-        );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("merged"),
-            "error should mention 'merged': {msg}"
-        );
-    }
-
-    #[test]
-    fn legacy_auto_merge_resolver_field_ignored() {
-        let yaml = with_start_end(
-            r#"
-name: with-old-field
-auto_merge_resolver: true
-nodes: []
-"#,
-        );
-        let result = parse_pipeline(&yaml).unwrap();
-        assert_eq!(result.pipeline.name, "with-old-field");
     }
 
     #[test]
@@ -3260,10 +3192,10 @@ edges: []
 
     #[test]
     fn types_without_isolation_carry_no_line() {
-        // A Merge is isolated by construction and Start/End own no worktree —
-        // writing a line nobody may edit would only invite someone to edit it.
-        // A stray key is dropped rather than round-tripped.
-        for node_type in ["merge", "start", "end", "switch", "loop"] {
+        // Start/End own no worktree — writing a line nobody may edit would
+        // only invite someone to edit it. A stray key is dropped rather than
+        // round-tripped.
+        for node_type in ["start", "end", "switch", "loop"] {
             let mut v = node_value(&format!(
                 "id: n1\nname: X\ntype: {node_type}\nisolated_worktree: false\n"
             ));
@@ -3276,8 +3208,9 @@ edges: []
     fn retired_types_fail_like_any_other_invalid_value() {
         // #653: no alias, no migrator, no bespoke diagnostic. The two retired
         // types take the generic unknown-type path — the message must not name
-        // them any differently than `bogus`.
-        for retired in ["doc-only", "code-mutating"] {
+        // them any differently than `bogus`. ADR-0082: `merge` is retired the
+        // same way.
+        for retired in ["doc-only", "code-mutating", "merge"] {
             let mut v = node_value(&format!("id: n1\nname: X\ntype: {retired}\n"));
             let diags = normalize_node_value(&mut v).unwrap();
             assert_eq!(diags.len(), 1, "type {retired}");
@@ -3342,7 +3275,7 @@ edges: []
     }
 
     #[test]
-    fn is_isolated_reads_the_line_and_merge_reads_nothing() {
+    fn is_isolated_reads_the_line() {
         let yaml = "\
 name: iso
 nodes:
@@ -3353,14 +3286,6 @@ nodes:
   - id: forked
     name: Forked
     type: agent
-  - id: gather
-    name: Gather
-    type: merge
-    inputs:
-      - name: branches
-        repeated: true
-    outputs:
-      - name: merged
   - id: start
     name: Start
     type: start
@@ -3377,10 +3302,6 @@ edges: []
         let by_id = |id: &str| parsed.nodes.iter().find(|n| n.id == id).unwrap();
         assert!(!by_id("shared").is_isolated());
         assert!(by_id("forked").is_isolated());
-        assert!(
-            by_id("gather").is_isolated(),
-            "a Merge is isolated by construction, with no line to read"
-        );
         assert!(!by_id("start").is_isolated());
     }
 

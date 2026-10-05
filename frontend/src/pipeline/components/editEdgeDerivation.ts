@@ -97,8 +97,6 @@ export function edgeIndexFromId(edgeId: string): number | null {
  * `targetHandle` matches no rendered handle (`getEdgePosition` → error 008), so
  * the id here must mirror what the target node renders:
  *
- * - Structural nodes (merge) render an id'd target handle per declared input
- *   via `PortPill`, so the edge keeps its declared port name.
  * - Emergent work nodes (`agent`, ADR-0011 / #149) and the End marker (#840)
  *   render one body-covering target handle PER SIDE. The edge binds to the handle for
  *   its chosen `target_side` (#168) so the arrow anchors and routes from that
@@ -113,9 +111,6 @@ function resolveTargetHandle(
   declaredPort: string,
   targetSide: PortSide | null | undefined,
 ): string | null {
-  if (target.type === "merge") {
-    return declaredPort || null;
-  }
   // A node that pins the wire to a declared handle keeps binding to it.
   if (!landsByDrop(target.type)) {
     return target.inputs[0]?.name ?? declaredPort ?? null;
@@ -131,7 +126,7 @@ function resolveTargetHandle(
  * They differ exactly where the target keeps a DECLARED handle: `target_side` is
  * a lands-by-drop notion (#168) and such a node never has one, so the persisted
  * value reads back as the `left` default while the handle sits wherever the port
- * declares (a merge's `branches` on its own side). Routing to `left` there lays
+ * declares. Routing to `left` there lays
  * the perpendicular landing leg on a border the wire does not touch.
  */
 export function resolveTargetGeometrySide(
@@ -209,7 +204,7 @@ export function deriveEditEdges(pipeline: EditorPipelineDef): Edge<EditEdgeData>
       ? resolveTargetHandle(targetNode, e.target.port, targetSide)
       : e.target.port || null;
     // The side the wire actually ARRIVES on, which is not always the persisted
-    // one: a target that keeps a declared handle (a merge's `branches`)
+    // one: a target that keeps a declared handle
     // ignores `target_side` entirely and pins the arrow on its own
     // side. Handing the edge the persisted `left` there made it lay the landing
     // leg across a side the handle is not on — a wire entering the card from the

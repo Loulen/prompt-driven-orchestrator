@@ -1,4 +1,4 @@
-import { User, GitMerge, Play, Square, GitBranch, SquareTerminal } from "lucide-react";
+import { User, Play, Square, GitBranch, SquareTerminal } from "lucide-react";
 import type { NodeType } from "../../shared/generated/NodeType";
 
 interface IconProps {
@@ -9,8 +9,6 @@ interface IconProps {
 
 export function NodeTypeIcon({ type, size = 14, className }: IconProps) {
   switch (type) {
-    case "merge":
-      return <GitMerge data-testid="node-icon-merge" size={size} className={className} />;
     case "start":
       return <Play data-testid="node-icon-start" size={size} className={className} />;
     case "end":

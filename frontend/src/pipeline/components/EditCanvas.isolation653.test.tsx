@@ -116,14 +116,4 @@ describe("EditCanvas — new-node isolation defaults (#653)", () => {
     expect(nodes[0].type).toBe("script");
     expect(nodes[0].isolated_worktree).toBe(false);
   });
-
-  it("creates a Merge with no isolation to state — it forks by construction", () => {
-    renderCanvas();
-    fireEvent.click(screen.getByTestId("toolbar-merge"));
-
-    const nodes = useEditStore.getState().openTabs[0].pipeline.nodes;
-    expect(nodes).toHaveLength(1);
-    expect(nodes[0].type).toBe("merge");
-    expect(nodes[0].isolated_worktree).toBeUndefined();
-  });
 });

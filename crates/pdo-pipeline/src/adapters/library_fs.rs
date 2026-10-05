@@ -641,20 +641,20 @@ mod tests {
 
         // A type that carries no isolation drops a stray value rather than
         // round-tripping a line nobody may edit (mirrors `stamp_isolation_default`).
-        agent.node_type = crate::domain::pipeline::NodeType::Merge;
+        agent.node_type = crate::domain::pipeline::NodeType::Switch;
         agent.isolated_worktree = Some(false);
         assert_eq!(entry_from_node(&agent, "p").isolated_worktree, None);
     }
 
-    /// A starred Merge/Start/End writes no isolation line at all.
+    /// A starred Start/End/Switch writes no isolation line at all.
     #[test]
     fn isolation_key_is_absent_for_types_that_carry_none() {
-        let mut node = make_node("Gatherer");
-        node.node_type = crate::domain::pipeline::NodeType::Merge;
+        let mut node = make_node("Router");
+        node.node_type = crate::domain::pipeline::NodeType::Switch;
         let yaml = serde_yaml::to_string(&entry_from_node(&node, "p")).unwrap();
         assert!(
             !yaml.contains("isolated_worktree"),
-            "isolation leaked onto a Merge entry:\n{yaml}"
+            "isolation leaked onto a Switch entry:\n{yaml}"
         );
     }
 

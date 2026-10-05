@@ -55,7 +55,7 @@ export default function ModelPicker({
    *  `1M`), keyed by id. Rendered as a muted hint next to the id; an id with no
    *  entry shows none. Optional: every other source names no window. */
   contexts?: Record<string, string>;
-  testid: string; // "node-model" | "merge-model"
+  testid: string; // e.g. "node-model"
   /** Identity of what this picker edits — a node id, or a stable key for a
    *  singleton like the Settings default. Changing it resets the draft and the
    *  Custom… mode, so no value ever crosses from one subject to the next (#617 FP). */

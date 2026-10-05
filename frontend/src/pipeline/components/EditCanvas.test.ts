@@ -47,8 +47,8 @@ function makePipeline(): EditorPipelineDef {
       },
       {
         id: "m1",
-        name: "merge",
-        type: "merge",
+        name: "gather",
+        type: "agent",
         inputs: [{ name: "branches", repeated: true, side: "left" }],
         outputs: [{ name: "merged", repeated: false, side: "right" }],
         interactive: false,
@@ -95,7 +95,6 @@ function makeRunState(
     node_defs: [],
     start_node: undefined,
     end_node: undefined,
-    merge_resolver: undefined,
   };
 }
 
@@ -117,7 +116,7 @@ describe("statusForNode", () => {
 });
 
 describe("deriveEditNodes — live status wiring (regression: node-card borders ignore run state)", () => {
-  it("forwards live status into every node type's data (regular / merge)", () => {
+  it("forwards live status into every node's data", () => {
     const pipeline = makePipeline();
     const run = makeRunState({
       impl: "running",
@@ -168,8 +167,7 @@ describe("markerReached", () => {
     const run = runWith("completed");
     const others: NodeType[] = [
       "agent",
-      "agent",
-      "merge",
+      "script",
     ];
     for (const t of others) expect(markerReached(t, run)).toBe(false);
   });

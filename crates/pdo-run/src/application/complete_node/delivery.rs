@@ -13,7 +13,6 @@ use pdo_workspace::adapters::git::worktrees::{
 };
 
 use super::*;
-use crate::application::merge_resolver::spawn_merge_resolver;
 use crate::application::node::reap::short;
 use crate::domain::{completion_refusal, event, merge_action, state};
 use crate::Runs;
@@ -150,7 +149,6 @@ pub async fn deliver_node_run(
             &sub_branch,
             node_id,
             iter,
-            false,
             spawn_base.as_deref(),
         )
     };
@@ -331,30 +329,6 @@ pub async fn deliver_node_run(
             Some(completion_refusal::CompletionRefusal::MergeConflict {
                 node_id: node_id.to_string(),
             })
-        }
-        worktrees::DeliveryOutcome::ConflictPendingResolution(conflict) => {
-            let conflict_event = event::Event {
-                id: None,
-                run_id: run_id.to_string(),
-                ts: pdo_kernel::clock::now_iso(),
-                kind: event::EventKind::MergeConflictDetected,
-                node_id: Some(node_id.to_string()),
-                iter: Some(iter),
-                payload: Some(serde_json::json!({
-                    "reason": format!("conflict merging {node_id} into pipeline branch"),
-                    "detail": conflict.detail,
-                    "pipeline_tip": conflict.pipeline_tip,
-                    "node_tip": conflict.node_tip,
-                    "conflicting_files": conflict.conflicting_files,
-                })),
-            };
-            let _ = append_event(state, &conflict_event).await;
-
-            // DEAD in production (ADR-0035 §6): `keep_conflict` is never `true`, so
-            // `ConflictPendingResolution` is never built. The two resolver arms
-            // ride the type at zero test cost; removing the whole vestigial
-            // subsystem is ADR-0006 fallout, not this ticket.
-            Some(spawn_merge_resolver(state, run_id, node_id, iter, worktree_dir).await)
         }
     }
 }

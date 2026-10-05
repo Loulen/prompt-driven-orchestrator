@@ -234,7 +234,7 @@ pub fn exhaustion_outcome(
 // carries an `over: <field>` driver naming a list in the entering artifact's
 // frontmatter. It fans the region entry out **in parallel**, one lap per item;
 // the region's outgoing edges fire **once, on the barrier** — when every item
-// finishes — preserving `done → Merge` convergence (ADR-0006). An empty
+// finishes — so the downstream node converges on every lap (ADR-0082). An empty
 // collection fires the barrier immediately with zero item-artifacts.
 
 /// Resolves a collection region's driver list from the entering artifact's
@@ -329,8 +329,8 @@ pub fn collection_region_entered_by_edge<'a>(
 }
 
 /// The external targets a collection region's barrier fires into. Fired
-/// **once**, in edge order, de-duplicated — preserving `done → Merge`
-/// convergence (ADR-0006). Collection-region outgoing edges are unconditional
+/// **once**, in edge order, de-duplicated — the downstream node converges
+/// on every lap (ADR-0082). Collection-region outgoing edges are unconditional
 /// (the lap count is the collection, not a guard), so every one fires.
 pub fn collection_barrier_targets(pipeline: &PipelineDef, region: &LoopRegion) -> Vec<String> {
     let member_set: std::collections::HashSet<&str> =
@@ -804,9 +804,10 @@ mod tests {
 
     // ── Collection region engine (ADR-0011 / #151) ──────────────────────────
 
-    /// triage -> fixer (single-member collection over `issues`) -> merge -> end.
-    /// The barrier edge leaves the region (fixer:fix -> merge:branches).
-    fn collection_fanout_merge() -> (PipelineDef, LoopRegion) {
+    /// triage -> fixer (single-member collection over `issues`) -> gather -> end.
+    /// The barrier edge leaves the region (fixer:fix -> gather:branches); `gather`
+    /// is an ordinary agent converging the laps (ADR-0082).
+    fn collection_fanout_convergence() -> (PipelineDef, LoopRegion) {
         let pipeline = PipelineDef {
             name: "cfm".into(),
             version: None,
@@ -815,18 +816,14 @@ mod tests {
                 node("start", &[], &["user_prompt"]),
                 node("triage", &["task"], &["plan"]),
                 node("fixer", &["in"], &["fix"]),
-                {
-                    let mut m = node("merge", &["branches"], &["merged"]);
-                    m.node_type = NodeType::Merge;
-                    m
-                },
+                node("gather", &["branches"], &["merged"]),
                 node("end", &["result"], &[]),
             ],
             edges: vec![
                 edge("start", "user_prompt", "triage", "task"),
                 edge("triage", "plan", "fixer", "in"),
-                edge("fixer", "fix", "merge", "branches"),
-                edge("merge", "merged", "end", "result"),
+                edge("fixer", "fix", "gather", "branches"),
+                edge("gather", "merged", "end", "result"),
             ],
             loops: vec![],
             notes: Vec::new(),
@@ -862,7 +859,7 @@ mod tests {
         // A 3-item collection plans 3 laps; the entry is the single member
         // `fixer` (fed from outside the region). Each item becomes one parallel
         // lap of the entry.
-        let (pipeline, region) = collection_fanout_merge();
+        let (pipeline, region) = collection_fanout_convergence();
         let fm = issues(&["a", "b", "c"]);
         let plan = collection_fanout(&pipeline, &region, &fm);
         assert_eq!(plan.total, 3);
@@ -874,7 +871,7 @@ mod tests {
     fn collection_resolves_over_from_entering_frontmatter() {
         // `resolve_collection` reads the `over` field's list from the entering
         // artifact's frontmatter.
-        let (_pipeline, region) = collection_fanout_merge();
+        let (_pipeline, region) = collection_fanout_convergence();
         let fm = issues(&["x", "y"]);
         let items = resolve_collection(&region, &fm);
         assert_eq!(
@@ -890,7 +887,7 @@ mod tests {
     fn empty_collection_fans_out_zero_items() {
         // An empty `issues: []` resolves to total 0 — no entry spawns; the caller
         // fires the barrier immediately.
-        let (pipeline, region) = collection_fanout_merge();
+        let (pipeline, region) = collection_fanout_convergence();
         let mut fm = std::collections::HashMap::new();
         fm.insert("issues".into(), serde_yaml::Value::Sequence(vec![]));
         let plan = collection_fanout(&pipeline, &region, &fm);
@@ -902,7 +899,7 @@ mod tests {
     fn missing_over_field_is_an_empty_collection() {
         // A missing `over` field (sharp tool, ADR-0001): empty collection, no
         // error — the barrier fires immediately.
-        let (pipeline, region) = collection_fanout_merge();
+        let (pipeline, region) = collection_fanout_convergence();
         let plan = collection_fanout(&pipeline, &region, &Default::default());
         assert_eq!(plan.total, 0);
     }
@@ -928,13 +925,13 @@ mod tests {
     }
 
     #[test]
-    fn barrier_fires_once_into_the_merge_target() {
-        // The region's single outgoing edge (fixer:fix -> merge:branches) leaves
-        // the region: the barrier fires once into `merge`, preserving the
-        // done -> Merge convergence (ADR-0006). The intra-region entering edge
-        // (triage -> fixer) is NOT a barrier target.
-        let (pipeline, region) = collection_fanout_merge();
+    fn barrier_fires_once_into_the_convergence_target() {
+        // The region's single outgoing edge (fixer:fix -> gather:branches) leaves
+        // the region: the barrier fires once into `gather`, the node converging
+        // the laps (ADR-0082). The intra-region entering edge (triage -> fixer)
+        // is NOT a barrier target.
+        let (pipeline, region) = collection_fanout_convergence();
         let targets = collection_barrier_targets(&pipeline, &region);
-        assert_eq!(targets, vec!["merge".to_string()]);
+        assert_eq!(targets, vec!["gather".to_string()]);
     }
 }

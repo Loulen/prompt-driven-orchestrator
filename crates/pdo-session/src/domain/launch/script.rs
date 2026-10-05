@@ -725,7 +725,7 @@ mod tests {
 
     #[test]
     fn build_script_omits_session_id_when_none_or_empty() {
-        // #473: `None` OR `Some("")` (an infra session — manager / merge resolver)
+        // #473: `None` OR `Some("")` (an infra session — the manager)
         // emits no `--session-id`, byte-identical to the legacy tail. This is what
         // keeps the pre-#473 launch bytes for the sessions the sweep never probes.
         for sid in [None, Some("")] {

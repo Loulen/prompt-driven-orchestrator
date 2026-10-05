@@ -203,15 +203,3 @@ pub struct EndNodeInfo {
     pub id: String,
     pub ports: Vec<EndPortStatus>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct MergeResolverInfo {
-    pub status: NodeStatus,
-    pub conflicting_node_id: String,
-    pub iter: i64,
-    pub session_name: Option<String>,
-    pub started_at: Option<String>,
-    pub completed_at: Option<String>,
-    pub failure_reason: Option<String>,
-}

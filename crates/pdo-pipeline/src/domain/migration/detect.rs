@@ -85,12 +85,12 @@ pub fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
     for node in nodes {
         // A flat `model:` / `effort:` on ANY node migrates under
         // `harnesses.claude.*`. Checked before the structural-node `continue` below,
-        // or a `merge` node's flat fields would be skipped.
+        // or a structural node's flat fields would be skipped.
         if node.get("model").is_some() || node.get("effort").is_some() {
             return true;
         }
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if matches!(node_type, "start" | "end" | "switch" | "loop" | "merge") {
+        if matches!(node_type, "start" | "end" | "switch" | "loop") {
             continue;
         }
         if node.get("prompt_file").and_then(|v| v.as_str()).is_some() {
@@ -104,7 +104,7 @@ pub fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
         // Inputs are emergent (#149): a *regular* node (agent / script)
         // that still declares any input needs migration so the declared port is
         // dropped (and a `repeated` flag migrated onto its edge). Structural
-        // nodes (for-each here; start/end/switch/loop/merge already `continue`d
+        // nodes (for-each here; start/end/switch/loop already `continue`d
         // above) keep their required ports.
         if node_type != "for-each"
             && node

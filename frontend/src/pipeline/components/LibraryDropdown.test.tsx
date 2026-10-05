@@ -149,7 +149,7 @@ describe("LibraryDropdown", () => {
     const entries = [
       makeEntry("Forker"),
       { ...makeEntry("Sharer"), isolated_worktree: false },
-      { ...makeEntry("Gatherer"), type: "merge" },
+      { ...makeEntry("Marker"), type: "start" },
     ];
     renderDropdown({ entries, onDelete: vi.fn() });
     fireEvent.click(screen.getByTestId("toolbar-library"));
@@ -159,12 +159,12 @@ describe("LibraryDropdown", () => {
       "Isolated worktree",
     );
     expect(screen.getByTestId("library-workspace-shared")).toHaveTextContent("Run worktree");
-    // A Merge carries no workspace, so the row shows no label to argue with.
+    // A structural type carries no workspace, so the row shows no label to argue with.
     expect(screen.getAllByTestId(/^library-workspace-/)).toHaveLength(2);
     // …and each row wears its type's canvas glyph rather than a two-letter
     // badge that only knew `agent`.
     expect(screen.getAllByTestId("node-icon-agent")).toHaveLength(2);
-    expect(screen.getByTestId("node-icon-merge")).toBeInTheDocument();
+    expect(screen.getByTestId("node-icon-start")).toBeInTheDocument();
   });
 
   it("restores the entry's workspace onto the dropped node", async () => {

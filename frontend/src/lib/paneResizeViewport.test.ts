@@ -86,8 +86,9 @@ describe("reframeOnPaneResize (#949)", () => {
 describe("paneResizeAction (#949, FP iteration 2 of #43)", () => {
   const base = { prevWidth: 1358, width: 958, msSinceMount: 5000, paneToggled: false };
 
-  it("ignores the first measure and a zero width", () => {
-    expect(paneResizeAction({ ...base, prevWidth: null, msSinceMount: 0 })).toBeNull();
+  it("ignores a zero width, and a first measure once the mount window is over", () => {
+    expect(paneResizeAction({ ...base, prevWidth: null })).toBeNull();
+    expect(paneResizeAction({ ...base, prevWidth: null, width: 0, msSinceMount: 0 })).toBeNull();
     expect(paneResizeAction({ ...base, width: 0, msSinceMount: 0 })).toBeNull();
     expect(paneResizeAction({ ...base, prevWidth: 0, paneToggled: true })).toBeNull();
   });
@@ -101,6 +102,13 @@ describe("paneResizeAction (#949, FP iteration 2 of #43)", () => {
     // React Flow's initial fit may have measured the full width.
     expect(paneResizeAction({ ...base, msSinceMount: 40 })).toBe("fit");
     expect(paneResizeAction({ ...base, msSinceMount: 40, paneToggled: true })).toBe("fit");
+  });
+
+  it("fits the view on the first measure inside the mount window", () => {
+    // #43 (FP iteration 2): the run pane may have unfolded before the observer
+    // started, so no width change is ever seen — while React Flow measured the
+    // nodes, and fitted them, before its own width caught up.
+    expect(paneResizeAction({ ...base, prevWidth: null, msSinceMount: 40 })).toBe("fit");
   });
 
   it("re-frames, without fitting, on a pane toggle once the mount window is over", () => {

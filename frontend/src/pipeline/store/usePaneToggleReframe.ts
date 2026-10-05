@@ -32,6 +32,8 @@ export function usePaneToggleReframe(
   // #43 (FP iteration 1): a width change right after the canvas mounts (a run
   // opened with no tab open, its pane unfolding in the same commit) fits the
   // view again — React Flow's initial fit may have measured the full width.
+  // #43 (FP iteration 2): so does the observer's first measure, the only one
+  // seen when the pane unfolded before this effect started observing.
   const lastCanvasWidthRef = useRef<number | null>(null);
   const paneToggledRef = useRef(false);
   const prevRightCollapsedRef = useRef(rightPaneCollapsed);
@@ -55,9 +57,11 @@ export function usePaneToggleReframe(
       lastCanvasWidthRef.current = width;
       const msSinceMount = performance.now() - mountedAt;
       const action = paneResizeAction({ prevWidth, width, msSinceMount, paneToggled: paneToggledRef.current });
-      if (action == null || prevWidth == null) return;
+      if (action == null) return;
       paneToggledRef.current = false;
-      if (action === "fit") {
+      if (action === "fit" || prevWidth == null) {
+        // Queued by React Flow until the nodes are measured; this observer was
+        // created after React Flow's own, so its width is already current.
         void reactFlow.fitView(CANVAS_FIT_VIEW_OPTIONS);
         return;
       }

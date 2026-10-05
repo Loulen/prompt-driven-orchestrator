@@ -66,7 +66,8 @@ export function reframeOnPaneResize(
  * canvas in the same commit the run pane unfolds; React Flow's initial fit can
  * land on the full-width canvas before the pane takes its width, and half a
  * width of pan cannot shrink a graph fitted to a wider frame. Within the window
- * the view is fitted again instead.
+ * the view is fitted again instead, from the very first measure: React Flow can
+ * measure (and fit) its nodes before its own width update in the same frame.
  */
 export const MOUNT_FIT_WINDOW_MS = 1000;
 
@@ -81,7 +82,12 @@ export interface PaneResize {
 
 /** What the canvas does on a width change: fit again, re-frame, or nothing. */
 export function paneResizeAction({ prevWidth, width, msSinceMount, paneToggled }: PaneResize): "fit" | "reframe" | null {
-  if (prevWidth == null || prevWidth <= 0 || width <= 0 || width === prevWidth) return null;
-  if (msSinceMount < MOUNT_FIT_WINDOW_MS) return "fit";
+  if (width <= 0) return null;
+  const opening = msSinceMount < MOUNT_FIT_WINDOW_MS;
+  // FP iteration 2: the pane may have unfolded before the observer started, so
+  // its first measure is the only one the opening produces — fit on it too.
+  if (prevWidth == null) return opening ? "fit" : null;
+  if (prevWidth <= 0 || width === prevWidth) return null;
+  if (opening) return "fit";
   return paneToggled ? "reframe" : null;
 }

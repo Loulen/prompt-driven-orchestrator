@@ -28,6 +28,7 @@ import { useProjects, useRuns } from "./useAppData";
 import { useSurfaces } from "./useSurfaces";
 import { useAppTour } from "./useAppTour";
 import { useRunNavigation } from "./useRunNavigation";
+import { useRunLink } from "./useRunLink";
 import { useEditorHotkeys } from "./useEditorHotkeys";
 import { useLaunchActions } from "./useLaunchActions";
 import { useShellRefresh } from "./useShellRefresh";
@@ -198,6 +199,9 @@ export default function App() {
     setSelectedRunId,
     setSelectedNodeId,
   });
+
+  // CORE-1: `#/runs/<id>` selects the Run, from the address bar or an extension.
+  useRunLink(handleSelectRun);
 
   const handleRunCreated = useCallback(
     (runId: string) => {

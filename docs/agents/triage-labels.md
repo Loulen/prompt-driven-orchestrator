@@ -1,19 +1,21 @@
 # Triage Labels
 
-The skills speak in terms of five canonical triage roles. This repo carries **only two labels**,
-both **type** labels:
+The skills speak in terms of five canonical triage roles. This repo has **no labels**: items live
+in `pm`, Backlog `CORE` (`docs/agents/business-backlog.md`), and the Property **`type`**
+(Multi-select) carries their kind:
 
-- `US` — a business user story (the business backlog, see `docs/agents/business-backlog.md`).
-- `tâche` — a technical ticket or a spec/PRD (the technical backlog, see
-  `docs/agents/issue-tracker.md`).
+- `metier` — a business user story (the business backlog).
+- `tech` — a technical ticket (the technical backlog, `docs/agents/issue-tracker.md`). A spec is
+  not a Tâche: it is a sub-page of its story.
 
-| Canonical role    | Label in our tracker | Meaning                                              |
-| ----------------- | -------------------- | ---------------------------------------------------- |
-| `needs-triage`    | _(no label)_         | Say it in a comment; the maintainer evaluates        |
-| `needs-info`      | _(no label)_         | Ask in a comment                                     |
-| `ready-for-agent` | `tâche`              | Spec/PRD or ticket, fully specified, agent-grabbable |
-| `ready-for-human` | _(no label)_         | Say it in a comment                                  |
-| `wontfix`         | _(no label)_         | Close the issue as "not planned", with a comment     |
+| Canonical role    | In `pm`                           | Meaning                                              |
+| ----------------- | --------------------------------- | ---------------------------------------------------- |
+| `needs-triage`    | _(a Commentaire)_                 | Say it in a comment; the maintainer evaluates        |
+| `needs-info`      | _(a Commentaire)_                 | Ask in a comment                                     |
+| `ready-for-agent` | `type=tech`, Status `To do`       | Ticket fully specified, agent-grabbable              |
+| `ready-for-human` | _(a Commentaire)_                 | Say it in a comment                                  |
+| `wontfix`         | a Commentaire, then the Corbeille | `pdo ext pm tache delete <ID>` after saying why      |
 
-When a skill mentions a role (e.g. "apply the `ready-for-agent` triage label"), use the label in
-this table. A role with no label is never created as a label: write it in a comment instead.
+When a skill says « apply the `ready-for-agent` label », create the Tâche with `--set "type=tech"`
+and `--status "To do"`. A role with no mapping is never created as a Property option: write it in
+a comment instead.

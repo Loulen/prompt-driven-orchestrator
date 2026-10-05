@@ -510,13 +510,27 @@ declaration order, whatever its `when`) and hands `<path>` to it as `context.pat
 - A link toward an extension that is not installed, whose interface is not loaded, or that has no
   page at that location shows an error toast and opens nothing.
 
+### Toward a Run
+
+`#/runs/<run_id>` is the core's own deep link toward a Run. Following it closes the open
+extension page (and any artifact viewer), selects the Run in the list and shows its detail, as a
+click on its row would; the link then leaves the address bar.
+
+- It works however it is followed: `CommandHost.open("#/runs/<id>")`, a page setting
+  `window.location.hash`, a markdown link whose target is `#/runs/<id>`, or the address bar on load.
+  From the Review page, the link loads the app on the Run.
+- A Run the daemon does not know shows an error toast; the selection, the open page and its deep
+  link stay as they were.
+- Only the written form is recognised as a link: plain text `#/runs/<id>` in a markdown render is
+  left as text.
+
 ## Commands
 
 ```ts
 interface CommandContext extends LocationContext { extension: ExtensionRef; contribution: string }
 interface CommandHost {
   notify(message: string, kind?: "info" | "error"): void; // a toast
-  open(link: string): void;                               // follow a deep link
+  open(link: string): void;                               // follow a deep link: #/ext/… or #/runs/<id>
 }
 type CommandFunction = (context: CommandContext, host: CommandHost) => unknown;
 ```

@@ -19,6 +19,10 @@ this file and the skill disagree, **this file wins**; the skill describes the fu
 - **Branch shape** stays the skill's: `integration/*`, `feature/*`, `hotfix/*`, off the right base.
 - **Sanity gate before `main` moves:** `make check` (cargo check + frontend typecheck) must be
   green. `make test` and HP are on request only.
+- **A merge closes no Tâche by itself** (tickets live in `pm`, Backlog `CORE`, no `Closes #N`):
+  the node that validates a ticket sets it to `Done` once its merge is **on the remote**; the story
+  goes to `Done` at the `integration/*` → `main` merge. Branches are named after the story's ID
+  (`integration/CORE-8-<slug>`) and the ticket's ID (`feature/CORE-9-<slug>`).
 - **Version discipline (semver).** On a merge, reconcile `Cargo.toml` / `Cargo.lock` /
   `CHANGELOG.md`: a `feat` is a minor bump, a `fix` a patch, a breaking change (`!`) a major. The
   CHANGELOG records only breaking changes + notes that don't follow from a commit title.

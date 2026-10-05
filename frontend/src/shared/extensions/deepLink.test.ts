@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDeepLink, isDeepLink, parseDeepLink } from "./deepLink";
+import { formatDeepLink, formatRunLink, isDeepLink, isRunLink, parseDeepLink, parseRunLink } from "./deepLink";
 
 describe("a deep link", () => {
   it("names the extension, its page location and the path", () => {
@@ -33,5 +33,25 @@ describe("a deep link", () => {
     expect(isDeepLink(link)).toBe(true);
     expect(isDeepLink("/#/ext/pm/topbar/end")).toBe(true);
     expect(isDeepLink("https://example.com/#/ext/pm")).toBe(false);
+  });
+});
+
+describe("a link toward a Run", () => {
+  it("names the Run, however it is written", () => {
+    expect(parseRunLink("#/runs/20261005-171614-2fb5c1b")).toBe("20261005-171614-2fb5c1b");
+    expect(parseRunLink("http://localhost:5272/#/runs/r1/")).toBe("r1");
+    expect(parseRunLink(formatRunLink("a b/c"))).toBeNull();
+    expect(parseRunLink(formatRunLink("a b"))).toBe("a b");
+    expect(parseRunLink("#/runs/")).toBeNull();
+    expect(parseRunLink("#/runs/r1/review")).toBeNull();
+    expect(parseRunLink("#/ext/pm/topbar/end")).toBeNull();
+  });
+
+  it("is a link of its own, not an extension's", () => {
+    expect(isRunLink("#/runs/r1")).toBe(true);
+    expect(isRunLink("/#/runs/r1")).toBe(true);
+    expect(isRunLink("#/ext/pm")).toBe(false);
+    expect(isDeepLink("#/runs/r1")).toBe(false);
+    expect(parseDeepLink("#/runs/r1")).toBeNull();
   });
 });

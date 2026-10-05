@@ -5,8 +5,15 @@
 import type { ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { CARD_HEIGHT, CARD_WIDTH } from "../../lib/nodePlacement";
-import { reframeOnPaneResize } from "../../lib/paneResizeViewport";
+import { paneResizeAction, reframeOnPaneResize } from "../../lib/paneResizeViewport";
 import { useEditStore } from "./editStore";
+
+/**
+ * #825 (FP iteration 2): never magnify. A two-marker pipeline fit-views to zoom 2
+ * by default (a card 360px wide, barely two across the canvas). Cards at the size
+ * they were drawn; a small graph sits in the middle.
+ */
+export const CANVAS_FIT_VIEW_OPTIONS = { maxZoom: 1 } as const;
 
 export function usePaneToggleReframe(
   reactFlowRef: React.RefObject<HTMLDivElement | null>,
@@ -22,6 +29,9 @@ export function usePaneToggleReframe(
   // width change it causes. A drag of the handle or a window resize never arms
   // it, so they keep React Flow's own top-left anchoring. The flag disarms
   // itself if no resize follows, so a later unrelated resize cannot consume it.
+  // #43 (FP iteration 1): a width change right after the canvas mounts (a run
+  // opened with no tab open, its pane unfolding in the same commit) fits the
+  // view again — React Flow's initial fit may have measured the full width.
   const lastCanvasWidthRef = useRef<number | null>(null);
   const paneToggledRef = useRef(false);
   const prevRightCollapsedRef = useRef(rightPaneCollapsed);
@@ -38,13 +48,19 @@ export function usePaneToggleReframe(
     const wrapper = reactFlowRef.current;
     if (!hasCanvas || !wrapper || typeof ResizeObserver === "undefined") return;
     lastCanvasWidthRef.current = null;
+    const mountedAt = performance.now();
     const observer = new ResizeObserver(() => {
       const { width, height } = wrapper.getBoundingClientRect();
       const prevWidth = lastCanvasWidthRef.current;
       lastCanvasWidthRef.current = width;
-      if (!paneToggledRef.current || prevWidth == null || prevWidth <= 0 || width <= 0) return;
-      if (width === prevWidth) return;
+      const msSinceMount = performance.now() - mountedAt;
+      const action = paneResizeAction({ prevWidth, width, msSinceMount, paneToggled: paneToggledRef.current });
+      if (action == null || prevWidth == null) return;
       paneToggledRef.current = false;
+      if (action === "fit") {
+        void reactFlow.fitView(CANVAS_FIT_VIEW_OPTIONS);
+        return;
+      }
       const selection = useEditStore.getState().selection;
       const node = selection.kind === "node" && selection.id ? reactFlow.getInternalNode(selection.id) : undefined;
       const selected = node

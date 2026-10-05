@@ -36,7 +36,7 @@ import { useCanvasContextMenu } from "../store/useCanvasContextMenu";
 import { useCanvasLint } from "../store/useCanvasLint";
 import { useCanvasPlacement } from "../store/useCanvasPlacement";
 import { useCanvasReveal } from "../store/useCanvasReveal";
-import { usePaneToggleReframe } from "../store/usePaneToggleReframe";
+import { CANVAS_FIT_VIEW_OPTIONS, usePaneToggleReframe } from "../store/usePaneToggleReframe";
 import { useCanvasRunActions } from "../store/useCanvasRunActions";
 import { useCanvasWiring } from "../store/useCanvasWiring";
 import { EditNode } from "./EditNode";
@@ -321,10 +321,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           connectionLineComponent={DragConnectionLine}
           deleteKeyCode={null}
           fitView
-          // #825 (FP iteration 2): never magnify. A two-marker pipeline fit-views to
-          // zoom 2 by default (a card 360px wide, barely two across the canvas).
-          // Cards at the size they were drawn; a small graph sits in the middle.
-          fitViewOptions={{ maxZoom: 1 }}
+          // #825: never magnify (see CANVAS_FIT_VIEW_OPTIONS).
+          fitViewOptions={CANVAS_FIT_VIEW_OPTIONS}
           proOptions={{ hideAttribution: true }}
           className="bg-bg-1"
           // #315: drag + connect are off on an archived run; click-to-select stays on.

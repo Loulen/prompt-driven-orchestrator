@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.15.0 — Tour Overview, sur un vrai Run de nodes script (#46)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Aucun changement daemon.
+Portage core #911 (spec #910).
+
+- Nouveau tour *Overview*, premier dans la Modale de bienvenue et dans Settings › Tutorials ;
+  le full tour enchaîne *Overview* → *First run* → *First pipeline*. Il marche sans harnais.
+- La carte d'intro prépare le dépôt d'entraînement, la pipeline `tutorial-overview` (mise en
+  page d'`implement-review`, nodes `script`), un Trigger d'exemple dont le guard refuse
+  toujours, et un Run attendu jusqu'à `completed` ; rejouer réutilise le dernier Run terminé non
+  archivé. *Start* reste inactif jusque-là.
+- Visite en 17 étapes, dont 7 gestes qui n'avancent que sur l'état observé : Run, implementer
+  (outputs, terminal figé), edge reviewer → End, Start, archivage réel (skippable), Triggers,
+  Pipelines. Settings et Stats sont éclairés sans être ouverts. Le canvas est en lecture seule
+  pendant le tour.
+- Le Trigger d'exemple est supprimé à toute sortie du tour (fin, abandon, enchaînement du full
+  tour) ; un échec de rangement est dit sur la carte affichée. La pipeline et le Run restent.
+- HP-03 commence désormais par *Overview*.
+
 ## 2.14.0 — Pipeline info seule surface des métadonnées, panneau de droite replié (#43)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Portage core #948 et #949

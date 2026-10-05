@@ -24,6 +24,7 @@ import { BASE_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
 import { terminalTheme } from "../model/terminalTheme";
 import {
   sendResize,
+  TERMINAL_INSET_PX,
   toTerminalNewlines,
   type FrozenPane,
   type PaneMode,
@@ -122,6 +123,11 @@ export function useXtermSession(
     term.loadAddon(webLinksAddon);
 
     term.open(container);
+    // #911: the grid started flush against the panel's edge, and the first
+    // column read clipped (`mplementer:`). The inset goes on xterm's own element,
+    // whose padding FitAddon subtracts — padding the container instead would be
+    // counted as grid width and push the last column out.
+    if (term.element) term.element.style.paddingLeft = `${TERMINAL_INSET_PX}px`;
     fitAddon.fit();
 
     terminalRef.current = term;

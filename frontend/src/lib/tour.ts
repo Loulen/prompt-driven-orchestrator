@@ -4,6 +4,7 @@ import type {
   TourObservation,
   TourStep,
 } from "./tourDef";
+import type { TourAside } from "./tourPanels";
 /**
  * The tour machine (#823, spec #821, ADR-0071) — pure, DOM-free.
  *
@@ -38,6 +39,23 @@ export function stepNote(step: TourStep, o: TourObservation): string | null {
 /** Is the step's lit area a zone to roam in **right now** (#825)? */
 export function stepSoft(step: TourStep, o: TourObservation): boolean {
   return typeof step.soft === "function" ? step.soft(o) : step.soft === true;
+}
+
+/** The step's read-only areas right now (#911), or none. */
+export function stepReadOnly(step: TourStep, o: TourObservation): string[] {
+  return step.readOnly?.(o) ?? [];
+}
+
+/**
+ * The step's side bubbles right now (#911): only once its condition holds.
+ * Before the gesture they would point into a panel that is not open yet — or,
+ * worse, into the one it replaces. An acknowledge step (no `done`) is satisfied
+ * from the start.
+ */
+export function stepAsides(step: TourStep, o: TourObservation): TourAside[] {
+  if (!step.asides) return [];
+  if (step.done && !step.done(o)) return [];
+  return step.asides(o);
 }
 
 /** Resolve the two end-card fields, which a tour may make depend on what it saw. */
@@ -91,6 +109,8 @@ export interface TourRun {
    * — so the recap reads this rather than a live observation.
    */
   observedApp: TourAppState;
+  /** The tour's {@link TourDef.teardown} has been played (#911). Once only. */
+  tidiedUp: boolean;
 }
 
 /** A missing target stops the tour after this long, unless the step says otherwise. */
@@ -136,6 +156,7 @@ function enterStep(tour: TourDef, index: number, o: TourObservation): TourRun {
     satisfiedOnEntry: step ? isStepDone(step, o) : false,
     failure: null,
     observedApp: o.app,
+    tidiedUp: false,
   };
 }
 
@@ -153,6 +174,7 @@ export function startTour(tour: TourDef, o: TourObservation): TourRun {
     satisfiedOnEntry: false,
     failure: null,
     observedApp: o.app,
+    tidiedUp: false,
   };
 }
 
@@ -263,4 +285,39 @@ export function observeTour(tour: TourDef, run: TourRun, o: TourObservation, now
     };
   }
   return run.missingSince === missingSince ? run : { ...run, missingSince };
+}
+
+/**
+ * How a tour is being left (#911). `finish` covers a Full tour chaining on to its
+ * next leg: the end card was reached either way. `stopped` is the clean stop — a
+ * target that never appeared, a refusal — and `quit` is ✕ or Escape, which may
+ * happen in any phase, the intro card included.
+ */
+export type TourExit = "finish" | "quit" | "stopped";
+
+/** The exit a run is at, or `null` while the tour is still going. */
+export function exitOf(run: TourRun): TourExit | null {
+  if (run.phase === "finished") return "finish";
+  if (run.phase === "failed") return "stopped";
+  return null;
+}
+
+/**
+ * Is it time to play the tour's teardown (#911)? Once per tour, and only at an
+ * exit: reaching the end card or the stop card (the teardown runs *while* that
+ * card is showing, so a failure can be said on it), or quitting from anywhere.
+ * Never while the tour is still under way — the example Trigger is precisely
+ * what the Triggers step points at.
+ *
+ * The machine decides *when*; the effect lives in the hook.
+ */
+export function shouldTidyUp(tour: TourDef, run: TourRun, exit: TourExit | null = exitOf(run)): boolean {
+  if (!tour.teardown || tour.teardown.length === 0) return false;
+  if (run.tidiedUp) return false;
+  return exit !== null;
+}
+
+/** Record that the teardown was played, so no second exit plays it again. */
+export function markTidiedUp(run: TourRun): TourRun {
+  return run.tidiedUp ? run : { ...run, tidiedUp: true };
 }

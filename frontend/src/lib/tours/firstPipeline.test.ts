@@ -53,6 +53,7 @@ class FakeApp {
     dirty: false,
     libraryPipelineIds: [],
     runCount: 0,
+    runs: [],
     latestRun: null,
     activeRunId: null,
   };

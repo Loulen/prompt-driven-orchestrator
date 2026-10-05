@@ -31,14 +31,27 @@ import {
 } from "../lib/tour";
 import type { TourAppState, TourChecklistItem, TourDef } from "../lib/tourDef";
 import { markTourDone } from "../lib/tourMemory";
-import { HOLE_PADDING, MENU_CONTAINERS, rectOf, sameRect, union, visible } from "./tour/tourGeometry";
+import { installReadOnlyGuard, type ReadOnlyScope } from "../lib/tourReadOnly";
+import {
+  HOLE_PADDING,
+  MENU_CONTAINERS,
+  query,
+  rectOf,
+  sameAsides,
+  sameRect,
+  sameRects,
+  union,
+  visible,
+} from "./tour/tourGeometry";
 import {
   observation,
   readTourAppState,
   type TourRunDetailInput,
   type TourRunsInput,
 } from "./tour/tourObservation";
-import type { TourController, TourPrepView, TourRect, TourView } from "./tour/tourView";
+import { resolvePanels } from "./tour/tourPanels";
+import type { TourAsideView, TourController, TourPrepView, TourRect, TourView } from "./tour/tourView";
+import { useTourTidyUp } from "./tour/useTourTidyUp";
 import { useTourPreparation } from "./useTourPreparation";
 
 /** How often the machine is pumped. Fast enough to feel immediate, cheap enough
@@ -46,6 +59,8 @@ import { useTourPreparation } from "./useTourPreparation";
 const TICK_MS = 100;
 
 const NO_PREP: TourPrepView = { items: [], ready: true, failure: null };
+const NO_RECTS: TourRect[] = [];
+const NO_ASIDES: TourAsideView[] = [];
 
 export function useTour(
   runs: TourRunsInput,
@@ -56,6 +71,8 @@ export function useTour(
   const [hole, setHole] = useState<TourRect | null>(null);
   const [zone, setZone] = useState<TourRect | null>(null);
   const [wideZone, setWideZone] = useState(false);
+  const [lit, setLit] = useState<TourRect[]>(NO_RECTS);
+  const [asides, setAsides] = useState<TourAsideView[]>(NO_ASIDES);
   const [ready, setReady] = useState(false);
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
   const [body, setBody] = useState("");
@@ -71,8 +88,11 @@ export function useTour(
   // (`react-hooks/refs`) — and declared BEFORE the pump effect below so a commit
   // refreshes them first.
   const runRef = useRef<TourRun | null>(null);
+  const tourRef = useRef<TourDef | null>(null);
   const runsRef = useRef<TourRunsInput>(runs);
   const runDetailRef = useRef<TourRunDetailInput | null>(runDetail);
+  /** What the read-only guard protects right now (#911), refreshed by the pump. */
+  const guardRef = useRef<ReadOnlyScope | null>(null);
   /** The last aim scrolled to — step and selectors both (see the pump's scroll block). */
   const scrolledFor = useRef<string | null>(null);
   // What the app looked like when this tour started — every observation carries
@@ -81,6 +101,11 @@ export function useTour(
   useEffect(() => {
     runRef.current = run;
   }, [run]);
+  useEffect(() => {
+    tourRef.current = tour;
+  }, [tour]);
+  // The teardown (#911) — see `tour/useTourTidyUp.ts`.
+  const { commit, leave, tidyUpFailure, prepFlightRef, prepAbortRef } = useTourTidyUp(tourRef, runRef, setRun);
   useEffect(() => {
     runsRef.current = runs;
   }, [runs]);
@@ -98,7 +123,20 @@ export function useTour(
     [],
   );
 
+  /** Clear what the pump drew: the hole, the zone, the lit panels, the bubbles. */
+  const clearAim = useCallback(() => {
+    setHole(null);
+    setZone(null);
+    setWideZone(false);
+    setLit(NO_RECTS);
+    setAsides(NO_ASIDES);
+    guardRef.current = null;
+    setChecklist([]);
+  }, []);
+
   const start = useCallback((next: TourDef, rest: TourDef[] = []) => {
+    // Starting over a tour that is still up (Settings › Tutorials) is leaving it.
+    leave();
     // A tour starts on a clear stage (#825). It points at the app from above
     // every modal, so a transient overlay left open — the `out` artifact the
     // previous leg of a Full tour just told the reader to open — would dim into
@@ -110,12 +148,11 @@ export function useTour(
     baselineRef.current = baseline;
     const first = startTour(next, observation(runsRef.current, runDetailRef.current, baseline));
     scrolledFor.current = null;
+    tourRef.current = next;
+    runRef.current = first;
     setTour(next);
     setRun(first);
-    setHole(null);
-    setZone(null);
-    setWideZone(false);
-    setChecklist([]);
+    clearAim();
     setBody("");
     setNote(null);
     // Bumped rather than reset: the attempt counter is what re-arms the
@@ -125,21 +162,21 @@ export function useTour(
     setPrepAttempt((n) => n + 1);
     setPrep(next.intro ? null : NO_PREP);
     setChain(rest);
-  }, []);
+  }, [leave, clearAim]);
 
   const quit = useCallback(() => {
+    leave();
+    tourRef.current = null;
+    runRef.current = null;
     setTour(null);
     setRun(null);
-    setHole(null);
-    setZone(null);
-    setWideZone(false);
-    setChecklist([]);
+    clearAim();
     setBody("");
     setNote(null);
     setPrep(null);
     setChain([]);
     baselineRef.current = null;
-  }, []);
+  }, [leave, clearAim]);
 
   /**
    * The end card's primary. Marks this tour done, then either chains into the next
@@ -169,19 +206,19 @@ export function useTour(
 
   const next = useCallback(() => {
     if (!tour || !run) return;
-    setRun(confirmStep(tour, run, observe()));
-  }, [tour, run, observe]);
+    commit(tour, confirmStep(tour, run, observe()));
+  }, [tour, run, observe, commit]);
 
   const skip = useCallback(() => {
     if (!tour || !run) return;
-    setRun(skipStep(tour, run, observe()));
-  }, [tour, run, observe]);
+    commit(tour, skipStep(tour, run, observe()));
+  }, [tour, run, observe, commit]);
 
   const begin = useCallback(() => {
     if (!tour || !run) return;
     scrolledFor.current = null;
-    setRun(beginSteps(tour, run, observe()));
-  }, [tour, run, observe]);
+    commit(tour, beginSteps(tour, run, observe()));
+  }, [tour, run, observe, commit]);
 
   const retryPrep = useCallback(() => {
     setPrep(null);
@@ -190,7 +227,7 @@ export function useTour(
 
   // Preparation (#824) — see `useTourPreparation.ts`.
   const intro = tour?.intro ?? null;
-  useTourPreparation(intro, prepAttempt, setPrep);
+  useTourPreparation(intro, prepAttempt, setPrep, prepFlightRef, prepAbortRef);
 
   // One pump for everything: the machine, the hole, and the Next button's state.
   // Splitting them would mean three passes over the same `querySelector` results.
@@ -200,31 +237,17 @@ export function useTour(
       const current = runRef.current;
       if (!current || current.phase !== "running") return;
       const obs = observe();
-      const advanced = observeTour(tour, current, obs, Date.now());
-      if (advanced !== current) {
-        runRef.current = advanced;
-        setRun(advanced);
-      }
-      const active = advanced;
+      const observed = observeTour(tour, current, obs, Date.now());
+      if (observed !== current) commit(tour, observed);
+      const active = runRef.current ?? observed;
       const step = currentStep(tour, active);
       if (!step || active.phase !== "running") {
-        setHole(null);
-        setZone(null);
-        setWideZone(false);
-        setChecklist([]);
+        clearAim();
         return;
       }
 
       const selectors = step.target(obs);
-      const elements = selectors
-        .map((selector) => {
-          try {
-            return document.querySelector(selector);
-          } catch {
-            return null;
-          }
-        })
-        .filter(visible);
+      const elements = selectors.map(query).filter(visible);
 
       const nextHole = union(elements.map(rectOf), HOLE_PADDING);
       setHole((prev) => (sameRect(prev, nextHole) ? prev : nextHole));
@@ -244,6 +267,12 @@ export function useTour(
       const nextZone = menu ? union([rectOf(menu)], HOLE_PADDING) : wide ? nextHole : null;
       setZone((prev) => (sameRect(prev, nextZone) ? prev : nextZone));
       setWideZone(wide);
+
+      // The panels its gesture opened (#911): lit read-only, with side bubbles.
+      const panels = resolvePanels(step, obs, elements);
+      setLit((prev) => (sameRects(prev, panels.lit) ? prev : panels.lit));
+      guardRef.current = panels.guard;
+      setAsides((prev) => (sameAsides(prev, panels.asides) ? prev : panels.asides));
 
       setReady(canAdvance(tour, active, obs));
       setAwaitingConfirm(needsConfirm(tour, active, obs));
@@ -310,7 +339,16 @@ export function useTour(
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("scroll", onViewportChange, true);
     };
-  }, [tour, observe]);
+  }, [tour, observe, commit, clearAim]);
+
+  // The read-only guard (#911): one set of capture listeners per tour, reading
+  // the scope the pump keeps current. Only a *running* step guards anything —
+  // an end card that inherited the last step's scope would keep swallowing the
+  // keystrokes of a field the reader has every right to type in again.
+  useEffect(() => {
+    if (!tour) return;
+    return installReadOnlyGuard(() => (runRef.current?.phase === "running" ? guardRef.current : null));
+  }, [tour]);
 
   const view = useMemo<TourView | null>(() => {
     if (!tour || !run) return null;
@@ -323,6 +361,8 @@ export function useTour(
       hole,
       zone,
       wideZone,
+      lit,
+      asides,
       ready,
       awaitingConfirm,
       body,
@@ -330,8 +370,9 @@ export function useTour(
       checklist,
       prep: run.phase === "intro" ? (prep ?? { items: [], ready: false, failure: null }) : null,
       nextTour: chain[0] ?? null,
+      tidyUpFailure,
     };
-  }, [tour, run, hole, zone, wideZone, ready, awaitingConfirm, body, note, checklist, prep, chain]);
+  }, [tour, run, hole, zone, wideZone, lit, asides, ready, awaitingConfirm, body, note, checklist, prep, chain, tidyUpFailure]);
 
   return { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep };
 }

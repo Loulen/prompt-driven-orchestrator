@@ -38,6 +38,9 @@ export const REAPED_STATUSES = new Set(["completed", "failed", "stopped", "stale
 // its `overflow: hidden` div and the last 1–2 columns are clipped at the right
 // edge. Resetting both on the container, which exists before `term.open()`,
 // makes the two measures agree. Neither the grid size nor FitAddon is at fault.
+/** Left breathing room for the grid, in px (#911). */
+export const TERMINAL_INSET_PX = 4;
+
 export const TERMINAL_TYPOGRAPHY_RESET = {
   letterSpacing: "normal",
   fontFeatureSettings: "normal",

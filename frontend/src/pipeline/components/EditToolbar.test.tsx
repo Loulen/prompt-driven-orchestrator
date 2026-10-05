@@ -263,6 +263,40 @@ describe("EditToolbar", () => {
       expect(buttons).toHaveLength(8); // 7 core + assistant
       for (const b of buttons) expect(b).toHaveAccessibleName(/\S/);
     });
+
+    // #938 (story PDO-3): `(i)` exposes its pressed state like the glyph does,
+    // and the two render exactly what the host lights — one at a time.
+    it("exposes aria-pressed on Pipeline info", () => {
+      const onToggleInfo = vi.fn();
+      const { unmount } = renderToolbar({ onToggleInfo });
+      const info = screen.getByTestId("toolbar-info");
+      expect(info).toHaveAccessibleName("Pipeline info");
+      expect(info).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(info);
+      expect(onToggleInfo).toHaveBeenCalledTimes(1);
+      unmount();
+      renderToolbar({ onToggleInfo, infoOpen: true });
+      expect(screen.getByTestId("toolbar-info")).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it.each([
+      [{ assistantActive: true, infoOpen: false }, "true", "false"],
+      [{ assistantActive: false, infoOpen: true }, "false", "true"],
+      [{ assistantActive: false, infoOpen: false }, "false", "false"],
+    ])("lights only the button the host marks active (%o)", (state, assistant, info) => {
+      renderToolbar({
+        assistantAvailable: true,
+        onOpenAssistant: vi.fn(),
+        onToggleInfo: vi.fn(),
+        ...state,
+      });
+      const bot = screen.getByTestId("toolbar-assistant");
+      const i = screen.getByTestId("toolbar-info");
+      expect(bot).toHaveAttribute("aria-pressed", assistant);
+      expect(i).toHaveAttribute("aria-pressed", info);
+      expect(bot.className.includes("bg-acc text-bg-0")).toBe(assistant === "true");
+      expect(i.className.includes("bg-acc text-bg-0")).toBe(info === "true");
+    });
   });
 });
 

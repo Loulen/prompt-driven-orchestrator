@@ -22,10 +22,12 @@ interface Props {
   libraryEntries: LibraryEntry[];
   onLibraryDelete: (name: string) => void;
   getDropPosition?: () => { x: number; y: number };
+  // Lights `(i)` (and its `aria-pressed`). #938: on a template canvas the host
+  // passes "open on a tab other than Assistant", never with `assistantActive`.
   infoOpen?: boolean;
   onToggleInfo?: () => void;
-  // #302 / ADR-0048: the "agent" glyph beside `(i)`. Opens the Pipeline info
-  // panel focused on the Assistant tab (the library authoring copilot). Only
+  // #302 / ADR-0048: the "agent" glyph beside `(i)`. Toggles the Pipeline info
+  // panel on the Assistant tab (the library authoring copilot). Only
   // wired for a library *template* canvas (`assistantAvailable`) — on a run
   // canvas the same access path leads to the Manager tab instead.
   assistantAvailable?: boolean;
@@ -284,8 +286,9 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
           {!readOnly && !reviewHref && <span className="mx-0.5 h-4 w-px bg-line" />}
 
           {/* #302 / ADR-0048: the "agent" glyph, immediately left of `(i)`, both
-              opening the same Pipeline info panel — the Bot jumps straight to the
-              Assistant tab. Grouped with `(i)`, so no separator between them. */}
+              driving the same Pipeline info panel — the Bot toggles the Assistant
+              tab. Grouped with `(i)`, so no separator between them. #938: the host
+              lights at most one of the two, from the tab actually shown. */}
           {assistantAvailable && onOpenAssistant && (
             <Tooltip content="Pipeline assistant">
               <button
@@ -308,6 +311,8 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
             <Tooltip content="Pipeline info">
               <button
                 data-testid="toolbar-info"
+                aria-label="Pipeline info"
+                aria-pressed={infoOpen ?? false}
                 onClick={onToggleInfo}
                 className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
                   infoOpen

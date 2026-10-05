@@ -3,7 +3,7 @@ import type { RunState } from "../shared/generated/RunState";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { NodeState } from "../shared/generated/NodeState";
 import type { OpenPipeline } from "../pipeline/store/editState";
-import type { TabId } from "../pipeline/components/PipelineInfoPanel";
+import type { TabId } from "../lib/infoPanelReconcile";
 import type { SettingsPosition } from "../settings/components/SettingsSurface";
 import type { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import NodeDetailPanel from "../run/components/NodeDetailPanel";
@@ -38,7 +38,8 @@ export interface RightPaneProps {
   isArchived: boolean;
   isActiveRunArchived: boolean;
   assistantId: string | null;
-  infoPanelInitialTab: TabId | undefined;
+  infoPanelTab: TabId;
+  onInfoPanelTabChange: (tab: TabId) => void;
   infoPanelScrollToLine: number | undefined;
   onCloseInfo: () => void;
   libraryEntries: LibraryEntry[];
@@ -67,7 +68,8 @@ export default function RightPane({
   isArchived,
   isActiveRunArchived,
   assistantId,
-  infoPanelInitialTab,
+  infoPanelTab,
+  onInfoPanelTabChange,
   infoPanelScrollToLine,
   onCloseInfo: handleCloseInfo,
   libraryEntries,
@@ -193,11 +195,11 @@ export default function RightPane({
           />
         ) : paneOwner === "info" ? (
           <PipelineInfoPanel
-            key={infoPanelInitialTab ?? "default"}
             run={isEditingRun ? selectedRun : null}
             pipeline={editTab?.pipeline ?? null}
             onClose={handleCloseInfo}
-            initialTab={infoPanelInitialTab}
+            tab={infoPanelTab}
+            onTabChange={onInfoPanelTabChange}
             scrollToLine={infoPanelScrollToLine}
             assistantId={assistantId}
             onRefreshRun={refreshRun}

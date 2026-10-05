@@ -342,6 +342,14 @@ describe("EditNode rim drag-source (#844)", () => {
     expect(Number(top.style.zIndex)).toBeGreaterThan(1);
   });
 
+  it("draws a thin 4.5px rim on all four sides, in canvas space (#936)", () => {
+    render(<EditNode {...workProps([{ name: "out", side: "right" }])} />, { wrapper: Wrapper });
+    expect((screen.getByTestId("rim-source-top") as HTMLElement).style.height).toBe("4.5px");
+    expect((screen.getByTestId("rim-source-bottom") as HTMLElement).style.height).toBe("4.5px");
+    expect((screen.getByTestId("rim-source-left") as HTMLElement).style.width).toBe("4.5px");
+    expect((screen.getByTestId("rim-source-right") as HTMLElement).style.width).toBe("4.5px");
+  });
+
   it("grows no rim on a node that declares no output — it starts no wire", () => {
     render(<EditNode {...workProps([])} />, { wrapper: Wrapper });
     expect(screen.queryByTestId("rim-source-top")).toBeNull();

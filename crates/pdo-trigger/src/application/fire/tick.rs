@@ -81,6 +81,14 @@ impl Triggers {
                 continue;
             }
 
+            // API 0.8: a suspended Trigger spends its slot without firing, and
+            // the history says why. It fires again at its next slot once lifted.
+            if let Some(suspension) = self.suspension_of(&trigger) {
+                self.skip_slot(&trigger, now, suspended(suspension.reason))
+                    .await;
+                continue;
+            }
+
             // The fire is the Trigger's own gesture: its Acteur is the Trigger.
             let actor = Actor::Trigger {
                 trigger_id: trigger.id.clone(),
@@ -109,6 +117,17 @@ impl Triggers {
     /// forward, as for a skip, so the next tick does not ask again) and the
     /// refusal is recorded in the fire history, where the operator looks.
     async fn refused(&self, trigger: &Trigger, now: chrono::DateTime<chrono::Utc>, reason: String) {
+        self.skip_slot(trigger, now, cron_error(reason)).await;
+    }
+
+    /// Spend the slot of `trigger` (its schedule moves forward, as for a skip)
+    /// and record `record` in its fire history.
+    async fn skip_slot(
+        &self,
+        trigger: &Trigger,
+        now: chrono::DateTime<chrono::Utc>,
+        record: FireRecord,
+    ) {
         let next = crate::domain::cron_schedule::CronSchedule::parse(&trigger.cron)
             .ok()
             .and_then(|s| recompute_next_fire(now, Transition::CronTick(&s)).flatten());
@@ -118,9 +137,20 @@ impl Triggers {
                 trigger.id
             );
         }
-        self.record_fire(&trigger.id, &cron_error(reason)).await;
+        self.record_fire(&trigger.id, &record).await;
     }
 }
+
+/// The `skipped-suspended` outcome of a cron slot a suspended Trigger spent.
+fn suspended(reason: String) -> FireRecord {
+    FireRecord {
+        outcome: SKIPPED_SUSPENDED.to_string(),
+        ..cron_error(reason)
+    }
+}
+
+/// The outcome a suspended Trigger records for each slot it does not fire.
+pub const SKIPPED_SUSPENDED: &str = "skipped-suspended";
 
 /// An `error` outcome of a cron evaluation.
 fn cron_error(reason: String) -> FireRecord {

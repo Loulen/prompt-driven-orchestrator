@@ -148,6 +148,7 @@ impl DaemonHandle {
                 skills: Vec::new(),
                 auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
+                last_editor: None,
             })
             .await
             .expect("seeding a legacy trigger row must succeed");

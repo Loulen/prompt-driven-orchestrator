@@ -51,6 +51,10 @@ pub struct RunListEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub triggered_by: Option<String>,
+    /// Who created the Run (API 0.8), as `RunState::created_by`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub created_by: Option<pdo_kernel::Actor>,
     /// Provenance: the parent Run + node whose session created this Run
     /// (ADR-0064) — the key the "orchestrated" badge and the "root runs only"
     /// filter read. `None` on a root run. Mechanical: never caller-declared.
@@ -122,6 +126,7 @@ impl Runs {
                     awaiting_reason_code: run_state.awaiting_reason_code,
                     name: run_state.name,
                     triggered_by: run_state.triggered_by,
+                    created_by: run_state.created_by,
                     parent_run_id: run_state.parent_run_id,
                     parent_node_id: run_state.parent_node_id,
                     effective_repo,

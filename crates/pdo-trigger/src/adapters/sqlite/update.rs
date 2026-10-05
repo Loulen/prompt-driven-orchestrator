@@ -76,6 +76,9 @@ pub async fn update(
     if edit.enabled.is_some() {
         sets.push("enabled = ?");
     }
+    if edit.last_editor.is_some() {
+        sets.push("last_editor = ?");
+    }
 
     let sql = format!("UPDATE triggers SET {} WHERE id = ?", sets.join(", "));
     let mut query = sqlx::query(&sql);
@@ -139,6 +142,9 @@ pub async fn update(
     }
     if let Some(v) = &edit.enabled {
         query = query.bind(if *v { 1 } else { 0 });
+    }
+    if let Some(v) = &edit.last_editor {
+        query = query.bind(super::stored_actor(Some(v)));
     }
     query = query.bind(trigger_id);
     query.execute(db).await?;

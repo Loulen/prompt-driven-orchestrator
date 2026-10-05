@@ -24,6 +24,9 @@ default, and with no extension the daemon behaves as if none existed.
 | `ui()` | on every `GET /ext` | none |
 | `cli()` / `run_cli(invocation)` | `pdo ext <id> …` | no command line |
 | `skills()` | once, before `start` | none |
+| `node_env(launch)` (0.8) | at every launch of a Node, agent or script, and at an agent's resume; the first registered wins a name | none |
+| `node_preamble(launch)` (0.8) | at every launch of an agent; texts follow in registration order | none |
+| `trigger_suspension(trigger)` (0.8) | at every read of a Trigger and every due tick; the first `Some` wins, a panic suspends nothing | not suspended |
 
 ## The Manifest
 
@@ -169,6 +172,43 @@ GET /resources
 The same list comes from `Host::catalogue()` inside the daemon, and `core_resources()` /
 `catalogue(manifests)` build it without a daemon. An extension of rights reads it to list what
 rights can be set on, without knowing the other extensions.
+
+## The launch of a Node (0.8)
+
+`node_env` and `node_preamble` receive a `NodeLaunch`: `run_id`, `node_id`, `iter`, `kind`
+(`agent` or `script`), `created_by` (the Actor of `run` × `create`: the caller of `POST /runs`,
+or `{"kind": "trigger", …}` for a fired Run), `trigger` (`{id, editor}`: the Trigger that fired
+the Run and its last editor then), `repository` (the Run's primary repository) and `project`
+(the id of the Projet owning it).
+
+- **Variables** (`node_env`): exported before the Node's command on the host, passed as
+  `-e NAME=value` on the `docker exec` in a sandbox. A name the core sets is **never
+  overwritten**: dropped with a warning (`PATH`, `HOME`, `PDO_RUN_ID`, `PDO_NODE_ID`,
+  `PDO_NODE_ITER`, `PDO_DAEMON_URL`, `PDO_SBX_SESSION`, the harness's variables, a script's
+  `PDO_INPUT_*`/`PDO_OUTPUT_*`/…, the sandbox profile's env). A name that is no shell identifier
+  (`[A-Za-z_][A-Za-z0-9_]*`) is refused. Other `PDO_*` names are allowed (`PDO_TOKEN`).
+- **`CLAUDE_CONFIG_DIR`**: when a Node gets one, it is frozen on its `NodeStarted`
+  (`claude_config_dir`), and the core reads that Node's Claude Code transcripts, for its cost
+  and its liveness, under `$CLAUDE_CONFIG_DIR/projects/`.
+- **Preamble** (`node_preamble`): placed at the very top of an agent's prompt, before
+  `# PDO Runtime Preamble`, followed by a blank line. Never asked for a script.
+
+The Run carries who created it on the API: `created_by` on `GET /runs/<id>` and `GET /runs`,
+`trigger_editor` on a fired Run (`GET /runs/<id>`); a Trigger carries `last_editor`, set at its
+creation and at each `PATCH`. All three are the Actor's JSON, absent when unknown.
+
+## A suspended Trigger (0.8)
+
+`trigger_suspension` receives a `TriggerRef` (`id`, `name`, `last_editor`) and answers the
+reason, or `None`. The answer is never stored: the suspension lifts as soon as the extension
+stops giving one, and the Trigger fires again at its next slot. While suspended:
+
+- a due tick spends the slot without firing and records a fire `skipped-suspended` with the
+  reason;
+- `POST /triggers/<id>/fire` answers `409` `{"error": "trigger '<name>' is suspended: <reason>"}`;
+- `GET /triggers`, `GET /triggers/<id>`, and the answers of a create or an edit carry
+  `"suspension": {"extension": "<id>", "reason": "…"}`; the interface shows the Trigger switched
+  off with an amber « suspended » pill, the reason in its tooltip and in the Trigger's detail.
 
 ## Events
 

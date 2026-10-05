@@ -171,6 +171,8 @@ impl Triggers {
             // decides autonomy (ADR-0012 frontier).
             auto_name: req.auto_name,
             next_fire_at,
+            // API 0.8: its creator is its first editor.
+            last_editor: Some(actor.clone()),
         };
 
         let trigger = self.store.create(new).await.map_err(|e| {
@@ -192,6 +194,6 @@ impl Triggers {
         let mut trigger = trigger;
         let entity = EntityRef::new(ResourceKind::Trigger, trigger.id.clone());
         trigger.attributes = stamp(self.extensions(), actor, entity).await;
-        Ok(trigger)
+        Ok(self.with_suspension(trigger))
     }
 }

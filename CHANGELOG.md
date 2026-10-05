@@ -14,7 +14,7 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 
 `pdo-extension-api` passe en **0.8.0** : ajouts seulement, une extension 0.1 à 0.7 compile et
 tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du Backlog `CORE` de
-`pm`, US IAM-1 de `pdo-extensions` ; détail : ADR-0081, amendement CORE-3, et
+`pm`, US IAM-1 de `pdo-extensions` ; détail : ADR-0081, amendements CORE-3 et CORE-4, et
 `docs/reference/extension-api.md`.
 
 - **CORE-3, Projets d'une Opération** : une `Operation` porte `projects` (vide : hors Projet).
@@ -29,6 +29,27 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
 - `Runs::authorize`, `Review::authorize` et les use cases de session qui autorisent deviennent
   `async` (ils lisent le Projet d'un Run) ; ces API internes au workspace ne sont pas dans le
   contrat.
+- **CORE-4, Créateur du Run** : `RunStarted` fige `created_by` (l'Acteur de `run` × `create`, le Trigger
+  pour un fire) et, pour un Run déclenché, `trigger_editor` (le Dernier éditeur du Trigger). Les
+  deux sont dans `GET /runs/<id>` ; `created_by` aussi dans `GET /runs`. L'onglet Info d'un Run
+  affiche « Created by » (un Trigger par son nom). Un Trigger stocke `last_editor` (colonne ajoutée à `triggers`), mis à
+  jour à chaque création et `PATCH`, affiché dans son détail.
+- **CORE-4, lancement d'un Node** : nouveaux hooks `Extension::node_env` (variables d'un agent ou d'un
+  script, hôte et sandbox, reprise comprise ; une variable du core n'est jamais écrasée) et
+  `Extension::node_preamble` (texte en tête du préambule d'un agent). `NodeLaunch` leur donne le
+  Run, le Node, le créateur, le Trigger et son dernier éditeur, le Projet.
+- **`CLAUDE_CONFIG_DIR`** fourni par une extension : figé sur le `NodeStarted`
+  (`claude_config_dir`), le coût et la liveness du NodeRun lisent ses transcripts dessous.
+- **CORE-4, Trigger suspendu** : hook `Extension::trigger_suspension`. Un Trigger suspendu ne fire plus
+  (`skipped-suspended` dans son historique, `409` sur « Run now », qui nomme le Trigger et la raison) ; `GET /triggers` le rend avec
+  `suspension: {extension, reason}`, l'UI l'affiche interrupteur éteint, puce ambre
+  « suspended » (qui passe sous le nom quand la colonne est étroite), raison en infobulle et
+  dans le détail.
+- Contexte des extensions : `trigger/item` et `trigger/item/menu` reçoivent `last_editor` et
+  `suspension` ; `run/info` reçoit `created_by` et `trigger_editor`.
+- L'extension de test du core (le démon de démo des Feature Paths) apprend à injecter des
+  variables (`PDO_TEST_NODE_ENV`, `PUT /ext/test/launch`), un préambule
+  (`PDO_TEST_NODE_PREAMBLE`) et à suspendre un Trigger (`PUT /ext/test/suspensions`).
 - **CORE-5, lectures autorisées** : nouveau verbe `read` (`Verb::Read`). Lister et voir un Run
   (toute lecture `GET /runs/{id}…`), lister et voir un Projet, parcourir le disque
   (`GET /fs/browse`, `repository` × `read`) passent par l'Autorisation d'opération : refusée, une

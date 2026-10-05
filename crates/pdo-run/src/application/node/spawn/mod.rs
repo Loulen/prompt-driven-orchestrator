@@ -26,6 +26,8 @@ mod resolve;
 mod warnings;
 mod worktree;
 
+pub(crate) use reserve::freeze_claude_config_dir;
+
 pub struct SpawnContext<'a> {
     pub pipeline: &'a pipeline::PipelineDef,
     pub run_id: &'a str,
@@ -160,6 +162,8 @@ struct Plan {
     resolved_model: Option<String>,
     resolved_effort: Option<String>,
     session_id: Option<String>,
+    /// What the extensions add to this launch (API 0.8): variables, preamble.
+    extension: pdo_kernel::extension_host::NodeContribution,
 }
 
 /// Spawn one NodeRun (ADR-0009, layer 2): the guards before any side effect,
@@ -259,7 +263,22 @@ pub async fn spawn_node(
         .filter(|d| d.pins_session_id())
         .map(|_| uuid::Uuid::new_v4().to_string());
 
+    let extension = match &loaded {
+        Some((_, run)) => {
+            use crate::application::node::extension_launch as ext;
+            ext::contribution(
+                deps.runs,
+                run,
+                &node.id,
+                iter,
+                ext::node_kind(&node.node_type),
+            )
+            .await
+        }
+        None => Default::default(),
+    };
     let plan = Plan {
+        extension,
         role_prompt,
         foreach_context,
         run_sandboxed,

@@ -145,6 +145,10 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
         // a retry is a manual gesture — it fetches no more than any other
         // `POST /runs` does.
         source_fetch_error: None,
+        // The twin answers to whoever created the original (API 0.8): the
+        // command carries no Actor of its own.
+        created_by: run_state.created_by.clone(),
+        trigger_editor: run_state.trigger_editor.clone(),
     };
     // ADR-0064: a retried Run is created by the daemon, not from a node
     // session — it is a root even when the archived original had a parent.

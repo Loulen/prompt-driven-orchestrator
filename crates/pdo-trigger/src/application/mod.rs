@@ -9,6 +9,7 @@ pub mod fire;
 pub mod pause_triggers;
 pub mod ports;
 pub mod read;
+pub mod suspension;
 pub mod test_guard;
 pub mod triggers;
 pub mod update_trigger;

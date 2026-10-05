@@ -242,7 +242,8 @@ effect and return the unregistration.
 - **Accepts**: section.
 - **Renders**: the Info tab of a Run's panel, after its stats, before the description.
 - **Context**: `RunInfoContext` = `LocationContext` + `entity` (`{ kind: "run", id, name?,
-  attributes }`). No `form`.
+  attributes, created_by, trigger_editor }`): the Actor that created the Run and, for a fired
+  Run, the Trigger's last editor, `null` when unknown (API 0.8). No `form`.
 
 ### Decorations
 
@@ -269,7 +270,9 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 - **Accepts**: decoration.
 - **Renders**: a row of the Triggers list, on a third line of its own under the pipeline and the
   schedule, so a badge never truncates the pipeline's name; several wrap.
-- **Context**: `DecorationContext`, `entity` = `{ kind: "trigger", id, name, attributes }`.
+- **Context**: `DecorationContext`, `entity` = a `TriggerEntity` (`{ kind: "trigger", id, name,
+  pipeline, enabled, attributes, last_editor, suspension }`): its last editor and, when an
+  extension suspends it, `{ extension, reason }` (API 0.8).
 
 ### `pipeline/item`
 
@@ -358,8 +361,15 @@ The contexts they hand over, on top of `LocationContext`:
 
 ```ts
 interface EntityContext { kind: string; id: string; attributes: Attributes; name?: string | null }
+// The Actor of the extension API, as the daemon serializes it (API 0.8).
+type Actor = { kind: "local_operator" } | { kind: "agent"; run_id: string; node_id: string }
+  | { kind: "trigger"; trigger_id: string } | { kind: "identified"; namespace: string; id: string };
 interface RunEntity extends EntityContext { kind: "run"; name: string | null; pipeline: string; status: string }
-interface TriggerEntity extends EntityContext { kind: "trigger"; name: string; pipeline: string; enabled: boolean }
+interface TriggerEntity extends EntityContext {
+  kind: "trigger"; name: string; pipeline: string; enabled: boolean;
+  last_editor: Actor | null;                                  // API 0.8
+  suspension: { extension: string; reason: string } | null;   // API 0.8
+}
 interface PipelineEntity extends EntityContext { kind: "pipeline"; name: string }
 interface NodeEntity extends EntityContext { kind: "node"; name: string | null; type: string | null; status: string | null }
 interface EdgeEntity extends EntityContext { kind: "edge"; from: string; to: string }   // id: "<from>.<port>-><to>.<port>"

@@ -62,6 +62,8 @@ impl RunState {
             skills: Vec::new(),
             auto_fail: None,
             triggered_by: None,
+            created_by: None,
+            trigger_editor: None,
             parent_run_id: None,
             parent_node_id: None,
             pipeline_id: None,

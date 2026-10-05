@@ -5,6 +5,7 @@
 
 mod columns;
 mod crud;
+mod editor;
 mod fires;
 mod migrations;
 
@@ -42,5 +43,6 @@ pub(crate) fn sample(name: &str, cron: &str) -> NewTrigger {
         skills: Vec::new(),
         auto_name: true,
         next_fire_at: Some("2026-06-06T10:00:00.000Z".to_string()),
+        last_editor: None,
     }
 }

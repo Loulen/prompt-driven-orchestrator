@@ -112,6 +112,12 @@ fn request(fire: RunFromTrigger) -> CreateRunRequest {
         auto_fail: None,
         provisioning: ProvisioningRules::default(),
         source_fetch_error,
+        // API 0.8: a fired Run is created by its Trigger, and carries the
+        // Trigger's last editor, who answers for it.
+        created_by: Some(Actor::Trigger {
+            trigger_id: trigger.id.clone(),
+        }),
+        trigger_editor: trigger.last_editor.clone(),
     }
 }
 

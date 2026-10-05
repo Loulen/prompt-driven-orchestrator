@@ -43,6 +43,13 @@ pub(super) fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         last_fired_at: row.get("last_fired_at"),
         last_outcome: row.get("last_outcome"),
         attributes: Default::default(),
+        // Absence (legacy NULL), or an unreadable value, is no known editor.
+        last_editor: row
+            .try_get::<Option<String>, _>("last_editor")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        suspension: None,
     }
 }
 

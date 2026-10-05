@@ -174,7 +174,7 @@ test("renders an html artifact in a scriptless sandboxed iframe", async ({
 
   // Open the html port row.
   const portRow = page
-    .locator("button.port-row")
+    .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: /^report/ });
   await expect(portRow).toBeVisible({ timeout: 5_000 });
   await portRow.click();

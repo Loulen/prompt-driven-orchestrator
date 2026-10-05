@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 
 /** The artifact viewer's header: the port and the file shown (or the caller's
- *  own header), the iteration and file pagers, the close button. */
+ *  own header), the iteration and file pagers, the copy button, the close button. */
 export default function ArtifactHeader({
   header,
   portName,
@@ -17,6 +17,7 @@ export default function ArtifactHeader({
   fileIndex,
   total,
   setFileIndex,
+  copyButton,
   onClose,
 }: {
   header?: ReactNode;
@@ -32,6 +33,8 @@ export default function ArtifactHeader({
   fileIndex: number;
   total: number;
   setFileIndex: (index: number) => void;
+  /** #41: the « copy raw file » button, absent where nothing can be copied. */
+  copyButton?: ReactNode;
   onClose: () => void;
 }) {
   return (
@@ -107,6 +110,14 @@ export default function ArtifactHeader({
               <ChevronRight size={14} />
             </button>
           </div>
+        )}
+        {copyButton && (
+          <>
+            {(hasIterNav || isRepeated) && (
+              <span className="h-4 w-px bg-line-strong" aria-hidden="true" />
+            )}
+            {copyButton}
+          </>
         )}
         <button
           onClick={onClose}

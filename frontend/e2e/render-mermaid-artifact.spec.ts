@@ -190,7 +190,7 @@ async function openNode(page: Page) {
 
 async function openPort(page: Page, port: string) {
   const card = page
-    .locator("button.port-row")
+    .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: new RegExp(`^${port}`) });
   await expect(card).toBeVisible({ timeout: 5_000 });
   await card.click();

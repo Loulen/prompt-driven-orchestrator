@@ -93,6 +93,10 @@ mod extension_cli;
 #[path = "extension_interop.rs"]
 mod extension_interop;
 
+// CORE-3: the catalogue of the Ressources, and the Projets of an Operation.
+#[path = "extension_catalogue.rs"]
+mod extension_catalogue;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;

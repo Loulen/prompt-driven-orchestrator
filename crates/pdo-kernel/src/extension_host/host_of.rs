@@ -4,7 +4,7 @@
 use std::sync::Weak;
 
 use pdo_extension_api::{
-    Attributes, Authorization, EntityRef, ExtensionEvent, Host, OperationApplied,
+    Attributes, Authorization, EntityRef, ExtensionEvent, Host, OperationApplied, Resource,
 };
 
 use super::{ExtensionHost, Extensions, Registry};
@@ -54,6 +54,13 @@ impl Host for ExtensionHostOf {
         self.extensions()
             .map(|extensions| extensions.stamps(actor, entity, Some(&self.id)))
             .unwrap_or_default()
+    }
+
+    fn catalogue(&self) -> Vec<Resource> {
+        match self.extensions() {
+            Some(extensions) => ExtensionHost::catalogue(&extensions),
+            None => pdo_extension_api::core_resources(),
+        }
     }
 }
 

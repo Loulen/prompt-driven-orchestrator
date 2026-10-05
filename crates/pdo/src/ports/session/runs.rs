@@ -1,7 +1,7 @@
 //! The Run facts of the declared wait, of a node's pane, and of the run shell.
 
 use pdo_session::application::ports::{
-    BoxFuture, NodePanes, NodeWaits, RunLookup, RunShells, ShellTarget,
+    BoxFuture, NodePanes, NodeWaits, RunLookup, RunProjects, RunShells, ShellTarget,
 };
 use pdo_session::domain::declared_wait::{
     AwaitingMarker, IterationFacts, NodeWaitFacts, WaitFacts,
@@ -17,6 +17,17 @@ use pdo_run::domain::state::{NodeStatus, RunState, RunStatus};
 use pdo_workspace::adapters::git::worktrees::worktree_dir_for_run;
 
 use super::RunSide;
+
+impl RunProjects for RunSide {
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            match self.runs.get() {
+                Ok(runs) => runs.projects_of_run(run_id).await,
+                Err(_) => Vec::new(),
+            }
+        })
+    }
+}
 
 impl NodeWaits for RunSide {
     fn wait_facts<'a>(

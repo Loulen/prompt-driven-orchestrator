@@ -43,6 +43,7 @@ pub(super) fn session(
             assistant_harness: run.assistant_harness,
             terminal_window: Arc::new(OsTerminalWindow),
             extensions: host,
+            projects: run.projects,
         },
         SessionOptions {
             daemon_port: r.port,

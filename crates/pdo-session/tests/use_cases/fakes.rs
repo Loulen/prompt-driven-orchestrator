@@ -464,3 +464,21 @@ impl TerminalWindow for Window {
         Ok("kitty".into())
     }
 }
+
+/// The Run [`InP1`] puts in the Projet `p1`.
+pub const RUN_IN_P1: &str = "20260912-100000-a11ce01";
+
+/// The Projets of the Runs: [`RUN_IN_P1`] is in `p1`, every other Run in none.
+pub struct InP1;
+
+impl pdo_session::application::ports::RunProjects for InP1 {
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            if run_id == RUN_IN_P1 {
+                vec!["p1".to_string()]
+            } else {
+                Vec::new()
+            }
+        })
+    }
+}

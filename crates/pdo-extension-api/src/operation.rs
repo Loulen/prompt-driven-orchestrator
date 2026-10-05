@@ -7,8 +7,12 @@ use serde::{Serialize, Serializer};
 /// *Extensions*, D9).
 ///
 /// Every mutation has one. An Operation is never named after a need
-/// ("UpdateProfileAsAdmin"): the same three fields describe every case, so the
-/// list of variants never describes the extensions the core expects.
+/// ("UpdateProfileAsAdmin"): the same fields describe every case, so the list
+/// of variants never describes the extensions the core expects.
+///
+/// It also says which Projets it is in ([`Operation::projects`]): the core
+/// fills them in its use cases, an extension for its own resources, so that no
+/// extension ever works out a Projet from a repository itself.
 ///
 /// Non-exhaustive, like its fields' enums: build one with [`Operation::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -18,6 +22,16 @@ pub struct Operation {
     pub verb: Verb,
     /// The id of the entity acted on; `None` for a creation.
     pub target: Option<String>,
+    /// The ids of the Projets the Operation is in, without duplicates; empty
+    /// when it is in none (hors Projet).
+    ///
+    /// The core fills them for its own Operations: a Run's, its nodes', its
+    /// sessions' and its review comments' are the Projet of the Run's primary
+    /// repository (a creation: of the repository it names); a Projet's are
+    /// that Projet; a repository's, the Projet it belongs to. The others
+    /// (pipelines, Triggers, settings, skills…) are in none. An extension fills
+    /// them for its own resources (a Backlog may belong to several Projets).
+    pub projects: Vec<String>,
 }
 
 impl Operation {
@@ -27,6 +41,7 @@ impl Operation {
             resource,
             verb,
             target: None,
+            projects: Vec::new(),
         }
     }
 
@@ -34,6 +49,28 @@ impl Operation {
     pub fn on(mut self, id: impl Into<String>) -> Self {
         self.target = Some(id.into());
         self
+    }
+
+    /// The same Operation, in the Projets `projects` (in place of the ones it
+    /// had), a duplicate kept once. An empty list: in no Projet.
+    pub fn in_projects<I, S>(mut self, projects: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.projects = Vec::new();
+        for project in projects {
+            let project = project.into();
+            if !self.projects.contains(&project) {
+                self.projects.push(project);
+            }
+        }
+        self
+    }
+
+    /// Whether the Operation is in no Projet.
+    pub fn is_outside_projects(&self) -> bool {
+        self.projects.is_empty()
     }
 }
 
@@ -82,6 +119,45 @@ pub enum ResourceKind {
 }
 
 impl ResourceKind {
+    /// Every kind of the core, in the catalogue's order.
+    pub const CORE: &'static [ResourceKind] = &[
+        ResourceKind::Run,
+        ResourceKind::Node,
+        ResourceKind::Pipeline,
+        ResourceKind::LibraryEntry,
+        ResourceKind::Project,
+        ResourceKind::Trigger,
+        ResourceKind::AgentProfile,
+        ResourceKind::Skill,
+        ResourceKind::SkillFolder,
+        ResourceKind::SandboxProfile,
+        ResourceKind::InstanceSettings,
+        ResourceKind::PageMount,
+        ResourceKind::ReviewComment,
+        ResourceKind::Repository,
+        ResourceKind::Session,
+        ResourceKind::Update,
+        ResourceKind::Service,
+        ResourceKind::StatsAbsorption,
+        ResourceKind::PriceTable,
+    ];
+
+    /// The kind whose wire name is `name`: one of [`ResourceKind::CORE`], or
+    /// `<extension>/<kind>` for an extension's. `None` for an unknown core
+    /// name or an empty part.
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        match name.split_once('/') {
+            Some((extension, kind)) if !extension.is_empty() && !kind.is_empty() => {
+                Some(ResourceKind::extension(extension, kind))
+            }
+            Some(_) => None,
+            None => ResourceKind::CORE
+                .iter()
+                .find(|kind| kind.wire_name() == name)
+                .cloned(),
+        }
+    }
+
     /// The kind `kind` of entity the extension `extension` owns.
     pub fn extension(extension: impl Into<String>, kind: impl Into<String>) -> Self {
         ResourceKind::Extension {
@@ -154,13 +230,31 @@ mod tests {
         assert_eq!(op.target.as_deref(), Some("p1"));
         assert_eq!(
             serde_json::to_value(&op).unwrap(),
-            serde_json::json!({ "resource": "agent_profile", "verb": "update", "target": "p1" })
+            serde_json::json!({
+                "resource": "agent_profile", "verb": "update", "target": "p1", "projects": [],
+            })
         );
         let fire = Operation::new(ResourceKind::Trigger, Verb::Action("fire".into()));
         assert_eq!(
             serde_json::to_value(&fire).unwrap(),
-            serde_json::json!({ "resource": "trigger", "verb": { "action": "fire" }, "target": null })
+            serde_json::json!({
+                "resource": "trigger", "verb": { "action": "fire" }, "target": null, "projects": [],
+            })
         );
+    }
+
+    #[test]
+    fn an_operation_is_outside_every_projet_until_given_some() {
+        let op = Operation::new(ResourceKind::Run, Verb::Delete).on("r1");
+        assert!(op.is_outside_projects());
+        let op = op.in_projects(["p1", "p2", "p1"]);
+        assert_eq!(op.projects, vec!["p1".to_string(), "p2".to_string()]);
+        assert!(!op.is_outside_projects());
+        assert_eq!(
+            serde_json::to_value(&op).unwrap()["projects"],
+            serde_json::json!(["p1", "p2"])
+        );
+        assert!(op.in_projects(Vec::<String>::new()).is_outside_projects());
     }
 
     #[test]
@@ -168,7 +262,9 @@ mod tests {
         let op = Operation::new(ResourceKind::extension("pm", "tache"), Verb::Update).on("PM-12");
         assert_eq!(
             serde_json::to_value(&op).unwrap(),
-            serde_json::json!({ "resource": "pm/tache", "verb": "update", "target": "PM-12" })
+            serde_json::json!({
+                "resource": "pm/tache", "verb": "update", "target": "PM-12", "projects": [],
+            })
         );
         assert_eq!(
             ResourceKind::extension("pm", "tache"),
@@ -182,5 +278,21 @@ mod tests {
             ResourceKind::StatsAbsorption.wire_name(),
             "stats_absorption"
         );
+    }
+
+    #[test]
+    fn a_kind_reads_back_from_its_wire_name() {
+        for kind in ResourceKind::CORE {
+            assert_eq!(
+                ResourceKind::from_wire_name(&kind.wire_name()).as_ref(),
+                Some(kind)
+            );
+        }
+        assert_eq!(
+            ResourceKind::from_wire_name("pm/tache"),
+            Some(ResourceKind::extension("pm", "tache"))
+        );
+        assert_eq!(ResourceKind::from_wire_name("nope"), None);
+        assert_eq!(ResourceKind::from_wire_name("pm/"), None);
     }
 }

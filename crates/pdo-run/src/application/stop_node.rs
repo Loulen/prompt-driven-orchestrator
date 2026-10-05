@@ -29,7 +29,10 @@ pub struct StopNode {
 impl Runs {
     pub async fn stop_node(self: &Arc<Self>, actor: &Actor, command: StopNode) -> Response {
         let StopNode { run_id, node_id } = command;
-        if let Err(denied) = self.authorize(actor, &on_node("stop", &run_id, &node_id)) {
+        if let Err(denied) = self
+            .authorize(actor, &on_node("stop", &run_id, &node_id))
+            .await
+        {
             return denied.into_response();
         }
         let state = self;

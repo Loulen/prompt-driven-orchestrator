@@ -49,8 +49,9 @@ impl Runs {
         attachments: Vec<InputFile>,
         session: Option<SessionClaim>,
     ) -> Response {
-        let operation = Operation::new(ResourceKind::Run, Verb::Create);
-        if let Err(denied) = self.authorize(actor, &operation) {
+        let operation = Operation::new(ResourceKind::Run, Verb::Create)
+            .in_projects(self.projects_of_new_run(&req, session.as_ref()).await);
+        if let Err(denied) = self.authorize(actor, &operation).await {
             return denied.into_response();
         }
         req.created_by = Some(actor.clone());

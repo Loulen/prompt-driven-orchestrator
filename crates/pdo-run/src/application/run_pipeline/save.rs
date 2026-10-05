@@ -79,7 +79,10 @@ impl Runs {
         run_id: &str,
         req: SaveRunPipelineRequest,
     ) -> Response {
-        if let Err(denied) = self.authorize(actor, &on_run("edit_pipeline", run_id)) {
+        if let Err(denied) = self
+            .authorize(actor, &on_run("edit_pipeline", run_id))
+            .await
+        {
             return denied.into_response();
         }
         let state = self;

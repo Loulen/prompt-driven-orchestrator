@@ -9,7 +9,7 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::info;
 
 use crate::application::launch::spawn_shell;
-use crate::application::ports::{RunLookup, RunShells, Tmux};
+use crate::application::ports::{NoRunProjects, RunLookup, RunProjects, RunShells, Tmux};
 use crate::domain::launch::SandboxWrap;
 use crate::domain::names::shell_session_name;
 
@@ -40,6 +40,7 @@ pub struct OpenShell {
     tmux: Arc<dyn Tmux>,
     host: Arc<dyn ExtensionHost>,
     daemon_port: u16,
+    projects: Arc<dyn RunProjects>,
 }
 
 impl OpenShell {
@@ -54,7 +55,14 @@ impl OpenShell {
             tmux,
             host,
             daemon_port,
+            projects: Arc::new(NoRunProjects),
         }
+    }
+
+    /// The same use case, its Operations in the Projets `projects` gives.
+    pub fn with_projects(mut self, projects: Arc<dyn RunProjects>) -> Self {
+        self.projects = projects;
+        self
     }
 
     pub async fn execute(
@@ -64,7 +72,8 @@ impl OpenShell {
     ) -> Result<OpenedShell, OpenShellError> {
         let session = shell_session_name(run_id);
         // A creation carries no target (the session does not exist yet).
-        let operation = Operation::new(ResourceKind::Session, Verb::Create);
+        let operation = Operation::new(ResourceKind::Session, Verb::Create)
+            .in_projects(self.projects.projects_of_run(run_id).await);
         authorize(self.host.as_ref(), actor, &operation).map_err(OpenShellError::Refused)?;
         let target = self
             .runs

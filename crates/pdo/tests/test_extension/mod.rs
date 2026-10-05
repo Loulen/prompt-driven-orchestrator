@@ -8,7 +8,11 @@
 //! - **`authorize`**: refuses what its [`Refusal`] says, with a reason naming the
 //!   Operation. The refusal can change while the daemon runs ([`Control::set`]),
 //!   so a test seeds its fixtures before refusing everything.
-//! - Every `(Actor, Operation)` it is asked about is recorded ([`Control::seen`]).
+//! - Every `(Actor, Operation)` it is asked about is recorded ([`Control::seen`]),
+//!   with the Projets the Operation is in; `GET /ext/test/operations` lists
+//!   them.
+//! - **`manifest`** declares one Ressource, [`NOTE`] (`test/note`), so the
+//!   catalogue (`GET /resources`) lists it after the core's.
 //! - **`on_create`**: stamps `started_by` (so `test/started_by`): the id of an
 //!   identified caller, else the kind of actor (`local_operator`, `trigger`…).
 //! - **`on_event`**: records every event ([`Control::events`]) and appends it
@@ -16,7 +20,7 @@
 //!   first ([`OnEvent`]).
 //! - **`start`**: remembers its data folder ([`Control::data_dir`]).
 //! - **`routes`** (`routes.rs`): `/ext/test` answers who it is, `/events` the
-//!   trace of the events, `/ui.js` its UI bundle, `/icon.svg` its icon,
+//!   trace of the events, `/operations` the Operations it was asked about, `/ui.js` its UI bundle, `/icon.svg` its icon,
 //!   `/commands` the trace of its command's calls (`POST` records one),
 //!   `/incompatible` switches the bundle to a React major the front does not run.
 //! - **`ui`** (`ui.js`): one element at each location of the catalogue. The
@@ -68,8 +72,8 @@ use std::time::Duration;
 use pdo::extension_api::{
     Actor, Attributes, Authorization, CliInvocation, CliOutput, CliSpec, EntityRef, Extension,
     ExtensionContext, ExtensionSkill, Manifest, NodeEnv, NodeLaunch, Operation, RequestParts,
-    ResourceKind, Slot, TriggerRef, UiCommand, UiContribution, UiContributions, UiLocation, UiSlot,
-    Verb, When,
+    ResourceDeclaration, ResourceKind, Slot, TriggerRef, UiCommand, UiContribution,
+    UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -80,6 +84,15 @@ pub const ID: &str = "test";
 /// The major of React the test bundle declares; the incompatible one declares
 /// the one before.
 pub const REACT_MAJOR: u32 = 19;
+
+/// The kind of the one Ressource the test extension declares (`test/note`).
+pub const NOTE: &str = "note";
+
+/// What the test extension declares of [`NOTE`]: its label and its verbs.
+pub fn note() -> ResourceDeclaration {
+    ResourceDeclaration::new(NOTE, "Test notes", ["create", "update", "delete", "pin"])
+        .described("The notes of the test extension")
+}
 
 /// The request header naming the caller.
 pub const ACTOR_HEADER: &str = "x-pdo-test-actor";
@@ -166,16 +179,8 @@ impl Refusal {
                 let (resource, verb) = other.split_once(':').ok_or_else(|| {
                     format!("`{other}`: expected none, all, panic or resource:verb")
                 })?;
-                let resource = match resource.split_once('/') {
-                    Some((extension, kind)) if !extension.is_empty() && !kind.is_empty() => {
-                        ResourceKind::extension(extension, kind)
-                    }
-                    _ => RESOURCES
-                        .iter()
-                        .find(|r| r.wire_name() == resource)
-                        .cloned()
-                        .ok_or_else(|| format!("unknown resource `{resource}`"))?,
-                };
+                let resource = ResourceKind::from_wire_name(resource)
+                    .ok_or_else(|| format!("unknown resource `{resource}`"))?;
                 let verb = match verb {
                     "create" => Verb::Create,
                     "update" => Verb::Update,
@@ -198,44 +203,11 @@ impl Refusal {
     }
 }
 
-/// The resources a text refusal can name.
-const RESOURCES: &[ResourceKind] = &[
-    ResourceKind::Run,
-    ResourceKind::Node,
-    ResourceKind::Pipeline,
-    ResourceKind::LibraryEntry,
-    ResourceKind::Project,
-    ResourceKind::Trigger,
-    ResourceKind::AgentProfile,
-    ResourceKind::Skill,
-    ResourceKind::SkillFolder,
-    ResourceKind::SandboxProfile,
-    ResourceKind::InstanceSettings,
-    ResourceKind::PageMount,
-    ResourceKind::ReviewComment,
-    ResourceKind::Repository,
-    ResourceKind::Session,
-    ResourceKind::Update,
-    ResourceKind::Service,
-    ResourceKind::StatsAbsorption,
-    ResourceKind::PriceTable,
-];
-
-fn verb_name(verb: &Verb) -> String {
-    match verb {
-        Verb::Create => "create".into(),
-        Verb::Update => "update".into(),
-        Verb::Delete => "delete".into(),
-        Verb::Action(action) => action.clone(),
-        other => format!("{other:?}"),
-    }
-}
-
 /// The reason the test extension gives for refusing `operation`.
 pub fn reason(operation: &Operation) -> String {
     format!(
         "the test extension refuses {} {}",
-        verb_name(&operation.verb),
+        operation.verb.name(),
         operation.resource
     )
 }
@@ -384,7 +356,7 @@ impl TestExtension {
 
 impl Extension for TestExtension {
     fn manifest(&self) -> Manifest {
-        let manifest = Manifest::new(ID, "Test extension", VERSION);
+        let manifest = Manifest::new(ID, "Test extension", VERSION).with_resource(note());
         match &self.api_version {
             Some(version) => manifest.requiring_api(version.clone()),
             None => manifest,

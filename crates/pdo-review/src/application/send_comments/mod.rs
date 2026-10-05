@@ -48,7 +48,7 @@ impl Review {
         run_id: &str,
         drafts: Vec<DraftComment>,
     ) -> Outcome<Value> {
-        self.authorize(actor, &operations::send(run_id))?;
+        self.authorize(actor, &operations::send(run_id)).await?;
         let run = self.run(run_id).await?;
         if drafts.is_empty() {
             return Err(Failure::error(400, "no comments to send"));

@@ -18,8 +18,8 @@ use pdo_run::domain::projection::project;
 use pdo_run::domain::state::RunState;
 use pdo_run::Runs;
 use pdo_session::application::ports::{
-    AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunLookup, RunShells, SessionOwners,
-    Templates,
+    AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunLookup, RunProjects, RunShells,
+    SessionOwners, Templates,
 };
 use tokio::sync::broadcast;
 
@@ -51,6 +51,7 @@ pub struct SessionRunPorts {
     pub gauges: Arc<dyn DaemonGauges>,
     pub templates: Arc<dyn Templates>,
     pub assistant_harness: Arc<dyn AssistantHarness>,
+    pub projects: Arc<dyn RunProjects>,
 }
 
 impl SessionRunPorts {
@@ -63,6 +64,7 @@ impl SessionRunPorts {
             owners: ports.clone(),
             gauges: ports.clone(),
             templates: ports.clone(),
+            projects: ports.clone(),
             assistant_harness: ports,
         }
     }

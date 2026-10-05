@@ -47,7 +47,8 @@ impl Review {
         comment_id: &str,
         command: ReplyCommand,
     ) -> Outcome<Value> {
-        self.authorize(actor, &operations::on_comment("reply", run_id, comment_id))?;
+        self.authorize(actor, &operations::on_comment("reply", run_id, comment_id))
+            .await?;
         let run = self.run(run_id).await?;
         let text = command.text.trim_end().to_string();
         if text.trim().is_empty() {

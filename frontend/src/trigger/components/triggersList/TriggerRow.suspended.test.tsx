@@ -73,6 +73,16 @@ describe("TriggerRow — suspended by an extension (API 0.8)", () => {
     expect(screen.getByText("Weekly dependency bump")).toHaveClass("max-w-full", "truncate");
   });
 
+  it("lets the pill shrink with its column instead of spilling under the hover actions", () => {
+    renderRow(trigger({ suspension }));
+    const pill = screen.getByTestId("trigger-suspended");
+    // Once the hover actions take their room, the column gets narrower than
+    // the pill: the pill truncates its label inside the column, never past it.
+    expect(pill).toHaveClass("min-w-0", "max-w-full", "overflow-hidden");
+    expect(pill).not.toHaveClass("shrink-0");
+    expect(screen.getByText("suspended")).toHaveClass("truncate");
+  });
+
   it("is a plain enabled row without a suspension", () => {
     renderRow(trigger());
     expect(screen.getByTestId("trigger-toggle")).toHaveAttribute("aria-checked", "true");

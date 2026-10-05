@@ -10,6 +10,55 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.13.0 — Bloc Provisioning replié, expliqué et diagnosticable (#45)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Portage core #951 (spec #950).
+
+- Le bloc Provisioning est replié par défaut là où il est secondaire (New Run, édition de
+  projet, inspecteur d'un nœud isolé, détail d'un nœud en cours). Il reste déplié dans
+  Settings › Sandbox & worktrees. Replié, son en-tête résume les règles
+  (`N inherited · M at this level`, ou `none`) et une ligne explique ce qu'est le provisioning.
+- Chaque mode (Copy, Hardlink, Symlink) et la barre des niveaux portent une infobulle.
+- Un conflit de mode ou une erreur d'aperçu rouvre le bloc tout seul, qui ne se replie plus tant
+  que le problème demeure. Dans New Run, le bouton Launch désactivé explique pourquoi.
+- Retirés : le bouton « Configure worktree provisioning… » de l'édition de projet et le toggle
+  « Configure / Hide provisioning » de l'inspecteur de nœud, remplacés par le bloc repliable.
+
+## 2.12.0 — Retrait du nœud Merge, la convergence est portée par tout nœud (#42)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Le nœud Merge est retiré
+(ADR-0082, portage core #942).
+
+- Le type de nœud `merge` disparaît de l'éditeur, du modèle et du runtime. La convergence est
+  portée par **tout nœud** : reliez plusieurs arêtes à un `agent`, il attend que chaque branche
+  ait firé ou soit morte, ne reçoit que les branches firées et trouve leur code sur la branche du
+  Run. La barre d'outils n'a plus de bouton Merge.
+- Un YAML qui contient encore `type: merge` se charge : le nœud devient un `agent` isolé, avec le
+  warning ordinaire « unknown node type », et garde ses ports `branches` / `merged`. Ni alias, ni
+  règle `pdo migrate`.
+- Seul écart de comportement : un nœud de convergence dont toutes les branches sont mortes est
+  désormais sauté (l'ancien Merge était exclu de l'auto-skip).
+- Le résolveur de merge automatique, mort en production depuis ADR-0006, est supprimé (prompt
+  `merge-resolver`, refus `merge_resolution_failed` / `merge_resolver_*`, lint « fan-out sans
+  Merge », conseil Merge de l'importeur). Le contrat TypeScript perd `MergeResolverInfo` et le
+  champ `merge_resolver` de `RunState`. Les événements `MergeResolver*` des anciens Runs restent
+  lisibles : ces Runs se rouvrent, se chiffrent et gardent leur ligne Infrastructure dans Stats.
+- Un conflit de merge-back met le nœud en Interrupted ; sa bannière dit désormais « Merge-back
+  conflict » au lieu de « Session died ».
+- Canvas : une arête auto qui sort à droite vers une cible située en arrière (typiquement la
+  sortie sans `side` d'un ancien Merge, au-dessus de son End) ne traverse plus sa carte source.
+  Elle part par une patte du côté de sortie et contourne la carte.
+
+## 2.11.0 — Quitter un terminal n'y écrit rien, terminal de nœud agrandi en overlay (#44)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Fermer un terminal (changer de
+node, fermer le Shell de run) n'écrit plus rien dans la session tmux : la saisie en cours de
+Claude Code reste intacte sur une ligne et un shell détaché survit (portage core #946).
+« Expand terminal » ouvre le terminal agrandi : la même session, sans remontage, en overlay à
+16 px des bords sur fond assombri, avec une barre nom · itération · statut, un cadre à la couleur
+du statut et les gestes de complétion compacts en `awaiting_user`. On en sort par Minimize, Échap
+hors du terminal ou un clic sur le fond ; l'état agrandi n'est jamais persisté (portage core #968).
+
 ## 2.10.1 — Panneau secondaire fermable, modales bornées à la fenêtre (#40)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Le panneau secondaire de la
@@ -32,10 +81,9 @@ les outputs image (portage core 1.114.0).
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Changement de geste sur le
 canvas d'édition (portage core #936) : une edge ne naît plus que d'un drag depuis le bord d'un
-node, désormais épais de 4,5 px. Cliquer un bord puis un autre node (ou une poignée `branches`
-d'un `merge`) ne connecte plus rien : le clic sélectionne le node. Sur une template, le glyphe
-« agent » et `i` de la toolbar sont exclusifs et suivent l'onglet affiché du panneau Pipeline
-info (portage core #938).
+node, désormais épais de 4,5 px. Cliquer un bord puis un autre node ne connecte plus rien : le
+clic sélectionne le node. Sur une template, le glyphe « agent » et `i` de la toolbar sont
+exclusifs et suivent l'onglet affiché du panneau Pipeline info (portage core #938).
 
 ## 2.8.0 — Médias du README paramétrables par une config (#36)
 

@@ -22,7 +22,6 @@ use pdo_run::application::complete_node::{
     complete_node_iteration, interactive_completion_refusal, CompletionAttempt, CompletionSource,
 };
 use pdo_run::application::events::{emit_run_event, reload_run_state, reload_run_state_with};
-use pdo_run::application::merge_resolver::MERGE_RESOLVER_NODE_ID;
 use pdo_run::application::node::launch::{find_node_type, node_run_isolation, snapshot_isolation};
 use pdo_run::application::node::spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
 use pdo_run::application::paths::{
@@ -206,8 +205,7 @@ pub async fn command_triplet(
     (status, content_type, body)
 }
 
-/// The merge-back on its **conservative** arm: `keep_conflict` off and no
-/// spawn base, so a conflict still reads `MergeResult::Conflict`.
+/// The merge-back on its **conservative** arm: no spawn base, so a conflict still reads `MergeResult::Conflict`.
 pub fn commit_and_merge_sub_worktree(
     sub_worktree_dir: &Path,
     pipeline_worktree_dir: &Path,
@@ -221,7 +219,6 @@ pub fn commit_and_merge_sub_worktree(
         sub_branch,
         node_id,
         iter,
-        false,
         None,
     )
 }

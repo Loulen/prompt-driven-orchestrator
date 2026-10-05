@@ -100,7 +100,6 @@ describe("isEmergentInputNode", () => {
   it("keeps structural nodes on their declared, fixed-side ports", () => {
     expect(isEmergentInputNode("start")).toBe(false);
     expect(isEmergentInputNode("end")).toBe(false);
-    expect(isEmergentInputNode("merge")).toBe(false);
   });
 });
 
@@ -110,7 +109,7 @@ describe("anchorsByDropOnBody", () => {
   });
 
   it("does not anchor when the edge landed on a declared/structural port", () => {
-    // End's `result`, a merge `branches` handle, etc. keep their fixed side.
+    // A declared port handle keeps its fixed side.
     expect(anchorsByDropOnBody("result")).toBe(false);
     expect(anchorsByDropOnBody("branches")).toBe(false);
     expect(anchorsByDropOnBody(null)).toBe(false);

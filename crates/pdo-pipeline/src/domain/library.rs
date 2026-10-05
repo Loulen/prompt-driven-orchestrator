@@ -48,7 +48,7 @@ pub struct LibraryEntry {
     /// Always `Some` for `agent`/`script` (stamped by [`normalized_isolation`]
     /// on every read and write, so a pre-#655 file states its choice too), and
     /// always `None` for the types that carry none. `skip_serializing_if` is
-    /// what keeps a starred Merge/Start/End file free of a line nobody may edit.
+    /// what keeps a starred Start/End file free of a line nobody may edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub isolated_worktree: Option<bool>,
@@ -60,7 +60,7 @@ impl LibraryEntry {
     /// The type has the last word on *whether* there is a choice at all, and the
     /// entry has the last word on *which* — the same precedence
     /// `NodeDef::is_isolated` uses, so the library and the Document cannot read
-    /// one silence two ways. A stray value on a Merge is dropped rather than
+    /// one silence two ways. A stray value on a Start/End is dropped rather than
     /// round-tripped, mirroring `pipeline::stamp_isolation_default`.
     fn normalized_isolation(&self) -> Option<bool> {
         let default = self.node_type.default_isolation()?;

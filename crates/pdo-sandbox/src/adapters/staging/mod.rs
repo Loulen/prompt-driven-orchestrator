@@ -332,7 +332,7 @@ pub fn merge_back(home_root: &Path, sandbox_root: &Path, run_id: &str) -> Result
                 continue;
             };
             // Un Run = plusieurs dirs encodés (un par worktree de node, manager,
-            // merge-resolver). Itérer TOUS les sous-dossiers, jamais supposer un seul.
+            // résolveur de merge d'un Run archivé). Itérer TOUS les sous-dossiers, jamais supposer un seul.
             for entry in entries.flatten() {
                 let proj = entry.path();
                 if proj.is_dir() {

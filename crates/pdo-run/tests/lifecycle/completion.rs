@@ -21,7 +21,6 @@ use pdo_run::application::complete_node::{
     complete_node_iteration, interactive_completion_refusal, CompletionAttempt, CompletionSource,
 };
 use pdo_run::application::events::{emit_run_event, reload_run_state, reload_run_state_with};
-use pdo_run::application::merge_resolver::MERGE_RESOLVER_NODE_ID;
 use pdo_run::application::node::launch::{find_node_type, node_run_isolation, snapshot_isolation};
 use pdo_run::application::node::spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
 use pdo_run::application::paths::{
@@ -552,106 +551,6 @@ async fn mark_node_done_emits_exactly_one_run_completed() {
     assert_eq!(
         event_log::project(&events).unwrap().status,
         event_log::RunStatus::Completed
-    );
-}
-
-#[tokio::test]
-async fn merge_resolver_done_records_original_node_and_completes_once() {
-    // Caller B (CompletionFirst, flag=false): resolving a conflict records the
-    // `NodeCompleted` under the ORIGINAL conflicting node id — never the
-    // `__merge_resolver__` pseudo-node — and completes the run exactly once.
-    // This caller's tail had zero coverage before #275.
-    let tmp = tempfile::tempdir().unwrap();
-    // The merge path first validates the run worktree is clean; an empty
-    // (non-repo) dir trivially has no conflict markers / tracked changes, so
-    // validation passes and we exercise the completion tail itself.
-    let worktree = tmp
-        .path()
-        .join(".pdo")
-        .join("runs")
-        .join("c275-merge")
-        .join("worktree");
-    std::fs::create_dir_all(&worktree).unwrap();
-
-    let state = test_state_with_dir(tmp.path()).await;
-    let run_id = "c275-merge";
-    for ev in [
-        seed_event(
-            run_id,
-            event_log::EventKind::RunStarted,
-            None,
-            None,
-            Some(serde_json::json!({
-                "pipeline_name": "conflict",
-                "node_defs": [
-                    { "id": "worker", "node_type": "agent", "isolated_worktree": true, "inputs": [], "outputs": [] }
-                ],
-                "edges": []
-            })),
-        ),
-        seed_event(
-            run_id,
-            event_log::EventKind::NodeStarted,
-            Some("worker"),
-            Some(1),
-            None,
-        ),
-        seed_event(
-            run_id,
-            event_log::EventKind::MergeResolverStarted,
-            None,
-            None,
-            Some(serde_json::json!({
-                "conflicting_node_id": "worker",
-                "iter": 1,
-                "session_name": "pdo-c275-merge-__merge_resolver__-iter-1"
-            })),
-        ),
-    ] {
-        append_event(&state, &ev).await.unwrap();
-    }
-
-    let resp = build_router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!(
-                    "/runs/{run_id}/nodes/{MERGE_RESOLVER_NODE_ID}/done"
-                ))
-                .header("content-type", "application/json")
-                .body(Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let events = load_events(&state.db, run_id).await.unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|e| e.kind == event_log::EventKind::MergeResolverCompleted),
-        "merge resolver completion is recorded"
-    );
-    // The resolved work is attributed to the ORIGINAL node, not the pseudo-node.
-    assert_eq!(
-        count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
-        1,
-        "NodeCompleted recorded for the original conflicting node"
-    );
-    assert_eq!(
-        count_events(
-            &events,
-            event_log::EventKind::NodeCompleted,
-            MERGE_RESOLVER_NODE_ID
-        ),
-        0,
-        "no NodeCompleted for the __merge_resolver__ pseudo-node"
-    );
-    assert_eq!(
-        count_run_completed(&events),
-        1,
-        "merge-resolver completion must emit exactly one RunCompleted"
     );
 }
 

@@ -128,8 +128,8 @@ describe("drawnEdgeLayout (#844)", () => {
 
   it("never saves a route that runs through the target card (#844, FP finding 2)", () => {
     // The whole chain, as the canvas runs it: a gesture that dives at the BOTTOM
-    // of a target that pins the wire to a handle declared on its TOP border (a
-    // merge's `branches`; End lands by drop since #840). The
+    // of a target that pins the wire to a handle declared on its TOP border
+    // (End lands by drop since #840). The
     // preview is pinned to that handle — the drop position has no say — so the
     // route persisted is the one that will be rendered, and it goes round the
     // card rather than through it. Before the fix the preview landed on the
@@ -198,14 +198,14 @@ describe("drawnEdgeLayout (#844)", () => {
   });
 
   describe("a pinned target approached from its far side, dropped on the next event (#844 FP iter-2)", () => {
-    // A merge at TGT_RECT, its declared handle covering the card and pinned on
-    // the TOP border (End was the case here until it began landing by drop,
-    // #840). The gesture comes from BELOW.
+    // A target at TGT_RECT that does not land by drop, its declared handle
+    // covering the card and pinned on the TOP border (End was the case here
+    // until it began landing by drop, #840). The gesture comes from BELOW.
     const PINNED_NODE: HoveredNode = {
-      id: "merge",
+      id: "pinned",
       measured: { width: TGT_RECT.width, height: TGT_RECT.height },
       internals: { positionAbsolute: { x: TGT_RECT.x, y: TGT_RECT.y } },
-      data: { nodeType: "merge" },
+      data: { nodeType: "start" },
     };
     const PINNED_HANDLE: HoveredHandle = {
       x: TGT_RECT.x + TGT_RECT.width / 2,

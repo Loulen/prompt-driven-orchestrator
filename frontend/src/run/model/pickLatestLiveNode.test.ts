@@ -39,7 +39,6 @@ function makeRun(nodes: NodeState[]): RunState {
     node_defs: [],
     start_node: undefined,
     end_node: undefined,
-    merge_resolver: undefined,
   };
 }
 

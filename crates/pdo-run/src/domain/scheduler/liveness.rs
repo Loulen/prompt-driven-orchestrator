@@ -160,9 +160,9 @@ pub(super) fn edge_is_dead(
 /// (b) it declares a `required: true` input port whose every feeding edge is dead —
 /// even if the node has other live inputs.
 ///
-/// `Start`/`End` and the structural `Loop`/`Switch`/`Merge` routers are never
-/// auto-skipped here: `End`-unreachability is the `unrouted` convergence path, and a
-/// `Merge` keeps its ADR-0006 edge-centred barrier.
+/// `Start`/`End` and the structural `Loop`/`Switch` routers are never auto-skipped
+/// here: `End`-unreachability is the `unrouted` convergence path. A convergence
+/// node whose every branch is dead is skipped like any other node (ADR-0082).
 pub fn unreachable_nodes(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -176,7 +176,7 @@ pub fn unreachable_nodes(
         }
         if matches!(
             node.node_type,
-            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::Switch | NodeType::Merge
+            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::Switch
         ) {
             continue;
         }

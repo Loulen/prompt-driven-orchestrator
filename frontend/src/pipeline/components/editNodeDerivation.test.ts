@@ -168,15 +168,6 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     expect(deriveEditEdges(p)[0].data?.targetSide).toBe("bottom");
   });
 
-  it("keeps the declared port for structural nodes (merge)", () => {
-    const p = pipeline(
-      [node("src", "agent", [], ["plan"]), node("m", "merge", ["branches"], ["merged"])],
-      [{ source: { node: "src", port: "plan" }, target: { node: "m", port: "branches" } }],
-    );
-    const edges = deriveEditEdges(p);
-    expect(edges[0].targetHandle).toBe("branches");
-  });
-
   it("binds both same-named edges to a side body handle when they pool into one body input (default left)", () => {
     const p = pipeline(
       [
@@ -389,7 +380,6 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
       node_defs: [],
       start_node: undefined,
       end_node: undefined,
-      merge_resolver: undefined,
       ...(totalItems == null
         ? { collection_states: {} }
         : {

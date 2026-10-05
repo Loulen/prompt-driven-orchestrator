@@ -42,6 +42,22 @@ export interface RouteInput {
    * best-effort.
    */
   targetSide?: PortSide;
+  /**
+   * The source card side the wire leaves from, and the source card itself. The
+   * source is not an obstacle (the wire starts on its border), so a route that
+   * heads back across it — an output on the right towards a target below-left,
+   * the typical « no `side` » output above its End — ran straight through the
+   * card's label. Given both, such a route leaves by a stub on `sourceSide` and
+   * goes around the card instead. Absent ⇒ the legacy behaviour.
+   */
+  sourceSide?: PortSide;
+  sourceRect?: Rect;
+  /**
+   * Length of that stub (px). A caller that snaps the route onto a lattice
+   * passes one that still clears its own perpendicular leg once rounded, or the
+   * snapped bend lands short of the leg and draws a spur. Absent ⇒ `LEAD_IN`.
+   */
+  sourceStub?: number;
 }
 
 const DEFAULT_MARGIN = 16;
@@ -68,12 +84,38 @@ export function routeOrthogonal(input: RouteInput): Point[] {
   const targetSide = input.targetSide ?? "left";
 
   const simple = rawPath(source, target, targetSide);
-  if (!obstacles.some((o) => polylineHitsRect(simple, o))) {
-    return simple;
-  }
+  const path = obstacles.some((o) => polylineHitsRect(simple, o))
+    ? (routeViaGrid(source, target, obstacles, margin) ?? simple)
+    : simple;
 
-  const routed = routeViaGrid(source, target, obstacles, margin);
-  return routed ?? simple;
+  const { sourceSide, sourceRect } = input;
+  if (sourceSide && sourceRect && polylineHitsRect(path, sourceRect)) {
+    const stub = input.sourceStub ?? LEAD_IN;
+    const around = aroundSource(source, target, targetSide, sourceSide, sourceRect, stub, obstacles, margin);
+    if (around) return around;
+  }
+  return path;
+}
+
+// A route that would cross its own source card, re-planned from a stub outside
+// the anchored source side to the target's lead-in point, with the source card
+// as one more obstacle. The grid search then turns away from the card (out,
+// along, back in) rather than doubling back through it. Null when no such path
+// exists, so the caller keeps the legacy route.
+function aroundSource(
+  source: Point,
+  target: Point,
+  targetSide: PortSide,
+  sourceSide: PortSide,
+  sourceRect: Rect,
+  stub: number,
+  obstacles: Rect[],
+  margin: number,
+): Point[] | null {
+  const out = leadInPoint(source, sourceSide, stub);
+  const lead = leadInPoint(target, targetSide, LEAD_IN);
+  const routed = routeViaGrid(out, lead, [...obstacles, sourceRect], margin);
+  return routed ? simplify([source, ...routed, target]) : null;
 }
 
 // The lead-in point one stub outside the target along the anchored side's
@@ -219,7 +261,13 @@ function routeViaGrid(
   const goal = { cx: ix(target.x), cy: iy(target.y) };
   if (start.cx < 0 || start.cy < 0 || goal.cx < 0 || goal.cy < 0) return null;
 
-  const key = (cx: number, cy: number) => `${cx},${cy}`;
+  // A search state is a cell AND the direction it was entered by: the turn
+  // penalty depends on it, so two equal-cost arrivals at one cell are not
+  // interchangeable. Keyed by cell alone, the first to arrive won and the other
+  // was dropped even when it was the one that could go on straight — a route
+  // turning back towards its source card for one more bend (#942 FP).
+  type Dir = "x" | "y" | null;
+  const key = (cx: number, cy: number, dir: Dir) => `${cx},${cy},${dir}`;
   const at = (cx: number, cy: number): Point => ({ x: gridX[cx], y: gridY[cy] });
 
   const moveBlocked = (a: Point, b: Point): boolean =>
@@ -227,16 +275,15 @@ function routeViaGrid(
 
   // A* with Manhattan heuristic; turn penalty keeps the path from zig-zagging
   // when a straighter route of equal length exists.
-  interface CameFrom {
+  interface State {
     cx: number;
     cy: number;
-    dir: string | null;
+    dir: Dir;
   }
-  const open: { cx: number; cy: number; f: number; g: number; dir: string | null }[] = [
-    { ...start, f: 0, g: 0, dir: null },
-  ];
-  const best = new Map<string, number>([[key(start.cx, start.cy), 0]]);
-  const came = new Map<string, CameFrom>();
+  const startState: State = { ...start, dir: null };
+  const open: (State & { f: number; g: number })[] = [{ ...startState, f: 0, g: 0 }];
+  const best = new Map<string, number>([[key(start.cx, start.cy, null), 0]]);
+  const came = new Map<string, State>();
 
   const heuristic = (cx: number, cy: number) =>
     Math.abs(gridX[cx] - target.x) + Math.abs(gridY[cy] - target.y);
@@ -244,10 +291,11 @@ function routeViaGrid(
   while (open.length > 0) {
     open.sort((a, b) => a.f - b.f);
     const cur = open.shift()!;
+    if (cur.g > (best.get(key(cur.cx, cur.cy, cur.dir)) ?? Infinity)) continue;
     if (cur.cx === goal.cx && cur.cy === goal.cy) {
-      return reconstruct(came, goal, key, at, source, target);
+      return reconstruct(came, cur, key, at, source, target);
     }
-    const neighbours = [
+    const neighbours: State[] = [
       { cx: cur.cx + 1, cy: cur.cy, dir: "x" },
       { cx: cur.cx - 1, cy: cur.cy, dir: "x" },
       { cx: cur.cx, cy: cur.cy + 1, dir: "y" },
@@ -263,11 +311,11 @@ function routeViaGrid(
       const stepCost = Math.abs(to.x - from.x) + Math.abs(to.y - from.y);
       const turnPenalty = cur.dir && cur.dir !== n.dir ? 1 : 0;
       const g = cur.g + stepCost + turnPenalty;
-      const nk = key(n.cx, n.cy);
+      const nk = key(n.cx, n.cy, n.dir);
       if (g < (best.get(nk) ?? Infinity)) {
         best.set(nk, g);
         came.set(nk, { cx: cur.cx, cy: cur.cy, dir: cur.dir });
-        open.push({ cx: n.cx, cy: n.cy, dir: n.dir, g, f: g + heuristic(n.cx, n.cy) });
+        open.push({ ...n, g, f: g + heuristic(n.cx, n.cy) });
       }
     }
   }
@@ -275,18 +323,18 @@ function routeViaGrid(
 }
 
 function reconstruct(
-  came: Map<string, { cx: number; cy: number; dir: string | null }>,
-  goal: { cx: number; cy: number },
-  key: (cx: number, cy: number) => string,
+  came: Map<string, { cx: number; cy: number; dir: "x" | "y" | null }>,
+  goal: { cx: number; cy: number; dir: "x" | "y" | null },
+  key: (cx: number, cy: number, dir: "x" | "y" | null) => string,
   at: (cx: number, cy: number) => Point,
   source: Point,
   target: Point,
 ): Point[] {
   const cells: { cx: number; cy: number }[] = [{ cx: goal.cx, cy: goal.cy }];
-  let cur = came.get(key(goal.cx, goal.cy));
+  let cur = came.get(key(goal.cx, goal.cy, goal.dir));
   while (cur) {
     cells.push({ cx: cur.cx, cy: cur.cy });
-    cur = came.get(key(cur.cx, cur.cy));
+    cur = came.get(key(cur.cx, cur.cy, cur.dir));
   }
   cells.reverse();
   const pts = cells.map((c) => at(c.cx, c.cy));

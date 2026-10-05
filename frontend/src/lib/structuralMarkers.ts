@@ -13,7 +13,7 @@ export function isStructuralMarker(node: Pick<EditorNodeDef, "type"> | NodeType 
 }
 
 export type NodeInspectorKind =
-  /** Full edit surface (agent / merge / script nodes), with the Run/Edit tabs. */
+  /** Full edit surface (agent / script nodes), with the Run/Edit tabs. */
   | "node"
   /** `StartInspector`: the run's real input — only meaningful inside a run. */
   | "run-start"

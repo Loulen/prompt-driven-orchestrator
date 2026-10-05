@@ -175,3 +175,99 @@ describe("routeOrthogonal — arrives from the anchored target side (#175)", () 
     expect(routeOrthogonal(input)).toEqual(routeOrthogonal(input));
   });
 });
+
+describe("routeOrthogonal — never crosses its own source card", () => {
+  // The fp-legacy-merge layout: a card whose output has no `side` (so it leaves
+  // by the right) feeding an End right below it, arriving on its top.
+  const sourceRect: Rect = { x: 400, y: 400, width: 160, height: 36 };
+  const source: Point = { x: 560, y: 418 }; // middle of the right side
+  const target: Point = { x: 480, y: 600 }; // middle of the End's top side
+
+  it("legacy call (no source side): doubles back through the card", () => {
+    const path = routeOrthogonal({ source, target, obstacles: [], targetSide: "top" });
+    expect(pathCrosses(path, sourceRect)).toBe(true);
+  });
+
+  it("with the source side and card: leaves right, goes around, lands on top", () => {
+    const path = routeOrthogonal({
+      source,
+      target,
+      obstacles: [],
+      targetSide: "top",
+      sourceSide: "right",
+      sourceRect,
+    });
+    expect(isOrthogonal(path)).toBe(true);
+    expect(pathCrosses(path, sourceRect)).toBe(false);
+    expect(path[0]).toEqual(source);
+    expect(path[path.length - 1]).toEqual(target);
+    // Leaves outwards (to the right), arrives from above.
+    expect(path[1].x).toBeGreaterThan(source.x);
+    expect(path[1].y).toBe(source.y);
+    expect(path[path.length - 2].x).toBe(target.x);
+    expect(path[path.length - 2].y).toBeLessThan(target.y);
+    // Right, down, left, down: no needless zig-zag.
+    expect(path).toHaveLength(5);
+  });
+
+  it("leaves by a stub of the requested length", () => {
+    const path = routeOrthogonal({
+      source,
+      target,
+      obstacles: [],
+      targetSide: "top",
+      sourceSide: "right",
+      sourceRect,
+      sourceStub: 45,
+    });
+    expect(path[1]).toEqual({ x: source.x + 45, y: source.y });
+    expect(pathCrosses(path, sourceRect)).toBe(false);
+  });
+
+  it("does not turn back towards the card for an extra bend among other nodes", () => {
+    // The whole fp-legacy-merge canvas: Start, Agent-A and Agent-B add grid
+    // lines, among them the column one margin right of the source card. Two
+    // equal-cost arrivals at that column used to be told apart by arrival order,
+    // not by which could run on straight: the wire went out, came back to it,
+    // and only then went down.
+    const card = (x: number, y: number): Rect => ({ x, y, width: 160, height: 35 });
+    const path = routeOrthogonal({
+      source,
+      target,
+      obstacles: [card(400, 0), card(200, 200), card(600, 200)],
+      targetSide: "top",
+      sourceSide: "right",
+      sourceRect,
+      sourceStub: 45,
+    });
+    expect(path).toEqual([
+      source,
+      { x: source.x + 45, y: source.y },
+      { x: source.x + 45, y: target.y - 22 },
+      { x: target.x, y: target.y - 22 },
+      target,
+    ]);
+  });
+
+  it("also clears a left arrival reached backwards", () => {
+    const tgtLeft: Point = { x: 300, y: 600 };
+    const path = routeOrthogonal({
+      source,
+      target: tgtLeft,
+      obstacles: [],
+      sourceSide: "right",
+      sourceRect,
+    });
+    expect(isOrthogonal(path)).toBe(true);
+    expect(pathCrosses(path, sourceRect)).toBe(false);
+    expect(path[path.length - 2].x).toBeLessThan(tgtLeft.x);
+  });
+
+  it("keeps the legacy route when it does not cross the source card", () => {
+    const forward: Point = { x: 800, y: 600 };
+    const base = { source, target: forward, obstacles: [] as Rect[], targetSide: "top" as const };
+    expect(routeOrthogonal({ ...base, sourceSide: "right", sourceRect })).toEqual(
+      routeOrthogonal(base),
+    );
+  });
+});

@@ -72,6 +72,9 @@ pub enum EventKind {
     /// resolution commit and what would have conflicted. Wire form:
     /// `"merge_resolved_in_node_favour"`.
     MergeResolvedInNodeFavour,
+    /// The retired merge resolver's lifecycle (ADR-0082). Never emitted any
+    /// more; kept so archived Runs that recorded it still deserialise, and so
+    /// their cost keeps its Infrastructure line.
     MergeResolverStarted,
     MergeResolverCompleted,
     MergeResolverFailed,

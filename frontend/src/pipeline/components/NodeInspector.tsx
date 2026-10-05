@@ -257,8 +257,7 @@ export default function NodeInspector({
             named places, not a switch: the working directory is a choice between
             two locations, not a feature you turn on. The resolved path underneath
             is the point — the author reads where the Node will write instead of
-            deducing it. Absent on `merge` (isolated by construction) and on
-            Start/End, because a greyed control invites you to look for the way to
+            deducing it. Absent on Start/End, because a greyed control invites you to look for the way to
             un-grey it. */}
         {carriesIsolation(node.type) && isolation !== null && (
           <WorkspaceSection

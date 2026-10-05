@@ -10,9 +10,10 @@ node_type: NodeType,
 /**
  * Where this node works (#653, ADR-0060), as the Run's pipeline snapshot
  * froze it: `true` ⇒ its own sub-worktree, `false` ⇒ the Run worktree.
- * `None` for a type that carries no isolation (`merge` is isolated by
- * construction; structural nodes have no worktree of their own) and for a
- * pre-#653 snapshot. `skip_serializing_if` keeps the wire byte-identical
+ * `None` for a type that carries no isolation (structural nodes have no
+ * worktree of their own), for a pre-#653 snapshot, and for a `merge` in an
+ * archived snapshot (the type is retired, ADR-0082 — its NodeRun's frozen
+ * isolation lives on `NodeStarted`). `skip_serializing_if` keeps the wire byte-identical
  * when absent.
  */
 isolated_worktree?: boolean, 

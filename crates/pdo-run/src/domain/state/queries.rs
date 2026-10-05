@@ -38,7 +38,6 @@ impl RunState {
             provisioning_rules: Vec::new(),
             start_node: None,
             end_node: None,
-            merge_resolver: None,
             loop_states: HashMap::new(),
             foreach_states: HashMap::new(),
             collection_states: HashMap::new(),

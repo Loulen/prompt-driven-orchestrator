@@ -18,8 +18,8 @@ export interface DrawnEdgeInput {
   /** Where on the source rim the gesture started. Absent when the drag did not
    *  start on a rim strip (a structural handle, or a synthetic connection). */
   sourceAnchor: EdgeAnchor | null;
-  /** Where on the target the arrow landed. Absent for a declared-port target
-   *  (a merge's input), which keeps its fixed side. */
+  /** Where on the target the arrow landed. Absent for a declared-port target,
+   *  which keeps its fixed side. */
   targetAnchor: EdgeAnchor | null;
   /** The side the arrow arrives on. */
   targetSide: PortSide;

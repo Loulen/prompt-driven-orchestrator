@@ -36,30 +36,6 @@ pub fn worktree_has_tracked_changes(worktree_dir: &std::path::Path) -> Result<bo
     Ok(status.lines().any(|line| !line.starts_with("??")))
 }
 
-pub fn has_conflict_markers(worktree_dir: &std::path::Path) -> Result<bool> {
-    let output = std::process::Command::new("git")
-        .args(["grep", "-rlE", "^<{7} |^={7}$|^>{7} "])
-        .current_dir(worktree_dir)
-        .output()
-        .context("git grep failed")?;
-
-    Ok(output.status.success() && !output.stdout.is_empty())
-}
-
-pub fn validate_merge_resolution(worktree_dir: &std::path::Path) -> Result<Vec<String>> {
-    let mut problems = Vec::new();
-
-    if has_conflict_markers(worktree_dir)? {
-        problems.push("conflict markers remain in tracked files".to_string());
-    }
-
-    if worktree_has_tracked_changes(worktree_dir)? {
-        problems.push("working tree is not clean (uncommitted changes)".to_string());
-    }
-
-    Ok(problems)
-}
-
 pub fn create_worktree(
     repo_root: &std::path::Path,
     worktree_dir: &std::path::Path,

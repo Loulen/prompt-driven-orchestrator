@@ -42,7 +42,6 @@ pub mod fail_node;
 pub mod forget_run;
 pub mod list;
 pub mod manager;
-pub mod merge_resolver;
 pub mod node;
 pub mod node_diff;
 pub mod operations;

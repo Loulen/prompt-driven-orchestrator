@@ -169,7 +169,7 @@ pub fn evaluate_outgoing_edges_full(
                 // that flipped the whole run `completed` when the fast branch
                 // arrived, stranding the sibling `running` with no way back (its
                 // late `pdo complete` → 409, and `resume_run` is a no-op on a
-                // terminal run). Gate like a `Merge`: complete only once EVERY
+                // terminal run). Gate like any convergence: complete only once EVERY
                 // inbound edge is resolved (source completed, is the just-completed
                 // node, or is a dead branch — so a suppressed conditional path
                 // never stalls the run).
@@ -317,7 +317,7 @@ pub fn evaluate_outgoing_edges_full(
     // would sit `Running` forever. Park instead, so the state is diagnosable.
     //
     // Only when this completion produced no forward progress: if `End` is still
-    // reachable through a live path, a Merge waiting on a running sibling is
+    // reachable through a live path, a convergence waiting on a running sibling is
     // normal, not a stall.
     if !is_switch
         && !actions.iter().any(|a| {

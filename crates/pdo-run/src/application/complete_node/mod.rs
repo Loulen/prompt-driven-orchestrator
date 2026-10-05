@@ -21,8 +21,6 @@ pub use outcome::*;
 use crate::application::events::append_event;
 use crate::application::events::load_events;
 use crate::application::events::run_is_forgotten;
-use crate::application::merge_resolver::merge_resolver_done;
-use crate::application::merge_resolver::MERGE_RESOLVER_NODE_ID;
 use crate::application::node::launch::node_run_isolation;
 use crate::application::node::output_validation::check_output_validation_with_retry;
 use crate::application::node::reap::reap_dead_node_after_run_failure;
@@ -67,18 +65,6 @@ impl Runs {
         } = command;
         if let Err(denied) = self.authorize(actor, &on_node("complete", &run_id, &node_id)) {
             return denied.into_response();
-        }
-
-        // `__merge_resolver__` is handled HERE, hoisted out of the shared body
-        // (ADR-0035 §6): it was the one site whose "stopped short" was a complete
-        // *success*, which kept "a stopped-short attempt is never a 2xx" from being
-        // a total invariant. Hoisting also removes the transition-guard bypass the
-        // branch performed by sitting *before* the guard.
-        //
-        // Safe: the liveness sweep, the other caller of the shared body, can never
-        // reach this id — no resolver session is ever spawned (ADR-0006).
-        if node_id == MERGE_RESOLVER_NODE_ID {
-            return merge_resolver_done(self, &run_id).await;
         }
 
         let source = if auto {

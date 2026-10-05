@@ -126,7 +126,7 @@ pub fn resolve_source_frontmatter(
 }
 
 /// Output frontmatter of every settled node in `run_state`, keyed by node id.
-/// Feeds convergence suppression (ADR-0011) so a `Merge` does not stall on a branch
+/// Feeds convergence suppression (ADR-0011) so a convergence node does not stall on a branch
 /// an upstream conditional/`else` edge permanently suppressed.
 pub fn resolve_completed_frontmatter(
     pipeline: &pipeline::PipelineDef,

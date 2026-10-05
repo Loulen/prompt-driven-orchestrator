@@ -103,9 +103,9 @@ describe("EffortPicker (#424, #616)", () => {
     expect(screen.queryByTestId("node-effort-option-passthrough")).toBeNull();
   });
 
-  it("honours the testid prefix so the merge inspector gets its own handles", () => {
-    render(<EffortPicker value="low" onChange={() => {}} efforts={EFFORTS} testid="merge-effort" />);
-    expect(screen.getByTestId("merge-effort-option-low")).toBeInTheDocument();
+  it("honours the testid prefix so each inspector gets its own handles", () => {
+    render(<EffortPicker value="low" onChange={() => {}} efforts={EFFORTS} testid="script-effort" />);
+    expect(screen.getByTestId("script-effort-option-low")).toBeInTheDocument();
     expect(screen.queryByTestId("node-effort-option-low")).toBeNull();
   });
 
@@ -158,11 +158,11 @@ describe("EffortPicker (#424, #616)", () => {
       // The supported list is EXACTLY Default + the served levels + the flagged
       // passthrough — the unsupported value renders no radio among the levels.
       render(
-        <EffortPicker value="max" onChange={() => {}} efforts={["off"]} testid="merge-effort" strict />,
+        <EffortPicker value="max" onChange={() => {}} efforts={["off"]} testid="node-effort" strict />,
       );
       expect(screen.getAllByRole("radio")).toHaveLength(3); // default, off, passthrough
-      expect(screen.queryByTestId("merge-effort-option-max")).toBeNull();
-      expect(screen.getByTestId("merge-effort-option-off")).toBeInTheDocument();
+      expect(screen.queryByTestId("node-effort-option-max")).toBeNull();
+      expect(screen.getByTestId("node-effort-option-off")).toBeInTheDocument();
     });
 
     it("warns nothing for a supported value", () => {

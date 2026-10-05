@@ -244,8 +244,8 @@ pub async fn spawn_node(
     // (post node → instance precedence, post empty-string collapse), read from the
     // winning harness's entry — NOT the raw NodeDef. The `NodeStarted` payload
     // records these resolved values (what the flags really carried, which the
-    // resume path reads back). `__manager__` / `__merge_resolver__` are infra
-    // sessions with no NodeDef and stay at the account default — they don't route
+    // resume path reads back). `__manager__` is an infra
+    // session with no NodeDef and stays at the account default — it does not route
     // through `spawn_node`.
     let resolved_model = resolved_harness.as_ref().and_then(|r| r.model.clone());
     let resolved_effort = resolved_harness.as_ref().and_then(|r| r.effort.clone());

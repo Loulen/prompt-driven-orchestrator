@@ -1360,6 +1360,105 @@ mod tests {
         assert!((infra.usd.unwrap() - 2.0).abs() < 1e-9);
     }
 
+    /// ADR-0082 replay seam: an ARCHIVED Run whose pipeline still had a `merge`
+    /// node, and which ran the (now deleted) merge resolver. The `merge` string
+    /// survives in the event log's payloads and the `MergeResolver*` kinds are
+    /// still deserialised: the node's frozen isolation attributes its transcript,
+    /// and the resolver's session still bills the Infrastructure bucket.
+    #[test]
+    fn an_archived_run_with_a_merge_node_and_a_resolver_is_still_costed() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude").join("projects");
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "archived-merge";
+        let node_dir = repo
+            .path()
+            .join(".pdo/runs")
+            .join(run_id)
+            .join("nodes/gather/iter-1");
+        let node_project = claude.join(cc_project_dirname(&node_dir));
+        std::fs::create_dir_all(&node_project).unwrap();
+        std::fs::write(
+            node_project.join("sid-gather.jsonl"),
+            format!(
+                "{}\n",
+                assistant("gather", "req-gather", "claude-opus-4-8", 1_000_000, 0)
+            ),
+        )
+        .unwrap();
+        let worktree = repo.path().join(".pdo/runs").join(run_id).join("worktree");
+        let run_project = claude.join(cc_project_dirname(&worktree));
+        std::fs::create_dir_all(&run_project).unwrap();
+        std::fs::write(
+            run_project.join("resolver.jsonl"),
+            format!(
+                "{}\n",
+                assistant("resolver", "req-resolver", "claude-opus-4-8", 400_000, 0)
+            ),
+        )
+        .unwrap();
+        let event = |kind, node_id: Option<&str>, payload| Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind,
+            node_id: node_id.map(str::to_string),
+            iter: node_id.map(|_| 1),
+            payload,
+        };
+        let events = vec![
+            event(
+                EventKind::RunStarted,
+                None,
+                Some(serde_json::json!({
+                    "harness": "claude",
+                    "node_defs": [{
+                        "id": "gather", "name": "Gather", "node_type": "merge",
+                        "view_x": null, "view_y": null,
+                        "inputs": [{"name": "branches", "side": "left"}],
+                        "outputs": [{"name": "merged", "side": "right"}]
+                    }]
+                })),
+            ),
+            event(
+                EventKind::NodeStarted,
+                Some("gather"),
+                Some(serde_json::json!({
+                    "node_type": "merge", "isolated_worktree": true,
+                    "harness": "claude", "session_id": "sid-gather"
+                })),
+            ),
+            event(
+                EventKind::MergeResolverStarted,
+                None,
+                Some(serde_json::json!({"conflicting_node_id": "gather", "iter": 1})),
+            ),
+            event(EventKind::MergeResolverCompleted, None, None),
+        ];
+        // The log still projects: the retired type and events are data, not errors.
+        let state = crate::domain::projection::project(&events).unwrap();
+        assert_eq!(state.node_defs[0].node_type, "merge");
+
+        let breakdown =
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
+
+        let node = breakdown
+            .contributions
+            .iter()
+            .find(|c| c.scope == CostScope::Node)
+            .expect("the former Merge is costed as an agentic node");
+        assert_eq!(node.node_id.as_deref(), Some("gather"));
+        assert!((node.usd.unwrap() - 5.0).abs() < 1e-9);
+        let infra = breakdown
+            .contributions
+            .iter()
+            .find(|c| c.scope == CostScope::Infrastructure)
+            .expect("the resolver session stays on the Infrastructure line");
+        assert!((infra.usd.unwrap() - 2.0).abs() < 1e-9);
+        assert!((breakdown.cost.unwrap().usd - 7.0).abs() < 1e-9);
+    }
+
     #[test]
     fn non_claude_infrastructure_keeps_run_harness_and_unknown_session_cost() {
         let home = tempfile::tempdir().unwrap();

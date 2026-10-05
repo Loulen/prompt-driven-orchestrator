@@ -54,9 +54,17 @@ into a named, **bounded loop** (`↻ 1/8` on the canvas) with a `max_iter`, so a
 forever. A **collection loop** fans a node out over a list field of its input, with laps running in
 parallel.
 
+Branches converge on any node: wire several edges into an `agent` and it waits until each incoming
+edge has fired or died, receives only the outputs of the branches that fired (same-named edges group
+into one input), and finds each isolated branch's code already merged back on the run's branch. A
+node whose every branch died is skipped; if that makes `End` unreachable, the run halts explicitly
+(« unrouted ») instead of stalling. There is no dedicated Merge node: the converging node carries its
+own prompt, so it can do real synthesis work.
+
 Decisions: [ADR-0002](adr/0002-mechanical-conditionals-only.md),
 [ADR-0011](adr/0011-conditional-edges-and-loop-regions.md),
-[ADR-0026](adr/0026-collection-region-live-wiring.md).
+[ADR-0026](adr/0026-collection-region-live-wiring.md),
+[ADR-0082](adr/0082-la-convergence-est-portee-par-tout-noeud-le-merge-est-retire.md).
 
 ## Typed outputs
 
@@ -130,7 +138,7 @@ Which harness reports what: [harnesses.md](reference/harnesses.md).
 
 ## Interactive and orchestrator nodes
 
-Two flags of an agent node, independent of its type (`agent`, `script`, `merge`): together they
+Two flags of an agent node, independent of its type (`agent`, `script`): together they
 make its **node kind**, and a node can be both.
 
 Turn **Interactive** on and a human talks to the node. When its agent needs you (a question, a

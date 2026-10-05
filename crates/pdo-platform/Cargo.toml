@@ -14,6 +14,9 @@ publish = false
 
 [dependencies]
 pdo-kernel.workspace = true
+# The audit journal returns the Actor of a row and its display name (`ts`: their
+# TypeScript, like the daemon's).
+pdo-extension-api = { workspace = true, features = ["ts"] }
 anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true
@@ -31,5 +34,4 @@ ts-rs.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-pdo-extension-api.workspace = true
 tempfile.workspace = true

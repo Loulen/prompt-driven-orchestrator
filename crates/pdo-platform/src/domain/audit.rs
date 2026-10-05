@@ -9,6 +9,7 @@
 //! the seam: read the before → mutate → write the audit **after the commit**,
 //! best-effort. A failed write is logged and never fails the mutation.
 
+use pdo_extension_api::{Actor, ActorDisplay};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -19,6 +20,15 @@ pub struct AuditEntry {
     pub id: i64,
     pub ts: String,
     pub actor_hint: String,
+    /// The Actor of the request that made the mutation (0.8), absent on the
+    /// rows written before, or outside a request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub actor: Option<Actor>,
+    /// How that Actor shows, when an extension names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub actor_display: Option<ActorDisplay>,
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

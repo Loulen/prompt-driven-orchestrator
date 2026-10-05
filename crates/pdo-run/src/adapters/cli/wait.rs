@@ -27,7 +27,10 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
         .as_deref()
         .map(pdo_session::domain::declared_wait::truncate_message)
         .filter(|m| !m.is_empty());
-    let resp = match reqwest::blocking::Client::new()
+    let resp = match reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
+        .build()
+        .unwrap_or_default()
         .post(format!("{url}/runs/{rid}/nodes/{nid}/wait-user"))
         .header(SESSION_RUN_HEADER, &rid)
         .header(SESSION_NODE_HEADER, &nid)
@@ -96,6 +99,7 @@ pub fn run_run_wait(all: bool, timeout: Option<u64>) -> std::process::ExitCode {
     };
     let url = cli_daemon_url();
     let client = reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
         .timeout(std::time::Duration::from_secs(
             CHILDREN_WAIT_SERVER_MAX_SECS + 15,
         ))

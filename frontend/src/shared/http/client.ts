@@ -4,6 +4,8 @@
  * The typed wrappers of each context sit on top of it.
  */
 
+import { followSignInOf } from "./signIn";
+
 /** Same-origin: the daemon serves the UI, so every path is relative to it. */
 export const BASE = "";
 
@@ -266,6 +268,9 @@ export async function request<T = unknown>(
     // `undefined` ⇔ the body is not JSON at all — a proxy's HTML error page,
     // never the daemon, whose refusals always carry `{ error }` (#839).
     const errBody: unknown = await resp.json().catch(() => undefined);
+    // 0.8: an extension refused a request nobody identified, naming its
+    // sign-in page: go there (once), the call still fails below.
+    if (resp.status === 401) followSignInOf(errBody);
     const line =
       typeof (errBody as { line?: unknown } | null)?.line === "number"
         ? (errBody as { line: number }).line

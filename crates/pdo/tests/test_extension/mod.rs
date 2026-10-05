@@ -3,8 +3,12 @@
 //! published.
 //!
 //! - **`identify`**: the caller named by the [`ACTOR_HEADER`] request header
-//!   becomes `Actor::Identified { namespace: "test", id }`; without the
-//!   header, the core decides.
+//!   becomes `Actor::Identified { namespace: "test", id }`; so does the holder
+//!   of the token it may require (`gate.rs`, [`Control::set_gate`]); otherwise
+//!   the core decides.
+//! - **`admit`**: with a token required, refuses a request nobody identified,
+//!   or redirects it to its sign-in page (`gate.rs`).
+//! - **`display_name`**: names the Actors it identifies (`alice` → `Alice`).
 //! - **`authorize`**: refuses what its [`Refusal`] says, with a reason naming the
 //!   Operation. The refusal can change while the daemon runs ([`Control::set`]),
 //!   so a test seeds its fixtures before refusing everything.
@@ -35,6 +39,8 @@
 //!   one.
 //! - **`cli`** / **`run_cli`**: `pdo ext test echo|cat|exit|panic` (see
 //!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
+//! - `topbar/account` (0.8): `AccountMenu`, an avatar opening a menu that
+//!   names the signed-in Actor through `useCurrentActor` of `@pdo/extension-ui`.
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
@@ -52,6 +58,7 @@
 //!
 //! [`Host`]: pdo::extension_api::Host
 
+pub mod gate;
 pub mod hosted;
 pub mod interop;
 mod routes;
@@ -62,9 +69,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pdo::extension_api::{
-    Actor, Attributes, Authorization, CliInvocation, CliOutput, CliSpec, EntityRef, Extension,
-    ExtensionContext, ExtensionSkill, Manifest, Operation, RequestParts, ResourceKind, Slot,
-    UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
+    Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
+    EntityRef, Extension, ExtensionContext, ExtensionSkill, Manifest, Operation, RequestParts,
+    ResourceKind, Slot, UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -257,6 +264,7 @@ pub struct Control {
     cli_calls: Arc<Mutex<Vec<CliInvocation>>>,
     commands: Arc<Mutex<Vec<Value>>>,
     sections: Arc<Mutex<Vec<Value>>>,
+    gate: gate::SharedGate,
 }
 
 impl Default for Control {
@@ -271,11 +279,21 @@ impl Default for Control {
             cli_calls: Arc::default(),
             commands: Arc::default(),
             sections: Arc::default(),
+            gate: Arc::default(),
         }
     }
 }
 
 impl Control {
+    /// What the extension requires to admit a request (a token, or nothing).
+    pub fn set_gate(&self, gate: gate::Gate) {
+        *self.gate.lock().unwrap() = gate;
+    }
+
+    pub fn gate(&self) -> gate::Gate {
+        self.gate.lock().unwrap().clone()
+    }
+
     pub fn set(&self, refusal: Refusal) {
         *self.refusal.lock().unwrap() = Some(refusal);
     }
@@ -384,11 +402,25 @@ impl Extension for TestExtension {
     }
 
     fn identify(&self, request: &RequestParts) -> Option<Actor> {
-        let caller = request.headers.get(ACTOR_HEADER)?.to_str().ok()?.trim();
-        (!caller.is_empty()).then(|| Actor::Identified {
-            namespace: ID.to_string(),
-            id: caller.to_string(),
-        })
+        let named = request
+            .headers
+            .get(ACTOR_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|caller| !caller.is_empty())
+            .map(|caller| Actor::Identified {
+                namespace: ID.to_string(),
+                id: caller.to_string(),
+            });
+        named.or_else(|| gate::identify(&self.control.gate(), request))
+    }
+
+    fn admit(&self, request: &RequestParts) -> Admission {
+        gate::admit(&self.control.gate(), request)
+    }
+
+    fn display_name(&self, actor: &Actor) -> Option<ActorDisplay> {
+        gate::display_name(actor)
     }
 
     fn start(&self, context: &ExtensionContext) {
@@ -428,6 +460,7 @@ impl Extension for TestExtension {
         let show_context = UiCommand::new(SHOW_CONTEXT, "Show context", "showContext");
         let never = UiCommand::new("test.never", "Never shown", "showContext");
         let mut ui = UiContributions::bundle(format!("/ext/{ID}/ui.js"), major)
+            .importing_ui_module()
             .with(UiSlot::new(
                 Slot::Navigation,
                 "events",
@@ -556,6 +589,13 @@ impl Extension for TestExtension {
                 "status-badge",
                 "Test",
                 "EntityBadge",
+            ))
+            // 0.8: the avatar of the signed-in Actor, after Settings.
+            .contribute(UiContribution::decoration(
+                UiLocation::TopbarAccount,
+                "account",
+                "Account",
+                "AccountMenu",
             ))
             // Throws on every render: its error boundary keeps it to its own mark.
             .contribute(UiContribution::decoration(

@@ -10,6 +10,28 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.17.0 — Seams d'identité de IAM-1 : admission, jeton de la CLI, nom d'affichage (CORE-2)
+
+`pdo-extension-api` passe en **0.8.0** : ajouts seulement, une extension 0.1 à 0.7 compile et
+tourne toujours. Ticket CORE-2 du Backlog `CORE` (story IAM-1 de `pdo-extensions`). Amendement
+CORE-2 d'ADR-0081.
+
+- **Admission d'une requête** (`Extension::admit`) : une extension peut refuser (`401`
+  `unauthenticated`) ou renvoyer vers sa page de connexion une requête qu'aucune extension n'a
+  identifiée, sur toutes les routes, `/ws` et les PTY compris, jamais sur les fichiers de
+  l'interface. L'interface suit la redirection avant de rendre quoi que ce soit (`next=` ramène
+  au lien profond). Sans extension qui le demande, rien ne change.
+- **`PDO_TOKEN`** : toute commande de la CLI qui parle au démon l'envoie en
+  `Authorization: Bearer`. Nouvelle commande `pdo run list [--json]`.
+- **Nom d'affichage d'un Acteur** (`Extension::display_name`, `Host::display_name`,
+  `GET /actors/me`, `POST /actors/display`, `useCurrentActor` / `useActorDisplay` du module
+  partagé) ; le journal d'audit (`GET /audit`) rend `actor` et `actor_display` (colonne `actor`
+  ajoutée à `audit_log`, sans backfill : les anciennes lignes n'ont pas d'Acteur) ; la ligne d'un
+  Run nomme son créateur quand une extension le nomme.
+- Nouvel emplacement d'UI `topbar/account` (Décoration, après Settings) pour le menu de l'avatar.
+- Nouvelles routes de premier niveau `/actors/*` : un reverse proxy qui filtre par préfixe doit
+  les laisser passer.
+
 ## 2.16.0 — Lien profond vers un Run, factory du core dans `pm` (CORE-1)
 
 Aucun changement du crate : `pdo-extension-api` reste en **0.7.0**. Aucun changement daemon.

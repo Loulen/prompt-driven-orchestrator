@@ -5,19 +5,20 @@ import { useDaemonSocket } from "./useDaemonSocket";
 /** A socket the test drives: it records every instance and fires its events on demand. */
 class FakeSocket {
   static instances: FakeSocket[] = [];
-  listeners = new Map<string, (() => void)[]>();
+  listeners = new Map<string, ((event: object) => void)[]>();
   url: string;
   constructor(url: string) {
     this.url = url;
     FakeSocket.instances.push(this);
   }
-  addEventListener(type: string, listener: () => void) {
+  addEventListener(type: string, listener: (event: object) => void) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
   /** Like a browser: the "close" event arrives later, not inside `close()`. */
   close() {}
-  fire(type: string) {
-    for (const listener of this.listeners.get(type) ?? []) listener();
+  /** A "close" carries 1000 (a normal close) unless told otherwise. */
+  fire(type: string, event: object = type === "close" ? { code: 1000 } : {}) {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 }
 
@@ -41,6 +42,19 @@ describe("useDaemonSocket", () => {
       vi.advanceTimersByTime(3000);
     });
     expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it("asks whether to sign in when the upgrade failed (1006), and only then", () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderHook(() => useDaemonSocket());
+    act(() => FakeSocket.instances[0].fire("close"));
+    expect(fetchMock).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    act(() => FakeSocket.instances[1].fire("close", { code: 1006 }));
+    expect(fetchMock).toHaveBeenCalledWith("/actors/me");
   });
 
   it("never reconnects once unmounted, even when the close event arrives after", () => {

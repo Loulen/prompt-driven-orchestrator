@@ -264,7 +264,13 @@ pub(crate) fn mount(router: Router, extensions: &Extensions) -> Router {
             let prefix = format!("/ext/{id}");
             let unserved =
                 move |OriginalUri(uri): OriginalUri| async move { not_found(&id, uri.path()) };
-            router = router.nest(&prefix, routes.fallback(unserved));
+            // `admit` on the nested router itself: its fallbacks (`unserved`,
+            // and any the extension declares in a sub-router) land in the
+            // parent's fallback, which `identify`'s `route_layer` never wraps.
+            let routes = routes
+                .fallback(unserved)
+                .layer(axum::middleware::from_fn(crate::identify::admit));
+            router = router.nest(&prefix, routes);
         }
     }
     // What no route under `/ext` claims. A fallback, not a `/ext/{id}/{*rest}`
@@ -281,9 +287,12 @@ pub(crate) fn mount(router: Router, extensions: &Extensions) -> Router {
             None => extension_not_found(id, false),
         }
     };
-    router
-        .route("/ext/", any(absent.clone()))
-        .nest("/ext", Router::new().fallback(absent))
+    router.route("/ext/", any(absent.clone())).nest(
+        "/ext",
+        Router::new()
+            .fallback(absent)
+            .layer(axum::middleware::from_fn(crate::identify::admit)),
+    )
 }
 
 /// The `<id>` of `/ext/<id>…`; empty for `/ext/`.

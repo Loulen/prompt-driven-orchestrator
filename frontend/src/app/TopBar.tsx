@@ -1,13 +1,19 @@
 import { BarChart3, Settings } from "lucide-react";
+import type { DecorationContext } from "../shared/extensions/contract";
 import ExtensionBanner from "../shared/extensions/ExtensionBanner";
+import ExtensionDecorations from "../shared/extensions/ExtensionDecorations";
 import ExtensionNavigation from "../shared/extensions/ExtensionNavigation";
 import ExtensionPageHost from "../shared/extensions/ExtensionPageHost";
 import ExtensionTopbarEnd from "../shared/extensions/ExtensionTopbarEnd";
 
+/** What `topbar/account` adds to the base context: no item. */
+const ACCOUNT_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { entity: null };
+
 /**
  * The app's top bar: the PDO mark, the extensions' `topbar/start` entries, then
- * the right-hand group: the extensions' `topbar/end` icons, Stats and the
- * Settings gear. Under it, the banner of the extensions whose interface could
+ * the right-hand group: the extensions' `topbar/end` icons, Stats, the
+ * Settings gear, then the extensions' `topbar/account` components (an
+ * avatar menu, say). Under it, the banner of the extensions whose interface could
  * not be loaded; over everything, the extension page open (by its entry or its
  * deep link).
  */
@@ -62,6 +68,12 @@ export default function TopBar({
           >
             <Settings size={15} />
           </button>
+          {/* 0.8: the `topbar/account` components, after Settings (none without extension). */}
+          <ExtensionDecorations<DecorationContext>
+            location="topbar/account"
+            extra={ACCOUNT_ITEM}
+            className="ml-1 flex-nowrap"
+          />
         </div>
       </header>
       {/* ADR-0081: a UI bundle built for another React is not loaded: the banner says so. */}

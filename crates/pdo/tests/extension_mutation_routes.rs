@@ -42,6 +42,11 @@ const NOT_MUTATIONS: &[(&str, &str, &str)] = &[
         "relays `pdo ext <id>` to the extension (#33): the core stores nothing, and what the \
          command mutates is the extension's to authorize",
     ),
+    (
+        "POST",
+        "/actors/display",
+        "asks the extensions how a list of Actors shows (0.8); stores nothing",
+    ),
 ];
 
 /// One request aimed at a route: its method, its template, the concrete path

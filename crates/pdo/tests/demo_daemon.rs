@@ -12,6 +12,13 @@
 //!   are read from `$PDO_DEMO_ROOT/.pdo/pipelines`, not from `$HOME`.
 //! - `PDO_TEST_EXTENSION_REFUSE`: what the test extension refuses (`none`, `all`,
 //!   `panic`, `<resource>:<verb>`), `project:update` by default.
+//! - `PDO_TEST_EXTENSION_TOKEN`: the token the test extension requires
+//!   (`test_extension/gate.rs`); unset, it admits every request. The CLI sends
+//!   it as `PDO_TOKEN`, the browser signs in on `/ext/test/sign-in`; its holder
+//!   is the identified Actor `alice`, shown « Alice ». `PUT /ext/test/gate
+//!   {"token": …, "redirect": …}` switches it while the daemon runs.
+//! - `PDO_TEST_EXTENSION_REDIRECT`: `1` redirects a refused request to the
+//!   sign-in page (the UI follows it) instead of a bare `401`.
 //! - `PDO_TEST_EXTENSION_INCOMPATIBLE`: `1` starts with the UI bundle declaring
 //!   a React major the front does not run (`POST /ext/test/incompatible` switches
 //!   it while the daemon runs).
@@ -72,6 +79,7 @@ async fn demo_daemon() {
 
     let config = pdo::Config::from_cli(Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), port).unwrap();
     let (ext, control) = TestExtension::new(refusal.clone());
+    control.set_gate(crate::test_extension::gate::Gate::from_env());
     control
         .set_incompatible(std::env::var("PDO_TEST_EXTENSION_INCOMPATIBLE").as_deref() == Ok("1"));
     let mut extensions = ext.boxed();

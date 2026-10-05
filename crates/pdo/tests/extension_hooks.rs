@@ -484,6 +484,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("port/item", "decoration", "port-badge"),
         triple("review/file", "decoration", "file-badge"),
         triple("statusbar", "decoration", "status-badge"),
+        triple("topbar/account", "decoration", "account"),
         triple("statusbar", "decoration", "exploding"),
         triple("triggers/filter", "list_filter", "triggers-started-by"),
         triple("pipelines/filter", "list_filter", "pipelines-started-by"),

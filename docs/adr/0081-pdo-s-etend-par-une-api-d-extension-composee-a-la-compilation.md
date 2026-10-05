@@ -441,3 +441,48 @@ déborder : les Onglets des extensions s'ajoutent après ceux du core.
 Écartés : un type de contribution par emplacement (une « Section de formulaire »), parce que le
 contrat du Save est le même partout où l'hôte en a un ; un Save des Sections avant celui du core,
 impossible pour un Projet créé, qui n'a pas encore d'id.
+
+## Amendement CORE-2 : admission, jeton de la CLI, nom d'affichage d'un Acteur
+
+Pour l'extension `iam` de `Loulen/pdo-extensions` (ADR-0005 de ce repo, qui amende son ADR-0001) :
+une extension d'identité doit pouvoir fermer la porte aux anonymes, la CLI doit pouvoir s'identifier,
+et tout le monde doit pouvoir afficher « Alice » sans connaître `iam`. Trois seams génériques,
+exercés par l'extension de test interne (`crates/pdo/tests/test_extension/gate.rs`).
+
+- **Admission d'une requête** (`Extension::admit`, `Admission`) : une requête qu'**aucune**
+  extension n'a identifiée passe par l'`admit` de chaque extension, dans l'ordre d'enregistrement ;
+  la première qui ne l'admet pas gagne, une panique refuse. `Refuse { reason }` répond `401`
+  `{"error": "unauthenticated", "message", "reason"}` ; `Redirect { to }` ajoute `"redirect": to`,
+  la page de connexion de l'extension. Le middleware `identify` garde **toutes les routes** (API,
+  `/ws`, PTY des terminaux, routes des extensions, `/ext-cli`), **jamais le fallback de la SPA** :
+  l'interface se charge toujours, puis suit la redirection. Défaut neutre : tout est admis. Le mot
+  « admission » seul reste réservé au cap de sessions (CONTEXT.md).
+- **L'interface suit la redirection** : une porte (`SignInGate`) demande `GET /actors/me` avant de
+  rendre l'app ; tout appel refusé avec `redirect` envoie le navigateur sur la page, une fois, avec
+  `next=<chemin, requête et hash>` pour revenir au lien profond. Les sockets (`/ws`, PTY), dont le
+  navigateur ne voit pas le statut d'un upgrade refusé, sondent `GET /actors/me` à leur fermeture
+  anormale (1006).
+- **Jeton de la CLI** : toute commande qui parle au démon envoie `PDO_TOKEN` en
+  `Authorization: Bearer` (`pdo_kernel::env::cli_headers`), que l'extension lit dans `identify`.
+  `pdo run list` s'ajoute, client mince de `GET /runs`.
+- **Nom d'affichage d'un Acteur** (`Extension::display_name`, `ActorDisplay { name, avatar_url }`) :
+  la première extension qui nomme l'Acteur gagne, une panique est ignorée. Donné par l'Hôte
+  (`Host::display_name`, défaut `None`), par HTTP (`GET /actors/me`, `POST /actors/display`) et au
+  contexte d'UI par le module partagé (`useCurrentActor`, `useActorDisplay`). Le core l'affiche :
+  le journal d'audit enregistre l'Acteur de la requête (colonne `actor`, ajoutée sans backfill) et
+  rend `actor_display` ; la ligne d'un Run nomme son créateur (`created_by`, CORE-4) quand une
+  extension le nomme, et rien sinon.
+- **Emplacement `topbar/account`** : tout à droite de la barre du haut, **après Settings**, il rend
+  tel quel le composant d'une Décoration (un avatar qui ouvre le menu de la personne connectée) ;
+  `topbar/end` ne rend que des boutons icône, trop pauvres pour un menu à en-tête.
+- **`Actor`** devient désérialisable (et exporté en TypeScript) : on l'envoie en `POST
+  /actors/display`.
+- **Version** : `pdo-extension-api` passe en **0.8.0** (après 0.7.0, amendement #31 ; ajouts : des
+  méthodes à défaut sur `Extension` et `Host`, des types, une variante de `UiLocation`). Une
+  extension 0.1 à 0.7 compile et tourne toujours.
+
+Écartés : une redirection HTTP `302` sur la navigation (le hash du lien profond ne part pas au
+serveur, la page ne saurait pas où revenir) ; un type de contribution « menu » rendu par le core
+(l'en-tête nom, e-mail, badge et les libellés à droite des entrées sont propres à chaque
+extension) ; consulter l'admission pour les fichiers de la SPA (ils ne portent aucune donnée, et
+sans eux rien ne suit la redirection).

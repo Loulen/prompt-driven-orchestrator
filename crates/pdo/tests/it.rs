@@ -23,6 +23,9 @@ mod admission_concurrency;
 #[path = "cli_complete_does_not_panic.rs"]
 mod cli_complete_does_not_panic;
 
+#[path = "extension_identity.rs"]
+mod extension_identity;
+
 #[path = "cli_run_create.rs"]
 mod cli_run_create;
 

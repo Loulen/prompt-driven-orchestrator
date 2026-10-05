@@ -3,6 +3,7 @@
 // A plain ES module, no build step: `react` is the front's own, shared through
 // its import map.
 import React from "react";
+import { useCurrentActor } from "@pdo/extension-ui";
 
 const h = React.createElement;
 
@@ -254,4 +255,66 @@ export function EntityBadge({ entity, context }) {
 // else of the status bar moves.
 export function Exploding() {
   throw new Error("the test extension's exploding decoration");
+}
+
+// `topbar/account` (0.8): the signed-in Actor's avatar, after Settings, opening
+// a menu with its name (`useCurrentActor` of the shared module) and Sign out
+// (the sign-in page's cookie dropped, back to the sign-in page).
+export function AccountMenu() {
+  const current = useCurrentActor();
+  const [open, setOpen] = React.useState(false);
+  const name = current?.display?.name ?? current?.actor?.kind ?? "…";
+  const initials = name.slice(0, 2).toUpperCase();
+  const signOut = () => {
+    document.cookie = "pdo-test-token=; path=/; max-age=0";
+    window.location.assign(`/ext/test/sign-in?next=${encodeURIComponent(window.location.hash ? "/" + window.location.hash : "/")}`);
+  };
+  return h(
+    "span",
+    { style: { position: "relative", display: "inline-flex" } },
+    h(
+      "button",
+      {
+        type: "button",
+        "aria-label": `Account: ${name}`,
+        "data-testid": "test-account-avatar",
+        onClick: () => setOpen((o) => !o),
+        style: {
+          width: "24px",
+          height: "24px",
+          borderRadius: "999px",
+          border: "none",
+          background: "#f97316",
+          color: "#fff",
+          fontSize: "9px",
+          fontWeight: 600,
+          cursor: "pointer",
+        },
+      },
+      initials,
+    ),
+    open &&
+      h(
+        "div",
+        {
+          role: "menu",
+          "data-testid": "test-account-menu",
+          style: {
+            position: "absolute",
+            right: 0,
+            top: "30px",
+            zIndex: 50,
+            minWidth: "200px",
+            padding: "8px",
+            borderRadius: "8px",
+            border: "1px solid rgba(127,127,127,.3)",
+            background: "var(--bg-3, #1b1e24)",
+            ...box,
+          },
+        },
+        h("strong", { "data-testid": "test-account-name" }, name),
+        h("span", { style: muted }, current?.actor?.kind ?? ""),
+        h("button", { type: "button", role: "menuitem", onClick: signOut }, "Sign out"),
+      ),
+  );
 }

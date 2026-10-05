@@ -47,6 +47,8 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
     // The core's side of the extensions (`GET /ext`); each extension's own
     // routes, nested under `/ext/<id>/`, are the extension's.
     ("src/extensions.rs", "pub fn router("),
+    // Who the caller is, and the display names (`/actors`).
+    ("src/actors.rs", "pub(crate) fn router("),
 ];
 
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];

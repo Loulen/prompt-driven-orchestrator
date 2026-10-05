@@ -31,6 +31,19 @@ export interface HostedElement {
   context: HostedContext;
 }
 
+/** Who triggers a mutation (since 0.8): the core's `Actor`, as on the wire. */
+export type Actor =
+  | { kind: "local_operator" }
+  | { kind: "agent"; run_id: string; node_id: string }
+  | { kind: "trigger"; trigger_id: string }
+  | { kind: "identified"; namespace: string; id: string };
+
+/** How an Actor shows, as an extension names it (since 0.8). */
+export interface ActorDisplay {
+  name: string;
+  avatar_url: string | null;
+}
+
 /** The version of `pdo-extension-api` the module comes with, and its major. */
 export const version: string;
 export const major: number;
@@ -47,6 +60,11 @@ export function HostedContributions(props: {
   props?: Record<string, unknown>;
   wrap?: (element: HostedElement, rendered: ReactNode) => ReactNode;
 }): ReactNode;
+/** The UI's own Actor and its display name; `null` until known (since 0.8). */
+export function useCurrentActor(): { actor: Actor; display: ActorDisplay | null } | null;
+/** The display name of `actor`; `null` while unknown or when no extension
+ *  names it (since 0.8). */
+export function useActorDisplay(actor: Actor | null | undefined): ActorDisplay | null;
 
 declare const ExtensionUi: {
   version: string;
@@ -55,5 +73,7 @@ declare const ExtensionUi: {
   runHostedCommand: typeof runHostedCommand;
   HostedContribution: typeof HostedContribution;
   HostedContributions: typeof HostedContributions;
+  useCurrentActor: typeof useCurrentActor;
+  useActorDisplay: typeof useActorDisplay;
 };
 export default ExtensionUi;

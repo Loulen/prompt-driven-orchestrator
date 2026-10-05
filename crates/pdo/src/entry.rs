@@ -13,8 +13,8 @@ use pdo_kernel::extension_host::Extensions;
 use pdo_platform::adapters::cli::{run_page, run_service, ServiceAction};
 use pdo_review::adapters::cli::run_review;
 use pdo_run::adapters::cli::{
-    run_complete, run_fail, run_reap, run_run_create, run_run_wait, run_skip, run_wait_user,
-    RunAction,
+    run_complete, run_fail, run_reap, run_run_create, run_run_list, run_run_wait, run_skip,
+    run_wait_user, RunAction,
 };
 
 use crate::cli::{run_docs, run_ext, run_migrate, Cli, Commands};
@@ -141,6 +141,7 @@ where
         Commands::Run { action } => match *action {
             // `run wait` owns the `2` (timeout, not a failure).
             RunAction::Wait { all, timeout } => run_run_wait(all, timeout),
+            RunAction::List { json } => exit(run_run_list(json)),
             create => exit(run_run_create(create)),
         },
         Commands::Page { action } => exit(run_page(action)),

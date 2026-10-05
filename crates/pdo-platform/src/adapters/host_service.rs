@@ -63,6 +63,7 @@ impl ServiceHost for RealServiceHost {
             return PortState::Foreign;
         }
         let client = match reqwest::blocking::Client::builder()
+            .default_headers(pdo_kernel::env::cli_headers())
             .timeout(Duration::from_millis(800))
             .build()
         {

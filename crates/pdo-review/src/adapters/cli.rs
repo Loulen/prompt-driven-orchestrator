@@ -50,7 +50,10 @@ pub enum ReviewAction {
 /// node id); `--run` only changes which Run is addressed, never who speaks.
 pub fn run_review(action: ReviewAction) -> Result<()> {
     let url = cli_daemon_url();
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
+        .build()
+        .unwrap_or_default();
     let session = session_env_claim();
     let with_identity = |request: reqwest::blocking::RequestBuilder| {
         let mut request = request.header("X-PDO-Actor", "cli");

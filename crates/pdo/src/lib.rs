@@ -13,6 +13,7 @@
 //! the re-exported [`extension_api`] are covered by semver. Everything else in
 //! the workspace promises nothing.
 
+mod actors;
 mod attributes;
 #[doc(hidden)]
 pub mod cli;

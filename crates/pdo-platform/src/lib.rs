@@ -125,7 +125,7 @@ impl Platform {
             read_pages: ReadPages::new(page_mounts.clone(), page_files),
             release_run_pages: ReleaseRunPages::new(page_mounts.clone(), lock),
             record_audit,
-            list_audit: ListAudit::new(audit.clone()),
+            list_audit: ListAudit::new(audit.clone(), extensions.clone()),
             check_for_update: CheckForUpdate::new(context.clone(), extensions.clone()),
             get_update_status: GetUpdateStatus::new(context.clone()),
             get_changelog: GetChangelog::new(context.clone()),

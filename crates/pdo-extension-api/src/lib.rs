@@ -2,7 +2,8 @@
 //!
 //! An [`Extension`] is registered when the daemon starts (`pdo::serve(config,
 //! extensions)`) and plugs into the core's generic hooks: identify the [`Actor`]
-//! of a request, authorize or refuse an [`Operation`], stamp [`Attributes`] on a
+//! of a request (and refuse one nobody identified, [`Admission`]), show an
+//! Actor's name ([`ActorDisplay`]), authorize or refuse an [`Operation`], stamp [`Attributes`] on a
 //! new entity, observe events, contribute routes and UI, answer a command line
 //! (`pdo ext <id> <args…>`) and bring skills into the Banque de skills.
 //!
@@ -22,7 +23,9 @@
 //! daemon already broadcasts on `/ws`, never an internal Rust enum.
 
 mod actor;
+mod admission;
 mod cli;
+mod display;
 mod entity;
 mod event;
 mod extension;
@@ -33,7 +36,9 @@ mod skill;
 mod ui;
 
 pub use actor::Actor;
+pub use admission::{Admission, UNAUTHENTICATED};
 pub use cli::{CliInvocation, CliOutput, CliSpec, EXIT_NO_CLI};
+pub use display::ActorDisplay;
 pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
 pub use extension::{
@@ -58,5 +63,6 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// extension requiring any version from this one up to [`API_VERSION`] runs.
 /// In 0.x a minor may break; this is where the API says which ones did not
 /// (0.2 only added to 0.1, ADR-0081 amendment #29; 0.3 broke only compilation,
-/// amendment #34; 0.4 only added to 0.3, amendment #32).
+/// amendment #34; 0.4 only added to 0.3, amendment #32; 0.8 only added to
+/// 0.7: admission, display names, the `topbar/account` location).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

@@ -25,10 +25,13 @@ fn storage(error: sqlx::Error) -> StorageError {
 fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<AuditEntry, sqlx::Error> {
     let before: Option<String> = row.try_get("before")?;
     let after: Option<String> = row.try_get("after")?;
+    let actor: Option<String> = row.try_get("actor")?;
     Ok(AuditEntry {
         id: row.get("id"),
         ts: row.get("ts"),
         actor_hint: row.get("actor_hint"),
+        actor: actor.and_then(|s| serde_json::from_str(&s).ok()),
+        actor_display: None,
         action: row.get("action"),
         target_kind: row.try_get("target_kind")?,
         target_id: row.try_get("target_id")?,
@@ -38,8 +41,8 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<AuditEntry, sqlx::Error
 }
 
 impl AuditLog for SqliteAuditLog {
-    /// `CREATE TABLE IF NOT EXISTS`, no `ALTER`, no backfill: no risk on a
-    /// production `pdo.db`.
+    /// `CREATE TABLE IF NOT EXISTS`, then the one nullable `actor` column
+    /// added when missing (0.8), no backfill: no risk on a production `pdo.db`.
     fn init(&self) -> BoxFuture<'_, Result<(), StorageError>> {
         Box::pin(async move {
             sqlx::query(
@@ -57,6 +60,18 @@ impl AuditLog for SqliteAuditLog {
             .execute(&self.db)
             .await
             .map_err(storage)?;
+            let has_actor: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('audit_log') WHERE name = 'actor'",
+            )
+            .fetch_one(&self.db)
+            .await
+            .map_err(storage)?;
+            if !has_actor {
+                sqlx::query("ALTER TABLE audit_log ADD COLUMN actor TEXT")
+                    .execute(&self.db)
+                    .await
+                    .map_err(storage)?;
+            }
             sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts)")
                 .execute(&self.db)
                 .await
@@ -65,17 +80,22 @@ impl AuditLog for SqliteAuditLog {
         })
     }
 
-    /// `before`/`after` are stored as JSON TEXT (SQLite has no real JSON type).
+    /// `before`/`after` are stored as JSON TEXT (SQLite has no real JSON type),
+    /// and so is `actor`: the Actor of the request this mutation is served in
+    /// ([`pdo_kernel::actor::current`]), `NULL` outside one.
     fn record(&self, e: NewAuditEntry) -> BoxFuture<'_, Result<(), StorageError>> {
         Box::pin(async move {
             let before = e.before.as_ref().map(|v| v.to_string());
             let after = e.after.as_ref().map(|v| v.to_string());
+            let actor =
+                pdo_kernel::actor::current().and_then(|actor| serde_json::to_string(&actor).ok());
             sqlx::query(
-                "INSERT INTO audit_log (ts, actor_hint, action, target_kind, target_id, before, after)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO audit_log (ts, actor_hint, actor, action, target_kind, target_id, before, after)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(pdo_kernel::clock::now_iso())
             .bind(&e.actor_hint)
+            .bind(actor)
             .bind(&e.action)
             .bind(&e.target_kind)
             .bind(&e.target_id)
@@ -96,7 +116,7 @@ impl AuditLog for SqliteAuditLog {
     ) -> BoxFuture<'a, Result<Vec<AuditEntry>, StorageError>> {
         Box::pin(async move {
             let rows = sqlx::query(
-                "SELECT id, ts, actor_hint, action, target_kind, target_id, before, after
+                "SELECT id, ts, actor_hint, actor, action, target_kind, target_id, before, after
                  FROM audit_log
                  WHERE (?1 IS NULL OR ts >= ?1)
                    AND (?2 IS NULL OR ts < ?2)
@@ -208,6 +228,57 @@ mod tests {
         assert_eq!(rows[1].action, "trigger.created");
         assert!(rows[1].before.is_none());
         assert!(rows[1].after.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_row_keeps_the_actor_of_the_request_it_was_written_in() {
+        let log = journal().await;
+        let alice = pdo_kernel::Actor::Identified {
+            namespace: "test".into(),
+            id: "alice".into(),
+        };
+        pdo_kernel::actor::scope(
+            alice.clone(),
+            log.record(trigger_entry("trigger.updated", "t-1")),
+        )
+        .await
+        .unwrap();
+        log.record(trigger_entry("trigger.updated", "t-2"))
+            .await
+            .unwrap();
+        let rows = log.list(&all()).await.unwrap();
+        assert_eq!(rows[0].actor, None);
+        assert_eq!(rows[1].actor, Some(alice));
+    }
+
+    #[tokio::test]
+    async fn init_adds_the_actor_column_to_a_journal_written_before_it() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+                actor_hint TEXT NOT NULL, action TEXT NOT NULL, target_kind TEXT,
+                target_id TEXT, before TEXT, after TEXT)",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO audit_log (ts, actor_hint, action) VALUES ('t', 'cli', 'trigger.created')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        let log = SqliteAuditLog::new(db);
+        log.init().await.unwrap();
+        log.init().await.unwrap();
+        let rows = log.list(&all()).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].actor, None);
     }
 
     #[tokio::test]

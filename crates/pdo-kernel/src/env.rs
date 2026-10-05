@@ -11,6 +11,34 @@ pub const DEFAULT_PORT: u16 = 5172;
 /// Where the CLI reaches the daemon when `PDO_DAEMON_URL` is unset.
 pub const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
 
+/// The token the CLI sends the daemon, as `Authorization: Bearer <token>`,
+/// on every call (`pdo ext …`, `pdo complete`, `pdo run …`): what an extension
+/// reads in `identify` (ADR-0081). Unset or blank, no header: the core's own
+/// identification.
+pub const TOKEN_ENV: &str = "PDO_TOKEN";
+
+/// The headers every CLI call to the daemon carries: `Authorization: Bearer
+/// <PDO_TOKEN>` when the variable holds a token. Set them as a client's
+/// default headers.
+pub fn cli_headers() -> pdo_extension_api::axum::http::HeaderMap {
+    bearer_headers(std::env::var(TOKEN_ENV).ok().as_deref())
+}
+
+/// [`cli_headers`] for the token `token`.
+pub fn bearer_headers(token: Option<&str>) -> pdo_extension_api::axum::http::HeaderMap {
+    use pdo_extension_api::axum::http::{header, HeaderMap, HeaderValue};
+    let mut headers = HeaderMap::new();
+    let value = token
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .and_then(|t| HeaderValue::from_str(&format!("Bearer {t}")).ok());
+    if let Some(mut value) = value {
+        value.set_sensitive(true);
+        headers.insert(header::AUTHORIZATION, value);
+    }
+    headers
+}
+
 /// Replaces the `claude …` tail in the tmux script of a node session.
 ///
 /// Read **once at daemon boot** (`DaemonConfig::from_env`) and then carried as
@@ -41,3 +69,18 @@ pub const REAPER_INTERVAL_SECS_ENV: &str = "PDO_REAPER_INTERVAL_SECS";
 /// Overrides the library assistant's idle TTL (seconds). Default: 120 (#594,
 /// ADR-0051).
 pub const LIBASSIST_IDLE_TTL_SECS_ENV: &str = "PDO_LIBASSIST_IDLE_TTL_SECS";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_token_becomes_a_bearer_header_and_a_blank_one_none() {
+        let headers = bearer_headers(Some(" s3cret "));
+        assert_eq!(headers["authorization"], "Bearer s3cret");
+        assert!(headers["authorization"].is_sensitive());
+        assert!(bearer_headers(Some("  ")).is_empty());
+        assert!(bearer_headers(None).is_empty());
+        assert!(bearer_headers(Some("bad\nvalue")).is_empty());
+    }
+}

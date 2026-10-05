@@ -18,6 +18,7 @@ import { useEditStore } from "../pipeline/store/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import { legacyScope } from "../test/legacy";
+import { resetActorsForTests, useActorsStore } from "../shared/actors/store";
 
 const mockRenameRun = vi.mocked(renameRun);
 const mockCreatePipeline = vi.mocked(createPipeline);
@@ -419,6 +420,22 @@ describe("UnifiedLeftPanel run display labels", () => {
     expect(pipelineName).toBeInTheDocument();
     expect(label.textContent).toBe("Feature X");
     expect(pipelineName.textContent).toBe("review-loop");
+  });
+
+  it("names the Run's creator on its second line, when an extension names it", () => {
+    resetActorsForTests();
+    const alice = { kind: "identified" as const, namespace: "test", id: "alice" };
+    useActorsStore.getState().remember([alice], [{ name: "Alice", avatar_url: null }]);
+    const runs = [
+      { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, created_by: alice },
+      { stalled: false, effective_repo: "", run_id: "run-2", pipeline_name: "review-loop", status: "running", started_at: null },
+    ] as RunListEntry[];
+    renderPanel({ runs });
+
+    const names = screen.getAllByTestId("actor-name");
+    expect(names).toHaveLength(1);
+    expect(names[0].textContent).toBe("AAlice");
+    resetActorsForTests();
   });
 
   it("renders edit icon for renaming", () => {

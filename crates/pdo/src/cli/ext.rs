@@ -52,6 +52,7 @@ impl Daemon {
         let session = clean("PDO_RUN_ID").zip(clean("PDO_NODE_ID"));
         // No timeout: an extension's command may take its time (a backup).
         let client = Client::builder()
+            .default_headers(pdo_kernel::env::cli_headers())
             .timeout(None)
             .build()
             .unwrap_or_else(|_| Client::new());

@@ -66,7 +66,7 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
         provisioning,
     } = action
     else {
-        anyhow::bail!("`pdo run wait` has its own exit-code contract — see `run_run_wait`");
+        anyhow::bail!("`pdo run create` only: `wait` and `list` have their own entry points");
     };
 
     let url = cli_daemon_url();
@@ -139,6 +139,7 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
     // payload, and the failure names what was being sent and to whom.
     let timeout = upload_timeout(attachment_bytes);
     let client = reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
         .connect_timeout(Duration::from_secs(10))
         .timeout(timeout)
         .build()

@@ -25,7 +25,7 @@ interface Props {
 // When the user clicks the outline star for the very first time, default the
 // new library entry to repo scope. The user works inside a concrete repo and
 // almost always wants the template to follow it; user-scope is the explicit
-// override available from the Pipeline Inspector.
+// override.
 const DEFAULT_NEW_STAR_SCOPE: LibraryPipelineScope = "repo";
 
 export default function PipelineStar({

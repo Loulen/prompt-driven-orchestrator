@@ -29,6 +29,18 @@ describe("shouldCloseInfoOnTabChange (#385)", () => {
     ).toBe(true);
   });
 
+  // #948: a Save that renames the pipeline rekeys the SAME tab (#774) — the
+  // overlay still describes the tab in focus, so it stays open.
+  it("stays open when the tab id change is the store's rekey of the same tab", () => {
+    const rekey = { from: "demo", to: "renamed" };
+    expect(shouldCloseInfoOnTabChange({ prevTabId: "demo", nextTabId: "renamed", infoOpen: true, rekey })).toBe(false);
+  });
+
+  it("still closes on a real tab switch after an earlier rekey", () => {
+    const rekey = { from: "demo", to: "renamed" };
+    expect(shouldCloseInfoOnTabChange({ prevTabId: "renamed", nextTabId: "other", infoOpen: true, rekey })).toBe(true);
+  });
+
   // Full truth table — enumerate every combination (test-everything rule).
   it("matches the full truth table", () => {
     const cases: Array<[InfoPanelReconcileInputs, boolean]> = [

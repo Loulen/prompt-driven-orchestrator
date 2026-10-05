@@ -806,7 +806,7 @@ describe("PipelineInfoPanel — Repositories tab and Info header (#752)", () => 
   it("Info shows the frozen harness when named (#551) and the editing / archived note (#315)", () => {
     const { unmount } = renderPanel(makeRun({ status: "running", harness: "opencode" } as Partial<RunState>));
     expect(screen.getByTestId("run-harness")).toHaveTextContent("opencode");
-    expect(screen.getByTestId("run-info-note")).toHaveTextContent("changes sync to template");
+    expect(screen.getByTestId("run-info-note")).toHaveTextContent("Canvas edits sync to template · run settings are read-only");
     unmount();
     renderPanel(makeRun({ status: "archived" }));
     expect(screen.queryByTestId("run-harness")).toBeNull();

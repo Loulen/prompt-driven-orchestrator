@@ -232,7 +232,7 @@ export default function InterfaceSection({ section }: { section: SettingsSection
         />
         <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
           The step edges snap to on the canvas, for every pipeline that has no size of its own. A
-          pipeline can pick its own size in its Pipeline Inspector; that choice is saved in the
+          pipeline can pick its own size in its Pipeline info; that choice is saved in the
           pipeline file and wins over this one. Existing routes are never re-snapped.
         </div>
       </div>

@@ -2555,6 +2555,8 @@ describe("pipeline rename (#774)", () => {
     expect(s.lastSavedAt["old-name"]).toBeUndefined();
     expect(s.history["fresh-stem"]).toBeDefined();
     expect(s.history["old-name"]).toBeUndefined();
+    // #948: the rekey is recorded so the right-pane router keeps Pipeline info open.
+    expect(s.lastRekey).toEqual({ from: "old-name", to: "fresh-stem" });
   });
 
   it("save keeps the tab in place when the stem is unchanged", async () => {

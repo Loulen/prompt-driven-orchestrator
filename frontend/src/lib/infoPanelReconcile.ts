@@ -5,6 +5,8 @@ export interface InfoPanelReconcileInputs {
   nextTabId: string | null;
   /** Whether the Pipeline Info peek overlay is currently open. */
   infoOpen: boolean;
+  /** The store's last tab rekey (#774), if any: a rename moved a tab to a new id. */
+  rekey?: { from: string; to: string } | null;
 }
 
 /**
@@ -22,11 +24,17 @@ export interface InfoPanelReconcileInputs {
  * runs of the SAME pipeline still differ). Reselecting the already-active tab
  * leaves `activeTabId` unchanged (`prevTabId === nextTabId`) → keep it open.
  *
+ * A REKEY is not a tab change (#948): a Save that renames the pipeline moves
+ * the SAME tab to a new id (`prev → next` matches `rekey`) — the overlay still
+ * describes the tab in focus, so it stays open.
+ *
  * Keyed on the tab id, NOT on `selection`: the live-run auto-snap effect mutates
  * `selection` (none → node) with no user intent, which would spuriously close.
  */
 export function shouldCloseInfoOnTabChange(input: InfoPanelReconcileInputs): boolean {
-  return input.infoOpen && input.prevTabId !== input.nextTabId;
+  if (!input.infoOpen || input.prevTabId === input.nextTabId) return false;
+  const rekey = input.rekey;
+  return !(rekey && rekey.from === input.prevTabId && rekey.to === input.nextTabId);
 }
 
 /** A tab of the Pipeline info panel. */

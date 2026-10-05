@@ -10,6 +10,23 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.14.0 — Pipeline info seule surface des métadonnées, panneau de droite replié (#43)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Portage core #948 et #949
+(spec #947).
+
+- Pipeline info (`i` de la toolbar) devient la seule surface des métadonnées d'une pipeline.
+  Sur une template, l'onglet Info montre Identity (Name, Version, Prompt required), Variables,
+  Canvas (grille Global / S / M / L) et Stats ; chaque modification marque l'onglet non
+  sauvegardé, s'annule, apparaît dans le YAML et s'écrit au Save. Sur un Run, actif ou archivé,
+  les mêmes valeurs sont en lecture seule. Le faux bloc « Description » disparaît.
+- Retiré : le Pipeline Inspector. Une sélection vide sur une template n'affiche rien à droite.
+- Le panneau de droite se replie quand il n'a rien à montrer (template sans sélection et
+  Pipeline info fermé, accueil sans onglet) : le canvas prend toute la largeur et la poignée est
+  masquée. Il se rouvre aussitôt à la dernière largeur choisie dès qu'un contenu le réclame ; le
+  repli n'écrase jamais la largeur persistée. Pas de repli manuel. Un Run sans sélection garde
+  son panneau, un Run archivé son état « Run archived ».
+
 ## 2.13.0 — Bloc Provisioning replié, expliqué et diagnosticable (#45)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Portage core #951 (spec #950).

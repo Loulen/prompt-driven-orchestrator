@@ -8,7 +8,6 @@ import type { SettingsPosition } from "../settings/components/SettingsSurface";
 import type { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import NodeDetailPanel from "../run/components/NodeDetailPanel";
 import NodeInspector from "../pipeline/components/NodeInspector";
-import PipelineInspector from "../pipeline/components/PipelineInspector";
 import PipelineInfoPanel from "../pipeline/components/PipelineInfoPanel";
 import StartInspector from "../pipeline/components/StartInspector";
 import EndInspector from "../pipeline/components/EndInspector";
@@ -258,9 +257,9 @@ export default function RightPane({
                   onOpenSettings={() => openSettings({ category: "agents", section: "pipeline-manager" })}
                 />
               )}
-            {selection.kind === "none" && !isEditingRun && (
-              <PipelineInspector />
-            )}
+            {/* Notion #6 / #948: an empty selection on a template shows
+                nothing — its settings live in Pipeline info, opened by `i`;
+                the pane collapses (#949). */}
           </>
         ) : (
           <>

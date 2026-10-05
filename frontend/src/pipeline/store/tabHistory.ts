@@ -121,7 +121,7 @@ export function rekeyTab(
     history[newId] = history[oldId];
     delete history[oldId];
   }
-  return { openTabs, activeTabId, lastSavedAt, history };
+  return { openTabs, activeTabId, lastSavedAt, history, lastRekey: { from: oldId, to: newId } };
 }
 
 // Single-tab replace (#342): `tab` becomes the sole open tab, every `victims`

@@ -1,3 +1,5 @@
+import type { SelectionKind } from "../pipeline/store/editState";
+
 export type RightPaneOwner = "info" | "trigger" | "editTab" | "selectedNode";
 
 export interface RightPaneInputs {
@@ -23,7 +25,7 @@ export interface RightPaneInputs {
  *                 reclaims the pane from a Trigger by clearing the Trigger
  *                 selection on the next canvas selection / tab switch, NOT through
  *                 this precedence (see the reconciliation effect in App).
- *  3. `editTab` — a node/edge/region selection or the run/pipeline inspector for
+ *  3. `editTab` — a node/edge/region selection or the Run panel for
  *                 the active edit tab.
  *  4. `selectedNode` — the legacy no-tab node detail path.
  *
@@ -34,4 +36,44 @@ export function rightPaneOwner(input: RightPaneInputs): RightPaneOwner {
   if (input.triggerSelected) return "trigger";
   if (input.hasEditTab) return "editTab";
   return "selectedNode";
+}
+
+export interface RightPaneContentInputs {
+  /** The view that owns the pane (`rightPaneOwner`). */
+  owner: RightPaneOwner;
+  /** The canvas selection kind (`editStore.selection.kind`). */
+  selectionKind: SelectionKind;
+  /** The active edit tab is a Run and its state is loaded — the Run panel shows. */
+  runPanelShown: boolean;
+  /**
+   * The legacy no-tab path has something to render: a selected run node, a
+   * Start/End node, or the "Run archived" notice.
+   */
+  legacyHasContent: boolean;
+}
+
+/**
+ * Whether the right pane has nothing to show and collapses (Notion #6 / #949,
+ * CONTEXT.md « Panneau de droite replié »).
+ *
+ * Mirrors App's render branches exactly: the pane collapses when the branch the
+ * owner selects would paint nothing — a template tab with an empty selection
+ * (its settings live in Pipeline info, opened by `i`), the home screen, closing
+ * Pipeline info with nothing selected. It stays open for any canvas selection,
+ * Pipeline info, a Trigger, the Run panel of a Run tab on an empty selection
+ * (Q6), and the "Run archived" notice (Q7).
+ */
+export function rightPaneCollapsed(input: RightPaneContentInputs): boolean {
+  switch (input.owner) {
+    case "info":
+    case "trigger":
+      return false;
+    case "editTab":
+      if (input.selectionKind === "none" || input.selectionKind === "run") {
+        return !input.runPanelShown;
+      }
+      return false;
+    case "selectedNode":
+      return !input.legacyHasContent;
+  }
 }

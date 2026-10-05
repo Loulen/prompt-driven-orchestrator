@@ -70,8 +70,6 @@ export default function PipelineInfoPanel({
   onOpenSettings,
 }: Props) {
   const pipelineName = run?.pipeline_name ?? pipeline?.name ?? "Untitled";
-  const variables = pipeline?.variables ?? {};
-  const variableEntries = Object.entries(variables);
   const managerSession = run ? `pdo-mgr-${run.run_id}` : null;
 
   // Manager on demand: the Manager tab shows for EVERY live Run — an empty
@@ -253,7 +251,7 @@ export default function PipelineInfoPanel({
           run={run}
           pipeline={pipeline}
           pipelineName={pipelineName}
-          variables={variableEntries}
+          pipelineId={run ? null : (assistantId ?? null)}
           hasAssistant={hasAssistant}
           onOpenDiff={() => selectTab("diff")}
         />

@@ -9,6 +9,7 @@ import { fetchPipelineDocument, fetchPipelineSkillsSidecar } from "../api/docume
 import { serializePipeline } from "../../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
 import type { EditorPipelineDef } from "../model/pipeline";
+import { useEditStore } from "../store/editStore";
 
 export function YamlTab({
   pipeline,
@@ -26,7 +27,15 @@ export function YamlTab({
     () => (pipeline ? serializePipeline(pipeline) : ""),
     [pipeline],
   );
+  // The last saved portable document — what Copy / Download export.
   const [yaml, setYaml] = useState(fallbackYaml);
+  // #948: an edit shows here before it is saved. While the active tab holds
+  // unsaved edits the view is the edit buffer serialized (what Save will write);
+  // Copy / Download keep exporting the saved document, refetched once Save lands.
+  const dirty = useEditStore(
+    (s) => s.openTabs.find((t) => t.id === s.activeTabId)?.dirty ?? false,
+  );
+  const shownYaml = dirty ? fallbackYaml : yaml;
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
@@ -42,6 +51,7 @@ export function YamlTab({
   }, [pipeline]);
 
   useEffect(() => {
+    if (dirty) return;
     let cancelled = false;
     const request = runId
       ? fetchRunPipelineDocument(runId)
@@ -58,7 +68,7 @@ export function YamlTab({
     return () => {
       cancelled = true;
     };
-  }, [fallbackYaml, pipelineId, runId]);
+  }, [dirty, fallbackYaml, pipelineId, runId]);
 
   useEffect(() => {
     if (scrollToLine == null || !preRef.current) return;
@@ -169,6 +179,11 @@ export function YamlTab({
             the sidecar <code>{pipelineName}.skills/</code>; import both so the bank recreates them.
           </p>
         )}
+        {dirty && (
+          <p className="mt-1 text-st-await" style={{ fontSize: "10px" }} data-testid="yaml-unsaved-note">
+            Unsaved edits shown. Copy and Download export the last saved document until you Save.
+          </p>
+        )}
         {runId && (
           <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
             This is the pipeline that ran, not the Run. Runtime values are not included.
@@ -196,7 +211,7 @@ export function YamlTab({
         style={{ fontSize: "11px", lineHeight: "1.6", tabSize: 2 }}
         data-testid="info-yaml-content"
       >
-        {highlightYaml(yaml, scrollToLine)}
+        {highlightYaml(shownYaml, scrollToLine)}
       </pre>
     </div>
   );

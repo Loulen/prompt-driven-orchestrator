@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
-import PipelineInspector from "./PipelineInspector";
+import PipelineInfoPanel from "./PipelineInfoPanel";
 import { useEditStore } from "../store/editStore";
 import { TooltipProvider } from "../../shared/ui/tooltip";
 
@@ -30,7 +30,7 @@ vi.mock("../../skill/api/bank", () => ({
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
 }));
 
-// EditCanvas (via usePipelineLibraryState) and PipelineInspector both import the
+// EditCanvas (via usePipelineLibraryState) and PipelineInfoPanel both import the
 // API client; stub the network so nothing fetches on mount.
 vi.mock("../../settings/api/settings", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
@@ -120,7 +120,9 @@ afterEach(() => {
 });
 
 describe("LintBanner duplication (#63)", () => {
-  it("renders exactly one lint banner when EditCanvas and PipelineInspector are co-mounted with no node selected", () => {
+  // Since #948 the pipeline's settings live in Pipeline info, so that is the
+  // panel co-mounted beside the canvas.
+  it("renders exactly one lint banner when EditCanvas and Pipeline info are co-mounted with no node selected", () => {
     render(
       <TooltipProvider>
         <EditCanvas
@@ -129,13 +131,17 @@ describe("LintBanner duplication (#63)", () => {
           onLibraryDelete={() => {}}
           onLibraryPipelinesChanged={() => {}}
         />
-        <PipelineInspector />
+        <PipelineInfoPanel
+          run={null}
+          pipeline={useEditStore.getState().openTabs[0].pipeline}
+          onClose={() => {}}
+        />
       </TooltipProvider>,
     );
 
-    // Both panels mounted: the canvas body (stub) and the inspector header.
+    // Both panels mounted: the canvas body (stub) and Pipeline info's settings.
     expect(screen.getByTestId("reactflow-stub")).toBeInTheDocument();
-    expect(screen.getByText("Pipeline Inspector")).toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-meta")).toBeInTheDocument();
 
     // The diagnostics surface exactly once — the floating canvas overlay.
     expect(screen.getAllByTestId("lint-banner")).toHaveLength(1);

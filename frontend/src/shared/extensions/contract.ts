@@ -119,7 +119,7 @@ export interface NodeConfigContext extends LocationContext {
   readOnly: boolean;
 }
 
-/** `pipeline/config`: the pipeline the inspector shows. */
+/** `pipeline/config`: the template the Info tab of Pipeline info shows. */
 export interface PipelineConfigContext extends LocationContext {
   entity: EntityContext;
 }

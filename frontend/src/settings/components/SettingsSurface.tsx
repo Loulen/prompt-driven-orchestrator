@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import FullWindowShell, { type RailItem } from "../../shared/ui/FullWindowShell";
+import FullWindowShell, { type RailItem, type ShellDrawer } from "../../shared/ui/FullWindowShell";
 import TutorialsSection from "../../app/tour/TutorialsSection";
 import { harnessCatalog } from "../../harness/model/catalog";
 import VersionUpdateSection from "../../platform/components/VersionUpdateSection";
@@ -22,7 +22,7 @@ import CategoryPage from "./settingsSurface/CategoryPage";
 import { HarnessDescriptorRows, PriceTableRows } from "./settingsSurface/DiagnosticsRows";
 import { RunsSection, SessionsSection } from "./settingsSurface/GeneralSections";
 import InterfaceSection from "./settingsSurface/InterfaceSection";
-import { ConfirmCloseDialog, SettingsDrawer } from "./settingsSurface/overlays";
+import { ConfirmCloseDialog } from "./settingsSurface/overlays";
 import SandboxSections from "./settingsSurface/SandboxSections";
 import Section from "./settingsSurface/Section";
 import SettingsFooter from "./settingsSurface/SettingsFooter";
@@ -198,19 +198,30 @@ export default function SettingsSurface({
       current[cat] === section ? current : { ...current, [cat]: section },
     );
 
-  const drawerNode = drawerOpen ? (
-    <SettingsDrawer onClose={() => setDrawerOpen(false)}>
-      <SkillBankPanel
-        bank={skillBank}
-        loaded={skillsLoaded}
-        home={settings?.home ?? null}
-        onChanged={async () => {
-          await refreshSkills();
-          announceSkillsChanged();
-        }}
-      />
-    </SettingsDrawer>
-  ) : null;
+  // The skill bank in the shell's secondary panel (#690 decision 5, framed by the shell
+  // since #944): the rail stays visible, Escape returns to Settings › Skills first, and the
+  // Save footer hides under it so its own writes and Save are never both in view.
+  const shellDrawer: ShellDrawer | null = drawerOpen
+    ? {
+        title: "Skill bank",
+        escHint: "saves as you go · Esc returns to Settings",
+        widthClassName: "w-[min(880px,90vw)]",
+        testId: "settings-drawer",
+        dataAttributes: { "data-drawer": "skills" },
+        onClose: () => setDrawerOpen(false),
+        content: (
+          <SkillBankPanel
+            bank={skillBank}
+            loaded={skillsLoaded}
+            home={settings?.home ?? null}
+            onChanged={async () => {
+              await refreshSkills();
+              announceSkillsChanged();
+            }}
+          />
+        ),
+      }
+    : null;
 
   const loading = (
     <div className="px-1 py-4 text-fg-4" style={{ fontSize: "12px" }} data-testid="settings-loading">
@@ -245,7 +256,7 @@ export default function SettingsSurface({
             onCancel={requestClose}
           />
         }
-        drawer={drawerNode}
+        drawer={shellDrawer}
       >
         {SETTINGS_CATEGORIES.map((item) => (
           <CategoryPage

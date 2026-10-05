@@ -16,6 +16,13 @@ export type PageLocation = (typeof PAGE_LOCATIONS)[number];
 
 export const DEEP_LINK_PREFIX = "#/ext/";
 
+/**
+ * The core's own deep link toward a Run (CORE-1): `#/runs/<run_id>` closes the
+ * open page, selects the Run in the list and shows its detail. The app shell
+ * follows it (`useRunLink`); a Run the daemon does not know says so in a toast.
+ */
+export const RUN_LINK_PREFIX = "#/runs/";
+
 export interface DeepLink {
   extension: string;
   /** `null` when what follows the extension's id names no page location. */
@@ -27,6 +34,30 @@ export interface DeepLink {
 /** Whether `href` is a deep link (`#/ext/…`, `/#/ext/…`). */
 export function isDeepLink(href: string | null | undefined): href is string {
   return typeof href === "string" && (href.startsWith(DEEP_LINK_PREFIX) || href.startsWith(`/${DEEP_LINK_PREFIX}`));
+}
+
+/** Whether `href` is a deep link toward a Run (`#/runs/<id>`, `/#/runs/<id>`). */
+export function isRunLink(href: string | null | undefined): href is string {
+  return typeof href === "string" && (href.startsWith(RUN_LINK_PREFIX) || href.startsWith(`/${RUN_LINK_PREFIX}`));
+}
+
+/** The id of the Run `href` (or a hash, or a URL ending with one) points at; `null` if none. */
+export function parseRunLink(href: string): string | null {
+  const at = href.indexOf(RUN_LINK_PREFIX);
+  if (at < 0) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(href.slice(at + RUN_LINK_PREFIX.length));
+  } catch {
+    return null;
+  }
+  id = id.replace(/\/+$/, "");
+  return id && !id.includes("/") ? id : null;
+}
+
+/** The deep link toward the Run `runId`. */
+export function formatRunLink(runId: string): string {
+  return `${RUN_LINK_PREFIX}${encodeURIComponent(runId)}`;
 }
 
 /** The deep link `href` (or a hash, or a URL ending with one) stands for; `null` if none. */
@@ -101,6 +132,9 @@ export function resetPages(): void {
 
 /** Follow the address bar: the page its deep link names, or none. */
 export function syncWithAddress(): void {
+  // A link toward a Run is the app shell's (`useRunLink`): it closes the page
+  // only once the Run is known.
+  if (parseRunLink(window.location.hash)) return;
   const link = parseDeepLink(window.location.hash);
   const { open } = usePages.getState();
   if (!link) {
@@ -129,15 +163,17 @@ export function registerPageHost(): () => void {
 }
 
 /**
- * Follow the deep link `href`: in the app, its page opens; elsewhere (the
- * Review page), the app loads on it.
+ * Follow the deep link `href` (`#/ext/…` or `#/runs/<id>`): in the app, its
+ * page opens, or its Run is selected; elsewhere (the Review page), the app
+ * loads on it.
  */
 export function followDeepLink(href: string): void {
-  const at = href.indexOf(DEEP_LINK_PREFIX);
+  const ext = href.indexOf(DEEP_LINK_PREFIX);
+  const at = ext >= 0 ? ext : parseRunLink(href) ? href.indexOf(RUN_LINK_PREFIX) : -1;
   if (at < 0) return;
   const hash = href.slice(at);
   if (hostsMounted > 0) {
-    if (window.location.hash === hash) syncWithAddress();
+    if (window.location.hash === hash) window.dispatchEvent(new HashChangeEvent("hashchange"));
     else window.location.hash = hash;
   } else {
     window.location.assign(`/${hash}`);

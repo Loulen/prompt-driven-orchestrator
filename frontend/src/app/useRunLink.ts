@@ -1,0 +1,61 @@
+import { useEffect, useRef } from "react";
+import { fetchRun } from "../run/api/runs";
+import { dismissTransientOverlays } from "../lib/overlays";
+import { formatDeepLink, parseRunLink, usePages } from "../shared/extensions/deepLink";
+import { ApiError } from "../shared/http/client";
+import { toast } from "../shared/ui/toast";
+
+/**
+ * Follow the deep links toward a Run (`#/runs/<run_id>`, CORE-1), whoever wrote
+ * them: the address bar on load, a markdown link, an extension's
+ * `CommandHost.open` or its page setting `location.hash`. A known Run closes the
+ * open extension page, gives way to any transient overlay and is selected as a
+ * click in the list would; an unknown one says so in an error toast and changes
+ * nothing. Either way the link leaves the address bar: the app keeps no Run in
+ * its URL, and a stale one would outlive the next selection.
+ */
+export function useRunLink(onSelectRun: (runId: string) => void): void {
+  const selectRef = useRef(onSelectRun);
+  useEffect(() => {
+    selectRef.current = onSelectRun;
+  }, [onSelectRun]);
+
+  useEffect(() => {
+    // Only the last link followed counts: a late answer for an earlier one is dropped.
+    let latest = 0;
+    const follow = async () => {
+      const runId = parseRunLink(window.location.hash);
+      if (!runId) return;
+      const attempt = ++latest;
+      let failure: string | null = null;
+      try {
+        await fetchRun(runId);
+      } catch (cause) {
+        failure =
+          cause instanceof ApiError && cause.status === 404
+            ? `Run “${runId}” not found: this link can't be opened.`
+            : `Run “${runId}” can't be opened: ${cause instanceof Error ? cause.message : String(cause)}`;
+      }
+      if (attempt !== latest || parseRunLink(window.location.hash) !== runId) return;
+      const open = usePages.getState().open;
+      if (failure === null) {
+        usePages.setState({ open: null, requested: null });
+        dismissTransientOverlays();
+        selectRef.current(runId);
+      } else {
+        toast(failure, "error");
+      }
+      const { pathname, search } = window.location;
+      const back = failure !== null && open ? formatDeepLink(open.extension, open.location, open.path) : `${pathname}${search}`;
+      window.history.replaceState(window.history.state, "", back);
+    };
+    void follow();
+    window.addEventListener("hashchange", follow);
+    window.addEventListener("popstate", follow);
+    return () => {
+      latest = -1;
+      window.removeEventListener("hashchange", follow);
+      window.removeEventListener("popstate", follow);
+    };
+  }, []);
+}

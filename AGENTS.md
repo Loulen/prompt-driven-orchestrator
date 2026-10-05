@@ -31,7 +31,7 @@ Driving PDO during a journey: `docs/agents/run-scenario.md`.
 
 ## Dev workflow
 
-For a `tâche` ticket (the `ready-for-agent` role): branch per Git flow, then run **`/implement`** — the three-role
+For a `type=tech` Tâche (the `ready-for-agent` role): branch per Git flow, then run **`/implement`** — the three-role
 loop. It drives `/tdd` (red → green at the agreed seams) on the lower pyramid tiers, an
 **independent** `/code-review` on the diff, and a subagent that runs `/agentic-tests` on the
 ticket's Feature Path — driving the running system through its **primary surface** and reporting
@@ -50,13 +50,13 @@ skill** (no `develop`, `integration/*` → `main`, sanity gate = `make check`).
 ## Agent skills
 
 ### Business backlog
-GitHub Issues labelled `US`; the maintainer names the story in the prompt. See `docs/agents/business-backlog.md`.
+PDO's Project extension (`pm`, `pdo ext pm`, the `pm` skill): Tâches `type=metier` of the Backlog `CORE`; a batch of items becomes one story; the maintainer names it in the prompt. See `docs/agents/business-backlog.md`.
 
 ### Technical backlog (issue tracker)
-GitHub Issues of `Loulen/PDO-v2` (`gh`), label `tâche`; extension-only work goes to `Loulen/pdo-extensions`. See `docs/agents/issue-tracker.md`.
+Same Backlog `CORE`, Tâches `type=tech`; the spec is a sub-page of the story; extension-only work goes to the `PM` / `IAM` Backlogs (`Loulen/pdo-extensions`). No `gh issue` for new work. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
-Two labels only: `US` (business story) and `tâche` (technical ticket or spec/PRD, = `ready-for-agent`). See `docs/agents/triage-labels.md`.
+No labels: the Property `type` (`metier` / `tech`); `ready-for-agent` = `type=tech` in `To do`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 Single-context: `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`; where a new file goes: `docs/agents/module-layout.md`.

@@ -325,7 +325,10 @@ export interface CommandContext extends LocationContext {
 export interface CommandHost {
   /** Tell the operator, in a toast. */
   notify(message: string, kind?: "info" | "error"): void;
-  /** Follow a deep link (`#/ext/<extension>/<location>/<path>`). */
+  /**
+   * Follow a deep link: an extension's page (`#/ext/<extension>/<location>/<path>`)
+   * or a Run (`#/runs/<run_id>`, which closes the open page and selects it).
+   */
   open(link: string): void;
 }
 

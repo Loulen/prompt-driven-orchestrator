@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { Tooltip } from "../../shared/ui/tooltip";
 import { attachSession } from "../api/sessions";
 import { READ_ONLY_HINT } from "../model/terminalRole";
@@ -25,6 +25,11 @@ interface Props {
    *  terminal, so the awaiting banner says « take control to reply » instead of
    *  « reply below ». */
   onSpectatingChange?: (spectating: boolean) => void;
+  /** #44: the node's identity (status dot, name, iteration, status badge), at
+   *  the head of the toolbar, in place of the connection dot. */
+  toolbarIdentity?: ReactNode;
+  /** #44: extra gestures at the right of the toolbar, before Copy. */
+  toolbarActions?: ReactNode;
 }
 
 /** A session's inline terminal (ADR-0005): the live PTY, or its frozen pane. */
@@ -36,6 +41,8 @@ export default function TmuxTerminal({
   paneSource,
   onLiveSocketChange,
   onSpectatingChange,
+  toolbarIdentity,
+  toolbarActions,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { mode, frozen } = usePaneMode(session, status, paneSource);
@@ -85,6 +92,8 @@ export default function TmuxTerminal({
         onExpand={onExpand}
         onCopy={xterm.copySelection}
         onTakeControl={xterm.takeControl}
+        identity={toolbarIdentity}
+        actions={toolbarActions}
       />
 
       {/* Terminal container. #867: the read-only hint is always mounted and

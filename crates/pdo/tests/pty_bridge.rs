@@ -438,3 +438,192 @@ async fn pty_ws_reaps_tmux_child_on_close() {
         "PTY bridge leaked a `<defunct>` tmux zombie after WS close (#495): {zombies:?}"
     );
 }
+
+// --- #946: leaving a terminal writes nothing into it ---
+//
+// portable-pty 0.8.1's `Drop for UnixMasterWriter` writes `\n` + VEOF (`^D`)
+// into the master. While the `tmux attach` client is alive that input is
+// forwarded to the pane: Claude Code's prompt gained a blank line on every
+// node switch, and a hosted shell died on the first detach. The bridge must
+// release the writer only once the client is killed and reaped.
+
+/// Out-of-band pane that records every byte it receives, verbatim: the pane's
+/// tty is put in raw mode (no line discipline, no echo) so a `\n` or a `^D`
+/// lands in `record` instead of being interpreted. `cat` opens `record` only
+/// after `stty` ran, so its existence means the recorder is ready.
+fn create_recording_session(socket: &str, name: &str, record: &std::path::Path) {
+    let script = format!("stty raw -echo; exec cat > '{}'", record.display());
+    let status = std::process::Command::new("tmux")
+        .args([
+            "-L",
+            socket,
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "bash",
+            "-c",
+            &script,
+        ])
+        .status()
+        .expect("failed to run tmux");
+    assert!(status.success(), "tmux new-session should succeed");
+}
+
+async fn wait_for_path(path: &std::path::Path) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !path.exists() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(path.exists(), "recording pane never came up");
+}
+
+fn session_alive(socket: &str, name: &str) -> bool {
+    std::process::Command::new("tmux")
+        .args(["-L", socket, "has-session", "-t", name])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// How the test leaves the terminal — one per exit path of the bridge.
+#[derive(Clone, Copy, Debug)]
+enum Detach {
+    /// The front closes the WebSocket (node switch, Shell closed).
+    CleanClose,
+    /// The socket vanishes without a close frame (page reload, tab killed).
+    Abandon,
+    /// The tmux client goes away first (`detach-client`), socket still open.
+    ClientEnds,
+}
+
+async fn attach_then_detach(daemon: &TestDaemon, socket: &str, session_name: &str, how: Detach) {
+    let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session_name);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .expect("WS connect should succeed");
+
+    // Wait for the client's first repaint: the bridge is fully wired.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Binary(_)))) => break,
+            Ok(Some(Ok(_))) => {}
+            other => panic!("no PTY output before detaching: {other:?}"),
+        }
+    }
+
+    match how {
+        Detach::CleanClose => {
+            let _ = ws.close(None).await;
+            drop(ws);
+        }
+        Detach::Abandon => drop(ws),
+        Detach::ClientEnds => {
+            let status = std::process::Command::new("tmux")
+                .args(["-L", socket, "detach-client", "-s", session_name])
+                .status()
+                .expect("failed to run tmux");
+            assert!(status.success(), "tmux detach-client should succeed");
+            // The bridge closes the socket once its client is gone.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(remaining, ws.next()).await {
+                    Ok(Some(Ok(Message::Close(_)))) | Ok(Some(Err(_))) | Ok(None) => break,
+                    Ok(Some(Ok(_))) => {}
+                    Err(_) => panic!("bridge never closed the socket after its client ended"),
+                }
+            }
+            drop(ws);
+        }
+    }
+
+    // Leave the bridge time to tear down: kill (~250ms grace) + reap, then the
+    // writer's release.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+}
+
+async fn assert_detach_writes_nothing(how: Detach, session_name: &str) {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    // Out-of-band session → opt out of the orphan sweep (cf. the echo test).
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let dir = tempfile::tempdir().unwrap();
+    let record = dir.path().join("pane-input.bin");
+
+    kill_tmux_session(&socket, session_name);
+    create_recording_session(&socket, session_name, &record);
+    wait_for_path(&record).await;
+
+    attach_then_detach(&daemon, &socket, session_name, how).await;
+
+    let received = std::fs::read(&record).unwrap();
+    kill_tmux_session(&socket, session_name);
+    assert!(
+        received.is_empty(),
+        "leaving the terminal ({how:?}) wrote {received:?} into the pane (#946)"
+    );
+}
+
+/// #946: a clean close of the WebSocket writes no byte into the pane.
+#[tokio::test]
+async fn pty_ws_clean_close_writes_nothing_into_pane() {
+    assert_detach_writes_nothing(Detach::CleanClose, "pdo-pty-test-quiet-close").await;
+}
+
+/// #946: an abandoned socket (no close frame) writes no byte into the pane.
+#[tokio::test]
+async fn pty_ws_abandoned_socket_writes_nothing_into_pane() {
+    assert_detach_writes_nothing(Detach::Abandon, "pdo-pty-test-quiet-abandon").await;
+}
+
+/// #946: the tmux client ending first writes no byte into the pane either.
+#[tokio::test]
+async fn pty_ws_client_end_writes_nothing_into_pane() {
+    assert_detach_writes_nothing(Detach::ClientEnds, "pdo-pty-test-quiet-client-end").await;
+}
+
+/// #946: a hosted shell (no rc, no IGNOREEOF) is still alive after an attach
+/// then a detach through the bridge — pre-fix the `^D` made it exit, taking
+/// the tmux session with it.
+#[tokio::test]
+async fn pty_ws_shell_survives_detach() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let session_name = "pdo-pty-test-shell-survives";
+
+    kill_tmux_session(&socket, session_name);
+    let status = std::process::Command::new("tmux")
+        .args([
+            "-L",
+            &socket,
+            "new-session",
+            "-d",
+            "-s",
+            session_name,
+            "env -u IGNOREEOF bash --norc --noprofile",
+        ])
+        .status()
+        .expect("failed to run tmux");
+    assert!(status.success(), "tmux new-session should succeed");
+    // Let bash reach its prompt: a `^D` before readline is up would not count.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    attach_then_detach(&daemon, &socket, session_name, Detach::CleanClose).await;
+
+    let alive = session_alive(&socket, session_name);
+    kill_tmux_session(&socket, session_name);
+    assert!(
+        alive,
+        "the hosted shell died when the terminal was left (#946)"
+    );
+}

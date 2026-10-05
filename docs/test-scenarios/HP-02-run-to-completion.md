@@ -1,6 +1,6 @@
 ---
 id: HP-02
-covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, merge, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity]
+covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity]
 ---
 
 # HP-02 — Launch a run to completion
@@ -9,8 +9,9 @@ covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-regi
 
 A user launches a **Run** on a pipeline: picks a target repo, enters a prompt (optionally images),
 and watches nodes spawn real **tmux sessions** running each node's resolved **harness** (`claude` is
-the floor, not the only one), data route through edges / a loop region / a collection fan-out into a
-**Merge**, until the Run reaches a clean **Completed** state with inspectable artifacts and live
+the floor, not the only one), data route through edges / a loop region / a collection fan-out that
+**converges on an agent** (ADR-0082: there is no Merge node — any node fed by several edges is a
+convergence), until the Run reaches a clean **Completed** state with inspectable artifacts and live
 stats — the core "drive an orchestration to its end" loop.
 
 ## Drive-by
@@ -25,9 +26,12 @@ Features validated while crossing the run screens (grafted from retired per-issu
   `else` edge catches the unmatched case; pills are always visible (#144).
 - **Loop region**: a bounded review loop exits early on its PASS edge and, if the verdict never
   passes, halts explicitly **"exhausted — unrouted"** (never a silent stall) (#148).
-- **Collection fan-out / Merge**: a `kind: collection` region fans its (single-member, #269 /
+- **Collection fan-out / convergence**: a `kind: collection` region fans its (single-member, #269 /
   ADR-0026) body out in parallel — one lap per item — the barrier fires once when all laps finish,
-  and an empty collection fires the barrier immediately (#151, ADR-0006).
+  and an empty collection fires the barrier immediately (#151). The node downstream of the region is
+  an ordinary **agent**: it starts only once every lap is done, receives the laps' outputs grouped in
+  one input, and finds each lap's code already merged back on the Run branch (ADR-0082). The editor
+  toolbar offers no Merge button.
 - **Artifact rendering**: an output artifact opens in the markdown modal; a ` ```mermaid ` block
   renders as inline SVG and invalid mermaid degrades gracefully to raw source (#240 / ADR-0013).
 - **Run stats**: the Info panel shows a Stats block — Duration (ticking live), Node sessions started
@@ -73,7 +77,8 @@ Features validated while crossing the run screens (grafted from retired per-issu
 4. Select the running node → the right panel shows a **live terminal preview** (real `claude` TUI,
    wrapping without horizontal scroll) and the deterministic prompt preamble (`## Inputs` / `## Outputs`).
 5. Data routes downstream: conditional edges fire to all matching targets, the loop region iterates and
-   exits on PASS, a collection region fans out in parallel and converges on the **Merge**.
+   exits on PASS, a collection region fans out in parallel and converges on a downstream **agent** (no Merge
+   node exists: the convergence is the agent's incoming edges).
 6. The Run reaches **Completed** (the happy ending): nodes read completed, the End inspector shows the
    `result` port **received**.
 7. Open an output artifact → the **markdown modal** renders it (including a mermaid diagram as SVG).
@@ -138,7 +143,7 @@ Features validated while crossing the run screens (grafted from retired per-issu
 
 - Start/End nodes render; the running node shows live, wrapping terminal output (no horizontal scrollbar).
 - Routing matches the pipeline shape (multi-match fan-out, loop `↻ X/Y` header iterating, collection
-  `⇉ N items` badge, Merge convergence).
+  `⇉ N items` badge, convergence on the downstream agent — rendered as an agent, not a Merge).
 - The Run settles to **Completed**; the End `result` port shows **received**.
 - The artifact modal shows the content; a valid mermaid block is an SVG, an invalid one falls back to
   `<pre><code>` (never a blank pane, never a thrown error).
@@ -342,7 +347,7 @@ Harness three-way pin, read-only probes:
 ### Harness three-way pin — why it is built this way
 
 - **Its own three-node pipeline, not a pin on the main journey's nodes.** Those nodes carry the dataflow
-  (conditional routing, loop region, collection, merge); a node that fails to complete among them costs
+  (conditional routing, loop region, collection, convergence); a node that fails to complete among them costs
   six steps of assertions downstream. Isolating the newest axis is the same call the sandbox twin makes
   by getting its own one-node pipeline.
 - **The two axes are not crossed, on purpose.** HP-02 already pays ~1 GB of staging for the sandbox

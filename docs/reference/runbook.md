@@ -64,7 +64,7 @@ new target below.
 | `pdo_daemon::boot_recovery` | `pdo_run::application::boot_recovery` |
 | `pdo_daemon::run_sandbox` | `pdo_run::application::sandbox` |
 | `pdo_daemon::graph_resolver`, `::loop_region`, `::edge_router`, `::input_resolution` | `pdo_run::domain::graph_resolver`, `::loop_region`, `::edge_router`, `::input_resolution` |
-| `pdo_daemon` (the node handlers) | `pdo_run::application::{complete_node, fail_node, skip_node, start_node, stop_node, retry_node, release_completion, merge_resolver}` |
+| `pdo_daemon` (the node handlers) | `pdo_run::application::{complete_node, fail_node, skip_node, start_node, stop_node, retry_node, release_completion}` |
 | `pdo_daemon` (create, archive, forget, repositories, run-scoped pipeline, manager) | `pdo_run::application::{create_run, archive, forget_run, edit_repos, run_pipeline, manager, retry_all}` |
 | `pdo_daemon::price_table` | `pdo_run::domain::prices` |
 | `pdo_daemon::run_cost` | `pdo_run::adapters::run_cost` |

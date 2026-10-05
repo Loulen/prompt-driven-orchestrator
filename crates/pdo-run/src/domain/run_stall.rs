@@ -48,14 +48,10 @@ pub fn run_stall_reason(
         return None;
     }
 
-    // A live node or an in-flight merge resolver means the run can still advance
-    // organically — never reconcile under it.
+    // A live node means the run can still advance organically — never reconcile
+    // under it.
     let has_live_node = run_state.nodes.values().any(|n| n.status.can_progress());
-    let resolver_active = run_state
-        .merge_resolver
-        .as_ref()
-        .is_some_and(|mr| mr.status == state::NodeStatus::Running);
-    if has_live_node || resolver_active {
+    if has_live_node {
         return None;
     }
 

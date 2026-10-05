@@ -98,7 +98,7 @@ function seedNoSelectionWithDiagnostics() {
           ],
         },
         prompts: {},
-        diagnostics: ["node 'reviewer' receives edges from 2 isolated nodes without a Merge"],
+        diagnostics: ["node 'reviewer': unknown node type 'merge', defaulting to 'agent'"],
         dirty: false,
         externalDirty: false,
         libraryId: null,

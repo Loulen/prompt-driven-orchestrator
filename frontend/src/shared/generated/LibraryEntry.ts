@@ -29,6 +29,6 @@ prompt: string,
  * Always `Some` for `agent`/`script` (stamped by [`normalized_isolation`]
  * on every read and write, so a pre-#655 file states its choice too), and
  * always `None` for the types that carry none. `skip_serializing_if` is
- * what keeps a starred Merge/Start/End file free of a line nobody may edit.
+ * what keeps a starred Start/End file free of a line nobody may edit.
  */
 isolated_worktree?: boolean, };

@@ -1402,7 +1402,7 @@ mod tests {
     #[test]
     fn deterministic_nodes_do_not_inject_preserved_output_instructions() {
         let mut pipeline = sample_pipeline();
-        pipeline.nodes[0].node_type = NodeType::Merge;
+        pipeline.nodes[0].node_type = NodeType::Switch;
         pipeline.nodes[0].outputs[0].instructions = Some("This must remain metadata only.".into());
 
         let node = &pipeline.nodes[0];

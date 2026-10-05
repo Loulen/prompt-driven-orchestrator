@@ -153,9 +153,6 @@ pub fn refusal_headline(slug: &str, body: &serde_json::Value) -> String {
                 .into()
         }
         "merge_conflict" => "merging your sub-worktree into the pipeline branch conflicted".into(),
-        "merge_resolution_failed" | "merge_resolver_failed" | "merge_resolver_spawned" => {
-            "the merge resolver did not settle the conflict".into()
-        }
         "completion_rejected" => body
             .get("message")
             .and_then(|v| v.as_str())

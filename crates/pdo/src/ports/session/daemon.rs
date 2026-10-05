@@ -94,7 +94,7 @@ impl Templates for RunSide {
 
 impl AssistantHarness for RunSide {
     /// Infra harness — no Run to follow: instance default, else the `claude`
-    /// floor, resolved against the DISK TIER like the manager and the resolver.
+    /// floor, resolved against the DISK TIER like the manager.
     fn resolve(&self) -> BoxFuture<'_, pdo_harness::registry::HarnessDescriptor> {
         Box::pin(async move {
             let Ok(runs) = self.runs.get() else {

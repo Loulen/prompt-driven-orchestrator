@@ -8,7 +8,6 @@ import type { SettingsPosition } from "../settings/components/SettingsSurface";
 import type { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import NodeDetailPanel from "../run/components/NodeDetailPanel";
 import NodeInspector from "../pipeline/components/NodeInspector";
-import MergeInspector from "../pipeline/components/MergeInspector";
 import PipelineInspector from "../pipeline/components/PipelineInspector";
 import PipelineInfoPanel from "../pipeline/components/PipelineInfoPanel";
 import StartInspector from "../pipeline/components/StartInspector";
@@ -157,7 +156,6 @@ export default function RightPane({
 
   function inspectorEditPane() {
     switch (editNodeType) {
-      case "merge": return <MergeInspector />;
       // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
       // and hides the model field for it.
       // Without this case a script node would fall through and — before the

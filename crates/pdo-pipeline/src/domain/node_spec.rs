@@ -195,9 +195,9 @@ mod tests {
             ),
             ("name: n\ntype: start\n", serde_json::Value::Null),
             // #655: a stray line on a type that carries no isolation is dropped,
-            // not round-tripped — a Merge is isolated by construction.
+            // not round-tripped.
             (
-                "name: n\ntype: merge\nisolated_worktree: false\n",
+                "name: n\ntype: start\nisolated_worktree: false\n",
                 serde_json::Value::Null,
             ),
         ] {

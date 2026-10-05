@@ -67,7 +67,6 @@ nodes:
 - `agent` — a node that runs an agentic harness on its system prompt.
   Add `interactive: true` for a node a human drives and marks done by hand.
 - `script` — deterministic author-written bash instead of an agent (ADR-0017).
-- `merge` — joins parallel branches back together (ADR-0006).
 - `switch` — mechanical fan-out on a typed value.
 
 **Where a node works** (`isolated_worktree:`, ADR-0060). Every `agent` and every
@@ -79,8 +78,7 @@ nodes:
   for a `script`, and the right choice for a sequential pipeline that does not
   need a fork per role.
 
-`merge` is isolated by construction and carries no line; `start`/`end` carry none
-either. There is no `doc-only` or `code-mutating` — a node's type names its
+`start`/`end` carry none. There is no `doc-only` or `code-mutating` — a node's type names its
 execution role, never a guess about what it will touch.
 
 Either way, **never write git steps into a node's prompt**: the runtime keeps
@@ -91,7 +89,12 @@ the downstream starts (#654 / ADR-0060).
 Work nodes (`agent` / `script`) have **emergent inputs**: an
 input port is created from each incoming edge and named after the edge's target
 port — you normally don't declare `inputs:` on them. Structural nodes
-(`start`/`end`/`merge`/`switch`) keep declared ports.
+(`start`/`end`/`switch`) keep declared ports.
+
+**Convergence** (ADR-0082): there is no `merge` type. To join parallel branches,
+wire several edges into any node — it waits until every incoming edge has fired
+or died, receives only the branches that fired (same-named edges group into one
+input), and finds each isolated branch's code already on the Run branch.
 
 Each node's system prompt is a separate file `<id>.prompts/<node-id>.md`, sent in
 the `prompts` map of the save request (key = node id).

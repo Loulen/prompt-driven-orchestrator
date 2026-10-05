@@ -221,7 +221,7 @@ export interface PipelineEntity extends EntityContext {
 export interface NodeEntity extends EntityContext {
   kind: "node";
   name: string | null;
-  /** `agent`, `script`, `merge`… on the canvas; `null` where unknown. */
+  /** `agent`, `script`, `start`… on the canvas; `null` where unknown. */
   type: string | null;
   /** In a Run: the node's status; `null` on a pipeline template. */
   status: string | null;

@@ -144,7 +144,7 @@ pub async fn merge_back_best_effort(state: &Runs, run_id: &str) {
 
 /// Fill `harness`'s staging set into a sandboxed Run's staging **once per Run**, and
 /// return the env the session's `docker exec` must carry (#708, ADR-0063 §3). The
-/// entry point for the infra sessions (manager, merge resolver, reattach); `spawn_node`
+/// entry point for the infra sessions (manager, reattach); `spawn_node`
 /// calls [`staging::fill_staging_set`] with the roots it already holds. A no-op (empty
 /// env) for `off`, and for a harness with no set. Hard error when the set cannot be
 /// copied: a session on an unfillable home would hang on a dialog.

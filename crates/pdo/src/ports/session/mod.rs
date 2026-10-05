@@ -794,8 +794,8 @@ mod tests {
     }
 
     // Node-completion tail convergence: the *observable* behaviour `complete_node`
-    // must preserve across all three entrypoints (`node_done`, the `mark_node_done`
-    // command arm, `handle_merge_resolver_done`).
+    // must preserve across both entrypoints (`node_done` and the `mark_node_done`
+    // command arm).
     //
     // The headline invariant is exactly-one `RunCompleted` per run: `append_event`
     // does NOT de-dup it, so a regression that double-routes completion surfaces here.

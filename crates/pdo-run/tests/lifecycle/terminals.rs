@@ -21,7 +21,6 @@ use pdo_run::application::complete_node::{
     complete_node_iteration, interactive_completion_refusal, CompletionAttempt, CompletionSource,
 };
 use pdo_run::application::events::{emit_run_event, reload_run_state, reload_run_state_with};
-use pdo_run::application::merge_resolver::MERGE_RESOLVER_NODE_ID;
 use pdo_run::application::node::launch::{find_node_type, node_run_isolation, snapshot_isolation};
 use pdo_run::application::node::spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
 use pdo_run::application::paths::{

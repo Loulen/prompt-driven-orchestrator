@@ -101,9 +101,6 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub end_node: Option<EndNodeInfo>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub merge_resolver: Option<MergeResolverInfo>,
     #[serde(default)]
     pub loop_states: HashMap<String, LoopState>,
     #[serde(default)]
@@ -263,7 +260,7 @@ pub struct RunState {
     /// byte-identical to the pre-#551 shape). A blank/empty stored value collapses to
     /// `None` at the freeze (`Some("")` never persists), so it can never win a tier
     /// (#347). Read at every spawn seam as the `run` tier of [`pdo_harness::resolver`]
-    /// and by the infra sessions (Pipeline Manager, merge resolver).
+    /// and by the infra sessions (Pipeline Manager).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub harness: Option<String>,

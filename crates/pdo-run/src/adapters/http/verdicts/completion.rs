@@ -23,9 +23,6 @@ fn status(r: &CompletionRefusal) -> StatusCode {
         | CompletionRefusal::FrontmatterRetryPending { .. }
         | CompletionRefusal::FrontmatterRetryExhausted { .. }
         | CompletionRefusal::SecondaryRepoDirtied { .. }
-        | CompletionRefusal::MergeResolutionFailed { .. }
-        | CompletionRefusal::MergeResolverSpawned { .. }
-        | CompletionRefusal::MergeResolverFailed { .. }
         | CompletionRefusal::ChildrenPending { .. } => StatusCode::CONFLICT,
     }
 }
@@ -101,15 +98,6 @@ mod tests {
             CompletionRefusal::AppendFailed {
                 error: "disk full".into(),
             },
-            CompletionRefusal::MergeResolutionFailed {
-                reason: "still conflicted".into(),
-            },
-            CompletionRefusal::MergeResolverSpawned {
-                node_id: "impl".into(),
-            },
-            CompletionRefusal::MergeResolverFailed {
-                reason: "spawn failed".into(),
-            },
             CompletionRefusal::ChildrenPending {
                 node_id: "orch".into(),
                 active: 2,
@@ -135,9 +123,6 @@ mod tests {
                 CompletionRefusal::FrontmatterRetryExhausted { .. } => "FrontmatterRetryExhausted",
                 CompletionRefusal::SecondaryRepoDirtied { .. } => "SecondaryRepoDirtied",
                 CompletionRefusal::AppendFailed { .. } => "AppendFailed",
-                CompletionRefusal::MergeResolutionFailed { .. } => "MergeResolutionFailed",
-                CompletionRefusal::MergeResolverSpawned { .. } => "MergeResolverSpawned",
-                CompletionRefusal::MergeResolverFailed { .. } => "MergeResolverFailed",
                 CompletionRefusal::ChildrenPending { .. } => "ChildrenPending",
             };
             seen.insert(key);

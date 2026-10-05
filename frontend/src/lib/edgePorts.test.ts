@@ -86,7 +86,7 @@ describe("defaultConditionPort", () => {
 
 describe("emergentInputs", () => {
   it("keeps the target's declared input name for a single-port edge", () => {
-    // A declared handle (a merge input, End's `result`) and every pre-#843 file
+    // A declared handle (End's `result`) and every pre-#843 file
     // mean that name; renaming it on the way through would break them.
     expect(emergentInputs({ ...single, target: { node: "orchestrator", port: "review" } })).toEqual(
       [{ port: "out", input: "review" }],

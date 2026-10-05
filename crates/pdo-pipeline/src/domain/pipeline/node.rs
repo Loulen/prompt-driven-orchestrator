@@ -26,7 +26,6 @@ pub enum NodeType {
     End,
     Switch,
     Loop,
-    Merge,
     /// A node that runs author-written bash deterministically instead of
     /// launching Claude (#248 / ADR-0017). Runs in a tmux session (attachable
     /// like any NodeRun) whose tail is `timeout N bash <body>`: exit 0 ⇒ node
@@ -38,7 +37,7 @@ pub enum NodeType {
 impl NodeType {
     /// A *regular* node (agent / script) declares no inputs: its inputs are
     /// emergent, derived from incoming edges and named after the edge target
-    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop/merge)
+    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop)
     /// keep their required, declared input ports. A `script` node consumes whole
     /// artifacts by edge just like a work node, so its inputs are emergent too
     /// (#248).
@@ -48,10 +47,10 @@ impl NodeType {
 
     /// The isolation this type carries when the document says nothing (#653 /
     /// ADR-0060): an `agent` is isolated, a `script` shares the Run worktree,
-    /// and every other type carries no isolation setting at all — `merge` is
-    /// isolated by construction, structural nodes never run in a worktree of
-    /// their own. `None` is what keeps `isolated_worktree` off a Merge/Start/End
-    /// document instead of writing a line nobody may edit.
+    /// and every other type carries no isolation setting at all — structural
+    /// nodes never run in a worktree of their own. `None` is what keeps
+    /// `isolated_worktree` off a Start/End document instead of writing a line
+    /// nobody may edit.
     pub fn default_isolation(&self) -> Option<bool> {
         match self {
             NodeType::Agent => Some(true),
@@ -68,7 +67,6 @@ impl NodeType {
             NodeType::End => "end",
             NodeType::Switch => "switch",
             NodeType::Loop => "loop",
-            NodeType::Merge => "merge",
             NodeType::Script => "script",
         }
     }
@@ -230,9 +228,8 @@ pub struct NodeDef {
     /// of its own; `false` ⇒ the Run's shared worktree. Carried only by `agent`
     /// and `script`, where [`normalize_node_value`] fills the type's default
     /// (`agent` isolated, `script` shared) so the parsed document ALWAYS states
-    /// the choice — including when it equals the default. `None` on `merge`
-    /// (isolated by construction) and on structural nodes (no worktree of their
-    /// own). Semantic, not layout: moving a node between worktrees changes what
+    /// the choice — including when it equals the default. `None` on structural
+    /// nodes (no worktree of their own). Semantic, not layout: moving a node between worktrees changes what
     /// the pipeline does, so it enters the diff and the library content hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolated_worktree: Option<bool>,
@@ -250,8 +247,7 @@ pub struct NodeDef {
 
 impl NodeDef {
     /// Whether this node's NodeRun gets a sub-worktree of its own (#653,
-    /// ADR-0060). `merge` is isolated by construction and exposes no setting;
-    /// `agent`/`script` read their explicit line, falling back to the type's
+    /// ADR-0060). `agent`/`script` read their explicit line, falling back to the type's
     /// default for a `NodeDef` built in code rather than parsed; every other
     /// type runs in the Run worktree.
     ///
@@ -260,7 +256,6 @@ impl NodeDef {
     /// iteration between worktrees.
     pub fn is_isolated(&self) -> bool {
         match self.node_type {
-            NodeType::Merge => true,
             NodeType::Agent | NodeType::Script => self
                 .isolated_worktree
                 .or_else(|| self.node_type.default_isolation())

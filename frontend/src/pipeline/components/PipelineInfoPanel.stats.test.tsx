@@ -45,7 +45,6 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
     node_defs: [],
     start_node: undefined,
     end_node: undefined,
-    merge_resolver: undefined,
     loop_states: {},
     foreach_states: {},
     sessions_spawned: 1234,

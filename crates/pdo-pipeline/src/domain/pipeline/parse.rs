@@ -83,23 +83,6 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                     });
                 }
             }
-            NodeType::Merge => {
-                if node.inputs.len() != 1
-                    || node.inputs[0].name != "branches"
-                    || !node.inputs[0].repeated
-                {
-                    return Err(ParseError::MissingField(format!(
-                        "merge node '{}' must have exactly one input named 'branches' with repeated: true",
-                        node.id
-                    )));
-                }
-                if node.outputs.len() != 1 || node.outputs[0].name != "merged" {
-                    return Err(ParseError::MissingField(format!(
-                        "merge node '{}' must have exactly one output named 'merged'",
-                        node.id
-                    )));
-                }
-            }
             NodeType::Loop => {
                 if node.max_iter.is_none() {
                     return Err(ParseError::MissingField(format!(

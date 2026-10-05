@@ -1292,6 +1292,24 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByText(/session died/i)).toBeInTheDocument();
     });
 
+    it("names a merge-back conflict instead of a dead session (ADR-0082)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "interrupted",
+              failure_reason: "merge_conflict: conflict in shared.txt",
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      const banner = screen.getByTestId("interrupted-banner");
+      expect(banner).toHaveTextContent(/Merge-back conflict — conflict in shared\.txt/);
+      expect(banner).not.toHaveTextContent(/session died/i);
+      expect(banner).not.toHaveTextContent("merge_conflict:");
+    });
+
     it("offers a Play button in the node controls", () => {
       render(
         <TooltipProvider>

@@ -267,7 +267,7 @@ pub fn resolve(
     }
 }
 
-/// The combination an **infra session** (Pipeline Manager, merge resolver)
+/// The combination an **infra session** (Pipeline Manager)
 /// launches with (#563 AC18, amending ADR-0046's Run-only-harness rule): it has
 /// no NodeDef and no Projet of its own, so only `Run → instance → Default`
 /// apply — but unlike before #563, a Run's *explicit* choice now supplies model

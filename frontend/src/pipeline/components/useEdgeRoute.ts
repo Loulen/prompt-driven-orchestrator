@@ -157,6 +157,11 @@ export function useEdgeRoute(
       target: targetPt,
       obstacles,
       targetSide: data?.targetSide,
+      sourceSide: srcSide,
+      sourceRect: srcRect ?? undefined,
+      // Half a cell past the leg, so the lattice snap below never rounds the
+      // router's first bend back inside the source leg.
+      sourceStub: leg + step / 2,
     });
     // `manual: false`: the router's bends are not the user's pins, so a wire that
     // has to go around its target is re-laid from its last real corner, and one

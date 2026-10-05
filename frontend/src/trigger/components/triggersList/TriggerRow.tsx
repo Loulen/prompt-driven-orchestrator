@@ -77,8 +77,10 @@ export default function TriggerRow({
         onSelect={(e) => onSelectControl(e.shiftKey)}
       />
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className={`truncate font-medium ${suspension ? "text-fg-3" : ""}`}>{t.name}</span>
+        {/* The « suspended » pill wraps under the name rather than eat it in a
+            narrow panel (or once the hover actions take their room). */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="trigger-name-line">
+          <span className={`max-w-full truncate font-medium ${suspension ? "text-fg-3" : ""}`}>{t.name}</span>
           {suspension && <SuspendedPill suspension={suspension} />}
         </div>
         <div

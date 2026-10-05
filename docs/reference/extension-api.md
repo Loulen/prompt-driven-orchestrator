@@ -211,7 +211,7 @@ stops giving one, and the Trigger fires again at its next slot. While suspended:
 
 - a due tick spends the slot without firing and records a fire `skipped-suspended` with the
   reason;
-- `POST /triggers/<id>/fire` answers `409` `{"error": "trigger '<id>' is suspended: <reason>"}`;
+- `POST /triggers/<id>/fire` answers `409` `{"error": "trigger '<name>' is suspended: <reason>"}`;
 - `GET /triggers`, `GET /triggers/<id>`, and the answers of a create or an edit carry
   `"suspension": {"extension": "<id>", "reason": "…"}`; the interface shows the Trigger switched
   off with an amber « suspended » pill, the reason in its tooltip and in the Trigger's detail.

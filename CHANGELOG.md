@@ -10,6 +10,16 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.11.0 — Quitter un terminal n'y écrit rien, terminal de nœud agrandi en overlay (#44)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Fermer un terminal (changer de
+node, fermer le Shell de run) n'écrit plus rien dans la session tmux : la saisie en cours de
+Claude Code reste intacte sur une ligne et un shell détaché survit (portage core #946).
+« Expand terminal » ouvre le terminal agrandi : la même session, sans remontage, en overlay à
+16 px des bords sur fond assombri, avec une barre nom · itération · statut, un cadre à la couleur
+du statut et les gestes de complétion compacts en `awaiting_user`. On en sort par Minimize, Échap
+hors du terminal ou un clic sur le fond ; l'état agrandi n'est jamais persisté (portage core #968).
+
 ## 2.10.1 — Panneau secondaire fermable, modales bornées à la fenêtre (#40)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Le panneau secondaire de la

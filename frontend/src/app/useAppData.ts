@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { fetchRuns } from "../run/api/runs";
 import { fetchProjects } from "../workspace/api/projects";
+import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { Project } from "../workspace/model/project";
 
@@ -27,12 +28,15 @@ export function useRuns() {
 
 // #552 — Projets, hydrated on mount and refreshed on a `project_changed` WS push
 // (the daemon broadcasts one on every project mutation). Mirror of useTriggers.
+// CORE-5: each new list is also asked where a Run may be created.
 export function useProjects() {
   const [projects, setProjects] = useState<Project[]>([]);
 
   const refresh = useCallback(async () => {
     try {
-      setProjects(await fetchProjects());
+      const fetched = await fetchProjects();
+      setProjects(fetched);
+      void useRunCreationRightsStore.getState().refresh(fetched);
     } catch {
       // ignore
     }

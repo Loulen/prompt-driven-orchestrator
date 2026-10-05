@@ -82,6 +82,9 @@ export default defineConfig({
       // CORE-3: `GET /resources`, the catalogue of the Ressources an extension
       // of rights reads. Same trap: without it a dev GET answers the SPA.
       '/resources': daemonTarget,
+      // CORE-5: `POST /authorize`, the question of authorization (hides the
+      // loupe and the Projets a Run cannot be created in).
+      '/authorize': daemonTarget,
     },
   },
   test: {

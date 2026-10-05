@@ -456,10 +456,12 @@ impl pdo_pipeline::application::ports::SkillBank for NoBank {
 }
 
 /// An extension host that records every Operation it is asked about, and
-/// refuses them all once told to.
+/// refuses them all once told to; or only the reads in the Projets
+/// `refuse_reads_in`.
 #[derive(Default)]
 pub struct Host {
     pub refuse: Mutex<bool>,
+    pub refuse_reads_in: Mutex<Vec<String>>,
     pub asked: Mutex<Vec<(Actor, Operation)>>,
 }
 
@@ -472,7 +474,17 @@ impl ExtensionHost for Host {
             .lock()
             .unwrap()
             .push((actor.clone(), operation.clone()));
-        if *self.refuse.lock().unwrap() {
+        let refused_projects = self.refuse_reads_in.lock().unwrap();
+        if operation.is_read()
+            && operation
+                .projects
+                .iter()
+                .any(|p| refused_projects.contains(p))
+        {
+            Authorization::Deny {
+                reason: "the test host refuses this read".into(),
+            }
+        } else if *self.refuse.lock().unwrap() {
             Authorization::Deny {
                 reason: "the test host refuses everything".into(),
             }

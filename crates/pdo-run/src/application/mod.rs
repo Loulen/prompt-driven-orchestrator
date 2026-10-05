@@ -20,7 +20,8 @@
 //!   ([`manager`]) — each a gesture that asks the authorization — and the
 //!   reads: the list, the reapable Runs and the children ([`list`]), an
 //!   artifact ([`artifact`]), the refs, a file at a ref and the source drift
-//!   ([`refs`]).
+//!   ([`refs`]). Each read asks the authorization too ([`read_access`],
+//!   CORE-5): a list keeps the Runs the actor may read.
 //! - What a command triggers once it was authorized: the archive of a Run and
 //!   its descendants ([`archive`]), `retry_all` ([`retry_all`]).
 //! - The daemon's own transitions: [`boot_recovery`], the [`stale`] sweep,
@@ -49,6 +50,7 @@ pub mod paths;
 pub mod pipeline_modified;
 pub mod ports;
 pub mod projections;
+pub mod read_access;
 pub mod read_run;
 pub mod refs;
 pub mod release_completion;

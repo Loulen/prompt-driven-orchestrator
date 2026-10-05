@@ -15,15 +15,44 @@ pub use pdo_extension_api::{Denied, OPERATION_REFUSED};
 use crate::extension_host::ExtensionHost;
 use crate::{Actor, Operation};
 
-/// Ask the host whether `actor` may run `operation`.
+/// Ask the host whether `actor` may run `operation`. An allowed mutation is
+/// recorded, to be announced as applied once its gesture succeeded; a read
+/// ([`Verb::Read`](crate::Verb::Read)) never is.
 pub fn authorize(
     host: &dyn ExtensionHost,
     actor: &Actor,
     operation: &Operation,
 ) -> Result<(), Denied> {
     decide(host.authorize(actor, operation), actor, operation)?;
-    crate::applied::allowed(actor, operation);
+    if !operation.is_read() {
+        crate::applied::allowed(actor, operation);
+    }
     Ok(())
+}
+
+/// Whether `actor` may read what `operation` names (CORE-5): a Run, a Projet,
+/// the disk. Never recorded as applied, and a refusal is logged at `debug`
+/// only: a list asks once per entity it holds. Without extension, no
+/// question at all.
+pub fn authorize_read(
+    host: &dyn ExtensionHost,
+    actor: &Actor,
+    operation: &Operation,
+) -> Result<(), Denied> {
+    if host.allows_everything() {
+        return Ok(());
+    }
+    host.authorize(actor, operation)
+        .into_result()
+        .inspect_err(|denied| {
+            tracing::debug!(
+                "read refused: {} {:?} by {}: {}",
+                operation.resource,
+                operation.target,
+                who(actor),
+                denied.reason,
+            );
+        })
 }
 
 /// The verdict of `authorization` as a result, the refusal logged.
@@ -72,6 +101,53 @@ mod tests {
             node_id: "n1".into(),
         };
         assert_eq!(authorize(&NoExtensions, &agent, &op), Ok(()));
+    }
+
+    #[test]
+    fn a_read_is_asked_but_never_recorded_as_applied() {
+        struct RefusesReads;
+        impl ExtensionHost for RefusesReads {
+            fn identify(&self, _: &pdo_extension_api::RequestParts) -> Actor {
+                Actor::LocalOperator
+            }
+            fn authorize(&self, _: &Actor, operation: &Operation) -> Authorization {
+                if operation.is_read() {
+                    Authorization::deny("no reading")
+                } else {
+                    Authorization::Allow
+                }
+            }
+            fn publish(&self, _: &serde_json::Value) {}
+        }
+        let read = Operation::new(ResourceKind::Run, Verb::Read).on("r1");
+        assert_eq!(
+            authorize_read(&RefusesReads, &Actor::LocalOperator, &read),
+            Err(Denied {
+                reason: "no reading".into()
+            })
+        );
+        assert_eq!(
+            authorize_read(&NoExtensions, &Actor::LocalOperator, &read),
+            Ok(()),
+            "without extension, nothing is asked"
+        );
+        let allows_reads = Operation::new(ResourceKind::Project, Verb::Read).on("p1");
+        let (result, record) = block_on(async {
+            crate::applied::scope(async {
+                authorize(&NoExtensions, &Actor::LocalOperator, &allows_reads)
+            })
+            .await
+        });
+        assert_eq!(result, Ok(()));
+        assert!(record.is_empty(), "a read is never applied: {record:?}");
+    }
+
+    /// Drive `future` on a fresh current-thread runtime.
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
     }
 
     #[test]

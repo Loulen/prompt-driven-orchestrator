@@ -49,6 +49,8 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("src/extensions.rs", "pub fn router("),
     // Who the caller is, and the display names (`/actors`).
     ("src/actors.rs", "pub(crate) fn router("),
+    // The question of authorization (`POST /authorize`, CORE-5).
+    ("src/authorize.rs", "pub fn router("),
 ];
 
 const VERBS: [&str; 5] = ["get", "post", "put", "patch", "delete"];

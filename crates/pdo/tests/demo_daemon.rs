@@ -11,7 +11,11 @@
 //!   working directory of `pdo daemon`; the current one by default. Pipelines
 //!   are read from `$PDO_DEMO_ROOT/.pdo/pipelines`, not from `$HOME`.
 //! - `PDO_TEST_EXTENSION_REFUSE`: what the test extension refuses (`none`, `all`,
-//!   `panic`, `<resource>:<verb>`), `project:update` by default.
+//!   `panic`, or rules `<resource>:<verb>[@<project>][~<actor>]` separated by
+//!   `,`, a bare `@` meaning « in no Projet »), `project:update` by default. `POST /ext/test/refusal {"refuse": …}`
+//!   changes it while the daemon runs (CORE-5: `run:read@<p2>` hides the Runs
+//!   of a Projet, `repository:read` the loupe, `run:create@<p2>` the Projet in
+//!   the New Run form).
 //! - `PDO_TEST_EXTENSION_TOKEN`: the token the test extension requires
 //!   (`test_extension/gate.rs`); unset, it admits every request. The CLI sends
 //!   it as `PDO_TOKEN`, the browser signs in on `/ext/test/sign-in`; its holder

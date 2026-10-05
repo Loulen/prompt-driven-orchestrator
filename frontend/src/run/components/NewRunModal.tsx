@@ -8,10 +8,12 @@ import HowSection from "./newRun/HowSection";
 import WhatSection from "./newRun/WhatSection";
 import VariableOverrides from "./newRun/VariableOverrides";
 import NewRunFooter from "./newRun/NewRunFooter";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunNewContext } from "../../shared/extensions/contract";
 import { useSectionForm } from "../../shared/extensions/sectionForm";
+import { useRunCreationRightsStore } from "../store/runCreationRightsStore";
+import { projectLookup } from "../../workspace/model/projectLookup";
 
 // `OpenIntent` / `RUN_INTENT` live in `newRun/openIntent.ts`; re-exported so the existing
 // importers (`app/App.tsx`) keep importing them from here.
@@ -49,14 +51,28 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, handleProvisioningValidity,
     handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
   } = form;
+  // CORE-5: where a Run may be created, asked again at each open (a right may
+  // have changed since the Projets were last read).
+  const refreshRights = useRunCreationRightsStore((s) => s.refresh);
+  const projects = useRunCreationRightsStore((s) => s.projects);
+  useEffect(() => {
+    if (open) void refreshRights();
+  }, [open, refreshRights]);
   const sectionContext = useMemo<Omit<RunNewContext, "location" | "run" | "project">>(
-    () => ({
-      mode,
-      pipeline: selectedPipelineId || null,
-      repository: targetRepo,
-      trigger: editingTriggerId ?? null,
-    }),
-    [mode, selectedPipelineId, targetRepo, editingTriggerId],
+    () => {
+      const ref = projectLookup(projects)(targetRepo.trim());
+      const target = ref ? projects.find((p) => p.id === ref.id) : undefined;
+      return {
+        mode,
+        pipeline: selectedPipelineId || null,
+        repository: targetRepo,
+        targetProject: target
+          ? { id: target.id, name: target.name, attributes: target.attributes ?? {} }
+          : null,
+        trigger: editingTriggerId ?? null,
+      };
+    },
+    [mode, selectedPipelineId, targetRepo, editingTriggerId, projects],
   );
 
   if (!open) return null;

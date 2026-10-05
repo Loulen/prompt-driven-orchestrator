@@ -23,10 +23,12 @@ use crate::{Actor, Operation};
 mod host_of;
 mod identity;
 mod launch;
+mod neutral;
 mod skills;
 use host_of::{panic_message, ExtensionHostOf};
 pub use identity::Identification;
 pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
+pub use neutral::NoExtensions;
 pub use skills::ProvidedSkills;
 
 /// The core's view of its extensions.
@@ -99,23 +101,13 @@ pub trait ExtensionHost: Send + Sync {
     fn trigger_suspension(&self, _trigger: &TriggerRef) -> Option<TriggerSuspension> {
         None
     }
-}
 
-/// The host of a daemon with no extension: the core's identification, everything
-/// allowed, events go nowhere, no attribute.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoExtensions;
-
-impl ExtensionHost for NoExtensions {
-    fn identify(&self, request: &RequestParts) -> Actor {
-        actor_from_headers(&request.headers)
+    /// Whether no extension can refuse anything: the reads then skip the
+    /// question altogether (CORE-5), so a daemon without extension serves its
+    /// lists exactly as before. `false` by default.
+    fn allows_everything(&self) -> bool {
+        false
     }
-
-    fn authorize(&self, _actor: &Actor, _operation: &Operation) -> Authorization {
-        Authorization::Allow
-    }
-
-    fn publish(&self, _event: &Value) {}
 }
 
 /// What the daemon gives its extension host once its resources are open.
@@ -348,6 +340,10 @@ impl ExtensionHost for Extensions {
             }
         }
         Authorization::Allow
+    }
+
+    fn allows_everything(&self) -> bool {
+        self.is_empty()
     }
 
     fn publish(&self, event: &Value) {

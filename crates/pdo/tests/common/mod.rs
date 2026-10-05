@@ -909,6 +909,30 @@ impl TestDaemon {
             .await;
     }
 
+    /// Seed a started Run working in `target_repo`, nothing on disk (CORE-5).
+    pub async fn seed_run_in(&self, run_id: &str, pipeline_name: &str, target_repo: &str) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .seed_run_in(run_id, pipeline_name, target_repo)
+            .await;
+    }
+
+    /// Open a WebSocket connection to `/ws`, as the caller the test extension
+    /// identifies by `actor` (its `x-pdo-test-actor` header).
+    pub async fn connect_ws_as(
+        &self,
+        actor: &str,
+    ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = format!("ws://{}/ws", self.addr).into_client_request()?;
+        request
+            .headers_mut()
+            .insert("x-pdo-test-actor", actor.parse()?);
+        let (ws, _) = tokio_tungstenite::connect_async(request).await?;
+        Ok(ws)
+    }
+
     /// Open a WebSocket connection to `/ws`. Returns the connected stream so the
     /// test can read the initial `{"type":"ready"}` and any subsequent events.
     pub async fn connect_ws(&self) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {

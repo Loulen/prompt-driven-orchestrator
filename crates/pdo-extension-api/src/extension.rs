@@ -193,6 +193,14 @@ pub trait Extension: Send + Sync + 'static {
     /// Allow or refuse an Operation before it runs. Allows by default. Never
     /// consulted for the scheduler's internal transitions: an extension cannot
     /// freeze a Run in flight.
+    ///
+    /// Also asked about the reads ([`Verb::Read`](crate::Verb::Read), CORE-5):
+    /// once per Run a list holds, per Run event `/ws` relays to a connection
+    /// (the answer kept a few seconds), per Projet listed, per disk browse,
+    /// and for the question of authorization (`POST /authorize`), which asks
+    /// without running anything. A refused read hides the entity from a list
+    /// and from `/ws`, and answers `403` for one entity: refuse a read on its
+    /// resource and verb, never on a verb you do not know.
     fn authorize(&self, _actor: &Actor, _operation: &Operation) -> Authorization {
         Authorization::Allow
     }

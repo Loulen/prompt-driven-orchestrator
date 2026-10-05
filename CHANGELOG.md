@@ -14,7 +14,7 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 
 `pdo-extension-api` passe en **0.8.0** : ajouts seulement, une extension 0.1 à 0.7 compile et
 tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du Backlog `CORE` de
-`pm`, US IAM-1 de `pdo-extensions` ; détail : ADR-0081, amendements CORE-3, CORE-4 et CORE-2, et
+`pm`, US IAM-1 de `pdo-extensions` ; détail : ADR-0081, amendements CORE-3, CORE-4, CORE-5 et CORE-2, et
 `docs/reference/extension-api.md`.
 
 - **CORE-3, Projets d'une Opération** : une `Operation` porte `projects` (vide : hors Projet).
@@ -43,13 +43,25 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
 - **CORE-4, Trigger suspendu** : hook `Extension::trigger_suspension`. Un Trigger suspendu ne fire plus
   (`skipped-suspended` dans son historique, `409` sur « Run now », qui nomme le Trigger et la raison) ; `GET /triggers` le rend avec
   `suspension: {extension, reason}`, l'UI l'affiche interrupteur éteint, puce ambre
-  « suspended » (qui passe sous le nom quand la colonne est étroite), raison en infobulle et
+  « suspended » (qui passe sous le nom quand la colonne est étroite, et se tronque au survol plutôt que
+  de passer sous les actions), raison en infobulle et
   dans le détail.
 - Contexte des extensions : `trigger/item` et `trigger/item/menu` reçoivent `last_editor` et
   `suspension` ; `run/info` reçoit `created_by` et `trigger_editor`.
 - L'extension de test du core (le démon de démo des Feature Paths) apprend à injecter des
   variables (`PDO_TEST_NODE_ENV`, `PUT /ext/test/launch`), un préambule
   (`PDO_TEST_NODE_PREAMBLE`) et à suspendre un Trigger (`PUT /ext/test/suspensions`).
+- **CORE-5, lectures autorisées** : nouveau verbe `read` (`Verb::Read`). Lister et voir un Run
+  (toute lecture `GET /runs/{id}…`), lister et voir un Projet, parcourir le disque
+  (`GET /fs/browse`, `repository` × `read`) passent par l'Autorisation d'opération : refusée, une
+  entité disparaît des listes, son détail répond `403`. `/ws` ne relaie à une connexion que les
+  événements des Runs que son Acteur peut lire. **Cassant pour une extension** qui refusait toute
+  Opération sans regarder le verbe : elle masque désormais aussi les Runs et les Projets.
+- **CORE-5, question d'autorisation** : `POST /authorize {"operations": [...]}` rend une décision
+  par Opération sans rien exécuter ; une `Operation` se désérialise. Le formulaire New Run s'en sert
+  (loupe masquée, dépôts groupés par Projet permis, « N Project(s) hidden », « New Run » désactivé
+  quand aucun Projet ne le permet) ; le contexte de `run/new` gagne `targetProject`. Mesure :
+  500 Runs listés en ~35 ms (build optimisé) avec une extension qui autorise.
 - **CORE-2, admission d'une requête** (`Extension::admit`) : une extension peut refuser (`401`
   `unauthenticated`) ou renvoyer vers sa page de connexion une requête qu'aucune extension n'a
   identifiée, sur toutes les routes, `/ws` et les PTY compris, jamais sur les fichiers de

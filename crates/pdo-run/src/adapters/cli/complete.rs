@@ -28,7 +28,10 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
     let iter = cli_node_iter();
 
     let endpoint = format!("{url}/runs/{rid}/nodes/{nid}/done");
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
+        .build()
+        .unwrap_or_default();
     // The session headers identify the caller as this node's Agent (#915).
     let resp = match client
         .post(&endpoint)

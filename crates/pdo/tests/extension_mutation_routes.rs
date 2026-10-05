@@ -44,6 +44,11 @@ const NOT_MUTATIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/actors/display",
+        "asks the extensions how a list of Actors shows (0.8); stores nothing",
+    ),
+    (
+        "POST",
         "/authorize",
         "the question of authorization (CORE-5): asks the extensions about Operations without \
          running any; stores nothing",

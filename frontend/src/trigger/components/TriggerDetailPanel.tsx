@@ -10,7 +10,7 @@ import FireHistory from "./triggerDetail/FireHistory";
 import GuardSection from "./triggerDetail/GuardSection";
 import ExtensionDetailTab from "../../shared/extensions/ExtensionDetailTab";
 import { useDetailTabs } from "../../shared/extensions/catalogue";
-import { actorLabel } from "../../shared/lib/actor";
+import ActorLabel from "../../shared/actors/ActorLabel";
 import SuspendedPill from "./triggersList/SuspendedPill";
 import { suspensionTooltip } from "../model/suspension";
 
@@ -149,7 +149,7 @@ export default function TriggerDetailPanel({
         {trigger.last_editor && (
           <ConfigRow icon={<User size={12} />} label="Last editor">
             <span className="truncate text-fg-2" data-testid="trigger-last-editor">
-              {actorLabel(trigger.last_editor)}
+              <ActorLabel actor={trigger.last_editor} />
             </span>
           </ConfigRow>
         )}

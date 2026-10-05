@@ -26,7 +26,8 @@ use super::quote::sh_single_quote;
 ///   the hook needs no `jq` on the session PATH.
 ///
 /// `PDO_DAEMON_URL` is exported into the session by [`wrap_with_env`], so no env
-/// has to be threaded into the JSON. The 10 s timeout sits well under the 30 s
+/// has to be threaded into the JSON. `PDO_TOKEN`, when the session has one, goes
+/// as `Authorization: Bearer`, like every CLI call (extension API 0.8). The 10 s timeout sits well under the 30 s
 /// the hook contract allows.
 ///
 /// **This only applies on a harness whose launch template has a `{settings}`
@@ -36,7 +37,7 @@ use super::quote::sh_single_quote;
 /// dropped silently. On those the primer's equivalent instruction
 /// (fetch the focus before acting) is the only mechanism: degraded, deliberately,
 /// rather than absent (ADR-0051 §3).
-pub const LIBASSIST_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"curl -sf \"$PDO_DAEMON_URL/sessions/libassist/focus?format=text\" || true; exit 0","timeout":10}]}]}}"#;
+pub const LIBASSIST_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"curl -sf ${PDO_TOKEN:+-H \"Authorization: Bearer $PDO_TOKEN\"} \"$PDO_DAEMON_URL/sessions/libassist/focus?format=text\" || true; exit 0","timeout":10}]}]}}"#;
 
 /// Build the agent tail by rendering the harness descriptor's launch template
 /// through [`pdo_harness::argv`] (#550, ADR-0045). The caller shell-quotes each
@@ -144,6 +145,10 @@ mod tests {
         assert!(
             cmd.contains("/sessions/libassist/focus"),
             "the hook fetches the daemon's focus: {cmd}"
+        );
+        assert!(
+            cmd.contains(r#"${PDO_TOKEN:+-H "Authorization: Bearer $PDO_TOKEN"}"#),
+            "the hook sends the session's token, like the CLI: {cmd}"
         );
     }
 }

@@ -4,24 +4,37 @@
 //! the [`Actor`] in the request's extensions. A handler reads it with axum's
 //! `Extension<Actor>` extractor.
 //!
+//! A request no extension identified then goes through the extensions'
+//! admission (`Extension::admit`): refused, it answers `401` (with the page to
+//! sign in on, for a redirection) before any route runs. The admission guards
+//! every route, `/ws`, the terminals' PTY and the extensions' routes included,
+//! never the SPA fallback: the interface always loads, and follows the
+//! redirection its first call to the API gets.
+//!
 //! It also runs the request in an `OperationApplied` scope: once the response
 //! is a success, the extensions observe every Operation the request was
-//! allowed to run (D20).
+//! allowed to run (D20). And in the Actor's scope ([`pdo_kernel::actor::current`]),
+//! so a secondary adapter (the audit journal) knows who did it.
 
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::Router;
+use pdo_extension_api::Admission;
 use pdo_kernel::applied;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::Actor;
 
-/// `router`, with `identify` in front of every route, the fallback included.
+/// `router`, with the actors' routes, the admission in front of every route
+/// (not the fallback), and `identify` in front of everything.
 pub(crate) fn with_identify(router: Router, host: Arc<dyn ExtensionHost>) -> Router {
-    router.layer(middleware::from_fn_with_state(host, identify))
+    let router = router.merge(crate::actors::router(host.clone()));
+    router
+        .route_layer(middleware::from_fn(admit))
+        .layer(middleware::from_fn_with_state(host, identify))
 }
 
 async fn identify(
@@ -30,13 +43,28 @@ async fn identify(
     next: Next,
 ) -> Response {
     let (parts, body) = request.into_parts();
-    let actor: Actor = host.identify(&parts);
+    let identification = host.identify_request(&parts);
+    let actor: Actor = identification.actor;
     let mut request = Request::from_parts(parts, body);
-    request.extensions_mut().insert(actor);
-    let (response, record) = applied::scope(next.run(request)).await;
+    request.extensions_mut().insert(actor.clone());
+    request.extensions_mut().insert(identification.admission);
+    let (response, record) =
+        applied::scope(pdo_kernel::actor::scope(actor, next.run(request))).await;
     let status = response.status();
     if status.is_success() || status == StatusCode::SWITCHING_PROTOCOLS {
         applied::publish(host.as_ref(), record);
     }
     response
+}
+
+/// Refuse a route to a request the extensions did not admit. Also layered on
+/// every router nested under `/ext` (`extensions::mount`): `route_layer` does
+/// not reach the fallbacks a nested router brings.
+pub(crate) async fn admit(request: Request, next: Next) -> Response {
+    match request.extensions().get::<Admission>().cloned() {
+        Some(admission) if !admission.is_admitted() => admission
+            .into_refusal()
+            .unwrap_or_else(|| StatusCode::UNAUTHORIZED.into_response()),
+        _ => next.run(request).await,
+    }
 }

@@ -69,6 +69,7 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo docs support-table [--check\|--write] [--file <path>]` | Check or regenerate the harness support table in [harnesses.md](harnesses.md) (the default `--file`). |
 | `pdo run create <pipeline> [options]` | Create a run through the daemon, with optional input, repository, harness, sandbox, and provisioning settings. `--input-file <path>` reads the prompt from a file; `--image <path>` / `--file <path>` (repeatable) attach files the entry node sees under `## Input Images` / `## Input Files` (one budget per run, `max_attachments_mb` in Settings). |
 | `pdo run wait [--all] [--timeout <seconds>]` | From a node session, block until a child run of this node becomes terminal (`--all`: every child). Exit 0 with one JSON line per settled child (`run_id`, `name`, `status`, `reason`, `children_active`), or `{"noop":true}` when no child is active; exit 2 when `--timeout` elapses (nothing on stdout); exit 1 when the daemon is unreachable or outside a node session. |
+| `pdo run list [--json]` | List the runs the daemon knows, one tab-separated line per run (`run_id`, status, pipeline, name); `--json` prints the daemon's `GET /runs` answer as is. Exit 1 with the daemon's reason when it refuses the call. |
 | `pdo page mount <name> <directory>` | Serve a directory under `/pages/<name>/`. |
 | `pdo page list` | List active page mounts. |
 | `pdo page unmount <name>` | Remove a page mount. |
@@ -76,5 +77,11 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo review reply <id> --text <markdown> [--resolved] [--run <id>]` | Reply to a review comment and optionally propose or record its resolution. |
 | `pdo ext` | List the extensions of the running daemon that have a command line, one `<id>\t<summary>` per line. Exit 1 when the daemon is unreachable. |
 | `pdo ext <id> <args…>` | Run the command line of extension `<id>` through the daemon. The arguments (flags included), the standard input (when it is a pipe or a file: `… | pdo ext <id>` or `pdo ext <id> < file`; a terminal, `/dev/null` or the socket an agent's shell tool leaves open relay nothing, so the command never waits for its input) and the node session the command runs in reach the extension, which sees the agent `agent:<run>/<node>` from a node session and the local operator otherwise. Its stdout and stderr come back byte for byte. Exit code: the extension's, as is; 1 when the daemon is unreachable or the extension fails; 127 when the daemon has no extension `<id>` or one without a command line. |
+
+Every command that talks to the daemon reaches it at `PDO_DAEMON_URL` (default
+`http://localhost:5172`) and, when `PDO_TOKEN` holds a token, sends it as
+`Authorization: Bearer <token>`: an extension that identifies its callers (sign-in, personal
+tokens) reads it. A daemon whose extension requires one refuses a call without it with `401`
+`{"error": "unauthenticated", …}`, which the command prints before it exits non-zero.
 
 Exposing the daemon beyond `localhost` is covered in [reverse-proxy.md](reverse-proxy.md).

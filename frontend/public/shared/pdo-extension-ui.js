@@ -13,4 +13,6 @@ export const {
   runHostedCommand,
   HostedContribution,
   HostedContributions,
+  useCurrentActor,
+  useActorDisplay,
 } = ExtensionUi;

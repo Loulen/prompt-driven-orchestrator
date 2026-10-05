@@ -10,6 +10,8 @@ import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { DecorationContext } from "../../../shared/extensions/contract";
 import RunRowMenu from "./RunRowMenu";
+import ActorName from "../../../shared/actors/ActorName";
+import { runCreator } from "../../model/runCreator";
 
 interface Props {
   node: RunTreeNode;
@@ -211,6 +213,13 @@ export default function RunRow({
               <Zap size={9} />
             </span>
           )}
+          {/* 0.8: who created the Run, as an extension names it; nothing
+              without such an extension. */}
+          <ActorName
+            actor={runCreator(run)}
+            className="shrink-0 font-sans text-fg-3"
+            size={12}
+          />
         </div>
       </div>
       {/* Right column (#783): line 1 = the hover-revealed action icons, line 2

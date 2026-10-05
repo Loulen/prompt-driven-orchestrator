@@ -999,6 +999,12 @@ PDO s'étend sans modifier son core, par une **API d'extension** versionnée à 
 
 **Autorisation d'opération** *(terme)* : le point où les Extensions acceptent ou refusent une Opération avant son exécution. Elle couvre ce qui entre par l'UI, la CLI, les agents et les Triggers, **jamais les transitions internes du scheduler**. Une Extension en panne refuse. _Éviter_ : « admission » (réservé au cap de sessions), « permission ».
 
+**Admission d'une requête** *(terme, 0.8)* : ce que les Extensions font d'une requête qu'**aucune** n'a identifiée : la servir (défaut), la refuser (`401`), ou la renvoyer vers la page de connexion d'une Extension, que l'interface suit en revenant ensuite au lien profond demandé. Elle garde toutes les routes, `/ws` et les terminaux compris, jamais les fichiers de l'interface. Toujours qualifiée « d'une requête » : « admission » seul reste le cap de sessions. _Éviter_ : « authentification » (le core n'authentifie personne), « login ».
+
+**Nom d'affichage** *(terme, 0.8)* : le nom et l'avatar qu'une Extension donne à un Acteur (« Alice »), que le core (journal d'audit, ligne d'un Run) et les autres Extensions affichent sans connaître celle qui l'a identifié. Sans Extension qui le nomme, l'Acteur s'affiche comme avant. _Éviter_ : « profil », « utilisateur ».
+
+**Jeton de la CLI** *(terme, 0.8)* : la valeur de `PDO_TOKEN`, que toute commande de la CLI qui parle au daemon envoie en `Authorization: Bearer` ; le core ne l'interprète pas, une Extension la lit pour identifier l'appelant. _Éviter_ : « clé d'API ».
+
 **Attribut d'entité** *(terme)* : paire clé/valeur préfixée par l'id de l'Extension qui l'a posée sur une entité (Run, Projet, Profil…). Le core la stocke et filtre les listes dessus **sans l'interpréter**, comme un label Kubernetes ; sur l'entité d'une Ressource d'extension, c'est l'Extension propriétaire qui la stocke et la renvoie. Hors de l'event log : c'est une métadonnée ajoutée, pas un fait du Run. _Éviter_ : « étiquette », « label » (déjà pris par les labels d'edge), « tag ».
 
 **Ressource d'extension** *(terme, #34)* : une sorte d'entité qu'une Extension possède et mute elle-même (la Tâche de `pm`), nommée `<extension>/<sorte>` (`pm/tache`). Ses Opérations passent par la même Autorisation d'opération que celles du core, par l'**Hôte**. _Éviter_ : « ressource custom », « type d'extension ».

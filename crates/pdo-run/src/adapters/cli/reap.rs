@@ -56,7 +56,10 @@ pub fn run_reap(
     budget_secs: u64,
 ) -> Result<()> {
     let url = cli_daemon_url();
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
+        .build()
+        .unwrap_or_default();
     let listing = format!("{url}/runs/reapable?size=true");
 
     let list_runs = |client: &reqwest::blocking::Client| -> Result<Vec<reap_policy::ReapableRun>> {

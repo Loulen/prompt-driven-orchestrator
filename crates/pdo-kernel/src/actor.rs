@@ -31,6 +31,24 @@ pub fn actor_from_headers(headers: &HeaderMap) -> Actor {
     }
 }
 
+tokio::task_local! {
+    static CURRENT: Actor;
+}
+
+/// Run `gesture` as the request of `actor`: [`current`] answers it while the
+/// gesture runs on this task. The `identify` middleware does it for every HTTP
+/// request.
+pub async fn scope<F: std::future::Future>(actor: Actor, gesture: F) -> F::Output {
+    CURRENT.scope(actor, gesture).await
+}
+
+/// The Actor of the request being served on this task (a secondary adapter
+/// recording who did something, the audit journal), `None` outside one (the
+/// scheduler, a spawned task).
+pub fn current() -> Option<Actor> {
+    CURRENT.try_with(Actor::clone).ok()
+}
+
 /// A header's trimmed value, `None` when absent, not UTF-8 or blank.
 fn header<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     headers
@@ -50,6 +68,17 @@ mod tests {
             map.insert(*name, value.parse().unwrap());
         }
         map
+    }
+
+    #[tokio::test]
+    async fn the_current_actor_is_the_scope_s_only() {
+        assert_eq!(current(), None);
+        let alice = Actor::Identified {
+            namespace: "x".into(),
+            id: "alice".into(),
+        };
+        assert_eq!(scope(alice.clone(), async { current() }).await, Some(alice));
+        assert_eq!(current(), None);
     }
 
     #[test]

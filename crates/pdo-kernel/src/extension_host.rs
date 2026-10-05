@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
-    Attributes, Authorization, EntityRef, Extension, ExtensionContext, ExtensionSkill, Host,
-    Manifest, NodeLaunch, RequestParts, Resource, TriggerRef, EXTENSION_EVENT,
+    ActorDisplay, Admission, Attributes, Authorization, EntityRef, Extension, ExtensionContext,
+    Host, Manifest, NodeLaunch, RequestParts, Resource, TriggerRef, EXTENSION_EVENT,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -21,16 +21,36 @@ use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
 mod host_of;
+mod identity;
 mod launch;
 mod neutral;
+mod skills;
 use host_of::{panic_message, ExtensionHostOf};
+pub use identity::Identification;
 pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
 pub use neutral::NoExtensions;
+pub use skills::ProvidedSkills;
 
 /// The core's view of its extensions.
 pub trait ExtensionHost: Send + Sync {
     /// The actor behind a request. Never fails: the core has its own default.
     fn identify(&self, request: &RequestParts) -> Actor;
+
+    /// The actor behind a request, and whether to serve it: a request no
+    /// extension identified goes through every extension's `admit`. Admitted,
+    /// with the actor of [`Self::identify`], by default.
+    fn identify_request(&self, request: &RequestParts) -> Identification {
+        Identification {
+            actor: self.identify(request),
+            admission: Admission::Admit,
+        }
+    }
+
+    /// How `actor` shows to a person, when an extension knows it. None by
+    /// default.
+    fn display_name(&self, _actor: &Actor) -> Option<ActorDisplay> {
+        None
+    }
 
     /// Whether `actor` may run `operation`.
     fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization;
@@ -88,13 +108,6 @@ pub trait ExtensionHost: Send + Sync {
     fn allows_everything(&self) -> bool {
         false
     }
-}
-
-/// The skills one extension brings into the Banque de skills.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProvidedSkills {
-    pub manifest: Manifest,
-    pub skills: Vec<ExtensionSkill>,
 }
 
 /// What the daemon gives its extension host once its resources are open.
@@ -288,17 +301,25 @@ impl Extensions {
 
 impl ExtensionHost for Extensions {
     fn identify(&self, request: &RequestParts) -> Actor {
-        for r in &self.registry.registered {
-            match catch_unwind(AssertUnwindSafe(|| r.extension.identify(request))) {
-                Ok(Some(actor)) => return actor,
-                Ok(None) => {}
-                Err(_) => tracing::warn!(
-                    "extension `{}` panicked in identify; ignored",
-                    r.manifest.id
-                ),
-            }
+        self.identified(request)
+            .unwrap_or_else(|| actor_from_headers(&request.headers))
+    }
+
+    fn identify_request(&self, request: &RequestParts) -> Identification {
+        if let Some(actor) = self.identified(request) {
+            return Identification {
+                actor,
+                admission: Admission::Admit,
+            };
         }
-        actor_from_headers(&request.headers)
+        Identification {
+            actor: actor_from_headers(&request.headers),
+            admission: self.admission(request),
+        }
+    }
+
+    fn display_name(&self, actor: &Actor) -> Option<ActorDisplay> {
+        self.display(actor)
     }
 
     fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
@@ -355,27 +376,7 @@ impl ExtensionHost for Extensions {
     }
 
     fn skills(&self) -> Vec<ProvidedSkills> {
-        self.registry
-            .registered
-            .iter()
-            .filter_map(
-                // An empty list is kept: the seed removes what the extension
-                // provided before. A panic is no list at all: it removes nothing.
-                |r| match catch_unwind(AssertUnwindSafe(|| r.extension.skills())) {
-                    Ok(skills) => Some(ProvidedSkills {
-                        manifest: r.manifest.clone(),
-                        skills,
-                    }),
-                    Err(_) => {
-                        tracing::error!(
-                            "extension `{}` panicked in skills; it brings none",
-                            r.manifest.id
-                        );
-                        None
-                    }
-                },
-            )
-            .collect()
+        self.provided_skills()
     }
 
     fn catalogue(&self) -> Vec<Resource> {
@@ -397,7 +398,7 @@ mod tests {
     use crate::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
     use crate::{ResourceKind, Verb};
     use pdo_extension_api::axum::http::Request;
-    use pdo_extension_api::{ExtensionEvent, Manifest, OperationApplied};
+    use pdo_extension_api::{ExtensionEvent, ExtensionSkill, Manifest, OperationApplied};
 
     fn parts(headers: &[(&str, &str)]) -> RequestParts {
         let mut builder = Request::builder().uri("/runs");

@@ -75,6 +75,10 @@ export default defineConfig({
       // included). Same trap as the others: without it a dev GET /ext answers
       // 200 with the SPA and no extension ever shows up.
       '/ext': daemonTarget,
+      // 0.8: who the UI is (`GET /actors/me`) and the Actors' display names
+      // (`POST /actors/display`). Same trap: without it the sign-in gate reads
+      // the SPA shell and never redirects.
+      '/actors': daemonTarget,
       // CORE-3: `GET /resources`, the catalogue of the Ressources an extension
       // of rights reads. Same trap: without it a dev GET answers the SPA.
       '/resources': daemonTarget,

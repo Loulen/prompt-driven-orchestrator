@@ -58,6 +58,16 @@ mod tests {
             serde_json::json!({ "kind": "local_operator" })
         );
         assert_eq!(agent.kind(), "agent");
+        assert_eq!(
+            serde_json::from_value::<Actor>(serde_json::json!({
+                "kind": "identified", "namespace": "iam", "id": "alice"
+            }))
+            .unwrap(),
+            Actor::Identified {
+                namespace: "iam".into(),
+                id: "alice".into()
+            }
+        );
     }
 
     #[test]

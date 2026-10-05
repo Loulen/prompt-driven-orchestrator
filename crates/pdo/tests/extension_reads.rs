@@ -423,7 +423,8 @@ fn median(mut samples: Vec<Duration>) -> Duration {
 
 /// CORE-5's measure: `GET /runs` over 500 Runs (in two Projets and outside
 /// any), with an extension asked about each one and allowing it. The median of
-/// 7 calls, after a warm-up, printed beside the same list without extension.
+/// 7 calls, after a warm-up, printed beside the same list without extension,
+/// the two daemons called in turn.
 ///
 /// An optimized build (`cargo nextest run --release`) serves it under 200 ms.
 /// A debug build is slower without any extension already (the projection of
@@ -432,32 +433,32 @@ fn median(mut samples: Vec<Duration>) -> Duration {
 /// worked out once per list, never once per Run).
 #[tokio::test]
 async fn five_hundred_runs_are_listed_under_200_ms_with_an_extension_that_allows() {
-    async fn measure(daemon: &TestDaemon, repos: &[String]) -> Duration {
+    async fn seed_runs(daemon: &TestDaemon, repos: &[String]) {
         for i in 0..500 {
             let repo = &repos[i % repos.len()];
             daemon
                 .seed_run_in(&format!("run-{i:04}"), "solo", repo)
                 .await;
         }
-        let client = reqwest::Client::new();
-        let url = format!("{}/runs", daemon.url());
-        let warm = client.get(&url).send().await.unwrap();
-        let listed: Value = warm.json().await.unwrap();
-        assert_eq!(listed.as_array().unwrap().len(), 500);
-        let mut samples = Vec::new();
-        for _ in 0..7 {
-            let start = Instant::now();
-            let resp = client.get(&url).send().await.unwrap();
-            let _ = resp.bytes().await.unwrap();
-            samples.push(start.elapsed());
-        }
-        median(samples)
+    }
+
+    /// One `GET /runs`: how long it took, and how many Runs it listed.
+    async fn list(client: &reqwest::Client, daemon: &TestDaemon) -> (Duration, usize) {
+        let start = Instant::now();
+        let resp = client
+            .get(format!("{}/runs", daemon.url()))
+            .send()
+            .await
+            .unwrap();
+        let listed: Value = resp.json().await.unwrap();
+        (start.elapsed(), listed.as_array().unwrap().len())
     }
 
     let (ext, control) = TestExtension::new(Refusal::Nothing);
     let with = TestDaemon::spawn_with_extensions(seed, ext.boxed())
         .await
         .unwrap();
+    let without = TestDaemon::spawn(seed).await.unwrap();
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     let c = tempfile::tempdir().unwrap();
@@ -467,16 +468,32 @@ async fn five_hundred_runs_are_listed_under_200_ms_with_an_extension_that_allows
         .collect();
     projet(&with, "P1", &repos[0]).await;
     projet(&with, "P2", &repos[1]).await;
-    let with_extension = measure(&with, &repos).await;
+    seed_runs(&with, &repos).await;
+    seed_runs(&without, &repos).await;
+
+    // A warm-up each, then the two lists interleaved, call for call: a load
+    // spike on the machine (a sibling test, a build) weighs on both medians
+    // alike instead of on whichever daemon was measured during it.
+    let client = reqwest::Client::new();
+    let (mut with_samples, mut without_samples) = (Vec::new(), Vec::new());
+    for round in 0..8 {
+        let (took, listed) = list(&client, &with).await;
+        assert_eq!(listed, 500);
+        let (took_without, listed) = list(&client, &without).await;
+        assert_eq!(listed, 500);
+        if round > 0 {
+            with_samples.push(took);
+            without_samples.push(took_without);
+        }
+    }
+    let with_extension = median(with_samples);
+    let without_extension = median(without_samples);
     let reads = control
         .asked()
         .into_iter()
         .filter(|(_, op)| op.resource == ResourceKind::Run && op.verb == Verb::Read)
         .count();
     assert_eq!(reads, 500 * 8, "one question per Run per list");
-
-    let without = TestDaemon::spawn(seed).await.unwrap();
-    let without_extension = measure(&without, &repos).await;
 
     eprintln!(
         "CORE-5 measure: GET /runs over 500 Runs: {with_extension:?} with an extension that allows, {without_extension:?} without extension (median of 7)"

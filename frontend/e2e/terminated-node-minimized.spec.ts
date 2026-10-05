@@ -149,7 +149,7 @@ test("a terminated node opens minimized with the Outputs on screen, and the bar 
   await expect(runPane.getByTestId("details-pane")).toBeVisible({
     timeout: 5_000,
   });
-  await expect(runPane.locator("button.port-row").first()).toBeVisible({
+  await expect(runPane.locator('.port-row:has([data-testid="port-row-open"])').first()).toBeVisible({
     timeout: 10_000,
   });
   await expect(runPane.getByTestId("terminal-fullsize")).toHaveCount(0);

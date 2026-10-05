@@ -1,12 +1,16 @@
+import { useId } from "react";
 import { Clock, Save, Sparkles } from "lucide-react";
+import { Tooltip, TooltipProvider } from "../../../shared/ui/tooltip";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
 
 /** The footer: the close warning, Cancel, and Launch / Create / Save trigger. */
 export default function NewRunFooter({ form }: { form: NewRunForm }) {
   const {
     mode, editingTriggerId, submitting, attachments, closeWarning, attachmentsOverLimit,
-    requestClose, handleLaunch, canLaunch, canCreateTrigger, handleCreateTrigger,
+    requestClose, handleLaunch, canLaunch, launchBlockReason, canCreateTrigger,
+    handleCreateTrigger,
   } = form;
+  const launchReasonId = useId();
   return (
     <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
       {closeWarning && attachments.length > 0 && (
@@ -37,16 +41,34 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
         Cancel
       </button>
       {mode === "run" ? (
-        <button
-          onClick={handleLaunch}
-          disabled={submitting || !canLaunch}
-          className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
-          style={{ fontSize: "11.5px" }}
-          data-testid="launch-button"
-        >
-          <Sparkles size={12} />
-          {submitting ? (attachments.length > 0 ? "Uploading…" : "Launching…") : "Launch"}
-        </button>
+        // A disabled button takes no focus nor hover: the reason hangs on a
+        // wrapper, focusable only while provisioning blocks the launch.
+        <TooltipProvider>
+          <Tooltip content={launchBlockReason ?? ""} side="top" disabled={!launchBlockReason}>
+            <span
+              tabIndex={launchBlockReason ? 0 : undefined}
+              className="inline-flex rounded-md"
+              data-testid="launch-button-wrapper"
+            >
+              <button
+                onClick={handleLaunch}
+                disabled={submitting || !canLaunch}
+                aria-describedby={launchBlockReason ? launchReasonId : undefined}
+                className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+                style={{ fontSize: "11.5px" }}
+                data-testid="launch-button"
+              >
+                <Sparkles size={12} />
+                {submitting ? (attachments.length > 0 ? "Uploading…" : "Launching…") : "Launch"}
+              </button>
+              {launchBlockReason && (
+                <span id={launchReasonId} className="sr-only">
+                  {launchBlockReason}
+                </span>
+              )}
+            </span>
+          </Tooltip>
+        </TooltipProvider>
       ) : (
         <button
           onClick={handleCreateTrigger}

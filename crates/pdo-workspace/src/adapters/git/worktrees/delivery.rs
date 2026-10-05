@@ -167,7 +167,6 @@ pub enum DeliveryOutcome {
     /// The merge-back conflicted and was resolved in the node's favour (#503).
     ResolvedInNodeFavour(MergeAdoption),
     Conflict(MergeConflict),
-    ConflictPendingResolution(MergeConflict),
 }
 
 /// **The** delivery: keep the NodeRun's own commits, commit whatever it left
@@ -197,7 +196,6 @@ pub fn deliver_node_work(
     sub_branch: &str,
     node_id: &str,
     iter: i64,
-    keep_conflict: bool,
     spawn_base: Option<&str>,
 ) -> Result<DeliveryOutcome> {
     let before = rev_parse(run_worktree_dir, "HEAD")?;
@@ -221,7 +219,6 @@ pub fn deliver_node_work(
         sub_branch,
         node_id,
         iter,
-        keep_conflict,
         spawn_base,
     )?;
 
@@ -234,6 +231,5 @@ pub fn deliver_node_work(
             DeliveryOutcome::ResolvedInNodeFavour(adoption)
         }
         MergeResult::Conflict(c) => DeliveryOutcome::Conflict(c),
-        MergeResult::ConflictPendingResolution(c) => DeliveryOutcome::ConflictPendingResolution(c),
     })
 }

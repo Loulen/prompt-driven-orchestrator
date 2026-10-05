@@ -100,7 +100,7 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
     // #653/ADR-0060: where the node works, written UNCONDITIONALLY for an
     // `agent`/`script` — even at the editor default. A document that omits the
     // line makes the reader recall a default; one that states it does not. Never
-    // emitted for `merge` (isolated by construction) or a structural node.
+    // emitted for a structural node.
     const isolation = nodeIsolation(n);
     if (isolation !== null) node.isolated_worktree = isolation;
     // #723/ADR-0064: the « Orchestrator » toggle. Emitted only when on, like

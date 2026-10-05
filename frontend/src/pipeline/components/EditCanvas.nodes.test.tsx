@@ -420,8 +420,7 @@ describe("End marker accepts an incoming edge on any of its four borders (#840)"
     expect(landsByDrop("end")).toBe(true);
     expect(landsByDrop("agent")).toBe(true);
     expect(landsByDrop("script")).toBe(true);
-    // A merge keeps its `branches` port pill; Start takes no incoming edge.
-    expect(landsByDrop("merge")).toBe(false);
+    // Start takes no incoming edge.
     expect(landsByDrop("start")).toBe(false);
   });
 

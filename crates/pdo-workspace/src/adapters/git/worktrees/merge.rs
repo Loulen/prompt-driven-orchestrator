@@ -65,7 +65,6 @@ pub enum MergeResult {
     /// a merge commit carrying the node's tree. Not a failure — and never silent.
     ResolvedInNodeFavour(MergeAdoption),
     Conflict(MergeConflict),
-    ConflictPendingResolution(MergeConflict),
 }
 
 /// `spawn_base`: the commit this sub-worktree was cut from, per its `NodeStarted`
@@ -78,7 +77,6 @@ pub fn commit_and_merge_sub_worktree_inner(
     sub_branch: &str,
     node_id: &str,
     iter: i64,
-    keep_conflict: bool,
     spawn_base: Option<&str>,
 ) -> Result<MergeResult> {
     // The node's own commits are kept; only what it left uncommitted becomes a
@@ -116,9 +114,6 @@ pub fn commit_and_merge_sub_worktree_inner(
             conflicting_files: unmerged_paths(pipeline_worktree_dir),
         };
 
-        if keep_conflict {
-            return Ok(MergeResult::ConflictPendingResolution(conflict));
-        }
         let _ = std::process::Command::new("git")
             .args(["merge", "--abort"])
             .current_dir(pipeline_worktree_dir)

@@ -151,7 +151,6 @@ function runState(status: RunStatus): RunState {
     node_defs: [],
     start_node: undefined,
     end_node: undefined,
-    merge_resolver: undefined,
   };
 }
 
@@ -191,9 +190,8 @@ describe("#315 — EditCanvas is read-only for an archived run", () => {
   it("hides every add/edit toolbar control on an archived run", () => {
     renderCanvas("archived");
 
-    // The add-node dropdown, merge, and script buttons are gone.
+    // The add-node dropdown and script buttons are gone.
     expect(screen.queryByTestId("toolbar-add")).toBeNull();
-    expect(screen.queryByTestId("toolbar-merge")).toBeNull();
     expect(screen.queryByTestId("toolbar-script")).toBeNull();
   });
 
@@ -218,7 +216,7 @@ describe("#315 — EditCanvas is read-only for an archived run", () => {
 
     // Editing affordances present …
     expect(screen.getByTestId("toolbar-add")).toBeInTheDocument();
-    expect(screen.getByTestId("toolbar-merge")).toBeInTheDocument();
+    expect(screen.getByTestId("toolbar-script")).toBeInTheDocument();
     // … and drag/connect are on (ADR-0007 editing-during-run must not regress).
     const stub = screen.getByTestId("reactflow-stub");
     expect(stub.getAttribute("data-draggable")).toBe("true");

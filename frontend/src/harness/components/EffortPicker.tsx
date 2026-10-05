@@ -48,7 +48,7 @@ export default function EffortPicker({
      fewer; the picker renders whatever the binary offers. Empty ⇒ no offer, and the
      picker is typically also `disabled` (no effort axis). */
   efforts: string[];
-  testid: string; // "node-effort" | "merge-effort"
+  testid: string; // e.g. "node-effort"
   /* #550/ADR-0046, #616: greyed when the resolved harness has no effort axis — a
      SERVED fact now (`has_effort`), not a client map. An absence declared by the
      binary, so the control is disabled, not hidden. Assert on the `disabled`

@@ -1052,8 +1052,8 @@ describe("isolated_worktree emission (#653)", () => {
     }
   });
 
-  it("never writes the line for a merge or a structural node", () => {
-    for (const type of ["merge", "start", "end"] as const) {
+  it("never writes the line for a structural node", () => {
+    for (const type of ["start", "end"] as const) {
       const yaml = serializePipeline(
         pipelineWith(agent({ type, isolated_worktree: true })),
       );
@@ -1065,7 +1065,7 @@ describe("isolated_worktree emission (#653)", () => {
     expect(exportNodeAsYaml(agent({ isolated_worktree: false }), "p")).toContain(
       "isolated_worktree: false",
     );
-    expect(exportNodeAsYaml(agent({ type: "merge" }), "p")).not.toContain(
+    expect(exportNodeAsYaml(agent({ type: "start" }), "p")).not.toContain(
       "isolated_worktree",
     );
   });

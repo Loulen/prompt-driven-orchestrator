@@ -63,7 +63,7 @@ export function useNewRunSubmit(
     setEditingTriggerId, triggerName, setTriggerName, cronPresetId, dailyHour, dailyMinute,
     rawCron, guardCommand, setGuardCommand, setGuardTest, setGuardTesting, setGuardTestError,
     allowOverlap, setAllowOverlap, maxConcurrent, setMaxConcurrent, setSubmitting, setError,
-    provisioning, setProvisioning, provisioningValid, secondaryRepos, attachments,
+    provisioning, setProvisioning, provisioningValid, provisioningBlockReason, secondaryRepos, attachments,
     setAttachments, setAttachmentError, setAttachmentHint, settings, sandbox, harness,
     agentChoice, skills, setSkills, refreshRecentRepos,
   } = s;
@@ -182,6 +182,8 @@ export function useNewRunSubmit(
     // #465: every non-empty secondary must have resolved before Launch.
     secondariesReady,
   });
+  // Notion #7: the provisioning reason is the one the disabled Launch spells out.
+  const launchBlockReason = provisioningValid ? undefined : provisioningBlockReason;
 
   // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.
   // Memoized (like `selectedPipeline`/`overrideCount` above) so the compiler can
@@ -340,7 +342,7 @@ export function useNewRunSubmit(
     promptOptional, hasRequiredPrompt, dockerUnavailable, sandboxReason, sandboxProfiles,
     missingProfile, instanceDefaultSandbox, effectiveSandbox, sandboxDoomed,
     inheritedDefaultReason, harnessCatalog, instanceDefaultHarness, secondariesReady,
-    buildTargetRepos, handleLaunch, canLaunch, resolvedCron, triggerInputRejectReason,
+    buildTargetRepos, handleLaunch, canLaunch, launchBlockReason, resolvedCron, triggerInputRejectReason,
     canCreateTrigger, handleCreateTrigger, onTestGuard,
   };
 }

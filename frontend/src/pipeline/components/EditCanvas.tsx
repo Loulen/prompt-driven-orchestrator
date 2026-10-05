@@ -18,7 +18,6 @@ import { useEditStore } from "../store/editStore";
 import { ViewportWiringGridOverlay } from "./WiringGridOverlay";
 import { LoopRegionNode } from "./LoopRegionNode";
 import { NoteNode } from "./NoteNode";
-import { MergeEditNode } from "./MergeNode";
 import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
@@ -42,7 +41,7 @@ import { useCanvasWiring } from "../store/useCanvasWiring";
 import { EditNode } from "./EditNode";
 import { CanvasContextMenuHost } from "./CanvasContextMenu";
 
-const nodeTypes = { edit: EditNode, merge: MergeEditNode, loopRegion: LoopRegionNode, note: NoteNode };
+const nodeTypes = { edit: EditNode, loopRegion: LoopRegionNode, note: NoteNode };
 const edgeTypes = { orthogonal: OrthogonalEdge };
 
 interface EditCanvasProps {

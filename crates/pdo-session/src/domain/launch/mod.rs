@@ -26,7 +26,7 @@ pub const SCRIPT_TIMEOUT_SECS: u64 = 60;
 /// `pdo fail` — no LLM, no `tmux_cmd_override` (a script *is* deterministic
 /// bash, so the test seam must not clobber it).
 pub enum SessionTail<'a> {
-    /// Agent node / manager / merge-resolver. `model` is the per-node model
+    /// Agent node / manager. `model` is the per-node model
     /// override (#296); `None` ⇒ account default (byte-identical legacy launch).
     Agent {
         /// The resolved harness descriptor (#550, ADR-0045). Its `launch`
@@ -47,7 +47,7 @@ pub enum SessionTail<'a> {
         /// *identity* instead of by the newest `.jsonl` in a cwd it shares with the
         /// manager and any sibling non-isolated node. `None` *or* an
         /// empty string ⇒ no `--session-id`, byte-identical legacy tail — the state
-        /// for infra sessions (`__manager__` / `__merge_resolver__`) that own no
+        /// for infra sessions (`__manager__`) that own no
         /// `NodeStarted`, are never probed by the sweep and are never resumed.
         session_id: Option<&'a str>,
     },

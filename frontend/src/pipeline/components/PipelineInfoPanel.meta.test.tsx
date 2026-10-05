@@ -119,7 +119,6 @@ function makeRun(overrides: Partial<RunState> = {}): RunState {
     node_defs: [],
     start_node: undefined,
     end_node: undefined,
-    merge_resolver: undefined,
     ...overrides,
   };
 }
@@ -263,7 +262,7 @@ describe("Pipeline info — Info tab on a template (#948)", () => {
     useEditStore.setState((s) => ({
       openTabs: s.openTabs.map((t) => ({
         ...t,
-        diagnostics: ["node 'reviewer' receives edges from 2 isolated nodes without a Merge"],
+        diagnostics: ["node 'reviewer': unknown node type 'merge', defaulting to 'agent'"],
       })),
     }));
     render(<StorePanel />);

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, fireEvent, within } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import { useEditStore } from "../store/editStore";
 import { type OpenPipeline } from "../store/editState";
@@ -71,15 +71,6 @@ const PIPELINE: EditorPipelineDef = {
       outputs: [{ name: "review", repeated: false, side: "right" }],
       view: { x: 400, y: 0 },
     },
-    {
-      id: "join",
-      name: "Join",
-      type: "merge",
-      interactive: false,
-      inputs: [{ name: "branches", repeated: true, side: "left" }],
-      outputs: [{ name: "merged", repeated: false, side: "right" }],
-      view: { x: 800, y: 0 },
-    },
   ],
   edges: [],
 } as EditorPipelineDef;
@@ -138,15 +129,6 @@ describe("#936 — an edge is created by a drag only", () => {
 
     fireEvent.click(within(nodeEl("writer")).getByTestId("rim-source-right"));
     fireEvent.click(bodyTarget("reviewer"));
-
-    expect(edgeCount()).toBe(0);
-  });
-
-  it("clicking a merge's `branches` handle, then a node's rim, adds no edge", () => {
-    renderCanvas();
-
-    fireEvent.click(screen.getByTestId("port-input-branches").querySelector(".react-flow__handle")!);
-    fireEvent.click(within(nodeEl("writer")).getByTestId("rim-source-bottom"));
 
     expect(edgeCount()).toBe(0);
   });

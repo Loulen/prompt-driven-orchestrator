@@ -70,7 +70,7 @@ export function defaultConditionPort(ports: string[]): string {
  * under on the target.
  *
  * A single-port edge keeps `target.port` as the input name: that is what a
- * declared handle (a `merge` input, End's `result`) and every pre-#843 file
+ * declared handle (End's `result`) and every pre-#843 file
  * mean. From two ports on there is no single name left to honour, so each input
  * takes its own port's name — the emergent rule ("connecting
  * `debugger.repro_steps` creates a `repro_steps` input", CONTEXT.md).

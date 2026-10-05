@@ -109,15 +109,13 @@ pub fn find_node_type<'a>(run_state: &'a state::RunState, node_id: &str) -> Opti
 /// fallback for one whose events predate #653.
 ///
 /// A snapshot that states the isolation is authoritative. Absent it, the type's
-/// default stands in: `merge` is isolated by construction, an `agent` is
-/// isolated, a `script` shares the Run worktree, and a structural node has no
-/// worktree of its own.
+/// default stands in: an `agent` is isolated, a `script` shares the Run
+/// worktree, and a structural node has no worktree of its own.
 pub fn snapshot_isolation(run_state: &state::RunState, node_id: &str) -> bool {
     let Some(def) = run_state.node_defs.iter().find(|nd| nd.id == node_id) else {
         return false;
     };
-    def.isolated_worktree
-        .unwrap_or(matches!(def.node_type.as_str(), "merge" | "agent"))
+    def.isolated_worktree.unwrap_or(def.node_type == "agent")
 }
 
 /// Where a node's iteration `iter` works (#653, ADR-0060): its FROZEN answer

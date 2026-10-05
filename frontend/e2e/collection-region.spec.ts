@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 // Layer 3b — Collection region E2E (refs #60, ADR-0011).
 //
@@ -16,9 +16,9 @@ import { fileURLToPath } from "node:url";
 // eligible member (data-testid `ctx-fanout-<field>` — the gesture EXISTS now,
 // #151 / #269 shipped it).
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 
 const REGION_PIPELINE = `e2e-collection-region-${process.pid}-${Date.now()}`;
 const GESTURE_PIPELINE = `e2e-collection-gesture-${process.pid}-${Date.now()}`;
@@ -151,10 +151,11 @@ test("toolbar has no ForEach add-button (fan-out is a region, not a node)", asyn
   await openPipelineForEdit(page, REGION_PIPELINE);
   await page.waitForTimeout(500);
 
-  // The edit toolbar is present, with add + merge buttons.
+  // The edit toolbar is present, with the add button — and no Merge button:
+  // the laps converge on the node downstream of the region (ADR-0082).
   await expect(page.getByTestId("edit-toolbar")).toBeVisible({ timeout: 3_000 });
   await expect(page.getByTestId("toolbar-add")).toBeVisible();
-  await expect(page.getByTestId("toolbar-merge")).toBeVisible();
+  await expect(page.getByTestId("toolbar-merge")).toHaveCount(0);
 
   // ...but NO ForEach add-button — a collection fan-out is created from the
   // context-menu gesture on members (#151 / #171 / #269), not by adding a node.

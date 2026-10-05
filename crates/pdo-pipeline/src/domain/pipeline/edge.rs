@@ -247,7 +247,7 @@ impl EdgeDef {
     /// Each pair is `(source port, target input name)`.
     ///
     /// A single-port edge keeps `target.port` as the input name — that is what a
-    /// declared handle (a `merge`'s input, End's `result`) and every pre-#843
+    /// declared handle (End's `result`) and every pre-#843
     /// file mean, and renaming it on the way through would break them. As soon as
     /// the edge carries several ports there is no single name left to honour, so
     /// each input takes its own port's name — which is exactly the emergent rule

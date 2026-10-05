@@ -94,7 +94,7 @@ pub fn resolve_effort(node_entry_effort: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The harness an **infra** session (Pipeline Manager, merge resolver) runs on
+/// The harness an **infra** session (Pipeline Manager) runs on
 /// (#551, ADR-0046). Infra sessions have no NodeDef, hence no `node` tier and no
 /// model/effort: `Run → instance → plancher`. Don't give them their own tier —
 /// "ce Run tourne sur X" must hold with no exception to remember, so an A/B on a

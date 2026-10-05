@@ -24,11 +24,11 @@ describe("LintBanner", () => {
   it("renders diagnostic messages", () => {
     render(
       <LintBanner
-        items={[lint("node 'reviewer' receives edges from 2 isolated nodes without a Merge")]}
+        items={[lint("node 'reviewer': unknown node type 'merge', defaulting to 'agent'")]}
         onDismiss={noop}
       />,
     );
-    expect(screen.getByText(/isolated nodes without a Merge/)).toBeInTheDocument();
+    expect(screen.getByText(/unknown node type 'merge'/)).toBeInTheDocument();
   });
 
   it("renders multiple diagnostics", () => {

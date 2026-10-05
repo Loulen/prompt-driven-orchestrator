@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand } from "lucide-react";
 import { Tooltip } from "../../shared/ui/tooltip";
 import {
@@ -24,7 +25,18 @@ interface Props {
   onExpand?: () => void;
   onCopy: () => void;
   onTakeControl: () => void;
+  /** #44: the node's identity, at the head of the toolbar, in place of the
+   *  connection dot (the « attached · live » badge still says how the socket is
+   *  doing). */
+  identity?: ReactNode;
+  /** #44: extra gestures at the right of the toolbar, before Copy, followed by
+   *  a separator. */
+  actions?: ReactNode;
 }
+
+/** #44: the exits of the enlarged terminal, named on its collapse button. */
+export const COLLAPSE_LABEL = "Collapse terminal · Esc · click outside";
+export const EXPAND_LABEL = "Expand terminal";
 
 /** The terminal's toolbar: its session, its state, and what a human can do. */
 export default function TerminalToolbar({
@@ -42,6 +54,8 @@ export default function TerminalToolbar({
   onExpand,
   onCopy,
   onTakeControl,
+  identity,
+  actions,
 }: Props) {
   return (
     <div
@@ -49,7 +63,14 @@ export default function TerminalToolbar({
       style={{ fontSize: "11px" }}
       data-testid="term-toolbar"
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+      {identity ? (
+        <>
+          {identity}
+          <span className="mx-1 h-3 w-px bg-line-strong" aria-hidden />
+        </>
+      ) : (
+        <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+      )}
       <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
         {session}
       </span>
@@ -104,6 +125,12 @@ export default function TerminalToolbar({
           </span>
         </Tooltip>
       )}
+      {actions && (
+        <>
+          {actions}
+          <span className="mx-1 h-3 w-px bg-line-strong" aria-hidden />
+        </>
+      )}
       {/* #772: copy the browser-side selection; the tooltip doubles as the
           discoverable hint for the keyboard shortcuts. */}
       <Tooltip
@@ -131,11 +158,7 @@ export default function TerminalToolbar({
         </button>
       </Tooltip>
       {onExpand && (
-        <Tooltip
-          content={
-            expanded ? "Collapse terminal" : "Expand terminal"
-          }
-        >
+        <Tooltip content={expanded ? COLLAPSE_LABEL : EXPAND_LABEL}>
           <button
             onClick={onExpand}
             className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"

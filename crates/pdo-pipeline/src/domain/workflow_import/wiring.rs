@@ -78,23 +78,16 @@ impl Importer {
             return;
         }
         let mut new_cursor: Cursor = Vec::new();
-        let mut any_isolated = false;
         for a in agents {
             // Each sibling is entered from the same upstream sources (fan-out).
             let mut branch_cursor = entry_sources.clone();
             let id = self.emit_agent(a, &mut branch_cursor);
-            if self.nodes.last().map(|n| n.is_isolated()) == Some(true) {
-                any_isolated = true;
-            }
             new_cursor.push(Pending {
                 node: id,
                 port: "out".into(),
                 when: None,
                 is_else: false,
             });
-        }
-        if any_isolated {
-            self.warn("`parallel(...)` avec des nœuds isolés — envisage un nœud Merge en aval (lint info-only ADR-0006, pas d'auto-insertion)");
         }
         *cursor = new_cursor;
     }

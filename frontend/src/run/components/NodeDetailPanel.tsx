@@ -244,6 +244,7 @@ export default function NodeDetailPanel({
 
       <TerminalSection
         node={node}
+        nodeName={nodeName}
         runId={runId}
         selectedIter={selectedIter}
         selectedIterStatus={selectedIterStatus}
@@ -253,6 +254,19 @@ export default function NodeDetailPanel({
         setTerminalView={setTerminalView}
         setTerminalLive={setTerminalLive}
         setTerminalSpectating={setTerminalSpectating}
+        // #44: the enlarged terminal carries the panel's completion gestures.
+        completion={{
+          showGestures:
+            !isArchived &&
+            (selectedIterStatus === "awaiting_user" || nodeAwaitsOnLatestIter),
+          canRelease: canReleaseCompletion,
+          released: completionReleased,
+          isReleasing,
+          releaseVerdict,
+          markVerdict,
+          release: releaseCompletion,
+          markComplete,
+        }}
         detailsPane={
           <DetailsPane
             actions={

@@ -93,7 +93,7 @@ const PIPELINE = {
   ],
 };
 
-const DIAGNOSTIC = "unknown field 'auto_merge_resolver' (ignored)";
+const DIAGNOSTIC = "unknown field 'legacy_top_level_key' (ignored)";
 
 // An edit tab: `runId` unset, `scope` is a normal pipeline scope. This is the
 // state in which the lint banner is a legitimate edit-mode affordance.

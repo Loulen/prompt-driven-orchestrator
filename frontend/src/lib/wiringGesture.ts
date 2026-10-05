@@ -175,7 +175,7 @@ function foldJunction(points: Point[], junction: number): Point[] {
  * will use, so the previewed arrowhead is where the wire gets pinned.
  *
  * `pinned` is the escape hatch for a target that does NOT anchor by drop position:
- * a merge's `branches`. It keeps its own fixed handle, so the wire lands on it
+ * a declared handle. It keeps its own fixed handle, so the wire lands on it
  * whatever the cursor aimed at — and the preview has to say so. Previewing a drop-chosen side there drew a landing the
  * edge would never render, and the points of that phantom approach were persisted
  * as waypoints inside the card (#844, FP finding 2).
@@ -230,7 +230,7 @@ export function hoveredRect(toNode: HoveredNode | null, fromNodeId: string | nul
 
 /**
  * Where the wire will be pinned on a target that does NOT anchor by drop (a
- * merge's `branches`): on that handle, on its own side, wherever the cursor
+ * declared handle): on that handle, on its own side, wherever the cursor
  * happens to be. `null` for a target that lands where it is dropped — an
  * emergent body, or the End marker (#840, see `landsByDrop`).
  *

@@ -11,7 +11,6 @@ describe("isStructuralMarker (#684)", () => {
 
   it("is false for every other node type and for a missing node", () => {
     expect(isStructuralMarker("agent")).toBe(false);
-    expect(isStructuralMarker("merge")).toBe(false);
     expect(isStructuralMarker("script")).toBe(false);
     expect(isStructuralMarker(null)).toBe(false);
     expect(isStructuralMarker(undefined)).toBe(false);
@@ -21,9 +20,8 @@ describe("isStructuralMarker (#684)", () => {
 describe("resolveNodeInspector (#684)", () => {
   const base = { isEditingRun: false, hasRunStart: false, hasRunEnd: false };
 
-  it("routes agent / merge / script nodes to the full node inspector", () => {
+  it("routes agent / script nodes to the full node inspector", () => {
     expect(resolveNodeInspector({ ...base, nodeType: "agent" })).toBe("node");
-    expect(resolveNodeInspector({ ...base, nodeType: "merge" })).toBe("node");
     expect(resolveNodeInspector({ ...base, nodeType: "script" })).toBe("node");
   });
 

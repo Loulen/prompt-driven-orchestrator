@@ -12,8 +12,12 @@ use super::diagnostic::{Diagnostic, ParseError, Severity};
 /// migrator. They now take the same generic path as any other invalid value —
 /// coerced to `agent` with the unknown-type warning — because a bespoke
 /// diagnostic for a retired type is a compatibility branch by another name.
+///
+/// ADR-0082: `merge` is GONE the same way. A legacy `type: merge` becomes an
+/// isolated `agent` with the ordinary warning — its `branches` / `merged` ports
+/// survive untouched, and convergence is the generic rule of every node.
 pub const VALID_NODE_TYPES: &[&str] = &[
-    "agent", "start", "end", "switch", "loop", "merge",
+    "agent", "start", "end", "switch", "loop",
     // #248: without this, a `type: script` node is silently rewritten to
     // `agent` with only a diagnostic (see the layer-1 test).
     "script",
@@ -29,7 +33,7 @@ pub const VALID_NODE_TYPES: &[&str] = &[
 ///   coercing a fan-out to `agent` would run each item's work zero times).
 /// - missing `type` → default to `agent` (noisy warning).
 /// - unknown `type` → coerce to `agent` (noisy warning). This is the arm the
-///   retired `doc-only` / `code-mutating` now land in (#653).
+///   retired `doc-only` / `code-mutating` (#653) and `merge` (ADR-0082) land in.
 /// - a known type (incl. legacy `switch`/`loop`) → left untouched, no warning.
 ///
 /// It then stamps the node's isolation default (#653): an `agent`/`script` with
@@ -124,9 +128,9 @@ pub const SKILLS_KEY: &str = "skills";
 /// This is what makes "the Document always states the choice" true without
 /// asking every author to type the line: an `agent` with no `isolated_worktree`
 /// parses as isolated and *re-serializes* saying so. A type that carries no
-/// isolation (`merge`, `start`, `end`, `switch`, `loop`) has any stray key
-/// dropped rather than round-tripped — a Merge is isolated by construction, and
-/// a line nobody may edit would only invite someone to edit it.
+/// isolation (`start`, `end`, `switch`, `loop`) has any stray key dropped rather
+/// than round-tripped — a line nobody may edit would only invite someone to
+/// edit it.
 ///
 /// Runs after the type normalization above, so it reads the coerced type.
 fn stamp_isolation_default(node_map: &mut serde_yaml::Mapping) {

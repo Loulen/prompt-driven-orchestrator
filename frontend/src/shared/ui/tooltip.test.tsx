@@ -50,14 +50,14 @@ describe("Tooltip", () => {
 describe("Tooltip accessible name (#397)", () => {
   it("names an icon-only button with the tooltip text, at rest", () => {
     renderWithProvider(
-      <Tooltip content="Merge node">
+      <Tooltip content="Script node">
         <button data-testid="t">
           <svg aria-hidden="true" />
         </button>
       </Tooltip>,
     );
     // No hover, no focus: the name must be there in the resting state.
-    expect(screen.getByTestId("t")).toHaveAccessibleName("Merge node");
+    expect(screen.getByTestId("t")).toHaveAccessibleName("Script node");
   });
 
   it("names a disabled icon-only button too", () => {

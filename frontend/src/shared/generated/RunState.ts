@@ -7,7 +7,6 @@ import type { EndNodeInfo } from "./EndNodeInfo";
 import type { ForEachStateInfo } from "./ForEachStateInfo";
 import type { LocStat } from "./LocStat";
 import type { LoopStateInfo } from "./LoopStateInfo";
-import type { MergeResolverInfo } from "./MergeResolverInfo";
 import type { NodeDefInfo } from "./NodeDefInfo";
 import type { NodeState } from "./NodeState";
 import type { RepoPin } from "./RepoPin";
@@ -65,7 +64,7 @@ awaiting_reason_code?: string, nodes: { [key in string]: NodeState }, edges: Arr
  * Instance + Project + Run provisioning recipe frozen at Run creation
  * (ADR-0061). Node rules are appended only when its isolated worktree is cut.
  */
-provisioning_rules?: Array<ScopedProvisioningRules>, start_node?: StartNodeInfo, end_node?: EndNodeInfo, merge_resolver?: MergeResolverInfo, loop_states: { [key in string]: LoopStateInfo }, foreach_states: { [key in string]: ForEachStateInfo }, collection_states: { [key in string]: CollectionStateInfo }, switch_states: { [key in string]: SwitchState }, 
+provisioning_rules?: Array<ScopedProvisioningRules>, start_node?: StartNodeInfo, end_node?: EndNodeInfo, loop_states: { [key in string]: LoopStateInfo }, foreach_states: { [key in string]: ForEachStateInfo }, collection_states: { [key in string]: CollectionStateInfo }, switch_states: { [key in string]: SwitchState }, 
 /**
  * Live loop-region cap overrides folded from `set_region_max_iter` commands
  * (ADR-0011 / #600), keyed by region id. An **absolute** cap (last-write-wins),
@@ -197,7 +196,7 @@ fork_sha?: string,
  * byte-identical to the pre-#551 shape). A blank/empty stored value collapses to
  * `None` at the freeze (`Some("")` never persists), so it can never win a tier
  * (#347). Read at every spawn seam as the `run` tier of [`pdo_harness::resolver`]
- * and by the infra sessions (Pipeline Manager, merge resolver).
+ * and by the infra sessions (Pipeline Manager).
  */
 harness?: string, 
 /**

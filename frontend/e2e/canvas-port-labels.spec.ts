@@ -1,15 +1,15 @@
 import { test, expect } from "@playwright/test";
 import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 // Layer 3b — Card ports and the rim drag-source (refs #66, #844).
 //
 // Post canvas-refonte / slim card (#149) and border wiring (#844): a node's
 // INPUTS are emergent (an incoming arrow lands anywhere on the body, no input
-// pill) — the only exception is the `merge` node's repeated `branches` input,
-// which keeps a labelled pill. OUTPUTS are named on the EDGES that carry them,
+// pill), on every node — the `merge` node and its `branches` pill are gone
+// (ADR-0082), a convergence is an ordinary node. OUTPUTS are named on the EDGES that carry them,
 // never on the card: there is no output dot and no output pill any more. A wire
 // starts from any point of the card's border, through the four rim source strips
 // (`rim-<side>`), and its preview grows on the wiring grid with no label chasing
@@ -18,14 +18,14 @@ import { fileURLToPath } from "node:url";
 // This spec seeds one node of each kind that still parses (legacy `switch`/
 // `loop` types migrate to generic agent nodes; `type: for-each` is hard-refused
 // since ADR-0011 — its slot here is a plain non-isolated node with the same body/
-// done port shape) and asserts: no output dot exists, the merge input pill is
-// present, the four rim strips cover the border, and a drag from the rim draws
+// done port shape) plus an Agent converging two branches, and asserts: no
+// output dot and no input pill exist, the four rim strips cover the border, and a drag from the rim draws
 // the grid-snapped preview.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-port-labels-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -94,15 +94,12 @@ nodes:
       - name: done
         side: right
     view: { x: 750, y: 100 }
-  - id: mg1
-    name: merger
-    type: merge
-    inputs:
-      - name: branches
-        side: left
-        repeated: true
+  - id: gather1
+    name: gather
+    type: agent
+    isolated_worktree: true
     outputs:
-      - name: merged
+      - name: summary
         side: right
     view: { x: 750, y: 300 }
   - id: impl1
@@ -129,6 +126,10 @@ edges:
     target: { node: planner, port: task }
   - source: { node: planner, port: plan }
     target: { node: sw1, port: in }
+  - source: { node: planner, port: plan }
+    target: { node: gather1, port: branches }
+  - source: { node: fe1, port: done }
+    target: { node: gather1, port: branches }
 `;
 
 test.beforeAll(async () => {
@@ -136,6 +137,7 @@ test.beforeAll(async () => {
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
   await fs.writeFile(path.join(PROMPTS_DIR, "planner.md"), "Plan the task.\n");
   await fs.writeFile(path.join(PROMPTS_DIR, "implementer.md"), "Implement.\n");
+  await fs.writeFile(path.join(PROMPTS_DIR, "gather1.md"), "Summarise.\n");
 });
 
 test.afterAll(async () => {
@@ -143,7 +145,7 @@ test.afterAll(async () => {
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("no output dot is rendered; the merge input keeps its pill (#844)", async ({
+test("no output dot and no input pill is rendered (#844, ADR-0082)", async ({
   page,
 }) => {
   await page.goto("/");
@@ -163,10 +165,10 @@ test("no output dot is rendered; the merge input keeps its pill (#844)", async (
     page.locator('.react-flow__handle[data-handleid="plan"]'),
   ).toHaveCount(0);
 
-  // Inputs are emergent (no input pill) — except the merge node's repeated
-  // `branches` input, which keeps a labelled pill.
-  await expect(page.getByTestId("port-input-branches")).toHaveCount(1);
-  // No other input pills exist for the ordinary node types.
+  // Inputs are emergent (no input pill) on every node, the convergence node
+  // fed twice on `branches` included — no Merge pill survives (ADR-0082).
+  await expect(page.getByTestId("port-input-branches")).toHaveCount(0);
+  await expect(page.locator('[data-testid^="port-input-"]')).toHaveCount(0);
   await expect(page.getByTestId("port-input-task")).toHaveCount(0);
   await expect(page.getByTestId("port-input-in")).toHaveCount(0);
 });

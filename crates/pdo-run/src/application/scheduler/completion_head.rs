@@ -23,7 +23,7 @@ use super::advance::*;
 /// them to one variant without an order-equivalence integration test first —
 /// nothing here would catch a divergence.
 pub enum CompletionOrder {
-    /// `node_done` & `handle_merge_resolver_done`: edges, then sweep.
+    /// `node_done`: edges, then sweep.
     CompletionFirst,
     /// `mark_node_done` arm: sweep, then edges (the interactive node is already gone).
     SweepFirst,
@@ -138,9 +138,7 @@ pub(super) async fn fire_edges(state: &Runs, run_id: &str, completed_node_id: &s
 ///
 /// PRECONDITION: the caller has already appended its `NodeCompleted` (plus any
 /// companion events) and done any session reap. `completed_node_id` is the node
-/// whose edges to fire — on the merge-resolver path that is the *original
-/// conflicting node*, not the route's `__merge_resolver__` param, so it cannot be
-/// re-derived from the request.
+/// whose edges to fire.
 ///
 /// `retry_waiting_nodes` is cross-run on purpose: a freed session slot can start a
 /// `waiting` node in another run. Never call this tail from an all-runs/waiting

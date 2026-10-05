@@ -250,7 +250,7 @@ describe("landingAt", () => {
   });
 
   it("obeys a target that pins the wire to its own declared handle", () => {
-    // A merge's `branches` (End lands by drop since #840): the drop position has
+    // A declared handle (End lands by drop since #840): the drop position has
     // no say. The preview must land where the edge will actually be pinned, or it
     // draws — and persists — the approach to a border the wire never touches.
     const pin = { side: "top" as const, point: { x: 500, y: 400 } };

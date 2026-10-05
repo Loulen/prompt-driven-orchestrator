@@ -34,8 +34,8 @@ describe("nodeIsolation (#653 / ADR-0060)", () => {
     expect(nodeIsolation(node("script", true))).toBe(true);
   });
 
-  it("gives merge and structural nodes no isolation to state", () => {
-    for (const type of ["merge", "start", "end"] as const) {
+  it("gives structural nodes no isolation to state", () => {
+    for (const type of ["start", "end"] as const) {
       expect(nodeIsolation(node(type))).toBeNull();
       expect(carriesIsolation(type)).toBe(false);
     }
@@ -43,10 +43,7 @@ describe("nodeIsolation (#653 / ADR-0060)", () => {
     expect(carriesIsolation("script")).toBe(true);
   });
 
-  it("still reports a Merge as isolated — it forks by construction", () => {
-    // Unmarked on the canvas, a Merge would read as LESS isolated than the
-    // Agent feeding it, which is the opposite of the truth.
-    expect(isNodeIsolated(node("merge"))).toBe(true);
+  it("reports the canvas marker from the document's isolation", () => {
     expect(isNodeIsolated(node("start"))).toBe(false);
     expect(isNodeIsolated(node("agent"))).toBe(true);
     expect(isNodeIsolated(node("agent", false))).toBe(false);

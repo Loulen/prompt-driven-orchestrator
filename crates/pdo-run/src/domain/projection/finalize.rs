@@ -110,11 +110,7 @@ pub fn is_stalled(run: &RunState) -> bool {
         .nodes
         .values()
         .any(|n| matches!(n.status, NodeStatus::Running | NodeStatus::Waiting));
-    let resolver_active = run
-        .merge_resolver
-        .as_ref()
-        .is_some_and(|mr| mr.status == NodeStatus::Running);
-    if has_active_node || resolver_active {
+    if has_active_node {
         return false;
     }
 

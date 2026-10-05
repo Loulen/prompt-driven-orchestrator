@@ -74,7 +74,6 @@ export default function ProjectEditModal({
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [provisioningOpen, setProvisioningOpen] = useState(false);
   // #586: the harness options, dynamic from `/settings` (floor ∪ descriptors,
   // each installed/not). The modal holds no settings of its own, so it fetches.
   const harnessCatalog = useHarnessCatalog();
@@ -287,21 +286,11 @@ export default function ProjectEditModal({
 
         {initialProject && (
           <div className="mb-3">
-            {provisioningOpen ? (
-              <PersistedProvisioningEditor
-                scope="project"
-                projectId={initialProject.id}
-                initialRepository={initialProject.members[0] ?? ""}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setProvisioningOpen(true)}
-                className="rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
-              >
-                Configure worktree provisioning…
-              </button>
-            )}
+            <PersistedProvisioningEditor
+              scope="project"
+              projectId={initialProject.id}
+              initialRepository={initialProject.members[0] ?? ""}
+            />
           </div>
         )}
         </div>

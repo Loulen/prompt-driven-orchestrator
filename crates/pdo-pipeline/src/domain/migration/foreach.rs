@@ -16,7 +16,7 @@ use super::switches::edge_endpoint;
 /// - `FE.done -> D.r` becomes the **barrier** edge `T.o -> D.r`, where `T` is the
 ///   body terminal (the member with no outgoing edge to another member) and `o`
 ///   its first output port. The region's outgoing edges fire once when all items
-///   finish, preserving `done -> Merge` convergence (ADR-0006).
+///   finish, so the downstream node converges on every lap (ADR-0082).
 /// - the ForEach node is removed and a `{ id, kind: collection, over, members }`
 ///   entry is appended to the pipeline's `loops:` block (no `max_iter`).
 pub(crate) fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
@@ -299,7 +299,7 @@ pub(crate) fn body_terminal(
 }
 
 /// #149: inputs are emergent. Strip declared `inputs` from regular (non-isolated /
-/// isolated) nodes. Structural nodes (start/end/merge/loop/for-each) keep
+/// isolated) nodes. Structural nodes (start/end/switch/loop/for-each) keep
 /// their required ports. Any `repeated: true` declared input is migrated onto
 /// the matching incoming edge so loop accumulation is preserved.
 pub(crate) fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
@@ -311,10 +311,7 @@ pub(crate) fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
     if let Some(nodes) = doc.get("nodes").and_then(|n| n.as_sequence()) {
         for node in nodes {
             let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if matches!(
-                node_type,
-                "start" | "end" | "switch" | "merge" | "loop" | "for-each"
-            ) {
+            if matches!(node_type, "start" | "end" | "switch" | "loop" | "for-each") {
                 continue;
             }
             let Some(node_id) = node.get("id").and_then(|v| v.as_str()) else {

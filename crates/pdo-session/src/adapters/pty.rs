@@ -30,6 +30,18 @@ use crate::domain::pty_protocol::{decode_resize, is_take_control};
 use crate::domain::shared_terminal::{TermSize, INITIAL_SIZE};
 use crate::Session;
 
+/// Keystrokes to the PTY through the shared writer (#946). A poisoned lock
+/// (a panic mid-write) ends the input loop like a failed write would.
+fn write_input(
+    writer: &std::sync::Mutex<Box<dyn Write + Send>>,
+    data: &[u8],
+) -> std::io::Result<()> {
+    writer
+        .lock()
+        .map_err(|_| std::io::Error::other("PTY writer poisoned"))?
+        .write_all(data)
+}
+
 /// Bridge an upgraded socket to `session_id` until either side closes.
 pub(crate) async fn handle_pty_ws(
     socket: WebSocket,
@@ -90,7 +102,7 @@ pub(crate) async fn handle_pty_ws(
             return;
         }
     };
-    let mut pty_writer = match pair.master.take_writer() {
+    let pty_writer = match pair.master.take_writer() {
         Ok(w) => w,
         Err(e) => {
             error!("Failed to take PTY writer: {e}");
@@ -119,6 +131,18 @@ pub(crate) async fn handle_pty_ws(
 
     let master = pair.master;
     let (mut ws_sink, mut ws_stream) = socket.split();
+
+    // #946: leaving a terminal writes nothing into it. portable-pty's
+    // `Drop for UnixMasterWriter` writes `\n` + VEOF (`^D`) into the master;
+    // released while the `tmux attach` client is alive, the client forwards
+    // them to the pane (a blank line in Claude Code's prompt on every node
+    // switch, a hosted shell killed). So the writer is shared, never owned, by
+    // the input task: whatever way that task ends (close, abandoned socket,
+    // write error, panic, or still running when another task wins the
+    // select!), it only drops a handle. The last one goes after the reap below,
+    // when nothing forwards the bytes any more.
+    let pty_writer = Arc::new(std::sync::Mutex::new(pty_writer));
+    let input_writer = Arc::clone(&pty_writer);
 
     // Channel: PTY stdout → async sender → WebSocket
     let (pty_tx, mut pty_rx) = mpsc::channel::<Vec<u8>>(64);
@@ -167,7 +191,7 @@ pub(crate) async fn handle_pty_ws(
                 // mouse reports that travel the same way) never reach the pane,
                 // and so never lift a declared wait either.
                 Message::Binary(_) if spectator.load(std::sync::atomic::Ordering::SeqCst) => {}
-                Message::Binary(data) if pty_writer.write_all(&data).is_err() => {
+                Message::Binary(data) if write_input(&input_writer, &data).is_err() => {
                     break;
                 }
                 Message::Binary(data) => {
@@ -250,6 +274,11 @@ pub(crate) async fn handle_pty_ws(
         let _ = child.wait();
     })
     .await;
+
+    // #946: only now, with the client reaped, may the writer's `\n^D` fire:
+    // it lands on a PTY nobody reads. A still-running input task holds the
+    // other handle and releases it just as harmlessly when its socket ends.
+    drop(pty_writer);
 
     info!("PTY WebSocket closed for session {session_id}");
 }

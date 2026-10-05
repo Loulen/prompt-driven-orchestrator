@@ -29,8 +29,7 @@ export const ANCHOR_SIDES: readonly PortSide[] = ["left", "right", "top", "botto
  * left (the #175 bug). Keying on type makes both already-migrated (0-input) and
  * legacy (1-input `in`) work nodes anchor by drop.
  *
- * `start` has no inputs; `end` (declared `result`) and structural `merge` keep
- * their declared ports. Where an incoming wire LANDS is a separate question —
+ * `start` has no inputs; `end` keeps its declared `result`. Where an incoming wire LANDS is a separate question —
  * see {@link landsByDrop}: End lands by drop like a work node (#840).
  */
 export function isEmergentInputNode(type: NodeType): boolean {
@@ -47,8 +46,7 @@ export function isEmergentInputNode(type: NodeType): boolean {
  * `result` is the pipeline's contract — the edge still carries that port — but
  * it is not a place on the card. Pinning the arrow to `result`'s declared side
  * (`left` in every real pipeline) made End the one target that refused a wire on
- * its top, right or bottom border. Only a `merge` keeps a fixed landing: its
- * `branches` port pill is a real, visible handle. `start` takes no incoming edge.
+ * its top, right or bottom border. `start` takes no incoming edge.
  *
  * One question, asked by the card's handles, the edge derivation, the landing
  * preview and the drop — so the four cannot disagree on where a wire lands.
@@ -77,7 +75,7 @@ export function sideFromAnchorHandle(handleId: string | null | undefined): PortS
 /**
  * Whether a drop that landed on the handle `handleId` should anchor by drop
  * position (#168). Only a body anchor handle does (a work node's, or End's since
- * #840); a structural port (merge `branches`, loop `in`) keeps its fixed declared
+ * #840); a declared port handle keeps its fixed declared
  * side and must be left untouched (AC: declared ports unaffected).
  */
 export function anchorsByDropOnBody(handleId: string | null | undefined): boolean {
@@ -257,9 +255,8 @@ export function outwardDelta(side: PortSide): Point {
  *
  * This is xyflow's `getHandlePosition` rule, restated — the renderer is handed
  * exactly this point as `targetX/targetY`, so a preview that lands anywhere else
- * draws a wire the edge will not keep. It matters for a merge's `branches` pill,
- * the one target left that pins the wire to a declared handle (End lands by
- * drop since #840).
+ * draws a wire the edge will not keep. It matters for any target that pins the
+ * wire to a declared handle (End lands by drop since #840).
  */
 export function handlePin(
   centre: Point,

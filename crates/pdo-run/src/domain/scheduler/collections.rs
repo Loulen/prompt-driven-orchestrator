@@ -167,8 +167,8 @@ pub(super) fn check_all_upstream_completed(
         {
             return true;
         }
-        // ADR-0011 ("jamais de stall silencieux"): a convergence target (e.g. a
-        // `Merge`) must not wait forever on an upstream branch that is dead — a
+        // ADR-0011 ("jamais de stall silencieux"): a convergence target (any
+        // node fed by several edges) must not wait forever on an upstream branch that is dead — a
         // non-firing conditional/`else` edge, or a transitively-dead producer.
         // Such a branch never appears in `run_state` and never completes, so we
         // treat its edge as resolved rather than a blocker.

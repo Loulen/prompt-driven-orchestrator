@@ -1,4 +1,4 @@
-import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { useCallback, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { Maximize2 } from "lucide-react";
 import type { NodeState } from "../../../shared/generated/NodeState";
 import type { NodeStatus } from "../../../shared/generated/NodeStatus";
@@ -9,14 +9,30 @@ import {
 } from "../../../shared/ui/resizable";
 import TmuxTerminal from "../../../session/components/TmuxTerminal";
 import { terminalPlaceholder } from "../../model/nodeStatus";
+import { STATUS_BORDER } from "../../../nodeStyles";
 import type { TerminalView } from "./types";
+import {
+  EnlargedCompletionGestures,
+  EnlargedTerminalIdentity,
+  GestureVerdictPopover,
+  type TerminalCompletion,
+} from "./EnlargedTerminalBar";
+import { useEnlargedTerminal } from "./useEnlargedTerminal";
+
+/** #44: the enlarged terminal's drop shadow and backdrop, `RunShellModal`'s. */
+const OVERLAY_SHADOW = "0 30px 80px rgba(0,0,0,0.6)";
+const OVERLAY_BACKDROP = { background: "rgba(5,7,10,0.66)", backdropFilter: "blur(4px)" } as const;
+/** #44: the light halo an awaiting frame adds, at 18% of the status colour. */
+const AWAIT_HALO = "0 0 0 3px color-mix(in srgb, var(--color-st-await) 18%, transparent)";
 
 /**
  * The terminal inset and the details pane below it, laid out per `terminalView`
- * (#346): minimized bar + full-height details, split, or expanded terminal.
+ * (#346): minimized bar + full-height details, split, or the « Terminal
+ * agrandi » (#44): the same terminal lifted over the whole app.
  */
 export default function TerminalSection({
   node,
+  nodeName,
   runId,
   selectedIter,
   selectedIterStatus,
@@ -27,8 +43,10 @@ export default function TerminalSection({
   setTerminalLive,
   setTerminalSpectating,
   detailsPane,
+  completion,
 }: {
   node: NodeState;
+  nodeName?: string | null;
   runId: string;
   selectedIter: number;
   selectedIterStatus: NodeStatus;
@@ -39,18 +57,71 @@ export default function TerminalSection({
   setTerminalLive: (live: boolean) => void;
   setTerminalSpectating: (spectating: boolean) => void;
   detailsPane: ReactNode;
+  completion: TerminalCompletion;
 }) {
+  // #44: the « Terminal agrandi ». The terminal's own wrapper switches to
+  // `position: fixed` (same element, same React parent, no portal), so the
+  // xterm instance and its WebSocket survive the round trip; the existing
+  // ResizeObserver resizes the grid both ways.
+  const expanded = terminalView === "expanded";
+  const collapse = useCallback(() => setTerminalView("split"), [setTerminalView]);
+  const {
+    frameRef,
+    popoverRef,
+    gesturePopover,
+    setGesturePopover,
+    onFramePointerDownCapture,
+    onBackdropPointerDown,
+    onBackdropPointerUp,
+  } = useEnlargedTerminal(expanded, collapse);
+
+  // One element in both modes (only its classes change), so the terminal under
+  // it is never remounted. Fixed positioning needs no ancestor with a
+  // `transform` / `filter` / `contain` (none today).
   const terminalPane = (
     <div
-      className="flex h-full flex-col overflow-hidden"
-      data-testid="terminal-pane-wrapper"
+      ref={frameRef}
+      className={
+        expanded
+          ? `fixed inset-4 z-[41] flex flex-col overflow-hidden rounded-lg border-[1.5px] bg-bg-2 transition-[border-color,box-shadow] duration-[250ms] ${STATUS_BORDER[node.status]}`
+          : "flex h-full flex-col overflow-hidden"
+      }
+      style={
+        expanded
+          ? {
+              boxShadow:
+                node.status === "awaiting_user"
+                  ? `${AWAIT_HALO}, ${OVERLAY_SHADOW}`
+                  : OVERLAY_SHADOW,
+            }
+          : undefined
+      }
+      data-testid={expanded ? "terminal-fullsize" : "terminal-pane-wrapper"}
+      data-status={expanded ? node.status : undefined}
+      role={expanded ? "dialog" : undefined}
+      aria-modal={expanded ? true : undefined}
+      aria-label={expanded ? `Terminal of ${nodeName ?? node.node_id}` : undefined}
+      onPointerDownCapture={onFramePointerDownCapture}
     >
       {showTerminal ? (
         <TmuxTerminal
           session={sessionName}
-          expanded={terminalView === "expanded"}
+          expanded={expanded}
           onExpand={() =>
             setTerminalView((v) => (v === "expanded" ? "split" : "expanded"))
+          }
+          toolbarIdentity={
+            expanded ? (
+              <EnlargedTerminalIdentity node={node} nodeName={nodeName} iter={selectedIter} />
+            ) : undefined
+          }
+          toolbarActions={
+            expanded && completion.showGestures ? (
+              <EnlargedCompletionGestures
+                completion={completion}
+                onGesture={setGesturePopover}
+              />
+            ) : undefined
           }
           status={selectedIterStatus}
           // #617: the iteration this panel is showing, so a terminal one can
@@ -77,8 +148,28 @@ export default function TerminalSection({
           </div>
         </div>
       )}
+      {expanded && (
+        <GestureVerdictPopover
+          gesture={gesturePopover}
+          completion={completion}
+          iter={selectedIter}
+          popoverRef={popoverRef}
+        />
+      )}
     </div>
   );
+
+  // #44: the dimmed backdrop, a sibling under the frame. Not interactive beyond
+  // closing: press and release must both land on it.
+  const backdrop = expanded ? (
+    <div
+      className="fixed inset-0 z-40"
+      style={OVERLAY_BACKDROP}
+      data-testid="terminal-overlay-backdrop"
+      onPointerDown={onBackdropPointerDown}
+      onPointerUp={onBackdropPointerUp}
+    />
+  ) : null;
 
   // Minimized view (#346): the session has ended, so prioritise the
   // Outputs. Render a separate declarative subtree — a thin clickable bar
@@ -114,38 +205,27 @@ export default function TerminalSection({
     );
   }
 
-  // Keep `TmuxTerminal` mounted across the fullscreen toggle: render
-  // the same `<ResizablePanelGroup>` parent in both modes and only
-  // conditionally render the details panel + handle. React's reconciler
-  // matches the terminal panel at position 0 in both renders, so the
-  // WebSocket and xterm instance survive the toggle. Conditional panels
-  // with stable `id` + `order` props are the documented pattern for
-  // react-resizable-panels.
+  // Keep `TmuxTerminal` mounted across the enlarge toggle (#44): the split
+  // layout stays as it is underneath, and only the terminal's own wrapper lifts
+  // out of it (`position: fixed`). The tree is identical in both modes (the
+  // backdrop's slot is merely empty in split), so the WebSocket and xterm
+  // instance survive the toggle.
   return (
     <ResizablePanelGroup
       orientation="vertical"
       className="min-h-0 flex-1"
-      data-testid={terminalView === "expanded" ? "terminal-fullsize" : undefined}
+      // The overlay lives inside this group: without this, a drag across the
+      // hidden separator would resize the split underneath.
+      disabled={expanded}
     >
-      <ResizablePanel
-        id="terminal"
-        defaultSize={terminalView === "expanded" ? 100 : 45}
-        minSize="100px"
-      >
+      <ResizablePanel id="terminal" defaultSize={45} minSize="100px">
+        {backdrop}
         {terminalPane}
       </ResizablePanel>
-      {terminalView !== "expanded" && (
-        <>
-          <ResizableHandle />
-          <ResizablePanel
-            id="details"
-            defaultSize={55}
-            minSize="100px"
-          >
-            {detailsPane}
-          </ResizablePanel>
-        </>
-      )}
+      <ResizableHandle />
+      <ResizablePanel id="details" defaultSize={55} minSize="100px">
+        {detailsPane}
+      </ResizablePanel>
     </ResizablePanelGroup>
   );
 }

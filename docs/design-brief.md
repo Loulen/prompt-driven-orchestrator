@@ -82,7 +82,7 @@ The bulk of the screen. Renders the pipeline DAG of the currently selected run u
 
 - **Nodes** are styled as rounded rectangular boxes (~180×80 px), with:
   - Node name (top, bold).
-  - Node type icon (`agent`, `script`, `merge`, `start`, `end`), plus a discreet branch glyph on the nodes that fork a worktree of their own.
+  - Node type icon (`agent`, `script`, `start`, `end`), plus a discreet branch glyph on the nodes that fork a worktree of their own.
   - Status indicator border or fill — same color scheme as the run-status icons (blue pulsing if running, gray if pending, green if done, etc.).
   - For nodes inside a topological cycle (with a back-edge), show an iteration counter `iter: 3/5` if applicable.
   - Input/output handles on left/right sides, one per port, labeled with port name.
@@ -201,7 +201,7 @@ The right panel adapts to the selection:
 **If a Node is selected:**
 - Section "Identity": id (auto-generated, editable), Name (display name).
 - Section "Type": a static label (`agent`, or `script` for deterministic bash) — the type names the execution role and is not a toggle.
-- Section "Workspace": a radio pair between `Isolated worktree` ("a sub-worktree of the Node's own") and `Run worktree` ("shared with the whole Run"), with the resolved working directory printed underneath in monospace. Isolated is the default for an `agent`, the Run worktree for a `script`. Absent on `merge` (isolated by construction) and on Start/End.
+- Section "Workspace": a radio pair between `Isolated worktree` ("a sub-worktree of the Node's own") and `Run worktree` ("shared with the whole Run"), with the resolved working directory printed underneath in monospace. Isolated is the default for an `agent`, the Run worktree for a `script`. Absent on Start/End.
 - Section "Behavior": toggle `interactive` (with help text: "When true, this node pauses after spawning and waits for the user to interact via terminal and click 'Mark complete' in run mode.").
 - Section "Prompt": a large textarea (≥10 rows, monospace, markdown) bound to the node's external prompt file (e.g. `prompts/<node-id>.md`). Auto-saved.
 - Section "Inputs": list of input ports. Each row: port name (editable), `repeated` toggle (with tooltip: "When true, this port reads all artifacts matching `iter-*/<port>.md` instead of just the latest."). "+ Add input port" button.
@@ -215,7 +215,6 @@ The right panel adapts to the selection:
 **If nothing is selected (or the canvas background is clicked):**
 - Section "Pipeline": Name (text input), Description (textarea), Version (number).
 - Section "Variables": list of variables. Each: name + type (int / float / string / boolean / list) + default value. "+ Add variable".
-- Section "Config": toggle `auto_merge_resolver` (default on).
 
 ### 8.4 Multi-pipeline tabs
 
@@ -245,7 +244,7 @@ Dark mode uses lighter shades of the same hues.
 - **No pipelines yet** (Edit mode left panel): "No pipelines yet. Create one or import a YAML." + "+ New Pipeline" button.
 - **Daemon disconnected**: a banner across the top (red) "PDO daemon not reachable. Retrying…" with manual "Retry" button.
 - **Run blocked with halt**: in the run metadata overlay, the halt message is rendered in an orange callout. The manager attach button is highlighted as the next action.
-- **Merge conflict during fan-in**: a special node-level visual cue ("conflict resolver running" → "auto-resolved" → continues) to make this visible during a run.
+- **Merge-back conflict during fan-in**: an isolated node whose merge-back conflicts turns Interrupted with the named `merge_conflict` reason (no automatic resolver since ADR-0082); the node-level cue must make that visible during a run.
 - **Terminal preview offline** (if `tmux capture-pane` fails for any reason): show a placeholder "Preview unavailable. Click Open terminal to attach directly."
 
 ---

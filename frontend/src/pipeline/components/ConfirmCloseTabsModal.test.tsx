@@ -83,3 +83,15 @@ describe("ConfirmCloseTabsModal (#342)", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ConfirmCloseTabsModal — bounded to the window (#940)", () => {
+  it("scrolls a long tab list in its body; the actions stay outside it", () => {
+    const tabs = Array.from({ length: 60 }, (_, i) => tab(`tab_${i}`, { dirty: true }));
+    render(<ConfirmCloseTabsModal open tabs={tabs} onCancel={() => {}} onConfirm={() => {}} />);
+    const body = screen.getByTestId("close-tabs-body");
+    expect(body).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(body.parentElement).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    expect(body).toHaveTextContent("tab_59.yaml");
+    expect(body).not.toContainElement(screen.getByTestId("close-tabs-confirm"));
+  });
+});

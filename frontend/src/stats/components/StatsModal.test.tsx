@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -707,5 +707,119 @@ describe("StatsModal — « Uncombined » (#891)", () => {
       "data-show-uncombined",
       "true",
     );
+  });
+});
+
+describe("StatsModal — Pricing details in the shell's secondary panel (#944)", () => {
+  async function openPricing(onClose = vi.fn()) {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={onClose} />);
+    await user.click(await screen.findByTestId("stats-tab-cost"));
+    await user.click(screen.getByTestId("stats-pricing-trigger"));
+    return { user, onClose };
+  }
+
+  it("closes on its ✕ and stays on Cost with the period untouched", async () => {
+    const { user, onClose } = await openPricing();
+    await user.click(screen.getByTestId("stats-period-7d"));
+    const panel = screen.getByTestId("stats-pricing-details");
+    expect(panel).toHaveTextContent("Esc returns to Stats");
+
+    await user.click(within(panel).getByRole("button", { name: "Close panel" }));
+
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("stats-tab-cost")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("toggles from the header trigger, which exposes aria-expanded", async () => {
+    const { user } = await openPricing();
+    const trigger = screen.getByTestId("stats-pricing-trigger");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("stats-pricing-details")).toBeInTheDocument();
+
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+
+    await user.click(trigger);
+    expect(screen.getByTestId("stats-pricing-details")).toBeInTheDocument();
+  });
+
+  it("keeps the header reachable while open: Refresh, the period and Close stats", async () => {
+    const { user, onClose } = await openPricing();
+    await waitFor(() => expect(fetchStatsCostMock).toHaveBeenCalledTimes(1));
+    const panel = screen.getByTestId("stats-pricing-details");
+    // Framed by the shell under the header, not over it.
+    expect(panel).toHaveClass("top-14");
+    expect(panel).not.toHaveClass("inset-y-0");
+
+    await user.click(screen.getByTestId("stats-refresh"));
+    await waitFor(() => expect(fetchStatsCostMock).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByTestId("stats-period-7d"));
+    expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("stats-pricing-details")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Close stats" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close on a click in the main pane", async () => {
+    const { user } = await openPricing();
+    await user.click(screen.getByTestId("stats-charts-stub"));
+    expect(screen.getByTestId("stats-pricing-details")).toBeInTheDocument();
+  });
+
+  it("keeps Sync costs in the panel header", async () => {
+    await openPricing();
+    const panel = screen.getByTestId("stats-pricing-details");
+    const header = within(panel).getByRole("heading", { name: "Pricing details" }).parentElement!;
+    expect(within(header).getByTestId("stats-sync-prices")).toHaveTextContent("Sync costs");
+  });
+
+  it("closes when leaving the Cost tab", async () => {
+    const { user } = await openPricing();
+    await user.click(screen.getByTestId("stats-tab-runs"));
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+    expect(screen.getByTestId("stats-pricing-trigger")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows the trigger's open state, not only aria-expanded", async () => {
+    const { user } = await openPricing();
+    const trigger = screen.getByTestId("stats-pricing-trigger");
+    expect(trigger).toHaveClass("border-acc", "bg-acc/15");
+
+    await user.click(trigger);
+    expect(trigger).not.toHaveClass("border-acc");
+    expect(trigger).toHaveClass("border-line", "bg-bg-3");
+  });
+
+  it("returns focus to the trigger on ✕, Escape and the toggle", async () => {
+    const { user } = await openPricing();
+    const trigger = screen.getByTestId("stats-pricing-trigger");
+
+    await user.click(screen.getByTestId("stats-pricing-details-close"));
+    expect(trigger).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("stats-pricing-details")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(trigger);
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("closes the programmatic entry (Settings › Diagnostics) on its ✕ too", async () => {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} initialTab="cost" initialPricingOpen />);
+    await user.click(await screen.findByTestId("stats-pricing-details-close"));
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+    expect(screen.getByTestId("stats-tab-cost")).toHaveAttribute("aria-selected", "true");
   });
 });

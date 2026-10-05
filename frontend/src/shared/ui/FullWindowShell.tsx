@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
 export interface RailItem {
@@ -11,6 +11,32 @@ export interface RailItem {
   /** What the dot means, for screen readers and the hover title. Defaults to
    *  Settings' « Unsaved changes » — Stats says why its numbers moved instead. */
   dirtyLabel?: string;
+}
+
+/**
+ * The **panneau secondaire** (CONTEXT.md, #943): a panel the host describes and the shell
+ * frames. It opens under the header — the title, the host's header actions and the ✕ stay
+ * visible and clickable — and carries its own title, Escape hint and ✕. A click outside it
+ * does not close it; Escape still goes through the host's `onEscape`. Once it closes, focus
+ * returns to what opened it (the trigger) rather than falling to `<body>`.
+ */
+export interface ShellDrawer {
+  title: string;
+  /** Escape hint on the right of the panel header (« Esc returns to Settings »). */
+  escHint: string;
+  /** Panel header content, before the hint (Stats' « Sync costs »). */
+  actions?: ReactNode;
+  /** Width class of the panel, a literal Tailwind class (`w-[min(420px,90vw)]`). */
+  widthClassName: string;
+  /** `data-testid` of the panel; its ✕ is `${testId}-close` unless `closeTestId` says otherwise. */
+  testId: string;
+  closeTestId?: string;
+  /** Extra `data-*` attributes on the panel (Settings' `data-drawer`). */
+  dataAttributes?: Record<`data-${string}`, string>;
+  /** Class of the scrolling body. */
+  bodyClassName?: string;
+  onClose: () => void;
+  content: ReactNode;
 }
 
 interface Props {
@@ -31,8 +57,8 @@ interface Props {
   railAriaLabel?: string;
   /** `data-testid` prefix of a rail entry: `${prefix}-${id}`. */
   railTestIdPrefix?: string;
-  /** Right-side drawer (Stats' pricing details, Settings' skill bank). */
-  drawer?: ReactNode;
+  /** The secondary panel, framed by the shell (Stats' pricing details, Settings' skill bank). */
+  drawer?: ShellDrawer | null;
   /** Spans the pane, not the rail. Settings' Save footer. */
   footer?: ReactNode;
   /**
@@ -50,7 +76,7 @@ interface Props {
 
 /**
  * The full-window surface Stats, Settings and the extensions' pages share (#690): overlay,
- * header (title + ✕), optional left rail navigated with ↑↓, main slot, optional right drawer
+ * header (title + ✕), optional left rail navigated with ↑↓, main slot, optional secondary panel
  * and optional footer.
  *
  * The shell owns Escape: ignored while a tooltip is open (the tooltip consumes it), else
@@ -167,8 +193,62 @@ export default function FullWindowShell({
           </div>
         </div>
 
-        {drawer}
+        {drawer && <SecondaryPanel drawer={drawer} />}
       </div>
     </div>
+  );
+}
+
+/** The frame of the secondary panel: under the header, title + actions + Escape hint + ✕. */
+function SecondaryPanel({ drawer }: { drawer: ShellDrawer }) {
+  const panelRef = useRef<HTMLElement>(null);
+  // Focus return (#944): the element focused when the panel mounted is its opener (the
+  // trigger clicked or activated from the keyboard). When the panel goes — ✕, Escape or the
+  // toggle — focus goes back to it, unless the user has already moved it elsewhere or the
+  // opener is gone (tab change, programmatic entry from another surface).
+  useEffect(() => {
+    const panel = panelRef.current;
+    const opener = document.activeElement;
+    return () => {
+      if (!(opener instanceof HTMLElement) || !opener.isConnected) return;
+      if (panel?.contains(opener)) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && !panel?.contains(active)) return;
+      opener.focus();
+    };
+  }, []);
+
+  return (
+    <aside
+      ref={panelRef}
+      className={`absolute bottom-0 right-0 top-14 z-20 flex flex-col border-l border-line bg-bg-4 shadow-2xl ${drawer.widthClassName}`}
+      aria-label={drawer.title}
+      data-testid={drawer.testId}
+      {...drawer.dataAttributes}
+    >
+      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
+        <h3 className="font-semibold text-fg" style={{ fontSize: "13px" }}>
+          {drawer.title}
+        </h3>
+        <div className="ml-auto flex items-center gap-3">
+          {drawer.actions}
+          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            {drawer.escHint}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={drawer.onClose}
+          aria-label="Close panel"
+          data-testid={drawer.closeTestId ?? `${drawer.testId}-close`}
+          className="grid h-6 w-6 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      <div className={drawer.bodyClassName ?? "flex min-h-0 flex-1 flex-col overflow-y-auto"}>
+        {drawer.content}
+      </div>
+    </aside>
   );
 }

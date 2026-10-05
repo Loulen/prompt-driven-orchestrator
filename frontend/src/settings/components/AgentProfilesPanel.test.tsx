@@ -262,6 +262,21 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
     expect(screen.queryByText("daily driver")).toBeNull();
   });
 
+  it("bounds the profile modal to the window: only the fields scroll (#940)", async () => {
+    const user = userEvent.setup();
+    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    await user.click(screen.getByTestId("agent-profile-new"));
+
+    const modal = screen.getByTestId("agent-profile-modal");
+    expect(modal).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    const body = screen.getByTestId("agent-profile-body");
+    expect(body).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(body).toContainElement(within(modal).getByLabelText("Name"));
+    expect(body).not.toContainElement(screen.getByTestId("agent-profile-save"));
+    expect(body).not.toContainElement(screen.getByTestId("agent-profile-cancel"));
+    expect(body).not.toHaveTextContent("New agent profile");
+  });
+
   it("New profile opens the same modal, empty, with Create; creating calls createAgentProfile", async () => {
     const user = userEvent.setup();
     render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);

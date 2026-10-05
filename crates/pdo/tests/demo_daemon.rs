@@ -41,6 +41,12 @@
 //!
 //! The caller named by the `x-pdo-test-actor` header is the identified Actor.
 //!
+//! It plays the `fixture` of the core's Feature Paths (CORE-3): it declares the
+//! Ressource `test/note` (`GET /resources` lists it after the core's, and the
+//! interop peers' `<id>/item` with `PDO_TEST_INTEROP=1`), and
+//! `GET /ext/test/operations` lists every Operation it was asked about, with
+//! its actor and its Projets (`operation.projects`).
+//!
 //! A second test extension (`test2`) is registered after it: it adds a section
 //! to `project/edit`, so that location shows two extensions' sections.
 //!

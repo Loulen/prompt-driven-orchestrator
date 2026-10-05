@@ -32,7 +32,7 @@ use pdo_extension_api::{
     HostedLocation, UiCommand, UiContribution, UiContributions, UiElement, UiElementKind,
     UiLocation,
 };
-use pdo_kernel::extension_host::Extensions;
+use pdo_kernel::extension_host::{ExtensionHost, Extensions};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -228,12 +228,21 @@ fn entries(extensions: &Extensions) -> Vec<ExtensionEntry> {
         .collect()
 }
 
-/// The core's routes of the extensions: `GET /ext` and `POST /ext-cli/<id>`.
+/// The core's routes of the extensions: `GET /ext`, `POST /ext-cli/<id>` and
+/// `GET /resources`.
 pub fn router(extensions: Extensions) -> Router {
     Router::new()
         .route("/ext", get(index))
         .route("/ext-cli/{id}", post(extension_cli::run))
+        .route("/resources", get(resources))
         .with_state(extensions)
+}
+
+/// `GET /resources`: the catalogue of the Ressources (CORE-3), the core's
+/// then each extension's declarations in registration order; the core's alone
+/// without extension.
+async fn resources(State(extensions): State<Extensions>) -> Response {
+    Json(ExtensionHost::catalogue(&extensions)).into_response()
 }
 
 /// `GET /ext`: the registered extensions and their UI contributions, in

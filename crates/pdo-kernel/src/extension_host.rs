@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
     ActorDisplay, Admission, Attributes, Authorization, EntityRef, Extension, ExtensionContext,
-    ExtensionSkill, Host, Manifest, RequestParts, EXTENSION_EVENT,
+    ExtensionSkill, Host, Manifest, RequestParts, Resource, EXTENSION_EVENT,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -76,6 +76,12 @@ pub trait ExtensionHost: Send + Sync {
     /// panicked saying so is left out. None by default.
     fn skills(&self) -> Vec<ProvidedSkills> {
         Vec::new()
+    }
+
+    /// The catalogue of the Ressources: the core's, then each extension's
+    /// declarations, in registration order. The core's alone by default.
+    fn catalogue(&self) -> Vec<Resource> {
+        pdo_extension_api::core_resources()
     }
 }
 
@@ -386,6 +392,10 @@ impl ExtensionHost for Extensions {
                 },
             )
             .collect()
+    }
+
+    fn catalogue(&self) -> Vec<Resource> {
+        pdo_extension_api::catalogue(self.registry.registered.iter().map(|r| &r.manifest))
     }
 }
 
@@ -791,7 +801,9 @@ mod tests {
             serde_json::json!({
                 "type": "operation_applied",
                 "actor": { "kind": "local_operator" },
-                "operation": { "resource": "a/item", "verb": "create", "target": null },
+                "operation": {
+                    "resource": "a/item", "verb": "create", "target": null, "projects": [],
+                },
                 "entity": { "kind": "a/item", "id": "i1" },
             })
         );
@@ -848,6 +860,31 @@ mod tests {
         assert!(host
             .on_create(&Actor::LocalOperator, &EntityRef::new(item(), "i1"))
             .is_empty());
+    }
+
+    #[test]
+    fn the_catalogue_is_the_cores_then_each_extensions_declarations() {
+        struct Declares;
+        impl Extension for Declares {
+            fn manifest(&self) -> Manifest {
+                Manifest::new("pm", "Project", "0.0.0").with_resource(
+                    pdo_extension_api::ResourceDeclaration::new("tache", "Tasks", ["create"]),
+                )
+            }
+        }
+        let core = pdo_extension_api::core_resources();
+        assert_eq!(NoExtensions.catalogue(), core);
+        let host = Extensions::register(vec![Box::new(Named("a")), Box::new(Declares)]).unwrap();
+        let catalogue = host.catalogue();
+        assert_eq!(catalogue.len(), core.len() + 1);
+        assert_eq!(catalogue[..core.len()], core[..]);
+        assert_eq!(catalogue[core.len()].resource, "pm/tache");
+        assert_eq!(catalogue[core.len()].extension.as_deref(), Some("pm"));
+        assert_eq!(
+            host.host_of("a").catalogue(),
+            catalogue,
+            "a Host sees it too"
+        );
     }
 
     #[tokio::test]

@@ -11,6 +11,8 @@
 > Amendé par #33 : la CLI d'une extension (`pdo ext`) et ses skills (§ *Amendement #33*).
 > Amendé par #31 : le catalogue gagne les emplacements d'Onglet, de Section, de Décoration et de
 > Filtre de liste, et une Section participe au Save et au Cancel de son hôte (§ *Amendement #31*).
+> Amendé par CORE-3 : une Opération porte ses Projets, le Manifest déclare les Ressources d'une
+> extension, le core expose le catalogue des Ressources (§ *Amendement CORE-3*).
 
 ## Contexte
 
@@ -441,6 +443,59 @@ déborder : les Onglets des extensions s'ajoutent après ceux du core.
 Écartés : un type de contribution par emplacement (une « Section de formulaire »), parce que le
 contrat du Save est le même partout où l'hôte en a un ; un Save des Sections avant celui du core,
 impossible pour un Projet créé, qui n'a pas encore d'id.
+
+## Amendement CORE-3 : les Projets d'une Opération et le catalogue des Ressources
+
+Seam découvert au grilling de l'extension `iam` (IAM-1 ; ADR-0005 de `pdo-extensions`, qui
+amende son ADR-0001) : une extension de droits règle des Droits par Ressource et par Projet, sans
+connaître ni les dépôts ni les autres extensions. Deux trous : une Opération ne dit pas dans quel
+Projet elle a lieu, et rien ne liste les Ressources sur lesquelles régler des Droits.
+
+- **Une Opération porte ses Projets** (`Operation::projects`, `Operation::in_projects`) : la liste
+  des ids de Projet, vide pour une Opération **hors Projet**. Le core la remplit dans ses use
+  cases, au moment de l'Autorisation d'opération :
+  - `run` et `node` : le Projet qui possède le dépôt primaire du Run (`Runs::projects_of_run`) ;
+    une création de Run : le dépôt qu'elle nomme (`target_repo`, sinon `target_repos[0]`), ou,
+    créée depuis une session de node sans dépôt, le Run parent dont elle hérite le dépôt ;
+  - `session` : le Run de la session (node, manager, shell de Run) ; l'assistant de bibliothèque
+    est hors Projet ; `node` × `wait_user` / `resume` aussi par le Run ;
+  - `review_comment` : le Run de la cible (`<run>` ou `<run>/<commentaire>`) ;
+  - `project` ciblé : ce Projet ; `repository` × `fetch` / `fast_forward` : le Projet qui possède
+    le dépôt ;
+  - tout le reste (pipelines, Triggers, réglages, skills, profils, Stats, mise à jour) : hors
+    Projet, sauf rattachement explicite à venir.
+
+  Un dépôt appartient à au plus un Projet (ADR-0033), d'où une liste d'au plus un élément pour le
+  core. Les membres d'un Projet se comparent tels qu'écrits ; pour qu'un autre chemin du même
+  dossier (`/repo/`, `/repo/.`, un lien vers `/repo`) ne sorte pas un Run de son Projet, le dépôt
+  d'un Run est essayé tel quel, puis normalisé, puis résolu sur le disque. Une extension la remplit pour ses Ressources (un Backlog de `pm` peut appartenir à
+  plusieurs Projets). **Une extension ne recalcule jamais dépôt -> Projet** : elle lit
+  `operation.projects`. Une lecture des Projets qui échoue est journalisée et laisse l'Opération
+  hors Projet. Sur le fil, l'Opération gagne `"projects": [...]`, dans `/ws` comme dans
+  `on_event`.
+- **Le Manifest déclare les Ressources d'une extension** (`Manifest::resources`,
+  `Manifest::with_resource(ResourceDeclaration)`) : la sorte (`tache`), un libellé, une ligne
+  d'aide et les noms de ses verbes (`create`, `update`, `delete`, ou le nom d'une action,
+  `Verb::name`).
+- **Le catalogue des Ressources** (`Resource`) : les 19 Ressources du core (`ResourceKind::CORE`,
+  `core_resources()`, libellé, aide et tous les verbes que ses use cases emploient) puis, dans
+  l'ordre d'enregistrement, celles de chaque extension sous `<id>/<sorte>`. Exposé par
+  `Host::catalogue()` (méthode par défaut : le catalogue du core seul) et par `GET /resources`
+  (`[{resource, label, description, verbs, extension}]`, `extension` à `null` pour le core).
+- **Version** : `pdo-extension-api` passe en **0.8.0** (ajouts : un champ de `Operation` et de
+  `Manifest`, deux types, des méthodes). Les structures sont `#[non_exhaustive]` et la méthode de
+  l'Hôte a une valeur par défaut : une extension 0.1 à 0.7 compile et tourne telle quelle,
+  `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`.
+- L'extension de test interne (`test`, celle du daemon de démo des Feature Paths) joue ici le rôle
+  de `fixture` : elle déclare `test/note`, ses pairs d'interopérabilité déclarent `<id>/item` et
+  remplissent les Projets de leurs propres Opérations, et `GET /ext/test/operations` rend chaque
+  Opération reçue avec ses Projets.
+
+Écartés : **laisser l'extension déduire le Projet** du dépôt ou du Run : chaque extension
+refaisait le calcul, avec le risque de diverger du core. **Un Projet unique** (`Option`) : un
+Backlog de `pm` a plusieurs Projets, et le moindre privilège d'`iam` porte sur la liste. **Remplir
+les Projets dans l'Hôte du core**, une fois pour toutes : `authorize` est synchrone et la lecture
+des Projets ne l'est pas ; chaque use case le fait là où il connaît son Run.
 
 ## Amendement CORE-2 : admission, jeton de la CLI, nom d'affichage d'un Acteur
 

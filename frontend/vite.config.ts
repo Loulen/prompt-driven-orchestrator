@@ -79,6 +79,9 @@ export default defineConfig({
       // (`POST /actors/display`). Same trap: without it the sign-in gate reads
       // the SPA shell and never redirects.
       '/actors': daemonTarget,
+      // CORE-3: `GET /resources`, the catalogue of the Ressources an extension
+      // of rights reads. Same trap: without it a dev GET answers the SPA.
+      '/resources': daemonTarget,
     },
   },
   test: {

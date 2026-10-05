@@ -47,7 +47,10 @@ impl Runs {
     /// two consumers cannot drift.
     pub async fn start_node(self: &Arc<Self>, actor: &Actor, command: StartNode) -> Response {
         let StartNode { run_id, node_id } = command;
-        if let Err(denied) = self.authorize(actor, &on_node("start", &run_id, &node_id)) {
+        if let Err(denied) = self
+            .authorize(actor, &on_node("start", &run_id, &node_id))
+            .await
+        {
             return denied.into_response();
         }
         let state = self;

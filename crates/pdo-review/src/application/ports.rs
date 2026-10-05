@@ -43,6 +43,10 @@ pub trait ReviewRuns: Send + Sync {
     /// Paste `message` into the manager's session, off the request — after a
     /// grace when `just_started` (the harness has to be reading its input).
     fn hand_to_manager(&self, run_id: &str, message: String, just_started: bool);
+
+    /// The Projets the Run is in (CORE-3): its review comments' Operations
+    /// are in them. None for an unknown Run.
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>>;
 }
 
 /// A git failure: whether it means an unknown ref or repository (the caller

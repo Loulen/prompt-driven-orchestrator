@@ -106,7 +106,7 @@ impl Runs {
             Ok(cmd) => cmd,
             Err(e) => return e.into_response(),
         };
-        if let Err(denied) = self.authorize(actor, &cmd.operation(&run_id)) {
+        if let Err(denied) = self.authorize(actor, &cmd.operation(&run_id)).await {
             return denied.into_response();
         }
 

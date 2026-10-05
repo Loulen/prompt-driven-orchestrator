@@ -272,8 +272,11 @@ impl Runs {
     }
 
     /// Ask the extensions whether `actor` may run `operation`: every gesture
-    /// of an actor does, never a transition of the scheduler (D10).
-    pub fn authorize(&self, actor: &Actor, operation: &Operation) -> Result<(), Denied> {
-        authorize(self.extensions.as_ref(), actor, operation)
+    /// of an actor does, never a transition of the scheduler (D10). An
+    /// Operation on a Run or a node is asked in the Projets of its Run
+    /// ([`Runs::scoped`]).
+    pub async fn authorize(&self, actor: &Actor, operation: &Operation) -> Result<(), Denied> {
+        let operation = self.scoped(operation.clone()).await;
+        authorize(self.extensions.as_ref(), actor, &operation)
     }
 }

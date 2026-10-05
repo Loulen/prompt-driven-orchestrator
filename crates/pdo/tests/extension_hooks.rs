@@ -299,7 +299,9 @@ async fn a_settings_change_is_followed_by_an_operation_applied() {
         json!({
             "type": "operation_applied",
             "actor": { "kind": "identified", "namespace": "test", "id": "alice" },
-            "operation": { "resource": "instance_settings", "verb": "update", "target": null },
+            "operation": {
+                "resource": "instance_settings", "verb": "update", "target": null, "projects": [],
+            },
             "entity": null,
         })
     );

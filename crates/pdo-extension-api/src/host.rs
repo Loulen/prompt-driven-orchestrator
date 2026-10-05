@@ -1,6 +1,8 @@
 use serde::Serialize;
 
-use crate::{Actor, ActorDisplay, Attributes, Authorization, EntityRef, OperationApplied};
+use crate::{
+    Actor, ActorDisplay, Attributes, Authorization, EntityRef, OperationApplied, Resource,
+};
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
 /// extensions' `on_event`.
@@ -63,6 +65,13 @@ pub trait Host: Send + Sync {
     /// own `display_name`: the Host calls it back, without end.
     fn display_name(&self, _actor: &Actor) -> Option<ActorDisplay> {
         None
+    }
+
+    /// The catalogue of the Ressources: the core's, then those each
+    /// registered extension declares in its [`Manifest`](crate::Manifest), in
+    /// registration order. By default, the core's alone.
+    fn catalogue(&self) -> Vec<Resource> {
+        crate::core_resources()
     }
 }
 
@@ -148,5 +157,6 @@ mod tests {
         assert_eq!(host.display_name(&Actor::LocalOperator), None);
         host.publish(ExtensionEvent::new("x", serde_json::Value::Null));
         host.applied(OperationApplied::new(Actor::LocalOperator, op, None));
+        assert_eq!(host.catalogue(), crate::core_resources());
     }
 }

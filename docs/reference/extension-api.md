@@ -1,0 +1,190 @@
+# Extension API reference
+
+What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 and its
+amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
+source of truth for signatures; this page says what each part is for and what goes on the wire.
+
+Version: **0.8.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
+
+## The hooks
+
+An extension implements `Extension`. Only `manifest` is required; every other hook has a neutral
+default, and with no extension the daemon behaves as if none existed.
+
+| Hook | Called | Default |
+| --- | --- | --- |
+| `manifest` | at registration | required |
+| `start(context)` | once, before serving; `context.data_dir`, `context.host` | nothing |
+| `identify(request)` | on every request; the first `Some` wins | `None`: the core decides |
+| `admit(request)` (0.8) | on a request no extension identified, before any route; the first non-`Admit` wins, a panic refuses | `Admission::Admit` |
+| `display_name(actor)` (0.8) | wherever an Actor is shown; the first `Some` wins, a panic is skipped | `None`: shown as without extension |
+| `authorize(actor, operation)` | before every mutation of an actor; the first refusal wins, a panic refuses | allow |
+| `on_create(actor, entity)` | after a creation; attributes prefixed `<id>/` | none |
+| `on_event(event)` | off the request path, on the extension's own thread | ignore |
+| `routes()` | once; nested under `/ext/<id>/` | none |
+| `ui()` | on every `GET /ext` | none |
+| `cli()` / `run_cli(invocation)` | `pdo ext <id> …` | no command line |
+| `skills()` | once, before `start` | none |
+
+## The Manifest
+
+```rust
+use pdo_extension_api::{Manifest, ResourceDeclaration};
+
+fn manifest(&self) -> Manifest {
+    Manifest::new("pm", "Project", env!("CARGO_PKG_VERSION"))
+        .with_resource(
+            ResourceDeclaration::new("tache", "Tasks", ["create", "update", "delete", "editer"])
+                .described("The tasks of a Backlog"),
+        )
+}
+```
+
+- `id`: lowercase ASCII letters, digits and `-`, unique among the loaded extensions. It prefixes
+  the extension's routes (`/ext/<id>/`), its attributes (`<id>/<key>`), its Ressources
+  (`<id>/<kind>`) and its data folder.
+- `api_version`: the version of the API it was compiled against (`requiring_api` to override).
+- `resources` (0.8): the Ressources the extension owns, its `ResourceKind::Extension { extension,
+  kind }`. Each has a `kind`, a `label` (plural, as the interface shows it), a one-line
+  `description` and the names of its `verbs`. The core adds them to the catalogue.
+
+## The Operation
+
+Every mutation is described by an `Operation`: a resource, a verb, a target, and the Projets it is
+in.
+
+```json
+{ "resource": "run", "verb": { "action": "rename_run" }, "target": "20261005-181858-e816357",
+  "projects": ["prj_8f2c"] }
+```
+
+- `resource`: the wire name of a `ResourceKind`: one of the core's (`run`, `node`, `project`…, the
+  list is `ResourceKind::CORE`) or `<extension>/<kind>` (`pm/tache`).
+  `ResourceKind::from_wire_name` reads one back.
+- `verb`: `"create"`, `"update"`, `"delete"`, or `{"action": "<name>"}`. `Verb::name` gives the
+  bare name the catalogue lists (`"fire"`).
+- `target`: the id of the entity acted on, `null` for a creation. A node is `<run>/<node>`, a
+  review comment `<run>/<comment>`.
+- `projects` (0.8): the ids of the Projets the Operation is in, without duplicates; empty: **out
+  of any Projet**.
+
+The core fills `projects` for its own Operations:
+
+| Resource | Projets |
+| --- | --- |
+| `run`, `node` | the Projet owning the Run's primary repository; a creation: the repository it names (`target_repo`, else `target_repos[0]`), or the parent Run's for a Run created from a node session without a repository |
+| `session` | the Projets of the session's Run (node, manager, run shell); the library assistant is in none |
+| `review_comment` | the Projets of the Run in its target |
+| `project` (targeted) | that Projet |
+| `repository` (`fetch`, `fast_forward`) | the Projet owning the repository |
+| everything else | none |
+
+A repository belongs to one Projet at most, so the core's lists hold one id at most. A Run's
+repository is matched to a Projet's member verbatim, then without trailing `/` or `.`, then
+resolved on disk: `/repo/` or a link to `/repo` stays in the Projet that owns `/repo`. An extension
+fills `projects` for its own Ressources (`Operation::in_projects`), with as many Projets as its
+entity belongs to. **An extension never works out a Projet from a repository**: it reads
+`operation.projects`. When the Projets cannot be read, the core logs it and the Operation is in
+none.
+
+## The Host
+
+`context.host` (an `Arc<dyn Host>`) is how an extension runs its **own** mutations through the
+core's mechanisms (amendment #34):
+
+- `authorize(actor, operation)`: every extension's `authorize`, the caller's included; answer a
+  refusal with `Authorization::into_result()?`, a `403` `operation_refused`.
+- `on_create(actor, entity)`: the attributes the other extensions stamp; the extension stores them.
+- `publish(ExtensionEvent)`: broadcast on `/ws` and to the other extensions.
+- `applied(OperationApplied)`: tell the core that an authorized mutation succeeded.
+- `catalogue()` (0.8): the catalogue of the Ressources, below.
+- `display_name(actor)` (0.8): how an Actor shows, the first extension that names it (the
+  caller's included); `None` when none does.
+
+`NeutralHost` allows everything, publishes nothing and answers the core's catalogue alone: the
+host of `ExtensionContext::new`, and a stand-in in an extension's tests.
+
+## Admission of a request
+
+`identify` names the caller; when **no** extension does, the core asks every extension's
+`admit(request)` (method, URI, headers) before any route runs:
+
+| `Admission` | Answer |
+| --- | --- |
+| `Admit` | served, as without extension |
+| `Refuse { reason }` | `401` `{"error": "unauthenticated", "message": "authentication required: <reason>", "reason"}` |
+| `Redirect { to }` | the same `401`, plus `"redirect": "<to>"`: the page to sign in on |
+
+Every `401` carries `WWW-Authenticate: Bearer`. The admission guards every route: the API, `/ws`,
+the terminals' PTY (`/sessions/<id>/pty`), `/ext-cli/<id>`, `/actors/*` and every extension's
+routes under `/ext/<id>/`, fallbacks included. It never guards the SPA's own files: the
+interface always loads, asks `GET /actors/me`, and follows a `redirect` with `next=<path, query
+and hash>` appended ([extension-ui.md](extension-ui.md#signing-in)). So an extension that refuses
+anonymous callers **admits its own sign-in page by its path** (and whatever that page needs).
+
+The CLI sends `PDO_TOKEN`, when set, as `Authorization: Bearer <token>` on every call to the
+daemon (`pdo ext …`, `pdo complete`, `pdo run …`, the node sessions' hooks): `identify` reads it.
+
+## Display names
+
+```rust
+use pdo_extension_api::{Actor, ActorDisplay};
+
+fn display_name(&self, actor: &Actor) -> Option<ActorDisplay> {
+    match actor {
+        Actor::Identified { namespace, id } if namespace == "iam" => {
+            self.users.name_of(id).map(|name| ActorDisplay::new(name).with_avatar(format!("/ext/iam/avatars/{id}")))
+        }
+        _ => None,
+    }
+}
+```
+
+`ActorDisplay` is `{ "name": "Alice", "avatar_url": "/ext/iam/avatars/alice" | null }`. Where it
+shows:
+
+- `GET /actors/me`: `{ "actor": <Actor>, "display": <ActorDisplay> | null }`, the caller.
+- `POST /actors/display` `{ "actors": [<Actor>…] }`: `{ "displays": [<ActorDisplay> | null…] }`,
+  in order.
+- `GET /audit`: each row's `actor` (the Actor of the request that made the mutation, absent on
+  older rows and outside a request) and `actor_display`.
+- The interface: the creator of a Run on its row; `useCurrentActor()` and `useActorDisplay(actor)`
+  of `@pdo/extension-ui` for the extensions' bundles.
+
+An `Actor` on the wire: `{"kind": "local_operator"}`, `{"kind": "agent", "run_id", "node_id"}`,
+`{"kind": "trigger", "trigger_id"}`, `{"kind": "identified", "namespace", "id"}`.
+
+## The catalogue of the Ressources
+
+The core's 19 Ressources, then each extension's declarations in registration order:
+
+```http
+GET /resources
+```
+
+```json
+[
+  { "resource": "run", "label": "Runs", "description": "Create, steer, archive and delete Runs",
+    "verbs": ["create", "delete", "edit_repos", "…"], "extension": null },
+  { "resource": "pm/tache", "label": "Tasks", "description": "The tasks of a Backlog",
+    "verbs": ["create", "update", "delete", "editer"], "extension": "pm" }
+]
+```
+
+The same list comes from `Host::catalogue()` inside the daemon, and `core_resources()` /
+`catalogue(manifests)` build it without a daemon. An extension of rights reads it to list what
+rights can be set on, without knowing the other extensions.
+
+## Events
+
+`on_event` and `/ws` carry the same JSON. After every authorized and successful mutation, an
+`operation_applied`:
+
+```json
+{ "type": "operation_applied", "actor": { "kind": "local_operator" },
+  "operation": { "resource": "project", "verb": "update", "target": "p1", "projects": ["p1"] },
+  "entity": { "kind": "project", "id": "p1" } }
+```
+
+An extension's own events arrive as `{"type": "extension_event", "extension", "name", "payload"}`.

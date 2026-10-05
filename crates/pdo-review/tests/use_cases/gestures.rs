@@ -20,9 +20,14 @@ fn draft() -> DraftComment {
 }
 
 #[tokio::test]
-async fn each_gesture_names_its_operation() {
+async fn each_gesture_names_its_operation_in_the_projets_of_its_run() {
     let w = World::new();
     w.completed_run("r1").await;
+    w.runs
+        .projects
+        .lock()
+        .unwrap()
+        .insert("r1".into(), vec!["p1".into()]);
     let actor = Actor::LocalOperator;
     let _ = w.review.send_comments(&actor, "r1", vec![draft()]).await;
     let _ = w
@@ -40,10 +45,10 @@ async fn each_gesture_names_its_operation() {
     assert_eq!(
         w.asked(),
         vec![
-            r#"Operation { resource: ReviewComment, verb: Create, target: Some("r1") }"#,
-            r#"Operation { resource: ReviewComment, verb: Action("reply"), target: Some("r1/rc-001") }"#,
-            r#"Operation { resource: ReviewComment, verb: Action("resolve"), target: Some("r1/rc-001") }"#,
-            r#"Operation { resource: ReviewComment, verb: Action("reopen"), target: Some("r1/rc-001") }"#,
+            r#"Operation { resource: ReviewComment, verb: Create, target: Some("r1"), projects: ["p1"] }"#,
+            r#"Operation { resource: ReviewComment, verb: Action("reply"), target: Some("r1/rc-001"), projects: ["p1"] }"#,
+            r#"Operation { resource: ReviewComment, verb: Action("resolve"), target: Some("r1/rc-001"), projects: ["p1"] }"#,
+            r#"Operation { resource: ReviewComment, verb: Action("reopen"), target: Some("r1/rc-001"), projects: ["p1"] }"#,
         ]
     );
 }

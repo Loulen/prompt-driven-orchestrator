@@ -10,26 +10,39 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.17.0 — Seams d'identité de IAM-1 : admission, jeton de la CLI, nom d'affichage (CORE-2)
+## 2.17.0 — Seams d'identité et de droits pour `iam` (IAM-1)
 
 `pdo-extension-api` passe en **0.8.0** : ajouts seulement, une extension 0.1 à 0.7 compile et
-tourne toujours. Ticket CORE-2 du Backlog `CORE` (story IAM-1 de `pdo-extensions`). Amendement
-CORE-2 d'ADR-0081.
+tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du Backlog `CORE` de
+`pm`, US IAM-1 de `pdo-extensions` ; détail : ADR-0081, amendements CORE-3 et CORE-2,
+`docs/reference/extension-api.md`.
 
-- **Admission d'une requête** (`Extension::admit`) : une extension peut refuser (`401`
+- **CORE-3, Projets d'une Opération** : une `Operation` porte `projects` (vide : hors Projet).
+  Le core la remplit : un Run, ses nodes, ses sessions et ses commentaires de Review sont dans le
+  Projet qui possède le dépôt primaire du Run ; un Projet dans lui-même ; un dépôt dans son
+  Projet ; le reste hors Projet. Sur le fil (`/ws`, `on_event`), une Opération gagne
+  `"projects": [...]`. Une extension remplit `projects` pour ses propres Ressources. Un dépôt
+  écrit autrement (`/repo/`, `/repo/.`, un lien vers `/repo`) reste dans le Projet de `/repo`.
+- **CORE-3, catalogue des Ressources** : le `Manifest` déclare les Ressources d'une extension
+  (`with_resource(ResourceDeclaration)`) ; `GET /resources` et `Host::catalogue()` rendent les
+  19 Ressources du core (libellé, aide, verbes) puis celles des extensions.
+- `Runs::authorize`, `Review::authorize` et les use cases de session qui autorisent deviennent
+  `async` (ils lisent le Projet d'un Run) ; ces API internes au workspace ne sont pas dans le
+  contrat.
+- **CORE-2, admission d'une requête** (`Extension::admit`) : une extension peut refuser (`401`
   `unauthenticated`) ou renvoyer vers sa page de connexion une requête qu'aucune extension n'a
   identifiée, sur toutes les routes, `/ws` et les PTY compris, jamais sur les fichiers de
   l'interface. L'interface suit la redirection avant de rendre quoi que ce soit (`next=` ramène
   au lien profond). Sans extension qui le demande, rien ne change.
-- **`PDO_TOKEN`** : toute commande de la CLI qui parle au démon l'envoie en
+- **CORE-2, `PDO_TOKEN`** : toute commande de la CLI qui parle au démon l'envoie en
   `Authorization: Bearer`. Nouvelle commande `pdo run list [--json]`.
-- **Nom d'affichage d'un Acteur** (`Extension::display_name`, `Host::display_name`,
+- **CORE-2, nom d'affichage d'un Acteur** (`Extension::display_name`, `Host::display_name`,
   `GET /actors/me`, `POST /actors/display`, `useCurrentActor` / `useActorDisplay` du module
   partagé) ; le journal d'audit (`GET /audit`) rend `actor` et `actor_display` (colonne `actor`
   ajoutée à `audit_log`, sans backfill : les anciennes lignes n'ont pas d'Acteur) ; la ligne d'un
   Run nomme son créateur quand une extension le nomme.
-- Nouvel emplacement d'UI `topbar/account` (Décoration, après Settings) pour le menu de l'avatar.
-- Nouvelles routes de premier niveau `/actors/*` : un reverse proxy qui filtre par préfixe doit
+- CORE-2 : nouvel emplacement d'UI `topbar/account` (Décoration, après Settings) pour le menu de l'avatar.
+- CORE-2 : nouvelles routes de premier niveau `/actors/*` : un reverse proxy qui filtre par préfixe doit
   les laisser passer.
 
 ## 2.16.0 — Lien profond vers un Run, factory du core dans `pm` (CORE-1)

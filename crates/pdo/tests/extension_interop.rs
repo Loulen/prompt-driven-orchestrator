@@ -151,7 +151,9 @@ async fn an_item_created_through_the_host_publishes_its_event_then_its_operation
         json!({
             "type": "operation_applied",
             "actor": { "kind": "identified", "namespace": "test", "id": "alice" },
-            "operation": { "resource": "a/item", "verb": "create", "target": null },
+            "operation": {
+                "resource": "a/item", "verb": "create", "target": null, "projects": [],
+            },
             "entity": { "kind": "a/item", "id": id },
         })
     );
@@ -274,7 +276,7 @@ async fn a_deletion_names_its_target_and_a_slow_extension_never_delays_the_emitt
     let applied = relayed.iter().find(|e| is_applied_on(e, "c/item")).unwrap();
     assert_eq!(
         applied["operation"],
-        json!({ "resource": "c/item", "verb": "delete", "target": "c-1" })
+        json!({ "resource": "c/item", "verb": "delete", "target": "c-1", "projects": [] })
     );
     assert_eq!(applied["actor"], json!({ "kind": "local_operator" }));
     let left = daemon.get_json("/ext/c/items").await;

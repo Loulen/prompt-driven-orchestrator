@@ -18,23 +18,25 @@ fn terminals(host: Arc<Host>) -> Terminals {
     )
 }
 
-#[test]
-fn attaching_a_terminal_is_an_operation_on_the_session() {
+#[tokio::test]
+async fn attaching_a_terminal_is_an_operation_on_the_session() {
     let host = Host::allowing();
     let t = terminals(host.clone());
     assert!(t
         .authorize_attach(&Actor::LocalOperator, "pdo-mgr-r1")
+        .await
         .is_ok());
     let asked = host.asked();
     assert_eq!(asked[0].verb, Verb::Action("attach".into()));
     assert_eq!(asked[0].target.as_deref(), Some("pdo-mgr-r1"));
     assert!(terminals(Host::refusing())
         .authorize_attach(&Actor::LocalOperator, "pdo-mgr-r1")
+        .await
         .is_err());
 }
 
-#[test]
-fn a_spectator_takes_control_unless_it_is_refused() {
+#[tokio::test]
+async fn a_spectator_takes_control_unless_it_is_refused() {
     for (host, expected) in [(Host::allowing(), true), (Host::refusing(), false)] {
         let t = terminals(host);
         let (pilot_tx, _pilot_rx) = mpsc::unbounded_channel();
@@ -42,7 +44,8 @@ fn a_spectator_takes_control_unless_it_is_refused() {
         let _pilot = t.registry().join("s", Some("A".into()), pilot_tx);
         let spectator = t.registry().join("s", Some("B".into()), spectator_tx);
         assert_eq!(
-            t.take_control(&Actor::LocalOperator, "s", spectator.id),
+            t.take_control(&Actor::LocalOperator, "s", spectator.id)
+                .await,
             expected
         );
         assert_eq!(

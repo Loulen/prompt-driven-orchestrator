@@ -177,7 +177,7 @@ export function failOnPurpose() {
 // #31 — one component per kind of contribution, at every location that
 // accepts it.
 
-function describe(entity) {
+function describeEntity(entity) {
   if (!entity) return "nothing";
   return `${entity.kind} ${entity.id ?? "(new)"}${entity.name ? ` · ${entity.name}` : ""}`;
 }
@@ -189,7 +189,7 @@ export function EntityTab({ entity, context }) {
   return h(
     "div",
     { style: box, "data-testid": `test-tab-${context.location.replace("/", "-")}` },
-    h("p", null, describe(entity)),
+    h("p", null, describeEntity(entity)),
     attributes.length === 0
       ? h("p", { style: muted }, "No attribute.")
       : h("ul", null, attributes.map(([key, value]) => h("li", { key }, `${key} = ${value}`))),
@@ -221,9 +221,9 @@ export function EntitySection({ context, entity, form }) {
   return h(
     "div",
     { style: { ...box, fontSize: "11px" }, "data-testid": `test-section-${context.location.replace("/", "-")}` },
-    h("p", null, describe(entity)),
+    h("p", null, describeEntity(entity)),
     extra && h("p", { style: muted }, extra),
-    form && h("p", { style: muted }, saved ? `Saved: ${describe(saved)}` : "Takes part in Save"),
+    form && h("p", { style: muted }, saved ? `Saved: ${describeEntity(saved)}` : "Takes part in Save"),
   );
 }
 
@@ -234,7 +234,7 @@ export function EntityBadge({ entity, context }) {
   return h(
     "span",
     {
-      title: `Test · ${context.location} · ${describe(entity)}`,
+      title: `Test · ${context.location} · ${describeEntity(entity)}`,
       "data-testid": `test-badge-${context.location.replace("/", "-")}`,
       style: {
         display: "inline-flex",

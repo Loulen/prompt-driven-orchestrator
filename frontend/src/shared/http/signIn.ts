@@ -31,10 +31,21 @@ export function signInUrl(redirect: string, here: string): string {
   return `${base}${separator}next=${encodeURIComponent(here)}${hash ? `#${hash}` : ""}`;
 }
 
-/** Where the UI is: path, query and hash (the deep link). */
+let returnLink: string | null = null;
+
+/**
+ * The deep link of what the UI shows when its address has none: the app keeps
+ * no Run in its URL (CORE-1), so the selected Run registers `#/runs/<id>` here
+ * and a session lost on it comes back to it. `null` forgets it.
+ */
+export function setSignInReturnLink(link: string | null): void {
+  returnLink = link;
+}
+
+/** Where the UI is: path, query and hash (the deep link, or the registered one). */
 export function currentLocation(): string {
   const { pathname, search, hash } = window.location;
-  return `${pathname}${search}${hash}`;
+  return `${pathname}${search}${hash || (returnLink ?? "")}`;
 }
 
 let redirecting = false;
@@ -78,4 +89,5 @@ export async function probeSignIn(): Promise<void> {
 /** Tests: forget a redirection. */
 export function resetSignInForTests(): void {
   redirecting = false;
+  returnLink = null;
 }

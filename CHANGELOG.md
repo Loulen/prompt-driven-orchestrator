@@ -66,9 +66,11 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
   `unauthenticated`) ou renvoyer vers sa page de connexion une requête qu'aucune extension n'a
   identifiée, sur toutes les routes, `/ws` et les PTY compris, jamais sur les fichiers de
   l'interface. L'interface suit la redirection avant de rendre quoi que ce soit (`next=` ramène
-  au lien profond). Sans extension qui le demande, rien ne change.
+  au lien profond, ou au Run ouvert quand la session se perd en cours de route). Sans extension
+  qui le demande, rien ne change.
 - **CORE-2, `PDO_TOKEN`** : toute commande de la CLI qui parle au démon l'envoie en
-  `Authorization: Bearer`. Nouvelle commande `pdo run list [--json]`.
+  `Authorization: Bearer`. Nouvelle commande `pdo run list [--json]`. Un refus d'admission se lit
+  dans les mêmes mots partout, `pdo run create` compris.
 - **CORE-2, nom d'affichage d'un Acteur** (`Extension::display_name`, `Host::display_name`,
   `GET /actors/me`, `POST /actors/display`, `useCurrentActor` / `useActorDisplay` du module
   partagé) ; le journal d'audit (`GET /audit`) rend `actor` et `actor_display` (colonne `actor`

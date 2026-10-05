@@ -65,6 +65,14 @@ describe("TriggerRow — suspended by an extension (API 0.8)", () => {
     expect(onToggle).toHaveBeenCalledOnce();
   });
 
+  it("lets the pill wrap under the name instead of truncating it in a narrow panel", () => {
+    renderRow(trigger({ suspension }));
+    const line = screen.getByTestId("trigger-name-line");
+    expect(line).toHaveClass("flex-wrap");
+    expect(line).toContainElement(screen.getByTestId("trigger-suspended"));
+    expect(screen.getByText("Weekly dependency bump")).toHaveClass("max-w-full", "truncate");
+  });
+
   it("is a plain enabled row without a suspension", () => {
     renderRow(trigger());
     expect(screen.getByTestId("trigger-toggle")).toHaveAttribute("aria-checked", "true");

@@ -371,11 +371,9 @@ async fn a_suspended_trigger_shows_why_and_fires_neither_by_cron_nor_by_run_now(
     let (status, body) = post_json(&daemon, &format!("/triggers/{id}/fire"), json!({})).await;
     assert_eq!(status, 409, "{body}");
     assert!(
-        body["error"]
-            .as_str()
-            .unwrap()
-            .contains("Emma Leroy was disabled"),
-        "{body}"
+        body["error"].as_str().unwrap()
+            == "trigger 'Weekly dependency bump' is suspended: Emma Leroy was disabled",
+        "the toast names the Trigger by its name, not its id: {body}"
     );
 
     daemon.force_trigger_due(&id).await;

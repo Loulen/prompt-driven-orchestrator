@@ -32,7 +32,7 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
 - **CORE-4, Créateur du Run** : `RunStarted` fige `created_by` (l'Acteur de `run` × `create`, le Trigger
   pour un fire) et, pour un Run déclenché, `trigger_editor` (le Dernier éditeur du Trigger). Les
   deux sont dans `GET /runs/<id>` ; `created_by` aussi dans `GET /runs`. L'onglet Info d'un Run
-  affiche « Created by ». Un Trigger stocke `last_editor` (colonne ajoutée à `triggers`), mis à
+  affiche « Created by » (un Trigger par son nom). Un Trigger stocke `last_editor` (colonne ajoutée à `triggers`), mis à
   jour à chaque création et `PATCH`, affiché dans son détail.
 - **CORE-4, lancement d'un Node** : nouveaux hooks `Extension::node_env` (variables d'un agent ou d'un
   script, hôte et sandbox, reprise comprise ; une variable du core n'est jamais écrasée) et
@@ -41,9 +41,10 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
 - **`CLAUDE_CONFIG_DIR`** fourni par une extension : figé sur le `NodeStarted`
   (`claude_config_dir`), le coût et la liveness du NodeRun lisent ses transcripts dessous.
 - **CORE-4, Trigger suspendu** : hook `Extension::trigger_suspension`. Un Trigger suspendu ne fire plus
-  (`skipped-suspended` dans son historique, `409` sur « Run now ») ; `GET /triggers` le rend avec
+  (`skipped-suspended` dans son historique, `409` sur « Run now », qui nomme le Trigger et la raison) ; `GET /triggers` le rend avec
   `suspension: {extension, reason}`, l'UI l'affiche interrupteur éteint, puce ambre
-  « suspended », raison en infobulle et dans le détail.
+  « suspended » (qui passe sous le nom quand la colonne est étroite), raison en infobulle et
+  dans le détail.
 - Contexte des extensions : `trigger/item` et `trigger/item/menu` reçoivent `last_editor` et
   `suspension` ; `run/info` reçoit `created_by` et `trigger_editor`.
 - L'extension de test du core (le démon de démo des Feature Paths) apprend à injecter des

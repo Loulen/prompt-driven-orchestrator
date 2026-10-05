@@ -230,3 +230,32 @@ pub trait Templates: Send + Sync {
 pub trait AssistantHarness: Send + Sync {
     fn resolve(&self) -> BoxFuture<'_, HarnessDescriptor>;
 }
+
+/// The Projets of a Run (CORE-3): an Operation on a Run's node, session or
+/// shell is in them. Implemented by the `run` side.
+pub trait RunProjects: Send + Sync {
+    /// The Projets `run_id` is in; none for an unknown Run.
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>>;
+}
+
+/// No Run is in any Projet: a use case's Projets until it is given its own.
+pub struct NoRunProjects;
+
+impl RunProjects for NoRunProjects {
+    fn projects_of_run<'a>(&'a self, _run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async { Vec::new() })
+    }
+}
+
+/// The Projets of the session `session`: those of the Run it belongs to (a
+/// node's, a manager's, a run shell's); none for the library assistant or a
+/// name PDO does not give.
+pub async fn projects_of_session(projects: &dyn RunProjects, session: &str) -> Vec<String> {
+    match crate::domain::names::parse_session_name(session)
+        .as_ref()
+        .and_then(crate::domain::names::ParsedSession::run_id)
+    {
+        Some(run_id) => projects.projects_of_run(run_id).await,
+        None => Vec::new(),
+    }
+}

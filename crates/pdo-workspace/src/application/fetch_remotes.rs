@@ -18,10 +18,13 @@ impl Workspace {
             .git
             .validate_repository(path)
             .map_err(WorkspaceError::Invalid)?;
+        let path = repo.display().to_string();
+        let projects = self.projects_of_repository(&path).await;
         self.authorize(
             actor,
             Operation::new(ResourceKind::Repository, Verb::Action("fetch".into()))
-                .on(repo.display().to_string()),
+                .on(path)
+                .in_projects(projects),
         )?;
         let fetch_error = self.git.fetch(&repo).await;
         let mut list = self.git.branches(&repo).map_err(WorkspaceError::Git)?;
@@ -77,5 +80,28 @@ mod tests {
         assert!(matches!(err, WorkspaceError::Denied(_)));
         assert!(f.git.fetched().is_empty());
         assert_eq!(f.host.asked()[0].verb, Verb::Action("fetch".into()));
+    }
+
+    #[tokio::test]
+    async fn a_fetch_is_in_the_projet_owning_the_repository() {
+        let f = fixture();
+        f.projects
+            .seed(crate::domain::project::Project::named("a", "Alpha"));
+        f.workspace
+            .add_project_member(&Actor::LocalOperator, "a", "/repo")
+            .await
+            .unwrap();
+        f.workspace
+            .fetch_remotes(&Actor::LocalOperator, "/repo")
+            .await
+            .unwrap();
+        f.workspace
+            .fetch_remotes(&Actor::LocalOperator, "/elsewhere")
+            .await
+            .unwrap();
+        let asked = f.host.asked();
+        assert_eq!(asked[0].projects, vec!["a".to_string()], "the member's add");
+        assert_eq!(asked[1].projects, vec!["a".to_string()]);
+        assert!(asked[2].is_outside_projects());
     }
 }

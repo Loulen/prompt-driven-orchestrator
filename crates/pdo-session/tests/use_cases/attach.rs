@@ -8,14 +8,14 @@ use pdo_session::domain::names::manager_session_name;
 
 use crate::fakes::{FakeTmux, Host, Window};
 
-#[test]
-fn a_session_pops_out_in_a_terminal_window() {
+#[tokio::test]
+async fn a_session_pops_out_in_a_terminal_window() {
     let tmux = Arc::new(FakeTmux::default());
     let window = Arc::new(Window::default());
     let host = Host::allowing();
     let uc = AttachTerminal::new(tmux, window.clone(), host.clone());
     assert_eq!(
-        uc.session(&Actor::LocalOperator, "pdo-shell-r1"),
+        uc.session(&Actor::LocalOperator, "pdo-shell-r1").await,
         Ok(Attached {
             session: "pdo-shell-r1".into(),
             terminal: "kitty".into()
@@ -31,8 +31,8 @@ fn a_session_pops_out_in_a_terminal_window() {
     assert_eq!(host.asked()[0].verb, Verb::Action("attach".into()));
 }
 
-#[test]
-fn the_manager_must_be_running_to_pop_out() {
+#[tokio::test]
+async fn the_manager_must_be_running_to_pop_out() {
     let window = Arc::new(Window::default());
     let uc = AttachTerminal::new(
         Arc::new(FakeTmux::default()),
@@ -40,7 +40,7 @@ fn the_manager_must_be_running_to_pop_out() {
         Host::allowing(),
     );
     assert_eq!(
-        uc.manager(&Actor::LocalOperator, "r1"),
+        uc.manager(&Actor::LocalOperator, "r1").await,
         Err(AttachError::NoManager {
             session: "pdo-mgr-r1".into()
         })
@@ -50,11 +50,11 @@ fn the_manager_must_be_running_to_pop_out() {
         window,
         Host::allowing(),
     );
-    assert!(uc.manager(&Actor::LocalOperator, "r1").is_ok());
+    assert!(uc.manager(&Actor::LocalOperator, "r1").await.is_ok());
 }
 
-#[test]
-fn a_refusal_or_a_missing_display_is_named() {
+#[tokio::test]
+async fn a_refusal_or_a_missing_display_is_named() {
     let window = Arc::new(Window::default());
     let uc = AttachTerminal::new(
         Arc::new(FakeTmux::default()),
@@ -62,7 +62,7 @@ fn a_refusal_or_a_missing_display_is_named() {
         Host::refusing(),
     );
     assert!(matches!(
-        uc.session(&Actor::LocalOperator, "s"),
+        uc.session(&Actor::LocalOperator, "s").await,
         Err(AttachError::Refused(_))
     ));
     assert!(window.opened.lock().unwrap().is_empty());
@@ -75,7 +75,7 @@ fn a_refusal_or_a_missing_display_is_named() {
         Host::allowing(),
     );
     assert_eq!(
-        uc.session(&Actor::LocalOperator, "s"),
+        uc.session(&Actor::LocalOperator, "s").await,
         Err(AttachError::Terminal("failed to attach: no display".into()))
     );
 }

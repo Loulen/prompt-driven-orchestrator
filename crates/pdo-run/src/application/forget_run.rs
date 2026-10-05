@@ -22,10 +22,13 @@ impl Runs {
     /// torn down its worktrees and branches, or deleting the events would strand the
     /// on-disk state.
     pub async fn forget_run(self: &Arc<Self>, actor: &Actor, run_id: &str) -> Response {
-        if let Err(denied) = self.authorize(
-            actor,
-            &Operation::new(ResourceKind::Run, Verb::Delete).on(run_id),
-        ) {
+        if let Err(denied) = self
+            .authorize(
+                actor,
+                &Operation::new(ResourceKind::Run, Verb::Delete).on(run_id),
+            )
+            .await
+        {
             return denied.into_response();
         }
         let state = self;

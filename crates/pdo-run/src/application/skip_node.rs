@@ -43,7 +43,10 @@ impl Runs {
             iter,
             reason,
         } = command;
-        if let Err(denied) = self.authorize(actor, &on_node("skip", &run_id, &node_id)) {
+        if let Err(denied) = self
+            .authorize(actor, &on_node("skip", &run_id, &node_id))
+            .await
+        {
             return denied.into_response();
         }
         let state = self;

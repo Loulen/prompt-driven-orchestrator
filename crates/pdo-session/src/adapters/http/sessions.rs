@@ -60,7 +60,7 @@ pub(super) async fn attach(
     Extension(actor): Extension<Actor>,
     AxumPath(session_id): AxumPath<String>,
 ) -> Response {
-    attached(session.attach().session(&actor, &session_id))
+    attached(session.attach().session(&actor, &session_id).await)
 }
 
 pub(super) async fn manager_attach(
@@ -68,7 +68,7 @@ pub(super) async fn manager_attach(
     Extension(actor): Extension<Actor>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
-    attached(session.attach().manager(&actor, &run_id))
+    attached(session.attach().manager(&actor, &run_id).await)
 }
 
 fn attached(result: Result<Attached, AttachError>) -> Response {

@@ -10,7 +10,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::{info, warn};
 
-use crate::application::ports::{NodePanes, RunLookup, Tmux};
+use crate::application::ports::{NoRunProjects, NodePanes, RunLookup, RunProjects, Tmux};
 use crate::domain::names::node_session_name;
 use crate::domain::pane::{pane_snapshot_path, Pane, PaneSource, ReattachOutcome};
 
@@ -28,6 +28,7 @@ pub struct ReadPane {
     panes: Arc<dyn NodePanes>,
     tmux: Arc<dyn Tmux>,
     host: Arc<dyn ExtensionHost>,
+    projects: Arc<dyn RunProjects>,
 }
 
 impl ReadPane {
@@ -36,7 +37,18 @@ impl ReadPane {
         tmux: Arc<dyn Tmux>,
         host: Arc<dyn ExtensionHost>,
     ) -> Self {
-        Self { panes, tmux, host }
+        Self {
+            panes,
+            tmux,
+            host,
+            projects: Arc::new(NoRunProjects),
+        }
+    }
+
+    /// The same use case, its Operations in the Projets `projects` gives.
+    pub fn with_projects(mut self, projects: Arc<dyn RunProjects>) -> Self {
+        self.projects = projects;
+        self
     }
 
     /// The pane of `(run, node, iter)`, and the name of its session.
@@ -74,7 +86,8 @@ impl ReadPane {
         if target.latest_iter && !target.terminal && !target.pending {
             // A re-attach IS a (re)spawn: the one mutation behind this read.
             let operation = Operation::new(ResourceKind::Session, Verb::Action("resume".into()))
-                .on(session.clone());
+                .on(session.clone())
+                .in_projects(self.projects.projects_of_run(run_id).await);
             authorize(self.host.as_ref(), actor, &operation).map_err(ReadPaneError::Refused)?;
             let snapshot_or = |msg: &str| match std::fs::read_to_string(&snapshot_path) {
                 Ok(c) => Pane::new(c, PaneSource::Snapshot, false),

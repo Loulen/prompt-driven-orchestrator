@@ -32,8 +32,8 @@ use application::attach::AttachTerminal;
 use application::declared_wait::{DeclareWait, LiftWait, TypedInput};
 use application::open_shell::OpenShell;
 use application::ports::{
-    AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunShells, SessionOwners, Templates,
-    TerminalWindow, Tmux,
+    AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunProjects, RunShells, SessionOwners,
+    Templates, TerminalWindow, Tmux,
 };
 use application::read_pane::ReadPane;
 use application::status::ReadStatus;
@@ -60,6 +60,8 @@ pub struct SessionPorts {
     pub assistant_harness: Arc<dyn AssistantHarness>,
     pub terminal_window: Arc<dyn TerminalWindow>,
     pub extensions: Arc<dyn ExtensionHost>,
+    /// The Projets of a Run, its sessions' Operations are in (CORE-3).
+    pub projects: Arc<dyn RunProjects>,
 }
 
 /// The daemon's knobs the context reads.
@@ -104,6 +106,7 @@ impl Session {
             assistant_harness,
             terminal_window,
             extensions,
+            projects,
         } = ports;
         let typed = Arc::new(TypedInput::default());
         let focus = Arc::new(FocusCell::default());
@@ -119,22 +122,27 @@ impl Session {
                 tmux.clone(),
                 typed.clone(),
                 extensions.clone(),
-            ),
+            )
+            .with_projects(projects.clone()),
             terminals: Terminals::new(
                 tmux.clone(),
                 LiftWait::new(waits, typed, extensions.clone()),
                 extensions.clone(),
-            ),
+            )
+            .with_projects(projects.clone()),
             sweep: SweepOrphans::new(tmux.clone(), owners, focus.clone(), reaper.clone()),
             read_status: ReadStatus::new(gauges, reaper),
-            read_pane: ReadPane::new(panes, tmux.clone(), extensions.clone()),
+            read_pane: ReadPane::new(panes, tmux.clone(), extensions.clone())
+                .with_projects(projects.clone()),
             open_shell: OpenShell::new(
                 shells,
                 tmux.clone(),
                 extensions.clone(),
                 options.daemon_port,
-            ),
-            attach: AttachTerminal::new(tmux.clone(), terminal_window, extensions.clone()),
+            )
+            .with_projects(projects.clone()),
+            attach: AttachTerminal::new(tmux.clone(), terminal_window, extensions.clone())
+                .with_projects(projects),
             open_assistant: OpenAssistant::new(
                 tmux.clone(),
                 assistant_harness,

@@ -9,7 +9,9 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::info;
 
-use crate::application::ports::{TerminalWindow, Tmux};
+use crate::application::ports::{
+    projects_of_session, NoRunProjects, RunProjects, TerminalWindow, Tmux,
+};
 use crate::domain::names::manager_session_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub struct AttachTerminal {
     tmux: Arc<dyn Tmux>,
     window: Arc<dyn TerminalWindow>,
     host: Arc<dyn ExtensionHost>,
+    projects: Arc<dyn RunProjects>,
 }
 
 impl AttachTerminal {
@@ -41,12 +44,23 @@ impl AttachTerminal {
         window: Arc<dyn TerminalWindow>,
         host: Arc<dyn ExtensionHost>,
     ) -> Self {
-        Self { tmux, window, host }
+        Self {
+            tmux,
+            window,
+            host,
+            projects: Arc::new(NoRunProjects),
+        }
+    }
+
+    /// The same use case, its Operations in the Projets `projects` gives.
+    pub fn with_projects(mut self, projects: Arc<dyn RunProjects>) -> Self {
+        self.projects = projects;
+        self
     }
 
     /// Attach a terminal window to `session`.
-    pub fn session(&self, actor: &Actor, session: &str) -> Result<Attached, AttachError> {
-        self.authorize(actor, session)?;
+    pub async fn session(&self, actor: &Actor, session: &str) -> Result<Attached, AttachError> {
+        self.authorize(actor, session).await?;
         let terminal = self.open(session)?;
         info!("Attached terminal {terminal} to session {session}");
         Ok(Attached {
@@ -56,9 +70,9 @@ impl AttachTerminal {
     }
 
     /// Attach a terminal window to the Run's manager, which must be running.
-    pub fn manager(&self, actor: &Actor, run_id: &str) -> Result<Attached, AttachError> {
+    pub async fn manager(&self, actor: &Actor, run_id: &str) -> Result<Attached, AttachError> {
         let session = manager_session_name(run_id);
-        self.authorize(actor, &session)?;
+        self.authorize(actor, &session).await?;
         if !self.tmux.session_exists(&session) {
             return Err(AttachError::NoManager { session });
         }
@@ -67,9 +81,10 @@ impl AttachTerminal {
         Ok(Attached { session, terminal })
     }
 
-    fn authorize(&self, actor: &Actor, session: &str) -> Result<(), AttachError> {
-        let operation =
-            Operation::new(ResourceKind::Session, Verb::Action("attach".into())).on(session);
+    async fn authorize(&self, actor: &Actor, session: &str) -> Result<(), AttachError> {
+        let operation = Operation::new(ResourceKind::Session, Verb::Action("attach".into()))
+            .on(session)
+            .in_projects(projects_of_session(self.projects.as_ref(), session).await);
         authorize(self.host.as_ref(), actor, &operation).map_err(AttachError::Refused)
     }
 

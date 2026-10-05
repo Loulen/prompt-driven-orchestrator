@@ -17,6 +17,7 @@ const ICON: &str = include_str!("icon.svg");
 
 pub(super) fn router(control: Control) -> Router {
     let events = control.clone();
+    let operations = control.clone();
     let switch = control.clone();
     let commands = control.clone();
     let record = control.clone();
@@ -40,6 +41,17 @@ pub(super) fn router(control: Control) -> Router {
             get(move || {
                 let events = events.events();
                 async move { Json(Value::Array(events)) }
+            }),
+        )
+        .route(
+            "/operations",
+            get(move || {
+                let seen: Vec<Value> = operations
+                    .seen()
+                    .into_iter()
+                    .map(|(actor, operation)| json!({ "actor": actor, "operation": operation }))
+                    .collect();
+                async move { Json(Value::Array(seen)) }
             }),
         )
         .route(

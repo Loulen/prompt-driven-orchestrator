@@ -12,6 +12,11 @@
 //! extension, its events reach `/ws` and the other extensions, and the other
 //! extensions stamp their attributes on its entities.
 //!
+//! An [`Operation`] carries the Projets it is in (empty: in none), which the
+//! core fills for its own and an extension for its own; the [`Manifest`]
+//! declares the Ressources an extension owns, and the core exposes the whole
+//! catalogue ([`Host::catalogue`], `GET /resources`).
+//!
 //! **Every hook has a neutral default.** An extension overrides only what it does;
 //! with no extension installed, the caller is the local operator, everything is
 //! allowed, and PDO behaves exactly as before.
@@ -22,6 +27,7 @@
 //! daemon already broadcasts on `/ws`, never an internal Rust enum.
 
 mod actor;
+mod catalogue;
 mod cli;
 mod entity;
 mod event;
@@ -33,6 +39,7 @@ mod skill;
 mod ui;
 
 pub use actor::Actor;
+pub use catalogue::{catalogue, core_resources, Resource, ResourceDeclaration};
 pub use cli::{CliInvocation, CliOutput, CliSpec, EXIT_NO_CLI};
 pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
@@ -58,5 +65,6 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// extension requiring any version from this one up to [`API_VERSION`] runs.
 /// In 0.x a minor may break; this is where the API says which ones did not
 /// (0.2 only added to 0.1, ADR-0081 amendment #29; 0.3 broke only compilation,
-/// amendment #34; 0.4 only added to 0.3, amendment #32).
+/// amendment #34; 0.4 only added to 0.3, amendment #32; 0.8 only added fields
+/// and methods, amendment CORE-3).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

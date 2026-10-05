@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::API_VERSION;
+use crate::{ResourceDeclaration, API_VERSION};
 
 /// What an extension says about itself.
 ///
@@ -15,6 +15,13 @@ use crate::API_VERSION;
 /// start when it does not implement a compatible one: the same major, at least
 /// as recent, and while the API is in 0.x, not older than
 /// [`OLDEST_COMPATIBLE_API_VERSION`](crate::OLDEST_COMPATIBLE_API_VERSION).
+///
+/// `resources` are the Ressources the extension owns
+/// ([`ResourceKind::Extension`](crate::ResourceKind::Extension)), which the
+/// core adds to its catalogue (`GET /resources`, [`Host::catalogue`]) as
+/// `<id>/<kind>`. None by default.
+///
+/// [`Host::catalogue`]: crate::Host::catalogue
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Manifest {
@@ -22,6 +29,7 @@ pub struct Manifest {
     pub name: String,
     pub version: String,
     pub api_version: String,
+    pub resources: Vec<ResourceDeclaration>,
 }
 
 impl Manifest {
@@ -31,7 +39,14 @@ impl Manifest {
             name: name.into(),
             version: version.into(),
             api_version: API_VERSION.to_string(),
+            resources: Vec::new(),
         }
+    }
+
+    /// The same manifest, declaring one more Ressource.
+    pub fn with_resource(mut self, resource: ResourceDeclaration) -> Self {
+        self.resources.push(resource);
+        self
     }
 
     /// The same manifest, requiring version `api_version` of this API.
@@ -50,5 +65,14 @@ mod tests {
         let manifest = Manifest::new("demo", "Demo", "1.2.3");
         assert_eq!(manifest.api_version, API_VERSION);
         assert_eq!(manifest.requiring_api("0.9.0").api_version, "0.9.0");
+    }
+
+    #[test]
+    fn declares_no_resource_by_default() {
+        let manifest = Manifest::new("demo", "Demo", "1.2.3");
+        assert!(manifest.resources.is_empty());
+        let manifest =
+            manifest.with_resource(ResourceDeclaration::new("item", "Items", ["create"]));
+        assert_eq!(manifest.resources[0].kind, "item");
     }
 }

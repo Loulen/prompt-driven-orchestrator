@@ -51,7 +51,10 @@ impl Runs {
     /// silent success (the projection ignores `ManagerStarted`; the wire's
     /// `has_manager` stays the observed tmux fact).
     pub async fn start_manager(self: &Arc<Self>, actor: &Actor, run_id: &str) -> Response {
-        if let Err(denied) = self.authorize(actor, &on_run("start_manager", run_id)) {
+        if let Err(denied) = self
+            .authorize(actor, &on_run("start_manager", run_id))
+            .await
+        {
             return denied.into_response();
         }
         let state = self;
@@ -81,7 +84,7 @@ impl Runs {
     /// `200` ("nothing to stop"), and still writes its `ManagerStopped` event: the
     /// projection ignores the kind, so the durable record never lies about state.
     pub async fn stop_manager(self: &Arc<Self>, actor: &Actor, run_id: &str) -> Response {
-        if let Err(denied) = self.authorize(actor, &on_run("stop_manager", run_id)) {
+        if let Err(denied) = self.authorize(actor, &on_run("stop_manager", run_id)).await {
             return denied.into_response();
         }
         let state = self;

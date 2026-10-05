@@ -39,13 +39,16 @@ impl Workspace {
                 repo.display()
             )));
         }
+        let path = repo.display().to_string();
+        let projects = self.projects_of_repository(&path).await;
         self.authorize(
             actor,
             Operation::new(
                 ResourceKind::Repository,
                 Verb::Action("fast_forward".into()),
             )
-            .on(repo.display().to_string()),
+            .on(path)
+            .in_projects(projects),
         )?;
         let outcome = self.git.fast_forward(&repo, branch);
         let list = self.git.branches(&repo).map_err(WorkspaceError::Git)?;

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
-use pdo_kernel::{Actor, Operation};
+use pdo_kernel::{Actor, Operation, ResourceKind};
 
 use super::ports::{
     FileBrowser, Git, ProjectEvents, ProjectRepository, ProvisioningRulesRepository,
@@ -55,7 +55,26 @@ impl Workspace {
     }
 
     /// The Autorisation d'opération: every mutation goes through here first.
+    /// An Operation on a Projet is in that Projet (CORE-3).
     pub(crate) fn authorize(&self, actor: &Actor, operation: Operation) -> Result<(), Denied> {
+        let operation = match (&operation.resource, operation.target.clone()) {
+            (ResourceKind::Project, Some(id)) if operation.is_outside_projects() => {
+                operation.in_projects([id])
+            }
+            _ => operation,
+        };
         authorize(self.host.as_ref(), actor, &operation)
+    }
+
+    /// The Projets the repository `path` is in: the one that owns it, or none
+    /// (also when the Projets cannot be read).
+    pub(crate) async fn projects_of_repository(&self, path: &str) -> Vec<String> {
+        match self.projects.owner_of(path).await {
+            Ok(owner) => owner.map(|project| project.id).into_iter().collect(),
+            Err(e) => {
+                tracing::warn!("the Projet owning {path} cannot be read: {e}");
+                Vec::new()
+            }
+        }
     }
 }

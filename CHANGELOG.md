@@ -10,6 +10,26 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.17.0 — Seams d'identité et de droits pour `iam` (IAM-1)
+
+`pdo-extension-api` passe en **0.8.0** : ajouts seulement, une extension 0.1 à 0.7 compile et
+tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du Backlog `CORE` de
+`pm`, US IAM-1 de `pdo-extensions` ; détail : ADR-0081, amendement CORE-3, et
+`docs/reference/extension-api.md`.
+
+- **CORE-3, Projets d'une Opération** : une `Operation` porte `projects` (vide : hors Projet).
+  Le core la remplit : un Run, ses nodes, ses sessions et ses commentaires de Review sont dans le
+  Projet qui possède le dépôt primaire du Run ; un Projet dans lui-même ; un dépôt dans son
+  Projet ; le reste hors Projet. Sur le fil (`/ws`, `on_event`), une Opération gagne
+  `"projects": [...]`. Une extension remplit `projects` pour ses propres Ressources. Un dépôt
+  écrit autrement (`/repo/`, `/repo/.`, un lien vers `/repo`) reste dans le Projet de `/repo`.
+- **CORE-3, catalogue des Ressources** : le `Manifest` déclare les Ressources d'une extension
+  (`with_resource(ResourceDeclaration)`) ; `GET /resources` et `Host::catalogue()` rendent les
+  19 Ressources du core (libellé, aide, verbes) puis celles des extensions.
+- `Runs::authorize`, `Review::authorize` et les use cases de session qui autorisent deviennent
+  `async` (ils lisent le Projet d'un Run) ; ces API internes au workspace ne sont pas dans le
+  contrat.
+
 ## 2.16.0 — Lien profond vers un Run, factory du core dans `pm` (CORE-1)
 
 Aucun changement du crate : `pdo-extension-api` reste en **0.7.0**. Aucun changement daemon.

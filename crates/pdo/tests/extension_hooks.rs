@@ -378,6 +378,31 @@ async fn an_extension_that_sleeps_or_panics_in_on_event_never_delays_a_response(
     .await;
 }
 
+/// The test extensions' UI bundles are plain ES modules with no build step:
+/// nothing parses them before a browser does. A redeclared function once broke
+/// `ui.js` whole, and every contribution it carries (the avatar menu of
+/// `topbar/account` among them) silently vanished from the page.
+#[test]
+fn the_test_extension_bundles_parse_as_es_modules() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/test_extension");
+    let scratch = tempfile::tempdir().unwrap();
+    for bundle in ["ui.js", "host_a.js", "contributor_b.js"] {
+        // `.mjs`: parsed as a module whatever the nearest package.json says.
+        let copy = scratch.path().join(bundle.replace(".js", ".mjs"));
+        std::fs::copy(dir.join(bundle), &copy).unwrap();
+        let out = std::process::Command::new("node")
+            .arg("--check")
+            .arg(&copy)
+            .output()
+            .expect("node runs (the frontend build needs it too)");
+        assert!(
+            out.status.success(),
+            "{bundle} does not parse:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_extension_routes_answer_under_ext_and_hide_no_core_route() {
     let (daemon, control) = daemon().await;

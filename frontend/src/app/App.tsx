@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
@@ -29,6 +29,8 @@ import { useSurfaces } from "./useSurfaces";
 import { useAppTour } from "./useAppTour";
 import { useRunNavigation } from "./useRunNavigation";
 import { useRunLink } from "./useRunLink";
+import { formatRunLink } from "../shared/extensions/deepLink";
+import { setSignInReturnLink } from "../shared/http/signIn";
 import { useEditorHotkeys } from "./useEditorHotkeys";
 import { useLaunchActions } from "./useLaunchActions";
 import { useShellRefresh } from "./useShellRefresh";
@@ -202,6 +204,11 @@ export default function App() {
 
   // CORE-1: `#/runs/<id>` selects the Run, from the address bar or an extension.
   useRunLink(handleSelectRun);
+  // CORE-2: the address keeps no Run, so a lost session comes back to it this way.
+  useEffect(() => {
+    setSignInReturnLink(selectedRunId ? formatRunLink(selectedRunId) : null);
+    return () => setSignInReturnLink(null);
+  }, [selectedRunId]);
 
   const handleRunCreated = useCallback(
     (runId: string) => {

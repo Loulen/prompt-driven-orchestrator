@@ -32,15 +32,19 @@ pub fn run_run_list(json: bool) -> Result<()> {
 /// The daemon's sentence for a refusal (`message`, else `error`), else the
 /// body as is.
 fn refusal_message(body: &str) -> String {
-    serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|v| {
-            v["message"]
-                .as_str()
-                .or_else(|| v["error"].as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| body.to_string())
+    daemon_sentence(body).unwrap_or_else(|| body.to_string())
+}
+
+/// The sentence of a daemon's JSON refusal: its `message` (an admission
+/// refusal's readable one, ADR-0081), else its `error`. `None` for a body that
+/// is not the daemon's JSON.
+pub(super) fn daemon_sentence(body: &str) -> Option<String> {
+    serde_json::from_str::<Value>(body).ok().and_then(|v| {
+        v["message"]
+            .as_str()
+            .or_else(|| v["error"].as_str())
+            .map(str::to_string)
+    })
 }
 
 /// One line per Run: `run_id  status  pipeline  name`, tab-separated.

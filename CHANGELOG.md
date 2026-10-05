@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.10.1 — Panneau secondaire fermable, modales bornées à la fenêtre (#40)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Le panneau secondaire de la
+coquille pleine fenêtre (Stats › Cost › Pricing details, Settings › Banque de skills) s'ouvre
+sous le header, qui reste visible, avec un titre, l'indication Échap et un ✕. « Pricing details »
+devient une bascule. Les modales Edit project, profil agentique, destruction de loops et
+fermeture d'onglets sont bornées à 85 % de la hauteur de la fenêtre : titre et actions restent
+visibles, seul le corps défile (portage core #944 et #940).
+
 ## 2.10.0 — Copier en un clic le contenu brut d'un output (#41)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Dans le détail d'un node, un

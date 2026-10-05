@@ -14,7 +14,7 @@
 // The harness below — the real App with both full-window surfaces and a complete
 // api fixture — also carries the other host-level contracts of those two surfaces
 // (see the #819 block at the bottom).
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -365,6 +365,9 @@ vi.mock("../session/api/sessions", () => ({
 
 vi.mock("../session/api/assistant", () => ({
   closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
+  // #938: the Assistant tab spawns its session on mount — kept pending, the
+  // tests only look at which tab is shown.
+  openLibraryAssistant: vi.fn().mockReturnValue(new Promise(() => {})),
   putLibassistFocus: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -442,7 +445,16 @@ vi.mock("@xyflow/react", async (importOriginal) => {
   };
 });
 
+vi.mock("../pipeline/api/document", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pipeline/api/document")>()),
+  fetchPipelineDocument: vi
+    .fn()
+    .mockResolvedValue("name: tpl\nversion: '1.0'\nnodes: []\nedges: []\n"),
+  fetchPipelineSkillsSidecar: vi.fn().mockResolvedValue(null),
+}));
+
 import App from "./App";
+import { useEditStore } from "../pipeline/store/editStore";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -610,4 +622,140 @@ describe("App — the welcome modal (#823)", () => {
     await waitFor(() => expect(screen.queryByTestId("settings-loading")).not.toBeInTheDocument());
     expect(screen.queryByTestId("tour-welcome")).not.toBeInTheDocument();
   });
+});
+
+// ---------------------------------------------------------------------------
+// #938 (story PDO-3) — the toolbar's "agent" glyph and `(i)` are mutually
+// exclusive and lit from the tab the Pipeline info panel SHOWS. The rule crosses
+// App (owns the panel's open state + tab), the toolbar and the panel, hence the
+// real App mount on a library template canvas.
+// ---------------------------------------------------------------------------
+
+describe("App — Assistant and Info toolbar buttons are exclusive (#938)", () => {
+  function seedTemplate(saveError?: { message: string; line?: number }) {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "tpl",
+          scope: "repo",
+          pipeline: { name: "tpl", version: "1.0", variables: {}, nodes: [], edges: [] },
+          prompts: {},
+          diagnostics: [],
+          dirty: saveError != null,
+          externalDirty: false,
+          saveError,
+        },
+      ],
+      activeTabId: "tpl",
+      selection: { kind: "none", id: null },
+    });
+  }
+
+  beforeEach(() => {
+    localStorage.setItem("pdo.tour.offered", "1");
+  });
+
+  afterEach(() => {
+    useEditStore.setState({ openTabs: [], activeTabId: null });
+  });
+
+  function buttons() {
+    return {
+      bot: screen.getByTestId("toolbar-assistant"),
+      info: screen.getByTestId("toolbar-info"),
+    };
+  }
+
+  /** The lit button(s) and the tab the panel shows (`null` = panel closed). */
+  function view() {
+    const { bot, info } = buttons();
+    const panel = screen.queryByTestId("pipeline-info-panel");
+    const shown = panel
+      ? (["assistant", "info", "yaml"] as const).find((t) =>
+          screen.getByTestId(`info-tab-${t}`).className.includes("border-acc"),
+        )
+      : null;
+    return {
+      bot: bot.getAttribute("aria-pressed"),
+      info: info.getAttribute("aria-pressed"),
+      shown,
+    };
+  }
+
+  async function mount() {
+    const user = userEvent.setup();
+    seedTemplate();
+    render(<App />);
+    await screen.findByTestId("toolbar-assistant");
+    return user;
+  }
+
+  it("follows the transition table from a closed panel", async () => {
+    const user = await mount();
+    expect(view()).toEqual({ bot: "false", info: "false", shown: null });
+
+    // closed → glyph: opens on Assistant.
+    await user.click(buttons().bot);
+    expect(view()).toEqual({ bot: "true", info: "false", shown: "assistant" });
+    expect(screen.getByTestId("assistant-tab")).toBeInTheDocument();
+
+    // on Assistant → glyph: closes.
+    await user.click(buttons().bot);
+    expect(view()).toEqual({ bot: "false", info: "false", shown: null });
+
+    // closed → (i): opens on Info.
+    await user.click(buttons().info);
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "info" });
+
+    // on another tab → (i): closes.
+    await user.click(buttons().info);
+    expect(view()).toEqual({ bot: "false", info: "false", shown: null });
+  }, 20_000);
+
+  it("switches between Assistant and Info without closing the panel", async () => {
+    const user = await mount();
+
+    await user.click(buttons().bot);
+    // on Assistant → (i): switches to Info, stays open.
+    await user.click(buttons().info);
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "info" });
+
+    // on another tab → glyph: switches to Assistant.
+    await user.click(buttons().bot);
+    expect(view()).toEqual({ bot: "true", info: "false", shown: "assistant" });
+  }, 20_000);
+
+  it("keeps the toolbar in sync with the panel's own tabs", async () => {
+    const user = await mount();
+
+    await user.click(buttons().info);
+    await user.click(screen.getByTestId("info-tab-assistant"));
+    expect(view()).toEqual({ bot: "true", info: "false", shown: "assistant" });
+
+    await user.click(screen.getByTestId("info-tab-yaml"));
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "yaml" });
+
+    // YAML is "another tab": the glyph jumps to the Assistant...
+    await user.click(buttons().bot);
+    expect(view()).toEqual({ bot: "true", info: "false", shown: "assistant" });
+
+    await user.click(screen.getByTestId("info-tab-info"));
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "info" });
+
+    // ...and a click on the lit (i) closes the panel.
+    await user.click(buttons().info);
+    expect(view()).toEqual({ bot: "false", info: "false", shown: null });
+  }, 20_000);
+
+  it("« View YAML » opens the panel on YAML at the error line, (i) lit", async () => {
+    const user = userEvent.setup();
+    seedTemplate({ message: "bad yaml", line: 3 });
+    render(<App />);
+
+    await user.click(await screen.findByTestId("save-error-view-yaml"));
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "yaml" });
+    await waitFor(() =>
+      expect(document.querySelector('[data-line="3"]')).toHaveClass("bg-st-failed/20"),
+    );
+  }, 20_000);
 });

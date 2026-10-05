@@ -4,9 +4,10 @@ import type { PortSide } from "../../shared/generated/PortSide";
 import { rimHandleId } from "../../lib/anchorSide";
 import { WIRE_BG } from "../../lib/wiringColors";
 
-/** Thickness of the drag-source rim, in screen px. Wide enough to aim at without
- *  swallowing the card's drag area. */
-export const RIM = 9;
+/** Thickness of the drag-source rim, in canvas px (it scales with the zoom, like
+ *  the card). Wide enough to aim at without swallowing the card's drag area —
+ *  #936 halved it from 9: the thick band kept catching grabs meant to move the card. */
+export const RIM = 4.5;
 
 /**
  * FOUR source handles, one strip per side — not one ring: xyflow derives the

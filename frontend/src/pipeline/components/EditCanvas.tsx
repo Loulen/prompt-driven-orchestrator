@@ -317,17 +317,17 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           connectionLineComponent={DragConnectionLine}
           deleteKeyCode={null}
           fitView
-          // #825 (FP iteration 2): never magnify. A pipeline with two markers in
-          // it fit-views to zoom 2 by default, which makes a card 360 pixels wide
-          // and fits barely two of them across the canvas — the reader's first
-          // pipeline then runs out of screen after one node. Cards at the size
-          // they were drawn, and a small graph simply sits in the middle.
+          // #825 (FP iteration 2): never magnify. A two-marker pipeline fit-views to
+          // zoom 2 by default (a card 360px wide, barely two across the canvas).
+          // Cards at the size they were drawn; a small graph sits in the middle.
           fitViewOptions={{ maxZoom: 1 }}
           proOptions={{ hideAttribution: true }}
           className="bg-bg-1"
           // #315: drag + connect are off on an archived run; click-to-select stays on.
+          // #936: edges are born from a DRAG only; a click on a rim selects the node.
           nodesDraggable={!readOnly}
           nodesConnectable={!readOnly}
+          connectOnClick={false}
         >
           {/* Decorative background — pure chrome, but drawn at the wiring grid's
               pitch (#877) so a 30px step does not fall out of phase with it. */}

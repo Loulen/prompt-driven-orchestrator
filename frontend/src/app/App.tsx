@@ -129,8 +129,10 @@ export default function App() {
     isEditingRun && editTab?.runId === selectedRun?.run_id && isArchived;
   const conflictTab = openTabs.find((t) => t.conflict != null);
   const saveErrorTab = openTabs.find((t) => t.saveError != null);
-  const info = useInfoPanel(saveErrorTab);
-  const { infoPanelOpen, setInfoPanelOpen, infoPanelInitialTab, handleCloseInfo } = info;
+  // What the info panel offers (#938): a Run's tabs, or a template's Assistant.
+  const infoHasRun = isEditingRun && selectedRun != null;
+  const info = useInfoPanel(saveErrorTab, { hasRun: infoHasRun, hasAssistant: !infoHasRun && !!assistantId });
+  const { infoPanelOpen, setInfoPanelOpen, handleCloseInfo } = info;
 
   // The Trigger backing the right-panel detail view (#162), the pane-owner
   // precedence (#247), the two render-time reconciliations (#320 canvas-reclaim,
@@ -259,11 +261,11 @@ export default function App() {
               onBackToOrchestrator={handleBackToOrchestrator}
               libraryEntries={libraryEntries}
               refreshLibrary={refreshLibrary}
-              infoPanelOpen={infoPanelOpen}
-              assistantActive={infoPanelOpen && infoPanelInitialTab === "assistant"}
+              infoPanelOpen={info.infoActive}
+              assistantActive={info.assistantActive}
               onToggleInfo={info.handleToggleInfo}
               onCloseInfo={handleCloseInfo}
-              onOpenAssistant={info.handleOpenAssistant}
+              onOpenAssistant={info.handleToggleAssistant}
               selectedRun={selectedRun}
               onSelectRun={handleSelectRun}
             />
@@ -284,7 +286,8 @@ export default function App() {
               isArchived={isArchived}
               isActiveRunArchived={isActiveRunArchived}
               assistantId={assistantId}
-              infoPanelInitialTab={infoPanelInitialTab}
+              infoPanelTab={info.infoPanelTab}
+              onInfoPanelTabChange={info.setInfoPanelTab}
               infoPanelScrollToLine={info.infoPanelScrollToLine}
               onCloseInfo={handleCloseInfo}
               libraryEntries={libraryEntries}

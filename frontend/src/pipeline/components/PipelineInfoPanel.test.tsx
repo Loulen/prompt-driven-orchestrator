@@ -581,6 +581,46 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
     expect(openLibraryAssistant).toHaveBeenCalledTimes(1);
     expect(closeLibraryAssistant).not.toHaveBeenCalled();
   });
+
+  // #938: App owns the tab (so the toolbar lights from the tab shown). The panel
+  // shows what it is given, reports clicks, and never moves on its own.
+  it("controlled: shows the host's tab and reports tab clicks", () => {
+    const onTabChange = vi.fn();
+    const panel = (tab: TabId) => (
+      <PipelineInfoPanel
+        run={null}
+        pipeline={makePipeline()}
+        onClose={() => {}}
+        tab={tab}
+        onTabChange={onTabChange}
+        assistantId="alpha"
+      />
+    );
+    const { rerender } = render(panel("assistant"));
+    expect(screen.getByTestId("assistant-tab")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("info-tab-yaml"));
+    expect(onTabChange).toHaveBeenCalledWith("yaml");
+    expect(screen.getByTestId("assistant-tab")).toBeInTheDocument();
+
+    rerender(panel("yaml"));
+    expect(screen.queryByTestId("assistant-tab")).toBeNull();
+    expect(screen.getByTestId("info-tab-yaml").className).toContain("border-acc");
+  });
+
+  it("controlled: a tab the context lacks resolves to Info", () => {
+    render(
+      <PipelineInfoPanel
+        run={null}
+        pipeline={makePipeline()}
+        onClose={() => {}}
+        tab="manager"
+        onTabChange={() => {}}
+        assistantId="alpha"
+      />,
+    );
+    expect(screen.getByTestId("info-tab-info").className).toContain("border-acc");
+  });
 });
 
 describe("PipelineInfoPanel — Diff tab (#748)", () => {

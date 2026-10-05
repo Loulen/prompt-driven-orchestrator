@@ -6,6 +6,7 @@
  */
 
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";
+import type { TourStepPanels, TourTidyUp } from "./tourPanels";
 
 /**
  * One node of the Run a tour is following (#825), narrowed to the two facts the
@@ -32,6 +33,20 @@ const TERMINAL_NODE_STATUSES = new Set(["completed", "failed", "skipped", "stopp
 
 export function isNodeFinished(node: TourRunNode | null): boolean {
   return node != null && TERMINAL_NODE_STATUSES.has(node.status);
+}
+
+/**
+ * One row of the Run list, narrowed to what a tour reads (#911): the *Overview*
+ * tour follows the Run its preparation made, which is not necessarily the newest
+ * one, and watches it turn `archived` under the user's own gesture.
+ */
+export interface TourRunSummary {
+  id: string;
+  name: string;
+  /** The pipeline's display name, as the list shows it. */
+  pipeline: string;
+  /** `running` | `completed` | `archived` | … — the list's own status. */
+  status: string;
 }
 
 /** The Run a tour is following — its list entry, plus the detail the inspector
@@ -73,6 +88,9 @@ export interface TourAppState {
    * steps that read its nodes (#825).
    */
   latestRun: TourRunView | null;
+  /** Every Run the list holds, newest first (#911) — the same list the left panel
+   *  renders, read rather than fetched (ADR-0071 §3). */
+  runs: TourRunSummary[];
   /**
    * The Run whose tab is open on the canvas, or `null` on a pipeline tab (#825).
    * Read as « did the user open the Run we are talking about », which is one tab
@@ -111,7 +129,7 @@ export interface TourObservation {
   text: (selector: string) => string | null;
 }
 
-export interface TourStep {
+export interface TourStep extends TourStepPanels {
   id: string;
   /** Imperative — the one thing to do. */
   title: string;
@@ -271,8 +289,14 @@ export interface TourPreparation {
   ready: string;
   /** Headline when THIS one refuses, e.g. "The training repository could not be created". */
   failureTitle: string;
-  /** Idempotent. Rejects with the daemon's own sentence, which is quoted verbatim. */
-  run: () => Promise<void>;
+  /**
+   * Idempotent. Rejects with the daemon's own sentence, which is quoted verbatim.
+   *
+   * `signal` aborts when the card goes away (quit, a new start) — the one
+   * preparation that *waits* (a Run until `completed`, #911) must not go on
+   * polling for a tour nobody is looking at any more.
+   */
+  run: (signal?: AbortSignal) => Promise<void>;
 }
 
 /**
@@ -307,6 +331,12 @@ export interface TourDef {
   steps: TourStep[];
   /** The welcome card and its preparations. Absent → the tour starts on step 1. */
   intro?: TourIntro;
+  /**
+   * What the tour puts away at any exit (#911): end, quit, clean stop. Absent or
+   * empty → nothing to tidy. The pipeline and the Run a tour leaves behind are
+   * the user's; only what exists purely to be shown belongs here.
+   */
+  teardown?: TourTidyUp[];
   /** End card headline, e.g. "You built …". */
   recapIntro: string | ((app: TourAppState) => string);
   /** End card bullets: what the thing the user just built actually does. */

@@ -9,10 +9,8 @@ import { useLibassistLifecycle } from "../session/store/useLibassistLifecycle";
 import { useTerminalOverlayOpen } from "../session/store/terminalOverlayStore";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import NewRunModal from "../run/components/NewRunModal";
-import SettingsSurface from "../settings/components/SettingsSurface";
 import { useUpdateStatus } from "../platform/store/useUpdateStatus";
 import { useUpdateFlow } from "../platform/store/useUpdateFlow";
-import StatsModal from "../stats/components/StatsModal";
 import TopBar from "./TopBar";
 import { useTriggers } from "../trigger/store/useTriggers";
 import { useTriggersPause } from "../trigger/store/useTriggersPause";
@@ -38,6 +36,7 @@ import { useInfoPanel } from "./useInfoPanel";
 import { useCollapsibleRightPane } from "./useCollapsibleRightPane";
 import CenterPane from "./CenterPane";
 import RightPane from "./RightPane";
+import AppSurfaces from "./AppSurfaces";
 import StatusBar from "./StatusBar";
 import UpdateModals from "./UpdateModals";
 import EditorModals from "./EditorModals";
@@ -357,30 +356,14 @@ export default function App() {
         // magnifier" also says where it opens. Undefined outside a tour.
         repoExplorerStartPath={tour.view?.step?.explorerStart}
       />
-      <SettingsSurface
-        // #717: keys MUST be namespaced per sibling — two always-mounted siblings sharing a
-        // bare numeric key (both started at 0) collide in React 19's mapRemainingChildren,
-        // which keys its lookup map by fiber.key alone; the wrong fiber wins the update and
-        // the surface becomes permanently unclosable.
-        key={"settings-" + surfaces.settingsEntry.key}
-        open={surfaces.settingsOpen}
-        onClose={() => surfaces.setSettingsOpen(false)}
+      <AppSurfaces
+        surfaces={surfaces}
         liveSessions={sessions.live}
-        onSaved={refreshSessions}
-        initialPosition={surfaces.settingsEntry.position}
-        onOpenStats={openStats}
+        onSessionsSaved={refreshSessions}
         onOpenChangelog={() => setChangelogOpen(true)}
         onRequestUpdate={() => setUpdateConfirmOpen(true)}
         onStartTour={startTourById}
         onStartFullTour={startFullTour}
-      />
-      <StatsModal
-        // #717: see the SettingsSurface key above — sibling keys must never collide.
-        key={"stats-" + surfaces.statsEntry.key}
-        open={surfaces.statsOpen}
-        onClose={() => surfaces.setStatsOpen(false)}
-        initialTab={surfaces.statsEntry.intent?.tab}
-        initialPricingOpen={surfaces.statsEntry.intent?.pricingOpen}
       />
       <EditorModals
         conflictTab={conflictTab}

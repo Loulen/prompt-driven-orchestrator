@@ -24,17 +24,19 @@ describe("the Tutorials section", () => {
 
   /**
    * #824 shipped *First run*, so the greyed "soon" placeholder #823 listed is
-   * gone: both rows are startable, and *First run* leads (design Q6 — it is
-   * shorter and ends with a Run on screen).
+   * gone: every row is startable. *Overview* leads (#911, design Q2 — the tour
+   * préface, with no harness needed), then *First run*, then *First pipeline*.
    */
-  it("lists both tours startable, First run first", () => {
+  it("lists every tour startable, Overview first", () => {
     setup();
+    expect(screen.getByTestId("tutorials-start-overview")).toBeEnabled();
     expect(screen.getByTestId("tutorials-start-first-run")).toBeEnabled();
     expect(screen.getByTestId("tutorials-row-first-run")).not.toHaveTextContent("soon");
     expect(screen.getByTestId("tutorials-row-first-run")).toHaveTextContent("~4 min");
 
     const rows = screen.getAllByTestId(/^tutorials-row-/);
     expect(rows.map((row) => row.dataset.testid ?? row.getAttribute("data-testid"))).toEqual([
+      "tutorials-row-overview",
       "tutorials-row-first-run",
       "tutorials-row-first-pipeline",
     ]);
@@ -46,6 +48,13 @@ describe("the Tutorials section", () => {
     expect(screen.getByTestId("tutorials-done-first-pipeline")).toBeInTheDocument();
     expect(screen.getByTestId("tutorials-row-first-pipeline")).toHaveAttribute("data-done", "true");
     expect(screen.getByTestId("tutorials-start-first-pipeline")).toHaveTextContent("Replay");
+  });
+
+  it("ticks Overview once it is done, like the other tours", () => {
+    markTourDone("overview");
+    setup();
+    expect(screen.getByTestId("tutorials-done-overview")).toBeInTheDocument();
+    expect(screen.getByTestId("tutorials-start-overview")).toHaveTextContent("Replay");
   });
 
   it("shows no tick on a tour that was only started (story 5)", () => {

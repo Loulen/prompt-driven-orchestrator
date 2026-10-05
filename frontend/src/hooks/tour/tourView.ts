@@ -31,6 +31,13 @@ export interface TourView {
   zone: TourRect | null;
   /** The zone IS the target: the dim lightens and no ring is drawn (#825). */
   wideZone: boolean;
+  /**
+   * The step's read-only areas, lit beside the hole (#911) — the panel its
+   * gesture opened. Empty when it declares none, or none is on screen.
+   */
+  lit: TourRect[];
+  /** The step's side bubbles whose target is on screen, once its condition holds (#911). */
+  asides: TourAsideView[];
   /** The step's condition holds: `Next` is enabled. */
   ready: boolean;
   /** The step waits for `Next` instead of advancing on its own. */
@@ -44,11 +51,24 @@ export interface TourView {
   /** The intro card's state, while `run.phase === "intro"` (#824). */
   prep: TourPrepView | null;
   /**
+   * The tour's teardown failed (#911): said on the card showing — the end card
+   * or the stop card — never swallowed. `null` while nothing went wrong.
+   */
+  tidyUpFailure: { title: string; reason: string } | null;
+  /**
    * The next leg of a **Full tour**, or `null` for a tour started on its own
    * (#824). The end card's primary chains to it instead of closing — that is the
    * whole difference between "the Full tour" and "two tours you start by hand".
    */
   nextTour: TourDef | null;
+}
+
+/** One side bubble, resolved to where its target is (#911). */
+export interface TourAsideView {
+  /** The aside's selector — stable across ticks, so React keeps the bubble. */
+  target: string;
+  text: string;
+  rect: TourRect;
 }
 
 /** What the intro card shows while it prepares what the tour needs (#824). */

@@ -4,6 +4,7 @@ import type { TourAppState, TourDef } from "../../lib/tourDef";
 import { TOUR_CATALOG } from "../../lib/tours";
 import { CardShell } from "./TourCardShell";
 import { withCode } from "./tourCardText";
+import TourTidyUpFailure from "./TourTidyUpFailure";
 
 /**
  * The cards that bracket a tour: the one it opens on (#824), the recap when it
@@ -34,6 +35,7 @@ export function TourEndCard({
   nextTour,
   /** How many legs of the Full tour are done / in total. Absent outside a chain. */
   chainProgress,
+  tidyUpFailure,
   onFinish,
   onFinishHere,
   onStartTour,
@@ -44,6 +46,8 @@ export function TourEndCard({
   /** The next leg of a Full tour: the primary then chains instead of closing. */
   nextTour?: TourDef | null;
   chainProgress?: { done: number; total: number } | null;
+  /** The tour's teardown failed while this card was up (#911). */
+  tidyUpFailure?: { title: string; reason: string } | null;
   onFinish: () => void;
   onFinishHere: () => void;
   onStartTour: (tourId: string) => void;
@@ -112,6 +116,8 @@ export function TourEndCard({
         )
       )}
 
+      <TourTidyUpFailure failure={tidyUpFailure} />
+
       {others.length > 0 && (
         <>
           <div
@@ -176,6 +182,21 @@ export function TourEndCard({
 }
 
 /**
+ * The reassurance under a stopped tour's reason. « Nothing was created » is only
+ * true of a tour with no intro preparations: *First run* and *Overview* set
+ * things up before step 1, and *Overview* puts its example Trigger away on this
+ * very card (#911). The steps themselves still only ever watch.
+ */
+function stopFootnote(tour: TourDef): string {
+  const prepared = (tour.intro?.prepare.length ?? 0) > 0;
+  if (!prepared) return "Nothing was created, changed or deleted — a tour only ever watches.";
+  const tidied = (tour.teardown?.length ?? 0) > 0;
+  return tidied
+    ? "The steps changed nothing — a tour only ever watches. What its intro prepared stays yours, except what it set up only to show you, which is removed now."
+    : "The steps changed nothing — a tour only ever watches. What its intro prepared stays yours.";
+}
+
+/**
  * The card a tour stops on: a target that never appeared, or an app that said no
  * out loud (#823, #824).
  *
@@ -188,6 +209,7 @@ export function TourFailedCard({
   tour,
   failure,
   nextTour,
+  tidyUpFailure,
   onClose,
   onBackToTours,
   onContinue,
@@ -197,6 +219,8 @@ export function TourFailedCard({
   /** The pending leg of a Full tour, or `null` — the last leg stopping offers no
    *  Continue, because there is nothing to continue into. */
   nextTour?: TourDef | null;
+  /** The tour's teardown failed while this card was up (#911). */
+  tidyUpFailure?: { title: string; reason: string } | null;
   onClose: () => void;
   onBackToTours: () => void;
   onContinue: () => void;
@@ -241,7 +265,7 @@ export function TourFailedCard({
             but it did not appear.{failure.hint ? ` ${failure.hint}` : ""}
           </p>
           <p className="mt-1.5 text-fg-4" style={{ fontSize: "10.5px", lineHeight: 1.55 }}>
-            Nothing was created, changed or deleted — a tour only ever watches.
+            {stopFootnote(tour)}
           </p>
         </>
       )}
@@ -257,6 +281,7 @@ export function TourFailedCard({
           {nextTour.chainNote}
         </p>
       )}
+      <TourTidyUpFailure failure={tidyUpFailure} />
       <div className="mt-4 flex justify-end gap-2">
         <button
           type="button"

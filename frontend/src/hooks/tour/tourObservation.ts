@@ -8,19 +8,19 @@ import { useEditStore } from "../../pipeline/store/editStore";
 import type { TourAppState, TourObservation, TourRunNode } from "../../lib/tourDef";
 import { visible } from "./tourGeometry";
 
-/**
- * The slice of app state the step predicates read. Built fresh on every tick from
- * what the UI has already loaded — the tour issues no request of its own.
- */
+/** One entry of the Run list, narrowed to what a tour reads. */
+export interface TourRunEntry {
+  run_id: string;
+  name?: string | null;
+  pipeline_name?: string;
+  status?: string;
+}
+
 /**
  * The Runs the tour is allowed to see — the same list the left panel renders.
- * Only a count and the newest entry are read; the shape is narrowed here so the
- * hook never depends on the full `RunListEntry`.
+ * The shape is narrowed here so the hook never depends on the full `RunListEntry`.
  */
-export interface TourRunsInput {
-  length: number;
-  0?: { run_id: string; name?: string | null; pipeline_name?: string };
-}
+export type TourRunsInput = ArrayLike<TourRunEntry>;
 
 /**
  * The selected Run's detail, narrowed to what the reading steps read (#825) —
@@ -89,6 +89,12 @@ export function readTourAppState(
     dirty: tab?.dirty ?? false,
     libraryPipelineIds: s.pipelines.map((p) => p.id),
     runCount: runs.length,
+    runs: Array.from(runs, (r) => ({
+      id: r.run_id,
+      name: r.name?.trim() || r.run_id,
+      pipeline: r.pipeline_name ?? "",
+      status: r.status ?? "",
+    })),
     latestRun: newest
       ? {
           id: newest.run_id,

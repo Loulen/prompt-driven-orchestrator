@@ -5,9 +5,13 @@
  * waits for all of them. Idempotent by contract, so a Retry — or a replayed tour —
  * costs nothing when the work is already done. `prepAttempt` is `useTour`'s retry
  * counter: bumping it re-runs the effect.
+ *
+ * Two handles go back to `useTour` (#911): the flight, so a teardown played
+ * while the preparations still run waits for them, and the abort, so leaving the
+ * card stops the one preparation that polls (a Run until `completed`).
  */
 
-import { useEffect, type Dispatch, type SetStateAction } from "react";
+import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import type { TourIntro } from "../lib/tourDef";
 import type { TourPrepView } from "./tour/tourView";
 
@@ -15,10 +19,14 @@ export function useTourPreparation(
   intro: TourIntro | null,
   prepAttempt: number,
   setPrep: Dispatch<SetStateAction<TourPrepView | null>>,
+  prepFlightRef: MutableRefObject<Promise<unknown> | null>,
+  prepAbortRef: MutableRefObject<AbortController | null>,
 ): void {
   useEffect(() => {
     if (!intro) return;
     let cancelled = false;
+    const abort = new AbortController();
+    prepAbortRef.current = abort;
     const done = new Set<string>();
     const render = (failure: TourPrepView["failure"]) => {
       if (cancelled) return;
@@ -33,10 +41,10 @@ export function useTourPreparation(
       });
     };
     render(null);
-    void Promise.all(
+    const flight = Promise.allSettled(
       intro.prepare.map((item) =>
         item
-          .run()
+          .run(abort.signal)
           .then(() => {
             done.add(item.id);
             render(null);
@@ -60,8 +68,10 @@ export function useTourPreparation(
           }),
       ),
     );
+    prepFlightRef.current = flight;
     return () => {
       cancelled = true;
+      abort.abort();
     };
-  }, [intro, prepAttempt, setPrep]);
+  }, [intro, prepAttempt, setPrep, prepFlightRef, prepAbortRef]);
 }

@@ -28,7 +28,7 @@ Two levels:
 |---|---|---|---|
 | [HP-01](HP-01-author-and-save.md) | Author & save a pipeline | pipeline authoring, library, unified canvas | active |
 | [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, **sandbox A/B (`full` vs `off`)**, **harness three-way pin (`claude` / `opencode` / `copilot`)** | active |
-| [HP-03](HP-03-guided-onboarding.md) | A newcomer takes the full tour | tutorial mode, Projecteur, training repository, interactive node + completion guard, artifact | proposed (#825) |
+| [HP-03](HP-03-guided-onboarding.md) | A newcomer takes the full tour | tutorial mode, Projecteur, training repository, *Overview* on a script Run + example Trigger tidy-up, interactive node + completion guard, artifact | proposed (#825, #46) |
 
 **The 3rd slot went to onboarding (#825, spec #821), not to Triggers.** The full tour is the only
 journey that is *somebody's first five minutes*: it crosses the welcome modal, the New Run form, a

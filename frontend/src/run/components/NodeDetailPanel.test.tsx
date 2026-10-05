@@ -35,8 +35,10 @@ const previewProvisioningMock = vi.fn().mockResolvedValue({
 // branches can be driven. Vitest compares arity strictly, hence the spread.
 const markNodeDoneMock = vi.fn().mockResolvedValue({ kind: "completed" });
 const releaseNodeCompletionMock = vi.fn().mockResolvedValue({ kind: "released" });
+const fetchArtifactMock = vi.fn();
 
 vi.mock("../../settings/api/settings", () => ({
+  fetchArtifact: (...args: unknown[]) => fetchArtifactMock(...args),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 // The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
@@ -68,13 +70,24 @@ vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
   previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
 }));
 
-function MockTmuxTerminal({ session, expanded, onExpand, status, paneSource, onSpectatingChange }: {
+function MockTmuxTerminal({
+  session,
+  expanded,
+  onExpand,
+  status,
+  paneSource,
+  onSpectatingChange,
+  toolbarIdentity,
+  toolbarActions,
+}: {
   session: string;
   expanded?: boolean;
   onExpand?: () => void;
   status?: string;
   paneSource?: { runId: string; nodeId: string; iter: number };
   onSpectatingChange?: (spectating: boolean) => void;
+  toolbarIdentity?: React.ReactNode;
+  toolbarActions?: React.ReactNode;
 }) {
   useEffect(() => {
     tmuxMountCount.current += 1;
@@ -90,7 +103,14 @@ function MockTmuxTerminal({ session, expanded, onExpand, status, paneSource, onS
       data-status={status}
       data-pane-source={paneSource ? JSON.stringify(paneSource) : undefined}
     >
+      {/* #44: the toolbar slots the enlarged view fills. */}
+      <div data-testid="mock-toolbar">
+        {toolbarIdentity}
+        {toolbarActions}
+      </div>
       <button data-testid="term-expand" onClick={onExpand}>expand</button>
+      {/* Stands in for xterm's input textarea (focus target, Escape owner). */}
+      <textarea className="xterm-helper-textarea" data-testid="mock-xterm-input" />
       {/* #870: stand-ins for the daemon's role frames. */}
       <button data-testid="mock-become-spectator" onClick={() => onSpectatingChange?.(true)}>spectate</button>
       <button data-testid="mock-become-pilot" onClick={() => onSpectatingChange?.(false)}>pilot</button>
@@ -117,10 +137,13 @@ vi.mock("../../shared/ui/resizable", () => ({
 }));
 
 vi.mock("./MarkdownArtifactModal", () => ({
-  default: () => null,
+  default: ({ portName }: { portName: string }) => (
+    <div data-testid="artifact-modal" data-port={portName} />
+  ),
 }));
 
 import NodeDetailPanel from "./NodeDetailPanel";
+import { useTerminalOverlayStore } from "../../session/store/terminalOverlayStore";
 import { TooltipProvider } from "../../shared/ui/tooltip";
 import type { NodeState } from "../../shared/generated/NodeState";
 
@@ -319,7 +342,9 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("prompt-toggle")).toBeInTheDocument();
     });
 
-    it("hides the details pane when the terminal is expanded (fullsize)", () => {
+    // #44: « Expand terminal » no longer swaps the panel for a full-height
+    // terminal: it lifts the same terminal into an overlay over the whole app.
+    it("opens the terminal in an overlay over the app, the panel staying underneath", () => {
       render(
         <TooltipProvider>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
@@ -328,18 +353,34 @@ describe("NodeDetailPanel", () => {
 
       const terminal = screen.getByTestId("tmux-terminal");
       expect(terminal.getAttribute("data-expanded")).toBe("false");
+      expect(screen.queryByTestId("terminal-overlay-backdrop")).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByTestId("term-expand"));
 
-      const reTerminal = screen.getByTestId("tmux-terminal");
-      expect(reTerminal.getAttribute("data-expanded")).toBe("true");
-      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
-      expect(screen.queryByTestId("details-pane")).not.toBeInTheDocument();
-      expect(screen.queryByText("Mark complete")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("prompt-toggle")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal").getAttribute("data-expanded")).toBe("true");
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame).toContainElement(screen.getByTestId("tmux-terminal"));
+      // 16px from the window on all four sides, above a dimmed backdrop.
+      expect(frame.className).toMatch(/\bfixed\b/);
+      expect(frame.className).toMatch(/\binset-4\b/);
+      expect(frame).toHaveAttribute("role", "dialog");
+      expect(screen.getByTestId("terminal-overlay-backdrop").className).toMatch(/\bfixed inset-0\b/);
+      // The old « whole right panel » mode is gone: the panel is still there.
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
     });
 
-    it("re-renders the details pane after collapsing the terminal", () => {
+    it("gives the keyboard to the terminal when it opens", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(document.activeElement).toBe(screen.getByTestId("mock-xterm-input"));
+    });
+
+    it("collapses back to split with the Minimize button", () => {
       render(
         <TooltipProvider>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
@@ -347,11 +388,103 @@ describe("NodeDetailPanel", () => {
       );
 
       fireEvent.click(screen.getByTestId("term-expand"));
-      expect(screen.queryByTestId("details-pane")).not.toBeInTheDocument();
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
 
       fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-overlay-backdrop")).not.toBeInTheDocument();
+      expect(screen.getByTestId("terminal-pane-wrapper").className).not.toMatch(/\bfixed\b/);
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
-      expect(screen.getByText("Mark complete")).toBeInTheDocument();
+    });
+
+    it("collapses on Escape when the focus is outside the terminal", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      act(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+      });
+
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+    });
+
+    it("leaves Escape to the agent when the terminal has the focus", () => {
+      const seenByApp = vi.fn();
+      window.addEventListener("keydown", seenByApp);
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      const input = screen.getByTestId("mock-xterm-input");
+      expect(document.activeElement).toBe(input);
+
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      expect(seenByApp).toHaveBeenCalledTimes(1);
+      window.removeEventListener("keydown", seenByApp);
+    });
+
+    it("keeps the app's shortcuts away while enlarged and the focus is outside the terminal", () => {
+      const seenByApp = vi.fn();
+      window.addEventListener("keydown", seenByApp);
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      act(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+      });
+
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(seenByApp).not.toHaveBeenCalled();
+
+      // Back in split, the app hears its keys again.
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      expect(seenByApp).toHaveBeenCalledTimes(1);
+      window.removeEventListener("keydown", seenByApp);
+    });
+
+    it("collapses on a click whose press and release both land on the backdrop", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      const backdrop = screen.getByTestId("terminal-overlay-backdrop");
+
+      fireEvent.pointerDown(backdrop);
+      fireEvent.pointerUp(backdrop);
+
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+    });
+
+    it("stays open when a selection pressed in the terminal is released on the backdrop", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+
+      // An earlier press on the backdrop that was released elsewhere must not
+      // linger and turn the next terminal drag into a close.
+      fireEvent.pointerDown(screen.getByTestId("terminal-overlay-backdrop"));
+      fireEvent.pointerDown(screen.getByTestId("tmux-terminal"));
+      fireEvent.pointerUp(screen.getByTestId("terminal-overlay-backdrop"));
+
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
     });
 
     it("starts in fullsize when initialTerminalExpanded is true", () => {
@@ -368,7 +501,6 @@ describe("NodeDetailPanel", () => {
       const terminal = screen.getByTestId("tmux-terminal");
       expect(terminal.getAttribute("data-expanded")).toBe("true");
       expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
-      expect(screen.queryByTestId("details-pane")).not.toBeInTheDocument();
     });
 
     it("lets the user collapse the terminal even when it started expanded", () => {
@@ -389,6 +521,46 @@ describe("NodeDetailPanel", () => {
       expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
     });
+
+    it("comes back to split on remount — the enlarged view is never persisted", () => {
+      const { unmount } = render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      unmount();
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal").getAttribute("data-expanded")).toBe("false");
+    });
+
+    it("stays open when the session ends under the user's eyes", () => {
+      const { rerender } = render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+
+      rerender(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame).toContainElement(screen.getByTestId("tmux-terminal"));
+      expect(frame.className).toMatch(/\bborder-st-done\b/);
+      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Completed");
+    });
+
 
     // Regression: toggling fullscreen used to swap a `<div>` wrapper for a
     // `<ResizablePanelGroup>` wrapper at the same JSX position, which made
@@ -2381,6 +2553,426 @@ describe("NodeDetailPanel", () => {
           "Mark ready for completion",
         );
       });
+    });
+  });
+
+  // #44 (core #968): the « Terminal agrandi »: identity bar, status frame,
+  // compact completion gestures, verdict popover.
+  describe("Enlarged terminal bar (#44)", () => {
+    const awaitingNode = (over?: Partial<NodeState>) =>
+      makeNode({
+        status: "awaiting_user",
+        awaiting: {
+          cause: "completion_not_released",
+          message: "Completion not released.",
+          since: "2026-09-12T10:00:00Z",
+        },
+        iterations: [
+          {
+            iter: 1,
+            status: "awaiting_user",
+            started_at: null,
+            completed_at: null,
+            interactive: true,
+            completion_released: false,
+          },
+        ],
+        ...over,
+      });
+
+    function renderEnlarged(node: NodeState, props?: { isArchived?: boolean }) {
+      const utils = render(
+        <TooltipProvider>
+          <NodeDetailPanel node={node} runId="run-1" nodeName="design" {...props} />
+        </TooltipProvider>,
+      );
+      // A settled node opens folded: unfold it first, as the user would.
+      const restore = screen.queryByTestId("term-restore");
+      if (restore) fireEvent.click(restore);
+      fireEvent.click(screen.getByTestId("term-expand"));
+      return utils;
+    }
+
+    const toolbar = () => within(screen.getByTestId("mock-toolbar"));
+
+    it("shows nothing extra in the split toolbar", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("term-identity")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("term-mark-complete")).not.toBeInTheDocument();
+    });
+
+    it("names the node, its iteration and its status, with the frame in the status colour", () => {
+      renderEnlarged(makeNode({ status: "running", iter: 3 }));
+      const identity = within(screen.getByTestId("mock-toolbar")).getByTestId("term-identity");
+      expect(within(identity).getByTestId("term-identity-name")).toHaveTextContent("design");
+      expect(identity).toHaveTextContent("iter 3");
+      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Running");
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame.className).toMatch(/\bborder-st-running\b/);
+      expect(frame.style.boxShadow).not.toContain("color-mix");
+    });
+
+    it("falls back to the node id when the node has no name", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.getByTestId("term-identity-name")).toHaveTextContent("test-node");
+    });
+
+    it("recolours the frame and the badge live when the status changes", () => {
+      const { rerender } = renderEnlarged(makeNode({ status: "running" }));
+      expect(screen.getByTestId("terminal-fullsize").className).toMatch(/\bborder-st-running\b/);
+
+      rerender(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
+        </TooltipProvider>,
+      );
+
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame.className).toMatch(/\bborder-st-await\b/);
+      expect(frame.className).not.toMatch(/\bborder-st-running\b/);
+      // The awaiting halo joins the shadow.
+      expect(frame.style.boxShadow).toContain("color-mix");
+      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Awaiting User");
+      expect(screen.getByTestId("term-identity-status")).toHaveAttribute("data-status", "awaiting_user");
+    });
+
+    it("carries the compact completion gestures in awaiting_user only", () => {
+      const { rerender } = renderEnlarged(awaitingNode());
+      expect(toolbar().getByRole("button", { name: "Mark ready for completion" })).toBeInTheDocument();
+      expect(
+        toolbar().getByRole("button", { name: "Mark complete · take the artifacts as they are" }),
+      ).toBeInTheDocument();
+
+      rerender(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" nodeName="design" />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("term-release-completion")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("term-mark-complete")).not.toBeInTheDocument();
+      // Still enlarged: the gestures leave, the view stays.
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+    });
+
+    it.each(["running", "failed", "completed"] as const)(
+      "has no completion gesture for a %s node",
+      (status) => {
+        renderEnlarged(makeNode({ status }), {});
+        expect(screen.queryByTestId("term-release-completion")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("term-mark-complete")).not.toBeInTheDocument();
+      },
+    );
+
+    it("has no completion gesture on an archived run", () => {
+      renderEnlarged(awaitingNode(), { isArchived: true });
+      expect(screen.queryByTestId("term-mark-complete")).not.toBeInTheDocument();
+    });
+
+    it("hides the release gesture when the iteration cannot be released (not interactive)", () => {
+      renderEnlarged(
+        awaitingNode({
+          iterations: [
+            {
+              iter: 1,
+              status: "awaiting_user",
+              started_at: null,
+              completed_at: null,
+              interactive: false,
+              completion_released: false,
+            },
+          ],
+        }),
+      );
+      expect(screen.queryByTestId("term-release-completion")).not.toBeInTheDocument();
+      expect(screen.getByTestId("term-mark-complete")).toBeInTheDocument();
+    });
+
+    it("releases the completion through the panel's path, and says so in a popover", async () => {
+      let resolveRelease: (v: { kind: "released" }) => void = () => {};
+      releaseNodeCompletionMock.mockReturnValue(
+        new Promise((resolve) => {
+          resolveRelease = resolve;
+        }),
+      );
+      const { rerender } = renderEnlarged(awaitingNode());
+      fireEvent.click(screen.getByTestId("term-release-completion"));
+      expect(releaseNodeCompletionMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+      // In flight: the icon spins, the popover says so.
+      expect(screen.getByTestId("term-release-completion")).toBeDisabled();
+      const popover = screen.getByTestId("term-gesture-popover");
+      expect(screen.getByTestId("terminal-fullsize")).toContainElement(popover);
+      expect(within(popover).getByTestId("release-verdict")).toHaveAttribute("data-verdict", "pending");
+      await act(async () => {
+        resolveRelease({ kind: "released" });
+      });
+
+      // The daemon's push: the iteration is released and runs again.
+      rerender(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "running",
+              iterations: [
+                {
+                  iter: 1,
+                  status: "running",
+                  started_at: null,
+                  completed_at: null,
+                  interactive: true,
+                  completion_released: true,
+                },
+              ],
+            })}
+            runId="run-1"
+            nodeName="design"
+          />
+        </TooltipProvider>,
+      );
+      // The release does not close the enlarged view; the frame follows.
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame.className).toMatch(/\bborder-st-running\b/);
+      expect(
+        within(screen.getByTestId("term-gesture-popover")).getByTestId("release-verdict"),
+      ).toHaveAttribute("data-verdict", "released");
+    });
+
+    it("turns the release icon into « Completion released » once released", () => {
+      renderEnlarged(
+        awaitingNode({
+          iterations: [
+            {
+              iter: 1,
+              status: "awaiting_user",
+              started_at: null,
+              completed_at: null,
+              interactive: true,
+              completion_released: true,
+            },
+          ],
+        }),
+      );
+      expect(toolbar().getByRole("button", { name: "Completion released" })).toBeInTheDocument();
+    });
+
+    it("marks complete through the panel's path and shows a refusal in the popover", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "frontmatter_mismatch",
+        recoverable: true,
+        message: "the output guard rejected the artifacts",
+        missing: [],
+        violations: [{ port: "out", field: "mockup_link", reason: "missing required field" }],
+        body: {},
+      });
+      renderEnlarged(awaitingNode());
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("term-mark-complete"));
+      });
+      expect(markNodeDoneMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+      const popover = screen.getByTestId("term-gesture-popover");
+      const verdict = within(popover).getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "refused");
+      expect(verdict).toHaveTextContent("out.mockup_link: missing required field");
+    });
+
+    it("closes the popover on a press elsewhere, and when the view collapses", async () => {
+      renderEnlarged(awaitingNode());
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("term-mark-complete"));
+      });
+      const popover = screen.getByTestId("term-gesture-popover");
+      // A press inside keeps it.
+      fireEvent.pointerDown(popover);
+      expect(screen.getByTestId("term-gesture-popover")).toBeInTheDocument();
+
+      fireEvent.pointerDown(screen.getByTestId("tmux-terminal"));
+      expect(screen.queryByTestId("term-gesture-popover")).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("term-mark-complete"));
+      });
+      expect(screen.getByTestId("term-gesture-popover")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.queryByTestId("term-gesture-popover")).not.toBeInTheDocument();
+    });
+
+    it("never remounts the terminal across every way in and out", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
+        </TooltipProvider>,
+      );
+      const first = screen.getByTestId("tmux-terminal");
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      act(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+      });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      const backdrop = screen.getByTestId("terminal-overlay-backdrop");
+      fireEvent.pointerDown(backdrop);
+      fireEvent.pointerUp(backdrop);
+
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal")).toBe(first);
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+    });
+
+    it("turns the app's panel resizing off while enlarged", () => {
+      const { unmount } = render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(useTerminalOverlayStore.getState().openCount).toBe(0);
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(useTerminalOverlayStore.getState().openCount).toBe(1);
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(useTerminalOverlayStore.getState().openCount).toBe(0);
+
+      // Unmounting while enlarged (another node selected) releases it too.
+      fireEvent.click(screen.getByTestId("term-expand"));
+      unmount();
+      expect(useTerminalOverlayStore.getState().openCount).toBe(0);
+    });
+
+    it("works the same for a spectator", () => {
+      renderEnlarged(makeNode({ status: "running" }));
+      fireEvent.click(screen.getByTestId("mock-become-spectator"));
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      expect(screen.getByTestId("term-identity")).toBeInTheDocument();
+    });
+  });
+
+  describe("copy raw file from a port row (#41)", () => {
+    function setClipboard(writeText: (text: string) => Promise<void>) {
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+        writable: true,
+      });
+    }
+
+    function port(
+      name: string,
+      files: { path: string; exists: boolean }[],
+      port_type?: "markdown" | "html" | "image" | "image_list",
+    ) {
+      return {
+        port: name,
+        repeated: false,
+        port_type,
+        files: files.map((f) => ({ ...f, size: 10, frontmatter: null })),
+      };
+    }
+
+    function ioFor(iter: number) {
+      return {
+        inputs: [port("task", [{ path: `n/iter-${iter}/task/output.md`, exists: true }])],
+        outputs: [
+          port("summary", [{ path: `n/iter-${iter}/summary/output.md`, exists: true }]),
+          port("report", [{ path: `n/iter-${iter}/report/output.html`, exists: true }], "html"),
+          port("shot", [{ path: `n/iter-${iter}/shot/output.png`, exists: true }], "image"),
+          port("missing", [{ path: `n/iter-${iter}/missing/output.md`, exists: false }]),
+        ],
+      };
+    }
+
+    function renderPanel(overrides?: Partial<NodeState>) {
+      return render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed", ...overrides })} runId="run-1" />
+        </TooltipProvider>,
+      );
+    }
+
+    function row(name: string) {
+      return document.querySelector(
+        `[data-testid="port-row"][data-kind="output"][data-port="${name}"]`,
+      ) as HTMLElement;
+    }
+
+    beforeEach(() => {
+      fetchArtifactMock.mockReset();
+      fetchArtifactMock.mockImplementation(async (_run: string, path: string) => `---\nk: v\n---\nraw ${path}`);
+      fetchNodeIOMock.mockImplementation(async (_run: string, _node: string, iter: number) => ioFor(iter));
+    });
+
+    it("offers a « Copy raw file » button on markdown and html output rows only", async () => {
+      renderPanel();
+      await act(async () => {});
+      expect(within(row("summary")).getByRole("button", { name: "Copy raw file" })).toBeInTheDocument();
+      expect(within(row("report")).getByTestId("port-copy")).toBeInTheDocument();
+      expect(within(row("shot")).queryByTestId("port-copy")).not.toBeInTheDocument();
+      expect(within(row("missing")).queryByTestId("port-copy")).not.toBeInTheDocument();
+      const input = document.querySelector('[data-testid="port-row"][data-kind="input"]') as HTMLElement;
+      expect(within(input).queryByTestId("port-copy")).not.toBeInTheDocument();
+    });
+
+    it("copies the raw main file of the shown iter without opening the modal", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      renderPanel();
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(fetchArtifactMock).toHaveBeenCalledWith("run-1", "n/iter-1/summary/output.md");
+      expect(writeText).toHaveBeenCalledWith("---\nk: v\n---\nraw n/iter-1/summary/output.md");
+      expect(within(row("summary")).getByText("Copied!")).toBeInTheDocument();
+      expect(screen.queryByTestId("artifact-modal")).not.toBeInTheDocument();
+    });
+
+    it("the row's open target still opens the modal", async () => {
+      renderPanel();
+      await act(async () => {});
+      fireEvent.click(within(row("summary")).getByTestId("port-row-open"));
+      expect(screen.getByTestId("artifact-modal")).toHaveAttribute("data-port", "summary");
+    });
+
+    it("copies the iter picked in the panel's selector", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      renderPanel({
+        iter: 2,
+        iterations: [
+          { iter: 1, status: "completed", started_at: null, completed_at: null },
+          { iter: 2, status: "completed", started_at: null, completed_at: null },
+        ],
+      });
+      await act(async () => {});
+      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(await screen.findByTestId("iter-option-1"));
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(writeText).toHaveBeenCalledWith("---\nk: v\n---\nraw n/iter-1/summary/output.md");
+    });
+
+    it("shows Copy failed (never Copied!) when the clipboard refuses", async () => {
+      setClipboard(vi.fn().mockRejectedValue(new DOMException("NotAllowedError")));
+      renderPanel();
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(within(row("summary")).getByText("Copy failed")).toBeInTheDocument();
+      expect(screen.queryByText("Copied!")).not.toBeInTheDocument();
     });
   });
 });

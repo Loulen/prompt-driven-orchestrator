@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { PortItemContext } from "../../../shared/extensions/contract";
-import { artifactUrl } from "../../api/artifacts";
+import { artifactUrl, fetchArtifact } from "../../api/artifacts";
 import type { PortIO } from "../../api/nodes";
 import ImageLightbox from "../../../shared/ui/ImageLightbox";
 import { fileBadge, formatSize, isImageFile } from "../../model/nodeDetailFormat";
+import CopyButton from "../artifacts/CopyButton";
+import { useCopyToClipboard } from "../../store/useCopyToClipboard";
 
 export default function PortRow({
   port,
@@ -48,6 +50,11 @@ export default function PortRow({
   // #333: an html port shows a type badge for parity with image ports (its
   // artifact is otherwise a single markdown-like file row).
   const isHtml = portType === "html";
+  // #41: an output row copies its main file (`output.*`, the first existing
+  // one) of the iter the panel shows — `port.files` IS that iter's listing.
+  // Images are out of scope, and a port with nothing on disk has nothing to copy.
+  const copyTarget = kind === "output" && !isImage ? existing[0] : undefined;
+  const { status: copyStatus, error: copyError, copy } = useCopyToClipboard();
 
   let dotClass = "bg-fg-5";
   if (inheritedOnly) {
@@ -117,7 +124,7 @@ export default function PortRow({
           )}
           {inheritedOnly && (
             <span
-              className="rounded border border-st-stopped/50 bg-bg-4 px-1 py-px font-mono text-st-stopped"
+              className="relative rounded border border-st-stopped/50 bg-bg-4 px-1 py-px font-mono text-st-stopped"
               style={{ fontSize: "9px" }}
               title="Present before this execution started — a previous execution's output, not this one's result"
               data-testid="inherited-badge"
@@ -127,7 +134,7 @@ export default function PortRow({
           )}
           {inheritedSome && (
             <span
-              className="rounded border border-st-stopped/50 bg-bg-4 px-1 py-px font-mono text-st-stopped"
+              className="relative rounded border border-st-stopped/50 bg-bg-4 px-1 py-px font-mono text-st-stopped"
               style={{ fontSize: "9px" }}
               title={`${inheritedCount} of ${existing.length} files were present before this execution started — a previous execution's output, not this one's result`}
               data-testid="inherited-badge"
@@ -135,7 +142,13 @@ export default function PortRow({
               {inheritedCount} inherited
             </span>
           )}
-          <ExtensionDecorations<PortItemContext> location="port/item" extra={decorated} />
+          {/* #41: lifted above the row's open target, so their own hover/click
+              still reach them (the inherited badges' explanation, an extension mark). */}
+          <ExtensionDecorations<PortItemContext>
+            location="port/item"
+            extra={decorated}
+            className="relative"
+          />
         </div>
         <div
           className="mt-0.5 truncate font-mono text-fg-3"
@@ -145,12 +158,31 @@ export default function PortRow({
         </div>
       </div>
 
-      {/* Meta + arrow icon */}
+      {/* Meta + copy + arrow icon */}
       <div className="flex items-center gap-2">
         {anyExists && totalSize > 0 && (
           <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
             {formatSize(totalSize)}
           </span>
+        )}
+        {copyTarget && (
+          <CopyButton
+            status={copyStatus}
+            error={copyError}
+            testId="port-copy"
+            // Hidden at rest, shown on row hover / keyboard focus, and kept up
+            // for as long as the feedback lasts. `relative` lifts it above the
+            // row's open target, so its click never opens the modal.
+            className={`relative -my-1 ${
+              copyStatus === "idle"
+                ? "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                : ""
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void copy(() => fetchArtifact(runId, copyTarget.path));
+            }}
+          />
         )}
         {anyExists && (
           <span
@@ -176,12 +208,12 @@ export default function PortRow({
               alt={f.path.split("/").pop() ?? ""}
               title={f.inherited ? "inherited — present before this execution started" : undefined}
               data-inherited={f.inherited ? "true" : undefined}
-              className={`h-12 w-12 cursor-zoom-in rounded border border-line object-cover transition-opacity hover:opacity-80${
+              className={`relative h-12 w-12 cursor-zoom-in rounded border border-line object-cover transition-opacity hover:opacity-80${
                 f.inherited ? " opacity-40 grayscale" : ""
               }`}
               onClick={(e) => {
                 // Open this thumbnail fullscreen instead of bubbling up to the
-                // row button (which opens the artifact modal). Snapshot the
+                // row (whose open target opens the artifact modal). Snapshot the
                 // FULL imageFiles list (not the .slice(0,4) shown as
                 // thumbnails) so arrows reach images behind the +N chip; `i`
                 // is a valid index into the full array since the slice starts
@@ -223,7 +255,7 @@ export default function PortRow({
                   target="_blank"
                   rel="noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="flex h-9 max-w-[220px] items-center gap-1.5 rounded border border-line bg-bg-0 px-1.5 transition-colors hover:border-fg-4"
+                  className="relative flex h-9 max-w-[220px] items-center gap-1.5 rounded border border-line bg-bg-0 px-1.5 transition-colors hover:border-fg-4"
                   title={name}
                   data-testid="input-file-chip"
                 >
@@ -279,19 +311,28 @@ export default function PortRow({
   );
 
   if (anyExists) {
+    // #41: the row holds two SIBLING targets — a button can't nest another.
+    // The open button is stretched over the whole row (under its content), so a
+    // click anywhere opens the artifact as before; the copy button, thumbnails
+    // and file chips are positioned above it and keep their own clicks.
     return (
       <>
-        <button
-          type="button"
-          onClick={onOpen}
+        <div
           data-testid="port-row"
           data-port={port.port}
           data-kind={kind}
-          className="port-row grid w-full cursor-pointer items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
+          className="port-row group relative grid w-full items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
           style={gridStyle}
         >
+          <button
+            type="button"
+            onClick={onOpen}
+            data-testid="port-row-open"
+            aria-label={`Open ${port.port}`}
+            className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-acc"
+          />
           {children}
-        </button>
+        </div>
         {lightboxEl}
       </>
     );

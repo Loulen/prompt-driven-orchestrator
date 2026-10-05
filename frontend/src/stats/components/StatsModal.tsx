@@ -7,7 +7,7 @@ import { useStats } from "../store/useStats";
 import type { SyncCostPricesReport } from "../model/prices";
 import { presetPeriod, PRESETS, type Preset } from "../model/period";
 import type { StatsTab } from "./StatsCharts";
-import { PricingDetails } from "./PricingDetails";
+import { PricingDetailsContent } from "./PricingDetails";
 import {
   DEFAULT_PERFORMANCE_BAND,
   TAB_COHORT_DEFAULTS,
@@ -187,7 +187,7 @@ function StatsSurface({
 
   // Escape order (Stats behaviour, kept by the shell contract): an open absorption
   // modal, then the row selection (both consumed by the tab, #890), then the
-  // drawer, then Stats.
+  // pricing panel, then Stats.
   const onEscape = () => {
     if (pricingOpen) setPricingOpen(false);
     else onClose();
@@ -265,11 +265,16 @@ function StatsSurface({
             Refresh
           </button>
           {tab === "cost" && (
+            // A toggle (#944): reclicking it, the panel open, closes it. Open, it takes the
+            // active look of the period presets so the toggle reads as one.
             <button
               type="button"
-              onClick={() => setPricingOpen(true)}
+              onClick={() => setPricingOpen((value) => !value)}
+              aria-expanded={pricingOpen}
               data-testid="stats-pricing-trigger"
-              className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+              className={`rounded border px-2 py-1 ${
+                pricingOpen ? "border-acc bg-acc/15 text-fg" : "border-line bg-bg-3 text-fg-2"
+              }`}
             >
               Pricing details
               {cost && cost.total.unpriced_models.length + cost.total.missing_reasons.length > 0
@@ -280,15 +285,30 @@ function StatsSurface({
         </>
       }
       drawer={
-        pricingOpen ? (
-          <PricingDetails
-            cost={cost}
-            syncing={syncing}
-            syncError={syncError}
-            syncReport={syncReport}
-            onSync={onSyncPrices}
-          />
-        ) : null
+        pricingOpen
+          ? {
+              title: "Pricing details",
+              escHint: "Esc returns to Stats",
+              widthClassName: "w-[min(420px,90vw)]",
+              testId: "stats-pricing-details",
+              bodyClassName: "min-h-0 flex-1 overflow-y-auto p-4",
+              onClose: () => setPricingOpen(false),
+              actions: (
+                <button
+                  type="button"
+                  onClick={onSyncPrices}
+                  disabled={syncing}
+                  data-testid="stats-sync-prices"
+                  className="rounded-md border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 disabled:opacity-40"
+                >
+                  {syncing ? "Syncing…" : "Sync costs"}
+                </button>
+              ),
+              content: (
+                <PricingDetailsContent cost={cost} syncError={syncError} syncReport={syncReport} />
+              ),
+            }
+          : null
       }
     >
       {error && (

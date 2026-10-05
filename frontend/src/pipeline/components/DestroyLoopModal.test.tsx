@@ -37,3 +37,25 @@ describe("DestroyLoopModal (#150)", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 });
+
+describe("DestroyLoopModal — bounded to the window (#940)", () => {
+  it("scrolls a long loop list in its body; the actions stay outside it", () => {
+    const ids = Array.from({ length: 60 }, (_, i) => `loop_${i}`);
+    render(<DestroyLoopModal open loopIds={ids} onClose={() => {}} onConfirm={() => {}} />);
+    const body = screen.getByTestId("destroy-loop-body");
+    expect(body).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(body.parentElement).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    expect(body).toHaveTextContent("loop_59");
+    expect(body).not.toContainElement(screen.getByTestId("destroy-loop-confirm"));
+    expect(screen.getByRole("heading", { name: /destroy these loops/i })).toHaveClass("shrink-0");
+  });
+
+  it("keeps closing on a backdrop click", () => {
+    const onClose = vi.fn();
+    render(<DestroyLoopModal open loopIds={["a"]} onClose={onClose} onConfirm={() => {}} />);
+    fireEvent.click(screen.getByTestId("destroy-loop-body"));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("destroy-loop-backdrop"));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+});

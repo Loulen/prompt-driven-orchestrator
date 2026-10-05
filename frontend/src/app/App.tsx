@@ -6,6 +6,7 @@ import { useSelectedRun } from "../run/store/useSelectedRun";
 import { useDaemonSessions } from "../session/store/useDaemonSessions";
 import { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import { useLibassistLifecycle } from "../session/store/useLibassistLifecycle";
+import { useTerminalOverlayOpen } from "../session/store/terminalOverlayStore";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import NewRunModal from "../run/components/NewRunModal";
 import SettingsSurface from "../settings/components/SettingsSurface";
@@ -215,6 +216,8 @@ export default function App() {
   });
 
   const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES);
+  // #44: an enlarged node terminal covers the app, its panels stop resizing.
+  const terminalOverlayOpen = useTerminalOverlayOpen();
   const minSizePx = `${layout.minSizePx}px`;
 
   return (
@@ -231,6 +234,8 @@ export default function App() {
           orientation="horizontal"
           defaultLayout={layout.defaultLayout}
           onLayoutChanged={layout.onLayoutChanged}
+          // #44: no resizing under an enlarged node terminal.
+          disabled={terminalOverlayOpen}
         >
           <ResizablePanel defaultSize={layout.defaultLayout.left} minSize={minSizePx} id="left">
             <UnifiedLeftPanel

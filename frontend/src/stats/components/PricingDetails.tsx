@@ -55,60 +55,40 @@ function SyncResult({ report }: { report: SyncCostPricesReport | null }) {
   );
 }
 
-export function PricingDetails({
+/** The body of Stats' secondary panel: « Sync costs » lives in the panel header (#944). */
+export function PricingDetailsContent({
   cost,
-  syncing,
   syncError,
   syncReport,
-  onSync,
 }: {
   cost: StatsCost | null;
-  syncing: boolean;
   syncError: string | null;
   syncReport: SyncCostPricesReport | null;
-  onSync: () => void;
 }) {
   const warnings = cost
     ? [...cost.total.unpriced_models, ...cost.total.missing_reasons]
     : [];
   return (
-    <aside
-      className="absolute inset-y-0 right-0 z-20 w-[min(420px,90vw)] overflow-y-auto border-l border-line bg-bg-4 p-4 shadow-2xl"
-      data-testid="stats-pricing-details"
-    >
-      <div className="mb-4 flex items-center justify-between">
-        <h3 className="font-semibold text-fg">Pricing details</h3>
-        <button
-          type="button"
-          onClick={onSync}
-          disabled={syncing}
-          data-testid="stats-sync-prices"
-          className="rounded-md border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 disabled:opacity-40"
+    <div className="flex flex-col gap-3" style={{ fontSize: "10.5px" }}>
+      {syncError && (
+        <div
+          className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          data-testid="stats-sync-error"
         >
-          {syncing ? "Syncing…" : "Sync costs"}
-        </button>
-      </div>
-      <div className="flex flex-col gap-3" style={{ fontSize: "10.5px" }}>
-        {syncError && (
-          <div
-            className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
-            data-testid="stats-sync-error"
-          >
-            {syncError}
-          </div>
-        )}
-        <SyncResult report={syncReport} />
-        {warnings.map((warning) => (
-          <div key={warning} className="text-st-await">
-            {warning}
-          </div>
-        ))}
-        {cost?.resolved.length ? (
-          <PriceRows rows={cost.resolved} />
-        ) : (
-          <div className="text-fg-4">No resolved prices.</div>
-        )}
-      </div>
-    </aside>
+          {syncError}
+        </div>
+      )}
+      <SyncResult report={syncReport} />
+      {warnings.map((warning) => (
+        <div key={warning} className="text-st-await">
+          {warning}
+        </div>
+      ))}
+      {cost?.resolved.length ? (
+        <PriceRows rows={cost.resolved} />
+      ) : (
+        <div className="text-fg-4">No resolved prices.</div>
+      )}
+    </div>
   );
 }

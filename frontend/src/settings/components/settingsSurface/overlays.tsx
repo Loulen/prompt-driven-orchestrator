@@ -1,41 +1,5 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { SETTINGS_CATEGORIES, type DirtyRollup } from "../../model/settingsCategories";
-
-/**
- * The shell's right drawer hosting the skill bank (#690 decision 5, kept by #691 for this
- * one panel): the rail stays visible, Escape returns to Settings › Skills first, and the
- * Save footer hides under it so its own writes and Save are never both in view.
- */
-export function SettingsDrawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
-  const kind = "skills";
-  return (
-    <aside
-      className="absolute bottom-0 right-0 top-14 z-20 flex w-[min(880px,90vw)] flex-col border-l border-line bg-bg-4 shadow-2xl"
-      data-testid="settings-drawer"
-      data-drawer={kind}
-    >
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-        <h3 className="font-semibold text-fg" style={{ fontSize: "13px" }}>
-          Skill bank
-        </h3>
-        <span className="ml-auto text-fg-4" style={{ fontSize: "10.5px" }}>
-          saves as you go · Esc returns to Settings
-        </span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close panel"
-          data-testid="settings-drawer-close"
-          className="grid h-6 w-6 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
-        >
-          <X size={14} />
-        </button>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
-    </aside>
-  );
-}
 
 export function ConfirmCloseDialog({
   rollup,

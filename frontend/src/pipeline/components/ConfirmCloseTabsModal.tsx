@@ -46,13 +46,16 @@ export default function ConfirmCloseTabsModal({ open, tabs, onCancel, onConfirm 
       onClick={onCancel}
     >
       <div
-        className="w-[380px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+        className="flex max-h-[85vh] w-[380px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
         style={{ fontSize: "12px" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+        {/* #940: bounded to the window like New Run — a long list scrolls, the
+            actions stay visible. */}
+        <h3 className="shrink-0 font-medium text-fg" style={{ fontSize: "13px" }}>
           Discard unsaved changes?
         </h3>
+        <div className="min-h-0 overflow-y-auto" data-testid="close-tabs-body">
         <p className="mt-2 text-fg-2">
           {plural ? `${unsaved.length} tabs have` : "1 tab has"} unsaved changes:{" "}
           {unsaved.map((tab, i) => (
@@ -65,7 +68,8 @@ export default function ConfirmCloseTabsModal({ open, tabs, onCancel, onConfirm 
           ))}
           . Closing {plural ? "them" : "it"} throws those changes away.
         </p>
-        <div className="mt-4 flex justify-end gap-2">
+        </div>
+        <div className="mt-4 flex shrink-0 justify-end gap-2">
           <button
             onClick={onCancel}
             data-testid="close-tabs-cancel"

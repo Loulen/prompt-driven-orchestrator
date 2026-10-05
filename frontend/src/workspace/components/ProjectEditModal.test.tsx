@@ -304,6 +304,32 @@ describe("ProjectEditModal", () => {
 
 // ADR-0081 (#31): the `project/edit` sections of the extensions take part in
 // the modal's Save and Cancel.
+describe("ProjectEditModal — bounded to the window (#940)", () => {
+  it("scrolls only its body: title and Save stay outside it, the member list nests in it", () => {
+    renderModal();
+    const modal = screen.getByTestId("project-edit-modal");
+    expect(modal).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    const body = screen.getByTestId("project-edit-body");
+    expect(body).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(body).not.toHaveTextContent("Name project");
+    expect(body).not.toContainElement(screen.getByTestId("project-edit-save"));
+    expect(body).not.toContainElement(screen.getByTestId("project-edit-cancel"));
+    expect(body).toContainElement(screen.getByTestId("project-name-input"));
+    // The member list keeps its own maximum height inside the scrolling body.
+    const members = screen.getByTestId("project-members-list");
+    expect(body).toContainElement(members);
+    expect(members).toHaveClass("max-h-48", "overflow-y-auto");
+  });
+
+  it("keeps closing on a backdrop click, not on a click in the body", () => {
+    const { onClose } = renderModal();
+    fireEvent.click(screen.getByTestId("project-edit-body"));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("project-edit-backdrop"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("ProjectEditModal — the project/edit sections", () => {
   const saved: unknown[] = [];
   const cancelled: string[] = [];

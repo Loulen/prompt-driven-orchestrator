@@ -3,7 +3,9 @@ import type { PortType } from "../../../shared/generated/PortType";
 
 // The terminal inset has three mutually exclusive display modes (#346):
 //   - "split"     : terminal ~45% / detail pane ~55% (default for a live node)
-//   - "expanded"  : terminal full-frame, detail pane hidden (user gesture, #270)
+//   - "expanded"  : the « Terminal agrandi » (#44): the same terminal lifted
+//                   over the whole app, 16px from the window edges, on a dimmed
+//                   backdrop (user gesture, never persisted)
 //   - "minimized" : terminal collapsed to a thin bar, Outputs take the full
 //                   height (default when opening a node whose session ended)
 // An enum (not two orthogonal booleans) makes the illegal

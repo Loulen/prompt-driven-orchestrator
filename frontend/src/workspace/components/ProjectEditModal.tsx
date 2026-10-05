@@ -13,6 +13,7 @@ import SkillSelector from "../../skill/components/SkillSelector";
 import { useSkillBank } from "../../skill/store/useSkillBank";
 import { announceSkillTiersChanged, useSkillTiers } from "../../skill/store/useSkillTiers";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
+import ProjectMembersList from "./ProjectMembersList";
 import type { ProjectEditContext } from "../../shared/extensions/contract";
 import { sectionSaveError, useSectionForm } from "../../shared/extensions/sectionForm";
 
@@ -216,22 +217,28 @@ export default function ProjectEditModal({
       onClick={cancel}
     >
       <div
-        className="max-h-[92vh] w-[440px] max-w-[90vw] overflow-y-auto rounded-lg border border-line bg-bg-4 p-4"
+        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-4"
         style={{ fontSize: "12px" }}
         role="dialog"
         aria-label="Edit project"
         data-testid="project-edit-modal"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-1 font-medium text-fg">
-          {editing ? "Edit project" : "Name project"}
+        {/* #940: bounded to the window like New Run — the header and the actions
+            never shrink, only the body scrolls when the content overflows; the
+            borders mark where the scrolling body is cut off. */}
+        <div className="shrink-0 border-b border-line px-4 pb-3 pt-4">
+          <div className="mb-1 font-medium text-fg">
+            {editing ? "Edit project" : "Name project"}
+          </div>
+          <p className="text-fg-4" style={{ fontSize: "11px" }}>
+            Group repositories that work together under one name. A repo belongs to
+            at most one project; the harness set here applies to every Run whose
+            primary repo is a member.
+          </p>
         </div>
-        <p className="mb-3 text-fg-4" style={{ fontSize: "11px" }}>
-          Group repositories that work together under one name. A repo belongs to
-          at most one project; the harness set here applies to every Run whose
-          primary repo is a member.
-        </p>
 
+        <div className="min-h-0 overflow-y-auto px-4 pt-3" data-testid="project-edit-body">
         <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
           Name
         </label>
@@ -302,50 +309,12 @@ export default function ProjectEditModal({
         <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
           Member repositories
         </label>
-        <div
-          className="mb-3 max-h-48 overflow-y-auto rounded border border-line-strong bg-bg-3"
-          data-testid="project-members-list"
-        >
-          {candidates.length === 0 && (
-            <div className="px-2 py-2 text-fg-4" style={{ fontSize: "11px" }}>
-              No repositories to attach.
-            </div>
-          )}
-          {candidates.map((path) => {
-            const owner = ownerElsewhere.get(path);
-            const disabled = owner != null;
-            return (
-              <label
-                key={path}
-                className={`flex items-center gap-2 border-b border-line-soft px-2 py-1.5 last:border-b-0 ${
-                  disabled ? "opacity-50" : "cursor-pointer hover:bg-bg-4"
-                }`}
-                style={{ fontSize: "11px" }}
-                title={owner ? `Already in project "${owner}"` : path}
-                data-testid="project-member-row"
-                data-path={path}
-                data-disabled={disabled ? "true" : "false"}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked.has(path)}
-                  disabled={disabled}
-                  onChange={() => toggle(path)}
-                  data-testid="project-member-checkbox"
-                />
-                <span className="truncate text-fg">{path}</span>
-                {owner && (
-                  <span
-                    className="ml-auto shrink-0 text-fg-4"
-                    data-testid="project-member-owner"
-                  >
-                    in {owner}
-                  </span>
-                )}
-              </label>
-            );
-          })}
-        </div>
+        <ProjectMembersList
+          candidates={candidates}
+          checked={checked}
+          ownerElsewhere={ownerElsewhere}
+          onToggle={toggle}
+        />
 
         {/* ADR-0081 (#31): the `project/edit` sections, under the core's fields,
             one per contribution in registration order. */}
@@ -354,7 +323,9 @@ export default function ProjectEditModal({
           extra={sectionContext}
           form={sections.form}
         />
+        </div>
 
+        <div className="shrink-0 border-t border-line px-4 py-3">
         {error && (
           <div
             className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
@@ -383,6 +354,7 @@ export default function ProjectEditModal({
           >
             {submitting ? "Saving…" : "Save"}
           </button>
+        </div>
         </div>
       </div>
     </div>

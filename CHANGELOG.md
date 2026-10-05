@@ -10,15 +10,10 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.9.0 — Éditeur : edge au drag uniquement, Assistant et Info exclusifs (#39)
+## 2.12.0 — Retrait du nœud Merge, la convergence est portée par tout nœud (#42)
 
-Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Changement de geste sur le
-canvas d'édition (portage core #936) : une edge ne naît plus que d'un drag depuis le bord d'un
-node, désormais épais de 4,5 px. Cliquer un bord puis un autre node ne connecte plus rien : le
-clic sélectionne le node. Sur une template, le glyphe « agent » et `i` de la toolbar sont
-exclusifs et suivent l'onglet affiché du panneau Pipeline info (portage core #938).
-
-**Le nœud Merge est retiré (#42, ADR-0082, portage core #942).**
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Le nœud Merge est retiré
+(ADR-0082, portage core #942).
 
 - Le type de nœud `merge` disparaît de l'éditeur, du modèle et du runtime. La convergence est
   portée par **tout nœud** : reliez plusieurs arêtes à un `agent`, il attend que chaque branche
@@ -39,6 +34,42 @@ exclusifs et suivent l'onglet affiché du panneau Pipeline info (portage core #9
 - Canvas : une arête auto qui sort à droite vers une cible située en arrière (typiquement la
   sortie sans `side` d'un ancien Merge, au-dessus de son End) ne traverse plus sa carte source.
   Elle part par une patte du côté de sortie et contourne la carte.
+
+## 2.11.0 — Quitter un terminal n'y écrit rien, terminal de nœud agrandi en overlay (#44)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Fermer un terminal (changer de
+node, fermer le Shell de run) n'écrit plus rien dans la session tmux : la saisie en cours de
+Claude Code reste intacte sur une ligne et un shell détaché survit (portage core #946).
+« Expand terminal » ouvre le terminal agrandi : la même session, sans remontage, en overlay à
+16 px des bords sur fond assombri, avec une barre nom · itération · statut, un cadre à la couleur
+du statut et les gestes de complétion compacts en `awaiting_user`. On en sort par Minimize, Échap
+hors du terminal ou un clic sur le fond ; l'état agrandi n'est jamais persisté (portage core #968).
+
+## 2.10.1 — Panneau secondaire fermable, modales bornées à la fenêtre (#40)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Le panneau secondaire de la
+coquille pleine fenêtre (Stats › Cost › Pricing details, Settings › Banque de skills) s'ouvre
+sous le header, qui reste visible, avec un titre, l'indication Échap et un ✕. « Pricing details »
+devient une bascule. Les modales Edit project, profil agentique, destruction de loops et
+fermeture d'onglets sont bornées à 85 % de la hauteur de la fenêtre : titre et actions restent
+visibles, seul le corps défile (portage core #944 et #940).
+
+## 2.10.0 — Copier en un clic le contenu brut d'un output (#41)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Dans le détail d'un node, un
+bouton « Copy raw file » apparaît sur la ligne de port d'un output (survol ou focus clavier) et
+dans le header de la modale d'artefact. Il copie le fichier brut de l'iteration affichée
+(frontmatter comprise, markdown non rendu, source pour un output html), y compris sur un Run
+archivé, et affiche « Copied! » ou « Copy failed » avec la raison en infobulle. Aucun bouton sur
+les outputs image (portage core 1.114.0).
+
+## 2.9.0 — Éditeur : edge au drag uniquement, Assistant et Info exclusifs (#39)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Changement de geste sur le
+canvas d'édition (portage core #936) : une edge ne naît plus que d'un drag depuis le bord d'un
+node, désormais épais de 4,5 px. Cliquer un bord puis un autre node ne connecte plus rien : le
+clic sélectionne le node. Sur une template, le glyphe « agent » et `i` de la toolbar sont
+exclusifs et suivent l'onglet affiché du panneau Pipeline info (portage core #938).
 
 ## 2.8.0 — Médias du README paramétrables par une config (#36)
 

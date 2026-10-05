@@ -8,7 +8,9 @@ use tracing::info;
 
 use crate::application::ports::Tmux;
 use crate::domain::launch::LIBASSIST_HOOK_SETTINGS_JSON;
-use crate::domain::launch::{build_resume_script, build_tmux_script, SandboxWrap, SessionTail};
+use crate::domain::launch::{
+    build_resume_script_with, build_tmux_script, build_tmux_script_with, SandboxWrap, SessionTail,
+};
 use crate::domain::libassist::LIBASSIST_ENV_ID;
 
 /// Spawn a detached tmux session for a NodeRun.
@@ -33,6 +35,7 @@ pub fn spawn(
     tail: SessionTail<'_>,
     sandbox: Option<&SandboxWrap<'_>>,
     inject_hook: bool,
+    extension_env: &[(String, String)],
 ) -> Result<()> {
     let prompt_dir = working_dir.join(".pdo").join("prompts");
     std::fs::create_dir_all(&prompt_dir)?;
@@ -81,7 +84,7 @@ pub fn spawn(
     // the pure builder — the goldens stay hermetic, the live session inherits the
     // very PATH the preflight resolved the harness on.
     let session_path = tmux.session_path();
-    let script = build_tmux_script(
+    let script = build_tmux_script_with(
         run_id,
         node_id,
         iter,
@@ -92,6 +95,7 @@ pub fn spawn(
         tail,
         sandbox,
         settings_path.as_deref(),
+        extension_env,
     );
     tmux.new_session(session_name, working_dir, &script, None)?;
 
@@ -239,6 +243,7 @@ pub fn resume(
     tmux_cmd_override: Option<&str>,
     sandbox: Option<&SandboxWrap<'_>>,
     inject_hook: bool,
+    extension_env: &[(String, String)],
 ) -> Result<()> {
     // #433 / ADR-0043 (D7): a resumed session must re-carry the `Stop` hook.
     // Re-write the settings file (idempotent; same path `spawn` used) and
@@ -269,7 +274,7 @@ pub fn resume(
     // interactive PATH the preflight resolves on, so a resurrected node does not hit
     // the `command not found` a bare service PATH would produce.
     let session_path = tmux.session_path();
-    let script = build_resume_script(
+    let script = build_resume_script_with(
         run_id,
         node_id,
         iter,
@@ -281,6 +286,7 @@ pub fn resume(
         tmux_cmd_override,
         sandbox,
         settings_path.as_deref(),
+        extension_env,
     );
     tmux.new_session(session_name, working_dir, &script, Some("resume"))?;
 
@@ -437,6 +443,7 @@ mod tests {
             },
             None,
             inject_hook,
+            &[],
         )
         .unwrap();
         assert_eq!(tmux.created.lock().unwrap()[0].0, session);

@@ -121,7 +121,9 @@ impl Triggers {
         {
             return Err(TriggerError::Invalid(EMPTY_NAME.to_string()));
         }
-        let edit = self.edit_of(&existing, req).await?;
+        let mut edit = self.edit_of(&existing, req).await?;
+        // API 0.8: whoever edits a Trigger answers for the Runs it fires next.
+        edit.last_editor = Some(actor.clone());
         if let Err(e) = self.store.update(id, edit).await {
             error!("failed to update trigger: {e}");
             return Err(TriggerError::Storage(
@@ -148,7 +150,7 @@ impl Triggers {
             serde_json::to_value(&updated).ok(),
         )
         .await;
-        Ok(updated)
+        Ok(self.with_suspension(updated))
     }
 
     /// The validated edit `req` makes to `existing`, with its recomputed next fire.
@@ -292,6 +294,8 @@ impl Triggers {
             // The enable bit and the forward next_fire_at must land in ONE atomic UPDATE,
             // or enabled=1 can persist with a stale (past) next_fire_at.
             enabled: req.enabled,
+            // Set by `update`, which knows the Actor.
+            last_editor: None,
         })
     }
 }

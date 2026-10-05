@@ -1,8 +1,9 @@
 //! The routes of the test extension, nested under `/ext/test/` by the core.
 
+use pdo::extension_api::axum::extract::Path;
 use pdo::extension_api::axum::http::header;
 use pdo::extension_api::axum::response::IntoResponse;
-use pdo::extension_api::axum::routing::{get, post};
+use pdo::extension_api::axum::routing::{delete, get, post};
 use pdo::extension_api::axum::{Json, Router};
 use serde_json::{json, Value};
 
@@ -26,7 +27,9 @@ pub(super) fn router(control: Control) -> Router {
     let saved = control.clone();
     let gate_read = control.clone();
     let gate_write = control.clone();
+    let launch = control.launch.clone();
     Router::new()
+        .merge(launch_routes(launch))
         // A sub-router with a fallback of its own: what the admission must
         // guard as well as a route (`/ext/test/nested/<anything>`).
         .nest(
@@ -118,6 +121,53 @@ pub(super) fn router(control: Control) -> Router {
                 let enabled = body["enabled"].as_bool().unwrap_or(true);
                 switch.set_incompatible(enabled);
                 async move { Json(json!({ "incompatible": enabled })) }
+            }),
+        )
+}
+
+/// API 0.8: what the extension gives a Node's launch, and its suspensions.
+fn launch_routes(launch: super::launch::Launch) -> Router {
+    let (read, configure, list, suspend, lift) = (
+        launch.clone(),
+        launch.clone(),
+        launch.clone(),
+        launch.clone(),
+        launch,
+    );
+    Router::new()
+        .route(
+            "/launch",
+            get(move || {
+                let state = read.state();
+                async move { Json(state) }
+            })
+            .put(move |Json(body): Json<Value>| {
+                configure.configure(&body);
+                let state = configure.state();
+                async move { Json(state) }
+            }),
+        )
+        .route(
+            "/suspensions",
+            get(move || {
+                let all = list.suspensions();
+                async move { Json(all) }
+            })
+            .put(move |Json(body): Json<Value>| {
+                let id = body["trigger_id"].as_str().unwrap_or_default().to_string();
+                let reason = body["reason"]
+                    .as_str()
+                    .unwrap_or("suspended by the test extension");
+                suspend.suspend(&id, reason);
+                let all = suspend.suspensions();
+                async move { Json(all) }
+            }),
+        )
+        .route(
+            "/suspensions/{id}",
+            delete(move |Path(id): Path<String>| {
+                let lifted = lift.lift(&id);
+                async move { Json(json!({ "lifted": lifted })) }
             }),
         )
 }

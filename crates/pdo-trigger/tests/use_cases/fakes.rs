@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use pdo_extension_api::{Authorization, RequestParts};
+use pdo_extension_api::{Authorization, RequestParts, TriggerRef};
 use pdo_kernel::event_bus::{BroadcastEventBus, EventBus};
-use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::extension_host::{ExtensionHost, TriggerSuspension};
 use pdo_kernel::{Actor, Operation};
 use pdo_platform::domain::audit::{ActorHint, NewAuditEntry};
 use pdo_trigger::application::create_trigger::CreateTriggerRequest;
@@ -79,6 +79,9 @@ fn apply(t: &mut Trigger, e: UpdateTrigger) {
         next_fire_at,
         enabled
     );
+    if let Some(editor) = e.last_editor {
+        t.last_editor = Some(editor);
+    }
 }
 
 fn ready<'a, T: Send + 'a>(value: T) -> BoxFuture<'a, T> {
@@ -117,6 +120,8 @@ impl TriggerRepository for InMemoryTriggers {
             last_fired_at: None,
             last_outcome: None,
             attributes: Default::default(),
+            last_editor: new.last_editor,
+            suspension: None,
         };
         self.triggers.lock().unwrap().insert(0, trigger.clone());
         ready(Ok(trigger))
@@ -382,11 +387,14 @@ impl AuditTrail for Audit {
     }
 }
 
-/// A host that records what it is asked and refuses when told to.
+/// A host that records what it is asked and refuses when told to; it
+/// suspends the Triggers of `suspended` (API 0.8), as the extension `test`.
 #[derive(Default)]
 pub struct Host {
     pub refuse: Mutex<bool>,
     pub asked: Mutex<Vec<(Actor, Operation)>>,
+    pub suspended: Mutex<std::collections::BTreeMap<String, String>>,
+    pub suspension_asks: Mutex<Vec<TriggerRef>>,
 }
 
 impl ExtensionHost for Host {
@@ -409,6 +417,18 @@ impl ExtensionHost for Host {
     }
 
     fn publish(&self, _event: &serde_json::Value) {}
+
+    fn trigger_suspension(&self, trigger: &TriggerRef) -> Option<TriggerSuspension> {
+        self.suspension_asks.lock().unwrap().push(trigger.clone());
+        self.suspended
+            .lock()
+            .unwrap()
+            .get(&trigger.id)
+            .map(|reason| TriggerSuspension {
+                extension: "test".into(),
+                reason: reason.clone(),
+            })
+    }
 }
 
 /// The context over fresh fakes, and the fakes.
@@ -485,6 +505,15 @@ pub fn world_with(options: TriggersOptions) -> World {
 impl World {
     pub fn refuse(&self) {
         *self.host.refuse.lock().unwrap() = true;
+    }
+
+    /// Have the extension suspend `id`, saying `reason`.
+    pub fn suspend(&self, id: &str, reason: &str) {
+        self.host
+            .suspended
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), reason.to_string());
     }
 
     /// Every message published on the bus so far.

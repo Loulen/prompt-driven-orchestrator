@@ -5,7 +5,9 @@
 //! of a request (and refuse one nobody identified, [`Admission`]), show an
 //! Actor's name ([`ActorDisplay`]), authorize or refuse an [`Operation`], stamp [`Attributes`] on a
 //! new entity, observe events, contribute routes and UI, answer a command line
-//! (`pdo ext <id> <args…>`) and bring skills into the Banque de skills.
+//! (`pdo ext <id> <args…>`), bring skills into the Banque de skills, contribute
+//! to the launch of a Node (environment variables, a preamble) and suspend a
+//! Trigger.
 //!
 //! An extension runs its **own** mutations through the same mechanisms, by the
 //! [`Host`] its [`ExtensionContext`] carries: its entities are a
@@ -36,6 +38,7 @@ mod entity;
 mod event;
 mod extension;
 mod host;
+mod launch;
 mod manifest;
 mod operation;
 mod skill;
@@ -52,6 +55,7 @@ pub use extension::{
     Authorization, Denied, Extension, ExtensionContext, RequestParts, OPERATION_REFUSED,
 };
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
+pub use launch::{NodeEnv, NodeKind, NodeLaunch, TriggerProvenance, TriggerRef};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
 pub use skill::{ExtensionSkill, SkillFile};
@@ -71,6 +75,6 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// In 0.x a minor may break; this is where the API says which ones did not
 /// (0.2 only added to 0.1, ADR-0081 amendment #29; 0.3 broke only compilation,
 /// amendment #34; 0.4 only added to 0.3, amendment #32; 0.8 only added
-/// fields, methods, types and the `topbar/account` location, amendments
-/// CORE-3 and CORE-2).
+/// fields, methods, hooks, types and the `topbar/account` location,
+/// amendments CORE-3, CORE-4 and CORE-2).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

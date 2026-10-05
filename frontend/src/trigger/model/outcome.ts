@@ -12,6 +12,7 @@ export function outcomeDot(outcome: string | null | undefined): string {
     case "error":
       return "bg-st-failed";
     case "skipped-overlap":
+    case "skipped-suspended":
     case "guard-exit-nonzero":
       return "bg-st-paused";
     case "guard-error":
@@ -30,6 +31,7 @@ export function outcomeRing(outcome: string | null | undefined): string {
     case "error":
       return "border-st-failed";
     case "skipped-overlap":
+    case "skipped-suspended":
     case "guard-exit-nonzero":
       return "border-st-paused";
     case "guard-error":

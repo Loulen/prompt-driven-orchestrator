@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Actor } from "../generated/Actor";
+import ActorLabel from "./ActorLabel";
 import ActorName from "./ActorName";
 import { initials } from "./initials";
 import { actorKey, requestDisplays, resetActorsForTests, useActorsStore } from "./store";
@@ -70,5 +71,16 @@ describe("the Actors' display names", () => {
   it("initials are the first letters of two words", () => {
     expect(initials("Alice Martin")).toBe("AM");
     expect(initials("bob")).toBe("B");
+  });
+
+  it("a label names the Actor, or falls back to the core's label", async () => {
+    render(
+      <>
+        <p data-testid="named"><ActorLabel actor={alice} /></p>
+        <p data-testid="unnamed"><ActorLabel actor={operator} /></p>
+      </>,
+    );
+    await waitFor(() => expect(screen.getByTestId("named").textContent).toBe("AMAlice Martin"));
+    expect(screen.getByTestId("unnamed").textContent).toBe("Local operator");
   });
 });

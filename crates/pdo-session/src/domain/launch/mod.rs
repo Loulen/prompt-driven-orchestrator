@@ -8,9 +8,11 @@ mod tails;
 mod wrap;
 
 pub use quote::{sh_quote_arg, sh_single_quote};
-pub use script::{build_resume_script, build_tmux_script};
+pub use script::{
+    build_resume_script, build_resume_script_with, build_tmux_script, build_tmux_script_with,
+};
 pub use tails::{build_script_tail, LIBASSIST_HOOK_SETTINGS_JSON};
-pub use wrap::host_daemon_url;
+pub use wrap::{host_daemon_url, CORE_ENV_NAMES};
 
 /// Default wall-clock bound for a `script` node's bash body (#248 / ADR-0017).
 /// Mirrors the trigger guard's 60 s (`pdo_trigger::domain::guard`). A script has no JSONL, so

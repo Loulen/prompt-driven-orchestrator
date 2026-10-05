@@ -9,5 +9,8 @@
  * ([`Actor::Identified`]).
  *
  * Non-exhaustive: adding a kind of actor is a minor evolution of the API.
+ *
+ * Deserializable since 0.8: the core stores the Actor that created a Run and
+ * the last editor of a Trigger, and gives them back on the API.
  */
 export type Actor = { "kind": "local_operator" } | { "kind": "agent", run_id: string, node_id: string, } | { "kind": "trigger", trigger_id: string, } | { "kind": "identified", namespace: string, id: string, };

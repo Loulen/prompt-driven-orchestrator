@@ -10,5 +10,6 @@ mod fire;
 mod guard;
 mod pause;
 mod read;
+mod suspension;
 mod tick;
 mod update;

@@ -79,6 +79,11 @@ mod extension_mutation_routes;
 #[path = "extension_trigger_fire.rs"]
 mod extension_trigger_fire;
 
+// The launch of a Node (API 0.8, CORE-4): the Run's creator, the extensions'
+// variables and preamble, `CLAUDE_CONFIG_DIR`, a suspended Trigger.
+#[path = "extension_node_launch.rs"]
+mod extension_node_launch;
+
 // The rest of the extension API (#931): attributes, events, routes, `/ext`.
 #[path = "extension_hooks.rs"]
 mod extension_hooks;

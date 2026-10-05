@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
     ActorDisplay, Admission, Attributes, Authorization, EntityRef, Extension, ExtensionContext,
-    ExtensionSkill, Host, Manifest, RequestParts, Resource, EXTENSION_EVENT,
+    Host, Manifest, NodeLaunch, RequestParts, Resource, TriggerRef, EXTENSION_EVENT,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -22,8 +22,12 @@ use crate::{Actor, Operation};
 
 mod host_of;
 mod identity;
+mod launch;
+mod skills;
 use host_of::{panic_message, ExtensionHostOf};
 pub use identity::Identification;
+pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
+pub use skills::ProvidedSkills;
 
 /// The core's view of its extensions.
 pub trait ExtensionHost: Send + Sync {
@@ -83,13 +87,18 @@ pub trait ExtensionHost: Send + Sync {
     fn catalogue(&self) -> Vec<Resource> {
         pdo_extension_api::core_resources()
     }
-}
 
-/// The skills one extension brings into the Banque de skills.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProvidedSkills {
-    pub manifest: Manifest,
-    pub skills: Vec<ExtensionSkill>,
+    /// What the extensions add to the launch of a Node: their environment
+    /// variables and their preamble ([`NodeContribution`]). Nothing by default.
+    fn node_launch(&self, _launch: &NodeLaunch) -> NodeContribution {
+        NodeContribution::default()
+    }
+
+    /// The extension that suspends `trigger`, and why, if one does. None by
+    /// default.
+    fn trigger_suspension(&self, _trigger: &TriggerRef) -> Option<TriggerSuspension> {
+        None
+    }
 }
 
 /// The host of a daemon with no extension: the core's identification, everything
@@ -371,31 +380,19 @@ impl ExtensionHost for Extensions {
     }
 
     fn skills(&self) -> Vec<ProvidedSkills> {
-        self.registry
-            .registered
-            .iter()
-            .filter_map(
-                // An empty list is kept: the seed removes what the extension
-                // provided before. A panic is no list at all: it removes nothing.
-                |r| match catch_unwind(AssertUnwindSafe(|| r.extension.skills())) {
-                    Ok(skills) => Some(ProvidedSkills {
-                        manifest: r.manifest.clone(),
-                        skills,
-                    }),
-                    Err(_) => {
-                        tracing::error!(
-                            "extension `{}` panicked in skills; it brings none",
-                            r.manifest.id
-                        );
-                        None
-                    }
-                },
-            )
-            .collect()
+        self.provided_skills()
     }
 
     fn catalogue(&self) -> Vec<Resource> {
         pdo_extension_api::catalogue(self.registry.registered.iter().map(|r| &r.manifest))
+    }
+
+    fn node_launch(&self, launch: &NodeLaunch) -> NodeContribution {
+        launch::node_launch(self, launch)
+    }
+
+    fn trigger_suspension(&self, trigger: &TriggerRef) -> Option<TriggerSuspension> {
+        launch::trigger_suspension(self, trigger)
     }
 }
 
@@ -405,7 +402,7 @@ mod tests {
     use crate::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
     use crate::{ResourceKind, Verb};
     use pdo_extension_api::axum::http::Request;
-    use pdo_extension_api::{ExtensionEvent, Manifest, OperationApplied};
+    use pdo_extension_api::{ExtensionEvent, ExtensionSkill, Manifest, OperationApplied};
 
     fn parts(headers: &[(&str, &str)]) -> RequestParts {
         let mut builder = Request::builder().uri("/runs");

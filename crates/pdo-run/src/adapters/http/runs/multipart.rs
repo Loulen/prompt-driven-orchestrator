@@ -306,6 +306,8 @@ pub(super) async fn parse_multipart_create_run(
         // A multipart `POST /runs` is a manual launch: the form already fetched
         // before it opened, so nothing is refreshed here (#804, ADR-0070 §3).
         source_fetch_error: None,
+        created_by: None,
+        trigger_editor: None,
     };
     Ok((req, attachments))
 }

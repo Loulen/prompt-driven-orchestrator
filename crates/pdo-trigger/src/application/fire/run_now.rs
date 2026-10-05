@@ -14,8 +14,8 @@ use crate::domain::trigger::FireRecord;
 use crate::Triggers;
 
 impl Triggers {
-    /// Contract (ADR-0025): refused → 403; unknown → 404; disabled or broken
-    /// reference → 409, before any effect and with no fire record; otherwise the
+    /// Contract (ADR-0025): refused → 403; unknown → 404; disabled, suspended
+    /// (API 0.8) or broken reference → 409, before any effect and with no fire record; otherwise the
     /// record of the evaluation — a guard/overlap skip is an honest answer, not
     /// an error. `None` is a silent no-op.
     pub async fn run_now(
@@ -39,6 +39,14 @@ impl Triggers {
         if !trigger.enabled {
             return Err(TriggerError::Conflict(format!(
                 "trigger '{id}' is disabled — enable it first"
+            )));
+        }
+
+        // API 0.8: a suspended Trigger does not fire, and the click says why.
+        if let Some(suspension) = self.suspension_of(&trigger) {
+            return Err(TriggerError::Conflict(format!(
+                "trigger '{id}' is suspended: {}",
+                suspension.reason
             )));
         }
 

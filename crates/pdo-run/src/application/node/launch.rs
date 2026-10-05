@@ -74,6 +74,24 @@ pub fn find_launch_harness(events: &[event::Event], node_id: &str, iter: i64) ->
         .map(|s| s.to_string())
 }
 
+/// The `projects/` root of the `CLAUDE_CONFIG_DIR` an extension gave the
+/// launch of `(node_id, iter)` (API 0.8), frozen on its `NodeStarted`.
+pub fn find_launch_claude_root(
+    events: &[event::Event],
+    node_id: &str,
+    iter: i64,
+) -> Option<std::path::PathBuf> {
+    events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == event::EventKind::NodeStarted
+                && e.node_id.as_deref() == Some(node_id)
+                && e.iter == Some(iter)
+        })
+        .and_then(crate::adapters::run_cost::node_claude_root)
+}
+
 /// The **latest** `NodeStarted` payload for `(node_id, iter)`, cloned whole.
 ///
 /// The `/pane` resurrection appends a fresh `NodeStarted` as a log trace, and REUSING

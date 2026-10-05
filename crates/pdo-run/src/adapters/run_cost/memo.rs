@@ -141,7 +141,11 @@ pub fn compute_run_cost_breakdown_cached(
     repo_root.hash(&mut roots);
     let key = (
         run_id.to_string(),
-        max_transcript_mtime_millis(claude_root, repo_root, run_id),
+        claude_roots(events, claude_root)
+            .iter()
+            .map(|root| max_transcript_mtime_millis(root, repo_root, run_id))
+            .max()
+            .unwrap_or(0),
         reported_stores_mtime_millis(events, claude_root, stores, repo_root, run_id),
         prices.fingerprint(),
         event_fingerprint(events),

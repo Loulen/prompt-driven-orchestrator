@@ -12,6 +12,7 @@ import { formatEstCost } from "../../run/model/costLabel";
 import type { EditorPipelineDef } from "../model/pipeline";
 
 import { SourceBlock } from "./SourceBlock";
+import RunCreator from "../../run/components/RunCreator";
 import PipelineMetaSections from "./PipelineMetaSections";
 import { PipelineConfigSections } from "./ExtensionInspectorSections";
 import { useEditStore } from "../store/editStore";
@@ -37,9 +38,11 @@ function RunInfoSections({ run }: { run: RunState }) {
         id: run.run_id,
         attributes: run.attributes ?? {},
         ...(run.name ? { name: run.name } : {}),
+        created_by: run.created_by ?? null,
+        trigger_editor: run.trigger_editor ?? null,
       },
     }),
-    [run.run_id, run.attributes, run.name],
+    [run.run_id, run.attributes, run.name, run.created_by, run.trigger_editor],
   );
   return <ExtensionSections<RunInfoContext> location="run/info" extra={extra} wrap={infoSection} />;
 }
@@ -209,6 +212,7 @@ export function InfoTab({
             <span className="rounded bg-bg-3 px-1.5 py-0.5 font-mono text-fg-2">{run.harness}</span>
           </div>
         )}
+        {run && <RunCreator run={run} />}
         {run && <SourceBlock run={run} />}
         {run && (
           <div

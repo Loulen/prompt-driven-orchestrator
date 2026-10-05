@@ -59,6 +59,7 @@ impl Triggers {
             .filter(|t| attributed.keeps(&t.id))
             .map(|mut t| {
                 t.attributes = attributed.of(&t.id);
+                let t = self.with_suspension(t);
                 let effective_repo = t.target_repo.clone().unwrap_or_else(|| repo_root.clone());
                 TriggerListEntry {
                     trigger: t,
@@ -84,7 +85,7 @@ impl Triggers {
         let mut trigger = self.get(id).await?;
         trigger.attributes =
             attributes::of_entity(self.extensions(), ResourceKind::Trigger, id).await;
-        Ok(trigger)
+        Ok(self.with_suspension(trigger))
     }
 
     pub async fn fires(&self, id: &str) -> Result<Vec<TriggerFire>, TriggerError> {

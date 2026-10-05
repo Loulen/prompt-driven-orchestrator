@@ -96,8 +96,8 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
         "INSERT INTO triggers
             (id, name, pipeline_id, pipeline_name, target_repo, target_repos, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
-             max_concurrent, sandbox, harness, agent_choice, skills, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
+             max_concurrent, sandbox, harness, agent_choice, skills, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at, last_editor)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?, ?)",
     )
     .bind(&id)
     .bind(&new.name)
@@ -125,10 +125,16 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
     .bind(if new.auto_name { 1_i64 } else { 0_i64 })
     .bind(&new.next_fire_at)
     .bind(&now)
+    .bind(stored_actor(new.last_editor.as_ref()))
     .execute(db)
     .await?;
 
     get(db, &id).await?.ok_or(sqlx::Error::RowNotFound)
+}
+
+/// An Actor as its column stores it: JSON text, NULL for none.
+pub(crate) fn stored_actor(actor: Option<&pdo_kernel::Actor>) -> Option<String> {
+    actor.and_then(|a| serde_json::to_string(a).ok())
 }
 
 /// Fetch one Trigger by id.

@@ -165,15 +165,10 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
         // (unknown pipeline, refused session claim, …). A body that is not the
         // daemon's JSON came from something in front of it (#839): say so, and
         // for a 413 name the proxy body limit rather than PDO's own budget.
-        let parsed: Option<serde_json::Value> = serde_json::from_str(&raw).ok();
-        let detail = match parsed
-            .as_ref()
-            .and_then(|p| p.get("error"))
-            .and_then(|v| v.as_str())
-        {
-            Some(err) => err.to_string(),
-            None => intermediary_refusal_detail(&url, status.as_u16(), attachment_bytes, &raw),
-        };
+        // An admission refusal (401) says `sign in first` in its `message`.
+        let detail = super::run_list::daemon_sentence(&raw).unwrap_or_else(|| {
+            intermediary_refusal_detail(&url, status.as_u16(), attachment_bytes, &raw)
+        });
         anyhow::bail!("daemon refused run creation ({status}): {detail}");
     }
     let parsed: serde_json::Value = serde_json::from_str(&raw)

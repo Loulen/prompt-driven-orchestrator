@@ -5,6 +5,7 @@ import {
   isRedirectingToSignIn,
   probeSignIn,
   resetSignInForTests,
+  setSignInReturnLink,
   signInRedirect,
   signInUrl,
 } from "./signIn";
@@ -46,6 +47,25 @@ describe("the sign-in redirection", () => {
     expect(assign).toHaveBeenCalledTimes(1);
     expect(assign).toHaveBeenCalledWith("/ext/test/sign-in?next=%2F%23%2Fruns%2Fr1");
     expect(isRedirectingToSignIn()).toBe(true);
+  });
+
+  it("comes back to the registered Run when the address has no deep link", () => {
+    vi.stubGlobal("location", { ...window.location, pathname: "/", search: "", hash: "", assign });
+    setSignInReturnLink("#/runs/r2");
+    followSignIn("/ext/test/sign-in");
+    expect(assign).toHaveBeenCalledWith("/ext/test/sign-in?next=%2F%23%2Fruns%2Fr2");
+  });
+
+  it("prefers the address's deep link, and forgets a cleared Run", () => {
+    setSignInReturnLink("#/runs/r2");
+    followSignIn("/ext/test/sign-in");
+    expect(assign).toHaveBeenLastCalledWith("/ext/test/sign-in?next=%2F%23%2Fruns%2Fr1");
+    resetSignInForTests();
+    vi.stubGlobal("location", { ...window.location, pathname: "/", search: "", hash: "", assign });
+    setSignInReturnLink("#/runs/r2");
+    setSignInReturnLink(null);
+    followSignIn("/ext/test/sign-in");
+    expect(assign).toHaveBeenLastCalledWith("/ext/test/sign-in?next=%2F");
   });
 
   it("is followed by every call of the client, which still fails", async () => {

@@ -345,22 +345,23 @@ async fn the_cli_sends_pdo_token() {
     let (code, _, _) = pdo(&daemon, &["ext", "test", "echo", "salut"], None).await;
     assert_ne!(code, 0);
 
-    // `pdo run create`: the created Run's attribute names the token's holder.
+    // `pdo run create`: refused without the token, in the same words as
+    // `pdo run list`; with it, the created Run's attribute names its holder.
     let target = daemon.target_repo();
-    let (code, stdout, stderr) = pdo(
-        &daemon,
-        &[
-            "run",
-            "create",
-            "solo",
-            "--input",
-            "go",
-            "--target-repo",
-            &target,
-        ],
-        Some(TOKEN),
-    )
-    .await;
+    let create = [
+        "run",
+        "create",
+        "solo",
+        "--input",
+        "go",
+        "--target-repo",
+        &target,
+    ];
+    let (code, _, stderr) = pdo(&daemon, &create, None).await;
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("401"), "{stderr}");
+    assert!(stderr.contains("requires a token"), "{stderr}");
+    let (code, stdout, stderr) = pdo(&daemon, &create, Some(TOKEN)).await;
     assert_eq!(code, 0, "{stdout}{stderr}");
     let (code, stdout, _) = pdo(&daemon, &["run", "list"], Some(TOKEN)).await;
     assert_eq!(code, 0);

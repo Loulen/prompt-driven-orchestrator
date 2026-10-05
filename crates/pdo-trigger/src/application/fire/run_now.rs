@@ -43,10 +43,11 @@ impl Triggers {
         }
 
         // API 0.8: a suspended Trigger does not fire, and the click says why.
+        // Named as the user knows it: the message lands as is in a toast.
         if let Some(suspension) = self.suspension_of(&trigger) {
             return Err(TriggerError::Conflict(format!(
-                "trigger '{id}' is suspended: {}",
-                suspension.reason
+                "trigger '{}' is suspended: {}",
+                trigger.name, suspension.reason
             )));
         }
 

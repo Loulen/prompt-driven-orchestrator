@@ -90,6 +90,13 @@ export function useNewRunState(open: boolean) {
     EMPTY_PROVISIONING_RULES,
   );
   const [provisioningValid, setProvisioningValid] = useState(true);
+  // Notion #7: why provisioning blocks Launch, shown on the disabled button —
+  // the (collapsible) block may be scrolled out of view.
+  const [provisioningBlockReason, setProvisioningBlockReason] = useState<string | undefined>();
+  const handleProvisioningValidity = useCallback((valid: boolean, reason?: string) => {
+    setProvisioningValid(valid);
+    setProvisioningBlockReason(valid ? undefined : reason);
+  }, []);
 
   // #465 (ADR-0042): read-only secondary repos. The primary stays `targetRepo` /
   // `sourceBranch` (from the hooks above, row 0), untouched — these are the extra
@@ -180,7 +187,8 @@ export function useNewRunState(open: boolean) {
     setGuardTest, guardTesting, setGuardTesting, guardTestError, setGuardTestError,
     allowOverlap, setAllowOverlap, maxConcurrent, setMaxConcurrent, varsOpen, setVarsOpen,
     submitting, setSubmitting, error, setError, provisioning, setProvisioning,
-    provisioningValid, setProvisioningValid, secondaryRepos, setSecondaryRepos, attachments,
+    provisioningValid, setProvisioningValid, provisioningBlockReason,
+    setProvisioningBlockReason, handleProvisioningValidity, secondaryRepos, setSecondaryRepos, attachments,
     setAttachments, attachmentError, setAttachmentError, attachmentHint, setAttachmentHint,
     attachmentDragOver, setAttachmentDragOver, attachmentShake, setAttachmentShake,
     closeWarning, setCloseWarning, settings, setSettings, settingsFailed, setSettingsFailed,

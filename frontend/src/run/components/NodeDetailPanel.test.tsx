@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, act, within } from "@testing-library/react";
+import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useEffect } from "react";
 
@@ -259,6 +259,14 @@ describe("NodeDetailPanel", () => {
             second: "2-digit",
           })}`,
         );
+        // Notion #7: collapsed on open, the frozen marker and summary visible.
+        const toggle = screen.getByRole("button", { name: /^Provisioning/ });
+        expect(toggle).toHaveAttribute("aria-expanded", "false");
+        expect(screen.queryByLabelText("Copy patterns")).not.toBeInTheDocument();
+        await waitFor(() =>
+          expect(toggle).toHaveTextContent("Provisioning · 0 inherited · 1 at this level"),
+        );
+        fireEvent.click(toggle);
         expect(screen.getByLabelText("Copy patterns")).toHaveAttribute("readonly");
       });
 

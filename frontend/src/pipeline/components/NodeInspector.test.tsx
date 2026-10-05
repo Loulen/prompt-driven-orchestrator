@@ -1002,17 +1002,23 @@ describe("NodeInspector — Workspace (#653)", () => {
     seedTabWithReviewer(false);
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    expect(screen.getByRole("button", { name: "Configure provisioning" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
-    expect(screen.queryByTestId("provisioning-isolated_node")).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+    // Notion #7: the shared disclosure replaces the « Configure provisioning » toggle.
+    expect(
+      screen.queryByRole("button", { name: /Configure provisioning|Hide provisioning/ }),
+    ).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: /^Provisioning/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByTestId("provisioning-isolated_node")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Copy patterns")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("/absolute/path/to/repository")).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(screen.getByLabelText("Copy patterns")).toBeInTheDocument();
+    // No repository known: « Resolve against » is in the expanded body.
+    expect(screen.getByPlaceholderText("/absolute/path/to/repository")).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("workspace-shared"));
-    expect(screen.queryByRole("button", { name: /provisioning/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Provisioning/ })).not.toBeInTheDocument();
     expect(screen.queryByTestId("provisioning-isolated_node")).not.toBeInTheDocument();
   });
 
@@ -1040,7 +1046,7 @@ describe("NodeInspector — Workspace (#653)", () => {
       provisioningFrozenAt: "12:00",
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Provisioning/ }));
 
     expect(screen.getByLabelText("Copy patterns")).toHaveValue("frozen");
   });
@@ -1068,7 +1074,7 @@ describe("NodeInspector — Workspace (#653)", () => {
       },
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Provisioning/ }));
     const copyPatterns = screen.getByLabelText("Copy patterns");
     expect(copyPatterns).toHaveValue("pipeline-rule");
 

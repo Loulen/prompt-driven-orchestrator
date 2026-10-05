@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.13.0 — Bloc Provisioning replié, expliqué et diagnosticable (#45)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Portage core #951 (spec #950).
+
+- Le bloc Provisioning est replié par défaut là où il est secondaire (New Run, édition de
+  projet, inspecteur d'un nœud isolé, détail d'un nœud en cours). Il reste déplié dans
+  Settings › Sandbox & worktrees. Replié, son en-tête résume les règles
+  (`N inherited · M at this level`, ou `none`) et une ligne explique ce qu'est le provisioning.
+- Chaque mode (Copy, Hardlink, Symlink) et la barre des niveaux portent une infobulle.
+- Un conflit de mode ou une erreur d'aperçu rouvre le bloc tout seul, qui ne se replie plus tant
+  que le problème demeure. Dans New Run, le bouton Launch désactivé explique pourquoi.
+- Retirés : le bouton « Configure worktree provisioning… » de l'édition de projet et le toggle
+  « Configure / Hide provisioning » de l'inspecteur de nœud, remplacés par le bloc repliable.
+
 ## 2.12.0 — Retrait du nœud Merge, la convergence est portée par tout nœud (#42)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Le nœud Merge est retiré

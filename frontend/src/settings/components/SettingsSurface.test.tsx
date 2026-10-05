@@ -476,6 +476,12 @@ describe("SettingsSurface", () => {
     expect(
       await screen.findByRole("button", { name: "Save provisioning" }),
     ).toBeInTheDocument();
+    // Notion #7: collapsed elsewhere, the instance section opens expanded here.
+    expect(screen.getByRole("button", { name: /^Provisioning/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByLabelText("Copy patterns")).toBeInTheDocument();
     // The page scrolls, not the surface: the shell is fixed, each category page owns its
     // scroll container.
     expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass(

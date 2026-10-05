@@ -8,10 +8,12 @@ export default function PersistedProvisioningEditor({
   scope,
   projectId,
   initialRepository = "",
+  defaultExpanded = false,
 }: {
   scope: "instance" | "project";
   projectId?: string;
   initialRepository?: string;
+  defaultExpanded?: boolean;
 }) {
   const [repository, setRepository] = useState(initialRepository);
   const [rules, setRules] = useState<ProvisioningRules>(EMPTY_PROVISIONING_RULES);
@@ -57,36 +59,39 @@ export default function PersistedProvisioningEditor({
   }
 
   return (
-    <div className="space-y-2">
-      <label className="block text-fg-3" style={{ fontSize: 10 }}>
-        Resolve against
-        <input
-          value={repository}
-          onChange={(event) => setRepository(event.target.value)}
-          placeholder="/absolute/path/to/repository"
-          className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
-        />
-      </label>
-      <ProvisioningRulesEditor
-        level={scope}
-        repository={repository}
-        rules={rules}
-        onChange={setRules}
-        onValidityChange={setValid}
-      />
-      <div className="flex items-center justify-between">
-        <span className={message?.includes("Failed") ? "text-st-failed" : "text-fg-4"}>
-          {message}
-        </span>
-        <button
-          type="button"
-          onClick={save}
-          disabled={!valid || saving || (scope === "project" && !projectId)}
-          className="rounded bg-acc px-2.5 py-1 font-medium text-on-acc disabled:opacity-40"
-        >
-          {saving ? "Saving…" : "Save provisioning"}
-        </button>
-      </div>
-    </div>
+    <ProvisioningRulesEditor
+      level={scope}
+      repository={repository}
+      rules={rules}
+      onChange={setRules}
+      onValidityChange={setValid}
+      defaultExpanded={defaultExpanded}
+      leading={
+        <label className="block text-fg-3" style={{ fontSize: 10 }}>
+          Resolve against
+          <input
+            value={repository}
+            onChange={(event) => setRepository(event.target.value)}
+            placeholder="/absolute/path/to/repository"
+            className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+          />
+        </label>
+      }
+      trailing={
+        <div className="flex items-center justify-between">
+          <span className={message?.includes("Failed") ? "text-st-failed" : "text-fg-4"}>
+            {message}
+          </span>
+          <button
+            type="button"
+            onClick={save}
+            disabled={!valid || saving || (scope === "project" && !projectId)}
+            className="rounded bg-acc px-2.5 py-1 font-medium text-on-acc disabled:opacity-40"
+          >
+            {saving ? "Saving…" : "Save provisioning"}
+          </button>
+        </div>
+      }
+    />
   );
 }

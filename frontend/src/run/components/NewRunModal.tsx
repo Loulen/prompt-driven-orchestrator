@@ -46,7 +46,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const sections = useSectionForm();
   const form = useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerSaved, sections });
   const {
-    sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, setProvisioningValid,
+    sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, handleProvisioningValidity,
     handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
   } = form;
   const sectionContext = useMemo<Omit<RunNewContext, "location" | "run" | "project">>(
@@ -121,7 +121,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                 repository={targetRepo}
                 rules={provisioning}
                 onChange={setProvisioning}
-                onValidityChange={setProvisioningValid}
+                onValidityChange={handleProvisioningValidity}
                 gitRef={sourceBranch || "HEAD"}
               />
             </div>

@@ -2,7 +2,10 @@ import { Plus } from "lucide-react";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import { ExtensionActionButtons } from "../../../shared/extensions/ExtensionActions";
 import { Tooltip } from "../../../shared/ui/tooltip";
-import { useRunCreationRightsStore } from "../../store/runCreationRightsStore";
+import {
+  useRecheckRunCreationRights,
+  useRunCreationRightsStore,
+} from "../../store/runCreationRightsStore";
 import { canCreateSomeRun } from "../../model/runCreationRights";
 
 /** Why « New Run » is disabled (CORE-5). */
@@ -21,6 +24,7 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
   const { availableRepos, setProjectEditor, projectOf, openProjectEditor } = pane;
   // CORE-5: disabled, with its reason, when no Projet allows creating a Run.
   const canCreate = useRunCreationRightsStore((s) => canCreateSomeRun(s.rights));
+  useRecheckRunCreationRights(!canCreate);
   return (
     <div
       className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"

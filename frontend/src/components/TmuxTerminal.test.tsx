@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 globalThis.ResizeObserver = class {
@@ -259,6 +259,48 @@ describe("TmuxTerminal", () => {
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
     expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+
+  // #968: the collapse button names the enlarged view's three exits.
+  it("names the exits on the collapse button when expanded", () => {
+    const { rerender } = render(
+      <TmuxTerminal session="pdo-run1-impl-iter-1" onExpand={() => {}} />,
+    );
+    const tooltipOf = () => screen.getByTestId("term-expand").parentElement;
+    expect(tooltipOf()).toHaveAttribute("data-tooltip", "Expand terminal");
+    rerender(<TmuxTerminal session="pdo-run1-impl-iter-1" expanded onExpand={() => {}} />);
+    expect(tooltipOf()).toHaveAttribute(
+      "data-tooltip",
+      "Collapse terminal · Esc · click outside",
+    );
+  });
+
+  // #968: the enlarged node terminal puts the node's identity at the head of
+  // the toolbar and its completion gestures before Copy.
+  it("renders the identity and action slots in the toolbar, in place of the connection dot", () => {
+    render(
+      <TmuxTerminal
+        session="pdo-run1-impl-iter-1"
+        toolbarIdentity={<span data-testid="slot-identity">design</span>}
+        toolbarActions={<button data-testid="slot-action">go</button>}
+      />,
+    );
+    const toolbar = screen.getByTestId("term-toolbar");
+    const identity = within(toolbar).getByTestId("slot-identity");
+    const action = within(toolbar).getByTestId("slot-action");
+    const session = within(toolbar).getByText("pdo-run1-impl-iter-1");
+    const copy = within(toolbar).getByTestId("term-copy");
+    // identity → session → … → action → Copy
+    expect(identity.compareDocumentPosition(session) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(action.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The connection dot gives way to the identity's own status dot.
+    expect(toolbar.firstElementChild).toBe(identity);
+  });
+
+  it("keeps the plain toolbar without slots", () => {
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
+    const toolbar = screen.getByTestId("term-toolbar");
+    expect(toolbar.firstElementChild?.className).toMatch(/rounded-full/);
   });
 
   it("shows detach button", () => {

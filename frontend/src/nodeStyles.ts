@@ -24,6 +24,19 @@ export const STATUS_BG: Record<NodeStatus, string> = {
   interrupted: "bg-st-interrupted-bg",
 };
 
+/** Status-tinted text, for a badge that carries the status colour (#968). */
+export const STATUS_TEXT: Record<NodeStatus, string> = {
+  pending: "text-fg-3",
+  running: "text-st-running",
+  awaiting_user: "text-st-await",
+  completed: "text-st-done",
+  skipped: "text-st-skipped",
+  failed: "text-st-failed",
+  stopped: "text-st-stopped",
+  stale: "text-st-stale",
+  interrupted: "text-st-interrupted",
+};
+
 export const STATUS_DOT: Record<NodeStatus, string> = {
   pending: "bg-st-pending",
   running: "bg-st-running",

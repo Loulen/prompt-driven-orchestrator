@@ -11,6 +11,8 @@ import type { IterationInfo, PortType } from "../types";
 import type { Element } from "hast";
 import ImageLightbox from "./ImageLightbox";
 import MermaidDiagram from "./MermaidDiagram";
+import CopyButton from "./CopyButton";
+import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 
 // #369 (residual flicker): react-markdown remounts a custom component whenever the
 // `components` entry at its position changes IDENTITY. NodeDetailPanel polls node
@@ -140,6 +142,10 @@ export default function MarkdownArtifactModal({
   // the fetch effect below (which only short-circuits on `isImage`) still runs.
   const isHtml = portType === "html";
   const [fetchedContent, setContent] = useState<string | null>(null);
+  // #965: which file `fetchedContent` belongs to. Paging to another file keeps
+  // the previous text on screen until the new fetch lands; the copy button must
+  // never write that previous file, so it is only armed when the paths agree.
+  const [fetchedPath, setFetchedPath] = useState<string | null>(null);
   const [fetchedLoading, setLoading] = useState(!isImage && !isInline);
   // #698: an inline source never fetches — its content/loading are read straight from
   // the prop (the caller fetches, the viewer renders), no state to keep in sync.
@@ -166,6 +172,7 @@ export default function MarkdownArtifactModal({
         const text = await fetchArtifact(runId, file.path);
         if (!cancelled) {
           setContent(text);
+          setFetchedPath(file.path);
           setLoading(false);
         }
       } catch {
@@ -287,6 +294,18 @@ export default function MarkdownArtifactModal({
     [],
   );
 
+  // #965: copy the displayed file's RAW text (frontmatter included — the strip
+  // below is for rendering only; html copies its source). No copy for images
+  // (out of scope) nor for an inline document (the changelog).
+  const showCopy = !isImage && !isInline;
+  const copyReady =
+    !filesLoading &&
+    !loading &&
+    !!file?.exists &&
+    fetchedContent != null &&
+    fetchedPath === file.path;
+  const { status: copyStatus, error: copyError, copy } = useCopyToClipboard();
+
   const frontmatter = file?.frontmatter;
   // An inline document is rendered as given (a release note may open on a `---` rule).
   const bodyContent = content ? (isInline ? content : stripFrontmatter(content)) : null;
@@ -385,6 +404,22 @@ export default function MarkdownArtifactModal({
                   <ChevronRight size={14} />
                 </button>
               </div>
+            )}
+            {showCopy && (
+              <>
+                {(hasIterNav || isRepeated) && (
+                  <span className="h-4 w-px bg-line-strong" aria-hidden="true" />
+                )}
+                <CopyButton
+                  status={copyStatus}
+                  error={copyError}
+                  testId="artifact-copy"
+                  disabled={!copyReady}
+                  onClick={() => {
+                    if (copyReady && fetchedContent != null) void copy(fetchedContent);
+                  }}
+                />
+              </>
             )}
             <button
               onClick={onClose}

@@ -35,10 +35,12 @@ const previewProvisioningMock = vi.fn().mockResolvedValue({
 // branches can be driven. Vitest compares arity strictly, hence the spread.
 const markNodeDoneMock = vi.fn().mockResolvedValue({ kind: "completed" });
 const releaseNodeCompletionMock = vi.fn().mockResolvedValue({ kind: "released" });
+const fetchArtifactMock = vi.fn();
 
 vi.mock("../api", () => ({
   fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
   fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
+  fetchArtifact: (...args: unknown[]) => fetchArtifactMock(...args),
   markNodeDone: (...args: unknown[]) => markNodeDoneMock(...args),
   releaseNodeCompletion: (...args: unknown[]) => releaseNodeCompletionMock(...args),
   killNode: (...args: unknown[]) => killNodeMock(...args),
@@ -119,7 +121,9 @@ vi.mock("./ui/resizable", () => ({
 }));
 
 vi.mock("./MarkdownArtifactModal", () => ({
-  default: () => null,
+  default: ({ portName }: { portName: string }) => (
+    <div data-testid="artifact-modal" data-port={portName} />
+  ),
 }));
 
 import NodeDetailPanel from "./NodeDetailPanel";
@@ -2840,6 +2844,126 @@ describe("NodeDetailPanel", () => {
       fireEvent.click(screen.getByTestId("mock-become-spectator"));
       expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
       expect(screen.getByTestId("term-identity")).toBeInTheDocument();
+    });
+  });
+
+  describe("copy raw file from a port row (#965)", () => {
+    function setClipboard(writeText: (text: string) => Promise<void>) {
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+        writable: true,
+      });
+    }
+
+    function port(
+      name: string,
+      files: { path: string; exists: boolean }[],
+      port_type?: "markdown" | "html" | "image" | "image_list",
+    ) {
+      return {
+        port: name,
+        repeated: false,
+        port_type,
+        files: files.map((f) => ({ ...f, size: 10, frontmatter: null })),
+      };
+    }
+
+    function ioFor(iter: number) {
+      return {
+        inputs: [port("task", [{ path: `n/iter-${iter}/task/output.md`, exists: true }])],
+        outputs: [
+          port("summary", [{ path: `n/iter-${iter}/summary/output.md`, exists: true }]),
+          port("report", [{ path: `n/iter-${iter}/report/output.html`, exists: true }], "html"),
+          port("shot", [{ path: `n/iter-${iter}/shot/output.png`, exists: true }], "image"),
+          port("missing", [{ path: `n/iter-${iter}/missing/output.md`, exists: false }]),
+        ],
+      };
+    }
+
+    function renderPanel(overrides?: Partial<NodeState>) {
+      return render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed", ...overrides })} runId="run-1" />
+        </TooltipProvider>,
+      );
+    }
+
+    function row(name: string) {
+      return document.querySelector(
+        `[data-testid="port-row"][data-kind="output"][data-port="${name}"]`,
+      ) as HTMLElement;
+    }
+
+    beforeEach(() => {
+      fetchArtifactMock.mockReset();
+      fetchArtifactMock.mockImplementation(async (_run: string, path: string) => `---\nk: v\n---\nraw ${path}`);
+      fetchNodeIOMock.mockImplementation(async (_run: string, _node: string, iter: number) => ioFor(iter));
+    });
+
+    it("offers a « Copy raw file » button on markdown and html output rows only", async () => {
+      renderPanel();
+      await act(async () => {});
+      expect(within(row("summary")).getByRole("button", { name: "Copy raw file" })).toBeInTheDocument();
+      expect(within(row("report")).getByTestId("port-copy")).toBeInTheDocument();
+      expect(within(row("shot")).queryByTestId("port-copy")).not.toBeInTheDocument();
+      expect(within(row("missing")).queryByTestId("port-copy")).not.toBeInTheDocument();
+      const input = document.querySelector('[data-testid="port-row"][data-kind="input"]') as HTMLElement;
+      expect(within(input).queryByTestId("port-copy")).not.toBeInTheDocument();
+    });
+
+    it("copies the raw main file of the shown iter without opening the modal", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      renderPanel();
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(fetchArtifactMock).toHaveBeenCalledWith("run-1", "n/iter-1/summary/output.md");
+      expect(writeText).toHaveBeenCalledWith("---\nk: v\n---\nraw n/iter-1/summary/output.md");
+      expect(within(row("summary")).getByText("Copied!")).toBeInTheDocument();
+      expect(screen.queryByTestId("artifact-modal")).not.toBeInTheDocument();
+    });
+
+    it("the row's open target still opens the modal", async () => {
+      renderPanel();
+      await act(async () => {});
+      fireEvent.click(within(row("summary")).getByTestId("port-row-open"));
+      expect(screen.getByTestId("artifact-modal")).toHaveAttribute("data-port", "summary");
+    });
+
+    it("copies the iter picked in the panel's selector", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      renderPanel({
+        iter: 2,
+        iterations: [
+          { iter: 1, status: "completed", started_at: null, completed_at: null },
+          { iter: 2, status: "completed", started_at: null, completed_at: null },
+        ],
+      });
+      await act(async () => {});
+      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(await screen.findByTestId("iter-option-1"));
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(writeText).toHaveBeenCalledWith("---\nk: v\n---\nraw n/iter-1/summary/output.md");
+    });
+
+    it("shows Copy failed (never Copied!) when the clipboard refuses", async () => {
+      setClipboard(vi.fn().mockRejectedValue(new DOMException("NotAllowedError")));
+      renderPanel();
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(within(row("summary")).getByText("Copy failed")).toBeInTheDocument();
+      expect(screen.queryByText("Copied!")).not.toBeInTheDocument();
     });
   });
 });

@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.114.0
+## 1.115.0
 **Terminal de nœud agrandi en overlay quasi plein écran** (#968, spec #967).
 
 - Le bouton Expand du terminal de nœud ouvre un overlay quasi plein écran (marge de 16 px, fond
@@ -19,6 +19,16 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - Fermeture par clic sur le fond ou Échap (hors du terminal ; Échap dans le terminal part à
   l'agent). En `awaiting_user`, la barre porte les gestes compacts (libérer, marquer terminé)
   par le même chemin que le panneau. L'agrandi n'est jamais persisté.
+
+## 1.114.0
+**Copier le contenu brut d'un output en un clic** (#965, story Notion PDO-12).
+
+- Un bouton de copie apparaît sur la ligne de port (section Outputs du panneau de détail, au
+  survol ou au focus clavier) et dans le header de la modale d'artefact. Il copie le fichier
+  brut de l'iter affichée, octet pour octet : frontmatter comprise, markdown non rendu, source
+  pour le html. Il marche aussi sur un Run archivé.
+- Retour « Copied! » ou « Copy failed » (raison en infobulle). Aucun bouton sur les outputs
+  image.
 
 ## 1.113.1
 **Terminal : fin du saut de ligne à chaque changement de node** (#946, spec #945, story Notion #1).

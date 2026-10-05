@@ -500,4 +500,155 @@ describe("MarkdownArtifactModal", () => {
       expect(onClose).not.toHaveBeenCalled();
     });
   });
+
+  describe("copy raw file (#965)", () => {
+    function setClipboard(writeText: (text: string) => Promise<void>) {
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+        writable: true,
+      });
+    }
+
+    const RAW = "---\nknowledge_base_update: false\n---\n# Title\n\nbody";
+
+    it("copies the displayed file's raw text, frontmatter included", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      fetchArtifactMock.mockResolvedValue(RAW);
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{ kind: "static", files: [makeFile("/path/out.md")] }}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+
+      const btn = screen.getByRole("button", { name: "Copy raw file" });
+      await act(async () => {
+        fireEvent.click(btn);
+      });
+      expect(writeText).toHaveBeenCalledWith(RAW);
+      expect(screen.getByText("Copied!")).toBeInTheDocument();
+    });
+
+    it("copies the iter navigated to, not the latest one", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      fetchArtifactMock.mockImplementation(async (_run, path: string) => `raw of ${path}`);
+      fetchNodeIOMock.mockImplementation(async (_run, _node, iter) => ({
+        inputs: [],
+        outputs: [
+          { port: "out", repeated: false, files: [makeFile(`/iter-${iter}/out.md`)] },
+        ],
+      }));
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{
+            kind: "iter-nav",
+            nodeId: "node-1",
+            portKind: "output",
+            iterations: makeIters(2),
+            initialIter: 2,
+          }}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+      fireEvent.click(screen.getByTestId("iter-prev"));
+      await act(async () => {});
+      expect(screen.getByText("iter 1 of 2")).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("artifact-copy"));
+      });
+      expect(writeText).toHaveBeenCalledWith("raw of /iter-1/out.md");
+    });
+
+    it("copies the html source of an html port", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      const html = "<!doctype html><h1>Report</h1>";
+      fetchArtifactMock.mockResolvedValue(html);
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="report"
+          portType="html"
+          source={{ kind: "static", files: [makeFile("/path/report.html")] }}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("artifact-copy"));
+      });
+      expect(writeText).toHaveBeenCalledWith(html);
+    });
+
+    it("has no copy button for an image port", () => {
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="shot"
+          portType="image"
+          source={{ kind: "static", files: [makeFile("/path/shot.png")] }}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.queryByTestId("artifact-copy")).not.toBeInTheDocument();
+    });
+
+    it("has no copy button for an inline source (changelog)", () => {
+      render(
+        <MarkdownArtifactModal
+          runId=""
+          portName="What's new"
+          source={{ kind: "inline", content: "# 1.0.0" }}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.queryByTestId("artifact-copy")).not.toBeInTheDocument();
+    });
+
+    it("is disabled while the content loads and when it could not be loaded", async () => {
+      fetchArtifactMock.mockRejectedValue(new Error("500"));
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{ kind: "static", files: [makeFile("/path/out.md")] }}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByTestId("artifact-copy")).toBeDisabled();
+      await act(async () => {});
+      expect(screen.getByText("Could not load content.")).toBeInTheDocument();
+      expect(screen.getByTestId("artifact-copy")).toBeDisabled();
+    });
+
+    it("shows Copy failed (never Copied!) when writeText rejects", async () => {
+      setClipboard(vi.fn().mockRejectedValue(new DOMException("NotAllowedError")));
+      fetchArtifactMock.mockResolvedValue(RAW);
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{ kind: "static", files: [makeFile("/path/out.md")] }}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("artifact-copy"));
+      });
+      expect(screen.getByText("Copy failed")).toBeInTheDocument();
+      expect(screen.queryByText("Copied!")).not.toBeInTheDocument();
+      expect(screen.getByTestId("artifact-copy")).toHaveAttribute("data-status", "failed");
+    });
+  });
 });

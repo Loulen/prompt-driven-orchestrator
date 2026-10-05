@@ -8,9 +8,10 @@ import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 // Layer 3b — Inputs/Outputs sections + MarkdownArtifactModal (#27).
 //
 // Post-refonte: the IO sections live in the Run inspector's details pane. An
-// output port that has artifacts on disk renders as a clickable `button.port-row`
-// that opens the MarkdownArtifactModal; a port with no files renders as a
-// non-interactive `div.port-row`. The reviewer runs (so the daemon tracks a
+// output port that has artifacts on disk renders as a `.port-row` holding an open
+// button stretched over it (#965: plus a sibling copy button) that opens the
+// MarkdownArtifactModal; a port with no files renders as a `.port-row` with no
+// button at all. The reviewer runs (so the daemon tracks a
 // NodeRun and the run pane shows its IO); we seed its `review` output and leave
 // `notes` empty, exercising both the interactive and non-interactive cases.
 
@@ -104,13 +105,13 @@ async function createRunAndSeedArtifacts(page: Page, baseURL: string) {
 /**
  * The seeded `review` output card. Target it by port name, not `.first()`:
  * since #370 fixed input resolution, the reviewer's resolved `task` input also
- * renders as a clickable `button.port-row`, so the first button is no longer
- * guaranteed to be the output. The port name is the button's leading text.
+ * renders as a clickable `.port-row`, so the first row is no longer
+ * guaranteed to be the output. The port name is the row's leading text.
  */
 function reviewCard(page: Page) {
   return page
     .getByTestId("inspector-pane-run")
-    .locator("button.port-row")
+    .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: /^review/ });
 }
 
@@ -196,14 +197,14 @@ test("port card with no files renders as non-interactive div", async ({
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
 
-  // The `notes` output has no seeded files, so its port row is a div, not a button.
+  // The `notes` output has no seeded files, so its port row holds no button:
+  // neither the open target nor the copy one (#965).
   const notesRow = page
     .getByTestId("inspector-pane-run")
     .locator(".port-row")
     .filter({ hasText: "notes" });
   await expect(notesRow).toBeVisible({ timeout: 5_000 });
-  const tag = await notesRow.evaluate((el) => el.tagName.toLowerCase());
-  expect(tag).toBe("div");
+  await expect(notesRow.locator("button")).toHaveCount(0);
 });
 
 test("port card opens modal via keyboard (Enter key)", async ({
@@ -219,7 +220,7 @@ test("port card opens modal via keyboard (Enter key)", async ({
   const portCard = reviewCard(page);
   await expect(portCard).toBeVisible({ timeout: 5_000 });
 
-  await portCard.focus();
+  await portCard.getByTestId("port-row-open").focus();
   await page.keyboard.press("Enter");
 
   const modal = page.locator(".artifact-markdown");

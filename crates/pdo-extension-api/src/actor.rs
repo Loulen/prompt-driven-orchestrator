@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Who triggers a mutation (CONTEXT.md § *Extensions*).
 ///
@@ -8,7 +8,11 @@ use serde::Serialize;
 /// ([`Actor::Identified`]).
 ///
 /// Non-exhaustive: adding a kind of actor is a minor evolution of the API.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+///
+/// Deserializable since 0.8: the core stores the Actor that created a Run and
+/// the last editor of a Trigger, and gives them back on the API.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Actor {
@@ -54,5 +58,26 @@ mod tests {
             serde_json::json!({ "kind": "local_operator" })
         );
         assert_eq!(agent.kind(), "agent");
+    }
+
+    #[test]
+    fn reads_back_what_it_writes() {
+        for actor in [
+            Actor::LocalOperator,
+            Actor::Agent {
+                run_id: "r1".into(),
+                node_id: "n1".into(),
+            },
+            Actor::Trigger {
+                trigger_id: "t1".into(),
+            },
+            Actor::Identified {
+                namespace: "iam".into(),
+                id: "alice".into(),
+            },
+        ] {
+            let json = serde_json::to_value(&actor).unwrap();
+            assert_eq!(serde_json::from_value::<Actor>(json).unwrap(), actor);
+        }
     }
 }

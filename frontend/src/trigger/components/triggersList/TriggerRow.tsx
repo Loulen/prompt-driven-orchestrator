@@ -11,6 +11,8 @@ import { repoGroupLabel } from "../../../lib/groupByRepo";
 import SelectControl from "../../../shared/ui/SelectControl";
 import { humanizeCron } from "../../model/cronPresets";
 import { lastOutcomeTooltip, outcomeDot, outcomeRing } from "../../model/outcome";
+import SuspendedPill from "./SuspendedPill";
+import { suspensionTooltip } from "../../model/suspension";
 
 interface Props {
   trigger: Trigger;
@@ -44,12 +46,12 @@ export default function TriggerRow({
   onToggle,
 }: Props) {
   const dot = outcomeDot(t.last_outcome);
-  // ADR-0081 (#31): what the `trigger/item` decorations mark.
-  const decorated = useMemo(
-    () => ({ entity: { kind: "trigger", id: t.id, name: t.name, attributes: t.attributes ?? {} } }),
-    [t.id, t.name, t.attributes],
-  );
+  // ADR-0081 (#31): what the `trigger/item` decorations mark — with its last
+  // editor and its suspension (API 0.8), for an extension that answers for it.
   const extra = useMemo(() => ({ entity: triggerEntity(t) }), [t]);
+  // API 0.8: a suspended Trigger reads switched off, whatever its stored bit.
+  const suspension = t.suspension ?? null;
+  const on = t.enabled && !suspension;
   return (
     <button
       onClick={onSelect}
@@ -59,7 +61,7 @@ export default function TriggerRow({
           : isSelected
             ? "border-l-transparent bg-bg-3 text-fg"
             : "border-l-transparent text-fg-2 hover:bg-bg-3/50"
-      } ${t.enabled ? "" : "opacity-60"}`}
+      } ${suspension ? "bg-st-interrupted/5" : ""} ${t.enabled ? "" : "opacity-60"}`}
       style={{ fontSize: "11.5px" }}
       data-testid="trigger-row"
       // #911: one row addressable by id, the way `data-run-row` is for Runs.
@@ -75,7 +77,10 @@ export default function TriggerRow({
         onSelect={(e) => onSelectControl(e.shiftKey)}
       />
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium">{t.name}</div>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={`truncate font-medium ${suspension ? "text-fg-3" : ""}`}>{t.name}</span>
+          {suspension && <SuspendedPill suspension={suspension} />}
+        </div>
         <div
           className="mt-0.5 flex items-center gap-1.5 truncate text-fg-4"
           style={{ fontSize: "10px" }}
@@ -100,12 +105,12 @@ export default function TriggerRow({
             pipeline's name and several wrap; nothing at all without one. */}
         <ExtensionDecorations<DecorationContext>
           location="trigger/item"
-          extra={decorated}
+          extra={extra}
           block
           className="mt-0.5"
         />
       </div>
-      {!t.enabled && (
+      {!t.enabled && !suspension && (
         <span
           className="shrink-0 rounded border border-line-strong px-1 py-px text-fg-4"
           style={{ fontSize: "9px" }}
@@ -180,11 +185,17 @@ export default function TriggerRow({
       {/* Enable/disable toggle — always visible so paused state is reversible. */}
       <span
         role="switch"
-        aria-checked={t.enabled}
+        aria-checked={on}
         aria-label={t.enabled ? "Disable trigger" : "Enable trigger"}
-        title={t.enabled ? "Disable trigger" : "Enable trigger"}
+        title={
+          suspension
+            ? `Suspended: ${suspensionTooltip(suspension)}`
+            : t.enabled
+              ? "Disable trigger"
+              : "Enable trigger"
+        }
         className={`shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-bg-4 ${
-          t.enabled ? "text-acc" : "text-fg-4"
+          on ? "text-acc" : "text-fg-4"
         }`}
         onClick={(e) => {
           e.stopPropagation();
@@ -207,6 +218,8 @@ function triggerEntity(t: Trigger): TriggerEntity {
     pipeline: t.pipeline_name,
     enabled: t.enabled,
     attributes: t.attributes ?? {},
+    last_editor: t.last_editor ?? null,
+    suspension: t.suspension ?? null,
   };
 }
 

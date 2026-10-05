@@ -72,7 +72,10 @@ use crate::domain::run_cost::usage::{aggregate_by_model, parse_line, Line, Model
 #[cfg(test)]
 use crate::domain::run_cost::usage::{line_cost, Usage};
 use crate::domain::state::{CostForm, CostStat, HarnessCost};
-use executions::{collect_executions, collect_jsonl_file, collect_jsonl_paths, Execution};
+pub use executions::node_claude_root;
+use executions::{
+    claude_roots, collect_executions, collect_jsonl_file, collect_jsonl_paths, Execution,
+};
 use pdo_harness::claude_transcript::cc_project_dirname;
 use pdo_sandbox::adapters::staging::stores::HarnessStores;
 use reported::reported_execution;
@@ -1074,6 +1077,105 @@ mod tests {
         assert!((usd[0] - 1.0).abs() < 1e-9);
         assert!((usd[1] - 2.0).abs() < 1e-9);
         assert!((breakdown.cost.unwrap().usd - 3.0).abs() < 1e-9);
+    }
+
+    /// API 0.8: a node an extension gave a `CLAUDE_CONFIG_DIR` writes its
+    /// transcript under that folder; its cost is read there, beside the other
+    /// nodes' under the Run's own root.
+    #[test]
+    fn a_node_given_a_claude_config_dir_is_costed_under_it() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude").join("projects");
+        let alice = home.path().join("iam").join("alice");
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "config-dir-run";
+        let seed = |root: &Path, node: &str, sid: &str| {
+            let dir = pdo_workspace::adapters::git::worktrees::sub_worktree_path(
+                repo.path(),
+                run_id,
+                node,
+                1,
+            );
+            let project = root.join(cc_project_dirname(&dir));
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(
+                project.join(format!("{sid}.jsonl")),
+                format!("{}\n", assistant(sid, sid, "claude-opus-4-8", 1_000_000, 0)),
+            )
+            .unwrap();
+        };
+        seed(&claude, "a", "sid-a");
+        seed(&alice.join("projects"), "b", "sid-b");
+        let started = |node: &str, sid: &str, config_dir: Option<&Path>| Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: EventKind::NodeStarted,
+            node_id: Some(node.into()),
+            iter: Some(1),
+            payload: Some(match config_dir {
+                Some(dir) => serde_json::json!({
+                    "node_type": "agent", "isolated_worktree": true, "harness": "claude",
+                    "session_id": sid, "claude_config_dir": dir,
+                }),
+                None => serde_json::json!({
+                    "node_type": "agent", "isolated_worktree": true, "harness": "claude",
+                    "session_id": sid,
+                }),
+            }),
+        };
+        let events = vec![
+            started("a", "sid-a", None),
+            started("b", "sid-b", Some(&alice)),
+        ];
+
+        let breakdown =
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
+        let nodes: Vec<_> = breakdown
+            .contributions
+            .iter()
+            .filter(|c| c.scope == CostScope::Node)
+            .collect();
+        assert_eq!(nodes.len(), 2);
+        assert!(
+            nodes.iter().all(|c| c.usd.is_some()),
+            "both nodes costed: {nodes:?}"
+        );
+        assert!((breakdown.cost.unwrap().usd - 10.0).abs() < 1e-9);
+
+        // The memo keys on the extension's folder too: a new line there is seen.
+        let cached = compute_run_cost_breakdown_cached(
+            &events,
+            &claude,
+            &stores,
+            repo.path(),
+            run_id,
+            &builtin(),
+        );
+        assert!((cached.cost.unwrap().usd - 10.0).abs() < 1e-9);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let dir =
+            pdo_workspace::adapters::git::worktrees::sub_worktree_path(repo.path(), run_id, "b", 1);
+        let file = alice
+            .join("projects")
+            .join(cc_project_dirname(&dir))
+            .join("sid-b.jsonl");
+        let mut text = std::fs::read_to_string(&file).unwrap();
+        text.push_str(&format!(
+            "{}\n",
+            assistant("m2", "r2", "claude-opus-4-8", 1_000_000, 0)
+        ));
+        std::fs::write(&file, text).unwrap();
+        let cached = compute_run_cost_breakdown_cached(
+            &events,
+            &claude,
+            &stores,
+            repo.path(),
+            run_id,
+            &builtin(),
+        );
+        assert!((cached.cost.unwrap().usd - 15.0).abs() < 1e-9);
     }
 
     #[test]

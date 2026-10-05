@@ -156,9 +156,12 @@ pub fn collect_executions(
         } else {
             Some(pdo_workspace::adapters::git::worktrees::worktree_dir_for_run(repo_root, run_id))
         };
+        // API 0.8: a node an extension gave a `CLAUDE_CONFIG_DIR` writes its
+        // transcripts under that folder, frozen on its `NodeStarted`.
+        let root = node_claude_root(event).unwrap_or_else(|| claude_root.to_path_buf());
         let project = working_dir
             .as_ref()
-            .map(|working_dir| claude_root.join(cc_project_dirname(working_dir)));
+            .map(|working_dir| root.join(cc_project_dirname(working_dir)));
         let legacy_claim = harness == pdo_harness::registry::CLAUDE
             && session_id.is_none()
             && is_isolated
@@ -189,6 +192,36 @@ pub fn collect_executions(
         });
     }
     executions
+}
+
+/// The `projects/` root of the `CLAUDE_CONFIG_DIR` frozen on a `NodeStarted`
+/// (API 0.8), if an extension gave the node one.
+pub fn node_claude_root(event: &crate::domain::event::Event) -> Option<PathBuf> {
+    event
+        .payload
+        .as_ref()?
+        .get("claude_config_dir")?
+        .as_str()
+        .filter(|dir| !dir.trim().is_empty())
+        .map(|dir| PathBuf::from(dir).join("projects"))
+}
+
+/// Every `projects/` root a Run's Claude Code transcripts may live under: the
+/// Run's own (`claude_root`), then each `CLAUDE_CONFIG_DIR` its nodes were
+/// given, once each.
+pub fn claude_roots(events: &[crate::domain::event::Event], claude_root: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![claude_root.to_path_buf()];
+    for event in events {
+        if event.kind != crate::domain::event::EventKind::NodeStarted {
+            continue;
+        }
+        if let Some(root) = node_claude_root(event) {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+    }
+    roots
 }
 
 pub fn collect_jsonl_paths(dir: &Path, out: &mut Vec<PathBuf>) {

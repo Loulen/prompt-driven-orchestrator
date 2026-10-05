@@ -103,6 +103,7 @@ pub(super) async fn launch(
         tail,
         sandbox.as_ref().map(SandboxExec::wrap).as_ref(),
         inject_hook,
+        &crate::application::node::extension_launch::env_pairs(&plan.extension),
     ) {
         // #785 / ADR-0050 §2: `duplicate session` while the session of this very
         // `(run, node, iter)` is alive means a WINNER already runs this iteration —

@@ -25,6 +25,7 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             agent_choice TEXT,
             auto_name INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 1,
+            last_editor TEXT,
             next_fire_at TEXT,
             last_fired_at TEXT,
             last_outcome TEXT,
@@ -138,6 +139,19 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .is_some();
     if !has_auto_name {
         sqlx::query("ALTER TABLE triggers ADD COLUMN auto_name INTEGER NOT NULL DEFAULT 1")
+            .execute(db)
+            .await?;
+    }
+
+    // `last_editor` — NULLABLE (API 0.8): the Actor JSON of the last creation or
+    // edit; NULL on a row last edited before it was recorded.
+    let has_last_editor =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'last_editor'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_last_editor {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN last_editor TEXT")
             .execute(db)
             .await?;
     }

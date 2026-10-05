@@ -13,6 +13,11 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
 
     let mut preamble = String::new();
 
+    // API 0.8: what the extensions say comes first, before anything of PDO's.
+    if let Some(text) = ctx.extension_preamble.filter(|t| !t.trim().is_empty()) {
+        preamble.push_str(text.trim_end());
+        preamble.push_str("\n\n");
+    }
     preamble.push_str("# PDO Runtime Preamble\n\n");
     preamble.push_str(&format!(
         "You are node `{}` in pipeline `{}`, iteration {}.\n\n",

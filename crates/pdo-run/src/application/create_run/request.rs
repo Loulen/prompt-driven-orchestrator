@@ -94,6 +94,16 @@ pub struct CreateRunRequest {
     /// its fetch-free cut by design (ADR-0070 §3).
     #[serde(skip)]
     pub source_fetch_error: Option<FetchError>,
+    /// The Actor of the Run's `run` × `create` (API 0.8): the caller of `POST
+    /// /runs`, or the Trigger of a fire. `#[serde(skip)]` like
+    /// `source_fetch_error`: the daemon decides it, never a body. Frozen into
+    /// `RunStarted` as `created_by`.
+    #[serde(skip)]
+    pub created_by: Option<pdo_kernel::Actor>,
+    /// The last editor of the Trigger that fires this Run, frozen into
+    /// `RunStarted` as `trigger_editor`. `None` on every other path.
+    #[serde(skip)]
+    pub trigger_editor: Option<pdo_kernel::Actor>,
 }
 
 /// The top-level keys `POST /runs` accepts, kept in lock-step with

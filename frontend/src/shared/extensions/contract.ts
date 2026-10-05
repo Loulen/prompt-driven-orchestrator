@@ -12,6 +12,8 @@
 
 import type { ReactNode } from "react";
 import type { UiLocation } from "../generated/UiLocation";
+import type { Actor } from "../generated/Actor";
+import type { TriggerSuspension } from "../generated/TriggerSuspension";
 import type { Attributes } from "./attributes";
 import type { BaseContext } from "./context";
 
@@ -126,7 +128,14 @@ export interface PipelineConfigContext extends LocationContext {
 
 /** `run/info`: the Run the Info tab shows. */
 export interface RunInfoContext extends LocationContext {
-  entity: EntityContext;
+  entity: RunInfoEntity;
+}
+
+/** The Run of `run/info`: who created it and, when a Trigger fired it, the
+ *  Trigger's last editor (API 0.8); `null` when unknown. */
+export interface RunInfoEntity extends EntityContext {
+  created_by: Actor | null;
+  trigger_editor: Actor | null;
 }
 
 /** A list filter (`runs/filter`, `triggers/filter`, `pipelines/filter`, `projects/filter`): the attribute filter in force. */
@@ -209,6 +218,10 @@ export interface TriggerEntity extends EntityContext {
   name: string;
   pipeline: string;
   enabled: boolean;
+  /** Its last creation or edit (API 0.8); `null` when unknown. */
+  last_editor: Actor | null;
+  /** Why an extension suspends it (API 0.8); `null` when none does. */
+  suspension: TriggerSuspension | null;
 }
 
 /** A Pipeline: a row of the Pipelines tab, or an editor tab (`pipeline/item/menu`, `tab/menu`). */

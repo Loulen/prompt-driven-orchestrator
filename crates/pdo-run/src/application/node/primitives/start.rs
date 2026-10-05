@@ -131,6 +131,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         // This path only runs for a never-started iteration, so no partial output
         // can survive; restart-with-artifacts is `node_spawn`'s concern.
         partial_outputs: &[],
+        extension_preamble: params.extension.preamble.as_deref(),
     };
 
     let full_prompt = crate::application::node::prompt::build_full_prompt(&aug_ctx, &role_prompt);
@@ -203,7 +204,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
     };
 
-    let node_started = event::Event {
+    let mut node_started = event::Event {
         id: None,
         run_id: params.run_id.to_string(),
         ts: pdo_kernel::clock::now_iso(),
@@ -239,6 +240,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         })),
     };
 
+    crate::application::node::spawn::freeze_claude_config_dir(&mut node_started, &params.extension);
     let session_name =
         pdo_session::domain::names::node_session_name(params.run_id, params.node_id, params.iter);
     // **Do not add a spawn path that spawns before the caller appends
@@ -266,6 +268,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         sandbox,
         // Gated by `!is_script`: a script node runs bash, so it carries no hook.
         inject_hook: params.inject_hook && !is_script,
+        extension_env: crate::application::node::extension_launch::env_pairs(&params.extension),
     };
 
     // #588/#810 / ADR-0069 §1: NO `NodeAwaitingUser` at spawn, interactive or

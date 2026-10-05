@@ -142,6 +142,9 @@ pub struct AugmentContext<'a> {
     /// `build_preamble` surfaces it as input to build on — never a target to
     /// clobber. Empty on a first spawn and on a clean restart.
     pub partial_outputs: &'a [std::path::PathBuf],
+    /// The text the extensions place at the very top of the preamble (API
+    /// 0.8), before `# PDO Runtime Preamble`; `None` when they give none.
+    pub extension_preamble: Option<&'a str>,
 }
 
 pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String {
@@ -259,6 +262,7 @@ mod tests {
             reused_sub_worktree: false,
             interrupted_git_ops: &[],
             partial_outputs: &[],
+            extension_preamble: None,
         }
     }
 
@@ -1025,6 +1029,33 @@ mod tests {
         assert!(full.contains("# PDO Runtime Preamble"));
         assert!(full.contains("You are a planner. Plan well."));
         assert!(full.contains("---"));
+    }
+
+    /// API 0.8: the extensions' text opens the prompt, before anything of
+    /// PDO's; without one, the prompt is unchanged.
+    #[test]
+    fn the_extension_preamble_comes_first() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let plain = build_full_prompt(&sample_ctx(&pipeline, node, &vars), "Plan.");
+        assert!(plain.starts_with("# PDO Runtime Preamble"), "{plain}");
+
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.extension_preamble = Some("Ligne de fixture\n");
+        let full = build_full_prompt(&ctx, "Plan.");
+        assert!(
+            full.starts_with("Ligne de fixture\n\n# PDO Runtime Preamble"),
+            "{full}"
+        );
+        assert_eq!(full.strip_prefix("Ligne de fixture\n\n").unwrap(), plain);
+
+        ctx.extension_preamble = Some("  \n");
+        assert_eq!(
+            build_full_prompt(&ctx, "Plan."),
+            plain,
+            "a blank text is none"
+        );
     }
 
     #[test]

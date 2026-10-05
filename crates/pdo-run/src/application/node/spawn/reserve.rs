@@ -41,6 +41,7 @@ pub(super) async fn reserve(
         resolved_model,
         resolved_effort,
         session_id,
+        extension,
     } = plan;
     let run_sandboxed = *run_sandboxed;
     let has_sub_worktree = wt.has_sub_worktree;
@@ -205,6 +206,7 @@ pub(super) async fn reserve(
             reused_sub_worktree,
             interrupted_git_ops,
             partial_outputs: &partial_outputs,
+            extension_preamble: extension.preamble.as_deref(),
         };
 
         let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, role_prompt);
@@ -220,7 +222,7 @@ pub(super) async fn reserve(
             Vec::new()
         };
 
-        let node_started = event::Event {
+        let mut node_started = event::Event {
             id: None,
             run_id: run_id.to_string(),
             ts: pdo_kernel::clock::now_iso(),
@@ -291,6 +293,7 @@ pub(super) async fn reserve(
                 "base_sha": spawn_base_sha,
             })),
         };
+        freeze_claude_config_dir(&mut node_started, extension);
         // A failed `NodeStarted` append means the reservation was NOT recorded:
         // treat it as a spawn abort (reap + RunFailed) rather than launching a
         // tmux session the run's event log has no record of.
@@ -352,4 +355,20 @@ pub(super) async fn reserve(
         }
     };
     Ok((full_prompt, script_env))
+}
+
+/// API 0.8: FREEZE the `CLAUDE_CONFIG_DIR` an extension gave the node, so its
+/// cost and liveness read its transcripts under that folder. Written only when
+/// given, so every other `NodeStarted` keeps its shape.
+pub(crate) fn freeze_claude_config_dir(
+    node_started: &mut event::Event,
+    extension: &pdo_kernel::extension_host::NodeContribution,
+) {
+    use crate::application::node::extension_launch::CLAUDE_CONFIG_DIR;
+    if let (Some(dir), Some(payload)) = (
+        extension.env.get(CLAUDE_CONFIG_DIR),
+        node_started.payload.as_mut(),
+    ) {
+        payload["claude_config_dir"] = serde_json::json!(dir);
+    }
 }

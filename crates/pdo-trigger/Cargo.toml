@@ -19,6 +19,8 @@ path = "src/lib.rs"
 
 [dependencies]
 pdo-kernel.workspace = true
+# `ts`: the Actor a Run and a Trigger carry (API 0.8) is part of their DTOs.
+pdo-extension-api = { workspace = true, features = ["ts"] }
 pdo-harness.workspace = true
 pdo-platform.workspace = true
 pdo-pipeline.workspace = true

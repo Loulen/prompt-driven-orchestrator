@@ -146,6 +146,15 @@ pub async fn reattach_node_session(
         )
     });
 
+    // API 0.8: the resumed agent re-carries what the extensions give its launch.
+    let extension = crate::application::node::extension_launch::contribution(
+        state,
+        run_state,
+        node_id,
+        iter,
+        pdo_extension_api::NodeKind::Agent,
+    )
+    .await;
     if let Err(e) = pdo_session::application::launch::resume(
         state.tmux(),
         session_name,
@@ -163,6 +172,7 @@ pub async fn reattach_node_session(
             .map(crate::application::sandbox::SandboxExec::wrap)
             .as_ref(),
         inject_hook,
+        &crate::application::node::extension_launch::env_pairs(&extension),
     ) {
         return ReattachOutcome::ResumeFailed {
             error: e.to_string(),

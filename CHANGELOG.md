@@ -43,7 +43,8 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
 - **CORE-4, Trigger suspendu** : hook `Extension::trigger_suspension`. Un Trigger suspendu ne fire plus
   (`skipped-suspended` dans son historique, `409` sur « Run now », qui nomme le Trigger et la raison) ; `GET /triggers` le rend avec
   `suspension: {extension, reason}`, l'UI l'affiche interrupteur éteint, puce ambre
-  « suspended » (qui passe sous le nom quand la colonne est étroite), raison en infobulle et
+  « suspended » (qui passe sous le nom quand la colonne est étroite, et se tronque au survol plutôt que
+  de passer sous les actions), raison en infobulle et
   dans le détail.
 - Contexte des extensions : `trigger/item` et `trigger/item/menu` reçoivent `last_editor` et
   `suspension` ; `run/info` reçoit `created_by` et `trigger_editor`.

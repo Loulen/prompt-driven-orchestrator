@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.10.0 — Copier en un clic le contenu brut d'un output (#41)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Dans le détail d'un node, un
+bouton « Copy raw file » apparaît sur la ligne de port d'un output (survol ou focus clavier) et
+dans le header de la modale d'artefact. Il copie le fichier brut de l'iteration affichée
+(frontmatter comprise, markdown non rendu, source pour un output html), y compris sur un Run
+archivé, et affiche « Copied! » ou « Copy failed » avec la raison en infobulle. Aucun bouton sur
+les outputs image (portage core 1.114.0).
+
 ## 2.9.0 — Éditeur : edge au drag uniquement, Assistant et Info exclusifs (#39)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Changement de geste sur le

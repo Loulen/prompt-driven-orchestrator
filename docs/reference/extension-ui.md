@@ -111,6 +111,17 @@ selected Run, or when its repository belongs to no Projet.
   or while it loads, the button shows the label's first letter, boxed.
 - **Context**: `PageContext` for a page, `LocationContext` for an action.
 
+### `topbar/account`
+
+- **Accepts**: decoration.
+- **Renders**: the component as is, at the far right of the top bar, **after Settings**: an avatar
+  opening the menu of the signed-in person (Profile, Administration, Sign out), say. The component
+  draws its own button and menu (the `DropdownMenu` of its bundle). Nothing without a
+  contribution.
+- **Context**: `DecorationContext`, `entity` = `null`. Who is signed in: `useCurrentActor()` of
+  `@pdo/extension-ui` ([below](#the-actors-names)).
+- **Since**: 0.8.
+
 ### `settings`
 
 - **Accepts**: section.
@@ -651,6 +662,7 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `HostedContribution({ element, props? })` | One element: its component with `extension`, `context` and `props`, inside an error boundary; an action as a button (its command's icon and title) that calls it |
 | `HostedContributions({ location, context?, props?, wrap? })` | Every element through `HostedContribution`, each wrapped by `wrap(element, rendered)` when given; `null` without element |
 | `runHostedCommand(element)` | Call an action's command, as its button does |
+| `useCurrentActor()`, `useActorDisplay(actor)` | The Actors' names, since 0.8 ([The Actors' names](#the-actors-names)) |
 | `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
 
 - **Context**: an element receives the host's `context`, merged over the context every location
@@ -663,6 +675,36 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 - **Version**: a bundle that imports the module declares it (`importing_ui_module()`, on the wire
   `ui.ui_module_major`). A bundle built against another major than the front's is never loaded,
   and a banner says so, as for React. The module's version is `pdo-extension-api`'s.
+
+## The Actors' names
+
+Since 0.8 an extension may name the Actors (`Extension::display_name`, a name and an avatar),
+and every extension's interface shows those names without knowing the extension that gave
+them. The shared module `@pdo/extension-ui` exports:
+
+| Export | What it does |
+| --- | --- |
+| `useCurrentActor()` | The Actor using the interface and its display name, `{ actor, display }` (`display` is `null` when no extension names it); `null` until known |
+| `useActorDisplay(actor)` | The display name of any `Actor` (`{ name, avatar_url }`); `null` while unknown, or when no extension names it. Batched and cached: call it per row |
+
+The core shows them too: the creator of a Run on its row (only when an extension names it),
+the `actor_display` of each row of the audit journal (`GET /audit`).
+
+Over HTTP: `GET /actors/me` (`{actor, display}`) and `POST /actors/display` (`{actors: [Actor]}`
+→ `{displays: [ActorDisplay | null]}`, in order).
+
+## Signing in
+
+An extension may refuse a request no extension identified (`Extension::admit`, 0.8): `401`
+`{"error": "unauthenticated", "message", "reason"}`, plus `"redirect": "<its sign-in page>"`
+when it redirects. The interface's files always load; before rendering anything it asks
+`GET /actors/me`, and any call refused with a `redirect` sends the browser there, once, with
+`next=<path, query and hash>` appended so the sign-in page brings the person back to the deep
+link they opened. `/ws` and a terminal's PTY are refused at their upgrade; their sockets ask
+`GET /actors/me` when they close abnormally and follow the redirection the same way.
+
+The sign-in page is the extension's: a route under `/ext/<id>/` it admits itself (by its path),
+served as a full HTML page outside the SPA.
 
 ## Version 0.1
 

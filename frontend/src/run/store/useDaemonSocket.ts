@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ABNORMAL_CLOSURE, probeSignIn } from "../../shared/http/signIn";
 import type { WsMessage } from "../model/liveStream";
 
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
@@ -60,10 +61,13 @@ export function useDaemonSocket() {
         }
       });
 
-      ws.addEventListener("close", () => {
+      ws.addEventListener("close", (event) => {
         if (disposed) return;
         setStatus("reconnecting");
         wsRef.current = null;
+        // 0.8: a refused upgrade (1006, no handshake) says nothing to the
+        // browser; ask whether the UI must sign in first.
+        if (event.code === ABNORMAL_CLOSURE) void probeSignIn();
         reconnectTimer.current = setTimeout(connect, RECONNECT_INTERVAL);
       });
 

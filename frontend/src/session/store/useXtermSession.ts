@@ -30,6 +30,7 @@ import {
   type PaneMode,
 } from "../model/terminalPane";
 import { useTheme } from "../../hooks/useTheme";
+import { ABNORMAL_CLOSURE, probeSignIn } from "../../shared/http/signIn";
 
 /** What the xterm of one session exposes to its toolbar. */
 export interface XtermSession {
@@ -297,6 +298,11 @@ export function useXtermSession(
     };
     ws?.addEventListener("close", dropRole);
     ws?.addEventListener("error", dropRole);
+    // 0.8: a refused upgrade (1006, no handshake) says nothing to the browser;
+    // ask whether the UI must sign in first.
+    ws?.addEventListener("close", (event) => {
+      if (event.code === ABNORMAL_CLOSURE) void probeSignIn();
+    });
 
     // ADR-0075 §3: a spectator is read-only. The daemon drops its input anyway;
     // not sending it keeps the pane's own echo from lying about what happened.

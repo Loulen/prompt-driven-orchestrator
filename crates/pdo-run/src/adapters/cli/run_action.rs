@@ -1,5 +1,5 @@
 //! The `pdo run` subcommands (#721, #588): create a Run, wait for the children
-//! of this node.
+//! of this node, list the Runs.
 
 use clap::Subcommand;
 
@@ -100,5 +100,14 @@ pub enum RunAction {
         /// Give up after this many seconds (exit 2). Without it, waits forever.
         #[arg(long)]
         timeout: Option<u64>,
+    },
+    /// List the Runs the daemon knows, newest first: one line per Run
+    /// (`run_id`, status, pipeline, name). The thin CLI client of `GET /runs`,
+    /// sending `PDO_TOKEN` like every command: a daemon that refuses the call
+    /// (an extension requiring a token) prints its reason and exits 1.
+    List {
+        /// Print the daemon's JSON as is.
+        #[arg(long)]
+        json: bool,
     },
 }

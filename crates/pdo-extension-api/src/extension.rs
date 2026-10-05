@@ -7,8 +7,9 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::{
-    Actor, Attributes, CliInvocation, CliOutput, CliSpec, EntityRef, ExtensionSkill, Host,
-    Manifest, NeutralHost, NodeEnv, NodeLaunch, Operation, TriggerRef, UiContributions,
+    Actor, ActorDisplay, Admission, Attributes, CliInvocation, CliOutput, CliSpec, EntityRef,
+    ExtensionSkill, Host, Manifest, NeutralHost, NodeEnv, NodeLaunch, Operation, TriggerRef,
+    UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
@@ -163,6 +164,29 @@ pub trait Extension: Send + Sync + 'static {
     /// extension, then the core, decide: the local operator, or the agent of the
     /// node session the request comes from.
     fn identify(&self, _request: &RequestParts) -> Option<Actor> {
+        None
+    }
+
+    /// What becomes of a request **no extension identified** ([`Self::identify`]
+    /// answered `None` everywhere): served ([`Admission::Admit`], the default),
+    /// refused with `401` ([`Admission::Refuse`]), or refused with `401` naming
+    /// the page to sign in on ([`Admission::Redirect`]), which the core's
+    /// interface follows. Every extension is asked, in registration order; the
+    /// first that does not admit wins. A panic refuses.
+    ///
+    /// Asked for every route of the API, `/ws`, the terminals' PTY and every
+    /// extension's routes included (the extension's own sign-in page and the
+    /// files it needs: admit them by their path), never for the SPA's own
+    /// files. Called on the request path: be quick.
+    fn admit(&self, _request: &RequestParts) -> Admission {
+        Admission::Admit
+    }
+
+    /// How `actor` shows to a person: its name and avatar, when this
+    /// extension knows it (typically the Actors it identifies). `None` (the
+    /// default) lets the next extension answer; with no answer, the core shows
+    /// the Actor as it always did. Called on the request path: be quick.
+    fn display_name(&self, _actor: &Actor) -> Option<ActorDisplay> {
         None
     }
 
@@ -328,6 +352,8 @@ mod tests {
         let op = Operation::new(ResourceKind::Project, Verb::Update).on("p1");
 
         assert_eq!(ext.identify(&parts), None);
+        assert_eq!(ext.admit(&parts), Admission::Admit);
+        assert_eq!(ext.display_name(&actor), None);
         assert_eq!(ext.authorize(&actor, &op), Authorization::Allow);
         assert!(ext
             .on_create(&actor, &EntityRef::new(ResourceKind::Project, "p1"))

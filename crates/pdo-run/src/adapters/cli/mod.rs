@@ -9,6 +9,7 @@ mod complete;
 mod reap;
 mod run_action;
 mod run_create;
+mod run_list;
 mod upload;
 mod wait;
 
@@ -20,6 +21,7 @@ pub use complete::run_complete;
 pub use reap::run_reap;
 pub use run_action::RunAction;
 pub use run_create::run_run_create;
+pub use run_list::run_run_list;
 pub use wait::{run_run_wait, run_wait_user, EXIT_WAIT_TIMEOUT};
 
 pub fn cli_daemon_url() -> String {
@@ -63,7 +65,10 @@ pub fn run_fail(reason: String) -> Result<()> {
     let iter = cli_node_iter();
 
     let endpoint = format!("{url}/runs/{rid}/nodes/{nid}/fail");
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
+        .build()
+        .unwrap_or_default();
     let resp = client
         .post(&endpoint)
         .header(SESSION_RUN_HEADER, &rid)
@@ -92,7 +97,10 @@ pub fn run_skip(reason: String) -> Result<()> {
     let iter = cli_node_iter();
 
     let endpoint = format!("{url}/runs/{rid}/nodes/{nid}/skip");
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
+        .build()
+        .unwrap_or_default();
     let resp = client
         .post(&endpoint)
         .header(SESSION_RUN_HEADER, &rid)

@@ -4,7 +4,8 @@
 use std::sync::Weak;
 
 use pdo_extension_api::{
-    Attributes, Authorization, EntityRef, ExtensionEvent, Host, OperationApplied, Resource,
+    ActorDisplay, Attributes, Authorization, EntityRef, ExtensionEvent, Host, OperationApplied,
+    Resource,
 };
 
 use super::{ExtensionHost, Extensions, Registry};
@@ -54,6 +55,11 @@ impl Host for ExtensionHostOf {
         self.extensions()
             .map(|extensions| extensions.stamps(actor, entity, Some(&self.id)))
             .unwrap_or_default()
+    }
+
+    fn display_name(&self, actor: &Actor) -> Option<ActorDisplay> {
+        self.extensions()
+            .and_then(|extensions| ExtensionHost::display_name(&extensions, actor))
     }
 
     fn catalogue(&self) -> Vec<Resource> {

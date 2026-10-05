@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use pdo_extension_api::{Authorization, RequestParts};
+use pdo_extension_api::{ActorDisplay, Authorization, RequestParts};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 
@@ -59,6 +59,12 @@ impl ExtensionHost for Host {
     }
 
     fn publish(&self, _event: &serde_json::Value) {}
+
+    /// Names the identified `alice` « Alice ».
+    fn display_name(&self, actor: &Actor) -> Option<ActorDisplay> {
+        matches!(actor, Actor::Identified { id, .. } if id == "alice")
+            .then(|| ActorDisplay::new("Alice"))
+    }
 }
 
 #[derive(Default)]
@@ -180,6 +186,9 @@ impl Runs for FakeRuns {
 #[derive(Default)]
 pub struct Audit {
     pub rows: Mutex<Vec<NewAuditEntry>>,
+    /// The Actor of the request each row was recorded in, as the SQLite
+    /// adapter reads it.
+    pub actors: Mutex<Vec<Option<Actor>>>,
     pub fails: bool,
 }
 
@@ -193,6 +202,10 @@ impl AuditLog for Audit {
                 return Err(StorageError("database is locked".into()));
             }
             self.rows.lock().unwrap().push(entry);
+            self.actors
+                .lock()
+                .unwrap()
+                .push(pdo_kernel::actor::current());
             Ok(())
         })
     }
@@ -202,6 +215,7 @@ impl AuditLog for Audit {
     ) -> BoxFuture<'a, Result<Vec<AuditEntry>, StorageError>> {
         Box::pin(async move {
             let rows = self.rows.lock().unwrap();
+            let actors = self.actors.lock().unwrap();
             Ok(rows
                 .iter()
                 .enumerate()
@@ -214,6 +228,8 @@ impl AuditLog for Audit {
                     id: i as i64 + 1,
                     ts: "t".into(),
                     actor_hint: e.actor_hint.clone(),
+                    actor: actors[i].clone(),
+                    actor_display: None,
                     action: e.action.clone(),
                     target_kind: e.target_kind.clone(),
                     target_id: e.target_id.clone(),

@@ -46,6 +46,11 @@ pub enum UiLocation {
     /// its command).
     #[serde(rename = "topbar/end")]
     TopbarEnd,
+    /// The far right of the top bar, **after Settings**: the component of a
+    /// [`UiElement::Decoration`] per contribution, rendered as is (an avatar
+    /// opening the menu of the signed-in person, say). Since 0.8.
+    #[serde(rename = "topbar/account")]
+    TopbarAccount,
     /// The Extensions page of the Settings: a [`UiElement::Section`] per
     /// contribution. The 0.1 `SettingsPanel` slot.
     #[serde(rename = "settings")]
@@ -204,6 +209,7 @@ impl UiLocation {
     pub const ALL: &'static [UiLocation] = &[
         UiLocation::TopbarStart,
         UiLocation::TopbarEnd,
+        UiLocation::TopbarAccount,
         UiLocation::Settings,
         UiLocation::RunsFilter,
         UiLocation::RunDetail,
@@ -246,6 +252,7 @@ impl UiLocation {
         match self {
             UiLocation::TopbarStart => "topbar/start",
             UiLocation::TopbarEnd => "topbar/end",
+            UiLocation::TopbarAccount => "topbar/account",
             UiLocation::Settings => "settings",
             UiLocation::RunsFilter => "runs/filter",
             UiLocation::RunDetail => "run/detail",
@@ -320,7 +327,8 @@ impl UiLocation {
             | UiLocation::PipelineItem
             | UiLocation::CanvasNode
             | UiLocation::PortItem
-            | UiLocation::Statusbar => matches!(element, UiElement::Decoration { .. }),
+            | UiLocation::Statusbar
+            | UiLocation::TopbarAccount => matches!(element, UiElement::Decoration { .. }),
             UiLocation::Hosted(_) => true,
             _ if self.is_action_location() => matches!(element, UiElement::Action { .. }),
             _ => false,
@@ -396,6 +404,8 @@ mod tests {
         assert!(!UiLocation::ProjectEdit.accepts(&tab));
         assert!(UiLocation::RunItem.accepts(&decoration));
         assert!(UiLocation::Statusbar.accepts(&decoration));
+        assert!(UiLocation::TopbarAccount.accepts(&decoration));
+        assert!(!UiLocation::TopbarAccount.accepts(&action));
         assert!(!UiLocation::RunItem.accepts(&section));
         assert!(UiLocation::SkillDetail.accepts(&tab));
         assert!(UiLocation::ProjectsFilter.accepts(&filter));

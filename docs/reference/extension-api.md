@@ -17,6 +17,8 @@ default, and with no extension the daemon behaves as if none existed.
 | `manifest` | at registration | required |
 | `start(context)` | once, before serving; `context.data_dir`, `context.host` | nothing |
 | `identify(request)` | on every request; the first `Some` wins | `None`: the core decides |
+| `admit(request)` (0.8) | on a request no extension identified, before any route; the first non-`Admit` wins, a panic refuses | `Admission::Admit` |
+| `display_name(actor)` (0.8) | wherever an Actor is shown; the first `Some` wins, a panic is skipped | `None`: shown as without extension |
 | `authorize(actor, operation)` | before every mutation of an actor, and every guarded read (0.8, below); the first refusal wins, a panic refuses | allow |
 | `on_create(actor, entity)` | after a creation; attributes prefixed `<id>/` | none |
 | `on_event(event)` | off the request path, on the extension's own thread | ignore |
@@ -148,9 +150,61 @@ core's mechanisms (amendment #34):
 - `publish(ExtensionEvent)`: broadcast on `/ws` and to the other extensions.
 - `applied(OperationApplied)`: tell the core that an authorized mutation succeeded.
 - `catalogue()` (0.8): the catalogue of the Ressources, below.
+- `display_name(actor)` (0.8): how an Actor shows, the first extension that names it (the
+  caller's included); `None` when none does.
 
 `NeutralHost` allows everything, publishes nothing and answers the core's catalogue alone: the
 host of `ExtensionContext::new`, and a stand-in in an extension's tests.
+
+## Admission of a request
+
+`identify` names the caller; when **no** extension does, the core asks every extension's
+`admit(request)` (method, URI, headers) before any route runs:
+
+| `Admission` | Answer |
+| --- | --- |
+| `Admit` | served, as without extension |
+| `Refuse { reason }` | `401` `{"error": "unauthenticated", "message": "authentication required: <reason>", "reason"}` |
+| `Redirect { to }` | the same `401`, plus `"redirect": "<to>"`: the page to sign in on |
+
+Every `401` carries `WWW-Authenticate: Bearer`. The admission guards every route: the API, `/ws`,
+the terminals' PTY (`/sessions/<id>/pty`), `/ext-cli/<id>`, `/actors/*` and every extension's
+routes under `/ext/<id>/`, fallbacks included. It never guards the SPA's own files: the
+interface always loads, asks `GET /actors/me`, and follows a `redirect` with `next=<path, query
+and hash>` appended ([extension-ui.md](extension-ui.md#signing-in)). So an extension that refuses
+anonymous callers **admits its own sign-in page by its path** (and whatever that page needs).
+
+The CLI sends `PDO_TOKEN`, when set, as `Authorization: Bearer <token>` on every call to the
+daemon (`pdo ext …`, `pdo complete`, `pdo run …`, the node sessions' hooks): `identify` reads it.
+
+## Display names
+
+```rust
+use pdo_extension_api::{Actor, ActorDisplay};
+
+fn display_name(&self, actor: &Actor) -> Option<ActorDisplay> {
+    match actor {
+        Actor::Identified { namespace, id } if namespace == "iam" => {
+            self.users.name_of(id).map(|name| ActorDisplay::new(name).with_avatar(format!("/ext/iam/avatars/{id}")))
+        }
+        _ => None,
+    }
+}
+```
+
+`ActorDisplay` is `{ "name": "Alice", "avatar_url": "/ext/iam/avatars/alice" | null }`. Where it
+shows:
+
+- `GET /actors/me`: `{ "actor": <Actor>, "display": <ActorDisplay> | null }`, the caller.
+- `POST /actors/display` `{ "actors": [<Actor>…] }`: `{ "displays": [<ActorDisplay> | null…] }`,
+  in order.
+- `GET /audit`: each row's `actor` (the Actor of the request that made the mutation, absent on
+  older rows and outside a request) and `actor_display`.
+- The interface: the creator of a Run on its row; `useCurrentActor()` and `useActorDisplay(actor)`
+  of `@pdo/extension-ui` for the extensions' bundles.
+
+An `Actor` on the wire: `{"kind": "local_operator"}`, `{"kind": "agent", "run_id", "node_id"}`,
+`{"kind": "trigger", "trigger_id"}`, `{"kind": "identified", "namespace", "id"}`.
 
 ## The catalogue of the Ressources
 

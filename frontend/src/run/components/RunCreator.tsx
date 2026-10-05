@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { User } from "lucide-react";
 import type { Actor } from "../../shared/generated/Actor";
 import type { RunState } from "../../shared/generated/RunState";
-import { actorLabel } from "../../shared/lib/actor";
+import ActorLabel from "../../shared/actors/ActorLabel";
 import { fetchTrigger } from "../../trigger/api/triggers";
 
 /**
  * Who created the Run (API 0.8), and for a fired Run the Trigger's last
- * editor, who answers for it. Nothing for a Run created before the core
+ * editor, who answers for it, by their display name when an extension names
+ * them (0.8). Nothing for a Run created before the core
  * recorded it.
  */
 export default function RunCreator({ run }: { run: RunState }) {
@@ -22,13 +23,13 @@ export default function RunCreator({ run }: { run: RunState }) {
         title={run.created_by.kind === "trigger" ? run.created_by.trigger_id : undefined}
         data-testid="run-creator"
       >
-        {triggerName ? `Trigger ${triggerName}` : actorLabel(run.created_by)}
+        {triggerName ? `Trigger ${triggerName}` : <ActorLabel actor={run.created_by} />}
       </span>
       {run.trigger_editor && (
         <>
           <span className="text-fg-4">· last editor</span>
           <span className="rounded bg-bg-3 px-1.5 py-0.5 text-fg-2" data-testid="run-trigger-editor">
-            {actorLabel(run.trigger_editor)}
+            <ActorLabel actor={run.trigger_editor} />
           </span>
         </>
       )}

@@ -1,6 +1,8 @@
 use serde::Serialize;
 
-use crate::{Actor, Attributes, Authorization, EntityRef, OperationApplied, Resource};
+use crate::{
+    Actor, ActorDisplay, Attributes, Authorization, EntityRef, OperationApplied, Resource,
+};
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
 /// extensions' `on_event`.
@@ -55,6 +57,15 @@ pub trait Host: Send + Sync {
     /// entity; the core keeps none of them. A panicking extension stamps
     /// nothing.
     fn on_create(&self, actor: &Actor, entity: &EntityRef) -> Attributes;
+
+    /// How `actor` shows to a person: the first
+    /// [`Extension::display_name`](crate::Extension::display_name) that knows
+    /// it, the calling extension's included. `None` when none does (and by
+    /// default): show the Actor as you would without. Never call it from your
+    /// own `display_name`: the Host calls it back, without end.
+    fn display_name(&self, _actor: &Actor) -> Option<ActorDisplay> {
+        None
+    }
 
     /// The catalogue of the Ressources: the core's, then those each
     /// registered extension declares in its [`Manifest`](crate::Manifest), in
@@ -143,6 +154,7 @@ mod tests {
         assert!(host
             .on_create(&Actor::LocalOperator, &EntityRef::new(kind.clone(), "PM-1"))
             .is_empty());
+        assert_eq!(host.display_name(&Actor::LocalOperator), None);
         host.publish(ExtensionEvent::new("x", serde_json::Value::Null));
         host.applied(OperationApplied::new(Actor::LocalOperator, op, None));
         assert_eq!(host.catalogue(), crate::core_resources());

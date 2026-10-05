@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.16.0 — Lien profond vers un Run, factory du core dans `pm` (CORE-1)
+
+Aucun changement du crate : `pdo-extension-api` reste en **0.7.0**. Aucun changement daemon.
+Ticket CORE-1 du Backlog `CORE` de `pm` (US PM-13 de `pdo-extensions`).
+
+- `#/runs/<run_id>` est un lien profond du core : le suivre ferme la page d'extension ouverte,
+  sélectionne le Run dans la liste et ouvre son détail. Il marche depuis la barre d'adresse, un
+  lien markdown, une page qui écrit `location.hash`, et `CommandHost.open`, qui l'accepte en plus
+  de `#/ext/…`. Un Run inconnu affiche un toast d'erreur et ne change rien. Référence :
+  `docs/reference/extension-ui.md`, « Toward a Run ».
+- La factory du core passe dans `pm` : backlogs métier et technique dans le Backlog `CORE`
+  (Propriété `type` : `metier` / `tech`), spec en sous-page de l'US, plus de `gh issue` ni de
+  `Closes #N` pour le nouveau travail. Les issues GitHub encore ouvertes y restent jusqu'à leur
+  clôture.
+
 ## 2.15.0 — Tour Overview, sur un vrai Run de nodes script (#46)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Aucun changement daemon.

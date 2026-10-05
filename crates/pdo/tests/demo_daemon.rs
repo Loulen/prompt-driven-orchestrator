@@ -27,6 +27,16 @@
 //!   by default (`POST /ext/b/panels {"count": n}` switches it while the
 //!   daemon runs). Its ids are the interop peers': not with `PDO_TEST_INTEROP`.
 //!
+//! - `PDO_TEST_NODE_ENV`: the variables the test extension adds to every Node
+//!   (API 0.8), `NAME=value` pairs separated by commas (`FIXTURE_HELLO=monde`);
+//!   none by default (`PUT /ext/test/launch {"env": {…}}` switches them).
+//! - `PDO_TEST_NODE_PREAMBLE`: the text it puts at the top of every agent's
+//!   preamble (`Ligne de fixture`); none by default (`PUT /ext/test/launch
+//!   {"preamble": …}`).
+//!
+//! It suspends a Trigger on `PUT /ext/test/suspensions {"trigger_id", "reason"}`
+//! and lifts it on `DELETE /ext/test/suspensions/<id>`.
+//!
 //! The test extension keeps its data under `$HOME/.pdo/extensions/test/`: give
 //! the demo daemon a disposable `HOME`.
 //!
@@ -74,6 +84,17 @@ async fn demo_daemon() {
     let (ext, control) = TestExtension::new(refusal.clone());
     control
         .set_incompatible(std::env::var("PDO_TEST_EXTENSION_INCOMPATIBLE").as_deref() == Ok("1"));
+    if let Ok(vars) = std::env::var("PDO_TEST_NODE_ENV") {
+        control.launch.set_env(
+            vars.split(',')
+                .filter_map(|pair| pair.split_once('='))
+                .map(|(k, v)| (k.trim().to_string(), v.to_string()))
+                .collect(),
+        );
+    }
+    if let Ok(text) = std::env::var("PDO_TEST_NODE_PREAMBLE") {
+        control.launch.set_preamble(Some(text));
+    }
     let mut extensions = ext.boxed();
     extensions.push(Box::new(SecondTestExtension));
     let hosted = std::env::var("PDO_DEMO_HOSTED").unwrap_or_default();

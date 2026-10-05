@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::{
     Actor, Attributes, CliInvocation, CliOutput, CliSpec, EntityRef, ExtensionSkill, Host,
-    Manifest, NeutralHost, Operation, UiContributions,
+    Manifest, NeutralHost, NodeEnv, NodeLaunch, Operation, TriggerRef, UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
@@ -251,6 +251,47 @@ pub trait Extension: Send + Sync + 'static {
     fn skills(&self) -> Vec<ExtensionSkill> {
         Vec::new()
     }
+
+    /// The environment variables to add to the Node being launched, an agent
+    /// or a script, on the host or in its Run's sandbox. None by default.
+    ///
+    /// The core adds them to the Node's environment, but **never overwrites
+    /// one of its own**: a name the core sets for this Node (`PDO_RUN_ID`,
+    /// `PATH`, `HOME`, the harness's variables, a script's `PDO_INPUT_*`…) is
+    /// dropped with a warning. Between two extensions, the first registered
+    /// wins.
+    ///
+    /// When a variable names `CLAUDE_CONFIG_DIR`, the core reads that Node's
+    /// Claude Code transcripts (its cost, its liveness) under that folder
+    /// instead of `~/.claude`.
+    ///
+    /// Called on the daemon's spawn path, once per launch: keep it quick. A
+    /// panic adds nothing.
+    fn node_env(&self, _launch: &NodeLaunch) -> NodeEnv {
+        NodeEnv::new()
+    }
+
+    /// A text the core places at the very top of an agent Node's PDO preamble,
+    /// before `# PDO Runtime Preamble`. Never asked for a script (it reads no
+    /// preamble). None by default.
+    ///
+    /// Two extensions' texts follow each other in registration order. Called
+    /// on the daemon's spawn path: keep it quick. A panic adds nothing.
+    fn node_preamble(&self, _launch: &NodeLaunch) -> Option<String> {
+        None
+    }
+
+    /// Why `trigger` is suspended, if it is: a suspended Trigger fires neither
+    /// on its schedule nor by "Run now", and the interface shows it switched
+    /// off with this reason. Asked again at every read and every due tick, so
+    /// the suspension lifts as soon as it answers `None`. Not suspended by
+    /// default.
+    ///
+    /// Between two extensions, the first that suspends wins. Called on the
+    /// daemon's request path: keep it quick. A panic suspends nothing.
+    fn trigger_suspension(&self, _trigger: &TriggerRef) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -298,6 +339,13 @@ mod tests {
             1
         );
         assert!(ext.skills().is_empty());
+        let launch = NodeLaunch::new("r1", "n1", 1, crate::NodeKind::Agent, "/repo");
+        assert!(ext.node_env(&launch).is_empty());
+        assert_eq!(ext.node_preamble(&launch), None);
+        assert_eq!(
+            ext.trigger_suspension(&TriggerRef::new("t1", "Nightly", None)),
+            None
+        );
         assert_eq!(ext.manifest().id, "bare");
     }
 

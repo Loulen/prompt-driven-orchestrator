@@ -237,6 +237,14 @@ pub async fn force_spawn_node(
         .unwrap_or_default();
     let harness_registry = pdo_harness::adapters::descriptor_file::load(&harness_home_root);
 
+    let extension_contribution = match pipeline_def.nodes.iter().find(|n| n.id == node_id) {
+        Some(node) => {
+            use crate::application::node::extension_launch as ext;
+            let kind = ext::node_kind(&node.node_type);
+            ext::contribution(state, &run_state, node_id, iter, kind).await
+        }
+        None => Default::default(),
+    };
     let params = node_primitives::StartNodeParams {
         run_id,
         node_id,
@@ -275,6 +283,7 @@ pub async fn force_spawn_node(
         // this spawn, exactly like the scheduler. `harness_home_root` is already the
         // host `$HOME` (or the embedded-floor fallback); pass it only when sandboxed.
         sandbox_home_root: (!run_state.sandbox.is_off()).then_some(harness_home_root.as_path()),
+        extension: extension_contribution,
     };
 
     // Hold the lock from the count until the reservation event is appended — exactly

@@ -217,6 +217,8 @@ mod tests {
             last_fired_at: None,
             last_outcome: None,
             attributes: Default::default(),
+            last_editor: None,
+            suspension: None,
         }
     }
 

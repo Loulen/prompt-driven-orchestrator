@@ -45,7 +45,7 @@ impl Runs {
     pub async fn create_run(
         self: &Arc<Self>,
         actor: &Actor,
-        req: CreateRunRequest,
+        mut req: CreateRunRequest,
         attachments: Vec<InputFile>,
         session: Option<SessionClaim>,
     ) -> Response {
@@ -53,6 +53,7 @@ impl Runs {
         if let Err(denied) = self.authorize(actor, &operation) {
             return denied.into_response();
         }
+        req.created_by = Some(actor.clone());
         match self.start_run(req, attachments, session).await {
             Ok(run_id) => {
                 self.stamp_run(actor, &run_id).await;

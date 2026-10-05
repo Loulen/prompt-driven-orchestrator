@@ -5,7 +5,8 @@
  */
 export type TriggerFire = { id: number, trigger_id: string, ts: string, 
 /**
- * `fired` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error` / `error`.
+ * `fired` / `skipped-overlap` / `skipped-suspended` / `guard-exit-nonzero` /
+ * `guard-error` / `error`.
  */
 outcome: string, reason?: string, run_id?: string, 
 /**

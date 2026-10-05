@@ -258,6 +258,15 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
             run_payload["triggered_by"] = serde_json::json!(trigger_id);
         }
     }
+    // API 0.8: FREEZE who created the Run, and for a fired Run the Trigger's
+    // last editor — the extensions read both at every node launch. Written only
+    // when known, so a payload built without an Actor keeps its shape.
+    if let Some(actor) = &req.created_by {
+        run_payload["created_by"] = serde_json::json!(actor);
+    }
+    if let Some(editor) = &req.trigger_editor {
+        run_payload["trigger_editor"] = serde_json::json!(editor);
+    }
     // ADR-0064: FREEZE the mechanical parent provenance — decided by the daemon
     // from the verified session claim, never read from the body (which refuses
     // any parent key outright). Written ONLY when the create came from a live

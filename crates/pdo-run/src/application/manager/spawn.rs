@@ -153,6 +153,8 @@ pub async fn spawn_manager_session(
         // The manager is an infra session, not a pipeline node — it never calls
         // `pdo complete`, so it gets no turn-end `Stop` hook.
         false,
+        // The manager is no Node: the launch hooks are not asked (API 0.8).
+        &[],
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {

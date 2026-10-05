@@ -61,6 +61,9 @@ pub struct StartNodeParams<'a> {
     /// on the host path and when the daemon cannot resolve `$HOME` — the set is then
     /// not filled here (a scheduler spawn or the manager already did, idempotently).
     pub sandbox_home_root: Option<&'a Path>,
+    /// What the extensions add to this launch (API 0.8), pre-resolved by the
+    /// caller like [`Self::default_model`]: `start_node` is sync.
+    pub extension: pdo_kernel::extension_host::NodeContribution,
 }
 
 /// Everything needed to launch the node's tmux session, once its reservation has
@@ -88,6 +91,8 @@ pub struct StartNodeSpawn {
     pub(super) sandbox: Option<SandboxExec>,
     /// Arm the turn-end `Stop` hook (already ANDed with `!is_script`).
     pub(super) inject_hook: bool,
+    /// The extensions' variables (API 0.8).
+    pub(super) extension_env: Vec<(String, String)>,
 }
 
 /// Owned mirror of [`SessionTail`] — the borrowing enum
@@ -146,6 +151,7 @@ impl StartNodeSpawn {
             tail,
             self.sandbox.as_ref().map(SandboxExec::wrap).as_ref(),
             self.inject_hook,
+            &self.extension_env,
         )
     }
 }

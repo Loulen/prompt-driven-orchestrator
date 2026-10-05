@@ -10,6 +10,33 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.17.0 — Seams de IAM-1 : lancement d'un Node, créateur du Run, Trigger suspendu (CORE-4)
+
+`pdo-extension-api` passe en **0.8.0**, par ajout : une extension écrite pour 0.1 à 0.7 compile
+et tourne sans changement (ADR-0081, amendement CORE-4). Ticket CORE-4 du Backlog `CORE` (US
+IAM-1 de `pdo-extensions`).
+
+- **Créateur du Run** : `RunStarted` fige `created_by` (l'Acteur de `run` × `create`, le Trigger
+  pour un fire) et, pour un Run déclenché, `trigger_editor` (le Dernier éditeur du Trigger). Les
+  deux sont dans `GET /runs/<id>` ; `created_by` aussi dans `GET /runs`. L'onglet Info d'un Run
+  affiche « Created by ». Un Trigger stocke `last_editor` (colonne ajoutée à `triggers`), mis à
+  jour à chaque création et `PATCH`, affiché dans son détail.
+- **Lancement d'un Node** : nouveaux hooks `Extension::node_env` (variables d'un agent ou d'un
+  script, hôte et sandbox, reprise comprise ; une variable du core n'est jamais écrasée) et
+  `Extension::node_preamble` (texte en tête du préambule d'un agent). `NodeLaunch` leur donne le
+  Run, le Node, le créateur, le Trigger et son dernier éditeur, le Projet.
+- **`CLAUDE_CONFIG_DIR`** fourni par une extension : figé sur le `NodeStarted`
+  (`claude_config_dir`), le coût et la liveness du NodeRun lisent ses transcripts dessous.
+- **Trigger suspendu** : hook `Extension::trigger_suspension`. Un Trigger suspendu ne fire plus
+  (`skipped-suspended` dans son historique, `409` sur « Run now ») ; `GET /triggers` le rend avec
+  `suspension: {extension, reason}`, l'UI l'affiche interrupteur éteint, puce ambre
+  « suspended », raison en infobulle et dans le détail.
+- Contexte des extensions : `trigger/item` et `trigger/item/menu` reçoivent `last_editor` et
+  `suspension` ; `run/info` reçoit `created_by` et `trigger_editor`.
+- L'extension de test du core (le démon de démo des Feature Paths) apprend à injecter des
+  variables (`PDO_TEST_NODE_ENV`, `PUT /ext/test/launch`), un préambule
+  (`PDO_TEST_NODE_PREAMBLE`) et à suspendre un Trigger (`PUT /ext/test/suspensions`).
+
 ## 2.16.0 — Lien profond vers un Run, factory du core dans `pm` (CORE-1)
 
 Aucun changement du crate : `pdo-extension-api` reste en **0.7.0**. Aucun changement daemon.

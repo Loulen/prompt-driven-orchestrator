@@ -441,3 +441,44 @@ déborder : les Onglets des extensions s'ajoutent après ceux du core.
 Écartés : un type de contribution par emplacement (une « Section de formulaire »), parce que le
 contrat du Save est le même partout où l'hôte en a un ; un Save des Sections avant celui du core,
 impossible pour un Projet créé, qui n'a pas encore d'id.
+
+## Amendement CORE-4 : le lancement d'un Node, le Créateur du Run, la suspension d'un Trigger
+
+Pour une extension de responsabilité (`iam`, ADR-0005 de `Loulen/pdo-extensions`) sans rien qui
+lui soit propre : le core dit qui a lancé, laisse une extension contribuer au lancement d'un
+Node et suspendre un Trigger. Exercé dans le core par l'extension de test (`crates/pdo/tests/
+test_extension/launch.rs`).
+
+- **Créateur du Run** : l'Acteur de `run` × `create` est figé dans `RunStarted` (`created_by`),
+  le Trigger pour un fire ; un Run déclenché porte aussi le **Dernier éditeur** du Trigger
+  (`trigger_editor`). Le Trigger stocke le sien (`last_editor`, à la création et à chaque
+  `PATCH`). Les trois sont exposés par l'API (Run, liste des Runs, Trigger) et aux extensions.
+  `Actor` devient désérialisable.
+- **`node_env(&NodeLaunch) -> NodeEnv`** : des variables pour un Node, agent ou script, sur
+  l'hôte (`export`) ou dans le sandbox (`-e K=V` sur le `docker exec`), à la reprise d'un agent
+  aussi. Le core ne laisse jamais écraser une des siennes : identité de session, `PATH`, `HOME`,
+  marqueur de sandbox, variables du harnais, catalogue d'un script, env du profil de sandbox ; une
+  telle variable est ignorée avec un avertissement. Un nom qui n'est pas un identifiant shell est
+  refusé (il serait collé sans guillemets dans un `export`). Entre extensions, la première
+  enregistrée gagne.
+- **`node_preamble(&NodeLaunch) -> Option<String>`** : un texte en tête du préambule d'un agent,
+  avant `# PDO Runtime Preamble` ; les textes de plusieurs extensions se suivent dans l'ordre
+  d'enregistrement. Jamais demandé pour un script.
+- **`CLAUDE_CONFIG_DIR`** : fourni par `node_env`, il est figé sur le `NodeStarted`
+  (`claude_config_dir`) ; le coût, son cache et la liveness du NodeRun lisent ses transcripts
+  sous `$CLAUDE_CONFIG_DIR/projects/`.
+- **`trigger_suspension(&TriggerRef) -> Option<String>`** : la raison pour laquelle une extension
+  suspend un Trigger. Demandé à chaque lecture et à chaque tick dû, jamais stocké. Suspendu, un
+  Trigger ne fire pas : un tick consomme le slot et écrit `skipped-suspended` avec la raison,
+  « Run now » répond `409`. L'API le rend dans `suspension` (`{extension, reason}`), l'UI l'affiche
+  interrupteur éteint, puce ambre « suspended », raison en infobulle.
+- `NodeLaunch` porte le Run, le Node, son itération et sa sorte (agent, script), le Créateur, le
+  Trigger et son Dernier éditeur, le dépôt primaire et le Projet qui le possède.
+- **Version** : `pdo-extension-api` passe en **0.8.0**, par ajout (hooks à défaut neutre, types
+  `#[non_exhaustive]`). Une extension 0.1 à 0.7 compile toujours.
+
+Écartés : une suspension stockée par le core et levée par un appel de l'extension (pousser
+l'état oblige l'extension à suivre chaque désactivation et chaque reprise ; la demander à la
+lecture suffit) ; un seul hook `node_launch` rendant variables et préambule (deux hooks gardent
+chaque défaut neutre lisible, et le préambule n'est pas demandé pour un script) ; exclure tout
+le préfixe `PDO_` (une extension doit pouvoir fournir `PDO_TOKEN`).

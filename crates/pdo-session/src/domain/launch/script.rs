@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::quote::sh_single_quote;
 use super::tails::{build_agent_tail, build_script_tail, forced_ccr_env};
-use super::wrap::{wrap_tail_in_docker_exec, wrap_with_env};
+use super::wrap::{extension_exports, wrap_tail_in_docker_exec, wrap_with_env};
 use super::{SandboxWrap, SessionTail};
 
 /// Construct the script tmux launches for a node run.
@@ -34,6 +34,40 @@ pub fn build_tmux_script(
     tail: SessionTail<'_>,
     sandbox: Option<&SandboxWrap<'_>>,
     settings_path: Option<&Path>,
+) -> String {
+    build_tmux_script_with(
+        run_id,
+        node_id,
+        iter,
+        daemon_port,
+        session_path,
+        prompt_path,
+        tmux_cmd_override,
+        tail,
+        sandbox,
+        settings_path,
+        &[],
+    )
+}
+
+/// [`build_tmux_script`], plus the variables the extensions add to the Node
+/// (`extension_env`, API 0.8). They are exported last on the host, forwarded
+/// as `-e K=V` on the exec when sandboxed, and **never** overwrite a variable
+/// of the core ([`extension_exports`]): an empty list is byte-identical to
+/// [`build_tmux_script`].
+#[allow(clippy::too_many_arguments)]
+pub fn build_tmux_script_with(
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    daemon_port: u16,
+    session_path: &str,
+    prompt_path: &Path,
+    tmux_cmd_override: Option<&str>,
+    tail: SessionTail<'_>,
+    sandbox: Option<&SandboxWrap<'_>>,
+    settings_path: Option<&Path>,
+    extension_env: &[(String, String)],
 ) -> String {
     const NO_ENV: &[(String, String)] = &[];
     // #550/AC #4: `harness_env` sources the CCR export — from the harness
@@ -97,9 +131,18 @@ pub fn build_tmux_script(
     // exports still run (harmless) so `PDO_DAEMON_URL=localhost` is not carried
     // in. `wrap_with_env` then gets an EMPTY `extra_env` — the catalogue crossed
     // the exec, not the host export — keeping the host wrapper minimal.
+    let set_env = sandbox.map(|wrap| wrap.set_env).unwrap_or_default();
+    let node_env: Vec<(String, String)> = extra_env
+        .iter()
+        .cloned()
+        .chain(extension_exports(
+            extension_env,
+            &[&harness_env, extra_env, set_env],
+        ))
+        .collect();
     match sandbox {
         Some(wrap) => {
-            let docker_tail = wrap_tail_in_docker_exec(wrap, extra_env, &tail_cmd);
+            let docker_tail = wrap_tail_in_docker_exec(wrap, &node_env, &tail_cmd);
             wrap_with_env(
                 run_id,
                 node_id,
@@ -118,7 +161,7 @@ pub fn build_tmux_script(
             daemon_port,
             session_path,
             &harness_env,
-            extra_env,
+            &node_env,
             &tail_cmd,
         ),
     }
@@ -173,6 +216,39 @@ pub fn build_resume_script(
     sandbox: Option<&SandboxWrap<'_>>,
     settings_path: Option<&Path>,
 ) -> String {
+    build_resume_script_with(
+        run_id,
+        node_id,
+        iter,
+        daemon_port,
+        session_path,
+        descriptor,
+        effort,
+        session_id,
+        tmux_cmd_override,
+        sandbox,
+        settings_path,
+        &[],
+    )
+}
+
+/// [`build_resume_script`], with the extensions' variables re-posed as at
+/// spawn ([`build_tmux_script_with`]).
+#[allow(clippy::too_many_arguments)]
+pub fn build_resume_script_with(
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    daemon_port: u16,
+    session_path: &str,
+    descriptor: &pdo_harness::registry::HarnessDescriptor,
+    effort: Option<&str>,
+    session_id: Option<&str>,
+    tmux_cmd_override: Option<&str>,
+    sandbox: Option<&SandboxWrap<'_>>,
+    settings_path: Option<&Path>,
+    extension_env: &[(String, String)],
+) -> String {
     // #473/#614: the resume *selector* is the one thing the pure hole-drop rule
     // cannot express (emit the blind verb precisely *when* the id is empty), so it
     // is computed here — but the VERBS are now the descriptor's property, not
@@ -213,9 +289,11 @@ pub fn build_resume_script(
     // working-dir path; the container mounts the repo at the same host path, so
     // the path (hence the transcript) still matches.
     let harness_env = descriptor.env.clone();
+    let set_env = sandbox.map(|wrap| wrap.set_env).unwrap_or_default();
+    let node_env = extension_exports(extension_env, &[&harness_env, set_env]);
     match sandbox {
         Some(wrap) => {
-            let docker_tail = wrap_tail_in_docker_exec(wrap, &[], &tail_cmd);
+            let docker_tail = wrap_tail_in_docker_exec(wrap, &node_env, &tail_cmd);
             wrap_with_env(
                 run_id,
                 node_id,
@@ -234,7 +312,7 @@ pub fn build_resume_script(
             daemon_port,
             session_path,
             &harness_env,
-            &[],
+            &node_env,
             &tail_cmd,
         ),
     }
@@ -1771,5 +1849,123 @@ mod tests {
         // session-id resume flag survives it.
         assert!(!script.contains("--resume"), "{script}");
         assert!(!script.contains("claude"), "{script}");
+    }
+
+    fn ext_env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// API 0.8: an extension's variables reach an agent on the host, after the
+    /// core's; a variable of the core (identity, harness env) is never
+    /// overwritten.
+    #[test]
+    fn extension_env_is_exported_to_an_agent_and_never_overwrites_the_core() {
+        let script = build_tmux_script_with(
+            "r1",
+            "solo",
+            1,
+            6172,
+            TEST_SESSION_PATH,
+            Path::new("/p.md"),
+            None,
+            SessionTail::Agent {
+                harness: &pdo_harness::registry::claude(),
+                model: None,
+                effort: None,
+                session_id: None,
+            },
+            None,
+            None,
+            &ext_env(&[
+                ("FIXTURE_HELLO", "monde d'ici"),
+                ("PDO_RUN_ID", "hijack"),
+                ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "0"),
+                ("PATH", "/evil"),
+            ]),
+        );
+        assert!(
+            script.contains("FIXTURE_HELLO="),
+            "the extension's variable is exported: {script}"
+        );
+        assert!(!script.contains("hijack"), "{script}");
+        assert!(!script.contains("TRAFFIC=0"), "{script}");
+        assert!(!script.contains("/evil"), "{script}");
+        let ext_at = script.find("FIXTURE_HELLO").unwrap();
+        let tail_at = script.find("exec claude").unwrap();
+        assert!(ext_at < tail_at, "exported before the tail: {script}");
+    }
+
+    /// An empty extension env is byte-identical to the historical builder.
+    #[test]
+    fn no_extension_env_is_byte_identical() {
+        let tail = || SessionTail::Script {
+            timeout_secs: 60,
+            env: &[],
+        };
+        let p = Path::new("/p.md");
+        assert_eq!(
+            build_tmux_script("r1", "s", 1, 6172, "", p, None, tail(), None, None),
+            build_tmux_script_with("r1", "s", 1, 6172, "", p, None, tail(), None, None, &[]),
+        );
+    }
+
+    /// A script's catalogue is the core's too, and in a sandbox the variables
+    /// cross the exec as valued `-e`, never as a host export.
+    #[test]
+    fn extension_env_reaches_a_sandboxed_script_without_overwriting_its_catalogue() {
+        let wt = Path::new("/wd");
+        let wrap_exec = TestExec::new("r1", "pdo-r1-s-iter-1", wt);
+        let wrap = sample_wrap(&wrap_exec);
+        let catalogue = ext_env(&[("PDO_OUTPUT_OUT", "/a/out.md")]);
+        let script = build_tmux_script_with(
+            "r1",
+            "s",
+            1,
+            6172,
+            TEST_SESSION_PATH,
+            Path::new("/p.md"),
+            None,
+            SessionTail::Script {
+                timeout_secs: 60,
+                env: &catalogue,
+            },
+            Some(&wrap),
+            None,
+            &ext_env(&[("FIXTURE_HELLO", "monde"), ("PDO_OUTPUT_OUT", "/x")]),
+        );
+        assert!(
+            script.contains("-e FIXTURE_HELLO=monde"),
+            "forwarded on the exec: {script}"
+        );
+        assert!(!script.contains("export FIXTURE_HELLO"), "{script}");
+        assert!(!script.contains("PDO_OUTPUT_OUT=/x"), "{script}");
+        assert!(script.contains("PDO_OUTPUT_OUT=/a/out.md"), "{script}");
+    }
+
+    /// A resumed node re-carries its extensions' variables.
+    #[test]
+    fn a_resume_re_poses_the_extension_env() {
+        let script = build_resume_script_with(
+            "r1",
+            "solo",
+            1,
+            6172,
+            TEST_SESSION_PATH,
+            &pdo_harness::registry::claude(),
+            None,
+            Some("sid"),
+            None,
+            None,
+            None,
+            &ext_env(&[
+                ("CLAUDE_CONFIG_DIR", "/home/u/.pdo/iam/alice"),
+                ("HOME", "/x"),
+            ]),
+        );
+        assert!(script.contains("export CLAUDE_CONFIG_DIR="), "{script}");
+        assert!(!script.contains("HOME=/x"), "{script}");
     }
 }

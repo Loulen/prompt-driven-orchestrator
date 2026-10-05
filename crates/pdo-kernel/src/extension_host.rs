@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
     Attributes, Authorization, EntityRef, Extension, ExtensionContext, ExtensionSkill, Host,
-    Manifest, RequestParts, EXTENSION_EVENT,
+    Manifest, NodeLaunch, RequestParts, TriggerRef, EXTENSION_EVENT,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -21,7 +21,9 @@ use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
 mod host_of;
+mod launch;
 use host_of::{panic_message, ExtensionHostOf};
+pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
 
 /// The core's view of its extensions.
 pub trait ExtensionHost: Send + Sync {
@@ -58,6 +60,18 @@ pub trait ExtensionHost: Send + Sync {
     /// panicked saying so is left out. None by default.
     fn skills(&self) -> Vec<ProvidedSkills> {
         Vec::new()
+    }
+
+    /// What the extensions add to the launch of a Node: their environment
+    /// variables and their preamble ([`NodeContribution`]). Nothing by default.
+    fn node_launch(&self, _launch: &NodeLaunch) -> NodeContribution {
+        NodeContribution::default()
+    }
+
+    /// The extension that suspends `trigger`, and why, if one does. None by
+    /// default.
+    fn trigger_suspension(&self, _trigger: &TriggerRef) -> Option<TriggerSuspension> {
+        None
     }
 }
 
@@ -360,6 +374,14 @@ impl ExtensionHost for Extensions {
                 },
             )
             .collect()
+    }
+
+    fn node_launch(&self, launch: &NodeLaunch) -> NodeContribution {
+        launch::node_launch(self, launch)
+    }
+
+    fn trigger_suspension(&self, trigger: &TriggerRef) -> Option<TriggerSuspension> {
+        launch::trigger_suspension(self, trigger)
     }
 }
 

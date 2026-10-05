@@ -484,6 +484,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let result = start_node(&params);
@@ -530,6 +531,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let result = start_node(&params);
@@ -576,6 +578,7 @@ mod tests {
             inject_hook: true,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
@@ -633,6 +636,7 @@ mod tests {
             inject_hook: true,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
         let result = start_node(&params);
 
@@ -697,6 +701,7 @@ mod tests {
             inject_hook: true,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
@@ -762,6 +767,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -827,6 +833,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -889,6 +896,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
         let input_paths = resolve_inputs(&params, node);
         assert_eq!(
@@ -997,6 +1005,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1072,6 +1081,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1180,6 +1190,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1250,6 +1261,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1320,6 +1332,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1571,6 +1584,7 @@ mod tests {
             inject_hook: false,
             harness_registry: None,
             sandbox_home_root: None,
+            extension: Default::default(),
         };
 
         let result = start_node(&params);

@@ -15,8 +15,9 @@ pub fn compute_run_cost_breakdown(
 
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
     let prefix = format!("{}-", cc_project_dirname(&run_dir));
-    let mut project_dirs: Vec<PathBuf> = std::fs::read_dir(claude_root)
-        .into_iter()
+    let mut project_dirs: Vec<PathBuf> = claude_roots(events, claude_root)
+        .iter()
+        .flat_map(std::fs::read_dir)
         .flatten()
         .flatten()
         .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))

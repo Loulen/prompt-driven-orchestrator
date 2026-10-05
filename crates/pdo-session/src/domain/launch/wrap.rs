@@ -11,6 +11,41 @@ pub fn host_daemon_url(daemon_port: u16) -> String {
     format!("http://localhost:{daemon_port}")
 }
 
+/// The variables the core sets in every node session, whatever its tail: the
+/// session `PATH` and identity, the daemon URL, the sandbox's `HOME` and its
+/// session marker. An extension can never overwrite one of them.
+pub const CORE_ENV_NAMES: &[&str] = &[
+    "PATH",
+    "HOME",
+    "PDO_RUN_ID",
+    "PDO_NODE_ID",
+    "PDO_NODE_ITER",
+    "PDO_DAEMON_URL",
+    "PDO_SBX_SESSION",
+];
+
+/// The extensions' variables a session may carry (API 0.8): every pair but
+/// those whose name the core sets itself ([`CORE_ENV_NAMES`], and each name
+/// of `core`: the harness's env, a script's catalogue, a staging set's env),
+/// dropped with a warning. A variable of the core is never overwritten.
+pub(super) fn extension_exports(
+    extension_env: &[(String, String)],
+    core: &[&[(String, String)]],
+) -> Vec<(String, String)> {
+    extension_env
+        .iter()
+        .filter(|(name, _)| {
+            let taken = CORE_ENV_NAMES.contains(&name.as_str())
+                || core.iter().any(|env| env.iter().any(|(k, _)| k == name));
+            if taken {
+                tracing::warn!("an extension's variable `{name}` is the core's: not overwritten");
+            }
+            !taken
+        })
+        .cloned()
+        .collect()
+}
+
 /// Splice the container-exec argv (built by the sandbox context, see
 /// [`super::ContainerExec`]) around a base tail:
 /// `docker <exec argv incl. -e K=V> pdo-sbx-<run> bash -lc '<tail>'`.

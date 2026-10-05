@@ -37,6 +37,9 @@
 //!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
+//! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
+//!   0.8, `launch.rs`): the variables, the preamble and the suspensions the
+//!   test sets ([`Control::launch`]).
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, so two extensions share a location.
 //!
@@ -54,6 +57,7 @@
 
 pub mod hosted;
 pub mod interop;
+pub mod launch;
 mod routes;
 
 use std::path::PathBuf;
@@ -63,8 +67,9 @@ use std::time::Duration;
 
 use pdo::extension_api::{
     Actor, Attributes, Authorization, CliInvocation, CliOutput, CliSpec, EntityRef, Extension,
-    ExtensionContext, ExtensionSkill, Manifest, Operation, RequestParts, ResourceKind, Slot,
-    UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
+    ExtensionContext, ExtensionSkill, Manifest, NodeEnv, NodeLaunch, Operation, RequestParts,
+    ResourceKind, Slot, TriggerRef, UiCommand, UiContribution, UiContributions, UiLocation, UiSlot,
+    Verb, When,
 };
 use serde_json::Value;
 
@@ -257,6 +262,8 @@ pub struct Control {
     cli_calls: Arc<Mutex<Vec<CliInvocation>>>,
     commands: Arc<Mutex<Vec<Value>>>,
     sections: Arc<Mutex<Vec<Value>>>,
+    /// Its launch hooks and its suspensions of Triggers (API 0.8).
+    pub launch: launch::Launch,
 }
 
 impl Default for Control {
@@ -271,6 +278,7 @@ impl Default for Control {
             cli_calls: Arc::default(),
             commands: Arc::default(),
             sections: Arc::default(),
+            launch: launch::Launch::default(),
         }
     }
 }
@@ -393,6 +401,18 @@ impl Extension for TestExtension {
 
     fn start(&self, context: &ExtensionContext) {
         *self.control.data_dir.lock().unwrap() = Some(context.data_dir.clone());
+    }
+
+    fn node_env(&self, launch: &NodeLaunch) -> NodeEnv {
+        self.control.launch.node_env(launch)
+    }
+
+    fn node_preamble(&self, launch: &NodeLaunch) -> Option<String> {
+        self.control.launch.node_preamble(launch)
+    }
+
+    fn trigger_suspension(&self, trigger: &TriggerRef) -> Option<String> {
+        self.control.launch.trigger_suspension(trigger)
     }
 
     fn on_create(&self, actor: &Actor, _entity: &EntityRef) -> Attributes {

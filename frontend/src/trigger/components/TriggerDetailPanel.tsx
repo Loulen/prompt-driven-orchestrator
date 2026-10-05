@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clock, FolderGit2, GitBranch, Layers, Zap } from "lucide-react";
+import { Clock, FolderGit2, GitBranch, Layers, User, Zap } from "lucide-react";
 import type { Trigger } from "../../shared/generated/Trigger";
 import { fetchSettings } from "../../settings/api/settings";
 import { humanizeCron } from "../model/cronPresets";
@@ -10,6 +10,9 @@ import FireHistory from "./triggerDetail/FireHistory";
 import GuardSection from "./triggerDetail/GuardSection";
 import ExtensionDetailTab from "../../shared/extensions/ExtensionDetailTab";
 import { useDetailTabs } from "../../shared/extensions/catalogue";
+import { actorLabel } from "../../shared/lib/actor";
+import SuspendedPill from "./triggersList/SuspendedPill";
+import { suspensionTooltip } from "../model/suspension";
 
 interface Props {
   trigger: Trigger;
@@ -91,9 +94,22 @@ export default function TriggerDetailPanel({
                 disabled
               </span>
             )}
+            {trigger.suspension && <SuspendedPill suspension={trigger.suspension} />}
           </div>
         </div>
       </div>
+      {/* API 0.8: an extension suspends it — it fires neither on its schedule
+          nor by Run now, until the extension lifts the suspension. */}
+      {trigger.suspension && (
+        <div
+          className="border-b border-st-interrupted/30 bg-st-interrupted-bg px-3 py-2 text-fg-2"
+          style={{ fontSize: "10.5px" }}
+          data-testid="trigger-detail-suspension"
+        >
+          <div className="font-medium text-st-interrupted">Suspended · does not fire</div>
+          <div className="mt-0.5 whitespace-pre-line break-words">{suspensionTooltip(trigger.suspension)}</div>
+        </div>
+      )}
 
       {tabs.length > 0 && (
         <div className="flex shrink-0 overflow-x-auto border-b border-line" style={{ fontSize: "11px" }}>
@@ -129,6 +145,14 @@ export default function TriggerDetailPanel({
         >
           Configuration
         </span>
+
+        {trigger.last_editor && (
+          <ConfigRow icon={<User size={12} />} label="Last editor">
+            <span className="truncate text-fg-2" data-testid="trigger-last-editor">
+              {actorLabel(trigger.last_editor)}
+            </span>
+          </ConfigRow>
+        )}
 
         <ConfigRow icon={<Layers size={12} />} label="Pipeline">
           <span className="font-mono text-fg-2">{trigger.pipeline_name || trigger.pipeline_id}</span>

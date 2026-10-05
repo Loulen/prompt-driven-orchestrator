@@ -297,6 +297,17 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub triggered_by: Option<String>,
+    /// The Actor of the Run's `run` × `create` (API 0.8): who launched it, or
+    /// the Trigger of a fire. Frozen into `RunStarted`; `None` on a Run created
+    /// before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub created_by: Option<pdo_kernel::Actor>,
+    /// For a fired Run, the Trigger's last editor when it fired. Frozen with
+    /// [`RunState::created_by`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub trigger_editor: Option<pdo_kernel::Actor>,
     /// Provenance: the Run whose node session created this one (ADR-0064).
     /// **Mechanical**: posed by the daemon at create time from the caller's
     /// verified live node session — never declared by the caller, whose body may

@@ -271,7 +271,12 @@ pub async fn run_stale_detection(state: &Arc<Runs>) {
 
             // The store ROOT is the resolved harness's own; the per-harness
             // `resolve_transcript` joins the right leaf.
-            let node_store_root: &Path = stores.root_for(&node_harness, &projects_root);
+            // API 0.8: a node given a `CLAUDE_CONFIG_DIR` writes its transcripts
+            // under it — its liveness is read there.
+            let claude_root =
+                crate::application::node::launch::find_launch_claude_root(&events, node_id, *iter)
+                    .unwrap_or_else(|| projects_root.clone());
+            let node_store_root: &Path = stores.root_for(&node_harness, &claude_root);
 
             let probes = SweepNodeProbes {
                 tmux,

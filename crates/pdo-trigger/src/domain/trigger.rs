@@ -8,6 +8,7 @@
 
 use pdo_harness::agent_choice::AgentChoice;
 use pdo_kernel::attributes::Attributes;
+use pdo_kernel::Actor;
 use pdo_skill::domain::selection::SkillRef;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -113,6 +114,27 @@ pub struct Trigger {
     #[serde(default, skip_serializing_if = "Attributes::is_empty")]
     #[ts(as = "Option<Attributes>", optional)]
     pub attributes: Attributes,
+    /// The Actor of its creation or last edit (API 0.8): who answers for the
+    /// Runs it fires. `None` on a Trigger last edited before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_editor: Option<Actor>,
+    /// Why an extension suspends it, if one does (API 0.8): a suspended
+    /// Trigger fires neither on its schedule nor by "Run now". Asked at every
+    /// read, never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub suspension: Option<Suspension>,
+}
+
+/// A Trigger an extension suspends (API 0.8), and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "TriggerSuspension")]
+pub struct Suspension {
+    /// The id of the extension that suspends it.
+    pub extension: String,
+    /// What the operator reads on the Trigger.
+    pub reason: String,
 }
 
 /// The fields supplied at creation time; scheduling state is derived/initial.
@@ -144,6 +166,8 @@ pub struct NewTrigger {
     pub auto_name: bool,
     /// First scheduled fire, computed by the caller from the cron expression.
     pub next_fire_at: Option<String>,
+    /// The Actor creating it, its first editor.
+    pub last_editor: Option<Actor>,
 }
 
 /// One audit row in `trigger_fires`.
@@ -153,7 +177,8 @@ pub struct TriggerFire {
     pub id: i64,
     pub trigger_id: String,
     pub ts: String,
-    /// `fired` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error` / `error`.
+    /// `fired` / `skipped-overlap` / `skipped-suspended` / `guard-exit-nonzero` /
+    /// `guard-error` / `error`.
     pub outcome: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -232,6 +257,9 @@ pub struct UpdateTrigger {
     /// Folded in here so the enable bit and a forward `next_fire_at` land in ONE
     /// atomic UPDATE (it was a separate `set_enabled` write).
     pub enabled: Option<bool>,
+    /// The Actor of this edit, who becomes the last editor (API 0.8). Flat: an
+    /// edit always has an Actor, and a Trigger never goes back to having none.
+    pub last_editor: Option<Actor>,
 }
 
 impl UpdateTrigger {
@@ -255,5 +283,6 @@ impl UpdateTrigger {
             && self.auto_name.is_none()
             && self.next_fire_at.is_none()
             && self.enabled.is_none()
+            && self.last_editor.is_none()
     }
 }

@@ -225,7 +225,9 @@ effect and return the unregistration.
 ### `pipeline/config`
 
 - **Accepts**: section.
-- **Renders**: the inspector of a pipeline (nothing selected on the canvas), after Stats.
+- **Renders**: the Info tab of Pipeline info (the toolbar's `i`) on a template, after Stats. A Run's
+  Info tab shows `run/info` instead. Pipeline info is the only surface of a pipeline's settings: an
+  empty canvas selection shows nothing on the right.
 - **Context**: `PipelineConfigContext` = `LocationContext` + `entity` (`{ kind: "pipeline", id,
   name, attributes }`). No `form`.
 

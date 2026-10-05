@@ -34,14 +34,18 @@ import { useLaunchActions } from "./useLaunchActions";
 import { useShellRefresh } from "./useShellRefresh";
 import { useDaemonEvents } from "./useDaemonEvents";
 import { useInfoPanel } from "./useInfoPanel";
+import { useCollapsibleRightPane } from "./useCollapsibleRightPane";
 import CenterPane from "./CenterPane";
 import RightPane from "./RightPane";
 import StatusBar from "./StatusBar";
 import UpdateModals from "./UpdateModals";
 import EditorModals from "./EditorModals";
+import RunNowErrorToast from "./RunNowErrorToast";
 
 const PANEL_IDS = ["left", "center", "right"];
 const DEFAULT_SIZES = { left: 15, center: 60, right: 25 };
+/** #949: the right pane collapses on its own; the canvas takes its width meanwhile. */
+const RIGHT_COLLAPSIBLE = { panelId: "right", absorbInto: "center" };
 
 /** The app shell: the Runs, Triggers and Projets on the left, the canvas in the
  *  center, the inspector on the right, the status bar, and every global modal. */
@@ -88,6 +92,7 @@ export default function App() {
   const selection = useEditStore((s) => s.selection);
   const openTabs = useEditStore((s) => s.openTabs);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
+  const editLastRekey = useEditStore((s) => s.lastRekey);
   // Merged /pipelines list — used to derive the selected trigger's prompt-required
   // signal for the guard dry-run caveat (#351).
   const pipelines = useEditStore((s) => s.pipelines);
@@ -151,11 +156,14 @@ export default function App() {
   });
   const { openNewRunModal, handleCloseNewRunModal, runNowError, setRunNowError } = launch;
 
-  const { paneOwner, selectedTrigger, triggerPromptRequired, runNode } =
+  const { paneOwner, selectedTrigger, triggerPromptRequired, runNode, collapsed: rightPaneCollapsed } =
     useRightPaneRouter({
       selection,
       editActiveTabId,
+      tabRekey: editLastRekey,
       hasEditTab,
+      isRunTab: isEditingRun,
+      selectedNodeId,
       selectedTriggerId,
       setSelectedTriggerId,
       triggerOpenedTabId,
@@ -214,8 +222,9 @@ export default function App() {
     bumpFiresRefreshKey,
   });
 
-  const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES);
+  const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES, RIGHT_COLLAPSIBLE);
   const minSizePx = `${layout.minSizePx}px`;
+  const rightPane = useCollapsibleRightPane(rightPaneCollapsed, layout.persistedSize, DEFAULT_SIZES.right);
 
   return (
     <TooltipProvider>
@@ -268,12 +277,28 @@ export default function App() {
               onOpenAssistant={info.handleToggleAssistant}
               selectedRun={selectedRun}
               onSelectRun={handleSelectRun}
+              rightPaneCollapsed={rightPaneCollapsed}
             />
           </ResizablePanel>
 
-          <ResizableHandle />
+          {/* #949: no handle while collapsed — the pane cannot be dragged out.
+              `invisible`, not `hidden`: a display:none separator has an empty
+              rect, which breaks the library's hit regions for the OTHER handle. */}
+          <ResizableHandle
+            id="right-pane-handle"
+            disabled={rightPaneCollapsed}
+            className={rightPaneCollapsed ? "invisible" : undefined}
+          />
 
-          <ResizablePanel defaultSize={layout.defaultLayout.right} minSize={minSizePx} id="right" className="panel-r">
+          <ResizablePanel
+            defaultSize={layout.defaultLayout.right}
+            minSize={minSizePx}
+            collapsible={rightPane.collapsible}
+            panelRef={rightPane.panelRef}
+            id="right"
+            className="panel-r"
+            data-collapsed={rightPaneCollapsed || undefined}
+          >
             <RightPane
               paneOwner={paneOwner}
               selectedTrigger={selectedTrigger}
@@ -365,22 +390,7 @@ export default function App() {
         onWelcomeAnswered={() => setTourOffered(true)}
         onOpenTutorials={() => openSettings({ category: "general", section: "tutorials" })}
       />
-      {runNowError && (
-        <div
-          className="fixed bottom-3 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded border border-st-failed bg-bg-2 px-3 py-2 text-fg"
-          style={{ fontSize: "11.5px" }}
-          data-testid="run-now-error"
-        >
-          <span>{runNowError}</span>
-          <button
-            onClick={() => setRunNowError(null)}
-            className="text-fg-3 hover:text-fg"
-            data-testid="run-now-error-dismiss"
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      {runNowError && <RunNowErrorToast error={runNowError} onDismiss={() => setRunNowError(null)} />}
       <Toaster />
     </div>
     </ExtensionContextProvider>

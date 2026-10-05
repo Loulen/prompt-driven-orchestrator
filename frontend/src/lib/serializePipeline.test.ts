@@ -596,6 +596,32 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toContain("max_iter: 5");
     expect(yaml).toContain("threshold: 0.8");
   });
+
+  // #948: the short form loses a type the daemon cannot infer back from the
+  // default (a `float` defaulting to `3` reloaded as an `int`) — such a
+  // variable is written in the explicit `{ type, default }` form.
+  it("writes the explicit form when the default does not carry the declared type", () => {
+    const pipeline: EditorPipelineDef = {
+      name: "vars-explicit", version: "1.0",
+      variables: {
+        ratio: { type: "float", default: 3 },
+        count: { type: "int", default: 3 },
+        label: { type: "string", default: "x" },
+        flag: { type: "bool", default: true },
+        items: { type: "list", default: ["a"] },
+        empty_list: { type: "list", default: "" },
+      },
+      nodes: [],
+      edges: [],
+    };
+    const out = serializePipeline(pipeline);
+    expect(out).toContain("  ratio: { type: float, default: 3 }\n");
+    expect(out).toContain("  count: 3\n");
+    expect(out).toContain("  label: x\n");
+    expect(out).toContain("  flag: true\n");
+    expect(out).toContain("  items: [a]\n");
+    expect(out).toContain('  empty_list: { type: list, default: "" }\n');
+  });
 });
 
 describe("serializePipeline persists edge when/else (ADR-0011)", () => {

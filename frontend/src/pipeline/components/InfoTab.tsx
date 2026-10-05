@@ -1,5 +1,6 @@
 /**
- * The Info tab: a pipeline's variables and prompt, a Run's status, source and stats.
+ * The Info tab: a pipeline's metadata (editable on a template, read-only on a
+ * Run), a Run's status, source and stats.
  */
 
 import { Info, Box, Loader, CloudOff } from "lucide-react";
@@ -11,6 +12,9 @@ import { formatEstCost } from "../../run/model/costLabel";
 import type { EditorPipelineDef } from "../model/pipeline";
 
 import { SourceBlock } from "./SourceBlock";
+import PipelineMetaSections from "./PipelineMetaSections";
+import { PipelineConfigSections } from "./ExtensionInspectorSections";
+import { useEditStore } from "../store/editStore";
 import { useMemo } from "react";
 import ExtensionSections, { type RenderedSection } from "../../shared/extensions/ExtensionSections";
 import type { RunInfoContext } from "../../shared/extensions/contract";
@@ -75,14 +79,15 @@ export function InfoTab({
   run,
   pipeline,
   pipelineName,
-  variables,
+  pipelineId,
   hasAssistant,
   onOpenDiff,
 }: {
   run: RunState | null;
   pipeline: EditorPipelineDef | null;
   pipelineName: string;
-  variables: [string, { default: unknown }][];
+  /** The template's id (its edit tab), for the `pipeline/config` sections; null on a Run. */
+  pipelineId: string | null;
   hasAssistant: boolean;
   /** #748: the Changes stat is the link to what it counts — the Diff tab. */
   onOpenDiff: () => void;
@@ -90,6 +95,7 @@ export function InfoTab({
   const durationMs = useRunDuration(run?.started_at, run?.completed_at, run?.status);
   const durationLabel = formatDuration(durationMs);
   const durationTicking = run != null && run.completed_at == null && isLiveRun(run.status);
+  const pipelines = useEditStore((s) => s.pipelines);
 
   return (
     <>
@@ -212,24 +218,7 @@ export function InfoTab({
           >
             {run.status === "archived"
               ? "Archived run · read-only · outputs preserved"
-              : "Editing run-scoped pipeline · changes sync to template"}
-          </div>
-        )}
-
-        {variables.length > 0 && (
-          <div className="mt-3 flex flex-col gap-1" data-testid="info-panel-variables">
-            {variables.map(([name, def]) => (
-              <div
-                key={name}
-                className="flex items-center justify-between rounded bg-bg-3 px-2 py-1"
-                style={{ fontSize: "10.5px" }}
-              >
-                <span className="font-mono text-fg-3">{name}</span>
-                <span className="font-mono text-fg-4">
-                  {formatVariableValue(def.default)}
-                </span>
-              </div>
-            ))}
+              : "Canvas edits sync to template · run settings are read-only"}
           </div>
         )}
       </div>
@@ -252,14 +241,26 @@ export function InfoTab({
         </div>
       )}
 
-      {run && (
+      {/* Notion #6 / #948: Pipeline info is the only surface of the pipeline's
+          metadata — editable on a template, read-only on a Run (active or
+          archived). Order: header → Identity → Variables → Canvas → Stats → note. */}
+      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null} />}
+
+      {(run || pipeline) && (
         <div
           className="border-b border-line px-3 py-3"
           style={{ fontSize: "11.5px" }}
-          data-testid="run-stats"
+          data-testid="info-stats"
         >
           <SectionHead title="Stats" />
-          <div className="mt-2 flex flex-col gap-1">
+          {pipeline && (
+            <div className="mt-2 flex gap-4 text-fg-4" style={{ fontSize: "10px" }} data-testid="pipeline-graph-stats">
+              <span>{pipeline.nodes.length} nodes</span>
+              <span>{pipeline.edges.length} edges</span>
+            </div>
+          )}
+          {run && (
+          <div className="mt-2 flex flex-col gap-1" data-testid="run-stats">
             <StatRow label="Duration" testid="stat-duration">
               <span className="flex items-center gap-1.5">
                 {durationLabel ?? "—"}
@@ -343,24 +344,28 @@ export function InfoTab({
               )}
             </StatRow>
           </div>
+          )}
         </div>
       )}
 
       {run && <RunInfoSections run={run} />}
 
-      <div className="px-3 py-3" style={{ fontSize: "11.5px" }}>
-        <SectionHead title="Description" />
-        <div
-          className="mt-2 text-fg-3"
-          style={{ fontSize: "12px", lineHeight: "1.55" }}
-        >
-          {pipeline?.name
-            ? `Pipeline: ${pipeline.name}`
-            : "No pipeline selected."}
+      {/* ADR-0081 (#31): the `pipeline/config` sections of the extensions, after
+          a template's Stats — they followed the standalone inspector here (#948). */}
+      {!run && pipeline && pipelineId && (
+        <div className="flex flex-col gap-3 border-b border-line px-3 py-3 empty:hidden" style={{ fontSize: "11.5px" }}>
+          <PipelineConfigSections
+            pipelineId={pipelineId}
+            pipelineName={pipeline.name}
+            attributes={(pipelines ?? []).find((p) => p.id === pipelineId)?.attributes}
+          />
         </div>
-        {!run && (
+      )}
+
+      {!run && (
+        <div className="px-3 py-3" style={{ fontSize: "11.5px" }}>
           <div
-            className="mt-3 flex items-center gap-2 rounded border border-dashed border-line-soft bg-bg-3 px-3 py-2.5 text-fg-4"
+            className="flex items-center gap-2 rounded border border-dashed border-line-soft bg-bg-3 px-3 py-2.5 text-fg-4"
             style={{ fontSize: "11.5px" }}
           >
             <Info size={14} className="shrink-0" />
@@ -370,15 +375,9 @@ export function InfoTab({
                 : "No active run. The Manager tab becomes available while a Run is in progress."}
             </span>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </>
   );
-}
-
-function formatVariableValue(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.join(", ")}]`;
-  if (typeof value === "string") return `"${value}"`;
-  return String(value ?? "");
 }
 

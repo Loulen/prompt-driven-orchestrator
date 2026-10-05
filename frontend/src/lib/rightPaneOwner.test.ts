@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { rightPaneOwner } from "./rightPaneOwner";
-import type { RightPaneInputs } from "./rightPaneOwner";
+import { rightPaneCollapsed, rightPaneOwner } from "./rightPaneOwner";
+import type { RightPaneContentInputs, RightPaneInputs } from "./rightPaneOwner";
 
 const base: RightPaneInputs = {
   triggerSelected: false,
@@ -73,5 +73,56 @@ describe("rightPaneOwner", () => {
     for (const [input, want] of expected) {
       expect(rightPaneOwner(input)).toBe(want);
     }
+  });
+});
+
+// Notion #6 / #949 — « Panneau de droite replié »: the pane collapses exactly
+// when the branch App renders for its owner would paint nothing.
+describe("rightPaneCollapsed", () => {
+  const tpl: RightPaneContentInputs = {
+    owner: "editTab",
+    selectionKind: "none",
+    runPanelShown: false,
+    legacyHasContent: false,
+  };
+
+  it("collapses on a template tab with an empty selection (info closed)", () => {
+    expect(rightPaneCollapsed(tpl)).toBe(true);
+  });
+
+  it("collapses on the home screen (no tab, nothing selected)", () => {
+    expect(rightPaneCollapsed({ ...tpl, owner: "selectedNode" })).toBe(true);
+  });
+
+  it("stays open while Pipeline info is open, even with nothing selected", () => {
+    expect(rightPaneCollapsed({ ...tpl, owner: "info" })).toBe(false);
+  });
+
+  it("stays open for a selected Trigger", () => {
+    expect(rightPaneCollapsed({ ...tpl, owner: "trigger" })).toBe(false);
+  });
+
+  it.each(["node", "edge", "region", "note"] as const)(
+    "stays open for a %s selection on a template",
+    (selectionKind) => {
+      expect(rightPaneCollapsed({ ...tpl, selectionKind })).toBe(false);
+    },
+  );
+
+  it("keeps the Run panel on a Run tab with an empty selection (Q6)", () => {
+    expect(rightPaneCollapsed({ ...tpl, runPanelShown: true })).toBe(false);
+    expect(
+      rightPaneCollapsed({ ...tpl, selectionKind: "run", runPanelShown: true }),
+    ).toBe(false);
+  });
+
+  it("collapses a Run tab whose state is not loaded yet (nothing painted)", () => {
+    expect(rightPaneCollapsed({ ...tpl, selectionKind: "run" })).toBe(true);
+  });
+
+  it("keeps the no-tab path open when it has content (run node, Run archived — Q7)", () => {
+    expect(
+      rightPaneCollapsed({ ...tpl, owner: "selectedNode", legacyHasContent: true }),
+    ).toBe(false);
   });
 });

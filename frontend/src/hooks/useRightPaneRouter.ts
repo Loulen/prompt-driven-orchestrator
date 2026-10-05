@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { rightPaneOwner } from "../lib/rightPaneOwner";
+import { rightPaneCollapsed, rightPaneOwner } from "../lib/rightPaneOwner";
 import type { RightPaneOwner } from "../lib/rightPaneOwner";
 import { shouldClearTriggerOnCanvasFocus } from "../trigger/model/triggerCanvasReconcile";
 import { shouldCloseInfoOnTabChange } from "../lib/infoPanelReconcile";
@@ -15,8 +15,14 @@ export interface RightPaneRouterArgs {
   selection: Selection;
   /** The active edit-tab id (`editStore.activeTabId`). */
   editActiveTabId: string | null;
+  /** The store's last tab rekey (`editStore.lastRekey`, #774) — not a tab switch. */
+  tabRekey?: { from: string; to: string } | null;
   /** Whether an edit tab owns the centre canvas. */
   hasEditTab: boolean;
+  /** Whether the active edit tab is a Run (not a template) — #949. */
+  isRunTab?: boolean;
+  /** The legacy no-tab node selection (App's `selectedNodeId`) — #949. */
+  selectedNodeId?: string | null;
   /** The currently-selected Trigger id (App-owned state). */
   selectedTriggerId: string | null;
   /** Setter for `selectedTriggerId` — the #320 reconciliation clears it. */
@@ -44,6 +50,8 @@ export interface RightPaneRouterResult {
   triggerPromptRequired: boolean;
   /** A synthesized pending NodeState for the Run pane, or null. */
   runNode: NodeState | null;
+  /** The pane has nothing to show and collapses (Notion #6 / #949). */
+  collapsed: boolean;
 }
 
 /**
@@ -71,7 +79,10 @@ export function useRightPaneRouter(
   const {
     selection,
     editActiveTabId,
+    tabRekey,
     hasEditTab,
+    isRunTab = false,
+    selectedNodeId = null,
     selectedTriggerId,
     setSelectedTriggerId,
     triggerOpenedTabId,
@@ -141,6 +152,7 @@ export function useRightPaneRouter(
       prevTabId: lastInfoTabId,
       nextTabId: editActiveTabId,
       infoOpen: infoPanelOpen,
+      rekey: tabRekey,
     });
     setLastInfoTabId(editActiveTabId); // UNCONDITIONAL — mirrors the #320 block
     if (closeInfo) setInfoPanelOpen(false);
@@ -198,5 +210,27 @@ export function useRightPaneRouter(
     };
   })();
 
-  return { paneOwner, selectedTrigger, triggerPromptRequired, runNode };
+  // #949: the pane collapses exactly when the branch App renders for this owner
+  // paints nothing. `legacyHasContent` mirrors the no-tab branch (a run node,
+  // Start/End, or the "Run archived" notice); `runPanelShown` the Run panel a
+  // Run tab keeps on an empty selection.
+  const legacyHasContent = (() => {
+    if (!selectedRun) return false;
+    const type =
+      selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.node_type ??
+      null;
+    const node = selectedNodeId ? selectedRun.nodes[selectedNodeId] ?? null : null;
+    const archivedNotice = node == null && selectedRun.status === "archived";
+    if (type === "start") return selectedRun.start_node != null;
+    if (type === "end") return selectedRun.end_node != null || archivedNotice;
+    return node != null || archivedNotice;
+  })();
+  const collapsed = rightPaneCollapsed({
+    owner: paneOwner,
+    selectionKind: selection.kind,
+    runPanelShown: isRunTab && selectedRun != null,
+    legacyHasContent,
+  });
+
+  return { paneOwner, selectedTrigger, triggerPromptRequired, runNode, collapsed };
 }

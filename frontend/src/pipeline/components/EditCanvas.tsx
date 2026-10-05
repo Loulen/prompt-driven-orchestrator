@@ -36,6 +36,7 @@ import { useCanvasContextMenu } from "../store/useCanvasContextMenu";
 import { useCanvasLint } from "../store/useCanvasLint";
 import { useCanvasPlacement } from "../store/useCanvasPlacement";
 import { useCanvasReveal } from "../store/useCanvasReveal";
+import { usePaneToggleReframe } from "../store/usePaneToggleReframe";
 import { useCanvasRunActions } from "../store/useCanvasRunActions";
 import { useCanvasWiring } from "../store/useCanvasWiring";
 import { EditNode } from "./EditNode";
@@ -62,9 +63,11 @@ interface EditCanvasProps {
   // #598 / ADR-0049: navigate to another run (used after Retry-all forks a fresh
   // run). Threaded from App so the canvas toolbar's Retry-all lands on the new run.
   onSelectRun?: (runId: string) => void;
+  // #949: whether App's right pane is folded; the canvas re-frames on its toggle.
+  rightPaneCollapsed?: boolean;
 }
 
-function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun, rightPaneCollapsed = false }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -111,6 +114,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   } = useCanvasWiring({ pipeline, reactFlow, addEdgeToStore, updateEdge, setWiring, gridStep });
   const dragHighlightNodeId = isDraggingEdge ? hoveredNodeId : null;
   useCanvasReveal(reactFlowRef, reactFlow);
+  usePaneToggleReframe(reactFlowRef, reactFlow, tab != null && pipeline != null, rightPaneCollapsed);
   const { computeDropPosition, handleAddNode, handleAddNote } = useCanvasPlacement({
     pipeline,
     reactFlowRef,
@@ -378,15 +382,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
 
       {/* #598 / ADR-0049: the finished-run group's Open-shell and Retry-all
           modals, reusing the exact components the left-panel row uses. */}
-      {runShell.shell && (
-        <RunShellModal session={runShell.shell.session} onClose={runShell.close} />
-      )}
-      {confirmRetryAll && (
-        <RetryAllConfirmModal
-          onConfirm={handleRetryAll}
-          onCancel={() => setConfirmRetryAll(false)}
-        />
-      )}
+      {runShell.shell && <RunShellModal session={runShell.shell.session} onClose={runShell.close} />}
+      {confirmRetryAll && <RetryAllConfirmModal onConfirm={handleRetryAll} onCancel={() => setConfirmRetryAll(false)} />}
     </div>
   );
 }

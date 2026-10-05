@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 export const MIN_SIZE_PX = 100;
 const MIN_SIZE_PCT = 5;
@@ -65,10 +65,41 @@ function loadLayout(
   }
 }
 
+/** Below this percentage a collapsible panel counts as collapsed (collapsedSize is 0%). */
+const COLLAPSED_PCT = 0.5;
+
+/** A panel the app collapses on its own, and the panel that takes its width meanwhile. */
+export interface CollapsiblePanel {
+  panelId: string;
+  absorbInto: string;
+}
+
+/**
+ * The layout to persist when `panel` may be collapsed (#949). A collapsed
+ * panel's zero width is never written: it keeps its last expanded width from
+ * `persisted`, taken back from the panel that absorbed it, so a later expand —
+ * or a reload — restores the width the user chose. The other panels' sizes (a
+ * drag on another handle while collapsed) still go through. Returns
+ * `persisted` unchanged when the absorbing panel is too small to give it back.
+ */
+export function keepCollapsedWidth(
+  next: Layout,
+  persisted: Layout,
+  panel: CollapsiblePanel,
+): Layout {
+  const { panelId, absorbInto } = panel;
+  if ((next[panelId] ?? 0) > COLLAPSED_PCT) return next;
+  const width = persisted[panelId];
+  const absorbed = (next[absorbInto] ?? 0) - width;
+  if (width === undefined || absorbed < MIN_SIZE_PCT) return persisted;
+  return { ...next, [panelId]: width, [absorbInto]: +absorbed.toFixed(2) };
+}
+
 export function useResizableLayout(
   mode: "run" | "edit",
   panelIds: string[],
   defaultSizes: Layout,
+  collapsible?: CollapsiblePanel,
 ) {
   const key = STORAGE_KEYS[mode];
 
@@ -77,12 +108,31 @@ export function useResizableLayout(
     [key, panelIds, defaultSizes],
   );
 
+  // The last persisted layout — the source of a collapsed panel's width.
+  const persistedRef = useRef(defaultLayout);
+  const collapsibleId = collapsible?.panelId;
+  const absorbInto = collapsible?.absorbInto;
+
   const onLayoutChanged = useCallback(
     (layout: Layout) => {
-      localStorage.setItem(key, JSON.stringify(layout));
+      const toStore =
+        collapsibleId && absorbInto
+          ? keepCollapsedWidth(layout, persistedRef.current, {
+              panelId: collapsibleId,
+              absorbInto,
+            })
+          : layout;
+      persistedRef.current = toStore;
+      localStorage.setItem(key, JSON.stringify(toStore));
     },
-    [key],
+    [key, collapsibleId, absorbInto],
   );
 
-  return { defaultLayout, onLayoutChanged, minSizePx: MIN_SIZE_PX };
+  /** The last persisted (expanded) size of a panel, in percent. */
+  const persistedSize = useCallback(
+    (panelId: string): number | undefined => persistedRef.current[panelId],
+    [],
+  );
+
+  return { defaultLayout, onLayoutChanged, persistedSize, minSizePx: MIN_SIZE_PX };
 }

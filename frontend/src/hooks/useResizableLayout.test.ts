@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   useResizableLayout,
   clampLayout,
+  keepCollapsedWidth,
   type Layout,
 } from "./useResizableLayout";
 
@@ -161,5 +162,58 @@ describe("useResizableLayout", () => {
       useResizableLayout("run", PANEL_IDS, defaults),
     );
     expect(result.current.minSizePx).toBe(100);
+  });
+});
+
+// #949: the right pane collapses on its own; its zero width is never persisted.
+describe("keepCollapsedWidth", () => {
+  const RIGHT = { panelId: "right", absorbInto: "center" };
+
+  it("passes an expanded layout through", () => {
+    expect(
+      keepCollapsedWidth(makeLayout(15, 55, 30), makeLayout(15, 60, 25), RIGHT),
+    ).toEqual(makeLayout(15, 55, 30));
+  });
+
+  it("keeps the last expanded width when the panel is collapsed", () => {
+    expect(
+      keepCollapsedWidth(makeLayout(15, 85, 0), makeLayout(15, 55, 30), RIGHT),
+    ).toEqual(makeLayout(15, 55, 30));
+  });
+
+  it("still records another panel resized while collapsed", () => {
+    expect(
+      keepCollapsedWidth(makeLayout(20, 80, 0), makeLayout(15, 55, 30), RIGHT),
+    ).toEqual(makeLayout(20, 50, 30));
+  });
+
+  it("keeps the persisted layout when the canvas cannot give the width back", () => {
+    const persisted = makeLayout(15, 55, 30);
+    expect(keepCollapsedWidth(makeLayout(70, 30, 0), persisted, RIGHT)).toBe(
+      persisted,
+    );
+  });
+});
+
+describe("useResizableLayout — collapsible panel (#949)", () => {
+  const defaults = makeLayout(15, 60, 25);
+  const RIGHT = { panelId: "right", absorbInto: "center" };
+
+  it("never persists a collapsed width, and it survives a reload", () => {
+    const { result } = renderHook(() =>
+      useResizableLayout("run", PANEL_IDS, defaults, RIGHT),
+    );
+    act(() => result.current.onLayoutChanged(makeLayout(15, 50, 35)));
+    act(() => result.current.onLayoutChanged(makeLayout(15, 85, 0)));
+    expect(JSON.parse(localStorage.getItem("pdo.layout.run")!)).toEqual(
+      makeLayout(15, 50, 35),
+    );
+    expect(result.current.persistedSize("right")).toBe(35);
+
+    const reloaded = renderHook(() =>
+      useResizableLayout("run", PANEL_IDS, defaults, RIGHT),
+    );
+    expect(reloaded.result.current.defaultLayout.right).toBe(35);
+    expect(reloaded.result.current.persistedSize("right")).toBe(35);
   });
 });

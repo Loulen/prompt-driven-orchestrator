@@ -3,7 +3,7 @@ import { GRID_SIZES, gridStep, type GridSize } from "../../lib/wiringGrid";
 /**
  * The S / M / L wiring-grid size picker (#877 / ADR-0076), shared by the global
  * default (Settings › General › Interface) and the pipeline's own choice (the
- * Pipeline Inspector). With `globalSize` set, a leading « Global » option stands
+ * Info tab of Pipeline info). With `globalSize` set, a leading « Global » option stands
  * for « no choice of its own » (`null`): the pipeline follows the reader's
  * default, and the file carries no `grid_size`.
  *

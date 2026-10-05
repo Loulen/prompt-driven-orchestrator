@@ -25,6 +25,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
   scrollToPort: null,
   lastSavedAt: {},
   history: {},
+  lastRekey: null,
   singleTabMode: loadTabsDisabled(),
   pendingSingleTab: null,
 

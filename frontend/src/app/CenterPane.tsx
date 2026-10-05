@@ -22,6 +22,7 @@ export default function CenterPane({
   onOpenAssistant: handleOpenAssistant,
   selectedRun,
   onSelectRun: handleSelectRun,
+  rightPaneCollapsed,
 }: {
   hasEditTab: boolean;
   orchestratorReturn: ReturnType<typeof useRunNavigation>["orchestratorReturn"];
@@ -35,6 +36,8 @@ export default function CenterPane({
   onOpenAssistant: () => void;
   selectedRun: RunState | null;
   onSelectRun: (runId: string) => void;
+  /** #949: whether the right pane is folded — the canvas re-frames on its toggle. */
+  rightPaneCollapsed: boolean;
 }) {
   return hasEditTab ? (
     <div className="flex h-full min-w-0 flex-col">
@@ -72,6 +75,7 @@ export default function CenterPane({
         onOpenAssistant={handleOpenAssistant}
         runState={selectedRun}
         onSelectRun={handleSelectRun}
+        rightPaneCollapsed={rightPaneCollapsed}
       />
     </div>
   ) : (

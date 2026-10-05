@@ -1,7 +1,8 @@
 /**
  * The extension sections of the canvas inspectors (ADR-0081, #31): `node/config`
- * after a node's Outputs, `pipeline/config` after a pipeline's Stats. Each is
- * headed like the inspector's own sections; nothing without a contribution.
+ * after a node's Outputs, `pipeline/config` after a template's Stats in the Info
+ * tab of Pipeline info (#948). Each is headed like the host's own sections;
+ * nothing without a contribution.
  * The inspectors save as they edit: these sections save the way their
  * extension decides.
  */

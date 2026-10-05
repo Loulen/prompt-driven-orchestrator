@@ -84,8 +84,8 @@ pub enum UiLocation {
     /// [`UiElement::Section`] per contribution.
     #[serde(rename = "node/config")]
     NodeConfig,
-    /// A section of the inspector of a pipeline (nothing selected on the
-    /// canvas), after Stats: a [`UiElement::Section`] per contribution.
+    /// A section of the Info tab of Pipeline info on a template, after Stats:
+    /// a [`UiElement::Section`] per contribution.
     #[serde(rename = "pipeline/config")]
     PipelineConfig,
     /// A section of the Info tab of a Run, after its stats: a

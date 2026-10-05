@@ -1,5 +1,7 @@
 # Le Merge devient un nœud first-class, plus auto-spawné
 
+**Superseded by ADR-0082** (le `Merge` est retiré ; la convergence edge-centred décrite ci-dessous est désormais la règle de tout nœud et vit dans ADR-0082).
+
 **Le runtime ne spawne jamais un résolveur de merge de lui-même : le `Merge` est un nœud du DAG que le designer place explicitement.** L'auto-spawn (et son toggle `auto_merge_resolver`) introduisait de l'orchestration ambiante — le designer ne *voyait* pas la barrière de synchro dans son graphe, ce qui contredit *Sharp tool* (ADR-0001) — et ne couvrait que le cas conflit, pas la barrière elle-même. Écarté aussi : *deux nœuds distincts `Merge` (code) et `Join` (doc-only)*, alors que « rassembler N branches » est un geste unique côté designer (le runtime choisit selon le type des upstream) ; et *un spawn LLM systématique pour la traçabilité*, dont le coût écrase le bénéfice — un summary trivial sans LLM suffit à l'audit.
 
 Forme : 1 input port `branches: repeated`, 1 output `merged` (frontmatter `conflict_count`, `branches: [...]`, corps narratif). Sémantique : barrière edge-centrée (ci-dessous) ; fork d'un sous-worktree depuis la branche du Run ; `git merge` de chaque upstream ayant une branche dédiée ; **si conflit** → spawn d'un agent qui lit les artefacts du Blackboard pour reconstituer les intentions, résout, commit ; **sinon** → summary trivial + commit, sans LLM.

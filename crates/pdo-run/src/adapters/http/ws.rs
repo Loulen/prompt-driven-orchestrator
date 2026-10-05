@@ -6,8 +6,10 @@
 //! connection only if its Actor (the one `identify` set on the upgrade
 //! request) may read that Run. Each decision is kept
 //! [`READ_DECISION_TTL`], so a busy Run asks once per few seconds, not once
-//! per event; a change of rights shows within that delay. The other messages
-//! (Triggers, pipelines, Projets, the extensions' events…) pass as before.
+//! per event; a change of rights shows within that delay. A `trigger_fired`
+//! still reaches the connection, without the `run_id` of a Run it may not
+//! read. The other messages (Triggers, pipelines, Projets, the extensions'
+//! events…) pass as before.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -87,9 +89,9 @@ async fn relay(mut socket: WebSocket, runs: Arc<Runs>, actor: Actor) {
             message = bus.recv() => {
                 match message {
                     Ok(msg) => {
-                        if !visible.shows(&msg).await {
+                        let Some(msg) = visible.filter(msg).await else {
                             continue;
-                        }
+                        };
                         if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
                             break;
                         }
@@ -122,14 +124,28 @@ impl<'a> Visibility<'a> {
         }
     }
 
-    /// Whether `message` reaches the connection.
-    async fn shows(&mut self, message: &Value) -> bool {
+    /// What of `message` reaches the connection: all of it, the message
+    /// without the Run it may not read, or nothing.
+    async fn filter(&mut self, mut message: Value) -> Option<Value> {
         if self.runs.extensions().allows_everything() {
-            return true;
+            return Some(message);
         }
-        let Some((run_id, gone)) = run_of_message(message) else {
-            return true;
-        };
+        if let Some((run_id, gone)) = run_of_message(&message) {
+            let run_id = run_id.to_string();
+            return self.may_read(&run_id, gone).await.then_some(message);
+        }
+        if let Some(run_id) = run_mentioned_by(&message).map(str::to_string) {
+            if !self.may_read(&run_id, false).await {
+                if let Some(fields) = message.as_object_mut() {
+                    fields.remove("run_id");
+                }
+            }
+        }
+        Some(message)
+    }
+
+    /// Whether the connection may read `run_id`, `gone` or not.
+    async fn may_read(&mut self, run_id: &str, gone: bool) -> bool {
         if let Some((readable, at)) = self.decisions.get(run_id) {
             if gone || at.elapsed() < READ_DECISION_TTL {
                 return *readable;
@@ -150,7 +166,8 @@ impl<'a> Visibility<'a> {
 
 /// The Run a message of the bus is about, and whether that Run is gone: a
 /// Run's event (`{"type": "event", "event": {"run_id"…}}`), its
-/// `run_forgotten`, an `operation_applied` on a Run or one of its nodes.
+/// `run_forgotten`, an `operation_applied` on a Run or one of its nodes (the
+/// creation of a Run has no target: the Run is the entity it produced).
 /// `None` for everything else.
 fn run_of_message(message: &Value) -> Option<(&str, bool)> {
     match message["type"].as_str()? {
@@ -158,13 +175,24 @@ fn run_of_message(message: &Value) -> Option<(&str, bool)> {
         "run_forgotten" => Some((message["run_id"].as_str()?, true)),
         "operation_applied" => {
             let operation = &message["operation"];
-            let target = operation["target"].as_str()?;
             match operation["resource"].as_str()? {
-                "run" => Some((target, false)),
-                "node" => Some((target.split('/').next()?, false)),
+                "run" => match operation["target"].as_str() {
+                    Some(target) => Some((target, false)),
+                    None => Some((message["entity"]["id"].as_str()?, false)),
+                },
+                "node" => Some((operation["target"].as_str()?.split('/').next()?, false)),
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+/// The Run a message about something else names in passing: the Run a
+/// Trigger's fire created.
+fn run_mentioned_by(message: &Value) -> Option<&str> {
+    match message["type"].as_str()? {
+        "trigger_fired" => message["run_id"].as_str(),
         _ => None,
     }
 }
@@ -210,6 +238,35 @@ mod tests {
             })),
             Some(("r4", false))
         );
+        assert_eq!(
+            run_of_message(&json!({
+                "type": "operation_applied",
+                "operation": { "resource": "run", "verb": "create", "target": null },
+                "entity": { "kind": "run", "id": "r5" },
+            })),
+            Some(("r5", false)),
+            "a creation is about the Run it produced"
+        );
+    }
+
+    #[test]
+    fn a_triggers_fire_names_the_run_it_created() {
+        assert_eq!(
+            run_mentioned_by(
+                &json!({ "type": "trigger_fired", "trigger_id": "t1", "run_id": "r1" })
+            ),
+            Some("r1")
+        );
+        assert_eq!(
+            run_mentioned_by(
+                &json!({ "type": "trigger_fired", "trigger_id": "t1", "outcome": "skipped" })
+            ),
+            None
+        );
+        assert_eq!(
+            run_mentioned_by(&json!({ "type": "event", "event": { "run_id": "r1" } })),
+            None
+        );
     }
 
     #[test]
@@ -222,7 +279,6 @@ mod tests {
                 "type": "operation_applied",
                 "operation": { "resource": "trigger", "verb": "update", "target": "t1" },
             }),
-            json!({ "type": "operation_applied", "operation": { "resource": "run", "verb": "create", "target": null } }),
             json!({ "type": "extension_event", "extension": "pm", "name": "x", "payload": {} }),
         ] {
             assert_eq!(run_of_message(&message), None, "{message}");

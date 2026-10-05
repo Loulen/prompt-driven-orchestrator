@@ -1,7 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import RunsPaneHeader, { NO_RUN_ANYWHERE } from "./RunsPaneHeader";
-import { useRunCreationRightsStore } from "../../store/runCreationRightsStore";
+import { act } from "react";
+import {
+  RECHECK_RIGHTS_EVERY_MS,
+  useRunCreationRightsStore,
+} from "../../store/runCreationRightsStore";
 import { runCreationRights, UNKNOWN_RIGHTS } from "../../model/runCreationRights";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import type { Project } from "../../../workspace/model/project";
@@ -29,6 +33,15 @@ function renderHeader() {
   );
   return onNewRun;
 }
+
+const DENIED_EVERYWHERE = runCreationRights(
+  [P1],
+  [
+    { decision: "deny", reason: "x" },
+    { decision: "deny", reason: "x" },
+    { decision: "deny", reason: "x" },
+  ],
+);
 
 beforeEach(() => {
   useRunCreationRightsStore.setState({ rights: UNKNOWN_RIGHTS, projects: [] });
@@ -74,5 +87,34 @@ describe("« New Run » under the rights of the caller (CORE-5)", () => {
     });
     renderHeader();
     expect(screen.getByTestId("new-run-button")).toBeEnabled();
+  });
+
+  describe("asks again while disabled, so a right given back shows without a reload", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("every few seconds, and when the window comes back", () => {
+      const refresh = vi.fn(async () => {});
+      useRunCreationRightsStore.setState({ rights: DENIED_EVERYWHERE, refresh });
+      renderHeader();
+      expect(refresh).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(RECHECK_RIGHTS_EVERY_MS));
+      expect(refresh).toHaveBeenCalledTimes(1);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(refresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("never while enabled", () => {
+      const refresh = vi.fn(async () => {});
+      useRunCreationRightsStore.setState({ rights: UNKNOWN_RIGHTS, refresh });
+      renderHeader();
+      act(() => vi.advanceTimersByTime(RECHECK_RIGHTS_EVERY_MS * 3));
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(refresh).not.toHaveBeenCalled();
+    });
   });
 });

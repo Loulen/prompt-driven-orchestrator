@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { create } from "zustand";
 import { askAuthorization } from "../../shared/authorization/api";
 import type { Project } from "../../workspace/model/project";
@@ -11,7 +12,8 @@ import {
 /**
  * Where the caller may create a Run (CORE-5), shared by the « New Run » button
  * and the New Run form. Asked again whenever the Projets change, and each time
- * the form opens (a right may have changed elsewhere, in an extension). A
+ * the form opens (a right may have changed elsewhere, in an extension), and
+ * while « New Run » is disabled (`useRecheckRunCreationRights`). A
  * failed question keeps the last answer: the daemon still decides at Launch.
  */
 interface RunCreationRightsState {
@@ -40,3 +42,29 @@ export const useRunCreationRightsStore = create<RunCreationRightsState>((set, ge
     }
   },
 }));
+
+/** How often a « New Run » disabled for want of rights asks again. */
+export const RECHECK_RIGHTS_EVERY_MS = 15_000;
+
+/**
+ * While `denied`, ask again every few seconds and whenever the window comes
+ * back: once disabled, « New Run » can no longer open the form that would
+ * ask, so a right given back elsewhere would otherwise wait for a reload.
+ */
+export function useRecheckRunCreationRights(denied: boolean): void {
+  useEffect(() => {
+    if (!denied) return;
+    const recheck = () => void useRunCreationRightsStore.getState().refresh();
+    const whenVisible = () => {
+      if (document.visibilityState === "visible") recheck();
+    };
+    const timer = window.setInterval(recheck, RECHECK_RIGHTS_EVERY_MS);
+    window.addEventListener("focus", recheck);
+    document.addEventListener("visibilitychange", whenVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", recheck);
+      document.removeEventListener("visibilitychange", whenVisible);
+    };
+  }, [denied]);
+}

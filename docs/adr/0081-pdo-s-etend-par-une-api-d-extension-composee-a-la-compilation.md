@@ -560,8 +560,9 @@ Acteur voyait tous les Runs, tous les Projets, et pouvait parcourir le disque.
   `operation_refused` (une couche du routeur assemblé, pas un contrôle par handler : une lecture
   ajoutée demain est gardée d'office) ; `GET /projects/{id}` et `GET /fs/browse` aussi.
 - **`/ws` filtré par connexion** : l'Acteur est celui de la requête d'upgrade ; un message sur un
-  Run (`event`, `run_forgotten`, `operation_applied` sur un Run ou un node) n'est envoyé qu'aux
-  connexions qui peuvent lire ce Run. La décision est gardée 5 s par connexion et par Run (un Run
+  Run (`event`, `run_forgotten`, `operation_applied` sur un Run ou un node, y compris la création
+  d'un Run, sans cible : le Run est l'entité produite) n'est envoyé qu'aux connexions qui peuvent
+  lire ce Run. Un `trigger_fired` arrive à toutes, sans le `run_id` d'un Run illisible. La décision est gardée 5 s par connexion et par Run (un Run
   bavard ne pose pas une question par événement ; un changement de droits se voit sous ce délai) ;
   un Run oublié est jugé par la dernière décision. Les autres messages passent comme avant.
 - **La question d'autorisation** : `POST /authorize {"operations": [...]}` rend une décision par
@@ -571,7 +572,9 @@ Acteur voyait tous les Runs, tous les Projets, et pouvait parcourir le disque.
   chaque ouverture de New Run et à chaque liste de Projets : sans loupe quand le disque est
   refusé, dépôts groupés par Projet où créer un Run est permis (plus les récents hors Projet si
   c'est permis), « N Project(s) hidden », bouton « New Run » désactivé avec sa raison quand aucun
-  Projet ne le permet. Le contexte de `run/new` gagne `targetProject`.
+  Projet ne le permet ; tant qu'il l'est, l'UI repose la question toutes les 15 s et au retour
+  sur la fenêtre (le bouton désactivé ne peut plus ouvrir le formulaire qui la posait). Le
+  contexte de `run/new` gagne `targetProject`.
 - **Une lecture n'est jamais appliquée** : pas d'`OperationApplied`, refus journalisé en `debug`
   seulement (une liste pose une question par entité). **Sans extension, aucune question** :
   `ExtensionHost::allows_everything` court-circuite, les listes sont servies comme avant.
@@ -584,6 +587,10 @@ Acteur voyait tous les Runs, tous les Projets, et pouvait parcourir le disque.
   lectures par leur verbe. L'extension de test (`fixture`) ne refuse jamais une lecture par `all`
   et apprend des règles `ressource:verbe[@projet][~acteur]`, modifiables à chaud
   (`POST /ext/test/refusal`).
+
+Assumés : le compteur « N / 20 sessions » de la barre d'état reste global (c'est la capacité du
+démon, partagée : filtré, il montrerait de la place qui n'existe pas) ; `/stats/performance` reste
+global (des agrégats sans identifiant de Run, hors du périmètre de CORE-5).
 
 Écartés : **un hook `authorize_read` à part**, qui dédoublait la décision d'`iam` (Droit Lecture
 d'une Ressource) et le catalogue ; **filtrer dans l'UI seule**, qui ne cloisonne rien ; **une

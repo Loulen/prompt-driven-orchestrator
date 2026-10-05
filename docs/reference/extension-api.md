@@ -100,7 +100,7 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | --- | --- | --- |
 | `GET /runs`, `/runs/reapable`, `/runs/{id}/children` | `run` × `read`, targeted, per Run listed | the Run is absent |
 | any `GET /runs/{id}…` (detail, events, nodes, artifacts, diff, review comments, a node's pane…) | `run` × `read` on `{id}` | `403` `operation_refused` |
-| `/ws` | `run` × `read`, per Run an event is about, per connection (answer kept 5 s) | the event is not sent to that connection |
+| `/ws` | `run` × `read`, per Run a message is about (its events, `run_forgotten`, `operation_applied` on it or its nodes, its creation included), per connection (answer kept 5 s) | the message is not sent to that connection; a `trigger_fired` is sent without its `run_id` |
 | `GET /projects` | `project` × `read`, per Projet | the Projet is absent |
 | `GET /projects/{id}` | `project` × `read` | `403` |
 | `GET /fs/browse` (the loupe, the explorers) | `repository` × `read`, no target, in no Projet | `403` |

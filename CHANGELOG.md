@@ -55,12 +55,14 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
   (toute lecture `GET /runs/{id}…`), lister et voir un Projet, parcourir le disque
   (`GET /fs/browse`, `repository` × `read`) passent par l'Autorisation d'opération : refusée, une
   entité disparaît des listes, son détail répond `403`. `/ws` ne relaie à une connexion que les
-  événements des Runs que son Acteur peut lire. **Cassant pour une extension** qui refusait toute
+  événements des Runs que son Acteur peut lire (création comprise ; un `trigger_fired` y arrive sans
+  le `run_id` d'un Run illisible). **Cassant pour une extension** qui refusait toute
   Opération sans regarder le verbe : elle masque désormais aussi les Runs et les Projets.
 - **CORE-5, question d'autorisation** : `POST /authorize {"operations": [...]}` rend une décision
   par Opération sans rien exécuter ; une `Operation` se désérialise. Le formulaire New Run s'en sert
   (loupe masquée, dépôts groupés par Projet permis, « N Project(s) hidden », « New Run » désactivé
-  quand aucun Projet ne le permet) ; le contexte de `run/new` gagne `targetProject`. Mesure :
+  quand aucun Projet ne le permet, question reposée toutes les 15 s et au retour sur la fenêtre
+  tant qu'il l'est) ; le contexte de `run/new` gagne `targetProject`. Mesure :
   500 Runs listés en ~35 ms (build optimisé) avec une extension qui autorise.
 
 ## 2.16.0 — Lien profond vers un Run, factory du core dans `pm` (CORE-1)

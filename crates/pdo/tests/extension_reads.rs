@@ -238,7 +238,7 @@ async fn a_refusal_for_one_caller_leaves_the_others_their_runs() {
     assert_eq!(status, 200);
 }
 
-/// The `event`s of `/ws` about `run_id` within `window`.
+/// The messages of `/ws` that name `run_id` (anywhere) within `window`.
 async fn events_about<S>(ws: &mut S, run_id: &str, window: Duration) -> Vec<Value>
 where
     S: StreamExt<
@@ -254,14 +254,8 @@ where
         let Some(text) = ws_text(&message) else {
             continue;
         };
-        let value: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-        let about = value["event"]["run_id"] == run_id
-            || (value["type"] == "operation_applied"
-                && value["operation"]["target"]
-                    .as_str()
-                    .is_some_and(|t| t.starts_with(run_id)));
-        if about {
-            seen.push(value);
+        if text.contains(run_id) {
+            seen.push(serde_json::from_str(text).unwrap_or(Value::Null));
         }
     }
     seen
@@ -307,6 +301,85 @@ async fn ws_relays_a_runs_events_only_to_the_connections_that_may_read_it() {
     );
     assert!(!bob_r1.is_empty(), "bob reads r1");
     assert!(!alice_r1.is_empty(), "alice reads r1");
+}
+
+#[tokio::test]
+async fn ws_never_names_a_new_run_to_a_connection_that_may_not_read_it() {
+    let w = world().await;
+    w.control
+        .set(Refusal::parse(&format!("run:read@{}~bob", w.p2)).unwrap());
+    let mut bob = w.daemon.connect_ws_as("bob").await.unwrap();
+    let mut alice = w.daemon.connect_ws_as("alice").await.unwrap();
+
+    let other_repo = w._other.path().to_string_lossy().into_owned();
+    let created = run_in(&w.daemon, &other_repo).await;
+
+    let window = Duration::from_millis(1500);
+    let (bob_seen, alice_seen) = tokio::join!(
+        events_about(&mut bob, &created, window),
+        events_about(&mut alice, &created, window)
+    );
+    assert!(
+        bob_seen.is_empty(),
+        "bob may not read the new Run of P2: {bob_seen:?}"
+    );
+    assert!(
+        alice_seen.iter().any(|m| m["type"] == "operation_applied"
+            && m["operation"]["verb"] == "create"
+            && m["entity"]["id"] == created.as_str()),
+        "alice is told of the creation: {alice_seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn ws_tells_of_a_fire_without_the_run_a_connection_may_not_read() {
+    let w = world().await;
+    let other_repo = w._other.path().to_string_lossy().into_owned();
+    let (status, trigger) = post(
+        &w.daemon,
+        "/triggers",
+        json!({
+            "name": "nightly",
+            "pipeline_id": "solo",
+            "cron": "0 3 * * *",
+            "input_template": "go",
+            "target_repo": other_repo,
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "{trigger}");
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    w.control
+        .set(Refusal::parse(&format!("run:read@{}~bob", w.p2)).unwrap());
+    let mut bob = w.daemon.connect_ws_as("bob").await.unwrap();
+    let mut alice = w.daemon.connect_ws_as("alice").await.unwrap();
+
+    let (status, body) = post(
+        &w.daemon,
+        &format!("/triggers/{trigger_id}/fire"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+
+    let window = Duration::from_millis(1500);
+    let (bob_seen, alice_seen) = tokio::join!(
+        events_about(&mut bob, &trigger_id, window),
+        events_about(&mut alice, &trigger_id, window)
+    );
+    let fired = |seen: &[Value]| {
+        seen.iter()
+            .find(|m| m["type"] == "trigger_fired")
+            .cloned()
+            .unwrap_or_else(|| panic!("no trigger_fired in {seen:?}"))
+    };
+    let (to_bob, to_alice) = (fired(&bob_seen), fired(&alice_seen));
+    assert!(
+        to_bob.get("run_id").is_none(),
+        "bob may not read the Run: {to_bob}"
+    );
+    let run_id = to_alice["run_id"].as_str().expect("alice reads the Run");
+    assert!(!to_bob.to_string().contains(run_id), "{to_bob}");
 }
 
 #[tokio::test]

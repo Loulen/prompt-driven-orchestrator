@@ -48,6 +48,10 @@ impl ReviewRuns for ContextRuns {
         })
     }
 
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(self.0.projects_of_run(run_id))
+    }
+
     fn ensure_manager<'a>(
         &'a self,
         run_id: &'a str,

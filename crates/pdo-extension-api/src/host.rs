@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::{Actor, Attributes, Authorization, EntityRef, OperationApplied};
+use crate::{Actor, Attributes, Authorization, EntityRef, OperationApplied, Resource};
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
 /// extensions' `on_event`.
@@ -55,6 +55,13 @@ pub trait Host: Send + Sync {
     /// entity; the core keeps none of them. A panicking extension stamps
     /// nothing.
     fn on_create(&self, actor: &Actor, entity: &EntityRef) -> Attributes;
+
+    /// The catalogue of the Ressources: the core's, then those each
+    /// registered extension declares in its [`Manifest`](crate::Manifest), in
+    /// registration order. By default, the core's alone.
+    fn catalogue(&self) -> Vec<Resource> {
+        crate::core_resources()
+    }
 }
 
 /// The host of an extension alone: everything allowed, events go nowhere, no
@@ -138,5 +145,6 @@ mod tests {
             .is_empty());
         host.publish(ExtensionEvent::new("x", serde_json::Value::Null));
         host.applied(OperationApplied::new(Actor::LocalOperator, op, None));
+        assert_eq!(host.catalogue(), crate::core_resources());
     }
 }

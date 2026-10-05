@@ -57,7 +57,9 @@ mod tests {
     fn carries_its_type_the_actor_the_operation_and_the_entity() {
         let applied = OperationApplied::new(
             Actor::LocalOperator,
-            Operation::new(ResourceKind::Project, Verb::Update).on("p1"),
+            Operation::new(ResourceKind::Project, Verb::Update)
+                .on("p1")
+                .in_projects(["p1"]),
             Some(EntityRef::new(ResourceKind::Project, "p1")),
         );
         assert_eq!(
@@ -65,7 +67,9 @@ mod tests {
             serde_json::json!({
                 "type": "operation_applied",
                 "actor": { "kind": "local_operator" },
-                "operation": { "resource": "project", "verb": "update", "target": "p1" },
+                "operation": {
+                    "resource": "project", "verb": "update", "target": "p1", "projects": ["p1"],
+                },
                 "entity": { "kind": "project", "id": "p1" },
             })
         );

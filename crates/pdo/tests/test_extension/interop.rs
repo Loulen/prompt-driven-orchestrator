@@ -4,8 +4,11 @@
 //! Tâches. Three of them installed together (`a`, `b`, `c`) interoperate
 //! without naming each other:
 //!
+//! - Each declares its `item` in its Manifest, so the catalogue lists
+//!   `a/item`, `b/item`, `c/item`.
 //! - **`authorize`** (the Host's): `POST /ext/<id>/items` asks every extension
-//!   whether the actor may create the item; a refusal answers the core's
+//!   whether the actor may create the item, in the Projets its body names
+//!   (`{"name": …, "projects": […]}`, none by default); a refusal answers the core's
 //!   `403` `operation_refused` with the refusing extension's reason, and
 //!   nothing is stored. Same for `DELETE /ext/<id>/items/<item>`.
 //! - **`publish`** and **`applied`**: a creation publishes `item_created`
@@ -29,11 +32,9 @@ use pdo::extension_api::axum::routing::{get, post};
 use pdo::extension_api::axum::{Extension as Ext, Json, Router};
 use pdo::extension_api::{
     Actor, Attributes, Authorization, EntityRef, Extension, ExtensionContext, ExtensionEvent, Host,
-    Manifest, NeutralHost, Operation, OperationApplied, ResourceKind, Verb,
+    Manifest, NeutralHost, Operation, OperationApplied, ResourceDeclaration, ResourceKind, Verb,
 };
 use serde_json::{json, Value};
-
-use super::verb_name;
 
 /// The kind of entity every peer owns.
 pub const ITEM: &str = "item";
@@ -48,7 +49,7 @@ pub const PEERS: [&str; 3] = ["a", "b", "c"];
 pub fn reason(id: &str, operation: &Operation) -> String {
     format!(
         "extension `{id}` refuses {} {}",
-        verb_name(&operation.verb),
+        operation.verb.name(),
         operation.resource
     )
 }
@@ -102,11 +103,12 @@ impl PeerControl {
         self.items.lock().unwrap().get(id).cloned()
     }
 
-    /// Create an item named `name` as `actor`, through the Host: `201` and
-    /// the item, or the refusal.
-    fn create(&self, actor: Actor, name: &str) -> Response {
+    /// Create an item named `name` as `actor`, in the Projets `projects`
+    /// (the peer fills its own Operations' Projets), through the Host: `201`
+    /// and the item, or the refusal.
+    fn create(&self, actor: Actor, name: &str, projects: Vec<String>) -> Response {
         let host = self.host();
-        let operation = Operation::new(self.kind(), Verb::Create);
+        let operation = Operation::new(self.kind(), Verb::Create).in_projects(projects);
         if let Err(denied) = host.authorize(&actor, &operation).into_result() {
             return denied.into_response();
         }
@@ -178,6 +180,11 @@ impl Extension for Peer {
             format!("Interop {}", self.control.id),
             "0.0.0",
         )
+        .with_resource(ResourceDeclaration::new(
+            ITEM,
+            "Items",
+            ["create", "delete"],
+        ))
     }
 
     fn start(&self, context: &ExtensionContext) {
@@ -229,7 +236,16 @@ fn router(control: PeerControl) -> Router {
             get(|State(c): State<PeerControl>| async move { Json(Value::Array(c.items())) }).post(
                 |State(c): State<PeerControl>, Ext(actor): Ext<Actor>, Json(body): Json<Value>| async move {
                     let name = body["name"].as_str().unwrap_or("unnamed").to_string();
-                    c.create(actor, &name)
+                    let projects = body["projects"]
+                        .as_array()
+                        .map(|projects| {
+                            projects
+                                .iter()
+                                .filter_map(|p| p.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    c.create(actor, &name, projects)
                 },
             ),
         )

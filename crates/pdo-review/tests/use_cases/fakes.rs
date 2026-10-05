@@ -25,6 +25,8 @@ pub struct Runs {
     pub manager_running: Mutex<bool>,
     pub manager_refusal: Mutex<Option<(u16, serde_json::Value)>>,
     pub handed: Mutex<Vec<(String, String, bool)>>,
+    /// The Projets of each Run; none for a Run absent from it.
+    pub projects: Mutex<HashMap<String, Vec<String>>>,
 }
 
 impl ReviewRuns for Runs {
@@ -57,6 +59,17 @@ impl ReviewRuns for Runs {
             event.id = Some(log.len() as i64 + 1);
             log.push(event);
             Ok(())
+        })
+    }
+
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            self.projects
+                .lock()
+                .unwrap()
+                .get(run_id)
+                .cloned()
+                .unwrap_or_default()
         })
     }
 

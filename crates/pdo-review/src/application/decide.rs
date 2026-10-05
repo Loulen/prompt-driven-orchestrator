@@ -32,7 +32,8 @@ impl Review {
         self.authorize(
             actor,
             &operations::on_comment(decision.action(), run_id, comment_id),
-        )?;
+        )
+        .await?;
         let run = self.run(run_id).await?;
         let comment = find_comment(&run, comment_id)?.clone();
         let by = match session_node(actor) {

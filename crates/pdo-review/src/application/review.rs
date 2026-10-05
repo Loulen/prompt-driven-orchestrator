@@ -49,9 +49,20 @@ impl Review {
         })
     }
 
-    /// Ask the extensions whether `actor` may run `operation`.
-    pub fn authorize(&self, actor: &Actor, operation: &Operation) -> Result<(), Denied> {
-        authorize(self.extensions.as_ref(), actor, operation)
+    /// Ask the extensions whether `actor` may run `operation`, in the Projets
+    /// of the Run its target names (`<run>` or `<run>/<comment>`).
+    pub async fn authorize(&self, actor: &Actor, operation: &Operation) -> Result<(), Denied> {
+        let run_id = operation
+            .target
+            .as_deref()
+            .map(|target| target.split_once('/').map_or(target, |(run, _)| run));
+        let operation = match run_id {
+            Some(run_id) => operation
+                .clone()
+                .in_projects(self.runs.projects_of_run(run_id).await),
+            None => operation.clone(),
+        };
+        authorize(self.extensions.as_ref(), actor, &operation)
     }
 
     /// The Run, or the JSON `500` / `404` a Run's surfaces answer.

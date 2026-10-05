@@ -86,6 +86,18 @@ pub enum ParsedSession {
     LibAssist,
 }
 
+impl ParsedSession {
+    /// The Run the session belongs to; `None` for the library assistant.
+    pub fn run_id(&self) -> Option<&str> {
+        match self {
+            ParsedSession::NodeRun { run_id, .. }
+            | ParsedSession::Manager { run_id }
+            | ParsedSession::Shell { run_id } => Some(run_id),
+            ParsedSession::LibAssist => None,
+        }
+    }
+}
+
 /// Parse a session name like `pdo-<run_id>-<node_id>-iter-<N>` or
 /// `pdo-mgr-<run_id>`. Returns `None` for unrecognised formats.
 pub fn parse_session_name(name: &str) -> Option<ParsedSession> {

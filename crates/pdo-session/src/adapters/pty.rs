@@ -224,7 +224,9 @@ pub(crate) async fn handle_pty_ws(
                         // #870 / ADR-0075: only a spectator's request does
                         // anything; the registry flips the roles, the `ignore-size`
                         // of both postes' clients and the read-only filter.
-                        terminals.take_control(&actor, &input_session, conn_id);
+                        terminals
+                            .take_control(&actor, &input_session, conn_id)
+                            .await;
                     } else {
                         // Unknown / malformed control frames must NEVER be
                         // written to the PTY as user input — that would inject

@@ -43,7 +43,11 @@ pub(super) async fn pty(
         );
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
-    if let Err(denied) = session.terminals().authorize_attach(&actor, &session_id) {
+    if let Err(denied) = session
+        .terminals()
+        .authorize_attach(&actor, &session_id)
+        .await
+    {
         return denied.into_response();
     }
 

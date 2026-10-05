@@ -5,6 +5,7 @@ mod attach;
 mod declared_wait;
 mod fakes;
 mod pane;
+mod projects;
 mod reap;
 mod shell;
 mod status;

@@ -10,7 +10,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::{info, warn};
 
-use crate::application::ports::{NodeWaits, Tmux};
+use crate::application::ports::{NoRunProjects, NodeWaits, RunProjects, Tmux};
 use crate::domain::declared_wait::{
     check_target, classify_input, liftable, plan_declaration, DeclareOutcome, WaitRefusal,
     CAUSE_COMPLETION_NOT_RELEASED, CAUSE_DECLARED, COMPLETION_NOT_RELEASED_MESSAGE,
@@ -63,6 +63,7 @@ pub struct DeclareWait {
     tmux: Arc<dyn Tmux>,
     typed: Arc<TypedInput>,
     host: Arc<dyn ExtensionHost>,
+    projects: Arc<dyn RunProjects>,
 }
 
 impl DeclareWait {
@@ -77,7 +78,14 @@ impl DeclareWait {
             tmux,
             typed,
             host,
+            projects: Arc::new(NoRunProjects),
         }
+    }
+
+    /// The same use case, its Operations in the Projets `projects` gives.
+    pub fn with_projects(mut self, projects: Arc<dyn RunProjects>) -> Self {
+        self.projects = projects;
+        self
     }
 
     /// The agent (or the operator) declares the wait. Accepted on any node
@@ -88,7 +96,8 @@ impl DeclareWait {
         command: DeclareWaitCommand,
     ) -> Result<DeclareOutcome, DeclareWaitError> {
         let operation = Operation::new(ResourceKind::Node, Verb::Action("wait_user".into()))
-            .on(node_target(&command.run_id, &command.node_id));
+            .on(node_target(&command.run_id, &command.node_id))
+            .in_projects(self.projects.projects_of_run(&command.run_id).await);
         authorize(self.host.as_ref(), actor, &operation).map_err(DeclareWaitError::Refused)?;
         self.declare(
             &command.run_id,
@@ -178,6 +187,7 @@ pub struct LiftWait {
     waits: Arc<dyn NodeWaits>,
     typed: Arc<TypedInput>,
     host: Arc<dyn ExtensionHost>,
+    projects: Arc<dyn RunProjects>,
 }
 
 impl LiftWait {
@@ -186,7 +196,18 @@ impl LiftWait {
         typed: Arc<TypedInput>,
         host: Arc<dyn ExtensionHost>,
     ) -> Self {
-        Self { waits, typed, host }
+        Self {
+            waits,
+            typed,
+            host,
+            projects: Arc::new(NoRunProjects),
+        }
+    }
+
+    /// The same use case, its Operations in the Projets `projects` gives.
+    pub fn with_projects(mut self, projects: Arc<dyn RunProjects>) -> Self {
+        self.projects = projects;
+        self
     }
 
     /// Remember typed bytes per session; on an Enter that follows at least one
@@ -239,7 +260,8 @@ impl LiftWait {
             return Ok(false);
         }
         let operation = Operation::new(ResourceKind::Node, Verb::Action("resume".into()))
-            .on(node_target(run_id, node_id));
+            .on(node_target(run_id, node_id))
+            .in_projects(self.projects.projects_of_run(run_id).await);
         authorize(self.host.as_ref(), actor, &operation).map_err(|d| d.to_string())?;
         self.waits
             .record_resumed(

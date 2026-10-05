@@ -132,8 +132,9 @@ impl Runs {
             node_id,
             iter,
         } = command;
-        if let Err(denied) =
-            self.authorize(actor, &on_node("release_completion", &run_id, &node_id))
+        if let Err(denied) = self
+            .authorize(actor, &on_node("release_completion", &run_id, &node_id))
+            .await
         {
             return denied.into_response();
         }

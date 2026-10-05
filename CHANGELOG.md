@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.9.0 — Éditeur : edge au drag uniquement, Assistant et Info exclusifs (#39)
+
+Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. Changement de geste sur le
+canvas d'édition (portage core #936) : une edge ne naît plus que d'un drag depuis le bord d'un
+node, désormais épais de 4,5 px. Cliquer un bord puis un autre node (ou une poignée `branches`
+d'un `merge`) ne connecte plus rien : le clic sélectionne le node. Sur une template, le glyphe
+« agent » et `i` de la toolbar sont exclusifs et suivent l'onglet affiché du panneau Pipeline
+info (portage core #938).
+
 ## 2.8.0 — Médias du README paramétrables par une config (#36)
 
 Aucun changement d'API : `pdo-extension-api` reste en **0.7.0**. L'outillage des médias du

@@ -1,13 +1,13 @@
 //! The routes of the test extension, nested under `/ext/test/` by the core.
 
 use pdo::extension_api::axum::extract::Path;
-use pdo::extension_api::axum::http::header;
+use pdo::extension_api::axum::http::{header, StatusCode};
 use pdo::extension_api::axum::response::IntoResponse;
 use pdo::extension_api::axum::routing::{delete, get, post};
 use pdo::extension_api::axum::{Json, Router};
 use serde_json::{json, Value};
 
-use super::{Control, ID};
+use super::{Control, Refusal, ID};
 
 /// The UI bundle: a plain ES module (no build step) importing `react` as the
 /// front shares it.
@@ -19,6 +19,8 @@ const ICON: &str = include_str!("icon.svg");
 pub(super) fn router(control: Control) -> Router {
     let events = control.clone();
     let operations = control.clone();
+    let refusal = control.clone();
+    let set_refusal = control.clone();
     let switch = control.clone();
     let commands = control.clone();
     let record = control.clone();
@@ -47,10 +49,34 @@ pub(super) fn router(control: Control) -> Router {
             }),
         )
         .route(
+            "/refusal",
+            get(move || {
+                let refusal = refusal.refusal();
+                async move { Json(json!({ "refusing": format!("{refusal:?}") })) }
+            })
+            .post(move |Json(body): Json<Value>| {
+                let answer = match body["refuse"].as_str().map(Refusal::parse) {
+                    Some(Ok(parsed)) => {
+                        let text = format!("{parsed:?}");
+                        set_refusal.set(parsed);
+                        (StatusCode::OK, Json(json!({ "refusing": text })))
+                    }
+                    Some(Err(message)) => {
+                        (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
+                    }
+                    None => (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "expected {\"refuse\": \"<refusal>\"}" })),
+                    ),
+                };
+                async move { answer }
+            }),
+        )
+        .route(
             "/operations",
             get(move || {
                 let seen: Vec<Value> = operations
-                    .seen()
+                    .asked()
                     .into_iter()
                     .map(|(actor, operation)| json!({ "actor": actor, "operation": operation }))
                     .collect();

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use pdo_kernel::Actor;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -75,7 +76,9 @@ impl Runs {
     /// children chronological within a group. Cost and duration live HERE, not on
     /// `GET /runs` — the global list stays cheap (ADR-0052: derived on read, never
     /// persisted).
-    pub async fn run_children(&self, run_id: &str) -> Response {
+    ///
+    /// Only the children `actor` may read (CORE-5).
+    pub async fn run_children(&self, actor: &Actor, run_id: &str) -> Response {
         let state = self;
         let run_id = run_id.to_string();
         // The parent must exist, so a typo'd id is a 404 — not a silent empty list
@@ -110,8 +113,12 @@ impl Runs {
         // the Orchestration tab and the run list agree about the same child.
         let mut states: Vec<RunState> = projected.iter().map(|(_, s)| s.clone()).collect();
         child_awaiting::overlay(&mut states);
+        let mut readable = self.readable(actor);
         for ((events, _), child) in projected.into_iter().zip(states) {
             if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
+                continue;
+            }
+            if !readable.keeps(&child).await {
                 continue;
             }
             let cost = state.live_facts.cost(&child, &events).await;

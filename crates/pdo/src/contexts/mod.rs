@@ -146,7 +146,7 @@ pub(crate) fn wire_over(
         platform: &platform,
         host: host.clone(),
     });
-    let settings = settings::settings(&r, stored, &platform, host);
+    let settings = settings::settings(&r, stored, &platform, host.clone());
     late_runs.set(&run);
     late_platform.set(&platform);
 
@@ -170,7 +170,10 @@ pub(crate) fn wire_over(
         .merge(pdo_review::router(review))
         .merge(pdo_stats::router(stats.clone()))
         .merge(pdo_trigger::router(triggers.clone()))
-        .merge(pdo_settings::router(settings.clone()));
+        .merge(pdo_settings::router(settings.clone()))
+        .merge(crate::authorize::router(host, run.clone()));
+    // CORE-5: every read of one Run, whichever context serves it, asks first.
+    let router = pdo_run::adapters::http::read_guard::guard_run_reads(router, run.clone());
     Contexts {
         router,
         platform,

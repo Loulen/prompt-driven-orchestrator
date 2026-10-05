@@ -3,6 +3,8 @@ import RepoCombobox from "../../../workspace/components/RepoCombobox";
 import SecondaryRepoRow, { SecondaryRepoLabel } from "../SecondaryRepoRow";
 import SourceBranchField from "../../../workspace/components/SourceBranchField";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
+import { useRunCreationRightsStore } from "../../store/runCreationRightsStore";
+import { hiddenProjectsNote, isRestricted, repoGroups } from "../../model/runCreationRights";
 
 /** ── WHERE ── the target repository, its source branch and the secondary repos (#465). */
 export default function WhereSection({ form, repoExplorerStartPath }: { form: NewRunForm; repoExplorerStartPath?: string }) {
@@ -10,8 +12,14 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
     branches, branchesLoading, sourceBranch, setSourceBranch, lastFetchAt, branchFetchError,
     branchesFetching, refetchRemotes, rereadBranches, fastForward, targetRepo, repoValid,
     repoError, repoValidating, repoBorderClass, handleRepoChange, mode, secondaryRepos,
-    recentRepos, updateSecondary, removeSecondary, addSecondary,
+    recentRepos, updateSecondary, removeSecondary, addSecondary, settings,
   } = form;
+  // CORE-5: where the caller may create a Run. Restricted, the field offers the
+  // repositories of the allowed Projets only, and the loupe goes when the disk
+  // may not be browsed.
+  const rights = useRunCreationRightsStore((s) => s.rights);
+  const projects = useRunCreationRightsStore((s) => s.projects);
+  const restricted = isRestricted(rights);
   return (
     <div className="flex flex-col gap-3 pb-4 border-b border-line">
       <span className="text-fg-4 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
@@ -46,6 +54,11 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
           repoError={repoError}
           borderClass={repoBorderClass}
           explorerStartPath={repoExplorerStartPath}
+          canBrowse={rights.canBrowse}
+          groups={restricted ? repoGroups(rights, recentRepos, projects) : undefined}
+          groupsNote={restricted ? hiddenProjectsNote(rights) : null}
+          help={rights.canBrowse ? null : "A new repository goes through an administrator."}
+          home={settings?.home ?? null}
         />
       </div>
 

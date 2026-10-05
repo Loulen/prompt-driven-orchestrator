@@ -51,6 +51,17 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
 - L'extension de test du core (le démon de démo des Feature Paths) apprend à injecter des
   variables (`PDO_TEST_NODE_ENV`, `PUT /ext/test/launch`), un préambule
   (`PDO_TEST_NODE_PREAMBLE`) et à suspendre un Trigger (`PUT /ext/test/suspensions`).
+- **CORE-5, lectures autorisées** : nouveau verbe `read` (`Verb::Read`). Lister et voir un Run
+  (toute lecture `GET /runs/{id}…`), lister et voir un Projet, parcourir le disque
+  (`GET /fs/browse`, `repository` × `read`) passent par l'Autorisation d'opération : refusée, une
+  entité disparaît des listes, son détail répond `403`. `/ws` ne relaie à une connexion que les
+  événements des Runs que son Acteur peut lire. **Cassant pour une extension** qui refusait toute
+  Opération sans regarder le verbe : elle masque désormais aussi les Runs et les Projets.
+- **CORE-5, question d'autorisation** : `POST /authorize {"operations": [...]}` rend une décision
+  par Opération sans rien exécuter ; une `Operation` se désérialise. Le formulaire New Run s'en sert
+  (loupe masquée, dépôts groupés par Projet permis, « N Project(s) hidden », « New Run » désactivé
+  quand aucun Projet ne le permet) ; le contexte de `run/new` gagne `targetProject`. Mesure :
+  500 Runs listés en ~35 ms (build optimisé) avec une extension qui autorise.
 
 ## 2.16.0 — Lien profond vers un Run, factory du core dans `pm` (CORE-1)
 

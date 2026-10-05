@@ -6,8 +6,12 @@
 //!   becomes `Actor::Identified { namespace: "test", id }`; without the
 //!   header, the core decides.
 //! - **`authorize`**: refuses what its [`Refusal`] says, with a reason naming the
-//!   Operation. The refusal can change while the daemon runs ([`Control::set`]),
-//!   so a test seeds its fixtures before refusing everything.
+//!   Operation. The refusal can change while the daemon runs ([`Control::set`],
+//!   `POST /ext/test/refusal`), so a test seeds its fixtures before refusing
+//!   everything. CORE-5: it refuses a read (`run:read`, `project:read`,
+//!   `repository:read` for the disk) when a rule says so, possibly only in
+//!   one Projet (`@<project id>`) and for one caller (`~<actor>`); `all`
+//!   refuses every mutation and never a read.
 //! - Every `(Actor, Operation)` it is asked about is recorded ([`Control::seen`]),
 //!   with the Projets the Operation is in; `GET /ext/test/operations` lists
 //!   them.
@@ -20,7 +24,7 @@
 //!   first ([`OnEvent`]).
 //! - **`start`**: remembers its data folder ([`Control::data_dir`]).
 //! - **`routes`** (`routes.rs`): `/ext/test` answers who it is, `/events` the
-//!   trace of the events, `/operations` the Operations it was asked about, `/ui.js` its UI bundle, `/icon.svg` its icon,
+//!   trace of the events, `/operations` the Operations it was asked about, `/refusal` what it refuses (`POST {"refuse": "<text form>"}` changes it), `/ui.js` its UI bundle, `/icon.svg` its icon,
 //!   `/commands` the trace of its command's calls (`POST` records one),
 //!   `/incompatible` switches the bundle to a React major the front does not run.
 //! - **`ui`** (`ui.js`): one element at each location of the catalogue. The
@@ -158,47 +162,119 @@ pub fn action_id(location: UiLocation) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     Nothing,
+    /// Every mutation; never a read ([`Verb::Read`]), so the lists still show
+    /// what a test seeded.
     Everything,
     /// One verb on one kind of resource.
     Only(ResourceKind, Verb),
-    /// Panics in `authorize`, on every Operation.
+    /// Each Operation one of the rules matches (CORE-5: a read in one Projet,
+    /// for one caller…).
+    Rules(Vec<Rule>),
+    /// Panics in `authorize`, on every mutation (never on a read).
     Panic,
 }
 
+/// One rule of [`Refusal::Rules`]: a verb on a kind of resource, only in one
+/// Projet and only for one identified caller when given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rule {
+    pub resource: ResourceKind,
+    pub verb: Verb,
+    /// Only an Operation in this Projet (its id); `""`: only an Operation in
+    /// no Projet.
+    pub project: Option<String>,
+    /// Only for the caller identified by this id (the [`ACTOR_HEADER`]).
+    pub actor: Option<String>,
+}
+
+impl Rule {
+    /// `<resource>:<verb>[@<project>][~<actor>]`.
+    fn parse(text: &str) -> Result<Self, String> {
+        let (rest, actor) = match text.split_once('~') {
+            Some((rest, actor)) => (rest, Some(actor.trim().to_string())),
+            None => (text, None),
+        };
+        let (rest, project) = match rest.split_once('@') {
+            Some((rest, project)) => (rest, Some(project.trim().to_string())),
+            None => (rest, None),
+        };
+        let (resource, verb) = rest.trim().split_once(':').ok_or_else(|| {
+            format!("`{text}`: expected none, all, panic or resource:verb[@project][~actor]")
+        })?;
+        let resource = ResourceKind::from_wire_name(resource)
+            .ok_or_else(|| format!("unknown resource `{resource}`"))?;
+        let verb = match verb {
+            "read" => Verb::Read,
+            "create" => Verb::Create,
+            "update" => Verb::Update,
+            "delete" => Verb::Delete,
+            action => Verb::Action(action.to_string()),
+        };
+        Ok(Rule {
+            resource,
+            verb,
+            project,
+            actor,
+        })
+    }
+
+    fn matches(&self, actor: &Actor, operation: &Operation) -> bool {
+        operation.resource == self.resource
+            && operation.verb == self.verb
+            && self.project.as_ref().is_none_or(|project| {
+                if project.is_empty() {
+                    operation.is_outside_projects()
+                } else {
+                    operation.projects.contains(project)
+                }
+            })
+            && self.actor.as_ref().is_none_or(|wanted| {
+                matches!(actor, Actor::Identified { namespace, id } if namespace == ID && id == wanted)
+            })
+    }
+}
+
 impl Refusal {
-    /// Read a refusal from its text form: `none`, `all`, `panic`, or
-    /// `<resource>:<verb>` with the wire names of both (`project:update`,
-    /// `trigger:fire` for the action `fire`, `a/item:create` for an
-    /// extension's resource).
+    /// Read a refusal from its text form: `none`, `all`, `panic`, or rules
+    /// separated by `,`, each `<resource>:<verb>` with the wire names of both
+    /// (`project:update`, `trigger:fire` for the action `fire`, `run:read`,
+    /// `a/item:create` for an extension's resource), then optionally
+    /// `@<project id>` (only in that Projet; a bare `@`: only in no Projet)
+    /// and `~<actor>` (only for that identified caller):
+    /// `run:read@p2,repository:read,run:create@,run:create@p2~bob`.
     pub fn parse(text: &str) -> Result<Self, String> {
         match text.trim() {
             "none" => Ok(Refusal::Nothing),
             "all" => Ok(Refusal::Everything),
             "panic" => Ok(Refusal::Panic),
             other => {
-                let (resource, verb) = other.split_once(':').ok_or_else(|| {
-                    format!("`{other}`: expected none, all, panic or resource:verb")
-                })?;
-                let resource = ResourceKind::from_wire_name(resource)
-                    .ok_or_else(|| format!("unknown resource `{resource}`"))?;
-                let verb = match verb {
-                    "create" => Verb::Create,
-                    "update" => Verb::Update,
-                    "delete" => Verb::Delete,
-                    action => Verb::Action(action.to_string()),
-                };
-                Ok(Refusal::Only(resource, verb))
+                let rules = other
+                    .split(',')
+                    .filter(|rule| !rule.trim().is_empty())
+                    .map(Rule::parse)
+                    .collect::<Result<Vec<_>, _>>()?;
+                match rules.as_slice() {
+                    [] => Err("no rule".to_string()),
+                    [Rule {
+                        resource,
+                        verb,
+                        project: None,
+                        actor: None,
+                    }] => Ok(Refusal::Only(resource.clone(), verb.clone())),
+                    _ => Ok(Refusal::Rules(rules)),
+                }
             }
         }
     }
 
-    fn refuses(&self, operation: &Operation) -> bool {
+    fn refuses(&self, actor: &Actor, operation: &Operation) -> bool {
         match self {
             Refusal::Nothing => false,
-            Refusal::Everything | Refusal::Panic => true,
+            Refusal::Everything | Refusal::Panic => !operation.is_read(),
             Refusal::Only(resource, verb) => {
                 operation.resource == *resource && operation.verb == *verb
             }
+            Refusal::Rules(rules) => rules.iter().any(|rule| rule.matches(actor, operation)),
         }
     }
 }
@@ -260,8 +336,28 @@ impl Control {
         *self.refusal.lock().unwrap() = Some(refusal);
     }
 
-    /// Every `(actor, operation)` `authorize` was asked about, in order.
+    /// What it refuses now.
+    pub fn refusal(&self) -> Refusal {
+        self.refusal
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or(Refusal::Nothing)
+    }
+
+    /// Every `(actor, operation)` `authorize` was asked about for a
+    /// mutation, in order: the reads (CORE-5) left out, so a test of the
+    /// mutations reads the same sequence whatever the UI or the test read.
     pub fn seen(&self) -> Vec<(Actor, Operation)> {
+        self.asked()
+            .into_iter()
+            .filter(|(_, operation)| !operation.is_read())
+            .collect()
+    }
+
+    /// Every `(actor, operation)` `authorize` was asked about, the reads
+    /// included, in order (what `GET /ext/test/operations` lists).
+    pub fn asked(&self) -> Vec<(Actor, Operation)> {
         self.seen.lock().unwrap().clone()
     }
 
@@ -647,10 +743,10 @@ impl Extension for TestExtension {
             .unwrap()
             .clone()
             .unwrap_or(Refusal::Nothing);
-        if refusal == Refusal::Panic {
+        if refusal == Refusal::Panic && !operation.is_read() {
             panic!("the test extension panics in authorize");
         }
-        if refusal.refuses(operation) {
+        if refusal.refuses(actor, operation) {
             Authorization::deny(reason(operation))
         } else {
             Authorization::Allow
@@ -720,6 +816,50 @@ fn a_refusal_reads_from_its_text_form() {
             ResourceKind::extension("a", "item"),
             Verb::Create
         ))
+    );
+    assert_eq!(
+        Refusal::parse("run:read@p2, repository:read,run:create@p2~bob"),
+        Ok(Refusal::Rules(vec![
+            Rule {
+                resource: ResourceKind::Run,
+                verb: Verb::Read,
+                project: Some("p2".into()),
+                actor: None,
+            },
+            Rule {
+                resource: ResourceKind::Repository,
+                verb: Verb::Read,
+                project: None,
+                actor: None,
+            },
+            Rule {
+                resource: ResourceKind::Run,
+                verb: Verb::Create,
+                project: Some("p2".into()),
+                actor: Some("bob".into()),
+            },
+        ]))
+    );
+    let outside = Refusal::parse("run:create@,repository:read").unwrap();
+    let create = Operation::new(ResourceKind::Run, Verb::Create);
+    let actor = Actor::LocalOperator;
+    assert!(outside.refuses(&actor, &create));
+    assert!(!outside.refuses(&actor, &create.clone().in_projects(["p1"])));
+    let bobs = Refusal::parse("run:read@p2~bob,project:read").unwrap();
+    let read = Operation::new(ResourceKind::Run, Verb::Read).in_projects(["p2"]);
+    let bob = Actor::Identified {
+        namespace: ID.into(),
+        id: "bob".into(),
+    };
+    assert!(bobs.refuses(&bob, &read));
+    assert!(!bobs.refuses(&actor, &read));
+    assert!(
+        !Refusal::Everything.refuses(&actor, &read),
+        "all never refuses a read"
+    );
+    assert_eq!(
+        Refusal::parse("run:read"),
+        Ok(Refusal::Only(ResourceKind::Run, Verb::Read))
     );
     assert!(Refusal::parse("nope:update").is_err());
     assert!(Refusal::parse("project").is_err());

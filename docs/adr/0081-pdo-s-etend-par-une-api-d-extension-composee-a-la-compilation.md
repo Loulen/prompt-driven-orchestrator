@@ -13,6 +13,10 @@
 > Filtre de liste, et une Section participe au Save et au Cancel de son hôte (§ *Amendement #31*).
 > Amendé par CORE-3 : une Opération porte ses Projets, le Manifest déclare les Ressources d'une
 > extension, le core expose le catalogue des Ressources (§ *Amendement CORE-3*).
+> Amendé par CORE-4 : le lancement d'un Node (créateur du Run, environnement, préambule), la
+> suspension d'un Trigger (§ *Amendement CORE-4*).
+> Amendé par CORE-5 : les lectures passent par l'Autorisation d'opération (verbe `read`), `/ws`
+> est filtré par connexion, l'UI pose la question d'autorisation (§ *Amendement CORE-5*).
 
 ## Contexte
 
@@ -537,3 +541,51 @@ l'état oblige l'extension à suivre chaque désactivation et chaque reprise ; l
 lecture suffit) ; un seul hook `node_launch` rendant variables et préambule (deux hooks gardent
 chaque défaut neutre lisible, et le préambule n'est pas demandé pour un script) ; exclure tout
 le préfixe `PDO_` (une extension doit pouvoir fournir `PDO_TOKEN`).
+
+## Amendement CORE-5 : les lectures autorisées et la question d'autorisation
+
+Deuxième seam du grilling d'`iam` (IAM-1, ADR-0005 de `pdo-extensions`) : une extension de droits
+cloisonne les Projets. Jusqu'ici l'Autorisation d'opération ne gardait que les mutations : tout
+Acteur voyait tous les Runs, tous les Projets, et pouvait parcourir le disque.
+
+- **Le verbe `read`** (`Verb::Read`, `Operation::is_read`) : une lecture est une Opération, dans
+  les Projets de son entité comme les gestes sur elle. Le core en pose quatre : `run` × `read`
+  (liste, détail et toute lecture sous `/runs/{id}`, flux `/ws`), `project` × `read` (liste et
+  détail), `repository` × `read` sans cible, hors Projet (`GET /fs/browse` : la loupe du
+  formulaire de Run et les explorateurs de fichiers). Le catalogue gagne `read` sur ces trois
+  Ressources.
+- **Une liste est filtrée, un détail refusé** : `GET /runs`, `/runs/reapable`, les enfants d'un Run
+  et `GET /projects` gardent ce que l'Acteur peut lire ; toute lecture `GET`/`HEAD` de
+  `/runs/{id}…`, quel que soit le contexte qui la sert (run, session, review), répond `403`
+  `operation_refused` (une couche du routeur assemblé, pas un contrôle par handler : une lecture
+  ajoutée demain est gardée d'office) ; `GET /projects/{id}` et `GET /fs/browse` aussi.
+- **`/ws` filtré par connexion** : l'Acteur est celui de la requête d'upgrade ; un message sur un
+  Run (`event`, `run_forgotten`, `operation_applied` sur un Run ou un node) n'est envoyé qu'aux
+  connexions qui peuvent lire ce Run. La décision est gardée 5 s par connexion et par Run (un Run
+  bavard ne pose pas une question par événement ; un changement de droits se voit sous ce délai) ;
+  un Run oublié est jugé par la dernière décision. Les autres messages passent comme avant.
+- **La question d'autorisation** : `POST /authorize {"operations": [...]}` rend une décision par
+  Opération, sans rien exécuter, annoncer ni journaliser ; une Opération sans Projet est placée
+  comme le core place les siennes (`run`/`node` ciblé : le Projet du Run ; `project` ciblé :
+  lui-même). Une `Operation` se désérialise depuis sa forme sur le fil. L'UI du core s'en sert à
+  chaque ouverture de New Run et à chaque liste de Projets : sans loupe quand le disque est
+  refusé, dépôts groupés par Projet où créer un Run est permis (plus les récents hors Projet si
+  c'est permis), « N Project(s) hidden », bouton « New Run » désactivé avec sa raison quand aucun
+  Projet ne le permet. Le contexte de `run/new` gagne `targetProject`.
+- **Une lecture n'est jamais appliquée** : pas d'`OperationApplied`, refus journalisé en `debug`
+  seulement (une liste pose une question par entité). **Sans extension, aucune question** :
+  `ExtensionHost::allows_everything` court-circuite, les listes sont servies comme avant.
+- **Coût** : une question par Run d'une liste, le Projet de chaque dépôt calculé une fois par
+  liste. Mesure (test `extension_reads::five_hundred_runs…`, build optimisé) : 500 Runs servis en
+  ~35 ms avec une extension qui autorise, sous le seuil de 200 ms demandé.
+- **Version** : `pdo-extension-api` reste en **0.8.0** (vague IAM-1, ajouts : un verbe, des
+  méthodes, `Deserialize`). Effet de bord assumé : une extension qui refusait toute Opération quel
+  que soit son verbe masque désormais aussi les Runs et les Projets ; elle doit refuser les
+  lectures par leur verbe. L'extension de test (`fixture`) ne refuse jamais une lecture par `all`
+  et apprend des règles `ressource:verbe[@projet][~acteur]`, modifiables à chaud
+  (`POST /ext/test/refusal`).
+
+Écartés : **un hook `authorize_read` à part**, qui dédoublait la décision d'`iam` (Droit Lecture
+d'une Ressource) et le catalogue ; **filtrer dans l'UI seule**, qui ne cloisonne rien ; **une
+question par événement `/ws`**, trop chère pour un Run bavard ; **un endpoint « mes Projets
+permis »** propre au formulaire de Run, qui aurait nommé un besoin dans le core.

@@ -15,7 +15,7 @@ import type { UiLocation } from "../generated/UiLocation";
 import type { Actor } from "../generated/Actor";
 import type { TriggerSuspension } from "../generated/TriggerSuspension";
 import type { Attributes } from "./attributes";
-import type { BaseContext } from "./context";
+import type { BaseContext, ProjectContext } from "./context";
 
 export type { BaseContext, ProjectContext, RunContext } from "./context";
 
@@ -109,6 +109,12 @@ export interface RunNewContext extends LocationContext {
   pipeline: string | null;
   /** The target repository, as typed. */
   repository: string;
+  /**
+   * The Projet owning the target repository (compared verbatim, as the Runs
+   * list groups it), whose rights the Run will be created under; `null` for a
+   * repository no Projet owns, or none typed yet (CORE-5).
+   */
+  targetProject: ProjectContext | null;
   /** The Trigger being edited, when the form edits one. */
   trigger: string | null;
 }

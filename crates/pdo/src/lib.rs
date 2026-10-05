@@ -14,6 +14,7 @@
 //! the workspace promises nothing.
 
 mod attributes;
+mod authorize;
 #[doc(hidden)]
 pub mod cli;
 mod contexts;

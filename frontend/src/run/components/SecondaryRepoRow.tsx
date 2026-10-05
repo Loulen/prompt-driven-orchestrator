@@ -5,6 +5,7 @@ import { pickDefaultBranch } from "../../workspace/model/branchSelect";
 import { useBranchList } from "../../workspace/store/useBranchList";
 import RepoCombobox from "../../workspace/components/RepoCombobox";
 import SourceBranchField from "../../workspace/components/SourceBranchField";
+import { useRunCreationRightsStore } from "../store/runCreationRightsStore";
 
 /** One secondary repo line of the multi-repo create modal (#465, ADR-0042/0047).
  *  `valid` is `null` while unknown/empty, so `canLaunch` can require every
@@ -46,6 +47,8 @@ export default function SecondaryRepoRow({
   onChange,
   onRemove,
 }: Props) {
+  // CORE-5: no loupe when the disk may not be browsed.
+  const canBrowse = useRunCreationRightsStore((s) => s.rights.canBrowse);
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -137,6 +140,7 @@ export default function SecondaryRepoRow({
             repoValidating={validating}
             repoError={error}
             borderClass={borderClass}
+            canBrowse={canBrowse}
           />
         </div>
         <button

@@ -19,6 +19,12 @@
 //! declares the Ressources an extension owns, and the core exposes the whole
 //! catalogue ([`Host::catalogue`], `GET /resources`).
 //!
+//! The reads the core guards are Operations too ([`Verb::Read`]): listing and
+//! reading the Runs (a refused Run is absent from the lists and from `/ws`,
+//! `403` for its detail), the Projets, browsing the disk. The UI asks
+//! whether an Operation would be allowed, without running it (`POST
+//! /authorize`), to hide what would be refused.
+//!
 //! **Every hook has a neutral default.** An extension overrides only what it does;
 //! with no extension installed, the caller is the local operator, everything is
 //! allowed, and PDO behaves exactly as before.
@@ -70,5 +76,5 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// In 0.x a minor may break; this is where the API says which ones did not
 /// (0.2 only added to 0.1, ADR-0081 amendment #29; 0.3 broke only compilation,
 /// amendment #34; 0.4 only added to 0.3, amendment #32; 0.8 only added fields,
-/// methods and hooks, amendments CORE-3 and CORE-4).
+/// methods, hooks and the verb `read`, amendments CORE-3, CORE-4 and CORE-5).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

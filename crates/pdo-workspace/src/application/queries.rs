@@ -1,5 +1,6 @@
-//! What the workspace answers without changing anything. Reads never go
-//! through the Autorisation d'opération: it guards mutations only.
+//! What the workspace answers without changing anything. The reads guarded by
+//! the Autorisation d'opération (the Projets, the disk) are in
+//! [`read_access`](super::read_access).
 
 use std::path::{Path, PathBuf};
 

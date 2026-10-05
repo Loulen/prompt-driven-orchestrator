@@ -102,17 +102,22 @@ pub(super) async fn create(
     runs.create_run(&actor, parsed, attachments, session).await
 }
 
-/// `GET /runs[?attr.<id>/<key>=<value>…]`.
-pub(super) async fn list(State(runs): State<Arc<Runs>>, RawQuery(query): RawQuery) -> Response {
-    runs.list_runs(AttributeFilter::from_query(query.as_deref()))
+/// `GET /runs[?attr.<id>/<key>=<value>…]`: the Runs the caller may read.
+pub(super) async fn list(
+    State(runs): State<Arc<Runs>>,
+    Extension(actor): Extension<Actor>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    runs.list_runs(&actor, AttributeFilter::from_query(query.as_deref()))
         .await
 }
 
 pub(super) async fn reapable(
     State(runs): State<Arc<Runs>>,
+    Extension(actor): Extension<Actor>,
     Query(query): Query<ReapableQuery>,
 ) -> Response {
-    runs.list_reapable(query).await
+    runs.list_reapable(&actor, query).await
 }
 
 pub(super) async fn forget(
@@ -125,9 +130,10 @@ pub(super) async fn forget(
 
 pub(super) async fn children(
     State(runs): State<Arc<Runs>>,
+    Extension(actor): Extension<Actor>,
     Path(run_id): Path<String>,
 ) -> Response {
-    runs.run_children(&run_id).await
+    runs.run_children(&actor, &run_id).await
 }
 
 pub(super) async fn file(

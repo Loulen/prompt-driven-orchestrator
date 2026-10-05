@@ -4,7 +4,8 @@
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
+use pdo_kernel::Actor;
 use serde::Deserialize;
 
 use crate::domain::browse::BrowseRootError;
@@ -33,10 +34,15 @@ pub(super) struct BrowseQuery {
     hidden: bool,
 }
 
+/// `GET /fs/browse`: `403` when the caller may not browse the disk (CORE-5).
 pub(super) async fn browse<S: ProjectSettings>(
     State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
     Query(q): Query<BrowseQuery>,
 ) -> Response {
+    if let Err(denied) = http.workspace.authorize_browse(&actor) {
+        return denied.into_response();
+    }
     match http.workspace.browse(q.path.as_deref(), q.files, q.hidden) {
         Ok(listing) => Json(serde_json::json!({
             "path": listing.path,

@@ -278,7 +278,7 @@ async fn a_runs_children_carry_the_cost_the_live_facts_derive() {
     }));
     w.runs.append_event().execute(&child).await.unwrap();
 
-    let (status, answer) = body(w.runs.run_children("parent").await).await;
+    let (status, answer) = body(w.runs.run_children(&Actor::LocalOperator, "parent").await).await;
     assert_eq!(status, 200, "{answer}");
     assert_eq!(answer["run_id"], "parent");
     let group = &answer["nodes"][0];
@@ -286,6 +286,6 @@ async fn a_runs_children_carry_the_cost_the_live_facts_derive() {
     assert_eq!(group["children"][0]["run_id"], "child");
     assert_eq!(group["children"][0]["cost"]["usd"], 1.5);
 
-    let (status, _) = body(w.runs.run_children("nobody").await).await;
+    let (status, _) = body(w.runs.run_children(&Actor::LocalOperator, "nobody").await).await;
     assert_eq!(status, 404, "an unknown parent is not an empty list");
 }

@@ -92,6 +92,11 @@ mod extension_interop;
 #[path = "extension_catalogue.rs"]
 mod extension_catalogue;
 
+// CORE-5: the reads (Runs, `/ws`, Projets, the disk) and the question of
+// authorization, with the measure of `GET /runs` over 500 Runs.
+#[path = "extension_reads.rs"]
+mod extension_reads;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Search } from "lucide-react";
+import { Check, ChevronDown, Search } from "lucide-react";
 import FsExplorerModal from "./FsExplorerModal";
+import { tildify } from "../../lib/homePath";
+
+/** A group of repositories the dropdown offers, under a heading (a Projet's name). */
+export interface RepoChoiceGroup {
+  label: string;
+  repos: string[];
+}
 
 interface Props {
   value: string;
@@ -18,6 +25,23 @@ interface Props {
    * move an open explorer, which would fight the user's own navigation.
    */
   explorerStartPath?: string;
+  /**
+   * The loupe (browsing the disk). `false` hides it: the daemon would refuse the
+   * browse (CORE-5). Shown by default.
+   */
+  canBrowse?: boolean;
+  /**
+   * When set, the dropdown offers these groups instead of the recent
+   * repositories: the repositories a Run may be created in, by Projet (CORE-5).
+   * A chevron opens it.
+   */
+  groups?: RepoChoiceGroup[];
+  /** One line closing the grouped dropdown (« 1 Project(s) hidden… »). */
+  groupsNote?: string | null;
+  /** One line of help under the field. */
+  help?: string | null;
+  /** The daemon's home, to read a grouped repository as `~/code/…`. */
+  home?: string | null;
 }
 
 function splitPath(fullPath: string): { folder: string; parent: string } {
@@ -39,6 +63,11 @@ export default function RepoCombobox({
   repoError,
   borderClass,
   explorerStartPath,
+  canBrowse = true,
+  groups,
+  groupsNote,
+  help,
+  home,
 }: Props) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -55,6 +84,18 @@ export default function RepoCombobox({
   );
 
   const showDropdown = dropdownOpen && recentRepos.length > 0 && filtered.length > 0;
+
+  // CORE-5: the restricted form offers its groups. A value picked from them
+  // shows every choice again; a typed one narrows them.
+  const grouped = groups !== undefined;
+  const narrowing = grouped && !groups.some((g) => g.repos.includes(value));
+  const shownGroups = (groups ?? [])
+    .map((g) => ({
+      ...g,
+      repos: narrowing ? g.repos.filter((r) => r.toLowerCase().includes(value.toLowerCase())) : g.repos,
+    }))
+    .filter((g) => g.repos.length > 0);
+  const showGroups = grouped && dropdownOpen && (shownGroups.length > 0 || !!groupsNote);
 
   const handleFocus = useCallback(() => {
     setDropdownOpen(true);
@@ -112,16 +153,34 @@ export default function RepoCombobox({
           data-testid="target-repo-input"
           autoComplete="off"
         />
-        <button
-          type="button"
-          onClick={openExplorer}
-          className="absolute inset-y-0 right-0 flex items-center px-2.5 text-fg-4 transition-colors hover:text-fg-2"
-          title="Browse for a repository"
-          aria-label="Browse for a repository"
-          data-testid="repo-browse-trigger"
-        >
-          <Search size={14} />
-        </button>
+        {canBrowse ? (
+          <button
+            type="button"
+            onClick={openExplorer}
+            className="absolute inset-y-0 right-0 flex items-center px-2.5 text-fg-4 transition-colors hover:text-fg-2"
+            title="Browse for a repository"
+            aria-label="Browse for a repository"
+            data-testid="repo-browse-trigger"
+          >
+            <Search size={14} />
+          </button>
+        ) : (
+          grouped && (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setDropdownOpen((o) => !o);
+                inputRef.current?.focus();
+              }}
+              className="absolute inset-y-0 right-0 flex items-center px-2.5 text-fg-4 transition-colors hover:text-fg-2"
+              aria-label="Show the repositories"
+              data-testid="repo-groups-trigger"
+            >
+              <ChevronDown size={14} />
+            </button>
+          )
+        )}
       </div>
       {repoValidating && (
         <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
@@ -138,8 +197,59 @@ export default function RepoCombobox({
           Valid git repository
         </span>
       )}
+      {help && (
+        <span className="block text-fg-4" style={{ fontSize: "10.5px" }} data-testid="repo-help">
+          {help}
+        </span>
+      )}
 
-      {showDropdown && (
+      {showGroups && (
+        <div
+          className="absolute left-0 right-0 z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-line bg-bg-4 py-1 shadow-lg"
+          data-testid="repo-groups-dropdown"
+        >
+          {shownGroups.map((group) => (
+            <div key={group.label} role="group" aria-label={group.label} data-testid="repo-group">
+              <div
+                className="px-2.5 pb-0.5 pt-1.5 font-medium uppercase tracking-wider text-fg-4"
+                style={{ fontSize: "9.5px" }}
+              >
+                {group.label}
+              </div>
+              {group.repos.map((repo) => (
+                <button
+                  key={repo}
+                  type="button"
+                  title={repo}
+                  className={`flex w-full items-center gap-2 px-2.5 py-1 text-left font-mono text-fg transition-colors hover:bg-bg-5 ${
+                    repo === value ? "bg-bg-5" : ""
+                  }`}
+                  style={{ fontSize: "12px" }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    handleSelect(repo);
+                  }}
+                  data-testid="repo-group-item"
+                >
+                  <span className="min-w-0 flex-1 truncate">{tildify(repo, home)}</span>
+                  {repo === value && <Check size={14} className="shrink-0 text-acc" />}
+                </button>
+              ))}
+            </div>
+          ))}
+          {groupsNote && (
+            <div
+              className="mt-1 border-t border-line px-2.5 pb-0.5 pt-1.5 text-fg-4"
+              style={{ fontSize: "10.5px" }}
+              data-testid="repo-groups-note"
+            >
+              {groupsNote}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!grouped && showDropdown && (
         <ul
           className="absolute left-0 right-0 z-50 mt-1 max-h-52 overflow-y-auto rounded-md border border-line bg-bg-4 shadow-lg"
           data-testid="recent-repos-dropdown"

@@ -98,8 +98,10 @@ impl Runs {
     /// candidates; the irreversible teardown stays a pipeline/human action.
     ///
     /// A run is emitted iff it is terminal AND not already `Archived` AND a `worktree/`
-    /// or `nodes/` dir still exists under its run dir.
-    pub async fn list_reapable(&self, q: ReapableQuery) -> Response {
+    /// or `nodes/` dir still exists under its run dir, and `actor` may read it
+    /// (CORE-5).
+    pub async fn list_reapable(&self, actor: &pdo_kernel::Actor, q: ReapableQuery) -> Response {
+        let mut readable = self.readable(actor);
         let state = self;
         let run_ids = match state.store().run_ids().await {
             Ok(ids) => ids,
@@ -122,7 +124,7 @@ impl Runs {
             // `Archived` is terminal too, so `is_terminal()` alone is not enough.
             let eligible =
                 run_state.status.is_terminal() && run_state.status != RunStatus::Archived;
-            if !eligible {
+            if !eligible || !readable.keeps(&run_state).await {
                 continue;
             }
 

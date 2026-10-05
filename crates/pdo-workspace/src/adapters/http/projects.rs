@@ -64,13 +64,15 @@ fn failure(err: WorkspaceError) -> Response {
     }
 }
 
-/// `GET /projects[?attr.<id>/<key>=<value>…]`.
+/// `GET /projects[?attr.<id>/<key>=<value>…]`: the Projets the caller may
+/// read (CORE-5).
 pub(super) async fn list<S: ProjectSettings>(
     State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
     RawQuery(query): RawQuery,
 ) -> Response {
     let filter = AttributeFilter::from_query(query.as_deref());
-    match http.workspace.projects_carrying(filter).await {
+    match http.workspace.readable_projects(&actor, filter).await {
         Ok(projects) => Json(
             projects
                 .into_iter()
@@ -85,17 +87,15 @@ pub(super) async fn list<S: ProjectSettings>(
     }
 }
 
+/// `GET /projects/{id}`: `403` when the caller may not read it (CORE-5).
 pub(super) async fn get<S: ProjectSettings>(
     State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
     AxumPath(project_id): AxumPath<String>,
 ) -> Response {
-    match http.workspace.attributed_project(&project_id).await {
-        Ok(Some(project)) => Json(ProjectDto::from_project::<S>(project)).into_response(),
-        Ok(None) => no_such_project(),
-        Err(e) => {
-            error!("failed to load project {project_id}: {e}");
-            store_error()
-        }
+    match http.workspace.readable_project(&actor, &project_id).await {
+        Ok(project) => Json(ProjectDto::from_project::<S>(project)).into_response(),
+        Err(e) => failure(e),
     }
 }
 

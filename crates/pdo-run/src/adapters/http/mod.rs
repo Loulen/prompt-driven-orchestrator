@@ -12,6 +12,7 @@
 
 mod commands;
 pub mod nodes;
+pub mod read_guard;
 mod run_detail;
 pub mod runs;
 mod stale;

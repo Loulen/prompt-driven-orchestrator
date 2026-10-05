@@ -11,7 +11,11 @@
 //!   working directory of `pdo daemon`; the current one by default. Pipelines
 //!   are read from `$PDO_DEMO_ROOT/.pdo/pipelines`, not from `$HOME`.
 //! - `PDO_TEST_EXTENSION_REFUSE`: what the test extension refuses (`none`, `all`,
-//!   `panic`, `<resource>:<verb>`), `project:update` by default.
+//!   `panic`, or rules `<resource>:<verb>[@<project>][~<actor>]` separated by
+//!   `,`, a bare `@` meaning « in no Projet »), `project:update` by default. `POST /ext/test/refusal {"refuse": …}`
+//!   changes it while the daemon runs (CORE-5: `run:read@<p2>` hides the Runs
+//!   of a Projet, `repository:read` the loupe, `run:create@<p2>` the Projet in
+//!   the New Run form).
 //! - `PDO_TEST_EXTENSION_INCOMPATIBLE`: `1` starts with the UI bundle declaring
 //!   a React major the front does not run (`POST /ext/test/incompatible` switches
 //!   it while the daemon runs).

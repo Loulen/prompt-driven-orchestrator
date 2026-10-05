@@ -154,6 +154,30 @@ impl DaemonHandle {
         trigger.id
     }
 
+    /// Seed a `run_started` event of a Run working in `target_repo`, without
+    /// creating anything on disk: the Runs a list holds (the CORE-5 measure of
+    /// `GET /runs` over 500 Runs).
+    #[doc(hidden)]
+    pub async fn seed_run_in(&self, run_id: &str, pipeline_name: &str, target_repo: &str) {
+        let _ = pdo_run::application::events::append_event(
+            &self.run,
+            &Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: pdo_kernel::clock::now_iso(),
+                kind: EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": pipeline_name,
+                    "input": "seeded input",
+                    "target_repo": target_repo,
+                })),
+            },
+        )
+        .await;
+    }
+
     /// Seed a `run_started` event whose payload carries **no** `target_repo` — a
     /// legacy Run record. Same rationale as
     /// [`Self::seed_legacy_trigger_without_target_repo`]: `POST /runs` refuses

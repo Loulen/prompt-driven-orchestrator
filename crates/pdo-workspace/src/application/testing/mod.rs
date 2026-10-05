@@ -26,6 +26,8 @@ fn ready<'a, T: Send + 'a>(value: T) -> BoxFuture<'a, T> {
 #[derive(Default)]
 pub struct RecordingHost {
     refusal: Option<String>,
+    /// Refuse only the reads in these Projets (CORE-5).
+    reads_refused_in: Vec<String>,
     asked: Mutex<Vec<Operation>>,
 }
 
@@ -41,6 +43,14 @@ impl ExtensionHost for RecordingHost {
     }
     fn authorize(&self, _actor: &Actor, operation: &Operation) -> Authorization {
         self.asked.lock().unwrap().push(operation.clone());
+        if operation.is_read()
+            && operation
+                .projects
+                .iter()
+                .any(|p| self.reads_refused_in.contains(p))
+        {
+            return Authorization::deny("no reading there");
+        }
         match &self.refusal {
             Some(reason) => Authorization::deny(reason.clone()),
             None => Authorization::Allow,
@@ -61,16 +71,20 @@ pub struct Fixture {
 }
 
 fn build(refusal: Option<String>) -> Fixture {
+    build_with(RecordingHost {
+        refusal,
+        ..RecordingHost::default()
+    })
+}
+
+fn build_with(host: RecordingHost) -> Fixture {
     let projects = Arc::new(InMemoryProjects::default());
     let provisioning = Arc::new(InMemoryProvisioning::default());
     let recent = Arc::new(InMemoryRecent::default());
     let events = Arc::new(RecordingEvents::default());
     let git = Arc::new(FakeGit::default());
     let source_tree = Arc::new(RecordingSourceTree::default());
-    let host = Arc::new(RecordingHost {
-        refusal,
-        asked: Mutex::default(),
-    });
+    let host = Arc::new(host);
     let workspace = Workspace::new(
         WorkspacePorts {
             projects: projects.clone(),
@@ -103,4 +117,12 @@ pub fn fixture() -> Fixture {
 /// A workspace whose extension refuses every Operation with `reason`.
 pub fn denying(reason: &str) -> Fixture {
     build(Some(reason.to_string()))
+}
+
+/// A workspace whose extension refuses only the reads in `projects`.
+pub fn denying_reads_in(projects: &[&str]) -> Fixture {
+    build_with(RecordingHost {
+        reads_refused_in: projects.iter().map(|p| p.to_string()).collect(),
+        ..RecordingHost::default()
+    })
 }

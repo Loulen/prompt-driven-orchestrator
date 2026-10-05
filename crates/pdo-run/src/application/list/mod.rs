@@ -9,7 +9,7 @@ use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use pdo_kernel::attributes::{AttributeFilter, AttributedList, Attributes};
-use pdo_kernel::ResourceKind;
+use pdo_kernel::{Actor, ResourceKind};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -73,9 +73,10 @@ pub struct RunListEntry {
 }
 
 impl Runs {
-    /// `GET /runs`: every Run carrying the attributes `filter` asks for, as the
-    /// list shows it, with its attributes.
-    pub async fn list_runs(&self, filter: AttributeFilter) -> Response {
+    /// `GET /runs`: every Run `actor` may read (CORE-5) carrying the
+    /// attributes `filter` asks for, as the list shows it, with its
+    /// attributes.
+    pub async fn list_runs(&self, actor: &Actor, filter: AttributeFilter) -> Response {
         let state = self;
         let run_ids = match state.store().run_ids().await {
             Ok(ids) => ids,
@@ -98,6 +99,7 @@ impl Runs {
         child_awaiting::overlay(&mut states);
         let attributed = AttributedList::read(self.extensions(), ResourceKind::Run, filter).await;
         states.retain(|run_state| attributed.keeps(&run_state.run_id));
+        self.readable(actor).retain(&mut states).await;
 
         let mut runs = Vec::new();
         for run_state in states {

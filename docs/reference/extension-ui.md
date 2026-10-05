@@ -207,12 +207,18 @@ effect and return the unregistration.
 - **Renders**: the New Run form, after the variable overrides, one section per contribution, in
   both of its modes (a Run, a Trigger).
 - **Context**: `RunNewContext` = `LocationContext` + `mode` (`"run"` or `"trigger"`) + `pipeline`
-  (the id picked, or `null`) + `repository` (the target repository, as typed) + `trigger` (the id
+  (the id picked, or `null`) + `repository` (the target repository, as typed) + `targetProject`
+  (the Projet owning that repository, compared verbatim, or `null`; CORE-5) + `trigger` (the id
   of the Trigger being edited, or `null`). `form` is present; `onSave` receives the Run launched
   (`{ kind: "run", id, name?, attributes }`, read back so it carries the Attributes the
   extensions stamped on the create) or the Trigger saved (`{ kind: "trigger", id, name, attributes }`). The
   Run or the Trigger exists whatever the handlers answer: a failure is an error toast, and the form
   closes.
+- **Rights** (CORE-5): the form asks the question of authorization (`POST /authorize`) at each
+  open. When the disk may not be browsed (`repository` × `read`), the loupe is gone; when a Run
+  may not be created somewhere, the field offers the repositories of the Projets that allow it,
+  grouped by Projet, and says how many Projets it hides. « New Run » is disabled, with its reason,
+  when no Projet allows a Run.
 
 ### `node/config`
 

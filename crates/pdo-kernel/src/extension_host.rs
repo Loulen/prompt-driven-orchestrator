@@ -65,6 +65,13 @@ pub trait ExtensionHost: Send + Sync {
     fn catalogue(&self) -> Vec<Resource> {
         pdo_extension_api::core_resources()
     }
+
+    /// Whether no extension can refuse anything: the reads then skip the
+    /// question altogether (CORE-5), so a daemon without extension serves its
+    /// lists exactly as before. `false` by default.
+    fn allows_everything(&self) -> bool {
+        false
+    }
 }
 
 /// The skills one extension brings into the Banque de skills.
@@ -89,6 +96,10 @@ impl ExtensionHost for NoExtensions {
     }
 
     fn publish(&self, _event: &Value) {}
+
+    fn allows_everything(&self) -> bool {
+        true
+    }
 }
 
 /// What the daemon gives its extension host once its resources are open.
@@ -313,6 +324,10 @@ impl ExtensionHost for Extensions {
             }
         }
         Authorization::Allow
+    }
+
+    fn allows_everything(&self) -> bool {
+        self.is_empty()
     }
 
     fn publish(&self, event: &Value) {

@@ -1,12 +1,13 @@
 use std::fmt;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// The generic description of a mutation the core is about to execute: a
-/// resource, a verb, and the target when it already exists (CONTEXT.md §
-/// *Extensions*, D9).
+/// The generic description of a mutation the core is about to execute, or of
+/// a read it is about to serve ([`Verb::Read`]): a resource, a verb, and the
+/// target when it already exists (CONTEXT.md § *Extensions*, D9).
 ///
-/// Every mutation has one. An Operation is never named after a need
+/// Every mutation has one, and so do the guarded reads (CORE-5): listing and
+/// reading the Runs, listing and reading the Projets, browsing the disk. An Operation is never named after a need
 /// ("UpdateProfileAsAdmin"): the same fields describe every case, so the list
 /// of variants never describes the extensions the core expects.
 ///
@@ -15,12 +16,17 @@ use serde::{Serialize, Serializer};
 /// extension ever works out a Projet from a repository itself.
 ///
 /// Non-exhaustive, like its fields' enums: build one with [`Operation::new`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// It reads back from its wire form (`{"resource", "verb", "target",
+/// "projects"}`, the last two optional): the form the question of
+/// authorization (`POST /authorize`) receives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Operation {
     pub resource: ResourceKind,
     pub verb: Verb,
     /// The id of the entity acted on; `None` for a creation.
+    #[serde(default)]
     pub target: Option<String>,
     /// The ids of the Projets the Operation is in, without duplicates; empty
     /// when it is in none (hors Projet).
@@ -31,6 +37,7 @@ pub struct Operation {
     /// that Projet; a repository's, the Projet it belongs to. The others
     /// (pipelines, Triggers, settings, skills…) are in none. An extension fills
     /// them for its own resources (a Backlog may belong to several Projets).
+    #[serde(default)]
     pub projects: Vec<String>,
 }
 
@@ -71,6 +78,12 @@ impl Operation {
     /// Whether the Operation is in no Projet.
     pub fn is_outside_projects(&self) -> bool {
         self.projects.is_empty()
+    }
+
+    /// Whether it is a read ([`Verb::Read`]): it changes nothing, so it is
+    /// never announced as applied.
+    pub fn is_read(&self) -> bool {
+        self.verb == Verb::Read
     }
 }
 
@@ -206,11 +219,23 @@ impl Serialize for ResourceKind {
     }
 }
 
+impl<'de> Deserialize<'de> for ResourceKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        ResourceKind::from_wire_name(&name)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown resource `{name}`")))
+    }
+}
+
 /// What an [`Operation`] does to its resource.
 ///
 /// Non-exhaustive: the named [`Verb::Action`] carries everything that is neither
 /// a creation, a modification nor a deletion (`"retry"`, `"fire"`, `"pause"`…).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+///
+/// [`Verb::Read`] (CORE-5) is the one verb that changes nothing: a Run listed
+/// or read, a Projet listed or read, the disk browsed. A refused read hides
+/// the entity from a list, and answers `403` for one entity.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Verb {
@@ -218,6 +243,7 @@ pub enum Verb {
     Update,
     Delete,
     Action(String),
+    Read,
 }
 
 #[cfg(test)]
@@ -278,6 +304,39 @@ mod tests {
             ResourceKind::StatsAbsorption.wire_name(),
             "stats_absorption"
         );
+    }
+
+    #[test]
+    fn an_operation_reads_back_from_its_wire_form() {
+        let op: Operation = serde_json::from_value(serde_json::json!({
+            "resource": "run", "verb": "create", "projects": ["p1"],
+        }))
+        .unwrap();
+        assert_eq!(
+            op,
+            Operation::new(ResourceKind::Run, Verb::Create).in_projects(["p1"])
+        );
+        let read = Operation::new(ResourceKind::Run, Verb::Read).on("r1");
+        assert!(read.is_read());
+        assert!(!op.is_read());
+        assert_eq!(serde_json::to_value(&read).unwrap()["verb"], "read");
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::to_value(&read).unwrap()).unwrap(),
+            read
+        );
+        let fire: Operation = serde_json::from_value(serde_json::json!({
+            "resource": "trigger", "verb": { "action": "fire" }, "target": "t1",
+        }))
+        .unwrap();
+        assert_eq!(fire.verb, Verb::Action("fire".into()));
+        let tache: Operation =
+            serde_json::from_value(serde_json::json!({ "resource": "pm/tache", "verb": "read" }))
+                .unwrap();
+        assert_eq!(tache.resource, ResourceKind::extension("pm", "tache"));
+        assert!(serde_json::from_value::<Operation>(
+            serde_json::json!({ "resource": "nope", "verb": "read" })
+        )
+        .is_err());
     }
 
     #[test]

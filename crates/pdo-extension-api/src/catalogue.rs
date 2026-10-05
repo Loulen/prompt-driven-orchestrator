@@ -114,6 +114,7 @@ pub fn catalogue<'a>(manifests: impl IntoIterator<Item = &'a Manifest>) -> Vec<R
 const CREATE: &str = "create";
 const UPDATE: &str = "update";
 const DELETE: &str = "delete";
+const READ: &str = "read";
 
 /// Label, help and verbs of each of the core's Ressources: every verb a use
 /// case of the core builds an Operation with.
@@ -123,8 +124,9 @@ fn core_entry(
     Some(match kind {
         ResourceKind::Run => (
             "Runs",
-            "Create, steer, archive and delete Runs",
+            "See, create, steer, archive and delete Runs",
             &[
+                READ,
                 CREATE,
                 DELETE,
                 "edit_repos",
@@ -179,8 +181,8 @@ fn core_entry(
         ),
         ResourceKind::Project => (
             "Projects",
-            "Create, edit and delete Projects and their repositories",
-            &[CREATE, UPDATE, DELETE],
+            "See, create, edit and delete Projects and their repositories",
+            &[READ, CREATE, UPDATE, DELETE],
         ),
         ResourceKind::Trigger => (
             "Triggers",
@@ -232,8 +234,8 @@ fn core_entry(
         ),
         ResourceKind::Repository => (
             "Repositories",
-            "Create repositories, fetch their remotes, fast-forward their branches",
-            &[CREATE, "fetch", "fast_forward"],
+            "Browse the disk for a repository, create repositories, fetch their remotes, fast-forward their branches",
+            &[READ, CREATE, "fetch", "fast_forward"],
         ),
         ResourceKind::Session => (
             "Sessions",
@@ -265,10 +267,11 @@ fn core_entry(
 }
 
 impl Verb {
-    /// The verb's name, as the catalogue lists it: `create`, `update`,
-    /// `delete`, or the action's own name (`fire`).
+    /// The verb's name, as the catalogue lists it: `read`, `create`,
+    /// `update`, `delete`, or the action's own name (`fire`).
     pub fn name(&self) -> &str {
         match self {
+            Verb::Read => READ,
             Verb::Create => CREATE,
             Verb::Update => UPDATE,
             Verb::Delete => DELETE,
@@ -295,6 +298,13 @@ mod tests {
         let run = &core[0];
         assert_eq!(run.resource, "run");
         assert!(run.verbs.contains(&"create".to_string()));
+        assert_eq!(run.verbs[0], "read", "a Run is read (CORE-5)");
+        let readable: Vec<&str> = core
+            .iter()
+            .filter(|r| r.verbs.iter().any(|v| v == "read"))
+            .map(|r| r.resource.as_str())
+            .collect();
+        assert_eq!(readable, ["run", "project", "repository"]);
         assert!(Resource::of_core(&ResourceKind::extension("pm", "tache")).is_none());
     }
 
@@ -334,6 +344,7 @@ mod tests {
 
     #[test]
     fn a_verb_is_named_as_the_catalogue_lists_it() {
+        assert_eq!(Verb::Read.name(), "read");
         assert_eq!(Verb::Create.name(), "create");
         assert_eq!(Verb::Update.name(), "update");
         assert_eq!(Verb::Delete.name(), "delete");

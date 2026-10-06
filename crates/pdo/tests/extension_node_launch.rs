@@ -196,7 +196,7 @@ async fn an_agent_reads_the_extension_preamble_first_and_carries_its_variables()
     };
     let (daemon, control) =
         daemon_with(|repo| seed_solo(repo, &[("solo", false)]), Some(tail)).await;
-    let config_dir = daemon.repo_root().join("home/iam/alice");
+    let config_dir = daemon.repo_root().join("home/test/alice");
     control.launch.set_env(env(&[
         ("FIXTURE_HELLO", "monde"),
         ("CLAUDE_CONFIG_DIR", &config_dir.to_string_lossy()),
@@ -349,12 +349,12 @@ async fn a_suspended_trigger_shows_why_and_fires_neither_by_cron_nor_by_run_now(
     let (daemon, control) = daemon_with(|repo| seed_solo(repo, &[("solo", false)]), None).await;
     let trigger = create_trigger_as(&daemon, "emma").await;
     let id = trigger["id"].as_str().unwrap().to_string();
-    control.launch.suspend(&id, "Emma Leroy was disabled");
+    control.launch.suspend(&id, "alice is on leave");
 
     let listed = daemon.get_json("/triggers").await;
     assert_eq!(
         listed[0]["suspension"],
-        json!({ "extension": "test", "reason": "Emma Leroy was disabled" }),
+        json!({ "extension": "test", "reason": "alice is on leave" }),
         "{listed}"
     );
     let asked = control.launch.trigger_asks();
@@ -372,7 +372,7 @@ async fn a_suspended_trigger_shows_why_and_fires_neither_by_cron_nor_by_run_now(
     assert_eq!(status, 409, "{body}");
     assert!(
         body["error"].as_str().unwrap()
-            == "trigger 'Weekly dependency bump' is suspended: Emma Leroy was disabled",
+            == "trigger 'Weekly dependency bump' is suspended: alice is on leave",
         "the toast names the Trigger by its name, not its id: {body}"
     );
 
@@ -380,7 +380,7 @@ async fn a_suspended_trigger_shows_why_and_fires_neither_by_cron_nor_by_run_now(
     daemon.run_trigger_tick().await;
     let fires = daemon.get_json(&format!("/triggers/{id}/fires")).await;
     assert_eq!(fires[0]["outcome"], "skipped-suspended", "{fires}");
-    assert_eq!(fires[0]["reason"], "Emma Leroy was disabled");
+    assert_eq!(fires[0]["reason"], "alice is on leave");
     let runs = daemon.get_json("/runs").await;
     assert!(
         runs.as_array()

@@ -116,7 +116,7 @@ impl Host for NeutralHost {
 }
 
 /// An event an extension publishes about its own entities: a name it
-/// chooses (`tache_modifiee`) and a payload it owns.
+/// chooses (`note_changed`) and a payload it owns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct ExtensionEvent {
@@ -153,14 +153,14 @@ mod tests {
 
     #[test]
     fn an_event_is_wrapped_in_the_envelope_of_ws() {
-        let event = ExtensionEvent::new("tache_modifiee", serde_json::json!({ "id": "PM-12" }));
+        let event = ExtensionEvent::new("note_changed", serde_json::json!({ "id": "note-12" }));
         assert_eq!(
-            event.to_event("pm"),
+            event.to_event("test"),
             serde_json::json!({
                 "type": "extension_event",
-                "extension": "pm",
-                "name": "tache_modifiee",
-                "payload": { "id": "PM-12" },
+                "extension": "test",
+                "name": "note_changed",
+                "payload": { "id": "note-12" },
             })
         );
     }
@@ -168,11 +168,14 @@ mod tests {
     #[test]
     fn the_neutral_host_allows_everything_and_stamps_nothing() {
         let host: &dyn Host = &NeutralHost;
-        let kind = ResourceKind::extension("pm", "tache");
+        let kind = ResourceKind::extension("test", "note");
         let op = Operation::new(kind.clone(), Verb::Create);
         assert!(host.authorize(&Actor::LocalOperator, &op).is_allowed());
         assert!(host
-            .on_create(&Actor::LocalOperator, &EntityRef::new(kind.clone(), "PM-1"))
+            .on_create(
+                &Actor::LocalOperator,
+                &EntityRef::new(kind.clone(), "note-1")
+            )
             .is_empty());
         assert_eq!(host.display_name(&Actor::LocalOperator), None);
         host.publish(ExtensionEvent::new("x", serde_json::Value::Null));

@@ -257,12 +257,12 @@ describe("actions and commands", () => {
 
 describe("deep links", () => {
   it("open the page on the path they carry", async () => {
-    window.history.replaceState(null, "", "/#/ext/demo/topbar/end/task/PM-12");
+    window.history.replaceState(null, "", "/#/ext/demo/topbar/end/note/note-12");
     serve([extension("demo", [page("home", "Demo", "ContextPage")])]);
     renderShell();
     const shell = await screen.findByTestId("extension-page");
-    expect(within(shell).getByText("path task/PM-12")).toBeInTheDocument();
-    expect(screen.getByTestId("extension-page-breadcrumb")).toHaveTextContent("taskPM-12");
+    expect(within(shell).getByText("path note/note-12")).toBeInTheDocument();
+    expect(screen.getByTestId("extension-page-breadcrumb")).toHaveTextContent("notenote-12");
   });
 
   it("toward an absent extension say so in an error toast, never a blank page", async () => {

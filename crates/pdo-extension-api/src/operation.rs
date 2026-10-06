@@ -36,7 +36,7 @@ pub struct Operation {
     /// repository (a creation: of the repository it names); a Projet's are
     /// that Projet; a repository's, the Projet it belongs to. The others
     /// (pipelines, Triggers, settings, skills…) are in none. An extension fills
-    /// them for its own resources (a Backlog may belong to several Projets).
+    /// them for its own resources (a note may belong to several Projets).
     #[serde(default)]
     pub projects: Vec<String>,
 }
@@ -91,7 +91,7 @@ impl Operation {
 /// extension owns ([`ResourceKind::Extension`]).
 ///
 /// On the wire, its name: `run`, `agent_profile`… for the core's kinds,
-/// `<extension>/<kind>` for an extension's (`pm/tache`).
+/// `<extension>/<kind>` for an extension's (`test/note`).
 ///
 /// Non-exhaustive: adding a resource is a minor evolution of the API.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -119,8 +119,8 @@ pub enum ResourceKind {
     StatsAbsorption,
     /// The price table the costs are priced with (its sync).
     PriceTable,
-    /// A kind of entity an extension owns and mutates itself (a Tâche of the
-    /// extension `pm`: `extension: "pm"`, `kind: "tache"`). Its Operations go
+    /// A kind of entity an extension owns and mutates itself (a note of the
+    /// extension `test`: `extension: "test"`, `kind: "note"`). Its Operations go
     /// through the same Autorisation d'opération as the core's, by the
     /// extension's [`Host`](crate::Host).
     Extension {
@@ -285,21 +285,25 @@ mod tests {
 
     #[test]
     fn an_extension_resource_is_named_after_its_extension() {
-        let op = Operation::new(ResourceKind::extension("pm", "tache"), Verb::Update).on("PM-12");
+        let op =
+            Operation::new(ResourceKind::extension("test", "note"), Verb::Update).on("note-12");
         assert_eq!(
             serde_json::to_value(&op).unwrap(),
             serde_json::json!({
-                "resource": "pm/tache", "verb": "update", "target": "PM-12", "projects": [],
+                "resource": "test/note", "verb": "update", "target": "note-12", "projects": [],
             })
         );
         assert_eq!(
-            ResourceKind::extension("pm", "tache"),
+            ResourceKind::extension("test", "note"),
             ResourceKind::Extension {
-                extension: "pm".into(),
-                kind: "tache".into()
+                extension: "test".into(),
+                kind: "note".into()
             }
         );
-        assert_eq!(ResourceKind::extension("pm", "page").to_string(), "pm/page");
+        assert_eq!(
+            ResourceKind::extension("test", "page").to_string(),
+            "test/page"
+        );
         assert_eq!(
             ResourceKind::StatsAbsorption.wire_name(),
             "stats_absorption"
@@ -329,10 +333,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(fire.verb, Verb::Action("fire".into()));
-        let tache: Operation =
-            serde_json::from_value(serde_json::json!({ "resource": "pm/tache", "verb": "read" }))
+        let note: Operation =
+            serde_json::from_value(serde_json::json!({ "resource": "test/note", "verb": "read" }))
                 .unwrap();
-        assert_eq!(tache.resource, ResourceKind::extension("pm", "tache"));
+        assert_eq!(note.resource, ResourceKind::extension("test", "note"));
         assert!(serde_json::from_value::<Operation>(
             serde_json::json!({ "resource": "nope", "verb": "read" })
         )
@@ -348,10 +352,10 @@ mod tests {
             );
         }
         assert_eq!(
-            ResourceKind::from_wire_name("pm/tache"),
-            Some(ResourceKind::extension("pm", "tache"))
+            ResourceKind::from_wire_name("test/note"),
+            Some(ResourceKind::extension("test", "note"))
         );
         assert_eq!(ResourceKind::from_wire_name("nope"), None);
-        assert_eq!(ResourceKind::from_wire_name("pm/"), None);
+        assert_eq!(ResourceKind::from_wire_name("test/"), None);
     }
 }

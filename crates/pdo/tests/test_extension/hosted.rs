@@ -1,6 +1,6 @@
 //! The two internal test extensions of the hosted locations (ADR-0081,
 //! amendment #32): **A** hosts locations in its own page, **B** contributes to
-//! them, as a third-party extension contributes to `pm`'s.
+//! them, as a third-party extension contributes to another's.
 //!
 //! - **A** (`a`): a `topbar/end` page, `HostPage`, listing two items. It hosts
 //!   [`PANEL`] (sections, rendered under each item, context `item`) and

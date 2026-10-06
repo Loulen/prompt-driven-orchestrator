@@ -14,7 +14,7 @@ use serde::Serialize;
 #[non_exhaustive]
 pub struct UiCommand {
     /// Unique among the extension's commands; an action names it. A dotted
-    /// name prefixed with the extension's id reads best (`pm.new-task`).
+    /// name prefixed with the extension's id reads best (`test.new-note`).
     pub id: String,
     /// What the operator reads on the entry that calls it.
     pub title: String,

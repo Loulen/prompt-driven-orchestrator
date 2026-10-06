@@ -34,8 +34,22 @@ fn is_repo_root(dir: &Path) -> bool {
     }
 }
 
+/// The variables through which git takes an identity over `user.name` /
+/// `user.email`. An inherited one (a daemon started from an agent's shell) would
+/// sign the initial commit instead of the repository's own identity.
+const IDENTITY_ENV: [&str; 4] = [
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+];
+
 fn git(repo: &Path, args: &[&str]) -> Result<(), String> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    for var in IDENTITY_ENV {
+        command.env_remove(var);
+    }
+    let output = command
         .args(args)
         .current_dir(repo)
         .output()

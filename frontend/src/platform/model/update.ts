@@ -18,7 +18,7 @@ import type { UpdateAttemptStatus } from "../../shared/generated/UpdateAttemptSt
 export interface UpdateStatus {
   /**
    * The release channel's name (#24): `PDO` for the vanilla binary, the
-   * distribution's name (`pdo-dist`…) otherwise.
+   * distribution's name (`acme-pdo`…) otherwise.
    */
   channel_name: string;
   /** The version the channel declares, compared with its releases. */

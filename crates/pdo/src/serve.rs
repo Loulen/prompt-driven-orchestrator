@@ -41,17 +41,17 @@ pub struct Config {
 /// ```no_run
 /// # async fn start() -> anyhow::Result<()> {
 /// let config = pdo::Config::from_cli(None, 5172)?.with_release_channel(pdo::ReleaseChannel {
-///     name: "pdo-dist".into(),
+///     name: "acme-pdo".into(),
 ///     installed_version: "0.3.0".into(),
-///     source_url: Some("https://api.github.com/repos/acme/pdo-dist/releases/latest".into()),
-///     upgrade_command: Some("brew update && brew upgrade acme/tap/pdo-dist".into()),
+///     source_url: Some("https://api.github.com/repos/acme/acme-pdo/releases/latest".into()),
+///     upgrade_command: Some("brew update && brew upgrade acme/tap/acme-pdo".into()),
 /// });
 /// pdo::serve(config, vec![]).await?.wait().await
 /// # }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseChannel {
-    /// Shown in the UI (`pdo-dist`…), next to the version of the core the
+    /// Shown in the UI (`acme-pdo`…), next to the version of the core the
     /// binary is built on. `PDO` is the vanilla binary's name.
     pub name: String,
     /// The version compared with the releases of `source_url`: the

@@ -1,7 +1,7 @@
 //! The interop peers of the test extension (amendment #34 of ADR-0081): small
 //! extensions that own an entity, the `item` (`<id>/item`), and mutate it
-//! through the [`Host`] the core hands them at `start`, like `pm` does its
-//! Tâches. Three of them installed together (`a`, `b`, `c`) interoperate
+//! through the [`Host`] the core hands them at `start`, as any extension does
+//! its own entities. Three of them installed together (`a`, `b`, `c`) interoperate
 //! without naming each other:
 //!
 //! - Each declares its `item` in its Manifest, so the catalogue lists

@@ -195,7 +195,7 @@ pub enum UiLocation {
     #[serde(rename = "skill/menu")]
     SkillMenu,
     /// A location an extension hosts, by its id `<extension>/<name>`
-    /// (`pm/onglet`): what it accepts and hands over is the host's
+    /// (`a/panneau`): what it accepts and hands over is the host's
     /// [`HostedLocation`](super::HostedLocation) declaration. A contribution to
     /// the location of an extension that is not loaded, or that does not
     /// declare it, is left out without error.
@@ -492,9 +492,9 @@ mod tests {
 
     #[test]
     fn a_hosted_location_serializes_as_its_id() {
-        let hosted = UiLocation::Hosted("pm/onglet");
-        assert_eq!(hosted.id(), "pm/onglet");
-        assert_eq!(serde_json::to_value(hosted).unwrap(), "pm/onglet");
+        let hosted = UiLocation::Hosted("a/panneau");
+        assert_eq!(hosted.id(), "a/panneau");
+        assert_eq!(serde_json::to_value(hosted).unwrap(), "a/panneau");
         assert!(!UiLocation::ALL.contains(&hosted));
     }
 }

@@ -939,8 +939,8 @@ mod tests {
         struct Declares;
         impl Extension for Declares {
             fn manifest(&self) -> Manifest {
-                Manifest::new("pm", "Project", "0.0.0").with_resource(
-                    pdo_extension_api::ResourceDeclaration::new("tache", "Tasks", ["create"]),
+                Manifest::new("test", "Test", "0.0.0").with_resource(
+                    pdo_extension_api::ResourceDeclaration::new("note", "Notes", ["create"]),
                 )
             }
         }
@@ -950,8 +950,8 @@ mod tests {
         let catalogue = host.catalogue();
         assert_eq!(catalogue.len(), core.len() + 1);
         assert_eq!(catalogue[..core.len()], core[..]);
-        assert_eq!(catalogue[core.len()].resource, "pm/tache");
-        assert_eq!(catalogue[core.len()].extension.as_deref(), Some("pm"));
+        assert_eq!(catalogue[core.len()].resource, "test/note");
+        assert_eq!(catalogue[core.len()].extension.as_deref(), Some("test"));
         assert_eq!(
             host.host_of("a").catalogue(),
             catalogue,

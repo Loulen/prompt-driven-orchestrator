@@ -151,7 +151,7 @@ Les hooks ci-dessus ne couvrent que les mutations **du core**.
   n'est plus `Copy` (la variante porte des `String`), `ExtensionContext` porte un champ de plus
   (`host`) et implémente `Debug`, `PartialEq` et `Eq` à la main (deux contextes sont égaux s'ils
   nomment le même dossier et partagent le même Hôte).
-  Une extension 0.1 ou 0.2 qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile telle
+  Une extension 0.1 ou 0.2 qui ne comptait pas sur `Copy` compile telle
   quelle et reste acceptée : la casse est de compilation, pas de fil, donc
   `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0` (amendement #29).
 - L'extension de test interne y gagne trois pairs (`a`, `b`, `c`, `interop.rs`) qui créent et
@@ -471,7 +471,7 @@ Projet elle a lieu, et rien ne liste les Ressources sur lesquelles régler des D
   hors Projet. Sur le fil, l'Opération gagne `"projects": [...]`, dans `/ws` comme dans
   `on_event`.
 - **Le Manifest déclare les Ressources d'une extension** (`Manifest::resources`,
-  `Manifest::with_resource(ResourceDeclaration)`) : la sorte (`tache`), un libellé, une ligne
+  `Manifest::with_resource(ResourceDeclaration)`) : la sorte (`note`), un libellé, une ligne
   d'aide et les noms de ses verbes (`create`, `update`, `delete`, ou le nom d'une action,
   `Verb::name`).
 - **Le catalogue des Ressources** (`Resource`) : les 19 Ressources du core (`ResourceKind::CORE`,

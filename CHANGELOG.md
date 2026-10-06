@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.117.0
+**Pilotage d'un Run en lecture seule, Edit for this run, Overwrite default pipeline** (#973, spec #970, ADR-0080).
+
+- Un onglet de Run s'ouvre en pilotage : canvas verrouillé (ni déplacement, ni câblage, ni menu
+  d'édition), `+`, Library, script et undo/redo masqués, pas de bouton Save. L'onglet Edit de
+  l'inspecteur devient **Config**, en lecture seule (prompt et skills). Un Run archivé l'indique.
+- Menu **Edit** : « Edit for this run » rouvre l'édition à chaud sur le snapshot du Run ;
+  « Edit source pipeline » ouvre l'onglet du Pipeline. « Finish editing » reverrouille, avec
+  confirmation s'il reste des modifications non enregistrées.
+- En édition de Run, « Save for this run » n'écrit que le snapshot (le Pipeline partagé n'est
+  plus synchronisé). « Overwrite default pipeline… » avertit (futurs Runs, Triggers concernés,
+  Pipeline partagé modifié depuis le lancement) puis copie le snapshot complet (YAML + prompts).
+- L'onglet d'un Pipeline hors Run s'édite et s'enregistre comme avant.
+
 ## 1.116.0
 **Importer un fichier dans un nœud à session vive, depuis son terminal** (#971, spec #970).
 

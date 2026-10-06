@@ -6,6 +6,8 @@ import type { BranchList, BranchRef, FastForwardOutcome, PipelineListEntry } fro
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn(),
+  // #974: the Projets come with the pipelines, so the menu can head with the Projet's.
+  fetchProjects: vi.fn(async () => []),
   listBranches: vi.fn(),
   fetchRemotes: vi.fn(),
   fastForwardBranch: vi.fn(),

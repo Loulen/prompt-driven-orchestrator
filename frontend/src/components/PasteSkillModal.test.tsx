@@ -296,7 +296,11 @@ describe("PasteSkillModal reference files (#671)", () => {
     );
     expect(screen.queryByTestId("paste-skill-files")).toBeNull();
     expect(screen.getByTestId("paste-skill-replaced")).toHaveTextContent("Replaced by dropped SKILL.md");
-    for (const id of ["frontmatter", "name", "description", "body", "unique"]) expect(checkState(id)).toBe("pass");
+    // The checks re-run on the new text (the uniqueness one asks the bank): under a
+    // full parallel run they can land a beat after the text does.
+    await waitFor(() => {
+      for (const id of ["frontmatter", "name", "description", "body", "unique"]) expect(checkState(id)).toBe("pass");
+    });
 
     fireEvent.keyDown(window, { key: "z", metaKey: true });
     expect((screen.getByTestId("paste-skill-text") as HTMLTextAreaElement).value).toBe("draft");

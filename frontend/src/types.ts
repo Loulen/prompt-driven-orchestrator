@@ -1239,7 +1239,8 @@ export interface WsMessage {
     | "trigger_updated"
     | "trigger_deleted"
     | "triggers_paused"
-    | "project_changed";
+    | "project_changed"
+    | "pipeline_validation_changed";
   event?: DaemonEvent;
   pipeline_id?: string;
   path?: string;
@@ -1429,7 +1430,22 @@ export interface PipelineListEntry {
    */
   prompt_required?: boolean;
   drifted?: boolean | null;
+  /**
+   * #974 (CONTEXT.md « Pipeline validé »): for which Projets the launch forms offer
+   * it. Absent (an older daemon) reads as validated for all Projets, like a Pipeline
+   * with no stored validation.
+   */
+  validation?: PipelineValidation;
 }
+
+/**
+ * #974 — a Pipeline's validation: every Projet (current and future), none (a
+ * *Pipeline de test*), or these Projets. Stored by the instance, never in the YAML.
+ */
+export type PipelineValidation =
+  | { kind: "all" }
+  | { kind: "none" }
+  | { kind: "projects"; project_ids: string[] };
 
 export type PortSide = "left" | "right" | "top" | "bottom";
 export type PortType = "markdown" | "image" | "image_list" | "html";

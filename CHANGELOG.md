@@ -10,6 +10,24 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.118.0
+**Pipelines validés par Projet** (#974, spec #970).
+
+- Bouton **Validate** (onglet d'un Pipeline) : le Pipeline est proposé à tous les Projets
+  (actuels et futurs), à une liste de Projets, ou à aucun (Pipeline de test). Un indicateur
+  (globe « All », dossiers + nombre, fiole 0) le résume sur l'onglet et dans l'onglet Pipelines.
+- Formulaires New Run et Trigger en sections : « Project pipelines · <Projet> », « Global
+  pipelines », puis « Show test pipelines ». Un Pipeline validé pour un autre Projet n'est pas
+  proposé. La présélection automatique prend le premier Pipeline du Projet, sinon le premier
+  global ; un choix explicite est conservé (#386).
+- **À noter** : les Pipelines existants restent proposés partout (aucune ligne = tous les
+  Projets), mais les Pipelines créés, dupliqués ou importés après la mise à jour sont des
+  Pipelines de test tant qu'ils ne sont pas validés. Supprimer un Projet le retire des
+  validations ; un Pipeline validé pour ce seul Projet devient un Pipeline de test.
+- API : `GET /pipelines` expose `validation`, nouvel endpoint `PUT /pipelines/{id}/validation`.
+- Tutoriels : étape Validate dans *First pipeline* ; *First run* valide `tutorial-interactive`
+  pour un Projet « Tutorial ».
+
 ## 1.117.0
 **Pilotage d'un Run en lecture seule, Edit for this run, Overwrite default pipeline** (#973, spec #970, ADR-0080).
 

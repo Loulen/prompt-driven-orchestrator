@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineValidation, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -1985,6 +1985,22 @@ export function createPipeline(
     "POST",
     "/pipelines",
     { body: { name }, label: "POST /pipelines" },
+  );
+}
+
+/**
+ * #974 — replace a Pipeline's validation (`PUT /pipelines/{id}/validation`). An
+ * empty Projet list comes back as `{ kind: "none" }` (« tout décocher = non
+ * validé »); an unknown Projet is a 400 naming it.
+ */
+export function setPipelineValidation(
+  id: string,
+  validation: PipelineValidation,
+): Promise<{ ok: boolean; id: string; validation: PipelineValidation }> {
+  return request<{ ok: boolean; id: string; validation: PipelineValidation }>(
+    "PUT",
+    `/pipelines/${encodeURIComponent(id)}/validation`,
+    { body: validation, label: `PUT /pipelines/${id}/validation` },
   );
 }
 

@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Save, X } from "lucide-react";
+import { BadgeCheck, Save, X } from "lucide-react";
 import { useEditStore, hasUnsavedWork } from "../stores/editStore";
 import type { OpenPipeline } from "../stores/editStore";
+import type { Project } from "../types";
+import { validationOf } from "../lib/pipelineValidation";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
+import { ValidatePipelineModal, ValidationIndicator } from "./PipelineValidation";
 
 function useRelativeTime(ts: number | undefined): string | null {
   const [now, setNow] = useState(() => Date.now());
@@ -23,7 +26,7 @@ function useRelativeTime(ts: number | undefined): string | null {
   return `Saved ${hrs}h ago`;
 }
 
-export default function TabBar() {
+export default function TabBar({ projects = [] }: { projects?: Project[] } = {}) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setActiveTab = useEditStore((s) => s.setActiveTab);
@@ -32,6 +35,10 @@ export default function TabBar() {
   const save = useEditStore((s) => s.save);
   const lastSavedAt = useEditStore((s) => s.lastSavedAt);
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const pipelines = useEditStore((s) => s.pipelines);
+  const loadPipelines = useEditStore((s) => s.loadPipelines);
+  // #974: the Validate modal of the active Pipeline tab.
+  const [validateOpen, setValidateOpen] = useState(false);
 
   // Right-click context menu (#342): viewport coords so it doesn't drift when
   // the tab strip scrolls. Null = closed.
@@ -55,6 +62,13 @@ export default function TabBar() {
   );
 
   const anyDirty = openTabs.some((t) => t.dirty);
+  // #974: Validate and the indicator belong to a Pipeline's own tab — never a
+  // Run's (its snapshot is not what the launch forms offer), and only once the
+  // Pipeline is in the list (saved at least once under this id).
+  const activeTab = openTabs.find((t) => t.id === activeTabId);
+  const activeEntry =
+    activeTab && activeTab.runId == null ? pipelines.find((p) => p.id === activeTab.id) : undefined;
+  const activeValidation = validationOf(activeEntry);
   const activeLastSaved = activeTabId ? lastSavedAt[activeTabId] : undefined;
   const savedAgo = useRelativeTime(activeLastSaved);
 
@@ -132,6 +146,25 @@ export default function TabBar() {
             {savedAgo}
           </span>
         )}
+        {activeEntry && (
+          <>
+            <ValidationIndicator
+              validation={activeValidation}
+              projects={projects}
+              testId="toolbar-validation-indicator"
+            />
+            <button
+              onClick={() => setValidateOpen(true)}
+              className="flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+              style={{ fontSize: "11px" }}
+              data-testid="validate-button"
+              title="Choose the projects this pipeline is offered to"
+            >
+              <BadgeCheck size={11} />
+              Validate
+            </button>
+          </>
+        )}
         <button
           onClick={() => { if (activeTabId) save(activeTabId); }}
           disabled={!anyDirty}
@@ -157,6 +190,20 @@ export default function TabBar() {
             // leaving the menu up would let it sit over the modal.
             setMenu(null);
             requestClose(ids);
+          }}
+        />
+      )}
+
+      {activeEntry && (
+        <ValidatePipelineModal
+          open={validateOpen}
+          pipelineId={activeEntry.id}
+          pipelineName={activeEntry.name}
+          validation={activeValidation}
+          projects={projects}
+          onClose={() => setValidateOpen(false)}
+          onSaved={() => {
+            void loadPipelines();
           }}
         />
       )}

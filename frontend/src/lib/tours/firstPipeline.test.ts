@@ -343,6 +343,13 @@ function gestures(fake: FakeApp): Record<string, () => void> {
       fake.save();
       fake.show(`[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`);
     },
+    // #974: Validate opens the modal; saving it closes the modal and the tab
+    // bar's indicator turns to the globe.
+    validate: () => {
+      fake.show('[data-testid="validate-pipeline-modal"]');
+      fake.hide('[data-testid="validate-pipeline-modal"]');
+      fake.show('[data-testid="toolbar-validation-indicator"][data-validation="all"]');
+    },
     // Keep or delete is deliberately unconstrained: keeping it is a Skip.
     "keep-or-delete": () => {},
   };
@@ -744,6 +751,12 @@ describe("the shape of every step", () => {
     expect(STEPS.find((s) => s.id === "keep-or-delete")?.skippable).toBe(true);
   });
 
+  it("validates right after Save, before Keep-or-delete (#974)", () => {
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("validate")).toBe(ids.indexOf("save") + 1);
+    expect(ids.indexOf("keep-or-delete")).toBe(ids.indexOf("validate") + 1);
+  });
+
   it("says which output the edge carries, on a node that has two", () => {
     // The FP drew the return edge from `image_list` (#825, FP iteration 2). A
     // drawn edge now carries the first declared output (#846, ADR-0073): the
@@ -851,5 +864,41 @@ describe("a condition on an edge that carries two outputs", () => {
     expect(step.done!(fake.obs())).toBe(false);
     expect(stepBody(step, fake.obs())).toContain("Not there yet");
     expect(stepBody(step, fake.obs())).toContain("verdict eq fail");
+  });
+});
+
+/**
+ * #974 — what PDO creates is born a test pipeline, so *First pipeline* ends by
+ * validating it: the button next to Save, then the modal it opens.
+ */
+describe("the Validate step", () => {
+  const step = STEPS.find((s) => s.id === "validate")!;
+  const MODAL = '[data-testid="validate-pipeline-modal"]';
+
+  it("lights Validate, then the modal it opens", () => {
+    const fake = new FakeApp();
+    expect(step.target(fake.obs())).toEqual(['[data-testid="validate-button"]']);
+    expect(stepBody(step, fake.obs())).toContain("Validate");
+
+    fake.show(MODAL);
+    expect(step.target(fake.obs())).toEqual([MODAL]);
+    expect(stepBody(step, fake.obs())).toContain("All projects");
+  });
+
+  it("is done once the modal is closed on a validated pipeline, not before", () => {
+    const fake = new FakeApp();
+    const done = (o: TourObservation) => (step.done ? step.done(o) : false);
+    fake.show('[data-testid="toolbar-validation-indicator"][data-validation="none"]');
+    expect(done(fake.obs())).toBe(false);
+
+    fake.show(MODAL, '[data-testid="toolbar-validation-indicator"][data-validation="projects"]');
+    expect(done(fake.obs()), "still in the modal").toBe(false);
+
+    fake.hide(MODAL);
+    expect(done(fake.obs())).toBe(true);
+  });
+
+  it("can be skipped by a reader who keeps a test pipeline", () => {
+    expect(step.skippable).toBe(true);
   });
 });

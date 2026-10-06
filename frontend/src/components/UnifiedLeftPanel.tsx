@@ -36,6 +36,8 @@ import { ChildCountPills } from "./OrchestrationTab";
 import RunShellModal from "./RunShellModal";
 import SelectControl from "./SelectControl";
 import TriggersListPanel from "./TriggersListPanel";
+import { ValidationIndicator } from "./PipelineValidation";
+import { validationOf } from "../lib/pipelineValidation";
 
 type LeftTab = "runs" | "triggers" | "library";
 
@@ -1246,6 +1248,14 @@ export default function UnifiedLeftPanel({
               // the delete may cascade to its Library twin (#227).
               onDelete={() => setDeleteTarget(p)}
               deleteTitle="Delete pipeline"
+              // #974: where the launch forms offer it, at a glance.
+              indicator={
+                <ValidationIndicator
+                  validation={validationOf(p)}
+                  projects={projects}
+                  testId={`validation-indicator-${p.id}`}
+                />
+              }
             />
           ))}
         </div>

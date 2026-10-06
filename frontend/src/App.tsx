@@ -787,6 +787,12 @@ export default function App() {
         refreshProjects();
         return;
       }
+      // #974: a Pipeline's validation changed (another tab or client) — the
+      // indicator and the launch forms read it from the Pipelines list.
+      if (msg.type === "pipeline_validation_changed") {
+        loadPipelines();
+        return;
+      }
       // Trigger lifecycle (#160/#162): create/update/delete refreshes the
       // Triggers list; a fire also creates a Run, so refresh both.
       if (
@@ -938,7 +944,7 @@ export default function App() {
           <ResizablePanel defaultSize={layout.defaultLayout.center} id="center">
             {hasEditTab ? (
               <div className="flex h-full min-w-0 flex-col">
-                <TabBar />
+                <TabBar projects={projects} />
                 {orchestratorReturn && selectedRun?.run_id === orchestratorReturn.childRunId && (
                   <button
                     type="button"

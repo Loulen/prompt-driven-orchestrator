@@ -178,6 +178,13 @@ const NEW_PIPELINE_ERROR = '[data-testid="new-pipeline-error"]';
 const outputSlot = (i: number) => `[data-output-index="${i}"]`;
 /** The delete confirmation's box — the dialog itself, not its full-screen backdrop. */
 const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
+/** #974: Validate, next to Save, and the modal it opens. */
+const VALIDATE_BUTTON = '[data-testid="validate-button"]';
+const VALIDATE_MODAL = '[data-testid="validate-pipeline-modal"]';
+/** The tab bar's indicator once the pipeline is offered to somebody. */
+const VALIDATED_FOR_ALL = '[data-testid="toolbar-validation-indicator"][data-validation="all"]';
+const VALIDATED_FOR_PROJECTS =
+  '[data-testid="toolbar-validation-indicator"][data-validation="projects"]';
 
 /** The dialog is gone and a pipeline is open: Create (or Enter) did its job. */
 function pipelineCreated(o: TourObservation): boolean {
@@ -571,6 +578,28 @@ const STEPS: TourStep[] = [
     done: (o) => !o.app.dirty && !!o.app.pipelineId && o.app.libraryPipelineIds.includes(o.app.pipelineId),
   },
   {
+    // #974: a pipeline PDO creates is born a test pipeline — New Run offers it
+    // only behind « Show test pipelines ». Validating it is what makes the one
+    // just built show up at launch.
+    id: "validate",
+    title: "Validate the pipeline",
+    // Two beats, one card: the button, then the modal it opens.
+    body: (o) =>
+      o.present(VALIDATE_MODAL)
+        ? "Tick All projects, or the projects that should see it, then Save validation. Leaving everything unticked keeps it a test pipeline."
+        : "Click Validate, next to Save. A new pipeline is a test pipeline: New Run hides it until you validate it for a project, or for all of them.",
+    target: (o) => (o.present(VALIDATE_MODAL) ? [VALIDATE_MODAL] : [VALIDATE_BUTTON]),
+    soft: (o) => o.present(VALIDATE_MODAL),
+    waitingFor: "the Validate button, next to Save",
+    failureHint: "It appears in the tab bar once the pipeline is saved.",
+    // A reader who wants to keep it as a test pipeline skips; the recap says so.
+    skippable: true,
+    advanceHint: "advances once validated",
+    done: (o) =>
+      !o.present(VALIDATE_MODAL) &&
+      (o.present(VALIDATED_FOR_ALL) || o.present(VALIDATED_FOR_PROJECTS)),
+  },
+  {
     id: "keep-or-delete",
     title: "Keep it, or delete it",
     // Two beats, one card: the trash, then the confirmation it opens.
@@ -613,6 +642,10 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
     {
       label: "Loop",
       text: "tester → implementer when verdict eq fail; tester → End when verdict eq pass.",
+    },
+    {
+      label: "Validate",
+      text: "New Run offers it to the projects you validated it for; until then it is a test pipeline, behind Show test pipelines.",
     },
   ],
   // #825 — what the card of a Full tour's *previous* leg says when that leg was

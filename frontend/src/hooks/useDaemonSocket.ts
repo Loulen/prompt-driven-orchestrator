@@ -43,7 +43,9 @@ export function useDaemonSocket() {
             // here before it reaches the App dispatcher, so a second client's
             // banner would never light up. (This transport allowlist is the
             // easiest line in the ticket to miss.)
-            msg.type === "triggers_paused"
+            msg.type === "triggers_paused" ||
+            // #974: the validation of a Pipeline changed — refreshes the list.
+            msg.type === "pipeline_validation_changed"
           ) {
             for (const listener of listenersRef.current) {
               listener(msg);

@@ -20,7 +20,17 @@
  * a user who edited the training repo keeps their edit.
  */
 
-import { ApiError, createPipeline, createRepo, fetchPipelines, savePipeline } from "../../api";
+import {
+  ApiError,
+  addProjectMember,
+  createPipeline,
+  createProject,
+  createRepo,
+  fetchPipelines,
+  fetchProjects,
+  savePipeline,
+  setPipelineValidation,
+} from "../../api";
 import {
   isNodeFinished,
   type TourAppState,
@@ -38,6 +48,11 @@ export const TUTORIAL_REPO_PATH = `${TUTORIAL_REPO_PARENT}/${TUTORIAL_REPO_NAME}
 /** The one-node pipeline the tour launches. A normal Library pipeline: no prefix,
  *  no tag — the name already says what it is (design Q8). */
 export const TUTORIAL_RUN_PIPELINE_ID = "tutorial-interactive";
+
+/** #974: the Projet the training repository lives in, and the only one the
+ *  tutorial pipeline is validated for — so it heads the New Run menu on the
+ *  training repository, and is offered to no other Projet of the instance. */
+export const TUTORIAL_PROJECT_NAME = "Tutorial";
 
 /** The block step 8 asks the user to paste. Deliberately concrete: the agent edits
  *  `notes.txt` and writes its output file, which the reading tour then shows. */
@@ -135,6 +150,12 @@ export async function prepareRepo(): Promise<void> {
  * answers the question that is actually being asked.
  */
 async function prepareTutorialPipeline(): Promise<void> {
+  await pipelineReady();
+}
+
+const pipelineReady = shared(writeTutorialPipeline);
+
+async function writeTutorialPipeline(): Promise<void> {
   const existing = await fetchPipelines();
   if (existing.some((p) => p.id === TUTORIAL_RUN_PIPELINE_ID)) return;
   try {
@@ -147,6 +168,47 @@ async function prepareTutorialPipeline(): Promise<void> {
   }
   await savePipeline(TUTORIAL_RUN_PIPELINE_ID, TUTORIAL_PIPELINE_YAML, {
     assistant: TUTORIAL_NODE_PROMPT,
+  });
+}
+
+/**
+ * Share one in-flight call between the preparations that need it. The engine
+ * starts them together, and the Projet's validation can only be written once the
+ * pipeline exists.
+ */
+function shared(fn: () => Promise<void>): () => Promise<void> {
+  let flight: Promise<void> | null = null;
+  return () => {
+    flight ??= fn().finally(() => {
+      flight = null;
+    });
+    return flight;
+  };
+}
+
+/**
+ * #974 — the Projet « Tutorial » holds the training repository, and
+ * `tutorial-interactive` is validated for it alone. Idempotent: a Projet that
+ * already owns the repository is reused whatever its name (a path belongs to one
+ * Projet at most, so a second one could not take it), then one named « Tutorial »,
+ * and only then is one created. The validation is rewritten on every pass: it is
+ * the tour's own setting, and a pipeline that existed before validations did would
+ * otherwise stay offered to every Projet.
+ */
+async function prepareTutorialProject(): Promise<void> {
+  const projects = await fetchProjects();
+  let project =
+    projects.find((p) => p.members.includes(TUTORIAL_REPO_PATH)) ??
+    projects.find((p) => p.name === TUTORIAL_PROJECT_NAME) ??
+    null;
+  if (project == null) project = await createProject(TUTORIAL_PROJECT_NAME);
+  if (!project.members.includes(TUTORIAL_REPO_PATH)) {
+    project = await addProjectMember(project.id, TUTORIAL_REPO_PATH);
+  }
+  await pipelineReady();
+  await setPipelineValidation(TUTORIAL_RUN_PIPELINE_ID, {
+    kind: "projects",
+    project_ids: [project.id],
   });
 }
 
@@ -354,7 +416,7 @@ const STEPS: TourStep[] = [
   {
     id: "pick-pipeline",
     title: `Choose ${TUTORIAL_RUN_PIPELINE_ID}`,
-    body: `Pick ${TUTORIAL_RUN_PIPELINE_ID}. It is a pipeline with a single node that waits for you instead of running on its own: the simplest Run there is.`,
+    body: `Pick ${TUTORIAL_RUN_PIPELINE_ID}, under Project pipelines. The menu lists the pipelines validated for the repository's project first; this one has a single node that waits for you instead of running on its own.`,
     target: (o) => (o.present(PIPELINE_OPTION) ? [PIPELINE_OPTION] : [PIPELINE_TRIGGER]),
     soft: true,
     waitingFor: "the Pipeline menu",
@@ -632,7 +694,7 @@ export const FIRST_RUN_TOUR: TourDef = {
     title: "Launch your first Run",
     body: "You will fill the New Run form yourself, step by step: a throwaway repository, a one-node pipeline that talks to you, a profile, two skills and a prompt. Then you press Launch.",
     footnote:
-      "Nothing here touches your own repositories. Both items are reused on the next run of the tour.",
+      "Nothing here touches your own repositories or projects. Everything is reused on the next run of the tour.",
     prepare: [
       {
         id: "repo",
@@ -647,6 +709,13 @@ export const FIRST_RUN_TOUR: TourDef = {
         ready: `Pipeline ${TUTORIAL_RUN_PIPELINE_ID} in the Library`,
         failureTitle: "The training pipeline could not be created",
         run: prepareTutorialPipeline,
+      },
+      {
+        id: "project",
+        pending: `Project ${TUTORIAL_PROJECT_NAME}, with the pipeline validated for it…`,
+        ready: `Project ${TUTORIAL_PROJECT_NAME}, with the pipeline validated for it`,
+        failureTitle: `The ${TUTORIAL_PROJECT_NAME} project could not be prepared`,
+        run: prepareTutorialProject,
       },
     ],
   },

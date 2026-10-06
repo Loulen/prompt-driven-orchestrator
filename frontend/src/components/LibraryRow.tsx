@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Copy, Pencil, Trash2 } from "lucide-react";
 import SelectControl from "./SelectControl";
 
@@ -46,6 +46,8 @@ interface Props {
    */
   checked?: boolean;
   onToggleSelect?: (e: MouseEvent) => void;
+  /** #974: the validation indicator, at the end of the meta line. */
+  indicator?: ReactNode;
 }
 
 /**
@@ -75,6 +77,7 @@ export default function LibraryRow({
   checked = false,
   onToggleSelect,
   modified,
+  indicator,
 }: Props) {
   const body = (
     <>
@@ -117,6 +120,7 @@ export default function LibraryRow({
               <span>edited {new Date(modified).toLocaleDateString()}</span>
             </>
           )}
+          {indicator && <span className="ml-auto flex shrink-0 items-center">{indicator}</span>}
         </div>
       </div>
       {onRenameStart && !renaming && (

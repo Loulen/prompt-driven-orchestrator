@@ -5149,6 +5149,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/pipelines/{pipeline_id}/rename", put(rename_pipeline))
         .route(
+            "/pipelines/{pipeline_id}/validation",
+            put(put_pipeline_validation),
+        )
+        .route(
             "/pipelines/{pipeline_id}/document",
             get(get_pipeline_document),
         )
@@ -7141,6 +7145,10 @@ struct PipelineListEntry {
     /// Whether a manual Run must supply a non-empty prompt. Surfaced so the New Run
     /// modal can make the prompt field optional.
     prompt_required: bool,
+    /// #974 (CONTEXT.md *Pipeline validé*): for which Projets the launch forms
+    /// offer it. Filled by `list_pipelines` from the instance database; the scan
+    /// itself only knows the default (no row ⇒ all Projets).
+    validation: project_store::PipelineValidation,
 }
 
 #[derive(Deserialize)]
@@ -7221,6 +7229,7 @@ fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntr
             modified,
             variables,
             prompt_required,
+            validation: project_store::PipelineValidation::default(),
         });
     }
     entries
@@ -7243,7 +7252,100 @@ async fn list_pipelines(State(state): State<Arc<AppState>>) -> Response {
     };
     let mut pipelines = scan_pipeline_dir(&dir, "instance");
     pipelines.sort_by_key(|entry| entry.name.to_lowercase());
+    match project_store::pipeline_validations(&state.db).await {
+        Ok(mut validations) => {
+            for entry in &mut pipelines {
+                if let Some(validation) = validations.remove(&entry.id) {
+                    entry.validation = validation;
+                }
+            }
+        }
+        Err(e) => {
+            error!("failed to read pipeline validations: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to read pipeline validations" })),
+            )
+                .into_response();
+        }
+    }
     Json(pipelines).into_response()
+}
+
+/// #974: what PDO creates, duplicates or imports is born a *Pipeline de test*.
+/// Best-effort like the Stats absorption of a rename: the file is already
+/// written, and failing the request over a lost row would lie about it.
+async fn mark_pipeline_not_validated(state: &AppState, pipeline_id: &str) {
+    if let Err(e) = project_store::set_pipeline_validation(
+        &state.db,
+        pipeline_id,
+        project_store::PipelineValidation::NotValidated,
+    )
+    .await
+    {
+        warn!("failed to mark pipeline {pipeline_id} as not validated: {e}");
+    }
+}
+
+/// #974: a rename (or a save that changes `name:`) moves the file stem; the
+/// validation follows it.
+async fn move_pipeline_validation(state: &AppState, old_id: &str, new_id: &str) {
+    if let Err(e) = project_store::rename_pipeline_validation(&state.db, old_id, new_id).await {
+        warn!("failed to move the validation of pipeline {old_id} to {new_id}: {e}");
+    }
+}
+
+/// `PUT /pipelines/{id}/validation` (#974): replace the Pipeline's validation —
+/// `{"kind":"all"}`, `{"kind":"none"}` or `{"kind":"projects","project_ids":[…]}`.
+/// An empty Projet list stores « not validated ». Unknown Projets are refused
+/// before any write, naming the first one.
+async fn put_pipeline_validation(
+    State(state): State<Arc<AppState>>,
+    AxumPath(pipeline_id): AxumPath<String>,
+    Json(validation): Json<project_store::PipelineValidation>,
+) -> Response {
+    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
+    if !path.exists() {
+        return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
+    }
+    if let project_store::PipelineValidation::Projects { project_ids } = &validation {
+        for project_id in project_ids {
+            match project_store::get(&state.db, project_id).await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("no such project: {project_id}"),
+                        })),
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!("failed to read project {project_id}: {e}");
+                    return project_list_error();
+                }
+            }
+        }
+    }
+    match project_store::set_pipeline_validation(&state.db, &pipeline_id, validation).await {
+        Ok(stored) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "pipeline_validation_changed",
+                "pipeline_id": pipeline_id,
+            }));
+            Json(serde_json::json!({ "ok": true, "id": pipeline_id, "validation": stored }))
+                .into_response()
+        }
+        Err(e) => {
+            error!("failed to store the validation of pipeline {pipeline_id}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to store the validation" })),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn get_pipeline(
@@ -7444,6 +7546,7 @@ async fn save_pipeline(
             }
         };
         mark_self_write(&state.recent_writes, &new_path);
+        move_pipeline_validation(&state, &pipeline_id, &desired_id).await;
         // #891 / ADR-0077 §4: the new id carries the old id's Stats series.
         stats_absorption::record_rename_best_effort(
             &state.db,
@@ -7662,6 +7765,7 @@ async fn rename_pipeline(
         }
     };
     mark_self_write(&state.recent_writes, &new_path);
+    move_pipeline_validation(&state, &pipeline_id, &new_id).await;
     // #891 / ADR-0077 §4: the new id carries the old id's Stats series.
     stats_absorption::record_rename_best_effort(
         &state.db,
@@ -7776,6 +7880,7 @@ async fn create_pipeline(
             .into_response();
     }
 
+    mark_pipeline_not_validated(&state, &id).await;
     info!("Created pipeline {id} at {}", path.display());
     (
         StatusCode::CREATED,
@@ -8150,15 +8255,18 @@ async fn duplicate_pipeline(
     let mut copy = parsed.pipeline;
     copy.name = new_name;
     match write_pipeline_atomically(&dir, &new_id, &copy, &read_pipeline_prompts(&source)) {
-        Ok(path) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": new_id,
-                "scope": "instance",
-                "path": path.to_string_lossy(),
-            })),
-        )
-            .into_response(),
+        Ok(path) => {
+            mark_pipeline_not_validated(&state, &new_id).await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": new_id,
+                    "scope": "instance",
+                    "path": path.to_string_lossy(),
+                })),
+            )
+                .into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
@@ -8347,17 +8455,20 @@ async fn import_pipeline_document(
     warnings.extend(skills.warnings.iter().cloned());
     imported.name = name;
     match write_pipeline_atomically(&dir, &id, &imported, &interpreted.prompts) {
-        Ok(path) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": id,
-                "scope": "instance",
-                "path": path.to_string_lossy(),
-                "warnings": warnings,
-                "skills": skills,
-            })),
-        )
-            .into_response(),
+        Ok(path) => {
+            mark_pipeline_not_validated(&state, &id).await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": id,
+                    "scope": "instance",
+                    "path": path.to_string_lossy(),
+                    "warnings": warnings,
+                    "skills": skills,
+                })),
+            )
+                .into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
@@ -8698,6 +8809,7 @@ async fn import_library_pipeline(
     imported.name = name;
     match write_pipeline_atomically(&dir, &id, &imported, &result.prompts) {
         Ok(path) => {
+            mark_pipeline_not_validated(&state, &id).await;
             let warnings: Vec<String> = result.warnings.iter().map(|d| d.message.clone()).collect();
             (
                 StatusCode::CREATED,
@@ -8753,6 +8865,9 @@ async fn delete_pipeline(
             .into_response();
     }
 
+    if let Err(e) = project_store::forget_pipeline_validation(&state.db, &pipeline_id).await {
+        warn!("failed to forget the validation of pipeline {pipeline_id}: {e}");
+    }
     info!("Deleted pipeline {pipeline_id}");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
@@ -36946,6 +37061,271 @@ edges:
         assert!(prompt_path.exists(), "canonical prompt file must exist");
         let content = std::fs::read_to_string(&prompt_path).unwrap();
         assert_eq!(content, "You are a worker agent.");
+    }
+
+    // --- #974 — Pipelines validés par Projet ---
+
+    async fn call_json(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
+        let builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json");
+        let req = match body {
+            Some(b) => builder
+                .body(Body::from(serde_json::to_string(&b).unwrap()))
+                .unwrap(),
+            None => builder.body(Body::empty()).unwrap(),
+        };
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into()));
+        (status, value)
+    }
+
+    async fn listed_validation(app: &Router, id: &str) -> serde_json::Value {
+        let (status, list) = call_json(app, "GET", "/pipelines", None).await;
+        assert_eq!(status, StatusCode::OK);
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap_or_else(|| panic!("pipeline {id} not listed: {list}"))["validation"]
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn validation_an_existing_pipeline_is_validated_for_all_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "legacy");
+        let app = build_router(test_state_with_dir(tmp.path()).await);
+        assert_eq!(
+            listed_validation(&app, "legacy").await,
+            serde_json::json!({ "kind": "all" })
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_created_duplicated_and_imported_pipelines_are_born_not_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "source");
+        let app = build_router(test_state_with_dir(tmp.path()).await);
+        let none = serde_json::json!({ "kind": "none" });
+
+        let (status, created) = call_json(
+            &app,
+            "POST",
+            "/pipelines",
+            Some(serde_json::json!({ "name": "fresh" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            listed_validation(&app, created["id"].as_str().unwrap()).await,
+            none
+        );
+
+        let (status, copy) = call_json(&app, "POST", "/pipelines/source/duplicate", None).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            listed_validation(&app, copy["id"].as_str().unwrap()).await,
+            none
+        );
+        // The source keeps its own validation.
+        assert_eq!(
+            listed_validation(&app, "source").await,
+            serde_json::json!({ "kind": "all" })
+        );
+
+        let (status, document) = call_json(&app, "GET", "/pipelines/source/document", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, imported) = call_json(
+            &app,
+            "POST",
+            "/pipelines/import",
+            Some(serde_json::json!({ "document": document.as_str().unwrap() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{imported}");
+        assert_eq!(
+            listed_validation(&app, imported["id"].as_str().unwrap()).await,
+            none
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_put_replaces_and_unchecking_everything_is_not_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "shared");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let bravo = project_store::create(&state.db, "Bravo").await.unwrap();
+        let app = build_router(state);
+
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [alpha.id, bravo.id] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let both = serde_json::json!({ "kind": "projects", "project_ids": [alpha.id, bravo.id] });
+        assert_eq!(body["validation"], both);
+        assert_eq!(listed_validation(&app, "shared").await, both);
+
+        // Replacement, not a merge.
+        let (_, _) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [bravo.id] })),
+        )
+        .await;
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "projects", "project_ids": [bravo.id] })
+        );
+
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["validation"], serde_json::json!({ "kind": "none" }));
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "none" })
+        );
+
+        let (_, _) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "all" })),
+        )
+        .await;
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "all" })
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_put_refuses_an_unknown_project_or_pipeline_before_any_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "shared");
+        let app = build_router(test_state_with_dir(tmp.path()).await);
+
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": ["prj-ghost"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("prj-ghost"));
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "all" })
+        );
+
+        let (status, _) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/ghost/validation",
+            Some(serde_json::json!({ "kind": "none" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn validation_survives_a_rename_and_a_renaming_save() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "before");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let app = build_router(state);
+        let only_alpha = serde_json::json!({ "kind": "projects", "project_ids": [alpha.id] });
+        call_json(
+            &app,
+            "PUT",
+            "/pipelines/before/validation",
+            Some(only_alpha.clone()),
+        )
+        .await;
+
+        let (status, renamed) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/before/rename",
+            Some(serde_json::json!({ "name": "middle" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(renamed["id"], "middle");
+        assert_eq!(listed_validation(&app, "middle").await, only_alpha);
+
+        let yaml = format!("name: after\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n");
+        let (status, saved) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/middle",
+            Some(serde_json::json!({ "yaml": yaml })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["id"], "after");
+        assert_eq!(listed_validation(&app, "after").await, only_alpha);
+    }
+
+    #[tokio::test]
+    async fn validation_is_erased_with_the_pipeline_and_never_exported() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "doomed");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let app = build_router(state.clone());
+        call_json(
+            &app,
+            "PUT",
+            "/pipelines/doomed/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [alpha.id] })),
+        )
+        .await;
+
+        let (_, document) = call_json(&app, "GET", "/pipelines/doomed/document", None).await;
+        let document = document.as_str().unwrap();
+        assert!(!document.contains(&alpha.id), "export carries no Projet");
+        assert!(!document.contains("Alpha"), "export carries no Projet");
+        assert!(!document.contains("validation"));
+
+        let (status, _) = call_json(&app, "DELETE", "/pipelines/doomed", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(project_store::pipeline_validations(&state.db)
+            .await
+            .unwrap()
+            .is_empty());
+        // A file reappearing under the same id (written by hand) is a fresh,
+        // all-Projets Pipeline — no ghost validation left behind.
+        write_test_pipeline(tmp.path(), "doomed");
+        assert_eq!(
+            listed_validation(&app, "doomed").await,
+            serde_json::json!({ "kind": "all" })
+        );
     }
 
     // --- #774 — pipeline rename (visible name ⇄ file stem 1:1) ---

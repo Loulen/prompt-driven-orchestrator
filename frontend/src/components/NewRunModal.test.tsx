@@ -99,7 +99,7 @@ vi.mock("../api", () => ({
   }),
 }));
 
-const { validateRepo, listBranches, fetchRemotes, createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, testGuard, previewProvisioning } = await import("../api");
+const { validateRepo, listBranches, fetchRemotes, createRun, createTrigger, updateTrigger, fetchPipelines, fetchProjects, fetchSettings, testGuard, previewProvisioning } = await import("../api");
 
 const noop = () => {};
 
@@ -235,9 +235,10 @@ describe("NewRunModal — pipeline picker", () => {
     await enterValidRepo();
 
     const menu = await openPipelineMenu();
-    // The menu is flat — no scope headers the way the harness picker has (#822):
-    // grouping would reorder the list, and "the first pipeline" is the default.
-    expect(menu.querySelectorAll("[data-slot='dropdown-menu-label']")).toHaveLength(0);
+    // No scope headers the way the harness picker has (#822). The only grouping is
+    // by validation (#974): a repository with no Projet reads the global section.
+    const labels = Array.from(menu.querySelectorAll("[data-slot='dropdown-menu-label']"));
+    expect(labels.map((l) => l.textContent)).toEqual(["Global pipelines"]);
     expect(pipelineOptions()).toEqual([{ id: "lib-pipe", name: "Library Pipeline" }]);
   });
 
@@ -250,7 +251,7 @@ describe("NewRunModal — pipeline picker", () => {
     await enterValidRepo();
 
     const menu = await openPipelineMenu();
-    expect(menu.querySelectorAll("[data-slot='dropdown-menu-label']")).toHaveLength(0);
+    expect(menu.querySelectorAll("[data-slot='dropdown-menu-label']")).toHaveLength(1);
     expect(pipelineOptions().map((o) => o.name)).toEqual([
       "Library Pipeline",
       "Repo Pipeline",
@@ -511,6 +512,122 @@ describe("NewRunModal — pipeline filter", () => {
     const trigger = screen.getByTestId("pipeline-select");
     expect(trigger).toBeDisabled();
     expect(trigger).toHaveTextContent("Select a repository first");
+  });
+});
+
+/**
+ * Pipelines validés par Projet (#974): the menu offers the Projet's Pipelines first,
+ * then the global ones; test Pipelines wait behind « Show test pipelines ».
+ */
+describe("NewRunModal — pipeline sections (#974)", () => {
+  const alpha = { id: "prj-alpha", name: "Alpha", members: ["/repos/alpha"] };
+  const bravo = { id: "prj-bravo", name: "Bravo", members: ["/repos/bravo"] };
+  const mixed = [
+    makePipeline({ id: "common", name: "common", validation: { kind: "all" } }),
+    makePipeline({ id: "legacy", name: "legacy" }), // no validation on the wire ⇒ all
+    makePipeline({ id: "draft", name: "draft", validation: { kind: "none" } }),
+    makePipeline({
+      id: "alpha-only",
+      name: "alpha-only",
+      validation: { kind: "projects", project_ids: ["prj-alpha"] },
+    }),
+  ];
+
+  function sectionIds(key: string): string[] {
+    const section = screen.queryByTestId(`pipeline-select-section-${key}`);
+    if (!section) return [];
+    return Array.from(section.querySelectorAll("[data-pipeline-id]")).map(
+      (row) => row.getAttribute("data-pipeline-id") ?? "",
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([alpha, bravo]);
+    vi.mocked(fetchPipelines).mockResolvedValue(mixed);
+  });
+
+  afterEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+  });
+
+  it("puts the Projet's pipelines first, then the global ones, and hides the test ones", async () => {
+    renderModal();
+    await enterValidRepo("/repos/alpha");
+    // The Projet's own pipeline is the default.
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-section-project")).toHaveTextContent(
+      "Project pipelines · Alpha",
+    );
+    expect(sectionIds("project")).toEqual(["alpha-only"]);
+    expect(sectionIds("global")).toEqual(["common", "legacy"]);
+    expect(screen.queryByTestId("pipeline-select-section-test")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pipeline-select-option-draft")).not.toBeInTheDocument();
+    // The Projet's section comes before the global one in the menu.
+    expect(pipelineOptions().map((o) => o.id)).toEqual(["alpha-only", "common", "legacy"]);
+  });
+
+  it("shows the test pipelines under « Unvalidated pipelines » on demand, and lets one be launched", async () => {
+    renderModal();
+    await enterValidRepo("/repos/alpha");
+    await openPipelineMenu();
+
+    const user = menuUser();
+    await user.click(screen.getByTestId("pipeline-select-show-tests"));
+    // The menu stays open: unfolding is not a choice.
+    expect(screen.getByTestId("pipeline-select-menu")).toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-select-section-test")).toHaveTextContent(
+      "Unvalidated pipelines",
+    );
+    expect(sectionIds("test")).toEqual(["draft"]);
+
+    await user.click(screen.getByTestId("pipeline-select-option-draft"));
+    expect(selectedPipeline()).toBe("draft");
+  });
+
+  it("does not offer a pipeline validated for another Projet", async () => {
+    renderModal();
+    await enterValidRepo("/repos/bravo");
+    await waitFor(() => expect(selectedPipeline()).toBe("common"));
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-section-project")).toHaveTextContent("Bravo");
+    expect(sectionIds("project")).toEqual([]);
+    expect(screen.getByTestId("pipeline-select-section-project-empty")).toBeInTheDocument();
+    await menuUser().click(screen.getByTestId("pipeline-select-show-tests"));
+    expect(screen.queryByTestId("pipeline-select-option-alpha-only")).not.toBeInTheDocument();
+  });
+
+  it("drops a choice that the new repository's Projet is not offered", async () => {
+    renderModal();
+    await enterValidRepo("/repos/alpha");
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
+
+    await enterValidRepo("/repos/bravo");
+    await waitFor(() => expect(selectedPipeline()).toBe("common"));
+  });
+
+  it("gives a repository without a Projet the global pipelines and the test ones", async () => {
+    renderModal();
+    await enterValidRepo("/repos/elsewhere");
+    await openPipelineMenu();
+
+    expect(screen.queryByTestId("pipeline-select-section-project")).not.toBeInTheDocument();
+    expect(sectionIds("global")).toEqual(["common", "legacy"]);
+    await menuUser().click(screen.getByTestId("pipeline-select-show-tests"));
+    expect(sectionIds("test")).toEqual(["draft"]);
+  });
+
+  it("has the same sections in Trigger mode", async () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    await enterValidRepo("/repos/alpha");
+    await openPipelineMenu();
+
+    expect(sectionIds("project")).toEqual(["alpha-only"]);
+    expect(sectionIds("global")).toEqual(["common", "legacy"]);
+    expect(screen.getByTestId("pipeline-select-show-tests")).toBeInTheDocument();
   });
 });
 

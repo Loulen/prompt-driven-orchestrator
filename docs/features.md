@@ -33,12 +33,17 @@ A **pipeline** is a named graph of roles. You build it on a canvas: drop a node 
 LLM involved.
 
 Underneath, a pipeline is plain YAML plus one prompt file per node, so it diffs, reviews and
-travels like code (export and import carry its skills along). You can edit the graph while a run is
-going: nodes that already run stay as they are, and the scheduler picks up the new graph on its next
-tick.
+travels like code (export and import carry its skills along). A run opens read-only: you follow it,
+and a node's Config shows its prompt and skills without letting you change them. **Edit › Edit for
+this run** unlocks the graph while the run is going: nodes that already run stay as they are, the
+scheduler picks up the new graph on its next tick, and **Save for this run** changes that run only.
+Making the change the default for everyone is a separate, warned gesture (**Overwrite default
+pipeline**, which names the triggers it affects); **Edit source pipeline** opens the shared pipeline
+in its own tab.
 
 Decisions: [ADR-0003](adr/0003-stack-rust-react-xyflow.md),
 [ADR-0007](adr/0007-edit-during-run.md),
+[ADR-0080](adr/0080-le-pilotage-d-un-run-est-en-lecture-seule-l-edition-est-un-geste-explicite-limite-au-run.md),
 [ADR-0017](adr/0017-script-node.md),
 [ADR-0059](adr/0059-les-pipelines-appartiennent-a-l-instance-et-voyagent-par-document.md).
 

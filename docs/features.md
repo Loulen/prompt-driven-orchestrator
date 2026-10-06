@@ -201,7 +201,7 @@ Decisions: [ADR-0036](adr/0036-merge-back-resolved-in-the-node-favour.md),
 
 Every node runs in a tmux session you can watch from the web terminal, type into, or take over. An
 interactive node waits for you, and an agent can declare that it waits on you with `pdo wait-user`.
-A shell can be opened in any run's worktree. Copy and paste: [terminal.md](reference/terminal.md).
+A shell can be opened in any run's worktree. Drop a file on a running node's terminal to import it into the Run (#971). Copy and paste, import: [terminal.md](reference/terminal.md).
 
 Decisions: [ADR-0005](adr/0005-inline-xterm-over-os-spawn.md),
 [ADR-0021](adr/0021-run-shell-open-session.md).

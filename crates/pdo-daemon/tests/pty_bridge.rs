@@ -638,9 +638,10 @@ async fn pty_ws_shell_survives_detach() {
 }
 
 /// #972: the daemon pings an open terminal socket on its own, so a reverse proxy
-/// never sees it idle while the agent inside is silent.
+/// never sees it idle while the agent inside is silent — and sends a `heartbeat`
+/// text frame with each ping, the beat the browser's watchdog can actually see.
 #[tokio::test]
-async fn pty_ws_receives_periodic_pings() {
+async fn pty_ws_receives_periodic_pings_and_heartbeats() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
         return;
@@ -660,14 +661,18 @@ async fn pty_ws_receives_periodic_pings() {
         .expect("WS connect should succeed");
 
     let mut pings = 0;
+    let mut heartbeats = 0;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while pings < 2 {
+    while pings < 2 || heartbeats < 2 {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             break;
         }
         match tokio::time::timeout(remaining, ws.next()).await {
             Ok(Some(Ok(Message::Ping(_)))) => pings += 1,
+            Ok(Some(Ok(Message::Text(text)))) if text.as_str() == r#"{"type":"heartbeat"}"# => {
+                heartbeats += 1
+            }
             Ok(Some(Ok(_))) => {}
             _ => break,
         }
@@ -676,6 +681,10 @@ async fn pty_ws_receives_periodic_pings() {
     assert!(
         pings >= 2,
         "expected periodic pings on the PTY socket, got {pings}"
+    );
+    assert!(
+        heartbeats >= 2,
+        "expected periodic heartbeat text frames on the PTY socket, got {heartbeats}"
     );
 
     let _ = ws.close(None).await;

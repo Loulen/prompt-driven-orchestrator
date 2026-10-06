@@ -144,10 +144,12 @@ use crate::worktree_ops::{
 const DEFAULT_PORT: u16 = 5172;
 const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-/// #972: the PTY bridge's keep-alive ping. Well under the 60 s `proxy_read_timeout`
-/// nginx applies by default, so a terminal whose agent is thinking is never idle
-/// in the eyes of a proxy.
-const PTY_PING_INTERVAL: Duration = Duration::from_secs(25);
+/// #972: the PTY bridge's keep-alive beat (a ping frame plus a `heartbeat` text
+/// frame). Well under the 60 s `proxy_read_timeout` nginx applies by default, so a
+/// terminal whose agent is thinking is never idle in the eyes of a proxy; and
+/// short enough for the browser, which cannot see pings, to call a socket that
+/// missed three beats dead (`PTY_SILENCE_TIMEOUT_MS` in `TmuxTerminal`).
+const PTY_PING_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Embed)]
 #[folder = "../../frontend/dist"]

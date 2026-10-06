@@ -28,7 +28,7 @@ per node terminal). The proxy must forward the HTTP upgrade and must not close a
 | Requirement | Why |
 | --- | --- |
 | Forward `Upgrade` and `Connection: upgrade` over HTTP/1.1 | Without them the upgrade fails and the terminal stays `disconnected` |
-| Read timeout above 60 s (`proxy_read_timeout` in nginx) | The daemon sends a heartbeat on `/ws` every 5 s and pings each terminal socket every 25 s; a shorter timeout cuts a terminal whose agent is thinking |
+| Read timeout above 60 s (`proxy_read_timeout` in nginx) | The daemon sends a heartbeat on `/ws` every 5 s and beats each terminal socket every 10 s; a shorter timeout cuts a terminal whose agent is thinking |
 | No response buffering on these routes | Buffered frames reach the browser late, or in bursts |
 
 ```nginx
@@ -59,8 +59,10 @@ When a socket drops anyway (network cut, proxy restart, laptop asleep), the UI r
 - the live stream reconnects with an increasing delay (1 s, 2 s, 4 s … up to 30 s), treats 15 s
   without a heartbeat as a dead socket, and re-reads every Run after each reconnection and each
   return to the tab;
-- a node terminal whose socket closed shows `Terminal connection closed` with a **Reconnect**
-  button, and reconnects by itself when the tab becomes visible again.
+- a node terminal whose socket closed, or went 30 s without a beat, or whose browser went
+  offline, shows `Terminal connection closed` with a **Reconnect** button; it retries by itself
+  with the same increasing delay, and at once when the tab becomes visible or the network
+  comes back.
 
 ## Attachments through a proxy
 

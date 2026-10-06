@@ -15,6 +15,7 @@ import {
 } from "../lib/terminalClipboard";
 import { resizeAvoidingAltBufferCorruption, type Dimensions } from "../lib/altBufferResize";
 import {
+  isHeartbeatFrame,
   isTakenOver,
   parseRoleFrame,
   READ_ONLY_HINT,
@@ -30,6 +31,7 @@ import { posteId } from "../lib/poste";
 import { BASE_FONT_SIZE, spectatorFontSize } from "../lib/spectatorFit";
 import { terminalTheme } from "../lib/terminalTheme";
 import { useTheme } from "../hooks/useTheme";
+import { reconnectDelay } from "../hooks/useDaemonSocket";
 
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
@@ -66,6 +68,14 @@ interface Props {
 /** #972: the veil over a live terminal whose socket dropped. */
 export const CONNECTION_CLOSED_LABEL = "Terminal connection closed";
 export const RECONNECT_LABEL = "Reconnect";
+
+/**
+ * #972: the daemon beats every terminal socket every 10 s (`PTY_PING_INTERVAL`).
+ * Three missed beats and the socket is deemed dead even if the browser never saw
+ * it close — a half-open connection (laptop asleep, Wi-Fi gone behind a proxy)
+ * never fires `close`, and would leave a frozen pane badged « attached · live ».
+ */
+export const PTY_SILENCE_TIMEOUT_MS = 30_000;
 
 /** #968: the exits of the enlarged terminal, named on its collapse button. */
 const COLLAPSE_LABEL = "Collapse terminal · Esc · click outside";
@@ -148,6 +158,9 @@ export default function TmuxTerminal({
   // #972: the live socket closed under the user (network cut, proxy, daemon
   // restart) — as opposed to never opened yet. Drives the veil.
   const [dropped, setDropped] = useState(false);
+  // #972: failed attempts since the socket was last open — paces the automatic
+  // retries of a veiled terminal (same backoff as the daemon's `/ws`).
+  const [drops, setDrops] = useState(0);
   // #972: bumped to open a fresh socket on the same session (Reconnect button,
   // return to the tab). The attach effect keys on it.
   const [attachKey, setAttachKey] = useState(0);
@@ -185,6 +198,7 @@ export default function TmuxTerminal({
     setMode(reaped ? "probing" : "live");
     setFrozen(null);
     setDropped(false);
+    setDrops(0);
   }
 
   // #972: a node that settles under the user's eyes loses its session on
@@ -195,6 +209,18 @@ export default function TmuxTerminal({
     setDropped(false);
     setAttachKey((k) => k + 1);
   }, []);
+
+  // #972: a veiled terminal keeps trying on its own, with an increasing delay,
+  // so the user who stays on the tab finds it back once the daemon or the
+  // network is. The veil stays up until a socket actually opens. A hidden tab
+  // does not retry: its return is the wake-up below.
+  useEffect(() => {
+    if (!veiled) return;
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState === "visible") setAttachKey((k) => k + 1);
+    }, reconnectDelay(drops - 1));
+    return () => window.clearTimeout(timer);
+  }, [veiled, drops]);
 
   // #972: back on the tab (or back online) with a dropped terminal ⇒ reconnect
   // on its own, no click needed.
@@ -465,31 +491,74 @@ export default function TmuxTerminal({
 
     // #972: the cleanup below closes the socket on purpose — not a drop.
     let disposed = false;
+    // #972: the socket's single exit (closed, errored, gone silent, offline) is
+    // taken once; a late `close` after the watchdog gave up is ignored.
+    let gone = false;
+    let lastFrameAt = Date.now();
+    let silenceTimer: number | undefined;
+
+    // A closed socket has no role left: back to the plain fit.
+    const dropRole = () => {
+      if (disposed || gone) return;
+      gone = true;
+      window.clearTimeout(silenceTimer);
+      setConnected(false);
+      setDropped(true);
+      setDrops((n) => n + 1);
+      if (roleRef.current.role !== "solo") applyRole(SOLO);
+    };
+
+    // #972: a socket that stopped beating, or a browser that went offline, is
+    // given up on now rather than when a `close` that may never come arrives.
+    const giveUp = () => {
+      if (!ws || disposed || gone) return;
+      dropRole();
+      ws.close();
+    };
+    const armSilence = () => {
+      lastFrameAt = Date.now();
+      window.clearTimeout(silenceTimer);
+      silenceTimer = window.setTimeout(giveUp, PTY_SILENCE_TIMEOUT_MS);
+    };
+    // A hidden tab's timers are throttled: judge the silence again on return.
+    const judgeSilence = () => {
+      if (
+        document.visibilityState === "visible" &&
+        ws?.readyState === WebSocket.OPEN &&
+        Date.now() - lastFrameAt > PTY_SILENCE_TIMEOUT_MS
+      ) {
+        giveUp();
+      }
+    };
+    if (ws) {
+      window.addEventListener("offline", giveUp);
+      document.addEventListener("visibilitychange", judgeSilence);
+    }
 
     ws?.addEventListener("open", () => {
+      if (disposed || gone) return;
       setConnected(true);
       setDropped(false);
+      setDrops(0);
+      armSilence();
       sendResize(ws, fitAddon.proposeDimensions());
     });
 
     ws?.addEventListener("message", (event) => {
+      if (disposed || gone) return;
+      armSilence();
       if (event.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(event.data));
       } else if (typeof event.data === "string") {
-        // Text frames carry the daemon's control messages (the role); anything
-        // else is written as before.
+        // Text frames carry the daemon's control messages (the role, the
+        // heartbeat); anything else is written as before.
+        if (isHeartbeatFrame(event.data)) return;
         const role = parseRoleFrame(event.data);
         if (role) applyRole(role);
         else term.write(event.data);
       }
     });
 
-    // A closed socket has no role left: back to the plain fit.
-    const dropRole = () => {
-      setConnected(false);
-      if (!disposed) setDropped(true);
-      if (roleRef.current.role !== "solo") applyRole(SOLO);
-    };
     ws?.addEventListener("close", dropRole);
     ws?.addEventListener("error", dropRole);
 
@@ -554,6 +623,9 @@ export default function TmuxTerminal({
       inputDisposable.dispose();
       binaryDisposable.dispose();
       disposed = true;
+      window.clearTimeout(silenceTimer);
+      window.removeEventListener("offline", giveUp);
+      document.removeEventListener("visibilitychange", judgeSilence);
       ws?.close();
       roleRef.current = SOLO;
       setTermRole(SOLO);

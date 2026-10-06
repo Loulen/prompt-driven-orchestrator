@@ -186,7 +186,7 @@ vi.mock("./ui/tooltip", () => ({
   }) => <span data-tooltip={disabled ? undefined : content}>{children}</span>,
 }));
 
-import TmuxTerminal from "./TmuxTerminal";
+import TmuxTerminal, { PTY_SILENCE_TIMEOUT_MS } from "./TmuxTerminal";
 
 describe("TmuxTerminal", () => {
   beforeEach(() => {
@@ -1293,6 +1293,101 @@ describe("TmuxTerminal", () => {
       await settle();
       unmount();
       expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("never writes the daemon's heartbeat into the pane", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      act(() => wsInstances[0].fireEvent("message", { data: '{"type":"heartbeat"}' }));
+      expect(mockTerminalInstances[0].write).not.toHaveBeenCalled();
+    });
+
+    it("veils the pane as soon as the browser goes offline, without waiting for a close", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      wsInstances[0].close = () => {
+        // a half-open socket: closing it fires nothing
+        wsInstances[0].readyState = MockWebSocket.CLOSING;
+      };
+      act(() => window.dispatchEvent(new Event("offline")));
+      expect(screen.getByTestId("term-veil")).toBeTruthy();
+      expect(screen.getByText("disconnected")).toBeTruthy();
+    });
+
+    describe("with the clock under control", () => {
+      beforeEach(() => vi.useFakeTimers());
+      afterEach(() => vi.useRealTimers());
+
+      const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+      const halfOpen = (ws: MockWebSocket) => {
+        ws.close = () => {
+          ws.readyState = MockWebSocket.CLOSING;
+        };
+      };
+
+      it("veils a socket that stopped beating, though it never closed", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        halfOpen(wsInstances[0]);
+        tick(PTY_SILENCE_TIMEOUT_MS - 1000);
+        expect(screen.queryByTestId("term-veil")).toBeNull();
+        tick(1000);
+        expect(screen.getByTestId("term-veil")).toBeTruthy();
+      });
+
+      it("a beat keeps a silent terminal alive", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        for (let i = 0; i < 6; i++) {
+          tick(10_000);
+          act(() => wsInstances[0].fireEvent("message", { data: '{"type":"heartbeat"}' }));
+        }
+        expect(screen.queryByTestId("term-veil")).toBeNull();
+      });
+
+      it("judges the silence again when the tab comes back", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        halfOpen(wsInstances[0]);
+        // A hidden tab's timers may not have run: move the clock without them.
+        vi.setSystemTime(Date.now() + PTY_SILENCE_TIMEOUT_MS + 1000);
+        act(() => setVisibility("visible"));
+        expect(screen.getByTestId("term-veil")).toBeTruthy();
+      });
+
+      it("a veiled terminal retries on its own, increasingly spaced, veil kept until it opens", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        act(() => serverDrop(wsInstances[0]));
+        // 1st retry after 1 s
+        tick(999);
+        expect(wsInstances).toHaveLength(1);
+        tick(1);
+        expect(wsInstances).toHaveLength(2);
+        expect(screen.getByTestId("term-veil")).toBeTruthy();
+        // it fails before opening: next retry after 2 s
+        act(() => serverDrop(wsInstances[1]));
+        tick(1999);
+        expect(wsInstances).toHaveLength(2);
+        tick(1);
+        expect(wsInstances).toHaveLength(3);
+        // this one opens: the veil lifts, the retries stop
+        tick(0);
+        expect(screen.queryByTestId("term-veil")).toBeNull();
+        tick(60_000 - 1);
+        expect(wsInstances).toHaveLength(3);
+      });
+
+      it("a hidden tab does not retry; its return does", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        act(() => setVisibility("hidden"));
+        act(() => serverDrop(wsInstances[0]));
+        tick(60_000);
+        expect(wsInstances).toHaveLength(1);
+        act(() => setVisibility("visible"));
+        expect(wsInstances).toHaveLength(2);
+      });
     });
   });
 });

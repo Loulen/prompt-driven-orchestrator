@@ -18,7 +18,7 @@ Ctrl+C without a selection still interrupts the program in the pane. On macOS us
 
 If the pane shows `disconnected` on a remote origin, the daemon rejected the WebSocket origin: add it to `PDO_ALLOWED_WS_ORIGINS` (see [reverse-proxy.md](reverse-proxy.md)).
 
-If the connection of a live pane drops (network cut, proxy, daemon restart), the pane is veiled with `Terminal connection closed` and a **Reconnect** button, which reopens the same terminal without leaving the node. Coming back to the browser tab reconnects it on its own. A node that finishes while you watch is not veiled: its session ends on purpose.
+If the connection of a live pane drops (network cut, proxy, daemon restart), the pane is veiled with `Terminal connection closed` and a **Reconnect** button, which reopens the same terminal without leaving the node. A connection that stops answering without closing (laptop asleep, Wi-Fi gone behind a proxy) counts as dropped too: the daemon beats every terminal socket every 10 s, and the pane is veiled after 30 s without a beat, or as soon as the browser reports it is offline. While veiled, the pane retries on its own (1 s, 2 s, 4 s … up to 30 s) and at once when the browser tab becomes visible or the network comes back. A node that finishes while you watch is not veiled: its session ends on purpose.
 
 ## Shared terminal: one pilot, spectators
 

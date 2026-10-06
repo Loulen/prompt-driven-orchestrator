@@ -61,6 +61,9 @@ describe("ImportFilesModal (#971)", () => {
     importMock.mockResolvedValue({ iter: 2, files: [{ name: "contrat.pdf", path: PATH, size: 4 }] });
     setup();
     expect(screen.getByTestId("import-files")).toHaveTextContent("contrat.pdf");
+    // One short line, no storage path.
+    expect(screen.getByText("Never committed, removed with the Run.")).toBeInTheDocument();
+    expect(screen.getByTestId("import-files-modal")).not.toHaveTextContent("_attachments");
     fireEvent.click(screen.getByTestId("import-submit"));
     await screen.findByTestId("import-done");
     expect(importMock).toHaveBeenCalledWith("run-1", "grill", 2, [expect.any(File)]);
@@ -100,11 +103,15 @@ describe("ImportFilesModal (#971)", () => {
     setup();
     fireEvent.click(screen.getByTestId("import-submit"));
     await screen.findByTestId("import-done");
-    fireEvent.click(screen.getByTestId("import-send"));
-    await screen.findByTestId("import-sent");
+    const send = screen.getByTestId("import-send");
+    expect(send).toHaveAttribute("title", expect.stringContaining("without submitting"));
+    fireEvent.click(send);
+    await waitFor(() => expect(sendMock).toHaveBeenCalledWith("run-1", "grill", 2, TEXT));
     expect(clipboardMock).toHaveBeenCalledWith(TEXT);
-    expect(sendMock).toHaveBeenCalledWith("run-1", "grill", 2, TEXT);
-    expect(screen.getByTestId("import-sent")).toHaveTextContent("not submitted");
+    // Sent on an explicit click: no confirmation, the button is usable again.
+    await waitFor(() => expect(send).toBeEnabled());
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByTestId("import-send-failed")).toBeNull();
   });
 
   it("a failed terminal write says the text is in the clipboard", async () => {

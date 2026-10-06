@@ -46,7 +46,7 @@ interface Props {
    */
   checked?: boolean;
   onToggleSelect?: (e: MouseEvent) => void;
-  /** #974: the validation indicator, at the end of the meta line. */
+  /** #974: the validation indicator, bottom-right under the hover actions. */
   indicator?: ReactNode;
 }
 
@@ -125,9 +125,14 @@ export default function LibraryRow({
               </>
             )}
           </span>
-          {indicator && <span className="ml-auto flex shrink-0 items-center">{indicator}</span>}
         </div>
       </div>
+      {/* Right column, same shape as a run row (#783): line 1 = the hover-revealed
+          action icons, line 2 = the validation indicator, always visible,
+          bottom-right. The actions line keeps its height at rest so the indicator
+          never moves when the icons appear. */}
+      <div className="flex shrink-0 flex-col items-end justify-between gap-1">
+      <div className="flex h-4 items-center gap-2">
       {onRenameStart && !renaming && (
         <span
           className="hidden shrink-0 group-hover:inline-flex"
@@ -170,6 +175,9 @@ export default function LibraryRow({
           className="text-fg-4 transition-colors hover:text-st-failed"
         />
       </span>
+      </div>
+      {indicator && <span className="flex shrink-0 items-center">{indicator}</span>}
+      </div>
     </>
   );
 

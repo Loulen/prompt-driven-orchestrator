@@ -32,10 +32,10 @@ interface Props {
   onClose: () => void;
 }
 
+/** No confirmation once sent: the user asked for it explicitly; only a failure is said. */
 type SendState =
   | { kind: "idle" }
   | { kind: "sending" }
-  | { kind: "sent"; copied: boolean }
   | { kind: "failed"; message: string; copied: boolean };
 
 /**
@@ -135,7 +135,7 @@ export default function ImportFilesModal({
     const copied = await writeClipboardText(text);
     try {
       await sendTextToNodeTerminal(runId, nodeId, iter, text);
-      setSend({ kind: "sent", copied });
+      setSend({ kind: "idle" });
     } catch (cause) {
       const message =
         cause instanceof ApiError || cause instanceof Error ? cause.message : "Send failed";
@@ -200,11 +200,7 @@ export default function ImportFilesModal({
 
           {imported === null ? (
             <>
-              <p className="text-fg-3">
-                The files go to this Run's Blackboard, under{" "}
-                <code className="font-mono text-fg-2">.pdo/artifacts/_attachments/{nodeId}/</code>: never
-                committed, removed with the Run. The agent is not told — you send it the text afterwards.
-              </p>
+              <p className="text-fg-3">Never committed, removed with the Run.</p>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -304,12 +300,6 @@ export default function ImportFilesModal({
                   {copyState === "copied" ? <Check size={13} /> : <Copy size={13} />}
                 </button>
               </div>
-              {send.kind === "sent" && (
-                <p className="text-st-done" role="status" data-testid="import-sent">
-                  Written into the terminal, not submitted: complete your message there and press Enter.
-                  {send.copied ? " Also copied to the clipboard." : ""}
-                </p>
-              )}
               {send.kind === "failed" && (
                 <p className="text-st-failed" role="alert" data-testid="import-send-failed">
                   Could not write into the terminal ({send.message}).
@@ -362,6 +352,7 @@ export default function ImportFilesModal({
                 type="button"
                 onClick={() => void copyAndSend()}
                 disabled={send.kind === "sending"}
+                title="Writes the text into the agent's input without submitting it, and copies it"
                 className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc hover:opacity-90 disabled:opacity-40"
                 style={{ fontSize: "12px" }}
                 data-testid="import-send"

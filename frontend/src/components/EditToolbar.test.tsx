@@ -486,8 +486,15 @@ describe("EditToolbar run « pilotage » and « Edit » menu (ADR-0080)", () => 
     const user = userEvent.setup();
     const edit = runEdit(false);
     renderToolbar({ readOnly: true, runEdit: edit });
-    await user.click(screen.getByTestId("toolbar-edit"));
-    await user.click(await screen.findByTestId("toolbar-edit-for-run"));
+    // A pencil icon only, named by its aria-label / title.
+    const trigger = screen.getByTestId("toolbar-edit");
+    expect(trigger).toHaveTextContent("");
+    expect(trigger).toHaveAttribute("title", "Edit");
+    expect(trigger).toHaveAccessibleName("Edit");
+    await user.click(trigger);
+    expect(await screen.findByTestId("toolbar-edit-for-run")).toHaveTextContent(/^Edit for this run$/);
+    expect(screen.getByTestId("toolbar-edit-source")).toHaveTextContent(/^Edit source pipeline$/);
+    await user.click(screen.getByTestId("toolbar-edit-for-run"));
     expect(edit.onEditForRun).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByTestId("toolbar-edit"));

@@ -205,7 +205,9 @@ describe("TabBar Save on a run tab (ADR-0080)", () => {
     render(<TabBar />);
 
     await user.click(screen.getByTestId("save-menu"));
-    await user.click(await screen.findByTestId("save-menu-overwrite"));
+    // A single line: the warning lives in the modal, not under the menu item.
+    expect(await screen.findByTestId("save-menu-overwrite")).toHaveTextContent(/^Overwrite default pipeline…$/);
+    await user.click(screen.getByTestId("save-menu-overwrite"));
 
     expect(await screen.findByTestId("overwrite-default-modal")).toBeInTheDocument();
     expect(screen.getByTestId("overwrite-default-future-runs")).toHaveTextContent("All future runs will use it");

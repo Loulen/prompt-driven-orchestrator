@@ -1,4 +1,4 @@
-import { Plus, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal, Pencil, ChevronDown, Check, ExternalLink } from "lucide-react";
+import { Plus, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal, Pencil, Check, ExternalLink } from "lucide-react";
 import type { PendingTone } from "../lib/reviewComments";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
@@ -214,13 +214,11 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
             <DropdownMenu>
               <DropdownMenuTrigger
                 data-testid="toolbar-edit"
-                className="flex h-7 cursor-pointer items-center gap-1 rounded px-2 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg data-[popup-open]:bg-bg-4 data-[popup-open]:text-fg"
-                style={{ fontSize: "11px" }}
+                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg data-[popup-open]:bg-bg-4 data-[popup-open]:text-fg"
                 aria-label="Edit"
+                title="Edit"
               >
-                <Pencil size={12} />
-                <span>Edit</span>
-                <ChevronDown size={11} className="text-fg-4" />
+                <Pencil size={13} />
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 className="min-w-[220px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg"
@@ -229,31 +227,21 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
               >
                 <DropdownMenuItem
                   data-testid="toolbar-edit-for-run"
-                  className="flex cursor-pointer flex-col items-start gap-0.5 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
                   style={{ fontSize: "11.5px" }}
                   onClick={runEdit.onEditForRun}
                 >
-                  <span className="flex items-center gap-2">
-                    <Pencil size={12} className="shrink-0 text-fg-4" />
-                    Edit for this run
-                  </span>
-                  <span className="pl-5 text-fg-4" style={{ fontSize: "10px" }}>
-                    Changes apply to this run only
-                  </span>
+                  <Pencil size={12} className="shrink-0 text-fg-4" />
+                  Edit for this run
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   data-testid="toolbar-edit-source"
-                  className="flex cursor-pointer flex-col items-start gap-0.5 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
                   style={{ fontSize: "11.5px" }}
                   onClick={runEdit.onEditSource}
                 >
-                  <span className="flex items-center gap-2">
-                    <ExternalLink size={12} className="shrink-0 text-fg-4" />
-                    Edit source pipeline
-                  </span>
-                  <span className="pl-5 text-fg-4" style={{ fontSize: "10px" }}>
-                    Opens the shared pipeline in its own tab
-                  </span>
+                  <ExternalLink size={12} className="shrink-0 text-fg-4" />
+                  Edit source pipeline
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

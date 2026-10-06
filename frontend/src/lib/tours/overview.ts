@@ -729,7 +729,7 @@ const STEPS: TourStep[] = [
       { target: TASK_ROW, text: "Its input, task: what the edge from Start delivered — the Run's prompt." },
       {
         target: INSPECTOR_TAB_CONFIG,
-        text: "Config: the node's prompt and skills, read-only. To change a Run, use Edit in the canvas toolbar.",
+        text: "Config: the node's prompt and skills, read-only. To change a Run, use the Edit pencil in the canvas toolbar.",
       },
     ],
   },

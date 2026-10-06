@@ -208,14 +208,11 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
               >
                 <DropdownMenuItem
                   data-testid="save-menu-overwrite"
-                  className="flex cursor-pointer flex-col items-start gap-0.5 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                  className="flex cursor-pointer items-center rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
                   style={{ fontSize: "11.5px" }}
                   onClick={() => setOverwriteTabId(activeTabId)}
                 >
-                  <span>Overwrite default pipeline…</span>
-                  <span className="text-fg-4" style={{ fontSize: "10px" }}>
-                    Every future run will use this run's version
-                  </span>
+                  Overwrite default pipeline…
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

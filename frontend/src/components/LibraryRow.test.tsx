@@ -87,14 +87,26 @@ describe("LibraryRow instance metadata", () => {
     expect(screen.getByText(/^edited /)).toBeInTheDocument();
   });
 
-  it("keeps the meta line on one line, truncating the text, never the indicator (#974)", () => {
+  it("keeps the meta line on one line, truncating the text (#974)", () => {
     // The hover actions narrow the row: the meta used to wrap (« 2 / nodes »)
     // and the row grew by a line under the cursor.
     renderRow({ modified: "2026-08-26T12:00:00Z", indicator: <span>ind</span> });
     const meta = screen.getByTestId("library-row-meta");
     expect(meta.className).toContain("whitespace-nowrap");
     expect(screen.getByText(/^edited /).parentElement!.className).toContain("truncate");
-    expect(screen.getByText("ind").parentElement!.className).toContain("shrink-0");
+  });
+
+  it("puts the indicator bottom-right, under the hover actions, out of the meta line (#974)", () => {
+    // Same shape as a run row (#783): the actions line keeps its height at rest,
+    // so the indicator does not move when the icons appear on hover.
+    renderRow({ modified: "2026-08-26T12:00:00Z", indicator: <span>ind</span> });
+    const indicatorSlot = screen.getByText("ind").parentElement!;
+    expect(screen.getByTestId("library-row-meta")).not.toContainElement(indicatorSlot);
+    expect(indicatorSlot.className).toContain("shrink-0");
+    const column = indicatorSlot.parentElement!;
+    expect(column.className).toContain("flex-col");
+    expect(column.lastElementChild).toBe(indicatorSlot);
+    expect(column.firstElementChild!.className).toContain("h-4");
   });
 });
 

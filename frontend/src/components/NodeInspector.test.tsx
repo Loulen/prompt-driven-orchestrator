@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import NodeInspector from "./NodeInspector";
+import NodeInspector, { NodeConfigView } from "./NodeInspector";
 import type { LibraryEntry } from "../api";
 import {
   saveToLibrary,
@@ -1185,5 +1185,66 @@ describe("NodeInspector — toggle skills (#588 / ADR-0069)", () => {
     expect(warning).toHaveTextContent("pdo-interactive skill was removed");
     fireEvent.click(within(warning).getByText("Re-add it"));
     expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-interactive"]);
+  });
+});
+
+describe("NodeConfigView — the read-only Config of a run followed in « pilotage » (ADR-0080)", () => {
+  function seedRunWithSkilledReviewer() {
+    seedTabWithReviewer(false, "Review this code.");
+    const [tab] = useEditStore.getState().openTabs;
+    useEditStore.setState({
+      openTabs: [
+        {
+          ...tab,
+          id: "__run__r1",
+          scope: "run",
+          runId: "r1",
+          pipeline: {
+            ...tab.pipeline,
+            nodes: [{ ...tab.pipeline.nodes[0], interactive: true, skills: [{ id: "pdo-interactive", name: "pdo-interactive" }] }],
+          },
+        },
+      ],
+      activeTabId: "__run__r1",
+    });
+  }
+
+  it("shows the node's prompt and skills without any editable field", () => {
+    seedRunWithSkilledReviewer();
+    render(
+      <TooltipProvider>
+        <NodeConfigView />
+      </TooltipProvider>,
+    );
+    const view = screen.getByTestId("node-config-view");
+    expect(screen.getByTestId("node-config-prompt")).toHaveTextContent("Review this code.");
+    expect(screen.getByTestId("node-config-skill-list")).toHaveTextContent("pdo-interactive");
+    expect(view).toHaveTextContent("/pdo-interactive");
+    // Nothing to type into: no input, no textarea, and no prompt editor.
+    expect(view.querySelector("input, textarea")).toBeNull();
+    expect(screen.queryByTestId("node-prompt-input")).toBeNull();
+    expect(screen.queryByTestId("node-name-input")).toBeNull();
+  });
+
+  it("points to « Edit for this run » to change the node", () => {
+    seedRunWithSkilledReviewer();
+    render(
+      <TooltipProvider>
+        <NodeConfigView />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("node-config-hint")).toHaveTextContent("Edit for this run");
+  });
+
+  it("on an archived run, does not point to an Edit button that is not there", () => {
+    seedRunWithSkilledReviewer();
+    render(
+      <TooltipProvider>
+        <NodeConfigView archived />
+      </TooltipProvider>,
+    );
+    const hint = screen.getByTestId("node-config-hint");
+    expect(hint).toHaveTextContent("This run is archived and read-only.");
+    expect(hint).not.toHaveTextContent("Edit for this run");
   });
 });

@@ -83,8 +83,13 @@ cd "$(git rev-parse --show-toplevel)"
 #   Settings › General › Stats absorptions list (every absorption, its origin, uncombine as
 #   you go). SettingsSurface renders it; it reuses StatsAbsorption's UncombineButton and
 #   lib/statsAbsorption, so only the Settings layout is new.
+# frontend/src/components: 206 (#974, story retours-2026-10-05; 204 + #971's
+#   ImportFilesModal.tsx and its test once the integration merged in) admits
+#   PipelineValidation.tsx and its test — the ValidationIndicator and the
+#   ValidatePipelineModal of a Pipeline validated per Project, rendered by BOTH TabBar and
+#   LibraryRow. The sectioning rule lives in lib/pipelineValidation.
 BASELINES='
-frontend/src/components 205
+frontend/src/components 206
 crates/pdo-daemon/src 93
 '
 

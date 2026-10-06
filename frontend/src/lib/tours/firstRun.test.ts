@@ -33,6 +33,7 @@ import {
 } from "../tour";
 import {
   FIRST_RUN_TOUR,
+  TUTORIAL_PROJECT_NAME,
   TUTORIAL_PROMPT,
   TUTORIAL_REPO_PATH,
   TUTORIAL_RUN_PIPELINE_ID,
@@ -1142,9 +1143,9 @@ describe("the definition holds the copy rules", () => {
     for (const step of STEPS) expect(step.waitingFor.length, step.id).toBeGreaterThan(0);
   });
 
-  it("declares both preparations, each with a failure headline", () => {
+  it("declares its preparations, each with a failure headline", () => {
     const prepare = TOUR.intro!.prepare;
-    expect(prepare.map((p) => p.id)).toEqual(["repo", "pipeline"]);
+    expect(prepare.map((p) => p.id)).toEqual(["repo", "pipeline", "project"]);
     for (const item of prepare) {
       expect(item.failureTitle.length).toBeGreaterThan(0);
       expect(item.pending.length).toBeGreaterThan(0);
@@ -1164,6 +1165,14 @@ vi.mock("../../api", async () => {
     fetchPipelines: vi.fn(async () => [] as unknown[]),
     createPipeline: vi.fn(async () => ({ id: TUTORIAL_RUN_PIPELINE_ID, scope: "instance", path: "p" })),
     savePipeline: vi.fn(async () => ({ ok: true })),
+    fetchProjects: vi.fn(async () => [] as unknown[]),
+    createProject: vi.fn(async (name: string) => ({ id: "prj-tuto", name, members: [] })),
+    addProjectMember: vi.fn(async (id: string, path: string) => ({
+      id,
+      name: "Tutorial",
+      members: [path],
+    })),
+    setPipelineValidation: vi.fn(async () => ({ ok: true, id: "x", validation: { kind: "all" } })),
   };
 });
 
@@ -1248,5 +1257,68 @@ describe("what the intro card prepares", () => {
     await expect(TOUR.intro!.prepare[0].run()).rejects.toThrow(
       "exists and is not a git repository",
     );
+  });
+});
+
+/**
+ * #974 — the First run tour keeps its pipeline out of everybody else's launch form:
+ * a Projet « Tutorial » holds the training repository, and `tutorial-interactive` is
+ * validated for it alone.
+ */
+describe("the Tutorial project the intro card prepares", () => {
+  const project = () => TOUR.intro!.prepare.find((p) => p.id === "project")!;
+
+  it("creates the Projet, attaches the training repository, and validates the pipeline for it only", async () => {
+    const api = await import("../../api");
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce([]);
+    vi.mocked(api.fetchPipelines).mockResolvedValueOnce([{ id: TUTORIAL_RUN_PIPELINE_ID } as never]);
+    vi.mocked(api.createProject).mockClear();
+
+    await project().run();
+
+    expect(api.createProject).toHaveBeenCalledWith(TUTORIAL_PROJECT_NAME);
+    expect(api.addProjectMember).toHaveBeenCalledWith("prj-tuto", TUTORIAL_REPO_PATH);
+    expect(api.setPipelineValidation).toHaveBeenLastCalledWith(TUTORIAL_RUN_PIPELINE_ID, {
+      kind: "projects",
+      project_ids: ["prj-tuto"],
+    });
+  });
+
+  it("reuses the Projet that already holds the training repository, without a second one", async () => {
+    const api = await import("../../api");
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce([
+      { id: "prj-mine", name: "Sandbox", members: [TUTORIAL_REPO_PATH] },
+    ]);
+    vi.mocked(api.fetchPipelines).mockResolvedValueOnce([{ id: TUTORIAL_RUN_PIPELINE_ID } as never]);
+    vi.mocked(api.createProject).mockClear();
+    vi.mocked(api.addProjectMember).mockClear();
+
+    await project().run();
+
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(api.addProjectMember).not.toHaveBeenCalled();
+    expect(api.setPipelineValidation).toHaveBeenLastCalledWith(TUTORIAL_RUN_PIPELINE_ID, {
+      kind: "projects",
+      project_ids: ["prj-mine"],
+    });
+  });
+
+  it("reuses a Projet named Tutorial and attaches the repository to it", async () => {
+    const api = await import("../../api");
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce([
+      { id: "prj-tuto-old", name: TUTORIAL_PROJECT_NAME, members: [] },
+    ]);
+    vi.mocked(api.fetchPipelines).mockResolvedValueOnce([{ id: TUTORIAL_RUN_PIPELINE_ID } as never]);
+    vi.mocked(api.createProject).mockClear();
+
+    await project().run();
+
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(api.addProjectMember).toHaveBeenLastCalledWith("prj-tuto-old", TUTORIAL_REPO_PATH);
+  });
+
+  it("names the pipeline's section in the Pick step", () => {
+    const step = STEPS.find((s) => s.id === "pick-pipeline")!;
+    expect(typeof step.body === "string" ? step.body : "").toContain("Project pipelines");
   });
 });

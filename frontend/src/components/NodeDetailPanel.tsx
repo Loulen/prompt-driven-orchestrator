@@ -36,6 +36,7 @@ import {
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
+import ImportFilesModal from "./ImportFilesModal";
 import type { ArtifactSource } from "./MarkdownArtifactModal";
 import ImageLightbox from "./ImageLightbox";
 import CopyButton from "./CopyButton";
@@ -668,6 +669,25 @@ export default function NodeDetailPanel({
       ?.focus();
   }, [expanded]);
 
+  // #971 — « Fichier importé en cours de Run »: the files dropped on the
+  // terminal (or `[]` from its Import button) while the import modal is open.
+  const [importFiles, setImportFiles] = useState<File[] | null>(null);
+  const importOpen = importFiles !== null;
+  const importBlockedReason = isArchived
+    ? "This Run is archived: its nodes have no session to receive files."
+    : selectedIter !== node.iter
+      ? `Only the current iteration (iter ${node.iter}) has a live session: switch to it to import files.`
+      : selectedIterStatus !== "running" && selectedIterStatus !== "awaiting_user"
+        ? "This node has no live session: files can only be imported into a node that is running."
+        : null;
+  const closeImport = useCallback(() => {
+    setImportFiles(null);
+    // Back to the agent's input, where the sent text waits for Enter.
+    terminalFrameRef.current
+      ?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+      ?.focus();
+  }, []);
+
   // While enlarged, the app behind it gets no keystroke: Escape closes the
   // overlay, every other key stops here (canvas shortcuts, the tour's Escape).
   // Capture phase on `window`, so we run before anyone else — but a keystroke
@@ -676,6 +696,8 @@ export default function NodeDetailPanel({
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: KeyboardEvent) => {
+      // The import modal (#971) stacks above the overlay and owns the keyboard.
+      if (importOpen) return;
       const active = document.activeElement;
       if (active && active.classList.contains("xterm-helper-textarea")) return;
       e.stopImmediatePropagation();
@@ -686,7 +708,7 @@ export default function NodeDetailPanel({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [expanded]);
+  }, [expanded, importOpen]);
 
   // The gesture popover closes on any press outside it.
   useEffect(() => {
@@ -1208,6 +1230,8 @@ export default function NodeDetailPanel({
                 paneSource={{ runId, nodeId: node.node_id, iter: selectedIter }}
                 onLiveSocketChange={setTerminalLive}
                 onSpectatingChange={setTerminalSpectating}
+                onImportFiles={isArchived ? undefined : setImportFiles}
+                importDisabledReason={importBlockedReason}
               />
             ) : (
               <div className="flex h-full flex-col" data-testid="pending-placeholder">
@@ -1477,6 +1501,17 @@ export default function NodeDetailPanel({
           </ResizablePanelGroup>
         );
       })()}
+
+      {importFiles !== null && (
+        <ImportFilesModal
+          runId={runId}
+          nodeId={node.node_id}
+          iter={node.iter}
+          initialFiles={importFiles}
+          blockedReason={importBlockedReason}
+          onClose={closeImport}
+        />
+      )}
 
       {modal && modalSource && (
         <MarkdownArtifactModal

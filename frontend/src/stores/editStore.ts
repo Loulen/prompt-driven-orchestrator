@@ -14,6 +14,7 @@ import {
   savePipeline,
   fetchRunPipeline,
   saveRunPipeline,
+  overwriteDefaultPipelineFromRun,
   deletePipeline as apiDeletePipeline,
   renamePipeline as apiRenamePipeline,
 } from "../api";
@@ -80,6 +81,12 @@ export interface OpenPipeline {
   dirty: boolean;
   externalDirty: boolean;
   runId?: string;
+  /**
+   * ADR-0080: a run tab opens in « pilotage » — locked, no authoring gesture.
+   * `true` once the user chose « Edit for this run »; « Finish editing » drops it.
+   * Meaningless on a template tab (no `runId`), which is always editable.
+   */
+  runEditing?: boolean;
   conflict?: ConflictData;
   saveError?: SaveErrorData;
   /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
@@ -98,6 +105,20 @@ export interface OpenPipeline {
  */
 export function hasUnsavedWork(t: OpenPipeline): boolean {
   return t.dirty || t.conflict != null || t.saveError != null;
+}
+
+/**
+ * ADR-0080: a run tab in « pilotage » — the Run is followed, never modified.
+ * Every definition mutation of the store is a no-op on such a tab, so no gesture
+ * (canvas, inspector, keyboard) can change it without « Edit for this run ».
+ */
+export function isRunTabLocked(t: OpenPipeline | undefined | null): boolean {
+  return t?.runId != null && !t.runEditing;
+}
+
+/** The active tab is a locked run tab (point-of-use selector). */
+export function selectActiveTabLocked(s: { openTabs: OpenPipeline[]; activeTabId: string | null }): boolean {
+  return isRunTabLocked(s.openTabs.find((t) => t.id === s.activeTabId));
 }
 
 /**
@@ -240,6 +261,19 @@ interface EditState {
   renamePipeline: (id: string, name: string) => Promise<void>;
 
   save: (id: string) => Promise<void>;
+  /** ADR-0080: « Edit for this run » — unlock a run tab for hot editing. */
+  startRunEditing: (id: string) => void;
+  /**
+   * ADR-0080: « Finish editing » — back to « pilotage ». Unsaved edits are
+   * discarded (the caller confirmed): the tab re-reads the Run's snapshot.
+   */
+  finishRunEditing: (id: string) => Promise<void>;
+  /**
+   * ADR-0080: « Overwrite default pipeline » — save the run tab for this Run if
+   * needed, then replace the shared Pipeline by the Run's whole snapshot.
+   * Rejects with the daemon's message when the save or the overwrite fails.
+   */
+  overwriteDefaultPipeline: (id: string) => Promise<void>;
   flushPendingSaves: () => Promise<void>;
   clearSaveError: (id: string) => void;
 
@@ -268,6 +302,8 @@ function mutateActiveTab(
 ): Partial<EditState> {
   const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
   if (idx < 0) return {};
+  // ADR-0080: a run tab in « pilotage » takes no definition change at all.
+  if (isRunTabLocked(state.openTabs[idx])) return {};
   const tabs = [...state.openTabs];
   const tab = { ...tabs[idx], pipeline: { ...tabs[idx].pipeline }, dirty: true };
   fn(tab);
@@ -317,6 +353,7 @@ function mutateActiveTabWithHistory(
 ): Partial<EditState> {
   const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
   if (idx < 0) return {};
+  if (isRunTabLocked(state.openTabs[idx])) return {};
   const before = state.openTabs[idx].pipeline; // immutable per the COW invariant
   const tabId = state.openTabs[idx].id;
   const mutated = mutateActiveTab(state, fn);
@@ -897,7 +934,7 @@ export const useEditStore = create<EditState>((set, get) => ({
     const h = s.history[tabId];
     if (!h || h.past.length === 0) return {};
     const idx = s.openTabs.findIndex((t) => t.id === tabId);
-    if (idx < 0) return {};
+    if (idx < 0 || isRunTabLocked(s.openTabs[idx])) return {};
     const current = s.openTabs[idx].pipeline;
     const prev = h.past[h.past.length - 1];
     const tabs = [...s.openTabs];
@@ -927,7 +964,7 @@ export const useEditStore = create<EditState>((set, get) => ({
     const h = s.history[tabId];
     if (!h || h.future.length === 0) return {};
     const idx = s.openTabs.findIndex((t) => t.id === tabId);
-    if (idx < 0) return {};
+    if (idx < 0 || isRunTabLocked(s.openTabs[idx])) return {};
     const current = s.openTabs[idx].pipeline;
     const next = h.future[h.future.length - 1];
     const tabs = [...s.openTabs];
@@ -1070,6 +1107,73 @@ export const useEditStore = create<EditState>((set, get) => ({
         ),
       }));
     }
+  },
+
+  startRunEditing: (id: string) => {
+    set((s) => ({
+      openTabs: s.openTabs.map((t) =>
+        t.id === id && t.runId != null ? { ...t, runEditing: true } : t,
+      ),
+    }));
+  },
+
+  finishRunEditing: async (id: string) => {
+    const tab = get().openTabs.find((t) => t.id === id);
+    if (!tab?.runId) return;
+    if (!hasUnsavedWork(tab)) {
+      set((s) => ({
+        openTabs: s.openTabs.map((t) => (t.id === id ? { ...t, runEditing: false } : t)),
+        history: clearedHistory(s.history, id),
+      }));
+      return;
+    }
+    // Discard: the tab goes back to what the Run actually runs — its snapshot.
+    let detail: Awaited<ReturnType<typeof fetchRunPipeline>> | null = null;
+    try {
+      detail = await fetchRunPipeline(tab.runId);
+    } catch {
+      // The snapshot is gone (archived meanwhile): lock anyway, the tab's
+      // content is no longer anything a save could reach.
+    }
+    set((s) => ({
+      openTabs: s.openTabs.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              ...(detail
+                ? { pipeline: detail.pipeline, prompts: detail.prompts, diagnostics: detail.diagnostics ?? [] }
+                : {}),
+              dirty: false,
+              conflict: undefined,
+              saveError: undefined,
+              runEditing: false,
+            }
+          : t,
+      ),
+      history: clearedHistory(s.history, id),
+      selection: s.activeTabId === id ? { kind: "none" as const, id: null } : s.selection,
+    }));
+  },
+
+  overwriteDefaultPipeline: async (id: string) => {
+    const tab = get().openTabs.find((t) => t.id === id);
+    if (!tab?.runId) return;
+    if (tab.dirty) {
+      // « Save for this run » first: the overwrite copies the Run's snapshot,
+      // so what the user sees must be what is on disk.
+      await get().save(id);
+      const after = get().openTabs.find((t) => t.id === id);
+      if (after?.dirty) {
+        throw new Error(after.saveError?.message ?? "Save for this run failed");
+      }
+    }
+    const { pipeline_id } = await overwriteDefaultPipelineFromRun(tab.runId);
+    // The daemon also broadcasts `pipeline_changed`; refreshing here keeps an
+    // open tab of the source pipeline current even if the socket is down.
+    if (get().openTabs.some((t) => t.id === pipeline_id && t.runId == null)) {
+      await get().reloadPipeline(pipeline_id);
+    }
+    await get().loadPipelines();
   },
 
   flushPendingSaves: async () => {

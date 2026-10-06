@@ -10,6 +10,49 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.118.0
+**Pipelines validés par Projet** (#974, spec #970).
+
+- Bouton **Validate** (onglet d'un Pipeline) : le Pipeline est proposé à tous les Projets
+  (actuels et futurs), à une liste de Projets, ou à aucun (Pipeline de test). Un indicateur
+  (globe « All », dossiers + nombre, fiole 0) le résume sur l'onglet et dans l'onglet Pipelines.
+- Formulaires New Run et Trigger en sections : « Project pipelines · <Projet> », « Global
+  pipelines », puis « Show test pipelines ». Un Pipeline validé pour un autre Projet n'est pas
+  proposé. La présélection automatique prend le premier Pipeline du Projet, sinon le premier
+  global ; un choix explicite est conservé (#386).
+- **À noter** : les Pipelines existants restent proposés partout (aucune ligne = tous les
+  Projets), mais les Pipelines créés, dupliqués ou importés après la mise à jour sont des
+  Pipelines de test tant qu'ils ne sont pas validés. Supprimer un Projet le retire des
+  validations ; un Pipeline validé pour ce seul Projet devient un Pipeline de test.
+- API : `GET /pipelines` expose `validation`, nouvel endpoint `PUT /pipelines/{id}/validation`.
+- Tutoriels : étape Validate dans *First pipeline* ; *First run* valide `tutorial-interactive`
+  pour un Projet « Tutorial ».
+
+## 1.117.0
+**Pilotage d'un Run en lecture seule, Edit for this run, Overwrite default pipeline** (#973, spec #970, ADR-0080).
+
+- Un onglet de Run s'ouvre en pilotage : canvas verrouillé (ni déplacement, ni câblage, ni menu
+  d'édition), `+`, Library, script et undo/redo masqués, pas de bouton Save. L'onglet Edit de
+  l'inspecteur devient **Config**, en lecture seule (prompt et skills). Un Run archivé l'indique.
+- Menu **Edit** : « Edit for this run » rouvre l'édition à chaud sur le snapshot du Run ;
+  « Edit source pipeline » ouvre l'onglet du Pipeline. « Finish editing » reverrouille, avec
+  confirmation s'il reste des modifications non enregistrées.
+- En édition de Run, « Save for this run » n'écrit que le snapshot (le Pipeline partagé n'est
+  plus synchronisé). « Overwrite default pipeline… » avertit (futurs Runs, Triggers concernés,
+  Pipeline partagé modifié depuis le lancement) puis copie le snapshot complet (YAML + prompts).
+- L'onglet d'un Pipeline hors Run s'édite et s'enregistre comme avant.
+
+## 1.116.0
+**Importer un fichier dans un nœud à session vive, depuis son terminal** (#971, spec #970).
+
+- Glisser-déposer sur le terminal du nœud, ou icône « Import » dans sa barre : une modale
+  dépose le(s) fichier(s) sous `.pdo/artifacts/_attachments/<node-id>/` (jamais commités,
+  supprimés avec le Run ; un nom déjà pris est suffixé `-1`, `-2`…).
+- La modale donne ensuite un texte avec le chemin relatif au worktree, à copier ou à écrire
+  dans la saisie de l'agent sans Entrée. Fonctionne aussi depuis un navigateur distant en http.
+- Refus motivé, sans rien écrire : nœud sans session vive (409), import au-delà de
+  `max_attachments_mb` (413).
+
 ## 1.115.0
 **Terminal de nœud agrandi en overlay quasi plein écran** (#968, spec #967).
 

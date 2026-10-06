@@ -41,12 +41,16 @@ const RIM_SIDES: { side: PortSide; position: Position; style: React.CSSPropertie
  */
 export default function NodeRimHandles({
   onRimHover,
+  isConnectable = true,
 }: {
   onRimHover?: (side: PortSide | null) => void;
+  /** False on a locked canvas (ADR-0080): no wire can start, so no rim cue. */
+  isConnectable?: boolean;
 }) {
   const [hovered, setHovered] = useState<PortSide | null>(null);
 
   const enter = (side: PortSide) => () => {
+    if (!isConnectable) return;
     setHovered(side);
     onRimHover?.(side);
   };
@@ -63,6 +67,7 @@ export default function NodeRimHandles({
           id={rimHandleId(side)}
           type="source"
           position={position}
+          isConnectable={isConnectable}
           onPointerEnter={enter(side)}
           onPointerLeave={leave}
           data-testid={`rim-source-${side}`}
@@ -72,7 +77,7 @@ export default function NodeRimHandles({
             borderRadius: 3,
             border: "none",
             background: hovered === side ? WIRE_BG : "transparent",
-            cursor: "crosshair",
+            cursor: isConnectable ? "crosshair" : "default",
             zIndex: 2,
             minWidth: 0,
             minHeight: 0,

@@ -1143,20 +1143,41 @@ pub fn paste_message(socket: &str, session_name: &str, text: &str) {
 /// error here (the caller verified it exists). Private: a daemon message to a
 /// harness goes through [`paste_message`], which poses the runtime prefix.
 fn paste_text(socket: &str, session_name: &str, text: &str) {
+    if !paste_without_enter(socket, session_name, text) {
+        return;
+    }
+    let _ = tmux(socket)
+        .args(["send-keys", "-t", session_name, "Enter"])
+        .output();
+}
+
+/// Paste `text` verbatim into a session's input as one bracketed paste and
+/// **never** press Enter (#971, « Copy and send to terminal »): the text waits
+/// in the agent's input for the user to complete and submit it. No runtime
+/// prefix — the text is the user's, written on their gesture. `false` when tmux
+/// refused the buffer or the paste (the caller's copy to the clipboard is the
+/// fallback).
+pub fn paste_without_enter(socket: &str, session_name: &str, text: &str) -> bool {
     use std::io::Write;
-    let buffer = format!("pdo-paste-{}", std::process::id());
+    let buffer = format!(
+        "pdo-paste-{}-{}",
+        std::process::id(),
+        PASTE_BUFFER_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     let child = tmux(socket)
         .args(["load-buffer", "-b", &buffer, "-"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
-    let Ok(mut child) = child else { return };
+    let Ok(mut child) = child else { return false };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(text.as_bytes());
     }
-    let _ = child.wait();
-    let _ = tmux(socket)
+    if !child.wait().map(|s| s.success()).unwrap_or(false) {
+        return false;
+    }
+    tmux(socket)
         .args([
             "paste-buffer",
             "-p",
@@ -1166,11 +1187,14 @@ fn paste_text(socket: &str, session_name: &str, text: &str) {
             "-t",
             session_name,
         ])
-        .output();
-    let _ = tmux(socket)
-        .args(["send-keys", "-t", session_name, "Enter"])
-        .output();
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
+
+/// Distinct buffer names for concurrent pastes of one daemon process: two
+/// pastes sharing a name could swap their texts between load and paste.
+static PASTE_BUFFER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Kill a tmux session. Best-effort — does not fail if the session is absent.
 pub fn kill(socket: &str, session_name: &str) {

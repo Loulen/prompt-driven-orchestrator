@@ -34,6 +34,8 @@ const FORWARDED = new Set<WsMessage["type"]>([
   // banner would never light up. (This transport allowlist is the
   // easiest line in the ticket to miss.)
   "triggers_paused",
+  // #974: the validation of a Pipeline changed — refreshes the list.
+  "pipeline_validation_changed",
   // #972: the daemon lost messages for this client — re-read everything.
   "resync",
 ]);

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { ReactNode } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import LibraryRow from "./LibraryRow";
 
@@ -19,6 +20,7 @@ function renderRow(
     onRenameCancel?: () => void;
     onDelete?: () => void;
     deleteTitle?: string;
+    indicator?: ReactNode;
   } = {},
 ) {
   const props = {
@@ -83,6 +85,16 @@ describe("LibraryRow instance metadata", () => {
   it("labels the useful last-edit metadata", () => {
     renderRow({ modified: "2026-08-26T12:00:00Z" });
     expect(screen.getByText(/^edited /)).toBeInTheDocument();
+  });
+
+  it("keeps the meta line on one line, truncating the text, never the indicator (#974)", () => {
+    // The hover actions narrow the row: the meta used to wrap (« 2 / nodes »)
+    // and the row grew by a line under the cursor.
+    renderRow({ modified: "2026-08-26T12:00:00Z", indicator: <span>ind</span> });
+    const meta = screen.getByTestId("library-row-meta");
+    expect(meta.className).toContain("whitespace-nowrap");
+    expect(screen.getByText(/^edited /).parentElement!.className).toContain("truncate");
+    expect(screen.getByText("ind").parentElement!.className).toContain("shrink-0");
   });
 });
 

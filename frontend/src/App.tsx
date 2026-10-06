@@ -35,7 +35,7 @@ import type { TabId } from "./components/PipelineInfoPanel";
 import { infoPanelButtons, toggleAssistantTab, toggleInfoTab } from "./lib/infoPanelReconcile";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
-import NodeInspector from "./components/NodeInspector";
+import NodeInspector, { NodeConfigView } from "./components/NodeInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
@@ -51,7 +51,7 @@ import { handleUndoRedoKeydown } from "./lib/undoRedoHotkeys";
 import InspectorTabs from "./components/InspectorTabs";
 import { useInspectorTab } from "./hooks/useInspectorTab";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { useEditStore } from "./stores/editStore";
+import { isRunTabLocked, useEditStore } from "./stores/editStore";
 import TourHost from "./components/tour/TourHost";
 import { useTour } from "./hooks/useTour";
 import { loadTourOffered, markTourOffered, shouldOfferWelcome } from "./lib/tourMemory";
@@ -379,6 +379,9 @@ export default function App() {
       : null;
 
   const isEditingRun = editTab?.scope === "run";
+  // ADR-0080: a run tab in « pilotage » (not « Edit for this run »): the
+  // inspector reads, never writes — Config instead of Edit.
+  const runLocked = isRunTabLocked(editTab);
   const hasEditTab = editTab != null;
   // #684: which pane a selected node gets. Markers (start/end) never reach the
   // generic `NodeInspector` — outside a run they get a read-only pane.
@@ -564,6 +567,16 @@ export default function App() {
   }
 
   function inspectorEditPane() {
+    if (runLocked) {
+      return (
+        <NodeConfigView
+          provisioningRepository={nodeInspectorProvisioningProps.provisioningRepository}
+          runSkills={nodeInspectorProvisioningProps.runSkills}
+          runNode={nodeInspectorProvisioningProps.runNode}
+          archived={isActiveRunArchived}
+        />
+      );
+    }
     switch (editNodeType) {
       // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
       // and hides the model field for it.
@@ -736,7 +749,8 @@ export default function App() {
     // #315: never fire a save for an archived run — the tab is read-only and a
     // PUT would 404. `isActiveRunArchived` also removes this listener the moment
     // the open run flips to archived (via refreshRun).
-    if (!hasEditTab || isActiveRunArchived) return;
+    // ADR-0080: nor for a run followed in « pilotage » — nothing to save.
+    if (!hasEditTab || isActiveRunArchived || runLocked) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
@@ -745,7 +759,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [hasEditTab, isActiveRunArchived, editActiveTabId, editSave]);
+  }, [hasEditTab, isActiveRunArchived, runLocked, editActiveTabId, editSave]);
 
   // Canvas undo/redo (ADR-0014 / #226): Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or
   // Ctrl/Cmd+Y redo. Sibling to the Ctrl+S effect above, but — unlike Save — it
@@ -801,6 +815,12 @@ export default function App() {
       // Triggers rows themselves are unchanged, so only the Projet list refetches.
       if (msg.type === "project_changed") {
         refreshProjects();
+        return;
+      }
+      // #974: a Pipeline's validation changed (another tab or client) — the
+      // indicator and the launch forms read it from the Pipelines list.
+      if (msg.type === "pipeline_validation_changed") {
+        loadPipelines();
         return;
       }
       // Trigger lifecycle (#160/#162): create/update/delete refreshes the
@@ -954,7 +974,7 @@ export default function App() {
           <ResizablePanel defaultSize={layout.defaultLayout.center} id="center">
             {hasEditTab ? (
               <div className="flex h-full min-w-0 flex-col">
-                <TabBar />
+                <TabBar projects={projects} />
                 {orchestratorReturn && selectedRun?.run_id === orchestratorReturn.childRunId && (
                   <button
                     type="button"
@@ -1039,7 +1059,7 @@ export default function App() {
             ) : paneOwner === "editTab" ? (
               <>
                 {selection.kind === "node" && editNodeType != null && nodeInspectorKind === "node" ? (
-                  <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab}>
+                  <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab} configMode={runLocked}>
                     <div hidden={inspectorTab !== "run"} className="h-full" data-testid="inspector-pane-run">
                       {inspectorRunPane()}
                     </div>
@@ -1063,15 +1083,27 @@ export default function App() {
                   <NodeInspector
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}
-                    readOnly={isActiveRunArchived}
+                    readOnly={isActiveRunArchived || runLocked}
                     {...nodeInspectorProvisioningProps}
                   />
-                ) : selection.kind === "edge" ? (
-                  <EdgeDetailPanel trigger={edgeTrigger} />
-                ) : selection.kind === "region" ? (
-                  <RegionInspector />
-                ) : selection.kind === "note" ? (
-                  <NoteInspector />
+                ) : selection.kind === "edge" || selection.kind === "region" || selection.kind === "note" ? (
+                  // ADR-0080: in « pilotage » these panes are read, not edited —
+                  // a disabled fieldset turns every control off at once (the store
+                  // refuses the mutation anyway).
+                  <fieldset
+                    disabled={runLocked}
+                    className="contents"
+                    data-testid="inspector-locked"
+                    data-locked={runLocked}
+                  >
+                    {selection.kind === "edge" ? (
+                      <EdgeDetailPanel trigger={edgeTrigger} />
+                    ) : selection.kind === "region" ? (
+                      <RegionInspector />
+                    ) : (
+                      <NoteInspector />
+                    )}
+                  </fieldset>
                 ) : null}
                 {/* `"none"` reaches this on a terminal/paused run (deselect, or
                     selecting the run — #503 red-dot panel). #752: the standalone

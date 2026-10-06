@@ -27,7 +27,7 @@ import { openRunShell, reopenRun, retryAll } from "../api";
 import RunShellModal from "./RunShellModal";
 import { RetryAllConfirmModal } from "./UnifiedLeftPanel";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId, resolveTargetGeometrySide } from "./editNodeDerivation";
-import { useEditStore } from "../stores/editStore";
+import { hasUnsavedWork, isRunTabLocked, useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../lib/nodePlacement";
 import { reframeOnPaneResize } from "../lib/paneResizeViewport";
@@ -117,7 +117,9 @@ interface EditNodeData {
 }
 
 // Exported for unit tests; co-located with the canvas it renders.
-export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) {
+// `isConnectable` mirrors the canvas's `nodesConnectable` (false while a run is
+// followed or archived, ADR-0080): handles then drop their wiring affordance.
+export function EditNode({ data, id, selected, isConnectable = true }: NodeProps<Node<EditNodeData>>) {
   const selection = useEditStore((s) => s.selection);
   // #844: hovering the rim arms the gesture — a subtle AMBER ring says « a wire
   // starts here », the crosshair on the strip itself says how.
@@ -189,6 +191,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
         id={emergent ? undefined : data.inputs[0]?.name}
         type="target"
         position={SIDE_TO_POSITION[bodyHandleSide]}
+        isConnectable={isConnectable}
         isConnectableStart={false}
         className={`emergent-body-target${isDropTarget ? " is-drop" : ""}`}
         style={{
@@ -216,6 +219,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
             id={anchorHandleId(side)}
             type="target"
             position={position}
+            isConnectable={isConnectable}
             isConnectableStart={false}
             className="emergent-anchor-target"
             style={{
@@ -300,7 +304,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
           and on a higher layer so it wins the pointer over the body target above;
           inside the rim the card still drags. A node that declares no output
           (the End marker) starts no wire and grows no rim. */}
-      {data.outputs.length > 0 && <NodeRimHandles onRimHover={setRimHover} />}
+      {data.outputs.length > 0 && <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} />}
     </NodeCard>
   );
 }
@@ -351,6 +355,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const addNoteToStore = useEditStore((s) => s.addNote);
   const moveNote = useEditStore((s) => s.moveNote);
   const deleteNote = useEditStore((s) => s.deleteNote);
+  const startRunEditing = useEditStore((s) => s.startRunEditing);
+  const finishRunEditing = useEditStore((s) => s.finishRunEditing);
+  const saveTab = useEditStore((s) => s.save);
+  const openPipeline = useEditStore((s) => s.openPipeline);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -408,9 +416,22 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // 404 → the tab self-closes and the canvas vanishes. We keep
   // selection/inspection (click a node to read its output) but disable every
   // mutation: drag, connect, add-node/add-note, and the context-menu edit
-  // actions. Keyed on `archived` ONLY, so editing-during-run (ADR-0007) stays
-  // intact for running/completed runs.
-  const readOnly = activeRunState?.status === "archived";
+  // actions.
+  // ADR-0080: every run tab is read-only the same way while in « pilotage »;
+  // « Edit for this run » unlocks it (hot editing of ADR-0007), never on an
+  // archived Run.
+  const archived = activeRunState?.status === "archived";
+  const readOnly = archived || isRunTabLocked(tab);
+  const runEditable = tab?.runId != null && activeRunState != null && !archived;
+  const [confirmFinishEditing, setConfirmFinishEditing] = useState(false);
+  const handleFinishEditing = useCallback(() => {
+    if (!tab) return;
+    if (hasUnsavedWork(tab)) {
+      setConfirmFinishEditing(true);
+      return;
+    }
+    void finishRunEditing(tab.id);
+  }, [tab, finishRunEditing]);
 
   // #752 (CONTEXT.md « Accès rapide Review »): the toolbar's Review quick access
   // — a link to the Run's Review page with the pending-comment pill — on every
@@ -1026,6 +1047,16 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         onReopen={handleReopen}
         onRetryAll={() => setConfirmRetryAll(true)}
         onOpenShell={handleOpenShell}
+        runEdit={
+          runEditable && tab && activeRunState
+            ? {
+                editing: !isRunTabLocked(tab),
+                onEditForRun: () => startRunEditing(tab.id),
+                onEditSource: () => void openPipeline(activeRunState.pipeline_name),
+                onFinishEditing: handleFinishEditing,
+              }
+            : undefined
+        }
       />
       {/* #225: lint diagnostics are an edit-mode affordance — suppress on run tabs.
           NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
@@ -1206,6 +1237,97 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           onCancel={() => setConfirmRetryAll(false)}
         />
       )}
+      {confirmFinishEditing && tab && (
+        <FinishEditingConfirmModal
+          onCancel={() => setConfirmFinishEditing(false)}
+          onDiscard={() => {
+            setConfirmFinishEditing(false);
+            void finishRunEditing(tab.id);
+          }}
+          onSave={async () => {
+            setConfirmFinishEditing(false);
+            await saveTab(tab.id);
+            const after = useEditStore.getState().openTabs.find((t) => t.id === tab.id);
+            // A failed save keeps the edits and the SaveErrorModal says why.
+            if (after && !hasUnsavedWork(after)) await finishRunEditing(tab.id);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * ADR-0080: « Finish editing » with unsaved edits. Three ways out — keep
+ * editing, save for this run then lock, or discard and lock. No Enter binding:
+ * discarding is destructive and the user may have just been typing. Escape
+ * keeps editing.
+ */
+export function FinishEditingConfirmModal({
+  onCancel,
+  onDiscard,
+  onSave,
+}: {
+  onCancel: () => void;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onCancel();
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      data-testid="finish-editing-backdrop"
+      onClick={onCancel}
+    >
+      <div
+        role="dialog"
+        aria-label="Finish editing"
+        data-testid="finish-editing-modal"
+        className="flex w-[400px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+        style={{ fontSize: "12px" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+          Finish editing with unsaved changes?
+        </h3>
+        <p className="mt-2 text-fg-2">
+          Your changes to this run are not saved. Finishing without saving throws them away; the run
+          keeps its current pipeline.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            data-testid="finish-editing-cancel"
+            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+            style={{ fontSize: "11.5px" }}
+          >
+            Keep editing
+          </button>
+          <button
+            onClick={onDiscard}
+            data-testid="finish-editing-discard"
+            className="cursor-pointer rounded-md border border-st-blocked/50 bg-bg-3 px-3 py-1.5 text-st-blocked transition-colors hover:bg-bg-4"
+            style={{ fontSize: "11.5px" }}
+          >
+            Discard changes
+          </button>
+          <button
+            onClick={onSave}
+            data-testid="finish-editing-save"
+            className="cursor-pointer rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+            style={{ fontSize: "11.5px" }}
+          >
+            Save for this run
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

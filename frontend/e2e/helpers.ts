@@ -61,7 +61,14 @@ export async function openPipelineForEdit(page: Page, name: string): Promise<voi
  */
 export async function pickPipeline(page: Page, pipelineId: string): Promise<void> {
   await page.getByTestId("pipeline-select").click();
-  await page.getByTestId(`pipeline-select-option-${pipelineId}`).click();
+  const option = page.getByTestId(`pipeline-select-option-${pipelineId}`);
+  // #974: a pipeline created through the API is born a test pipeline, folded
+  // behind « Show test pipelines » until somebody validates it.
+  const showTests = page.getByTestId("pipeline-select-show-tests");
+  if (!(await option.isVisible()) && (await showTests.isVisible())) {
+    if ((await showTests.getAttribute("aria-expanded")) !== "true") await showTests.click();
+  }
+  await option.click();
 }
 
 /**

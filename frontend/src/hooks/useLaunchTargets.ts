@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchPipelines } from "../api";
+import { fetchPipelines, fetchProjects } from "../api";
 import { pickDefaultBranch } from "../lib/branchSelect";
 import { useBranchList } from "./useBranchList";
-import type { PipelineListEntry } from "../types";
+import type { PipelineListEntry, Project } from "../types";
 
 /**
  * What a Run/Trigger can be launched AGAINST (#359): the target repo's branches and the
@@ -23,6 +23,10 @@ import type { PipelineListEntry } from "../types";
  */
 export function useLaunchTargets(open: boolean) {
   const [pipelines, setPipelines] = useState<PipelineListEntry[]>([]);
+  // #974: the Projets, to know which one owns the chosen repository and so which
+  // Pipelines head the menu. `null` until the first answer: a selection must not
+  // be judged « not offered » against a list that has not arrived yet.
+  const [projects, setProjects] = useState<Project[] | null>(null);
   const [selectedPipelineId, setSelectedPipelineId] = useState("");
   const [sourceBranch, setSourceBranch] = useState("");
   const {
@@ -76,6 +80,11 @@ export function useLaunchTargets(open: boolean) {
     fetchPipelines()
       .then((list) => setPipelines(list))
       .catch(() => {});
+    // Fresh on every open: a Projet created meanwhile (the First run tour makes
+    // one) must head the menu the next time the form opens.
+    fetchProjects()
+      .then((list) => setProjects(list))
+      .catch(() => setProjects([]));
   }, [open]);
 
   useEffect(() => {
@@ -89,6 +98,7 @@ export function useLaunchTargets(open: boolean) {
 
   return {
     pipelines,
+    projects,
     selectedPipeline,
     selectedPipelineId,
     setSelectedPipelineId,

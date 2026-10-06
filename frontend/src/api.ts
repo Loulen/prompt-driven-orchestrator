@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineValidation, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -992,6 +992,51 @@ export function fetchPane(
   );
 }
 
+/** One file of an import into a running node (#971): its final name (suffixed
+ *  when the name was taken) and its path relative to the Run's worktree root. */
+export interface ImportedFile {
+  name: string;
+  path: string;
+  size: number;
+}
+
+export interface ImportFilesResponse {
+  iter: number;
+  files: ImportedFile[];
+}
+
+/** #971: import files from this browser's machine into a node holding a live
+ *  session. Refused by name (no live session, over `max_attachments_mb`), in
+ *  which case nothing was written. */
+export function importNodeFiles(
+  runId: string,
+  nodeId: string,
+  iter: number,
+  files: File[],
+): Promise<ImportFilesResponse> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return request<ImportFilesResponse>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/attachments`,
+    { body: form, query: { iter }, label: "Import" },
+  );
+}
+
+/** #971: write `text` into the node's terminal input **without** pressing Enter. */
+export function sendTextToNodeTerminal(
+  runId: string,
+  nodeId: string,
+  iter: number,
+  text: string,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/terminal-text`,
+    { body: { iter, text }, label: "Send to terminal" },
+  );
+}
+
 export function fetchPipelines(): Promise<PipelineListEntry[]> {
   return request<PipelineListEntry[]>("GET", "/pipelines");
 }
@@ -1858,6 +1903,32 @@ export function saveRunPipeline(
   );
 }
 
+/** ADR-0080: what « Overwrite default pipeline » would touch, read before the warning. */
+export interface OverwritePreview {
+  pipeline_id: string;
+  pipeline_exists: boolean;
+  /** `null`: the Run predates the launch fingerprint — unknown, not "no". */
+  modified_since_launch: boolean | null;
+  triggers: { id: string; name: string; enabled: boolean }[];
+}
+
+export function fetchRunPipelineOverwritePreview(runId: string): Promise<OverwritePreview> {
+  return request<OverwritePreview>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/pipeline/overwrite-preview`,
+    { label: `GET /runs/${runId}/pipeline/overwrite-preview` },
+  );
+}
+
+/** ADR-0080: the Run's whole snapshot (YAML + prompts) replaces the shared Pipeline. */
+export function overwriteDefaultPipelineFromRun(runId: string): Promise<{ pipeline_id: string }> {
+  return request<{ pipeline_id: string }>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/pipeline/overwrite-default`,
+    { label: `POST /runs/${runId}/pipeline/overwrite-default` },
+  );
+}
+
 // Pin an operation to a single store. Without it the daemon resolves a bare id
 // repo-then-user, so a `library` (or `user`) entry colliding with a same-named
 // repo pipeline routes to the wrong file (#216). `repo`/`user`/`run` map to the
@@ -1914,6 +1985,22 @@ export function createPipeline(
     "POST",
     "/pipelines",
     { body: { name }, label: "POST /pipelines" },
+  );
+}
+
+/**
+ * #974 — replace a Pipeline's validation (`PUT /pipelines/{id}/validation`). An
+ * empty Projet list comes back as `{ kind: "none" }` (« tout décocher = non
+ * validé »); an unknown Projet is a 400 naming it.
+ */
+export function setPipelineValidation(
+  id: string,
+  validation: PipelineValidation,
+): Promise<{ ok: boolean; id: string; validation: PipelineValidation }> {
+  return request<{ ok: boolean; id: string; validation: PipelineValidation }>(
+    "PUT",
+    `/pipelines/${encodeURIComponent(id)}/validation`,
+    { body: validation, label: `PUT /pipelines/${id}/validation` },
   );
 }
 

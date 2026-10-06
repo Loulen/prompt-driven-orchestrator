@@ -121,6 +121,9 @@ mod node_delivery;
 #[path = "node_done_detach.rs"]
 mod node_done_detach;
 
+#[path = "node_import.rs"]
+mod node_import;
+
 #[path = "node_io.rs"]
 mod node_io;
 

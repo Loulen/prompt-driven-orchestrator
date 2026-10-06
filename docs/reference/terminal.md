@@ -36,3 +36,14 @@ When the pilot closes the terminal, the first browser to have arrived among the 
 
 A direct `tmux attach` (over SSH) and **Detach to OS terminal** open ordinary tmux clients outside these roles: they still weigh on the window size and can type.
 
+## Import a file into a running node
+
+A node with a live session (running or waiting for you) can receive files from your machine, on a local or a remote instance alike (#971).
+
+1. Drop one or more files on the node's terminal, or click the import icon in the terminal toolbar (next to copy and expand). The import window opens with the files listed.
+2. **Import** writes them into the Run's Blackboard, under `.pdo/artifacts/_attachments/<node-id>/` of the Run worktree. These files are never committed and are removed with the Run. A name already there gets a suffix (`contrat-1.pdf`): nothing is overwritten.
+3. The window then shows a ready-to-use text with each file's path relative to the worktree root. The copy icon copies it. **Copy & send to terminal** copies it too and writes it into the agent's input **without pressing Enter**: complete your message in the terminal and submit it yourself. PDO never tells the agent on its own.
+
+The import is refused, and nothing is written, when the node has no live session or when the files exceed `max_attachments_mb` (Settings, 50 MB by default, counted per import). Behind a reverse proxy, the proxy's own body limit (nginx `client_max_body_size`) must allow the same size (see [reverse-proxy.md](reverse-proxy.md)).
+
+API: `POST /runs/<run-id>/nodes/<node-id>/attachments` (multipart, `files` parts) and `POST /runs/<run-id>/nodes/<node-id>/terminal-text` (`{"text": "…"}`, pasted without Enter).

@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { FolderOpen, Square } from "lucide-react";
 
 /** The overlay itself (design 02): one line for the count, one for the two rules. */
-export function DropOverlay({ count, hint }: { count: number; hint: string }) {
+export function DropOverlay({ count, hint, title }: { count: number; hint: string; title?: string }) {
   return (
     <div
       className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-acc/70 bg-bg-1/70"
@@ -11,7 +11,7 @@ export function DropOverlay({ count, hint }: { count: number; hint: string }) {
     >
       <div className="flex flex-col gap-2 rounded-lg border border-line bg-bg-4 p-3 shadow-xl">
         <div className="rounded-md border border-line-strong bg-bg-3 px-8 py-3 text-center font-semibold text-fg" style={{ fontSize: "14px" }}>
-          Drop to attach {count} file{count === 1 ? "" : "s"}
+          {title ?? `Drop to attach ${count} file${count === 1 ? "" : "s"}`}
         </div>
         <div className="rounded-md border border-acc/40 bg-bg-3 px-4 py-2.5 text-center text-fg-3" style={{ fontSize: "11px" }}>
           {hint}

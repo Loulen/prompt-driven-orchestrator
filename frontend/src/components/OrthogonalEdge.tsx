@@ -30,7 +30,7 @@ import {
 import { mergeAlignedSegments, snapPolyline } from "../lib/wiringGrid";
 import { useWiringGridStep } from "../hooks/useWiringGrid";
 import { useWiringStore } from "../stores/wiringStore";
-import { useEditStore } from "../stores/editStore";
+import { selectActiveTabLocked, useEditStore } from "../stores/editStore";
 import type { EdgeAnchor, EdgeDef, EdgeWaypoint, PortSide } from "../types";
 import { EDGE_LABELS_ABOVE_NODES, EDGE_LABELS_UNDER_NODES } from "./editNodeDerivation";
 
@@ -111,6 +111,8 @@ export default function OrthogonalEdge({
   data,
 }: EdgeProps<Edge<OrthogonalEdgeData>>) {
   const updateEdge = useEditStore((s) => s.updateEdge);
+  // ADR-0080: a run followed in « pilotage » offers no route or label drag.
+  const locked = useEditStore(selectActiveTabLocked);
   // Selection drives the stroke color (#177). The store is the source of truth
   // the edge detail panel keys off, so reading it here (mirroring `EditNode`'s
   // own `isSelected` derivation) keeps the orange stroke and the open panel in
@@ -375,7 +377,7 @@ export default function OrthogonalEdge({
     (commit: (p: Point) => void) => (e: React.PointerEvent) => {
       // Primary button only: without this the right-click that opens the edge's
       // context menu would also start a drag and silently move the label.
-      if (e.button !== 0 || edgeIndex == null) return;
+      if (e.button !== 0 || edgeIndex == null || locked) return;
       e.stopPropagation();
       e.preventDefault();
       const start = { x: e.clientX, y: e.clientY };
@@ -392,7 +394,7 @@ export default function OrthogonalEdge({
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [edgeIndex, screenToFlowPosition, setSelection],
+    [edgeIndex, locked, screenToFlowPosition, setSelection],
   );
 
   // `EdgeLabelRenderer` portals its children out of the edge's SVG, but a React
@@ -555,6 +557,7 @@ export default function OrthogonalEdge({
             handle does NOTHING now (#844) — a waypoint goes away by being
             dragged into alignment, not by a hidden menu. */}
         {isSelected &&
+          !locked &&
           handles.map((h) => (
             <div
               key={h.segmentIndex}

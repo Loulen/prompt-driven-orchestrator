@@ -1,4 +1,4 @@
-import { Plus, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal } from "lucide-react";
+import { Plus, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal, Pencil, ChevronDown, Check, ExternalLink } from "lucide-react";
 import type { PendingTone } from "../lib/reviewComments";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
@@ -58,9 +58,19 @@ interface Props {
   onReopen?: () => void;
   onRetryAll?: () => void;
   onOpenShell?: () => void;
+  // ADR-0080: the « Edit » control of a non-archived run tab. Absent on a
+  // template (always editable) and on an archived Run (read-only for good).
+  // `editing` false = « pilotage »: a menu offers « Edit for this run » and
+  // « Edit source pipeline »; true = « Finish editing » takes its place.
+  runEdit?: {
+    editing: boolean;
+    onEditForRun: () => void;
+    onEditSource: () => void;
+    onFinishEditing: () => void;
+  };
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, runEdit }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -182,6 +192,75 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         </>
       )}
 
+      {/* ADR-0080: « Edit » — the one way out of « pilotage ». Following a Run
+          never modifies it; editing is an explicit gesture, for this Run only
+          unless the user later overwrites the default pipeline from Save. */}
+      {runEdit && (
+        <>
+          {!readOnly && <span className="mx-0.5 h-4 w-px bg-line" />}
+          {runEdit.editing ? (
+            <Tooltip content="Back to following the run — the canvas locks again">
+              <button
+                data-testid="toolbar-finish-editing"
+                onClick={runEdit.onFinishEditing}
+                className="flex h-7 cursor-pointer items-center gap-1 rounded px-2 text-acc transition-colors hover:bg-bg-4 active:bg-acc active:text-bg-0"
+                style={{ fontSize: "11px" }}
+              >
+                <Check size={13} />
+                <span>Finish editing</span>
+              </button>
+            </Tooltip>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                data-testid="toolbar-edit"
+                className="flex h-7 cursor-pointer items-center gap-1 rounded px-2 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg data-[popup-open]:bg-bg-4 data-[popup-open]:text-fg"
+                style={{ fontSize: "11px" }}
+                aria-label="Edit"
+              >
+                <Pencil size={12} />
+                <span>Edit</span>
+                <ChevronDown size={11} className="text-fg-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                className="min-w-[220px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg"
+                side="bottom"
+                align="start"
+              >
+                <DropdownMenuItem
+                  data-testid="toolbar-edit-for-run"
+                  className="flex cursor-pointer flex-col items-start gap-0.5 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                  style={{ fontSize: "11.5px" }}
+                  onClick={runEdit.onEditForRun}
+                >
+                  <span className="flex items-center gap-2">
+                    <Pencil size={12} className="shrink-0 text-fg-4" />
+                    Edit for this run
+                  </span>
+                  <span className="pl-5 text-fg-4" style={{ fontSize: "10px" }}>
+                    Changes apply to this run only
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  data-testid="toolbar-edit-source"
+                  className="flex cursor-pointer flex-col items-start gap-0.5 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                  style={{ fontSize: "11.5px" }}
+                  onClick={runEdit.onEditSource}
+                >
+                  <span className="flex items-center gap-2">
+                    <ExternalLink size={12} className="shrink-0 text-fg-4" />
+                    Edit source pipeline
+                  </span>
+                  <span className="pl-5 text-fg-4" style={{ fontSize: "10px" }}>
+                    Opens the shared pipeline in its own tab
+                  </span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </>
+      )}
+
       {/* #598 / ADR-0049: the finished-run action group (Variant A). Contextual
           to a TERMINAL, non-archived run — the three ways to continue it. Placed
           between the history group and the view group, in its own cluster. */}
@@ -234,7 +313,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
           `aria-pressed`). The pill is the pending count; its tone is the nuance. */}
       {reviewHref && (
         <>
-          {!readOnly && <span className="mx-0.5 h-4 w-px bg-line" />}
+          {(!readOnly || runEdit || finishedRun) && <span className="mx-0.5 h-4 w-px bg-line" />}
 
           <Tooltip content={reviewTitle}>
             <a
@@ -270,7 +349,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
       {(onToggleInfo || (assistantAvailable && onOpenAssistant)) && (
         <>
           {/* #315: no leading separator when the info group is the sole control. */}
-          {!readOnly && !reviewHref && <span className="mx-0.5 h-4 w-px bg-line" />}
+          {(!readOnly || runEdit || finishedRun) && !reviewHref && <span className="mx-0.5 h-4 w-px bg-line" />}
 
           {/* #302 / ADR-0048: the "agent" glyph, immediately left of `(i)`, both
               driving the same Pipeline info panel — the Bot toggles the

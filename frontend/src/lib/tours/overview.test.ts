@@ -92,7 +92,8 @@ const TRIGGERS_LIST = t("triggers-list-panel");
 const NEW_PIPELINE = t("new-pipeline-button");
 const PIPELINE_ROW = t("library-row-tutorial-overview");
 const INSPECTOR_RUN = t("inspector-pane-run");
-const INSPECTOR_EDIT = t("inspector-pane-edit");
+const INSPECTOR_CONFIG = t("inspector-pane-edit");
+const TAB_CONFIG = t("inspector-tab-config");
 const TAB_RUN = t("inspector-tab-run");
 const TERMINAL = t("tmux-terminal");
 const TERMINAL_RESTORE = t("term-restore");
@@ -219,15 +220,15 @@ class FakeApp {
   /** A finished node opens with its terminal folded to a bar (#346). */
   clickImplementer() {
     this.select("node", "implementer");
-    this.show(INSPECTOR_RUN, CODE_ROW, TERMINAL_RESTORE, TAB_RUN);
+    this.show(INSPECTOR_RUN, CODE_ROW, TERMINAL_RESTORE, TAB_RUN, TAB_CONFIG);
   }
-  /** The inspector's Edit tab hides the Run pane — its outputs and its terminal. */
-  openEditTab() {
+  /** The inspector's Config tab hides the Run pane — its outputs and its terminal. */
+  openConfigTab() {
     this.hide(INSPECTOR_RUN, CODE_ROW, TERMINAL_RESTORE);
-    this.show(INSPECTOR_EDIT);
+    this.show(INSPECTOR_CONFIG);
   }
   openRunTab() {
-    this.hide(INSPECTOR_EDIT);
+    this.hide(INSPECTOR_CONFIG);
     this.show(INSPECTOR_RUN, CODE_ROW, TERMINAL_RESTORE);
   }
   /** A click on the `code` row opens the artifact viewer, over everything. */
@@ -501,21 +502,21 @@ describe("gestures advance only on the observed state", () => {
     expect(currentStep(TOUR, after)?.id).toBe("terminal");
   });
 
-  it("keeps the implementer step satisfied and lit while the reader explores the Edit tab", () => {
+  it("keeps the implementer step satisfied and lit while the reader explores the Config tab", () => {
     const fake = new FakeApp();
     fake.openRun();
     fake.clickImplementer();
-    fake.openEditTab();
+    fake.openConfigTab();
     const step = stepById("open-implementer");
     expect(step.done!(fake.obs())).toBe(true);
     expect(stepReadOnly(step, fake.obs())).toEqual([RIGHT]);
   });
 
-  it("sends a reader left on the Edit tab back to the Run tab for the outputs and the terminal", () => {
+  it("sends a reader left on the Config tab back to the Run tab for the outputs and the terminal", () => {
     const fake = new FakeApp();
     fake.openRun();
     fake.clickImplementer();
-    fake.openEditTab();
+    fake.openConfigTab();
     for (const id of ["outputs", "terminal"]) {
       const step = stepById(id);
       expect(step.target(fake.obs()), id).toEqual([TAB_RUN]);
@@ -656,7 +657,9 @@ describe("gestures advance only on the observed state", () => {
     expect(stepReadOnly(stepById("outputs"), fake.obs())).toEqual([RIGHT]);
     expect(stepReadOnly(stepById("terminal"), fake.obs())).toEqual([RIGHT]);
     // The inspector's tabs stay clickable inside the read-only panel.
-    expect(stepById("open-implementer").explore).toContain(t("inspector-tab-edit"));
+    // ADR-0080: on a Run followed in « pilotage » the second tab is Config, not Edit.
+    expect(stepById("open-implementer").explore).toContain(TAB_CONFIG);
+    expect(stepById("open-implementer").explore).not.toContain(t("inspector-tab-edit"));
     // With the viewer up its backdrop covers the panel: nothing else is lit.
     fake.openCode();
     expect(stepReadOnly(stepById("outputs"), fake.obs())).toEqual([]);
@@ -678,7 +681,7 @@ describe("gestures advance only on the observed state", () => {
     expect(stepAsides(stepById("open-start"), fake.obs())).toEqual([]);
 
     fake.clickImplementer();
-    expect(stepAsides(stepById("open-implementer"), fake.obs()).map((a) => a.target)).toEqual([TASK_ROW]);
+    expect(stepAsides(stepById("open-implementer"), fake.obs()).map((a) => a.target)).toEqual([TASK_ROW, TAB_CONFIG]);
     fake.clickEndEdge();
     const [condition] = stepAsides(stepById("open-end-edge"), fake.obs());
     expect(condition.target).toBe(EDGE_CONDITION);

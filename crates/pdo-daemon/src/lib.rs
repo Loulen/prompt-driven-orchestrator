@@ -144,6 +144,12 @@ use crate::worktree_ops::{
 const DEFAULT_PORT: u16 = 5172;
 const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+/// #972: the PTY bridge's keep-alive beat (a ping frame plus a `heartbeat` text
+/// frame). Well under the 60 s `proxy_read_timeout` nginx applies by default, so a
+/// terminal whose agent is thinking is never idle in the eyes of a proxy; and
+/// short enough for the browser, which cannot see pings, to call a socket that
+/// missed three beats dead (`PTY_SILENCE_TIMEOUT_MS` in `TmuxTerminal`).
+const PTY_PING_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Embed)]
 #[folder = "../../frontend/dist"]
@@ -564,6 +570,10 @@ struct AppState {
     node_done_tail_gate: Arc<tokio::sync::Notify>,
     /// Whether the tail gate is currently armed. See [`Self::node_done_tail_gate`].
     node_done_tail_gate_armed: Arc<std::sync::atomic::AtomicBool>,
+    /// #972: how often the PTY bridge pings an open terminal socket, in ms, so no
+    /// reverse proxy drops a silent terminal for inactivity. [`PTY_PING_INTERVAL`]
+    /// in production; tests shorten it through [`DaemonHandle::set_pty_ping_interval`].
+    pty_ping_interval_ms: std::sync::atomic::AtomicU64,
     /// Persistent-service health, computed once at boot and cached so the polled
     /// `GET /sessions` pays zero subprocess cost per request.
     service_health: Arc<ServiceHealth>,
@@ -2894,6 +2904,28 @@ impl DaemonHandle {
 
     /// Release the terminal-tail gate: disarm, then wake every tail
     /// parked at the gate. See [`Self::arm_node_done_gate`].
+    /// Shorten the PTY bridge's keep-alive ping (#972, test seam). Applies to
+    /// the terminal sockets opened afterwards.
+    pub fn set_pty_ping_interval(&self, interval: Duration) {
+        self.state.pty_ping_interval_ms.store(
+            interval.as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Push `count` throwaway messages through the `/ws` broadcast in one
+    /// synchronous burst (#972, test seam): more than the channel holds, so a
+    /// subscriber that has not read them in between lags — the condition that
+    /// makes the daemon send `resync`.
+    pub fn flood_ws_broadcast(&self, count: usize) {
+        for i in 0..count {
+            let _ = self
+                .state
+                .pipeline_tx
+                .send(serde_json::json!({ "type": "test_flood", "seq": i }));
+        }
+    }
+
     pub fn release_node_done_gate(&self) {
         self.state
             .node_done_tail_gate_armed
@@ -3449,6 +3481,9 @@ pub async fn serve_with_config(
         panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
         node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
         node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+            PTY_PING_INTERVAL.as_millis() as u64
+        ),
         service_health,
         docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -5149,6 +5184,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/pipelines/{pipeline_id}/rename", put(rename_pipeline))
         .route(
+            "/pipelines/{pipeline_id}/validation",
+            put(put_pipeline_validation),
+        )
+        .route(
             "/pipelines/{pipeline_id}/document",
             get(get_pipeline_document),
         )
@@ -5203,6 +5242,17 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/runs/{run_id}/nodes/{node_id}/wait-user",
             post(node_wait_user),
         )
+        // #971: import files into a node with a live session. The budget is
+        // `max_attachments_mb`, enforced IN the handler (read fresh per request),
+        // so the route has no static body limit — same rule as `POST /runs`.
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/attachments",
+            post(node_import_files).route_layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/terminal-text",
+            post(node_terminal_text),
+        )
         .route(
             "/runs/{run_id}/nodes/{node_id}/children/wait",
             get(node_children_wait),
@@ -5252,6 +5302,14 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/runs/{run_id}/pipeline",
             axum::routing::put(save_run_pipeline),
+        )
+        .route(
+            "/runs/{run_id}/pipeline/overwrite-preview",
+            get(get_run_pipeline_overwrite_preview),
+        )
+        .route(
+            "/runs/{run_id}/pipeline/overwrite-default",
+            post(overwrite_default_pipeline),
         )
         .route("/runs/{run_id}/commands", post(run_command))
         .route("/runs/{run_id}/nodes/{node_id}/start", post(node_start))
@@ -7141,6 +7199,10 @@ struct PipelineListEntry {
     /// Whether a manual Run must supply a non-empty prompt. Surfaced so the New Run
     /// modal can make the prompt field optional.
     prompt_required: bool,
+    /// #974 (CONTEXT.md *Pipeline validé*): for which Projets the launch forms
+    /// offer it. Filled by `list_pipelines` from the instance database; the scan
+    /// itself only knows the default (no row ⇒ all Projets).
+    validation: project_store::PipelineValidation,
 }
 
 #[derive(Deserialize)]
@@ -7221,6 +7283,7 @@ fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntr
             modified,
             variables,
             prompt_required,
+            validation: project_store::PipelineValidation::default(),
         });
     }
     entries
@@ -7243,7 +7306,100 @@ async fn list_pipelines(State(state): State<Arc<AppState>>) -> Response {
     };
     let mut pipelines = scan_pipeline_dir(&dir, "instance");
     pipelines.sort_by_key(|entry| entry.name.to_lowercase());
+    match project_store::pipeline_validations(&state.db).await {
+        Ok(mut validations) => {
+            for entry in &mut pipelines {
+                if let Some(validation) = validations.remove(&entry.id) {
+                    entry.validation = validation;
+                }
+            }
+        }
+        Err(e) => {
+            error!("failed to read pipeline validations: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to read pipeline validations" })),
+            )
+                .into_response();
+        }
+    }
     Json(pipelines).into_response()
+}
+
+/// #974: what PDO creates, duplicates or imports is born a *Pipeline de test*.
+/// Best-effort like the Stats absorption of a rename: the file is already
+/// written, and failing the request over a lost row would lie about it.
+async fn mark_pipeline_not_validated(state: &AppState, pipeline_id: &str) {
+    if let Err(e) = project_store::set_pipeline_validation(
+        &state.db,
+        pipeline_id,
+        project_store::PipelineValidation::NotValidated,
+    )
+    .await
+    {
+        warn!("failed to mark pipeline {pipeline_id} as not validated: {e}");
+    }
+}
+
+/// #974: a rename (or a save that changes `name:`) moves the file stem; the
+/// validation follows it.
+async fn move_pipeline_validation(state: &AppState, old_id: &str, new_id: &str) {
+    if let Err(e) = project_store::rename_pipeline_validation(&state.db, old_id, new_id).await {
+        warn!("failed to move the validation of pipeline {old_id} to {new_id}: {e}");
+    }
+}
+
+/// `PUT /pipelines/{id}/validation` (#974): replace the Pipeline's validation —
+/// `{"kind":"all"}`, `{"kind":"none"}` or `{"kind":"projects","project_ids":[…]}`.
+/// An empty Projet list stores « not validated ». Unknown Projets are refused
+/// before any write, naming the first one.
+async fn put_pipeline_validation(
+    State(state): State<Arc<AppState>>,
+    AxumPath(pipeline_id): AxumPath<String>,
+    Json(validation): Json<project_store::PipelineValidation>,
+) -> Response {
+    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
+    if !path.exists() {
+        return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
+    }
+    if let project_store::PipelineValidation::Projects { project_ids } = &validation {
+        for project_id in project_ids {
+            match project_store::get(&state.db, project_id).await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("no such project: {project_id}"),
+                        })),
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!("failed to read project {project_id}: {e}");
+                    return project_list_error();
+                }
+            }
+        }
+    }
+    match project_store::set_pipeline_validation(&state.db, &pipeline_id, validation).await {
+        Ok(stored) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "pipeline_validation_changed",
+                "pipeline_id": pipeline_id,
+            }));
+            Json(serde_json::json!({ "ok": true, "id": pipeline_id, "validation": stored }))
+                .into_response()
+        }
+        Err(e) => {
+            error!("failed to store the validation of pipeline {pipeline_id}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to store the validation" })),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn get_pipeline(
@@ -7444,6 +7600,7 @@ async fn save_pipeline(
             }
         };
         mark_self_write(&state.recent_writes, &new_path);
+        move_pipeline_validation(&state, &pipeline_id, &desired_id).await;
         // #891 / ADR-0077 §4: the new id carries the old id's Stats series.
         stats_absorption::record_rename_best_effort(
             &state.db,
@@ -7662,6 +7819,7 @@ async fn rename_pipeline(
         }
     };
     mark_self_write(&state.recent_writes, &new_path);
+    move_pipeline_validation(&state, &pipeline_id, &new_id).await;
     // #891 / ADR-0077 §4: the new id carries the old id's Stats series.
     stats_absorption::record_rename_best_effort(
         &state.db,
@@ -7776,6 +7934,7 @@ async fn create_pipeline(
             .into_response();
     }
 
+    mark_pipeline_not_validated(&state, &id).await;
     info!("Created pipeline {id} at {}", path.display());
     (
         StatusCode::CREATED,
@@ -8150,15 +8309,18 @@ async fn duplicate_pipeline(
     let mut copy = parsed.pipeline;
     copy.name = new_name;
     match write_pipeline_atomically(&dir, &new_id, &copy, &read_pipeline_prompts(&source)) {
-        Ok(path) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": new_id,
-                "scope": "instance",
-                "path": path.to_string_lossy(),
-            })),
-        )
-            .into_response(),
+        Ok(path) => {
+            mark_pipeline_not_validated(&state, &new_id).await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": new_id,
+                    "scope": "instance",
+                    "path": path.to_string_lossy(),
+                })),
+            )
+                .into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
@@ -8347,17 +8509,20 @@ async fn import_pipeline_document(
     warnings.extend(skills.warnings.iter().cloned());
     imported.name = name;
     match write_pipeline_atomically(&dir, &id, &imported, &interpreted.prompts) {
-        Ok(path) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": id,
-                "scope": "instance",
-                "path": path.to_string_lossy(),
-                "warnings": warnings,
-                "skills": skills,
-            })),
-        )
-            .into_response(),
+        Ok(path) => {
+            mark_pipeline_not_validated(&state, &id).await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": id,
+                    "scope": "instance",
+                    "path": path.to_string_lossy(),
+                    "warnings": warnings,
+                    "skills": skills,
+                })),
+            )
+                .into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
@@ -8698,6 +8863,7 @@ async fn import_library_pipeline(
     imported.name = name;
     match write_pipeline_atomically(&dir, &id, &imported, &result.prompts) {
         Ok(path) => {
+            mark_pipeline_not_validated(&state, &id).await;
             let warnings: Vec<String> = result.warnings.iter().map(|d| d.message.clone()).collect();
             (
                 StatusCode::CREATED,
@@ -8753,6 +8919,9 @@ async fn delete_pipeline(
             .into_response();
     }
 
+    if let Err(e) = project_store::forget_pipeline_validation(&state.db, &pipeline_id).await {
+        warn!("failed to forget the validation of pipeline {pipeline_id}: {e}");
+    }
     info!("Deleted pipeline {pipeline_id}");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
@@ -16686,62 +16855,238 @@ async fn save_run_pipeline(
         }
     }
 
-    sync_run_pipeline_to_template(
-        &state,
-        &run_id,
-        &run_state.pipeline_name,
-        &req.yaml,
-        &req.prompts,
-    );
-
-    info!("Run-scoped pipeline for {run_id} saved (validated + synced to template)");
+    // ADR-0080: « Enregistrer pour ce Run » writes the run-scoped snapshot ONLY.
+    // The shared Pipeline moves through the explicit, warned
+    // `overwrite_default_pipeline` gesture, never as a side effect of a save.
+    info!("Run-scoped pipeline for {run_id} saved (validated, snapshot only)");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
-fn sync_run_pipeline_to_template(
+/// The run's snapshot as the overwrite gesture reads it: the live run-scoped
+/// YAML and its prompts. `Err` is the projected refusal (ADR-0080: an archived
+/// Run stays read-only, so it has nothing to overwrite with).
+async fn run_snapshot_for_overwrite(
     state: &AppState,
     run_id: &str,
-    pipeline_name: &str,
+) -> Result<(event_log::RunState, PathBuf, PathBuf), Box<Response>> {
+    let refuse = |status: StatusCode, message: String| {
+        Box::new(
+            (
+                status,
+                Json(serde_json::json!({ "error": message.clone(), "message": message })),
+            )
+                .into_response(),
+        )
+    };
+    let events = load_events(&state.db, run_id)
+        .await
+        .map_err(|e| refuse(StatusCode::INTERNAL_SERVER_ERROR, format!("load events: {e}")))?;
+    let Some(run_state) = event_log::project(&events) else {
+        return Err(refuse(StatusCode::NOT_FOUND, "run not found".to_string()));
+    };
+    if run_state.status == event_log::RunStatus::Archived {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            "an archived run is read-only: its pipeline cannot overwrite the default".to_string(),
+        ));
+    }
+    let repo_root = effective_repo_root(state, &run_state);
+    let snapshot = run_scoped_pipeline_path(&repo_root, run_id);
+    if !snapshot.exists() {
+        return Err(refuse(
+            StatusCode::NOT_FOUND,
+            "run-scoped pipeline not found".to_string(),
+        ));
+    }
+    let template = resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name);
+    Ok((run_state, snapshot, template))
+}
+
+/// What « Écraser le Pipeline par défaut » would touch (ADR-0080), read before
+/// the warning modal opens: the shared Pipeline itself, the Triggers that launch
+/// it, and whether it changed since this Run was launched. `modified_since_launch`
+/// is `null` when the Run predates the launch fingerprint (unknown, not "no").
+async fn get_run_pipeline_overwrite_preview(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let (run_state, _snapshot, template) = match run_snapshot_for_overwrite(&state, &run_id).await
+    {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    let repo_root = effective_repo_root(&state, &run_state);
+    let pipeline_exists = template.exists();
+    let modified_since_launch =
+        std::fs::read_to_string(run_source_fingerprint_path(&repo_root, &run_id))
+            .ok()
+            .map(|launched| {
+                pipeline_source_fingerprint(&template).as_deref() != Some(launched.trim())
+            });
+    let triggers: Vec<serde_json::Value> = match trigger_store::list(&state.db).await {
+        Ok(all) => all
+            .into_iter()
+            .filter(|t| t.pipeline_id == run_state.pipeline_name)
+            .map(|t| serde_json::json!({ "id": t.id, "name": t.name, "enabled": t.enabled }))
+            .collect(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("list triggers: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    Json(serde_json::json!({
+        "pipeline_id": run_state.pipeline_name,
+        "pipeline_exists": pipeline_exists,
+        "modified_since_launch": modified_since_launch,
+        "triggers": triggers,
+    }))
+    .into_response()
+}
+
+/// « Écraser le Pipeline par défaut » (ADR-0080): the Run's snapshot — YAML and
+/// every prompt — replaces the shared Pipeline it was launched from. The only
+/// path by which a Run's edit reaches the shared Pipeline; the warning lives in
+/// the UI, read from [`get_run_pipeline_overwrite_preview`].
+async fn overwrite_default_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let (run_state, snapshot, template) = match run_snapshot_for_overwrite(&state, &run_id).await {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    if !template.exists() {
+        let message = format!(
+            "the default pipeline '{}' no longer exists (renamed or deleted)",
+            run_state.pipeline_name
+        );
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": message.clone(), "message": message })),
+        )
+            .into_response();
+    }
+    let yaml = match std::fs::read_to_string(&snapshot) {
+        Ok(y) => y,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("read run pipeline: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let parsed = match pipeline::parse_pipeline(&yaml) {
+        Ok(r) => r.pipeline,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid run pipeline YAML: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let repo_root = effective_repo_root(&state, &run_state);
+    let prompts = read_prompts_from_dir(&run_scoped_prompts_dir(&repo_root, &run_id));
+    if let Err(e) = overwrite_template_with_snapshot(&state, &template, &yaml, &prompts, &parsed) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.clone(), "message": e })),
+        )
+            .into_response();
+    }
+    // The shared Pipeline now IS this Run's snapshot: re-anchor the launch
+    // fingerprint so the next overwrite from this Run does not warn about its own
+    // write as a colleague's change.
+    if let Some(fingerprint) = pipeline_source_fingerprint(&template) {
+        let _ = std::fs::write(run_source_fingerprint_path(&repo_root, &run_id), fingerprint);
+    }
+    // Self-writes are muted on the watcher: announce the change ourselves so an
+    // open tab of the shared Pipeline reloads.
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "pipeline_changed",
+        "pipeline_id": run_state.pipeline_name,
+        "path": template.to_string_lossy(),
+    }));
+    info!(
+        "Run {run_id} overwrote the default pipeline at {}",
+        template.display()
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "pipeline_id": run_state.pipeline_name })),
+    )
+        .into_response()
+}
+
+/// Replace the shared Pipeline at `template_path` with a Run's snapshot: the YAML
+/// atomically, every prompt at the canonical `<stem>.prompts/<id>.md` (the dir
+/// every reader consults, never a flat `prompts/`), and the prompts of nodes the
+/// snapshot no longer has pruned — the snapshot is the whole definition.
+fn overwrite_template_with_snapshot(
+    state: &AppState,
+    template_path: &Path,
     yaml: &str,
     prompts: &HashMap<String, String>,
-) {
-    let template_path = resolve_pipeline_path(&state.repo_root, pipeline_name);
+    snapshot: &pipeline::PipelineDef,
+) -> Result<(), String> {
     let tmp_path = template_path.with_extension("yaml.tmp");
-
     if let Some(parent) = template_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-
-    mark_self_write(&state.recent_writes, &template_path);
-
-    if let Err(e) = std::fs::write(&tmp_path, yaml) {
-        warn!("sync_run_pipeline_to_template: write tmp failed: {e}");
-        return;
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &template_path) {
-        warn!("sync_run_pipeline_to_template: rename failed: {e}");
+    mark_self_write(&state.recent_writes, template_path);
+    std::fs::write(&tmp_path, yaml).map_err(|e| format!("write failed: {e}"))?;
+    if let Err(e) = std::fs::rename(&tmp_path, template_path) {
         let _ = std::fs::remove_file(&tmp_path);
-        return;
+        return Err(format!("rename failed: {e}"));
     }
-
-    // Write each prompt to the canonical `<dir>/<stem>.prompts/<id>.md` location every
-    // reader consults. NOT a flat `<dir>/prompts/<id>.md` dir: no reader looks there,
-    // so run-scoped prompt edits vanish in silence.
     for (node_id, content) in prompts {
-        let prompt_path = pipeline::canonical_prompt_path(&template_path, node_id);
+        let prompt_path = pipeline::canonical_prompt_path(template_path, node_id);
         if let Some(parent) = prompt_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         mark_self_write(&state.recent_writes, &prompt_path);
-        if let Err(e) = std::fs::write(&prompt_path, content) {
-            warn!("sync_run_pipeline_to_template: prompt sync failed for {node_id}: {e}");
-        }
+        std::fs::write(&prompt_path, content)
+            .map_err(|e| format!("prompt write failed for {node_id}: {e}"))?;
     }
+    prune_orphan_prompts(state, template_path, snapshot);
+    Ok(())
+}
 
-    info!(
-        "Synced run {run_id} pipeline to template at {}",
-        template_path.display()
-    );
+/// Where a Run keeps the fingerprint of the shared Pipeline it was launched from
+/// (ADR-0080), beside its snapshot.
+fn run_source_fingerprint_path(repo_root: &Path, run_id: &str) -> PathBuf {
+    repo_root
+        .join(".pdo")
+        .join("runs")
+        .join(run_id)
+        .join("pipeline.source-fingerprint")
+}
+
+/// The content fingerprint of a shared Pipeline: its YAML bytes and every
+/// sidecar prompt, in node-id order. Two reads of an unchanged Pipeline agree;
+/// any edit of the YAML or of one prompt changes it. `None` when the YAML is
+/// unreadable (deleted, renamed).
+fn pipeline_source_fingerprint(pipeline_path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let yaml = std::fs::read(pipeline_path).ok()?;
+    let prompts = read_pipeline_prompts(pipeline_path);
+    let mut ids: Vec<&String> = prompts.keys().collect();
+    ids.sort();
+    let mut hasher = Sha256::new();
+    hasher.update((yaml.len() as u64).to_le_bytes());
+    hasher.update(&yaml);
+    for id in ids {
+        let content = &prompts[id];
+        hasher.update((id.len() as u64).to_le_bytes());
+        hasher.update(id.as_bytes());
+        hasher.update((content.len() as u64).to_le_bytes());
+        hasher.update(content.as_bytes());
+    }
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Gather best-effort diagnostic context the moment a node session is found dead.
@@ -18225,6 +18570,305 @@ async fn node_wait_user(
         }
         Err(refusal) => refusal.into_response(&run_id, &node_id, iter),
     }
+}
+
+#[derive(Deserialize, Default)]
+struct NodeIterQuery {
+    #[serde(default)]
+    iter: Option<i64>,
+}
+
+/// A refused import or terminal write (#971): the status and the sentence that
+/// names why, plus a stable slug for the client.
+fn node_gesture_refusal(status: StatusCode, slug: &str, message: String) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": slug,
+            "recoverable": true,
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
+/// The live session a gesture toward a node's agent needs (#971), or the named
+/// refusal of [`declared_wait::check_live_session`] with `what` (« nothing
+/// imported ») appended, so the user knows nothing happened.
+async fn require_live_node_session(
+    state: &Arc<AppState>,
+    run_id: &str,
+    node_id: &str,
+    iter: Option<i64>,
+    what: &str,
+) -> Result<declared_wait::LiveSession, Box<Response>> {
+    declared_wait::check_live_session(state, run_id, node_id, iter, |session| {
+        state.node_session_alive(session)
+    })
+    .await
+    .map_err(|refusal| {
+        let status = match refusal {
+            declared_wait::WaitRefusal::RunNotFound | declared_wait::WaitRefusal::NodeNotFound => {
+                StatusCode::NOT_FOUND
+            }
+            _ => StatusCode::CONFLICT,
+        };
+        let reason = match refusal {
+            declared_wait::WaitRefusal::RunNotFound => format!("run {run_id} does not exist"),
+            declared_wait::WaitRefusal::RunNotLive => format!("run {run_id} is not running"),
+            declared_wait::WaitRefusal::NodeNotFound => {
+                format!("node {node_id} is not part of run {run_id}")
+            }
+            declared_wait::WaitRefusal::NodeIsScript => {
+                format!("node {node_id} is a script node: no agent runs there")
+            }
+            declared_wait::WaitRefusal::NodeSessionNotLive => {
+                format!("node {node_id} has no live session")
+            }
+        };
+        Box::new(node_gesture_refusal(
+            status,
+            refusal.slug(),
+            format!("{reason}; {what}"),
+        ))
+    })
+}
+
+/// `POST /runs/{run_id}/nodes/{node_id}/attachments[?iter=N]` — import files
+/// from the user's machine into a node that holds a live session (#971, « Fichier
+/// importé en cours de Run »). Multipart, one or more `files` parts.
+///
+/// Every precondition is checked before anything is written: the live session
+/// first (before the body is even read), then the instance attachment budget
+/// (`max_attachments_mb`, per import, read fresh like `POST /runs`), then the
+/// names. The files land in the Run's Blackboard under
+/// `.pdo/artifacts/_attachments/<node-id>/` — never committed, removed with the
+/// Run — and a name already there is suffixed, never overwritten. The answer
+/// gives each file's final path relative to the Run's worktree root. The agent
+/// is not told: the UI hands the user a text to send it.
+async fn node_import_files(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Query(query): Query<NodeIterQuery>,
+    multipart: Result<Multipart, axum::extract::multipart::MultipartRejection>,
+) -> Response {
+    const NOTHING: &str = "nothing imported";
+    let live = match require_live_node_session(&state, &run_id, &node_id, query.iter, NOTHING).await
+    {
+        Ok(live) => live,
+        Err(refusal) => return *refusal,
+    };
+    let Some(worktree) = run_worktree_dir(&state, &live.run_state, &run_id) else {
+        return node_gesture_refusal(
+            StatusCode::CONFLICT,
+            "run_worktree_missing",
+            format!("run {run_id} has no worktree on disk; {NOTHING}"),
+        );
+    };
+    let mut multipart = match multipart {
+        Ok(m) => m,
+        Err(e) => {
+            return node_gesture_refusal(
+                StatusCode::BAD_REQUEST,
+                "bad_multipart",
+                format!("expected a multipart body with `files` parts ({e}); {NOTHING}"),
+            )
+        }
+    };
+    let max_mb = resolve_max_attachments_mb(
+        instance_config::get(&state.db)
+            .await
+            .ok()
+            .and_then(|cfg| cfg.max_attachments_mb),
+    );
+    let max_bytes = (max_mb as u64) * 1024 * 1024;
+
+    // Read every part in memory before writing anything: a refusal (budget,
+    // name, cut upload) must leave the Blackboard untouched.
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total: u64 = 0;
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                let cause = std::error::Error::source(&e)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| e.to_string());
+                return node_gesture_refusal(
+                    StatusCode::BAD_REQUEST,
+                    "upload_interrupted",
+                    format!(
+                        "{}; {NOTHING}",
+                        multipart_cut_message(None, None, total, &cause)
+                    ),
+                );
+            }
+        };
+        let field_name = field.name().unwrap_or("").to_string();
+        if field_name != "files" {
+            return node_gesture_refusal(
+                StatusCode::BAD_REQUEST,
+                "unknown_field",
+                format!("unknown field `{field_name}`; accepted: files; {NOTHING}"),
+            );
+        }
+        let raw_name = field.file_name().unwrap_or("").to_string();
+        let name = match blackboard::sanitize_import_name(&raw_name) {
+            Ok(name) => name,
+            Err(message) => {
+                return node_gesture_refusal(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_filename",
+                    format!("{message}; {NOTHING}"),
+                )
+            }
+        };
+        // Chunk by chunk, so a file far over the budget is cut at the line
+        // instead of being buffered whole.
+        let mut data: Vec<u8> = Vec::new();
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    total += chunk.len() as u64;
+                    if total > max_bytes {
+                        return node_gesture_refusal(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "attachments_too_large",
+                            format!(
+                                "`{name}` takes the import past the limit of {max_mb} MB per \
+                                 import; raise `max_attachments_mb` in Settings or import less. \
+                                 {NOTHING}"
+                            ),
+                        );
+                    }
+                    data.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return node_gesture_refusal(
+                        StatusCode::BAD_REQUEST,
+                        "upload_interrupted",
+                        format!(
+                            "{}; {NOTHING}",
+                            multipart_field_error("files", Some(&raw_name), total, &e)
+                        ),
+                    )
+                }
+            }
+        }
+        files.push((name, data));
+    }
+    if files.is_empty() {
+        return node_gesture_refusal(
+            StatusCode::BAD_REQUEST,
+            "no_files",
+            format!("no file in the import; {NOTHING}"),
+        );
+    }
+
+    let relative_dir =
+        blackboard::node_attachments_dir(Path::new(worktree_ops::RUN_ARTIFACTS_RELATIVE), &node_id);
+    let dir = worktree.join(&relative_dir);
+    let written = match blackboard::import_files(&dir, &files) {
+        Ok(written) => written,
+        Err(e) => {
+            return node_gesture_refusal(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "write_failed",
+                format!(
+                    "failed to write into {}: {e}; {NOTHING}",
+                    relative_dir.display()
+                ),
+            )
+        }
+    };
+    info!(
+        "Run {run_id}: imported {} file(s) for {node_id} iter-{} into {}",
+        written.len(),
+        live.iter,
+        relative_dir.display()
+    );
+    let entries: Vec<serde_json::Value> = written
+        .iter()
+        .zip(&files)
+        .map(|(name, (_, data))| {
+            serde_json::json!({
+                "name": name,
+                "path": relative_dir.join(name).to_string_lossy(),
+                "size": data.len(),
+            })
+        })
+        .collect();
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "iter": live.iter, "files": entries })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct TerminalTextRequest {
+    #[serde(default)]
+    iter: Option<i64>,
+    text: String,
+}
+
+/// The longest text « Copy and send to terminal » writes (#971): a few
+/// paragraphs, never a document.
+const TERMINAL_TEXT_MAX_BYTES: usize = 16 * 1024;
+
+/// `POST /runs/{run_id}/nodes/{node_id}/terminal-text` — write `text` into the
+/// input of a node's live session **without pressing Enter** (#971, « Copy and
+/// send to terminal »). The user completes and submits it themselves: this
+/// never starts an agent turn. The text counts as typed for the declared-wait
+/// Enter rule. Best-effort on the tmux side; the UI copies the text too.
+async fn node_terminal_text(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Json(body): Json<TerminalTextRequest>,
+) -> Response {
+    const NOTHING: &str = "nothing written";
+    if body.text.trim().is_empty() {
+        return node_gesture_refusal(
+            StatusCode::BAD_REQUEST,
+            "empty_text",
+            format!("empty text; {NOTHING}"),
+        );
+    }
+    if body.text.len() > TERMINAL_TEXT_MAX_BYTES {
+        return node_gesture_refusal(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "text_too_long",
+            format!("text over {} KB; {NOTHING}", TERMINAL_TEXT_MAX_BYTES / 1024),
+        );
+    }
+    let live = match require_live_node_session(&state, &run_id, &node_id, body.iter, NOTHING).await
+    {
+        Ok(live) => live,
+        Err(refusal) => return *refusal,
+    };
+    let socket = state.tmux_socket();
+    let session = live.session.clone();
+    let text = body.text.clone();
+    let pasted = tokio::task::spawn_blocking(move || {
+        tmux_session_manager::paste_without_enter(&socket, &session, &text)
+    })
+    .await
+    .unwrap_or(false);
+    if !pasted {
+        return node_gesture_refusal(
+            StatusCode::BAD_GATEWAY,
+            "paste_failed",
+            format!("tmux refused the paste into {}; {NOTHING}", live.session),
+        );
+    }
+    declared_wait::note_typed_text(&state, &live.session);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "iter": live.iter })),
+    )
+        .into_response()
 }
 
 async fn node_done(
@@ -21256,7 +21900,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("WebSocket client lagged by {n} events");
+                        warn!("WebSocket client lagged by {n} events, asking it to resync");
+                        if send_resync(&mut socket).await.is_err() {
+                            break;
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -21268,7 +21915,12 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("WebSocket client lagged by {n} broadcasts, asking it to resync");
+                        if send_resync(&mut socket).await.is_err() {
+                            break;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -21276,6 +21928,15 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
 
     info!("WebSocket client disconnected");
+}
+
+/// #972: the broadcast dropped messages this client never received, so its
+/// picture of the Runs may miss a transition. Rather than replaying, the daemon
+/// tells it to re-read everything — the same full re-read the client does after
+/// a reconnect.
+async fn send_resync(socket: &mut WebSocket) -> Result<(), axum::Error> {
+    let msg = serde_json::json!({ "type": "resync" });
+    socket.send(Message::Text(msg.to_string().into())).await
 }
 
 fn unix_timestamp_secs() -> String {
@@ -23018,6 +23679,14 @@ fn copy_pipeline_to_run(
         std::fs::create_dir_all(parent).context("create run dir")?;
     }
     std::fs::copy(pipeline_path, &dest_yaml).context("copy pipeline yaml")?;
+    // ADR-0080: remember what the shared Pipeline looked like at launch, so the
+    // overwrite warning can say whether a colleague changed it since. Best
+    // effort: a missing fingerprint only makes that line "unknown".
+    if let Some(fingerprint) = pipeline_source_fingerprint(pipeline_path) {
+        if let Err(e) = std::fs::write(run_source_fingerprint_path(repo_root, run_id), fingerprint) {
+            warn!("run {run_id}: could not record the pipeline launch fingerprint: {e}");
+        }
+    }
 
     let stem = pipeline_path
         .file_stem()
@@ -24523,6 +25192,9 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -29752,6 +30424,9 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             service_health: Arc::new(service_health),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -35679,6 +36354,9 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -35727,24 +36405,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_run_pipeline_writes_canonical_prompt_path() {
-        // Run-scoped sync must write each prompt to the canonical
-        // `<stem>.prompts/<id>.md` (where every reader looks) — never the flat
-        // `prompts/<id>.md` dir that no reader consults.
+    async fn overwrite_template_writes_canonical_prompt_path_and_prunes_orphans() {
+        // ADR-0080: overwriting the default Pipeline from a Run must write each
+        // prompt to the canonical `<stem>.prompts/<id>.md` (where every reader
+        // looks) — never the flat `prompts/<id>.md` dir that no reader consults —
+        // and drop the prompt of a node the snapshot no longer has.
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         write_test_pipeline(dir, "auto-issue");
         let state = test_state_with_dir(dir).await;
 
+        let pipelines = dir.join(".pdo").join("pipelines");
+        let template = pipelines.join("auto-issue.yaml");
+        let stale = pipelines.join("auto-issue.prompts").join("gone.md");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "a node the snapshot dropped").unwrap();
+
         let mut prompts = HashMap::new();
         prompts.insert("worker".to_string(), "the role prompt".to_string());
+        let yaml = std::fs::read_to_string(&template).unwrap();
+        let parsed = pipeline::parse_pipeline(&yaml).unwrap().pipeline;
+        overwrite_template_with_snapshot(&state, &template, &yaml, &prompts, &parsed).unwrap();
 
-        let yaml =
-            std::fs::read_to_string(dir.join(".pdo").join("pipelines").join("auto-issue.yaml"))
-                .unwrap();
-        sync_run_pipeline_to_template(&state, "run-xyz", "auto-issue", &yaml, &prompts);
-
-        let pipelines = dir.join(".pdo").join("pipelines");
         let canonical = pipelines.join("auto-issue.prompts").join("worker.md");
         let flat = pipelines.join("prompts").join("worker.md");
 
@@ -35757,6 +36439,40 @@ mod tests {
             !flat.exists(),
             "the flat prompts/ dir must never be written"
         );
+        assert!(!stale.exists(), "the prompt of a dropped node is pruned");
+    }
+
+    #[test]
+    fn pipeline_source_fingerprint_moves_with_yaml_and_prompts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_test_pipeline(dir, "fp");
+        let template = dir.join(".pdo").join("pipelines").join("fp.yaml");
+        let prompts = dir.join(".pdo").join("pipelines").join("fp.prompts");
+        std::fs::create_dir_all(&prompts).unwrap();
+        std::fs::write(prompts.join("worker.md"), "v1").unwrap();
+
+        let first = pipeline_source_fingerprint(&template).unwrap();
+        assert_eq!(
+            pipeline_source_fingerprint(&template).as_deref(),
+            Some(first.as_str()),
+            "an unchanged pipeline reads the same fingerprint"
+        );
+
+        std::fs::write(prompts.join("worker.md"), "v2").unwrap();
+        let after_prompt = pipeline_source_fingerprint(&template).unwrap();
+        assert_ne!(first, after_prompt, "a prompt edit changes the fingerprint");
+
+        let yaml = std::fs::read_to_string(&template).unwrap();
+        std::fs::write(&template, yaml.replace("version: \"1.0\"", "version: \"2.0\"")).unwrap();
+        assert_ne!(
+            after_prompt,
+            pipeline_source_fingerprint(&template).unwrap(),
+            "a YAML edit changes the fingerprint"
+        );
+
+        std::fs::remove_file(&template).unwrap();
+        assert!(pipeline_source_fingerprint(&template).is_none());
     }
 
     /// RAII guard that sets HOME to a temporary directory and restores it on drop.
@@ -36946,6 +37662,271 @@ edges:
         assert!(prompt_path.exists(), "canonical prompt file must exist");
         let content = std::fs::read_to_string(&prompt_path).unwrap();
         assert_eq!(content, "You are a worker agent.");
+    }
+
+    // --- #974 — Pipelines validés par Projet ---
+
+    async fn call_json(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
+        let builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json");
+        let req = match body {
+            Some(b) => builder
+                .body(Body::from(serde_json::to_string(&b).unwrap()))
+                .unwrap(),
+            None => builder.body(Body::empty()).unwrap(),
+        };
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into()));
+        (status, value)
+    }
+
+    async fn listed_validation(app: &Router, id: &str) -> serde_json::Value {
+        let (status, list) = call_json(app, "GET", "/pipelines", None).await;
+        assert_eq!(status, StatusCode::OK);
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap_or_else(|| panic!("pipeline {id} not listed: {list}"))["validation"]
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn validation_an_existing_pipeline_is_validated_for_all_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "legacy");
+        let app = build_router(test_state_with_dir(tmp.path()).await);
+        assert_eq!(
+            listed_validation(&app, "legacy").await,
+            serde_json::json!({ "kind": "all" })
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_created_duplicated_and_imported_pipelines_are_born_not_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "source");
+        let app = build_router(test_state_with_dir(tmp.path()).await);
+        let none = serde_json::json!({ "kind": "none" });
+
+        let (status, created) = call_json(
+            &app,
+            "POST",
+            "/pipelines",
+            Some(serde_json::json!({ "name": "fresh" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            listed_validation(&app, created["id"].as_str().unwrap()).await,
+            none
+        );
+
+        let (status, copy) = call_json(&app, "POST", "/pipelines/source/duplicate", None).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            listed_validation(&app, copy["id"].as_str().unwrap()).await,
+            none
+        );
+        // The source keeps its own validation.
+        assert_eq!(
+            listed_validation(&app, "source").await,
+            serde_json::json!({ "kind": "all" })
+        );
+
+        let (status, document) = call_json(&app, "GET", "/pipelines/source/document", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, imported) = call_json(
+            &app,
+            "POST",
+            "/pipelines/import",
+            Some(serde_json::json!({ "document": document.as_str().unwrap() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{imported}");
+        assert_eq!(
+            listed_validation(&app, imported["id"].as_str().unwrap()).await,
+            none
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_put_replaces_and_unchecking_everything_is_not_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "shared");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let bravo = project_store::create(&state.db, "Bravo").await.unwrap();
+        let app = build_router(state);
+
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [alpha.id, bravo.id] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let both = serde_json::json!({ "kind": "projects", "project_ids": [alpha.id, bravo.id] });
+        assert_eq!(body["validation"], both);
+        assert_eq!(listed_validation(&app, "shared").await, both);
+
+        // Replacement, not a merge.
+        let (_, _) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [bravo.id] })),
+        )
+        .await;
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "projects", "project_ids": [bravo.id] })
+        );
+
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["validation"], serde_json::json!({ "kind": "none" }));
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "none" })
+        );
+
+        let (_, _) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "all" })),
+        )
+        .await;
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "all" })
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_put_refuses_an_unknown_project_or_pipeline_before_any_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "shared");
+        let app = build_router(test_state_with_dir(tmp.path()).await);
+
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": ["prj-ghost"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("prj-ghost"));
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "all" })
+        );
+
+        let (status, _) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/ghost/validation",
+            Some(serde_json::json!({ "kind": "none" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn validation_survives_a_rename_and_a_renaming_save() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "before");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let app = build_router(state);
+        let only_alpha = serde_json::json!({ "kind": "projects", "project_ids": [alpha.id] });
+        call_json(
+            &app,
+            "PUT",
+            "/pipelines/before/validation",
+            Some(only_alpha.clone()),
+        )
+        .await;
+
+        let (status, renamed) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/before/rename",
+            Some(serde_json::json!({ "name": "middle" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(renamed["id"], "middle");
+        assert_eq!(listed_validation(&app, "middle").await, only_alpha);
+
+        let yaml = format!("name: after\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n");
+        let (status, saved) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/middle",
+            Some(serde_json::json!({ "yaml": yaml })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["id"], "after");
+        assert_eq!(listed_validation(&app, "after").await, only_alpha);
+    }
+
+    #[tokio::test]
+    async fn validation_is_erased_with_the_pipeline_and_never_exported() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "doomed");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let app = build_router(state.clone());
+        call_json(
+            &app,
+            "PUT",
+            "/pipelines/doomed/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [alpha.id] })),
+        )
+        .await;
+
+        let (_, document) = call_json(&app, "GET", "/pipelines/doomed/document", None).await;
+        let document = document.as_str().unwrap();
+        assert!(!document.contains(&alpha.id), "export carries no Projet");
+        assert!(!document.contains("Alpha"), "export carries no Projet");
+        assert!(!document.contains("validation"));
+
+        let (status, _) = call_json(&app, "DELETE", "/pipelines/doomed", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(project_store::pipeline_validations(&state.db)
+            .await
+            .unwrap()
+            .is_empty());
+        // A file reappearing under the same id (written by hand) is a fresh,
+        // all-Projets Pipeline — no ghost validation left behind.
+        write_test_pipeline(tmp.path(), "doomed");
+        assert_eq!(
+            listed_validation(&app, "doomed").await,
+            serde_json::json!({ "kind": "all" })
+        );
     }
 
     // --- #774 — pipeline rename (visible name ⇄ file stem 1:1) ---
@@ -42734,6 +43715,9 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -42945,6 +43929,9 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {

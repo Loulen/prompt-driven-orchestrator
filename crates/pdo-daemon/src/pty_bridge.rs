@@ -15,6 +15,11 @@
 //! - Binary frames ← stdout of the PTY (terminal output)
 //! - Text frames with JSON `{"type":"role","role":"solo"|"pilot"|"spectator",…}`
 //!   on every role change (see [`super::shared_terminal::RoleMsg`])
+//! - Every [`super::PTY_PING_INTERVAL`] (#972): a Ping frame, so a reverse proxy
+//!   never drops a terminal whose agent is silent, then a Text frame
+//!   [`PTY_HEARTBEAT_FRAME`] — the browser never sees pings, and this beat is how
+//!   it tells a silent terminal from a dead connection (half-open TCP, network
+//!   cut with no close)
 
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -36,6 +41,10 @@ use super::shared_terminal::{self, TermSize};
 /// once at boot in [`super::DaemonConfig::from_env`] — never in the hot path
 /// (#181/#407). Additive: the four localhost/127.0.0.1 defaults always stay.
 pub(crate) const ALLOWED_WS_ORIGINS_ENV: &str = "PDO_ALLOWED_WS_ORIGINS";
+
+/// #972: the application-level beat of a terminal socket, sent with each ping.
+/// The browser's watchdog re-arms on it; it is never written to the pane.
+pub(crate) const PTY_HEARTBEAT_FRAME: &str = r#"{"type":"heartbeat"}"#;
 
 /// Parse the raw [`ALLOWED_WS_ORIGINS_ENV`] value into a normalised, ready-to-
 /// compare list. **Pure** (takes the raw string, touches no env), so the truth
@@ -309,8 +318,20 @@ async fn handle_pty_ws(
         }
     });
 
-    // Task 2: forward PTY output and role frames to the WebSocket
+    // Task 2: forward PTY output and role frames to the WebSocket, and beat it
+    // (#972): an agent that thinks for minutes leaves the socket silent, and a
+    // reverse proxy closes a silent WebSocket once its read timeout runs out.
+    // The browser answers the ping on its own (the pong is ignored below) but
+    // cannot see it: the heartbeat text frame is what its watchdog reads.
+    let ping_every = std::time::Duration::from_millis(
+        state
+            .pty_ping_interval_ms
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .max(1),
+    );
     let ws_send_handle = tokio::spawn(async move {
+        let mut ping =
+            tokio::time::interval_at(tokio::time::Instant::now() + ping_every, ping_every);
         loop {
             let msg = tokio::select! {
                 data = pty_rx.recv() => match data {
@@ -318,6 +339,12 @@ async fn handle_pty_ws(
                     None => break,
                 },
                 Some(frame) = role_rx.recv() => Message::Text(frame.into()),
+                _ = ping.tick() => {
+                    if ws_sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        break;
+                    }
+                    Message::Text(PTY_HEARTBEAT_FRAME.into())
+                }
             };
             if ws_sink.send(msg).await.is_err() {
                 break;

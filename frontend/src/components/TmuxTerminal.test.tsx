@@ -186,7 +186,7 @@ vi.mock("./ui/tooltip", () => ({
   }) => <span data-tooltip={disabled ? undefined : content}>{children}</span>,
 }));
 
-import TmuxTerminal from "./TmuxTerminal";
+import TmuxTerminal, { PTY_SILENCE_TIMEOUT_MS } from "./TmuxTerminal";
 
 describe("TmuxTerminal", () => {
   beforeEach(() => {
@@ -1197,6 +1197,255 @@ describe("TmuxTerminal", () => {
       expect(container.dataset.role).toBeUndefined();
       expect(container.parentElement?.dataset.tooltip).toBeUndefined();
       expect(screen.queryByTestId("term-watchers")).toBeNull();
+    });
+  });
+
+  // #972 — a terminal whose socket drops under the user is veiled, offers a
+  // Reconnect, and reconnects on its own when the tab comes back.
+  describe("dropped connection (#972)", () => {
+    const serverDrop = (ws: MockWebSocket) => {
+      ws.readyState = MockWebSocket.CLOSED;
+      ws.fireEvent("close", {});
+    };
+    const settle = () => act(() => new Promise((r) => setTimeout(r, 5)));
+
+    function setVisibility(state: "visible" | "hidden") {
+      Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+
+    afterEach(() => {
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    });
+
+    it("shows no veil while connecting or connected", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+      await settle();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("veils the pane with « Terminal connection closed » when the socket drops", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      act(() => serverDrop(wsInstances[0]));
+      const veil = screen.getByTestId("term-veil");
+      expect(veil.textContent).toContain("Terminal connection closed");
+      expect(within(veil).getByRole("button", { name: /Reconnect/ })).toBeTruthy();
+      // The pane stays mounted underneath.
+      expect(screen.getByTestId("xterm-container")).toBeTruthy();
+    });
+
+    it("Reconnect reopens a socket on the same session and lifts the veil", async () => {
+      render(<TmuxTerminal session="pdo-run-1-cop-iter-1" status="running" />);
+      await settle();
+      act(() => serverDrop(wsInstances[0]));
+      fireEvent.click(screen.getByTestId("term-reconnect"));
+      expect(wsInstances).toHaveLength(2);
+      expect(wsInstances[1].url).toContain("/sessions/pdo-run-1-cop-iter-1/pty");
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+      await settle();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("reconnects on its own when the tab becomes visible again", async () => {
+      render(<TmuxTerminal session="s" status="awaiting_user" />);
+      await settle();
+      act(() => setVisibility("hidden"));
+      act(() => serverDrop(wsInstances[0]));
+      expect(wsInstances).toHaveLength(1);
+      act(() => setVisibility("visible"));
+      expect(wsInstances).toHaveLength(2);
+      await settle();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("a return to the tab leaves a healthy terminal alone", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      act(() => setVisibility("hidden"));
+      act(() => setVisibility("visible"));
+      expect(wsInstances).toHaveLength(1);
+    });
+
+    it("does not veil a node whose session was reaped as it settled", async () => {
+      const { rerender } = render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="running"
+          paneSource={{ runId: "run-1", nodeId: "cop", iter: 1 }}
+        />,
+      );
+      await settle();
+      rerender(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={{ runId: "run-1", nodeId: "cop", iter: 1 }}
+        />,
+      );
+      act(() => serverDrop(wsInstances[0]));
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("unmounting closes the socket without veiling anything", async () => {
+      const { unmount } = render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      unmount();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("never writes the daemon's heartbeat into the pane", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      act(() => wsInstances[0].fireEvent("message", { data: '{"type":"heartbeat"}' }));
+      expect(mockTerminalInstances[0].write).not.toHaveBeenCalled();
+    });
+
+    it("veils the pane as soon as the browser goes offline, without waiting for a close", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      wsInstances[0].close = () => {
+        // a half-open socket: closing it fires nothing
+        wsInstances[0].readyState = MockWebSocket.CLOSING;
+      };
+      act(() => window.dispatchEvent(new Event("offline")));
+      expect(screen.getByTestId("term-veil")).toBeTruthy();
+      expect(screen.getByText("disconnected")).toBeTruthy();
+    });
+
+    describe("with the clock under control", () => {
+      beforeEach(() => vi.useFakeTimers());
+      afterEach(() => vi.useRealTimers());
+
+      const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+      const halfOpen = (ws: MockWebSocket) => {
+        ws.close = () => {
+          ws.readyState = MockWebSocket.CLOSING;
+        };
+      };
+
+      it("veils a socket that stopped beating, though it never closed", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        halfOpen(wsInstances[0]);
+        tick(PTY_SILENCE_TIMEOUT_MS - 1000);
+        expect(screen.queryByTestId("term-veil")).toBeNull();
+        tick(1000);
+        expect(screen.getByTestId("term-veil")).toBeTruthy();
+      });
+
+      it("a beat keeps a silent terminal alive", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        for (let i = 0; i < 6; i++) {
+          tick(10_000);
+          act(() => wsInstances[0].fireEvent("message", { data: '{"type":"heartbeat"}' }));
+        }
+        expect(screen.queryByTestId("term-veil")).toBeNull();
+      });
+
+      it("judges the silence again when the tab comes back", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        halfOpen(wsInstances[0]);
+        // A hidden tab's timers may not have run: move the clock without them.
+        vi.setSystemTime(Date.now() + PTY_SILENCE_TIMEOUT_MS + 1000);
+        act(() => setVisibility("visible"));
+        expect(screen.getByTestId("term-veil")).toBeTruthy();
+      });
+
+      it("a veiled terminal retries on its own, increasingly spaced, veil kept until it opens", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        act(() => serverDrop(wsInstances[0]));
+        // 1st retry after 1 s
+        tick(999);
+        expect(wsInstances).toHaveLength(1);
+        tick(1);
+        expect(wsInstances).toHaveLength(2);
+        expect(screen.getByTestId("term-veil")).toBeTruthy();
+        // it fails before opening: next retry after 2 s
+        act(() => serverDrop(wsInstances[1]));
+        tick(1999);
+        expect(wsInstances).toHaveLength(2);
+        tick(1);
+        expect(wsInstances).toHaveLength(3);
+        // this one opens: the veil lifts, the retries stop
+        tick(0);
+        expect(screen.queryByTestId("term-veil")).toBeNull();
+        tick(60_000 - 1);
+        expect(wsInstances).toHaveLength(3);
+      });
+
+      it("a hidden tab does not retry; its return does", () => {
+        render(<TmuxTerminal session="s" status="running" />);
+        tick(0);
+        act(() => setVisibility("hidden"));
+        act(() => serverDrop(wsInstances[0]));
+        tick(60_000);
+        expect(wsInstances).toHaveLength(1);
+        act(() => setVisibility("visible"));
+        expect(wsInstances).toHaveLength(2);
+      });
+    });
+  });
+
+  describe("file import (#971)", () => {
+    const fileDrop = (files: File[]) => ({
+      dataTransfer: {
+        files,
+        items: files.map(() => ({ kind: "file" })),
+        types: ["Files"],
+        dropEffect: "none",
+      },
+    });
+
+    it("a PDF dropped on the terminal is handed to the import, pre-filled", async () => {
+      const onImportFiles = vi.fn();
+      render(<TmuxTerminal session="s-import" status="running" onImportFiles={onImportFiles} />);
+      const root = screen.getByTestId("tmux-terminal");
+      const pdf = new File(["%PDF"], "contrat.pdf", { type: "application/pdf" });
+      fireEvent.dragEnter(root, fileDrop([pdf]));
+      expect(screen.getByTestId("skill-drop-overlay")).toHaveTextContent(
+        "Drop to import 1 file into this node",
+      );
+      fireEvent.drop(root, fileDrop([pdf]));
+      expect(onImportFiles).toHaveBeenCalledWith([pdf]);
+      expect(screen.queryByTestId("skill-drop-overlay")).toBeNull();
+    });
+
+    it("the Import button sits in the toolbar and opens the import with no file", () => {
+      const onImportFiles = vi.fn();
+      render(<TmuxTerminal session="s-import" status="running" onImportFiles={onImportFiles} />);
+      const button = screen.getByTestId("term-import");
+      expect(button.parentElement?.dataset.tooltip).toBe("Import files into this node");
+      fireEvent.click(button);
+      expect(onImportFiles).toHaveBeenCalledWith([]);
+    });
+
+    it("without a live session the Import button is off and says why", () => {
+      const onImportFiles = vi.fn();
+      render(
+        <TmuxTerminal
+          session="s-import"
+          status="running"
+          onImportFiles={onImportFiles}
+          importDisabledReason="This node has no live session"
+        />,
+      );
+      const button = screen.getByTestId("term-import");
+      expect(button.parentElement?.dataset.tooltip).toBe("This node has no live session");
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(button);
+      expect(onImportFiles).not.toHaveBeenCalled();
+    });
+
+    it("no import handler, no Import button and no drop target (the Run shell)", () => {
+      render(<TmuxTerminal session="s-shell" status="running" />);
+      expect(screen.queryByTestId("term-import")).toBeNull();
+      fireEvent.dragEnter(screen.getByTestId("tmux-terminal"), fileDrop([new File(["x"], "a.txt")]));
+      expect(screen.queryByTestId("skill-drop-overlay")).toBeNull();
     });
   });
 });

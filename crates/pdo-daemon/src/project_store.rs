@@ -14,6 +14,13 @@
 //! can change neither the Projet nor the resolved harness. That property lives at
 //! the spawn seam (which passes the primary path only) — this store just answers
 //! "who owns this exact path".
+//!
+//! It also stores **Pipeline validation** (CONTEXT.md *Pipeline validé*, #974):
+//! for which Projets a Pipeline is offered at launch. A Projet-side datum of the
+//! instance, never written into the YAML, so an export carries no Projet. **No
+//! row means "all Projets"** — that is what keeps the Pipelines present before
+//! the feature visible without a migration; what PDO creates, duplicates or
+//! imports is written "not validated" (a *Pipeline de test*) by the caller.
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
@@ -61,6 +68,28 @@ pub(crate) enum AddMember {
         owner_name: String,
     },
 }
+
+/// For which Projets a Pipeline is offered at launch (CONTEXT.md *Pipeline
+/// validé*). The wire shape is tagged: `{"kind":"all"}`, `{"kind":"none"}`,
+/// `{"kind":"projects","project_ids":[…]}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum PipelineValidation {
+    /// Every Projet, current and future — also what an absent row reads as.
+    #[default]
+    #[serde(rename = "all")]
+    AllProjects,
+    /// A *Pipeline de test*: offered only behind « Show test pipelines ».
+    #[serde(rename = "none")]
+    NotValidated,
+    /// These Projets only, in the order they were validated. Never empty once
+    /// stored: [`set_pipeline_validation`] folds an empty list to `NotValidated`.
+    Projects { project_ids: Vec<String> },
+}
+
+const VALIDATION_ALL: &str = "all";
+const VALIDATION_NONE: &str = "none";
+const VALIDATION_PROJECTS: &str = "projects";
 
 pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -131,6 +160,29 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id)",
+    )
+    .execute(db)
+    .await?;
+
+    // #974: Pipeline validation. One row per Pipeline that states one (absent ⇒
+    // all Projets); the Projets of a `projects` row live in the side table,
+    // ordered by `rowid`. Keyed by the Pipeline id (its file stem), which a
+    // rename moves explicitly.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pipeline_validation (
+            pipeline_id TEXT PRIMARY KEY,
+            kind        TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        )",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pipeline_validation_projects (
+            pipeline_id TEXT NOT NULL,
+            project_id  TEXT NOT NULL,
+            PRIMARY KEY (pipeline_id, project_id)
+        )",
     )
     .execute(db)
     .await?;
@@ -380,6 +432,23 @@ pub(crate) async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Erro
         .bind(id)
         .execute(db)
         .await?;
+    // #974: a Pipeline validated for this Projet alone has nobody left to be
+    // offered to — it becomes a Pipeline de test rather than silently "all".
+    let orphaned =
+        sqlx::query("SELECT pipeline_id FROM pipeline_validation_projects WHERE project_id = ?")
+            .bind(id)
+            .fetch_all(db)
+            .await?;
+    sqlx::query("DELETE FROM pipeline_validation_projects WHERE project_id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    for row in &orphaned {
+        let pipeline_id: String = row.get("pipeline_id");
+        if validation_projects_of(db, &pipeline_id).await?.is_empty() {
+            set_pipeline_validation(db, &pipeline_id, PipelineValidation::NotValidated).await?;
+        }
+    }
     let res = sqlx::query("DELETE FROM projects WHERE id = ?")
         .bind(id)
         .execute(db)
@@ -394,6 +463,185 @@ pub(crate) async fn harness_for_path(
     path: &str,
 ) -> Result<Option<String>, sqlx::Error> {
     Ok(owner_of(db, path).await?.and_then(|p| p.harness))
+}
+
+async fn validation_projects_of(
+    db: &SqlitePool,
+    pipeline_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT project_id FROM pipeline_validation_projects WHERE pipeline_id = ? ORDER BY rowid ASC",
+    )
+    .bind(pipeline_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| r.get::<String, _>("project_id"))
+        .collect())
+}
+
+fn validation_from_row(kind: &str, project_ids: Vec<String>) -> PipelineValidation {
+    match kind {
+        VALIDATION_NONE => PipelineValidation::NotValidated,
+        VALIDATION_PROJECTS if project_ids.is_empty() => PipelineValidation::NotValidated,
+        VALIDATION_PROJECTS => PipelineValidation::Projects { project_ids },
+        // `all`, or a kind this build does not know: the permissive reading,
+        // the same as an absent row.
+        _ => PipelineValidation::AllProjects,
+    }
+}
+
+/// The validation of one Pipeline. No row ⇒ [`PipelineValidation::AllProjects`].
+/// The HTTP surface reads them all at once ([`pipeline_validations`]); this one is
+/// the store's own unit of truth for its tests.
+#[cfg(test)]
+pub(crate) async fn pipeline_validation(
+    db: &SqlitePool,
+    pipeline_id: &str,
+) -> Result<PipelineValidation, sqlx::Error> {
+    let row = sqlx::query("SELECT kind FROM pipeline_validation WHERE pipeline_id = ?")
+        .bind(pipeline_id)
+        .fetch_optional(db)
+        .await?;
+    match row {
+        None => Ok(PipelineValidation::AllProjects),
+        Some(row) => {
+            let kind: String = row.get("kind");
+            let ids = validation_projects_of(db, pipeline_id).await?;
+            Ok(validation_from_row(&kind, ids))
+        }
+    }
+}
+
+/// Every stated validation, keyed by Pipeline id — for the list. A Pipeline
+/// absent from the map is validated for all Projets.
+pub(crate) async fn pipeline_validations(
+    db: &SqlitePool,
+) -> Result<std::collections::HashMap<String, PipelineValidation>, sqlx::Error> {
+    let mut projects: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for row in sqlx::query(
+        "SELECT pipeline_id, project_id FROM pipeline_validation_projects ORDER BY rowid ASC",
+    )
+    .fetch_all(db)
+    .await?
+    {
+        projects
+            .entry(row.get("pipeline_id"))
+            .or_default()
+            .push(row.get("project_id"));
+    }
+    let mut out = std::collections::HashMap::new();
+    for row in sqlx::query("SELECT pipeline_id, kind FROM pipeline_validation")
+        .fetch_all(db)
+        .await?
+    {
+        let id: String = row.get("pipeline_id");
+        let kind: String = row.get("kind");
+        let ids = projects.remove(&id).unwrap_or_default();
+        out.insert(id, validation_from_row(&kind, ids));
+    }
+    Ok(out)
+}
+
+/// Replace a Pipeline's validation wholesale. An empty Projet list is stored as
+/// [`PipelineValidation::NotValidated`] (« tout décocher = non validé »);
+/// duplicates collapse, first occurrence wins. Returns what was stored.
+pub(crate) async fn set_pipeline_validation(
+    db: &SqlitePool,
+    pipeline_id: &str,
+    validation: PipelineValidation,
+) -> Result<PipelineValidation, sqlx::Error> {
+    let validation = match validation {
+        PipelineValidation::Projects { project_ids } => {
+            let mut seen = std::collections::HashSet::new();
+            let ids: Vec<String> = project_ids
+                .into_iter()
+                .filter(|id| seen.insert(id.clone()))
+                .collect();
+            if ids.is_empty() {
+                PipelineValidation::NotValidated
+            } else {
+                PipelineValidation::Projects { project_ids: ids }
+            }
+        }
+        other => other,
+    };
+    let kind = match &validation {
+        PipelineValidation::AllProjects => VALIDATION_ALL,
+        PipelineValidation::NotValidated => VALIDATION_NONE,
+        PipelineValidation::Projects { .. } => VALIDATION_PROJECTS,
+    };
+    let now = crate::event_log::now_iso();
+    let mut tx = db.begin().await?;
+    sqlx::query("DELETE FROM pipeline_validation_projects WHERE pipeline_id = ?")
+        .bind(pipeline_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO pipeline_validation (pipeline_id, kind, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(pipeline_id) DO UPDATE SET kind = excluded.kind, updated_at = excluded.updated_at",
+    )
+    .bind(pipeline_id)
+    .bind(kind)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await?;
+    if let PipelineValidation::Projects { project_ids } = &validation {
+        for project_id in project_ids {
+            sqlx::query(
+                "INSERT INTO pipeline_validation_projects (pipeline_id, project_id) VALUES (?, ?)",
+            )
+            .bind(pipeline_id)
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(validation)
+}
+
+/// A renamed Pipeline keeps its validation: its rows move to the new id. Any
+/// stale rows already under the new id are replaced.
+pub(crate) async fn rename_pipeline_validation(
+    db: &SqlitePool,
+    old_id: &str,
+    new_id: &str,
+) -> Result<(), sqlx::Error> {
+    if old_id == new_id {
+        return Ok(());
+    }
+    let mut tx = db.begin().await?;
+    for table in ["pipeline_validation", "pipeline_validation_projects"] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE pipeline_id = ?"))
+            .bind(new_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(&format!(
+            "UPDATE {table} SET pipeline_id = ? WHERE pipeline_id = ?"
+        ))
+        .bind(new_id)
+        .bind(old_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+/// A deleted Pipeline takes its validation with it.
+pub(crate) async fn forget_pipeline_validation(
+    db: &SqlitePool,
+    pipeline_id: &str,
+) -> Result<(), sqlx::Error> {
+    for table in ["pipeline_validation", "pipeline_validation_projects"] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE pipeline_id = ?"))
+            .bind(pipeline_id)
+            .execute(db)
+            .await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -657,5 +905,136 @@ mod tests {
         assert!(remove_member(&db, "/repos/front").await.unwrap());
         assert!(owner_of(&db, "/repos/front").await.unwrap().is_none());
         assert!(!remove_member(&db, "/repos/front").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_pipeline_without_a_row_is_validated_for_all_projects() {
+        let db = mem_db().await;
+        assert_eq!(
+            pipeline_validation(&db, "legacy").await.unwrap(),
+            PipelineValidation::AllProjects
+        );
+        assert!(pipeline_validations(&db).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_validation_replaces_and_an_empty_list_means_not_validated() {
+        let db = mem_db().await;
+        let a = create(&db, "Alpha").await.unwrap();
+        let b = create(&db, "Bravo").await.unwrap();
+        let stored = set_pipeline_validation(
+            &db,
+            "p",
+            PipelineValidation::Projects {
+                project_ids: vec![a.id.clone(), b.id.clone(), a.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            stored,
+            PipelineValidation::Projects {
+                project_ids: vec![a.id.clone(), b.id.clone()]
+            }
+        );
+        assert_eq!(pipeline_validation(&db, "p").await.unwrap(), stored);
+
+        let stored = set_pipeline_validation(
+            &db,
+            "p",
+            PipelineValidation::Projects {
+                project_ids: vec![],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(stored, PipelineValidation::NotValidated);
+        assert_eq!(
+            pipeline_validations(&db).await.unwrap().get("p"),
+            Some(&PipelineValidation::NotValidated)
+        );
+
+        set_pipeline_validation(&db, "p", PipelineValidation::AllProjects)
+            .await
+            .unwrap();
+        assert_eq!(
+            pipeline_validation(&db, "p").await.unwrap(),
+            PipelineValidation::AllProjects
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_moves_the_validation_and_forget_erases_it() {
+        let db = mem_db().await;
+        let a = create(&db, "Alpha").await.unwrap();
+        let v = PipelineValidation::Projects {
+            project_ids: vec![a.id.clone()],
+        };
+        set_pipeline_validation(&db, "old", v.clone())
+            .await
+            .unwrap();
+        rename_pipeline_validation(&db, "old", "new").await.unwrap();
+        assert_eq!(pipeline_validation(&db, "new").await.unwrap(), v);
+        assert_eq!(
+            pipeline_validation(&db, "old").await.unwrap(),
+            PipelineValidation::AllProjects
+        );
+        forget_pipeline_validation(&db, "new").await.unwrap();
+        assert!(pipeline_validations(&db).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deleting_the_only_project_turns_the_pipeline_into_a_test_pipeline() {
+        let db = mem_db().await;
+        let a = create(&db, "Alpha").await.unwrap();
+        let b = create(&db, "Bravo").await.unwrap();
+        set_pipeline_validation(
+            &db,
+            "solo",
+            PipelineValidation::Projects {
+                project_ids: vec![a.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+        set_pipeline_validation(
+            &db,
+            "shared",
+            PipelineValidation::Projects {
+                project_ids: vec![a.id.clone(), b.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+        delete(&db, &a.id).await.unwrap();
+        assert_eq!(
+            pipeline_validation(&db, "solo").await.unwrap(),
+            PipelineValidation::NotValidated
+        );
+        assert_eq!(
+            pipeline_validation(&db, "shared").await.unwrap(),
+            PipelineValidation::Projects {
+                project_ids: vec![b.id.clone()]
+            }
+        );
+    }
+
+    #[test]
+    fn validation_wire_shape_is_tagged_by_kind() {
+        assert_eq!(
+            serde_json::to_value(PipelineValidation::AllProjects).unwrap(),
+            serde_json::json!({ "kind": "all" })
+        );
+        assert_eq!(
+            serde_json::to_value(PipelineValidation::NotValidated).unwrap(),
+            serde_json::json!({ "kind": "none" })
+        );
+        assert_eq!(
+            serde_json::to_value(PipelineValidation::Projects {
+                project_ids: vec!["prj-1".into()]
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "projects", "project_ids": ["prj-1"] })
+        );
     }
 }

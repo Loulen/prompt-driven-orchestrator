@@ -41,6 +41,17 @@ export function parseRoleFrame(text: string): TerminalRole | null {
   return null;
 }
 
+/** #972: the daemon's `{"type":"heartbeat"}` beat on the terminal socket. It
+ *  only feeds the silence watchdog and is never written to the pane. */
+export function isHeartbeatFrame(text: string): boolean {
+  try {
+    const msg: unknown = JSON.parse(text);
+    return typeof msg === "object" && msg !== null && (msg as { type?: unknown }).type === "heartbeat";
+  } catch {
+    return false;
+  }
+}
+
 export const READ_ONLY_HINT =
   "Read-only — another browser has control. Take control with the ✋ icon.";
 

@@ -13,8 +13,10 @@ Un **Pipeline** est un DAG nommé, à **orchestration déterministe**, qui décr
 
 - **Orchestration déterministe** : aucun *LLM-router*. Le routage entre nœuds suit des prédicats mécaniques portés par les edges conditionnelles (`when:`/`else`) et les régions de boucle du bloc `loops:` (ADR-0011). Aucun LLM ne décide à l'exécution quel nœud activer.
 - **Pas de routage probabiliste** : le déterminisme porte sur la *structure d'orchestration* (qui appelle qui dans quel ordre), pas sur le contenu produit par chaque nœud (les LLM aux feuilles restent stochastiques).
-- **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. L'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007) et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run*).
+- **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. En mode *Éditer pour ce Run*, l'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007, ADR-0080) et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run*).
 - **Multiples pipelines plutôt qu'embranchements** : pour gérer des trade-offs coût/complexité (ex. *quick-fix* vs *feature-with-adversarial-review*), on définit plusieurs pipelines distincts. Pas un seul pipeline avec des branches.
+
+- **Pipeline validé** : Pipeline rendu disponible au lancement pour un ou plusieurs **Projets**, ou pour **tous les Projets** (actuels et futurs). Un Pipeline que PDO crée, duplique ou importe naît **non validé** — c'est un **Pipeline de test** : il n'est proposé au lancement (New Run, Trigger) que derrière « Afficher les Pipelines de test ». Un Pipeline sans validation enregistrée vaut « tous les Projets ». La validation est une donnée de l'instance, pas du YAML : un export n'emporte pas ses Projets. _Éviter_ : « favori », « accès rapide », « publié » (pas de modèle draft/published).
 
 Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-router), TPM workflow (orchestrateur LLM qui décide quand spawner).
 
@@ -172,7 +174,7 @@ Le modèle à id autorise de *déclarer* `inner ⊂ outer`, mais la sémantique 
 
 ### Édition pendant un Run & intra-Run
 
-Supprimer l'edge qui retire le **dernier cycle** d'une boucle `bounded` déclenche un popup de confirmation ; confirmé, l'entrée `loops:` part avec son état. L'interaction avec un Run actif est régie par ADR-0007. Les compteurs `iter` repartent de zéro à chaque Run.
+Supprimer l'edge qui retire le **dernier cycle** d'une boucle `bounded` déclenche un popup de confirmation ; confirmé, l'entrée `loops:` part avec son état. L'interaction avec un Run actif est régie par ADR-0007 et ADR-0080. Les compteurs `iter` repartent de zéro à chaque Run.
 
 ---
 
@@ -369,12 +371,17 @@ Conséquences :
 
 ## Édition pendant un Run
 
-Le canvas est **toujours interactif** (ADR-0007) — un seul mode d'édition, qui s'adapte selon que la pipeline tourne ou pas.
+Suivre un Run et modifier un Pipeline sont deux gestes distincts (ADR-0080, amende ADR-0007).
+
+- **Pilotage** *(défaut d'un onglet de Run)* : le canvas est verrouillé — ni déplacement, ni connexion, ni ajout ; la **Config** d'un nœud (prompt, skills) se lit en lecture seule. Seuls restent les contrôles de Run.
+- **Éditer pour ce Run** : geste explicite qui déverrouille l'édition à chaud sur le **snapshot run-scope** ; « Terminer l'édition » revient au pilotage. _Éviter_ : « mode Edit » sans préciser pour qui.
+- **Éditer le Pipeline source** : ouvre l'onglet du Pipeline, qui s'édite directement comme hors Run.
 
 ### Modèle de mutation
 
-- **Aucun Run en cours** : l'édition modifie directement la template en bibliothèque.
-- **Run en cours** : l'édition modifie le **snapshot run-scope** (`<repo>/.pdo/runs/<run-id>/pipeline.yaml`) ET propage vers la template d'origine (auto-sync montant). Le watcher émet `PipelineModified` ; le scheduler se réajuste au prochain tick.
+- **Onglet de Pipeline** : l'édition modifie directement le Pipeline partagé (la template en bibliothèque).
+- **Éditer pour ce Run** : « Enregistrer pour ce Run » n'écrit **que** le snapshot run-scope. Le watcher émet `PipelineModified` ; le scheduler se réajuste au prochain tick.
+- **Écraser le Pipeline par défaut** : geste distinct, après un avertissement qui dit qui sera touché (tous les futurs Runs, les Triggers qui le référencent) ; le snapshot du Run remplace entièrement le Pipeline partagé. Il n'y a plus d'auto-sync montant. _Éviter_ : « sync », « publier ».
 - **`PipelineModified` est un signal passif** (#221) : il ne ré-ouvre **aucun** Run terminal (intégrité de l'état terminal). Reprendre un Run terminé est une opération **explicite** (`resume_run`), jamais un effet de bord du watcher.
 
 ### Politique de mutation pendant un Run
@@ -385,7 +392,7 @@ Le canvas est **toujours interactif** (ADR-0007) — un seul mode d'édition, qu
 
 ### Étanchéité
 
-Modif d'un run-snapshot n'impacte aucun autre run ; modif d'une template hors-Run n'impacte aucun run en cours ; l'auto-sync ne va que du run-scope vers la template, jamais l'inverse.
+Modif d'un run-snapshot n'impacte ni le Pipeline partagé ni aucun autre run ; modif d'un Pipeline partagé n'impacte aucun run en cours. Seul « Écraser le Pipeline par défaut » fait passer une modification d'un Run vers le Pipeline partagé.
 
 ---
 
@@ -399,6 +406,7 @@ L'input peut aussi être **construit interactivement** via un nœud d'entrée `i
 
 - **Saisie persistante de la modale New Run** : le contenu saisi survit à une fermeture/réouverture et n'est vidé qu'après un lancement réussi.
 - **Images d'input** : téléversables à côté du prompt, stockées dans `_input/` du Blackboard, listées dans le préambule du nœud d'entrée, affichées sur la carte Start et dans son inspecteur.
+- **Fichier importé en cours de Run** : l'utilisateur donne un fichier de son poste à un nœud **à session vive**, en le glissant sur son terminal ou via l'import du terminal — le même geste sur une instance locale ou distante. Le fichier est déposé dans le Blackboard du Run (jamais commité, nettoyé avec le Run) sous le budget de pièces jointes de l'instance ; PDO ne prévient pas l'agent de lui-même : il rend un texte qui donne le chemin, que l'utilisateur copie ou fait **écrire dans le terminal sans le valider** (le geste de l'utilisateur, jamais un envoi). _Éviter_ : « upload » (le geste est un import vers un nœud), « input » (l'input est celui du Run).
 
 ### `prompt_required` — pipeline runnable sans prompt
 
@@ -563,6 +571,7 @@ Un **Projet** est un regroupement **nommé** de dépôts qui se travaillent ense
 
 - **Un chemin appartient à au plus un Projet**, et le Projet d'un Run est celui qui possède son **dépôt primaire**. Un secondaire membre d'un autre Projet n'y change rien : c'est un contexte read-only, pas une appartenance (ADR-0042).
 - **Matérialisé à la demande, jamais seedé** : tant qu'aucun nom n'est donné ni aucun réglage attaché, il n'existe pas de Projet — les listes se groupent sur le libellé dérivé du chemin. Nommer un en-tête de groupe est ce qui crée l'entité.
+- **Pipelines validés** : un Projet propose au lancement les Pipelines validés pour lui, avant les Pipelines validés pour tous les Projets (cf. *Pipeline validé*).
 - **Réglages portés** : le harnais agentique, dont il est le tier intermédiaire (ADR-0046), et ses skills sélectionnés (cf. *Banque de skills*).
 
 _Éviter_ : « projet » pour un dépôt seul (c'est le *repo cible*) ou pour le `projects/` d'un home stagé.
@@ -787,7 +796,7 @@ Hors du pont, un `tmux attach` direct ou « Détacher » restent des clients tmu
 
 ### Nœuds interactifs — attente déclarée et signal de complétion
 
-**Attente déclarée** *(terme, #588, ADR-0069 — declared wait)* : l'état `awaiting_user` d'un nœud à session vivante est **déclaré par l'agent** (`pdo wait-user [--message "<question>"]`, le message devient la raison en prose de la bannière du run) et **levé par la frappe humaine** (touche Entrée traversant le pont PTY de l'UI) ou par la libération de la complétion. Jamais inféré : ni au spawn d'un nœud interactif, ni d'un silence. Accepté sur tout nœud à session vivante, interactif ou non (un nœud coincé sur une question devient visible) ; refus nommé sur un nœud `script` ou sans session. Un `tmux attach` direct contourne le pont : le clic reste le second chemin. _Éviter_ : « attente interactive » pour désigner l'état (c'est la *cause*, pas le signal), « wait for user » (le nom CLI est `wait-user`), « détection d'inactivité ».
+**Attente déclarée** *(terme, #588, ADR-0069 — declared wait)* : l'état `awaiting_user` d'un nœud à session vivante est **déclaré par l'agent** (`pdo wait-user [--message "<question>"]`, le message devient la raison en prose de la bannière du run — une **notification** qui dit à l'utilisateur que c'est son tour, jamais le message lui-même : la question ou le résultat complet est écrit dans la conversation du terminal) et **levé par la frappe humaine** (touche Entrée traversant le pont PTY de l'UI) ou par la libération de la complétion. Jamais inféré : ni au spawn d'un nœud interactif, ni d'un silence. Accepté sur tout nœud à session vivante, interactif ou non (un nœud coincé sur une question devient visible) ; refus nommé sur un nœud `script` ou sans session. Un `tmux attach` direct contourne le pont : le clic reste le second chemin. _Éviter_ : « attente interactive » pour désigner l'état (c'est la *cause*, pas le signal), « wait for user » (le nom CLI est `wait-user`), « détection d'inactivité ».
 
 
 Un Node `interactive: true` spawn une session normale et **n'auto-complète jamais tant que sa complétion n'est pas libérée**. Deux gestes, **depuis l'UI**, côte à côte (pas de slash-command in-session : les boutons restent accessibles sans être attaché) :

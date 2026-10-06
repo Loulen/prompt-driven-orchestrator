@@ -58,6 +58,7 @@ vi.mock("../api", () => ({
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
+  fetchRunPipeline: vi.fn().mockRejectedValue(new Error("offline")),
 }));
 
 const PIPELINE = {
@@ -187,15 +188,73 @@ describe("#315 — EditCanvas is read-only for an archived run", () => {
     expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "worker" });
   });
 
-  it("stays fully editable for a non-archived (completed) run — read-only is archive-only", () => {
-    renderCanvas("completed");
+  it("an archived run offers no Edit control (read-only for good, ADR-0080)", () => {
+    renderCanvas("archived");
+    expect(screen.queryByTestId("toolbar-edit")).toBeNull();
+    expect(screen.queryByTestId("toolbar-finish-editing")).toBeNull();
+  });
+});
 
-    // Editing affordances present …
+describe("ADR-0080 — a run tab opens in « pilotage », « Edit for this run » unlocks it", () => {
+  it("locks a live run's canvas: no drag, no connect, no authoring control", () => {
+    renderCanvas("running");
+    const stub = screen.getByTestId("reactflow-stub");
+    expect(stub.getAttribute("data-draggable")).toBe("false");
+    expect(stub.getAttribute("data-connectable")).toBe("false");
+    for (const id of ["toolbar-add", "toolbar-library", "toolbar-script", "toolbar-undo", "toolbar-redo"]) {
+      expect(screen.queryByTestId(id), id).toBeNull();
+    }
+    expect(screen.getByTestId("toolbar-edit")).toBeInTheDocument();
+  });
+
+  it("keeps the run controls of a finished run while locked", () => {
+    renderCanvas("completed");
+    expect(screen.getByTestId("reactflow-stub").getAttribute("data-draggable")).toBe("false");
+    expect(screen.getByTestId("toolbar-reopen")).toBeInTheDocument();
+    expect(screen.getByTestId("toolbar-retry-all")).toBeInTheDocument();
+    expect(screen.getByTestId("toolbar-open-shell")).toBeInTheDocument();
+    expect(screen.getByTestId("toolbar-review")).toBeInTheDocument();
+  });
+
+  it("is fully editable once « Edit for this run » is chosen (ADR-0007 hot editing)", () => {
+    useEditStore.getState().startRunEditing("__run__r1");
+    renderCanvas("completed");
     expect(screen.getByTestId("toolbar-add")).toBeInTheDocument();
     expect(screen.getByTestId("toolbar-script")).toBeInTheDocument();
-    // … and drag/connect are on (ADR-0007 editing-during-run must not regress).
     const stub = screen.getByTestId("reactflow-stub");
     expect(stub.getAttribute("data-draggable")).toBe("true");
     expect(stub.getAttribute("data-connectable")).toBe("true");
+    expect(screen.getByTestId("toolbar-finish-editing")).toBeInTheDocument();
+  });
+
+  it("« Edit source pipeline » opens the run's source pipeline tab", async () => {
+    const openPipeline = vi.fn().mockResolvedValue(undefined);
+    useEditStore.setState({ openPipeline });
+    renderCanvas("running");
+    fireEvent.pointerDown(screen.getByTestId("toolbar-edit"));
+    fireEvent.click(screen.getByTestId("toolbar-edit"));
+    fireEvent.click(await screen.findByTestId("toolbar-edit-source"));
+    expect(openPipeline).toHaveBeenCalledWith("My Pipeline");
+  });
+
+  it("« Finish editing » locks again at once when nothing is unsaved", () => {
+    useEditStore.getState().startRunEditing("__run__r1");
+    renderCanvas("running");
+    fireEvent.click(screen.getByTestId("toolbar-finish-editing"));
+    expect(screen.queryByTestId("finish-editing-modal")).toBeNull();
+    expect(screen.getByTestId("toolbar-edit")).toBeInTheDocument();
+    expect(screen.getByTestId("reactflow-stub").getAttribute("data-draggable")).toBe("false");
+  });
+
+  it("« Finish editing » with unsaved edits asks first, and Keep editing keeps them", () => {
+    useEditStore.getState().startRunEditing("__run__r1");
+    useEditStore.getState().updatePrompt("worker", "draft");
+    renderCanvas("running");
+    fireEvent.click(screen.getByTestId("toolbar-finish-editing"));
+    expect(screen.getByTestId("finish-editing-modal")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("finish-editing-cancel"));
+    expect(screen.queryByTestId("finish-editing-modal")).toBeNull();
+    expect(useEditStore.getState().openTabs[0].prompts.worker).toBe("draft");
+    expect(screen.getByTestId("toolbar-finish-editing")).toBeInTheDocument();
   });
 });

@@ -346,8 +346,11 @@ export default function ReviewPage({ runId }: Props) {
   const { subscribe } = useDaemonSocket();
   useEffect(() => {
     return subscribe((msg) => {
-      if (msg.type !== "event" || !msg.event || msg.event.run_id !== runId) return;
-      const ev = msg.event;
+      // #972: a `resync` (reconnection, return to the tab, daemon-side loss)
+      // re-reads the Run like one of its own events would.
+      const resync = msg.type === "resync";
+      if (!resync && (msg.type !== "event" || !msg.event || msg.event.run_id !== runId)) return;
+      const ev = resync ? null : msg.event;
       fetchRun(runId)
         .then((r) => {
           const before = runRef.current;
@@ -379,7 +382,7 @@ export default function ReviewPage({ runId }: Props) {
           }
         })
         .catch(() => {});
-      if (ev.kind === "node_delivered" && ev.node_id && pairRef.current.to === `live:${ev.node_id}`) {
+      if (ev?.kind === "node_delivered" && ev.node_id && pairRef.current.to === `live:${ev.node_id}`) {
         setNodeDelivered({ nodeId: ev.node_id, iter: ev.iter ?? 1 });
       }
     });

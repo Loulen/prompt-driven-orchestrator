@@ -437,3 +437,85 @@ describe("EditToolbar finished-run group (#598)", () => {
     expect(screen.queryByTestId("toolbar-open-shell")).toBeNull();
   });
 });
+
+describe("EditToolbar run « pilotage » and « Edit » menu (ADR-0080)", () => {
+  function renderToolbar(props: Partial<ComponentProps<typeof EditToolbar>> = {}) {
+    return render(
+      <TooltipProvider>
+        <EditToolbar
+          onAddNode={vi.fn()}
+          onAddNote={vi.fn()}
+          onAddNodeFromYaml={vi.fn()}
+          libraryEntries={[]}
+          onLibraryDelete={vi.fn()}
+          onToggleInfo={vi.fn()}
+          {...props}
+        />
+      </TooltipProvider>,
+    );
+  }
+  function runEdit(editing: boolean) {
+    return {
+      editing,
+      onEditForRun: vi.fn(),
+      onEditSource: vi.fn(),
+      onFinishEditing: vi.fn(),
+    };
+  }
+
+  it("in « pilotage » hides +, Library, script and undo/redo but keeps the run controls", () => {
+    renderToolbar({
+      readOnly: true,
+      runEdit: runEdit(false),
+      finishedRun: true,
+      onReopen: vi.fn(),
+      onRetryAll: vi.fn(),
+      onOpenShell: vi.fn(),
+      reviewHref: "/runs/r1/review",
+    });
+    for (const id of ["toolbar-add", "toolbar-library", "toolbar-script", "toolbar-undo", "toolbar-redo"]) {
+      expect(screen.queryByTestId(id), id).toBeNull();
+    }
+    for (const id of ["toolbar-edit", "toolbar-reopen", "toolbar-retry-all", "toolbar-open-shell", "toolbar-review", "toolbar-info"]) {
+      expect(screen.getByTestId(id), id).toBeInTheDocument();
+    }
+    expect(screen.queryByTestId("toolbar-finish-editing")).toBeNull();
+  });
+
+  it("the Edit menu offers « Edit for this run » and « Edit source pipeline »", async () => {
+    const user = userEvent.setup();
+    const edit = runEdit(false);
+    renderToolbar({ readOnly: true, runEdit: edit });
+    // A pencil icon only, named by its aria-label / title.
+    const trigger = screen.getByTestId("toolbar-edit");
+    expect(trigger).toHaveTextContent("");
+    expect(trigger).toHaveAttribute("title", "Edit");
+    expect(trigger).toHaveAccessibleName("Edit");
+    await user.click(trigger);
+    expect(await screen.findByTestId("toolbar-edit-for-run")).toHaveTextContent(/^Edit for this run$/);
+    expect(screen.getByTestId("toolbar-edit-source")).toHaveTextContent(/^Edit source pipeline$/);
+    await user.click(screen.getByTestId("toolbar-edit-for-run"));
+    expect(edit.onEditForRun).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTestId("toolbar-edit"));
+    await user.click(await screen.findByTestId("toolbar-edit-source"));
+    expect(edit.onEditSource).toHaveBeenCalledTimes(1);
+  });
+
+  it("while editing for the run, the authoring controls come back with « Finish editing »", () => {
+    const edit = runEdit(true);
+    renderToolbar({ readOnly: false, runEdit: edit });
+    expect(screen.getByTestId("toolbar-add")).toBeInTheDocument();
+    expect(screen.getByTestId("toolbar-undo")).toBeInTheDocument();
+    expect(screen.queryByTestId("toolbar-edit")).toBeNull();
+    fireEvent.click(screen.getByTestId("toolbar-finish-editing"));
+    expect(edit.onFinishEditing).toHaveBeenCalledTimes(1);
+  });
+
+  it("an archived run gets no Edit control at all", () => {
+    renderToolbar({ readOnly: true });
+    expect(screen.queryByTestId("toolbar-edit")).toBeNull();
+    expect(screen.queryByTestId("toolbar-finish-editing")).toBeNull();
+    expect(screen.getByTestId("toolbar-info")).toBeInTheDocument();
+  });
+});

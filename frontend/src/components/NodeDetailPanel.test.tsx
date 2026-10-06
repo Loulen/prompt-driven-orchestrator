@@ -63,7 +63,11 @@ function MockTmuxTerminal({
   onSpectatingChange,
   toolbarIdentity,
   toolbarActions,
+  onImportFiles,
+  importDisabledReason,
 }: {
+  onImportFiles?: (files: File[]) => void;
+  importDisabledReason?: string | null;
   session: string;
   expanded?: boolean;
   onExpand?: () => void;
@@ -86,7 +90,16 @@ function MockTmuxTerminal({
       data-expanded={expanded}
       data-status={status}
       data-pane-source={paneSource ? JSON.stringify(paneSource) : undefined}
+      data-import={onImportFiles ? "on" : "off"}
+      data-import-disabled={importDisabledReason ?? undefined}
     >
+      {/* #971: stands in for a PDF dropped on the terminal. */}
+      <button
+        data-testid="mock-drop-pdf"
+        onClick={() => onImportFiles?.([new File(["%PDF"], "contrat.pdf")])}
+      >
+        drop
+      </button>
       {/* #968: the toolbar slots the enlarged view fills. */}
       <div data-testid="mock-toolbar">
         {toolbarIdentity}
@@ -118,6 +131,33 @@ vi.mock("./ui/resizable", () => ({
     <div>{children}</div>
   ),
   ResizableHandle: () => <div />,
+}));
+
+// #971: the import modal has its own test; here, what the panel hands it.
+vi.mock("./ImportFilesModal", () => ({
+  default: ({
+    nodeId,
+    iter,
+    initialFiles,
+    blockedReason,
+    onClose,
+  }: {
+    nodeId: string;
+    iter: number;
+    initialFiles: File[];
+    blockedReason?: string | null;
+    onClose: () => void;
+  }) => (
+    <div
+      data-testid="import-modal"
+      data-node={nodeId}
+      data-iter={iter}
+      data-files={initialFiles.map((f) => f.name).join(",")}
+      data-blocked={blockedReason ?? undefined}
+    >
+      <button data-testid="import-modal-close" onClick={onClose}>close</button>
+    </div>
+  ),
 }));
 
 vi.mock("./MarkdownArtifactModal", () => ({
@@ -2965,5 +3005,69 @@ describe("NodeDetailPanel", () => {
       expect(within(row("summary")).getByText("Copy failed")).toBeInTheDocument();
       expect(screen.queryByText("Copied!")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("NodeDetailPanel file import (#971)", () => {
+  function renderPanel(overrides?: Partial<NodeState>, isArchived = false) {
+    return render(
+      <TooltipProvider>
+        <NodeDetailPanel node={makeNode(overrides)} runId="run-1" isArchived={isArchived} />
+      </TooltipProvider>,
+    );
+  }
+
+  it("a PDF dropped on a running node's terminal opens the import, pre-filled, for the current iteration", () => {
+    renderPanel({
+      iter: 2,
+      iterations: [
+        { iter: 1, status: "completed", started_at: null, completed_at: null },
+        { iter: 2, status: "running", started_at: null, completed_at: null },
+      ],
+    });
+    const terminal = screen.getByTestId("tmux-terminal");
+    expect(terminal.dataset.import).toBe("on");
+    expect(terminal.dataset.importDisabled).toBeUndefined();
+    fireEvent.click(screen.getByTestId("mock-drop-pdf"));
+    const modal = screen.getByTestId("import-modal");
+    expect(modal.dataset.node).toBe("test-node");
+    expect(modal.dataset.iter).toBe("2");
+    expect(modal.dataset.files).toBe("contrat.pdf");
+    expect(modal.dataset.blocked).toBeUndefined();
+    fireEvent.click(screen.getByTestId("import-modal-close"));
+    expect(screen.queryByTestId("import-modal")).toBeNull();
+  });
+
+  it("a node without a live session says why the import is refused", () => {
+    renderPanel({
+      status: "completed",
+      iterations: [{ iter: 1, status: "completed", started_at: null, completed_at: null }],
+    });
+    // A completed node starts minimized: bring the terminal back.
+    fireEvent.click(screen.getByTestId("term-restore"));
+    const terminal = screen.getByTestId("tmux-terminal");
+    expect(terminal.dataset.importDisabled).toContain("no live session");
+    fireEvent.click(screen.getByTestId("mock-drop-pdf"));
+    expect(screen.getByTestId("import-modal").dataset.blocked).toContain("no live session");
+  });
+
+  it("an archived Run offers no import at all", () => {
+    renderPanel({ status: "completed" }, true);
+    fireEvent.click(screen.getByTestId("term-restore"));
+    expect(screen.getByTestId("tmux-terminal").dataset.import).toBe("off");
+  });
+
+  it("Escape with the import open over the enlarged terminal leaves the terminal enlarged", () => {
+    renderPanel({
+      iterations: [{ iter: 1, status: "running", started_at: null, completed_at: null }],
+    });
+    fireEvent.click(screen.getByTestId("term-expand"));
+    expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("mock-drop-pdf"));
+    act(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+    });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
   });
 });

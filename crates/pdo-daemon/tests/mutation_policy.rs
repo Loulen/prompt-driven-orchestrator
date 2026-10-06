@@ -1,6 +1,6 @@
 //! Layer 3a — proves issue #57 mutation policy: save_run_pipeline rejects
-//! illegal mutations (deleting non-pending nodes) with 409 and auto-syncs
-//! valid edits to the library template via atomic tmp+rename.
+//! illegal mutations (deleting non-pending nodes) with 409. Valid edits land in
+//! the run's snapshot only (ADR-0080: no auto-sync up to the shared pipeline).
 
 use crate::common::TestDaemon;
 use std::process::Command;
@@ -131,7 +131,7 @@ edges: []
 }
 
 #[tokio::test]
-async fn add_node_succeeds_and_syncs_to_template() {
+async fn add_node_succeeds_and_leaves_the_template_alone() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
 
@@ -182,7 +182,17 @@ edges:
 
     assert_eq!(resp.status(), 200, "adding a new node should succeed");
 
-    // Verify auto-sync: template file should now contain the reviewer node
+    // ADR-0080: the save wrote the run's snapshot, not the shared pipeline.
+    let run_yaml = std::fs::read_to_string(
+        daemon
+            .repo_root()
+            .join(".pdo")
+            .join("runs")
+            .join(&run_id)
+            .join("pipeline.yaml"),
+    )
+    .unwrap();
+    assert!(run_yaml.contains("reviewer"), "the run's snapshot has the new node");
     let template_path = daemon
         .repo_root()
         .join(".pdo")
@@ -190,8 +200,8 @@ edges:
         .join(format!("{PIPELINE_NAME}.yaml"));
     let template_content = std::fs::read_to_string(&template_path).unwrap();
     assert!(
-        template_content.contains("reviewer"),
-        "template should be updated with auto-synced content"
+        !template_content.contains("reviewer"),
+        "the shared pipeline must not be auto-synced from a run save"
     );
 }
 

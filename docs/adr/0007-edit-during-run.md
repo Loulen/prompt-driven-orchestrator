@@ -1,12 +1,14 @@
 # Édition du graphe pendant qu'un Run tourne
 
-**Il n'y a pas de mode Edit ni de modèle draft/published : le canvas est toujours interactif, y compris pendant un Run.** Sans cette décision on rebâtit la dichotomie « on conçoit, puis on lance, puis on attend » — alors que PDO est mono-user local (aucun collègue à surprendre), que l'audit est déjà tenu par l'event log SQLite append-only, et que *Deliberate over autonomous* suppose exactement le geste de rerouter à chaud ce qu'un output vient de révéler. C'est sciemment hors-marché : aucun outil mainstream ne fait du hot-rerouting d'un graphe en cours d'exécution.
+> Amendé par ADR-0080 : le pilotage d'un Run est en lecture seule, l'édition à chaud est un geste explicite (« Éditer pour ce Run ») et n'écrit que le snapshot du Run par défaut.
 
-**Portée de l'édition.** Pendant un Run, l'édition modifie le snapshot run-scope ET propage vers la template de bibliothèque (**auto-sync montant uniquement, jamais l'inverse**) : le cas dominant est « je débugge ma template via un run, je veux que ma correction colle ». Le cas inverse (patch jetable sans polluer la template) est assumé comme friction, à traiter plus tard si un cas concret le justifie. **Étanchéité** : chaque run a son propre snapshot, donc aucune édition n'impacte un autre run en cours.
+**Un Run en cours reste éditable à chaud, sans modèle draft/published : en mode « Éditer pour ce Run » (ADR-0080), le graphe du Run se modifie pendant qu'il tourne et le scheduler se réajuste au tick suivant.** *Deliberate over autonomous* suppose exactement le geste de rerouter à chaud ce qu'un output vient de révéler, et l'audit est déjà tenu par l'event log SQLite append-only. C'est sciemment hors-marché : aucun outil mainstream ne fait du hot-rerouting d'un graphe en cours d'exécution.
+
+**Portée de l'édition.** Pendant un Run, l'édition modifie le snapshot run-scope, et lui seul. L'écriture vers le Pipeline partagé est un geste distinct et averti (ADR-0080). **Étanchéité** : chaque run a son propre snapshot, donc aucune édition n'impacte un autre run en cours.
 
 **Les seuls garde-fous sont des invariants de cohérence runtime, jamais de la validation prescriptive** (*Sharp tool*, ADR-0001). Ils existent parce qu'un rejet tardif serait un stall ou une session orpheline, pas parce que le design serait « mauvais » :
 
-- (a) Un node à **session vive** (`running`, `awaiting_user`) est immuable — suppression comme **changement de type** : le spawn lit la pipeline live alors que `pdo complete` rejoue le snapshot du run ; un swap mid-session désynchronise les deux. Sur un node non spawné ou terminé, tout est libre.
+- (a) Un node à **session vive** (`running`, `awaiting_user`) est immuable — suppression comme **changement de type** : la session vive a été lancée sur l'ancienne définition alors que `pdo complete` rejoue le snapshot courant du run ; un swap mid-session désynchronise les deux. Sur un node non spawné ou terminé, tout est libre.
 - (b) Le `max_iter` d'une boucle live est éditable (ce qui rend la commande `extend_cycle` du Pipeline Manager redondante).
 - (c) Ajout de node + edge libre ; le scheduler pickup au tick suivant. Les nodes completed/running ne re-tournent pas.
 - (d) **Retirer** un membre d'une région de boucle en vol (compteur de lap actif) est rejeté — les nodes déjà itérés ne seraient plus attendus et la barrière de lap se désynchroniserait. **Agrandir** reste libre (le nouveau membre rejoint au lap suivant).

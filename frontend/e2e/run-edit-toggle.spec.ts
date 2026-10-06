@@ -4,10 +4,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runMultipart } from "./helpers";
 
-// Layer 3b — proves issue #57 unified edit mode. Boots the daemon, creates a
-// run, asserts the editor canvas appears automatically (no "Edit this run"
-// toggle needed), verifies the edit palette is present and no pencil toggle
-// exists anywhere.
+// Layer 3b — a run opens on its canvas automatically (issue #57), in
+// « pilotage » (ADR-0080): read-only until « Edit › Edit for this run », which
+// brings the edit palette back; « Finish editing » locks it again.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -78,37 +77,35 @@ test("unified edit mode: selecting a run opens editor canvas automatically", asy
   await expect(runEntry).toBeVisible({ timeout: 5_000 });
   await runEntry.click();
 
-  // Editor canvas should open automatically — the post-refonte EditCanvas
-  // always mounts its EditToolbar (no separate "Edit this run" step). The tab
-  // bar appears too once the run-scoped edit tab is open.
+  // Editor canvas should open automatically — the EditCanvas always mounts its
+  // EditToolbar. The tab bar appears too once the run-scoped tab is open.
   await expect(page.getByTestId("tab-list")).toBeVisible({ timeout: 5_000 });
   await expect(page.getByTestId("edit-toolbar")).toBeVisible();
-  await expect(page.getByTestId("toolbar-add")).toBeVisible();
-
-  // The opened tab is run-scoped: its id is `__run__<run_id>`, so the editor we
-  // see is editing the run's pipeline (run-scoped edits "sync to template").
-  // On a live run a node auto-selects, so the Run panel's Info footnote is not a
-  // reliable signal here — the run-scoped tab id is.
   await expect(page.getByTestId(`tab-title-__run__${run_id}`)).toBeVisible();
+
+  // ADR-0080: following a run never modifies it — no authoring palette.
+  await expect(page.getByTestId("toolbar-add")).toHaveCount(0);
+  await expect(page.getByTestId("toolbar-undo")).toHaveCount(0);
+  await expect(page.getByTestId("toolbar-edit")).toBeVisible();
 });
 
-test("no pencil toggle or edit-this-run button exists", async ({ page, request }) => {
+test("Edit for this run unlocks the canvas, Finish editing locks it again", async ({ page, request }) => {
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  // Create a run and select it
   await createRun(request);
 
   const runEntry = page.getByText(PIPELINE_NAME).first();
   await expect(runEntry).toBeVisible({ timeout: 5_000 });
   await runEntry.click();
 
-  // Wait for the editor to load (toolbar present)
   await expect(page.getByTestId("edit-toolbar")).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId("toolbar-edit").click();
+  await page.getByTestId("toolbar-edit-for-run").click();
+  await expect(page.getByTestId("toolbar-add")).toBeVisible();
+  await expect(page.getByTestId("save-button")).toHaveText(/Save for this run/);
 
-  // "Edit this run" button should NOT exist
-  await expect(page.getByRole("button", { name: "Edit this run" })).toHaveCount(0);
-
-  // No pencil toggle should exist in the toolbar
-  await expect(page.getByTitle("Toggle edit mode")).toHaveCount(0);
+  await page.getByTestId("toolbar-finish-editing").click();
+  await expect(page.getByTestId("toolbar-add")).toHaveCount(0);
+  await expect(page.getByTestId("toolbar-edit")).toBeVisible();
 });

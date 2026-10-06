@@ -121,6 +121,9 @@ mod node_delivery;
 #[path = "node_done_detach.rs"]
 mod node_done_detach;
 
+#[path = "node_import.rs"]
+mod node_import;
+
 #[path = "node_io.rs"]
 mod node_io;
 
@@ -243,6 +246,9 @@ mod turn_end_autocomplete;
 
 #[path = "waiting_node_starvation.rs"]
 mod waiting_node_starvation;
+
+#[path = "ws_resync.rs"]
+mod ws_resync;
 
 /// `autotests = false` means a new file in `tests/` is compiled only if it is
 /// declared above — otherwise it silently never runs, and nothing fails. Catch

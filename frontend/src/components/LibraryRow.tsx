@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Copy, Pencil, Trash2 } from "lucide-react";
 import SelectControl from "./SelectControl";
 
@@ -46,6 +46,8 @@ interface Props {
    */
   checked?: boolean;
   onToggleSelect?: (e: MouseEvent) => void;
+  /** #974: the validation indicator, bottom-right under the hover actions. */
+  indicator?: ReactNode;
 }
 
 /**
@@ -75,6 +77,7 @@ export default function LibraryRow({
   checked = false,
   onToggleSelect,
   modified,
+  indicator,
 }: Props) {
   const body = (
     <>
@@ -106,19 +109,30 @@ export default function LibraryRow({
             <span className="truncate font-medium">{name}</span>
           )}
         </div>
+        {/* One line whatever the width: when the hover actions narrow the row, the
+            meta text truncates instead of wrapping (#974 — the row grew on hover). */}
         <div
-          className="mt-0.5 flex items-center gap-1.5 text-fg-4"
+          className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-fg-4"
           style={{ fontSize: "10px" }}
+          data-testid="library-row-meta"
         >
-          <span>{nodeCount} nodes</span>
-          {modified && (
-            <>
-              <span>·</span>
-              <span>edited {new Date(modified).toLocaleDateString()}</span>
-            </>
-          )}
+          <span className="min-w-0 truncate">
+            <span>{nodeCount} nodes</span>
+            {modified && (
+              <>
+                <span> · </span>
+                <span>edited {new Date(modified).toLocaleDateString()}</span>
+              </>
+            )}
+          </span>
         </div>
       </div>
+      {/* Right column, same shape as a run row (#783): line 1 = the hover-revealed
+          action icons, line 2 = the validation indicator, always visible,
+          bottom-right. The actions line keeps its height at rest so the indicator
+          never moves when the icons appear. */}
+      <div className="flex shrink-0 flex-col items-end justify-between gap-1">
+      <div className="flex h-4 items-center gap-2">
       {onRenameStart && !renaming && (
         <span
           className="hidden shrink-0 group-hover:inline-flex"
@@ -161,6 +175,9 @@ export default function LibraryRow({
           className="text-fg-4 transition-colors hover:text-st-failed"
         />
       </span>
+      </div>
+      {indicator && <span className="flex shrink-0 items-center">{indicator}</span>}
+      </div>
     </>
   );
 

@@ -492,9 +492,12 @@ const TRIGGERS_LIST = testId("triggers-list-panel");
 const NEW_PIPELINE_BUTTON = testId("new-pipeline-button");
 const PIPELINE_ROW = testId(`library-row-${TUTORIAL_OVERVIEW_PIPELINE_ID}`);
 const INSPECTOR_RUN = testId("inspector-pane-run");
-const INSPECTOR_EDIT = testId("inspector-pane-edit");
+/** The pane behind the inspector's Config tab — a node's prompt and skills, read-only on a Run (ADR-0080). */
+const INSPECTOR_CONFIG = testId("inspector-pane-edit");
 /** The inspector's Run tab — where a node's outputs and terminal live. */
 const INSPECTOR_TAB_RUN = testId("inspector-tab-run");
+/** The inspector's Config tab: on a Run followed in « pilotage », the Edit tab is gone (ADR-0080). */
+const INSPECTOR_TAB_CONFIG = testId("inspector-tab-config");
 const TERMINAL = testId("tmux-terminal");
 /** A finished node's terminal opens folded to this bar, to leave room for its outputs. */
 const TERMINAL_RESTORE = testId("term-restore");
@@ -524,13 +527,13 @@ const SETTINGS_BUTTON = testId("open-settings");
 
 /**
  * The inspector's navigation, which a read-only step still lets through (#911):
- * the Run / Edit tabs, the I/O / Orchestration tabs, the « Initial Prompt » fold,
+ * the Run / Config tabs, the I/O / Orchestration tabs, the « Initial Prompt » fold,
  * and the terminal's own unfold / expand / copy. Everything else in the panel
  * that is a control stays refused while the tour shows it.
  */
 const INSPECTOR_EXPLORE = [
   testId("inspector-tab-run"),
-  testId("inspector-tab-edit"),
+  INSPECTOR_TAB_CONFIG,
   '[data-testid^="detail-tab-"]',
   testId("prompt-toggle"),
   TERMINAL_RESTORE,
@@ -606,22 +609,22 @@ function endEdgeIndex(app: TourAppState): number {
 
 /**
  * implementer is selected and its inspector is up — on either tab. The reader
- * may explore the Edit tab from the read-only panel (#911); a condition that
+ * may explore the Config tab from the read-only panel (#911); a condition that
  * only knew the Run tab would drop the step back to « Click implementer » and
  * dim the very panel they were looking at.
  */
 function implementerOpen(o: TourObservation): boolean {
   return (
-    selectedNode(o.app, worker(o.app, "implementer")) && (o.present(INSPECTOR_RUN) || o.present(INSPECTOR_EDIT))
+    selectedNode(o.app, worker(o.app, "implementer")) && (o.present(INSPECTOR_RUN) || o.present(INSPECTOR_CONFIG))
   );
 }
 
 /**
- * The reader left the inspector on its Edit tab (#911): what the Run tab shows —
+ * The reader left the inspector on its Config tab (#911): what the Run tab shows —
  * the outputs, the terminal — is not on screen, and the step points at the tab
  * instead of starving on a target that will not appear by itself.
  */
-function onEditTab(o: TourObservation): boolean {
+function onConfigTab(o: TourObservation): boolean {
   return !o.present(INSPECTOR_RUN) && o.present(INSPECTOR_TAB_RUN);
 }
 
@@ -708,7 +711,7 @@ const STEPS: TourStep[] = [
     title: "Click implementer",
     body: (o) =>
       selectedNode(o.app, worker(o.app, "implementer"))
-        ? "A node is usually an agent running in a harness (Claude Code, Copilot, …); here it is a script, so the tour costs nothing. It takes an input and produces outputs."
+        ? "A node is usually an agent running in a harness (Claude Code, Copilot, …); here it is a script, so the tour costs nothing. It takes an input and produces outputs. Its Config tab shows what it runs with — prompt and skills — read-only: following a Run never changes it."
         : "Click the implementer card. A node is usually an agent running in a harness (Claude Code, Copilot, …); this one is a script, so the tour costs nothing.",
     target: (o) => nodeSel(worker(o.app, "implementer")),
     waitingFor: "the implementer node on the canvas",
@@ -722,7 +725,13 @@ const STEPS: TourStep[] = [
     // The inspector it opened stays bright, to look around in — not to edit.
     readOnly: (o) => (implementerOpen(o) ? [RIGHT_PANEL] : []),
     explore: INSPECTOR_EXPLORE,
-    asides: () => [{ target: TASK_ROW, text: "Its input, task: what the edge from Start delivered — the Run's prompt." }],
+    asides: () => [
+      { target: TASK_ROW, text: "Its input, task: what the edge from Start delivered — the Run's prompt." },
+      {
+        target: INSPECTOR_TAB_CONFIG,
+        text: "Config: the node's prompt and skills, read-only. To change a Run, use the Edit pencil in the canvas toolbar.",
+      },
+    ],
   },
   {
     id: "outputs",
@@ -733,7 +742,7 @@ const STEPS: TourStep[] = [
       if (o.present(CODE_VIEWER)) {
         return "This is code, the file implementer wrote — and exactly what reviewer received through their edge.";
       }
-      return onEditTab(o)
+      return onConfigTab(o)
         ? "Click the Run tab: a finished node's outputs are listed there."
         : "A finished node's outputs are listed here: implementer wrote one, code. Click code to read it.";
     },
@@ -741,7 +750,7 @@ const STEPS: TourStep[] = [
     // *First run*'s last step re-aims onto its `out` file.
     target: (o) => {
       if (o.present(CODE_VIEWER)) return [CODE_VIEWER];
-      return onEditTab(o) ? [INSPECTOR_TAB_RUN] : [CODE_ROW];
+      return onConfigTab(o) ? [INSPECTOR_TAB_RUN] : [CODE_ROW];
     },
     soft: (o) => o.present(CODE_VIEWER),
     waitingFor: "the outputs of implementer",
@@ -778,13 +787,13 @@ const STEPS: TourStep[] = [
       if (o.present(TERMINAL)) {
         return "Every node runs in its own terminal; this one is frozen on the lines the script printed. While a node runs it is live and interactive — you talk to the harness there, and First run shows you how.";
       }
-      return onEditTab(o)
+      return onConfigTab(o)
         ? "Click the Run tab: every node runs in its own terminal, and it is shown there."
         : "Click Terminal to unfold it. Every node runs in its own terminal; a finished node's is folded to leave room for its outputs.";
     },
     target: (o) => {
       if (o.present(TERMINAL)) return [TERMINAL];
-      if (onEditTab(o)) return [INSPECTOR_TAB_RUN];
+      if (onConfigTab(o)) return [INSPECTOR_TAB_RUN];
       return o.present(TERMINAL_RESTORE) ? [TERMINAL_RESTORE] : [TERMINAL];
     },
     waitingFor: "the node's terminal",

@@ -1308,7 +1308,7 @@ enforces it, and the honest move is to wait, follow up, or fail loudly.
 pub(crate) const INTERACTIVE_SKILL_MD: &str = r#"---
 name: pdo-interactive
 description: Talk with a human inside a PDO node — declare when you wait for them (`pdo wait-user`), keep the conversation open, complete once released.
-skill_version: 1
+skill_version: 2
 ---
 
 # Talking with a human inside a PDO node
@@ -1327,11 +1327,22 @@ Every time you stop and need the user (a question, a choice, a review), run:
 pdo wait-user --message "<your question, one line, under 100 characters>"
 ```
 
-Then ask the question in the conversation as usual. The node and its run turn
-**awaiting-user** in the PDO UI, with your message on the banner: that is how
-the user, who may be elsewhere, learns it is their turn. Do not skip it — a
-node that stays silently « running » while waiting is the failure this skill
-exists to prevent.
+The node and its run turn **awaiting-user** in the PDO UI, with your message
+on the banner: that is how the user, who may be elsewhere, learns it is their
+turn. Do not skip it — a node that stays silently « running » while waiting is
+the failure this skill exists to prevent.
+
+## The banner is a notification, not the message
+
+The banner only tells the user it is their turn; they read your actual message
+in the conversation. So:
+
+- **Before** running `pdo wait-user`, write the full question — or the full
+  result you want them to review — in the conversation. The `--message` is a
+  one-line summary of it, never a substitute.
+- Never refer the user to « my previous message » or « the message above my
+  call »: they may not have it on screen. If they ask you to repeat something,
+  write it again in full.
 
 - The wait **lifts by itself** when the user types an answer in the PDO
   terminal (their Enter), or when they release your completion. You have
@@ -2256,6 +2267,12 @@ mod tests {
         assert_eq!(on_disk, INTERACTIVE_SKILL_MD);
         assert!(on_disk.contains("pdo wait-user --message"));
         assert!(on_disk.contains("Mark ready for completion"));
+        // #972: the banner is a notification — the full question or result is
+        // written in the conversation, and the skill was bumped so the seed
+        // rewrites it on every instance.
+        assert!(on_disk.contains("The banner is a notification, not the message"));
+        assert!(on_disk.contains("Never refer the user to « my previous message »"));
+        assert!(on_disk.contains("skill_version: 2"));
         // Both are locked against every bank write, like the first seed.
         assert!(is_seeded(SEEDED_SKILL_ID) && is_seeded(INTERACTIVE_SKILL_ID));
         assert!(!is_seeded("tdd"));

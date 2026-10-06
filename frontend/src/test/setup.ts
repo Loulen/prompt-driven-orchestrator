@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { useSelectionStore } from "../stores/selectionStore";
 
@@ -48,3 +49,10 @@ for (const name of ["localStorage", "sessionStorage"] as const) {
 afterEach(() => {
   useSelectionStore.getState().clearAll();
 });
+
+// Same reason as the `testTimeout` bump in vite.config.ts: on a loaded machine
+// (parallel workers, other builds) a jsdom render routinely takes longer than
+// Testing Library's 1 s default for `waitFor` / `findBy*`, and the failure moves
+// between unrelated tests run to run (ReviewPage's #751 card count, last seen).
+// A longer ceiling only slows a test that is failing anyway.
+configure({ asyncUtilTimeout: 5_000 });

@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.116.0
+**Importer un fichier dans un nœud à session vive, depuis son terminal** (#971, spec #970).
+
+- Glisser-déposer sur le terminal du nœud, ou icône « Import » dans sa barre : une modale
+  dépose le(s) fichier(s) sous `.pdo/artifacts/_attachments/<node-id>/` (jamais commités,
+  supprimés avec le Run ; un nom déjà pris est suffixé `-1`, `-2`…).
+- La modale donne ensuite un texte avec le chemin relatif au worktree, à copier ou à écrire
+  dans la saisie de l'agent sans Entrée. Fonctionne aussi depuis un navigateur distant en http.
+- Refus motivé, sans rien écrire : nœud sans session vive (409), import au-delà de
+  `max_attachments_mb` (413).
+
 ## 1.115.0
 **Terminal de nœud agrandi en overlay quasi plein écran** (#968, spec #967).
 

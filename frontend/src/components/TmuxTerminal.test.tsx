@@ -1199,4 +1199,62 @@ describe("TmuxTerminal", () => {
       expect(screen.queryByTestId("term-watchers")).toBeNull();
     });
   });
+
+  describe("file import (#971)", () => {
+    const fileDrop = (files: File[]) => ({
+      dataTransfer: {
+        files,
+        items: files.map(() => ({ kind: "file" })),
+        types: ["Files"],
+        dropEffect: "none",
+      },
+    });
+
+    it("a PDF dropped on the terminal is handed to the import, pre-filled", async () => {
+      const onImportFiles = vi.fn();
+      render(<TmuxTerminal session="s-import" status="running" onImportFiles={onImportFiles} />);
+      const root = screen.getByTestId("tmux-terminal");
+      const pdf = new File(["%PDF"], "contrat.pdf", { type: "application/pdf" });
+      fireEvent.dragEnter(root, fileDrop([pdf]));
+      expect(screen.getByTestId("skill-drop-overlay")).toHaveTextContent(
+        "Drop to import 1 file into this node",
+      );
+      fireEvent.drop(root, fileDrop([pdf]));
+      expect(onImportFiles).toHaveBeenCalledWith([pdf]);
+      expect(screen.queryByTestId("skill-drop-overlay")).toBeNull();
+    });
+
+    it("the Import button sits in the toolbar and opens the import with no file", () => {
+      const onImportFiles = vi.fn();
+      render(<TmuxTerminal session="s-import" status="running" onImportFiles={onImportFiles} />);
+      const button = screen.getByTestId("term-import");
+      expect(button.parentElement?.dataset.tooltip).toBe("Import files into this node");
+      fireEvent.click(button);
+      expect(onImportFiles).toHaveBeenCalledWith([]);
+    });
+
+    it("without a live session the Import button is off and says why", () => {
+      const onImportFiles = vi.fn();
+      render(
+        <TmuxTerminal
+          session="s-import"
+          status="running"
+          onImportFiles={onImportFiles}
+          importDisabledReason="This node has no live session"
+        />,
+      );
+      const button = screen.getByTestId("term-import");
+      expect(button.parentElement?.dataset.tooltip).toBe("This node has no live session");
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(button);
+      expect(onImportFiles).not.toHaveBeenCalled();
+    });
+
+    it("no import handler, no Import button and no drop target (the Run shell)", () => {
+      render(<TmuxTerminal session="s-shell" status="running" />);
+      expect(screen.queryByTestId("term-import")).toBeNull();
+      fireEvent.dragEnter(screen.getByTestId("tmux-terminal"), fileDrop([new File(["x"], "a.txt")]));
+      expect(screen.queryByTestId("skill-drop-overlay")).toBeNull();
+    });
+  });
 });

@@ -54,3 +54,25 @@ export function overLimitIndices(attachments: File[], maxBytes: number): Set<num
   });
   return over;
 }
+
+/** #971: the ready-to-use text the import modal hands the user once files landed
+ *  in a node's Blackboard — one line, so writing it into a terminal never submits
+ *  half of it. Paths are relative to the Run's worktree root. */
+export function importedFilesText(paths: string[]): string {
+  const quoted = paths.map((p) => `\`${p}\``).join(", ");
+  if (paths.length === 1) {
+    return `I imported a file for you: ${quoted} (path relative to the worktree root).`;
+  }
+  return `I imported ${paths.length} files for you: ${quoted} (paths relative to the worktree root).`;
+}
+
+/** #971: add `incoming` to the files staged for an import. A file with the same
+ *  name replaces the staged one (the user picked it again). */
+export function stageImportFiles(current: File[], incoming: ArrayLike<File>): File[] {
+  let next = [...current];
+  for (const file of Array.from(incoming)) {
+    const dup = next.findIndex((f) => f.name === file.name);
+    next = dup >= 0 ? next.map((f, i) => (i === dup ? file : f)) : [...next, file];
+  }
+  return next;
+}

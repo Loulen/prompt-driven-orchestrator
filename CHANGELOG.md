@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.17.1 — Le core ne nomme aucune extension (CORE-28)
+
+Aucun changement de contrat : `pdo-extension-api` reste en **0.8.0**. Détail : ADR-0081.
+
+- Commentaires de doc (et types TypeScript régénérés), tests Rust et front,
+  `docs/reference/extension-api.md`, `docs/reference/extension-ui.md` et les entrées passées de
+  ce fichier décrivent chaque seam pour lui-même, avec les extensions de test du core (`test`,
+  `demo`, `a/panneau`, `gate`) et une distribution d'exemple, `acme-pdo`. Mêmes assertions,
+  autres données.
+- Un dépôt créé de zéro signe son commit initial de sa propre identité (`user.name` /
+  `user.email`), même quand des variables `GIT_AUTHOR_*` / `GIT_COMMITTER_*` sont héritées.
+
 ## 2.17.0 — Seams d'identité et de droits (CORE-2 à CORE-5)
 
 `pdo-extension-api` passe en **0.8.0** : ajouts seulement, une extension 0.1 à 0.7 compile et

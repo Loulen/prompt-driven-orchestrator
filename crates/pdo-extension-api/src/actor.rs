@@ -60,11 +60,11 @@ mod tests {
         assert_eq!(agent.kind(), "agent");
         assert_eq!(
             serde_json::from_value::<Actor>(serde_json::json!({
-                "kind": "identified", "namespace": "iam", "id": "alice"
+                "kind": "identified", "namespace": "test", "id": "alice"
             }))
             .unwrap(),
             Actor::Identified {
-                namespace: "iam".into(),
+                namespace: "test".into(),
                 id: "alice".into()
             }
         );
@@ -82,7 +82,7 @@ mod tests {
                 trigger_id: "t1".into(),
             },
             Actor::Identified {
-                namespace: "iam".into(),
+                namespace: "test".into(),
                 id: "alice".into(),
             },
         ] {

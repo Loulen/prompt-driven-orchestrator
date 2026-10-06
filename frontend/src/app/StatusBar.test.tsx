@@ -48,34 +48,34 @@ describe("StatusBar — the version of the release channel", () => {
   it("a distribution shows its name and version, then the core's", () => {
     const badge = renderBar(
       update({
-        channel_name: "pdo-dist",
+        channel_name: "acme-pdo",
         installed_version: "0.3.0",
         core_version: "2.0.0",
         install_method: "declared",
-        manual_command: "pdo-dist-upgrade",
+        manual_command: "acme-pdo-upgrade",
       }),
       // `/sessions` reports the core's version: it must not be passed off as the distribution's.
       "2.0.0",
     );
-    expect(badge).toHaveTextContent("pdo-dist 0.3.0 (core 2.0.0)");
+    expect(badge).toHaveTextContent("acme-pdo 0.3.0 (core 2.0.0)");
     expect(badge).not.toHaveTextContent("v2.0.0");
   });
 
   it("a distribution behind its latest release keeps the amber pill", () => {
     const badge = renderBar(
       update({
-        channel_name: "pdo-dist",
+        channel_name: "acme-pdo",
         installed_version: "0.3.0",
         core_version: "2.0.0",
         latest_version: "0.4.0",
         newer_available: true,
         source: "GitHub Releases",
-        source_url: "https://api.github.com/repos/acme/pdo-dist/releases/latest",
+        source_url: "https://api.github.com/repos/acme/acme-pdo/releases/latest",
         reason: null,
       }),
       "2.0.0",
     );
-    expect(badge).toHaveTextContent("pdo-dist 0.3.0 (core 2.0.0)");
+    expect(badge).toHaveTextContent("acme-pdo 0.3.0 (core 2.0.0)");
     expect(screen.getByTestId("statusbar-version-badge")).toHaveTextContent("→ 0.4.0");
   });
 });

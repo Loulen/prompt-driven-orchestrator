@@ -44,15 +44,15 @@ mod tests {
     fn ids_are_derived_from_the_extension_and_the_name() {
         let seed = ExtensionSkillSeed {
             extension: ProvidedBy {
-                id: "pm".into(),
+                id: "demo".into(),
                 version: "0.3.0".into(),
             },
-            extension_name: "Projet".into(),
-            name: "pm".into(),
+            extension_name: "Demo".into(),
+            name: "demo".into(),
             skill_md: String::new(),
             files: vec![],
         };
-        assert_eq!(seed.id(), "ext-pm-pm");
-        assert_eq!(extension_folder_id("pm"), "skf-ext-pm");
+        assert_eq!(seed.id(), "ext-demo-demo");
+        assert_eq!(extension_folder_id("demo"), "skf-ext-demo");
     }
 }

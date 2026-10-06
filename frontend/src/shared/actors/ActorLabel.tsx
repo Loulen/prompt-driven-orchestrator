@@ -5,7 +5,7 @@ import { useActorDisplay } from "./store";
 
 /**
  * An Actor in text: its display name and avatar when an extension names it,
- * the core's own label otherwise (`alice (iam)`, `Local operator`).
+ * the core's own label otherwise (`alice (test)`, `Local operator`).
  */
 export default function ActorLabel({ actor }: { actor: Actor }) {
   const display = useActorDisplay(actor);

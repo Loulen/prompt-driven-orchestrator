@@ -31,8 +31,8 @@ impl CliSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CliInvocation {
-    /// The arguments after the id, verbatim (`pdo ext pm tache list --json`
-    /// gives `["tache", "list", "--json"]`).
+    /// The arguments after the id, verbatim (`pdo ext test note list --json`
+    /// gives `["note", "list", "--json"]`).
     pub args: Vec<String>,
     /// Everything the command read on its standard input when that input is a
     /// pipe or a file; empty otherwise (a terminal, `/dev/null`, the socket an

@@ -61,7 +61,7 @@ pub fn main_with(extensions: impl FnOnce() -> Vec<Box<dyn Extension>>) -> ExitCo
 /// fn main() -> std::process::ExitCode {
 ///     pdo::main_with_config(Vec::new, |config| {
 ///         config.with_release_channel(pdo::ReleaseChannel {
-///             name: "pdo-dist".into(),
+///             name: "acme-pdo".into(),
 ///             installed_version: env!("CARGO_PKG_VERSION").into(),
 ///             source_url: None,
 ///             upgrade_command: None,

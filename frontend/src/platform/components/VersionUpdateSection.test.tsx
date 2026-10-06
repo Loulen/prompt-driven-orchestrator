@@ -15,17 +15,17 @@ import VersionUpdateSection from "./VersionUpdateSection";
 /** A distribution (#24): its own name, version, source and command, on core 2.0.0. */
 function distribution(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
-    channel_name: "pdo-dist",
+    channel_name: "acme-pdo",
     installed_version: "0.3.0",
     core_version: "2.0.0",
     latest_version: "0.4.0",
     newer_available: true,
     checked_at: "2026-09-05T08:00:00Z",
     source: "GitHub Releases",
-    source_url: "https://api.github.com/repos/acme/pdo-dist/releases/latest",
+    source_url: "https://api.github.com/repos/acme/acme-pdo/releases/latest",
     check_enabled: true,
     install_method: "declared",
-    manual_command: "brew update && brew upgrade acme/tap/pdo-dist",
+    manual_command: "brew update && brew upgrade acme/tap/acme-pdo",
     supervision: "systemd",
     reason: null,
     last_error: null,
@@ -52,12 +52,12 @@ describe("Settings › Version & update — a distribution's release channel (#2
     fetchUpdateStatusMock.mockResolvedValue(distribution());
     renderSection();
     const installed = await screen.findByTestId("setting-version-installed");
-    expect(installed).toHaveTextContent("pdo-dist 0.3.0 (core 2.0.0)");
+    expect(installed).toHaveTextContent("acme-pdo 0.3.0 (core 2.0.0)");
     expect(screen.getByTestId("setting-version-install-method")).toHaveTextContent(
       "Declared by the distribution",
     );
     expect(screen.getByTestId("setting-version-manual-command")).toHaveTextContent(
-      "brew upgrade acme/tap/pdo-dist",
+      "brew upgrade acme/tap/acme-pdo",
     );
     expect(screen.getByTestId("setting-version-update-button")).not.toBeDisabled();
   });
@@ -77,7 +77,7 @@ describe("Settings › Version & update — a distribution's release channel (#2
       distribution({
         manual_command: null,
         can_apply: false,
-        apply_blocked_reason: "pdo-dist declares no update command: PDO will not guess.",
+        apply_blocked_reason: "acme-pdo declares no update command: PDO will not guess.",
       }),
     );
     renderSection();
@@ -85,7 +85,7 @@ describe("Settings › Version & update — a distribution's release channel (#2
     expect(btn).toBeDisabled();
     expect(btn).toHaveAttribute("title", expect.stringContaining("declares no update command"));
     expect(screen.getByTestId("setting-version-manual-command")).toHaveTextContent(
-      "pdo-dist declares no update command",
+      "acme-pdo declares no update command",
     );
     expect(screen.queryByTestId("setting-version-copy-command")).not.toBeInTheDocument();
     expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("will not guess");

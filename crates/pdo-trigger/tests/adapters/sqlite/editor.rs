@@ -8,7 +8,7 @@ use super::{sample, test_db};
 
 fn alice() -> Actor {
     Actor::Identified {
-        namespace: "iam".into(),
+        namespace: "test".into(),
         id: "alice".into(),
     }
 }

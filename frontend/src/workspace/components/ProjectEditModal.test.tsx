@@ -377,17 +377,17 @@ describe("ProjectEditModal — the project/edit sections", () => {
       return <p>{`Attach to ${entity?.name} (${entity?.id ?? "new"})`}</p>;
     },
     RefusingSection: ({ form }: SectionProps) => {
-      useEffect(() => form?.onSave(() => Promise.reject(new Error("no backlog"))), [form]);
+      useEffect(() => form?.onSave(() => Promise.reject(new Error("no note"))), [form]);
       return <p>refusing</p>;
     },
   };
   function serveSections(components: string[]) {
     const entry: ExtensionEntry = {
-      id: "pm",
-      name: "Project",
+      id: "demo",
+      name: "Demo",
       version: "1.0.0",
       ui: {
-        bundle_url: "/ext/pm/ui.js",
+        bundle_url: "/ext/demo/ui.js",
         react_major: hostReactMajor(),
         ui_module_major: null,
         locations: [],
@@ -395,7 +395,7 @@ describe("ProjectEditModal — the project/edit sections", () => {
         contributions: components.map((component) => ({
           location: "project/edit",
           id: component,
-          label: "Project",
+          label: "Demo",
           type: "section",
           component,
         })) as UiContribution[],
@@ -440,18 +440,18 @@ describe("ProjectEditModal — the project/edit sections", () => {
   it("keeps the modal open with the section's error, and runs the cancels on Cancel", async () => {
     serveSections(["AttachSection", "RefusingSection"]);
     const project = {
-      id: "p1", name: "front", harness: null, members: ["/repos/front"], attributes: { "pm/x": "1" },
+      id: "p1", name: "front", harness: null, members: ["/repos/front"], attributes: { "demo/x": "1" },
     } as unknown as Project;
     updateProject.mockResolvedValue({});
     const { onClose, onSaved } = renderModal({ initialProject: project });
     expect(await screen.findByText("Attach to front (p1)")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("project-edit-save"));
     expect(await screen.findByTestId("project-edit-error")).toHaveTextContent(
-      "An extension section could not save: no backlog",
+      "An extension section could not save: no note",
     );
     expect(onSaved).toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
-    expect(saved).toEqual([{ kind: "project", id: "p1", name: "front", attributes: { "pm/x": "1" } }]);
+    expect(saved).toEqual([{ kind: "project", id: "p1", name: "front", attributes: { "demo/x": "1" } }]);
 
     fireEvent.click(screen.getByTestId("project-edit-cancel"));
     expect(cancelled).toEqual(["attach"]);

@@ -37,7 +37,7 @@ export function isDistribution(s: UpdateStatus): boolean {
 }
 
 /**
- * How the installed version reads: `v2.0.0` for the vanilla binary, `pdo-dist 0.3.0
+ * How the installed version reads: `v2.0.0` for the vanilla binary, `acme-pdo 0.3.0
  * (core 2.0.0)` for a distribution, whose version alone says nothing about the core.
  */
 export function installedVersionLabel(s: UpdateStatus): string {

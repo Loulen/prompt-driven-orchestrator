@@ -1,6 +1,7 @@
 //! The Runs a Trigger produces, through the run context's public use cases: a
 //! fire is a creation the trigger context has already gated (`Runs::start_run`),
-//! whose Run the extensions stamp with the Trigger as its Acteur.
+//! whose Run the extensions stamp, before its first Node, with the Trigger as
+//! its Acteur.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,14 +50,10 @@ impl TriggerRuns for RunsOfTriggers {
 
     fn start(&self, fire: RunFromTrigger) -> BoxFuture<'_, Result<String, String>> {
         Box::pin(async move {
-            let actor = Actor::Trigger {
-                trigger_id: fire.trigger.id.clone(),
-            };
+            // `start_run` stamps the Run with its `created_by`, the Trigger,
+            // before its first Node.
             match self.0.start_run(request(fire), Vec::new(), None).await {
-                Ok(run_id) => {
-                    self.0.stamp_run(&actor, &run_id).await;
-                    Ok(run_id)
-                }
+                Ok(run_id) => Ok(run_id),
                 Err((_, body)) => Err(body
                     .get("error")
                     .and_then(|v| v.as_str())
@@ -111,6 +108,8 @@ fn request(fire: RunFromTrigger) -> CreateRunRequest {
         // preference, so `pdo fail` resolves through project/instance.
         auto_fail: None,
         provisioning: ProvisioningRules::default(),
+        // A Trigger carries no extension data.
+        extensions: Default::default(),
         source_fetch_error,
         // API 0.8: a fired Run is created by its Trigger, and carries the
         // Trigger's last editor, who answers for it.

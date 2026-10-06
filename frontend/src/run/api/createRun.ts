@@ -49,6 +49,10 @@ export interface CreateRunRequest {
   /** #779: non-image attachments, sent as the multipart `files` field. */
   files?: File[];
   provisioning?: ProvisioningRules;
+  /** API 0.9: extension id → the value the Run carries for it (the `run/new`
+   *  sections' `provide`). Each extension checks its own before the Run
+   *  exists; an id no installed extension has is refused. Omit for none. */
+  extensions?: Record<string, unknown>;
 }
 
 export interface CreateRunResponse {
@@ -79,6 +83,8 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.skills && req.skills.length > 0) form.append("skills", JSON.stringify(req.skills));
     if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
     if (req.provisioning) form.append("provisioning", JSON.stringify(req.provisioning));
+    if (req.extensions && Object.keys(req.extensions).length > 0)
+      form.append("extensions", JSON.stringify(req.extensions));
     for (const file of req.images ?? []) {
       form.append("images", file, file.name);
     }

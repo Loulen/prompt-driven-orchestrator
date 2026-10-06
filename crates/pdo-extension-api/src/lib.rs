@@ -3,8 +3,9 @@
 //! An [`Extension`] is registered when the daemon starts (`pdo::serve(config,
 //! extensions)`) and plugs into the core's generic hooks: identify the [`Actor`]
 //! of a request (and refuse one nobody identified, [`Admission`]), show an
-//! Actor's name ([`ActorDisplay`]), authorize or refuse an [`Operation`], stamp [`Attributes`] on a
-//! new entity, observe events, contribute routes and UI, answer a command line
+//! Actor's name ([`ActorDisplay`]), authorize or refuse an [`Operation`], check
+//! the data a creation carries for it ([`ExtensionData`]) and stamp
+//! [`Attributes`] on a new entity, observe events, contribute routes and UI, answer a command line
 //! (`pdo ext <id> <args…>`), bring skills into the Banque de skills, contribute
 //! to the launch of a Node (environment variables, a preamble) and suspend a
 //! Trigger.
@@ -47,6 +48,7 @@ mod host;
 mod launch;
 mod manifest;
 mod operation;
+mod run_creation;
 mod skill;
 mod ui;
 
@@ -64,6 +66,7 @@ pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use launch::{NodeEnv, NodeKind, NodeLaunch, TriggerProvenance, TriggerRef};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
+pub use run_creation::{ExtensionData, NewRun, RunCreation, RunNotCreated, RunRepo};
 pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
     ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions, UiElement,
@@ -82,5 +85,7 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// (0.2 only added to 0.1, ADR-0081 amendment #29; 0.3 broke only compilation,
 /// amendment #34; 0.4 only added to 0.3, amendment #32; 0.8 only added
 /// fields, methods, hooks, types, the verb `read` and the `topbar/account`
-/// location, amendments CORE-3, CORE-4, CORE-5 and CORE-2).
+/// location, amendments CORE-3, CORE-4, CORE-5 and CORE-2; 0.9 only added the
+/// extension data of a creation, its hooks and `Host::create_run`, amendment
+/// CORE-29).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

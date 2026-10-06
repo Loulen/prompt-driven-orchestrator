@@ -84,6 +84,10 @@ mod extension_trigger_fire;
 #[path = "extension_node_launch.rs"]
 mod extension_node_launch;
 
+// API 0.9: the extension data of a Run's creation, `--ext`, `Host::create_run`.
+#[path = "extension_run_creation.rs"]
+mod extension_run_creation;
+
 // The rest of the extension API (#931): attributes, events, routes, `/ext`.
 #[path = "extension_hooks.rs"]
 mod extension_hooks;

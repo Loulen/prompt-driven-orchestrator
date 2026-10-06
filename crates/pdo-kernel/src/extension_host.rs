@@ -8,7 +8,8 @@ use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
     ActorDisplay, Admission, Attributes, Authorization, EntityRef, Extension, ExtensionContext,
-    Host, Manifest, NodeLaunch, RequestParts, Resource, TriggerRef, EXTENSION_EVENT,
+    ExtensionData, Host, Manifest, NodeLaunch, RequestParts, Resource, ResourceKind, TriggerRef,
+    EXTENSION_EVENT,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -20,11 +21,13 @@ use crate::event_bus::EventBus;
 use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
+mod creation;
 mod host_of;
 mod identity;
 mod launch;
 mod neutral;
 mod skills;
+pub use creation::{CreationRefusal, RunCreator};
 use host_of::{panic_message, ExtensionHostOf};
 pub use identity::Identification;
 pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
@@ -70,6 +73,38 @@ pub trait ExtensionHost: Send + Sync {
     /// created, each key prefixed with its extension's id. None by default.
     fn on_create(&self, _actor: &Actor, _entity: &EntityRef) -> Attributes {
         Attributes::new()
+    }
+
+    /// [`Self::on_create`], with the data the creation carried for the
+    /// extensions (API 0.9): each extension receives its own value. By
+    /// default, [`Self::on_create`].
+    fn on_create_with_data(
+        &self,
+        actor: &Actor,
+        entity: &EntityRef,
+        _data: &ExtensionData,
+    ) -> Attributes {
+        self.on_create(actor, entity)
+    }
+
+    /// The ids of the installed extensions, in registration order. None by
+    /// default.
+    fn installed(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Check the data a creation of a `kind` carries for the extensions (API
+    /// 0.9), before anything is created: an id no installed extension has is
+    /// refused ([`CreationRefusal::UnknownExtension`]), then each extension
+    /// whose id is present checks its value. By default, only the ids are
+    /// checked against [`Self::installed`].
+    fn validate_create(
+        &self,
+        _actor: &Actor,
+        _kind: &ResourceKind,
+        data: &ExtensionData,
+    ) -> Result<(), CreationRefusal> {
+        creation::unknown_extension(data, &self.installed())
     }
 
     /// Where the entity attributes are stored.
@@ -134,6 +169,9 @@ struct Registry {
     registered: Vec<Registered>,
     attributes: OnceLock<Arc<dyn AttributeStore>>,
     bus: OnceLock<Arc<dyn EventBus>>,
+    /// What creates a Run for [`Host::create_run`], once the daemon wired
+    /// its contexts.
+    runs: OnceLock<Arc<dyn RunCreator>>,
 }
 
 /// The host of the extensions registered at startup, in registration order.
@@ -250,6 +288,15 @@ impl Extensions {
         }
     }
 
+    /// Plug in what creates a Run for the extensions' [`Host::create_run`],
+    /// once the daemon wired its contexts (after [`Self::start`]). Until then
+    /// a `create_run` answers `503`.
+    pub fn serve_runs(&self, runs: Arc<dyn RunCreator>) {
+        if self.registry.runs.set(runs).is_err() {
+            tracing::warn!("the Runs of the extensions were plugged twice; the second is ignored");
+        }
+    }
+
     /// Hand every event of the bus subscription `events` to the extensions.
     fn relay(&self, mut events: tokio::sync::broadcast::Receiver<Value>) {
         // Weak: the relay must not keep the extensions (and their delivery
@@ -280,14 +327,24 @@ impl Extensions {
         }
     }
 
-    /// Every extension's attributes for `entity`, but those of `except`.
-    fn stamps(&self, actor: &Actor, entity: &EntityRef, except: Option<&str>) -> Attributes {
+    /// Every extension's attributes for `entity`, but those of `except`, each
+    /// handed its value of `data`.
+    fn stamps(
+        &self,
+        actor: &Actor,
+        entity: &EntityRef,
+        data: &ExtensionData,
+        except: Option<&str>,
+    ) -> Attributes {
         let mut stamped = Attributes::new();
         for r in &self.registry.registered {
             if Some(r.manifest.id.as_str()) == except {
                 continue;
             }
-            match catch_unwind(AssertUnwindSafe(|| r.extension.on_create(actor, entity))) {
+            let value = data.get(&r.manifest.id);
+            match catch_unwind(AssertUnwindSafe(|| {
+                r.extension.on_create_with_data(actor, entity, value)
+            })) {
                 Ok(attributes) => stamped.extend(prefixed(&r.manifest.id, attributes)),
                 Err(_) => tracing::warn!(
                     "extension `{}` panicked in on_create; it stamps nothing",
@@ -365,7 +422,29 @@ impl ExtensionHost for Extensions {
     }
 
     fn on_create(&self, actor: &Actor, entity: &EntityRef) -> Attributes {
-        self.stamps(actor, entity, None)
+        self.stamps(actor, entity, &ExtensionData::new(), None)
+    }
+
+    fn on_create_with_data(
+        &self,
+        actor: &Actor,
+        entity: &EntityRef,
+        data: &ExtensionData,
+    ) -> Attributes {
+        self.stamps(actor, entity, data, None)
+    }
+
+    fn installed(&self) -> Vec<String> {
+        self.iter().map(|(manifest, _)| manifest.id.clone()).collect()
+    }
+
+    fn validate_create(
+        &self,
+        actor: &Actor,
+        kind: &ResourceKind,
+        data: &ExtensionData,
+    ) -> Result<(), CreationRefusal> {
+        creation::validate(self, actor, kind, data)
     }
 
     fn attributes(&self) -> Arc<dyn AttributeStore> {

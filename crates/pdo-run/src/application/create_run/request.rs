@@ -82,6 +82,14 @@ pub struct CreateRunRequest {
     /// Run-level provisioning rules, composed and frozen with Instance + Project.
     #[serde(default)]
     pub provisioning: provisioning::ProvisioningRules,
+    /// The data the Run carries for the extensions (API 0.9): extension id →
+    /// a JSON value the core never interprets. An id no installed extension
+    /// has is a `400`, like an unknown field; the extension checks its value
+    /// before anything is created (`validate_create`) and receives it when it
+    /// stamps the Run, before the first Node. Frozen into `RunStarted` as
+    /// `extensions`, only when non-empty.
+    #[serde(default)]
+    pub extensions: pdo_kernel::attributes::ExtensionData,
     /// Why the **pre-cut fetch** of a Trigger fire did not happen (#804,
     /// ADR-0070 §1), frozen into `RunStarted` so the Run can say it started on
     /// local state instead of a refreshed one. `None` on every other path, and on
@@ -133,6 +141,7 @@ pub const CREATE_RUN_FIELDS: &[&str] = &[
     "auto_name",
     "auto_fail",
     "provisioning",
+    "extensions",
 ];
 
 /// Reject a `POST /runs` body carrying an unknown top-level key. A non-object

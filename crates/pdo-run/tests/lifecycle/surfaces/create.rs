@@ -258,6 +258,72 @@ async fn retry_all_archives_and_creates_new_run() {
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
+async fn retry_all_carries_the_extension_data_of_the_original() {
+    // API 0.9: the twin carries what the original carried for the extensions,
+    // frozen in its `RunStarted` (they accepted it at the create).
+    let _home = FakeHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    init_test_repo(tmp.path());
+    write_test_pipeline(tmp.path(), "retry-pipe");
+    let state = test_state_with_dir(tmp.path()).await;
+    let data = serde_json::json!({ "acme": { "cle": "valeur" } });
+    for (kind, payload) in [
+        (
+            event_log::EventKind::RunStarted,
+            Some(serde_json::json!({
+                "pipeline_name": "retry-pipe",
+                "input": "do the thing",
+                "edges": [],
+                "node_defs": [],
+                "extensions": data,
+            })),
+        ),
+        (event_log::EventKind::RunFailed, None),
+    ] {
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: "retry-ext".into(),
+                ts: pdo_kernel::clock::now_iso(),
+                kind,
+                node_id: None,
+                iter: None,
+                payload,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let resp = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/runs/retry-ext/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"kind":"retry_all"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let twin = load_events(&state.db, json["run_id"].as_str().unwrap())
+        .await
+        .unwrap();
+    let started = twin
+        .iter()
+        .find(|e| e.kind == event_log::EventKind::RunStarted)
+        .unwrap();
+    assert_eq!(started.payload.as_ref().unwrap()["extensions"], data);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn retry_all_of_a_legacy_null_target_run_lands_on_the_resolved_repo() {
     // `retry_all` archives the original BEFORE creating the replacement.
     // A run recorded before the create boundary was hardened carries

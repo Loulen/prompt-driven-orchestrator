@@ -8,8 +8,8 @@ use serde::Serialize;
 
 use crate::{
     Actor, ActorDisplay, Admission, Attributes, CliInvocation, CliOutput, CliSpec, EntityRef,
-    ExtensionSkill, Host, Manifest, NeutralHost, NodeEnv, NodeLaunch, Operation, TriggerRef,
-    UiContributions,
+    ExtensionSkill, Host, Manifest, NeutralHost, NodeEnv, NodeLaunch, Operation, ResourceKind,
+    TriggerRef, UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
@@ -219,6 +219,41 @@ pub trait Extension: Send + Sync + 'static {
         Attributes::new()
     }
 
+    /// Check the value a creation carries for this extension (API 0.9), before
+    /// anything is created: `POST /runs` `{"extensions": {"<id>": <value>}}`,
+    /// `pdo run create --ext <id>.<key>=<value>`, a `run/new` section that
+    /// provides one, a [`Host::create_run`](crate::Host::create_run). `kind`
+    /// is what is being created ([`ResourceKind::Run`]).
+    ///
+    /// Asked only when the creation carries a value for this extension, once
+    /// the Autorisation d'opération allowed it. `Err(reason)` refuses the
+    /// creation: `400` with the reason, nothing created. Accepts everything by
+    /// default. Called on the request path: be quick. A panic refuses.
+    fn validate_create(
+        &self,
+        _actor: &Actor,
+        _kind: &ResourceKind,
+        _value: &serde_json::Value,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// [`Self::on_create`], with the value the creation carried for this
+    /// extension (API 0.9): `None` when it carried none, and for every entity
+    /// but a Run. Called for a new Run **before its first Node is launched**,
+    /// the value already checked by [`Self::validate_create`].
+    ///
+    /// By default, [`Self::on_create`]: override this one to read the value,
+    /// that one otherwise.
+    fn on_create_with_data(
+        &self,
+        actor: &Actor,
+        entity: &EntityRef,
+        _data: Option<&serde_json::Value>,
+    ) -> Attributes {
+        self.on_create(actor, entity)
+    }
+
     /// Observe an event: exactly the JSON the daemon broadcasts on `/ws`, which
     /// carries an [`OperationApplied`](crate::OperationApplied) after each
     /// authorized and successful mutation, and the events the other extensions
@@ -329,7 +364,7 @@ pub trait Extension: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ResourceKind, Verb};
+    use crate::Verb;
 
     /// An extension that overrides nothing but its manifest.
     struct Bare;
@@ -357,6 +392,17 @@ mod tests {
         assert_eq!(ext.authorize(&actor, &op), Authorization::Allow);
         assert!(ext
             .on_create(&actor, &EntityRef::new(ResourceKind::Project, "p1"))
+            .is_empty());
+        assert_eq!(
+            ext.validate_create(&actor, &ResourceKind::Run, &serde_json::json!({ "k": "v" })),
+            Ok(())
+        );
+        assert!(ext
+            .on_create_with_data(
+                &actor,
+                &EntityRef::new(ResourceKind::Run, "r1"),
+                Some(&serde_json::json!(1))
+            )
             .is_empty());
         ext.start(&ExtensionContext::new("/tmp/bare"));
         assert!(ExtensionContext::new("/tmp/bare")

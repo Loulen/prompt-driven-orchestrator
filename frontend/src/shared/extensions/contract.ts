@@ -74,6 +74,18 @@ export interface SectionForm {
   onSave(handler: (saved: EntityContext) => unknown): () => void;
   /** Run `handler` when the host is cancelled or closed without saving. */
   onCancel(handler: () => unknown): () => void;
+  /**
+   * Provide a value to the creation the host is about to submit (API 0.9):
+   * `handler` is called just before the submit, and what it answers (or
+   * resolves to) is sent under the id of the section's extension, as
+   * `POST /runs` `extensions.<id>`; the daemon hands it to that extension's
+   * `validate_create` then `on_create_with_data`. `undefined` provides
+   * nothing. A throw or a rejection keeps the form open with its message; so
+   * does the extension's refusal of the value. Two sections of one extension
+   * that both provide an object are merged, key by key. Only `run/new`, and
+   * only when it launches a Run (not a Trigger): elsewhere it is never called.
+   */
+  provide?(handler: () => unknown): () => void;
 }
 
 /** A section: `settings`, `project/edit`, `run/new`, `node/config`, `pipeline/config`, `run/info`. */
@@ -109,6 +121,10 @@ export interface RunNewContext extends LocationContext {
   pipeline: string | null;
   /** The target repository, as typed. */
   repository: string;
+  /** The prompt of the entry node, as typed (API 0.9). */
+  input: string;
+  /** The Run's name, as typed (`""`: none); the Trigger's name in `trigger` mode (API 0.9). */
+  name: string;
   /**
    * The Projet owning the target repository (compared verbatim, as the Runs
    * list groups it), whose rights the Run will be created under; `null` for a

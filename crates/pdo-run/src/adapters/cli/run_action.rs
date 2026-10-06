@@ -84,6 +84,13 @@ pub enum RunAction {
         /// Run-level provisioning rules as JSON (ADR-0061).
         #[arg(long)]
         provisioning: Option<String>,
+        /// Data for an extension (repeatable): `--ext <id>.<key>=<value>` sets
+        /// `extensions.<id>.<key>` of `POST /runs` to the string `<value>`,
+        /// which PDO never interprets. The extension `<id>` checks it before
+        /// the Run is created (a refusal prints its reason) and receives it
+        /// before the first node. An id no installed extension has is refused.
+        #[arg(long = "ext", value_name = "ID.KEY=VALUE")]
+        ext: Vec<String>,
     },
     /// Block until a child run of this node becomes terminal (#588, ADR-0069):
     /// a long-poll on the daemon, never a push into your pane. Prints one JSON

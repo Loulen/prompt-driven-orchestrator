@@ -110,24 +110,28 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
     .locator('.react-flow__node[data-id="worker-a"]')
     .click({ timeout: 5_000 });
 
-  // Both tabs should be visible
+  // Both tabs should be visible. ADR-0080: a run followed in « pilotage » shows
+  // the node's read-only Config, not an Edit tab.
   const runTab = page.getByTestId("inspector-tab-run");
-  const editTab = page.getByTestId("inspector-tab-edit");
+  const configTab = page.getByTestId("inspector-tab-config");
   await expect(runTab).toBeVisible({ timeout: 3_000 });
-  await expect(editTab).toBeVisible();
+  await expect(configTab).toBeVisible();
+  await expect(page.getByTestId("inspector-tab-edit")).toHaveCount(0);
 
   // Run tab should be active by default (active run)
   await expect(runTab).toHaveAttribute("data-active", "true");
 
-  // Switch to Edit tab
-  await editTab.click();
-  await expect(editTab).toHaveAttribute("data-active", "true");
+  // Switch to Config tab: prompt and skills, nothing to type into.
+  await configTab.click();
+  await expect(configTab).toHaveAttribute("data-active", "true");
+  await expect(page.getByTestId("node-config-prompt")).toBeVisible();
+  await expect(page.getByTestId("node-prompt-input")).toHaveCount(0);
 
-  // Select another node (worker-b) — Edit tab should stay active (sticky)
+  // Select another node (worker-b) — Config tab should stay active (sticky)
   await page
     .locator('.react-flow__node[data-id="worker-b"]')
     .click({ timeout: 3_000 });
-  await expect(editTab).toHaveAttribute("data-active", "true");
+  await expect(configTab).toHaveAttribute("data-active", "true");
 
   // Reload → select run → select running node → Run tab again
   await page.reload();

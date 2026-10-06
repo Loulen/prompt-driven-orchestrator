@@ -65,4 +65,19 @@ describe("InspectorTabs", () => {
     );
     expect(screen.getByTestId("tab-content")).toBeInTheDocument();
   });
+
+  it("reads « Config » on a run followed in « pilotage » (ADR-0080)", () => {
+    const onChange = vi.fn();
+    render(
+      <InspectorTabs activeTab="edit" onTabChange={onChange} configMode>
+        <div>content</div>
+      </InspectorTabs>,
+    );
+    const config = screen.getByTestId("inspector-tab-config");
+    expect(config).toHaveTextContent("Config");
+    expect(config).toHaveAttribute("data-active", "true");
+    expect(screen.queryByTestId("inspector-tab-edit")).toBeNull();
+    fireEvent.click(config);
+    expect(onChange).toHaveBeenCalledWith("edit");
+  });
 });

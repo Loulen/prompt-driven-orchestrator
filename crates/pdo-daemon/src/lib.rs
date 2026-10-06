@@ -5264,6 +5264,14 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/runs/{run_id}/pipeline",
             axum::routing::put(save_run_pipeline),
         )
+        .route(
+            "/runs/{run_id}/pipeline/overwrite-preview",
+            get(get_run_pipeline_overwrite_preview),
+        )
+        .route(
+            "/runs/{run_id}/pipeline/overwrite-default",
+            post(overwrite_default_pipeline),
+        )
         .route("/runs/{run_id}/commands", post(run_command))
         .route("/runs/{run_id}/nodes/{node_id}/start", post(node_start))
         .route("/runs/{run_id}/nodes/{node_id}/stop", post(node_stop))
@@ -16697,62 +16705,238 @@ async fn save_run_pipeline(
         }
     }
 
-    sync_run_pipeline_to_template(
-        &state,
-        &run_id,
-        &run_state.pipeline_name,
-        &req.yaml,
-        &req.prompts,
-    );
-
-    info!("Run-scoped pipeline for {run_id} saved (validated + synced to template)");
+    // ADR-0080: « Enregistrer pour ce Run » writes the run-scoped snapshot ONLY.
+    // The shared Pipeline moves through the explicit, warned
+    // `overwrite_default_pipeline` gesture, never as a side effect of a save.
+    info!("Run-scoped pipeline for {run_id} saved (validated, snapshot only)");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
-fn sync_run_pipeline_to_template(
+/// The run's snapshot as the overwrite gesture reads it: the live run-scoped
+/// YAML and its prompts. `Err` is the projected refusal (ADR-0080: an archived
+/// Run stays read-only, so it has nothing to overwrite with).
+async fn run_snapshot_for_overwrite(
     state: &AppState,
     run_id: &str,
-    pipeline_name: &str,
+) -> Result<(event_log::RunState, PathBuf, PathBuf), Box<Response>> {
+    let refuse = |status: StatusCode, message: String| {
+        Box::new(
+            (
+                status,
+                Json(serde_json::json!({ "error": message.clone(), "message": message })),
+            )
+                .into_response(),
+        )
+    };
+    let events = load_events(&state.db, run_id)
+        .await
+        .map_err(|e| refuse(StatusCode::INTERNAL_SERVER_ERROR, format!("load events: {e}")))?;
+    let Some(run_state) = event_log::project(&events) else {
+        return Err(refuse(StatusCode::NOT_FOUND, "run not found".to_string()));
+    };
+    if run_state.status == event_log::RunStatus::Archived {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            "an archived run is read-only: its pipeline cannot overwrite the default".to_string(),
+        ));
+    }
+    let repo_root = effective_repo_root(state, &run_state);
+    let snapshot = run_scoped_pipeline_path(&repo_root, run_id);
+    if !snapshot.exists() {
+        return Err(refuse(
+            StatusCode::NOT_FOUND,
+            "run-scoped pipeline not found".to_string(),
+        ));
+    }
+    let template = resolve_pipeline_path(&state.repo_root, &run_state.pipeline_name);
+    Ok((run_state, snapshot, template))
+}
+
+/// What « Écraser le Pipeline par défaut » would touch (ADR-0080), read before
+/// the warning modal opens: the shared Pipeline itself, the Triggers that launch
+/// it, and whether it changed since this Run was launched. `modified_since_launch`
+/// is `null` when the Run predates the launch fingerprint (unknown, not "no").
+async fn get_run_pipeline_overwrite_preview(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let (run_state, _snapshot, template) = match run_snapshot_for_overwrite(&state, &run_id).await
+    {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    let repo_root = effective_repo_root(&state, &run_state);
+    let pipeline_exists = template.exists();
+    let modified_since_launch =
+        std::fs::read_to_string(run_source_fingerprint_path(&repo_root, &run_id))
+            .ok()
+            .map(|launched| {
+                pipeline_source_fingerprint(&template).as_deref() != Some(launched.trim())
+            });
+    let triggers: Vec<serde_json::Value> = match trigger_store::list(&state.db).await {
+        Ok(all) => all
+            .into_iter()
+            .filter(|t| t.pipeline_id == run_state.pipeline_name)
+            .map(|t| serde_json::json!({ "id": t.id, "name": t.name, "enabled": t.enabled }))
+            .collect(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("list triggers: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    Json(serde_json::json!({
+        "pipeline_id": run_state.pipeline_name,
+        "pipeline_exists": pipeline_exists,
+        "modified_since_launch": modified_since_launch,
+        "triggers": triggers,
+    }))
+    .into_response()
+}
+
+/// « Écraser le Pipeline par défaut » (ADR-0080): the Run's snapshot — YAML and
+/// every prompt — replaces the shared Pipeline it was launched from. The only
+/// path by which a Run's edit reaches the shared Pipeline; the warning lives in
+/// the UI, read from [`get_run_pipeline_overwrite_preview`].
+async fn overwrite_default_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let (run_state, snapshot, template) = match run_snapshot_for_overwrite(&state, &run_id).await {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    if !template.exists() {
+        let message = format!(
+            "the default pipeline '{}' no longer exists (renamed or deleted)",
+            run_state.pipeline_name
+        );
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": message.clone(), "message": message })),
+        )
+            .into_response();
+    }
+    let yaml = match std::fs::read_to_string(&snapshot) {
+        Ok(y) => y,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("read run pipeline: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let parsed = match pipeline::parse_pipeline(&yaml) {
+        Ok(r) => r.pipeline,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid run pipeline YAML: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let repo_root = effective_repo_root(&state, &run_state);
+    let prompts = read_prompts_from_dir(&run_scoped_prompts_dir(&repo_root, &run_id));
+    if let Err(e) = overwrite_template_with_snapshot(&state, &template, &yaml, &prompts, &parsed) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.clone(), "message": e })),
+        )
+            .into_response();
+    }
+    // The shared Pipeline now IS this Run's snapshot: re-anchor the launch
+    // fingerprint so the next overwrite from this Run does not warn about its own
+    // write as a colleague's change.
+    if let Some(fingerprint) = pipeline_source_fingerprint(&template) {
+        let _ = std::fs::write(run_source_fingerprint_path(&repo_root, &run_id), fingerprint);
+    }
+    // Self-writes are muted on the watcher: announce the change ourselves so an
+    // open tab of the shared Pipeline reloads.
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "pipeline_changed",
+        "pipeline_id": run_state.pipeline_name,
+        "path": template.to_string_lossy(),
+    }));
+    info!(
+        "Run {run_id} overwrote the default pipeline at {}",
+        template.display()
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "pipeline_id": run_state.pipeline_name })),
+    )
+        .into_response()
+}
+
+/// Replace the shared Pipeline at `template_path` with a Run's snapshot: the YAML
+/// atomically, every prompt at the canonical `<stem>.prompts/<id>.md` (the dir
+/// every reader consults, never a flat `prompts/`), and the prompts of nodes the
+/// snapshot no longer has pruned — the snapshot is the whole definition.
+fn overwrite_template_with_snapshot(
+    state: &AppState,
+    template_path: &Path,
     yaml: &str,
     prompts: &HashMap<String, String>,
-) {
-    let template_path = resolve_pipeline_path(&state.repo_root, pipeline_name);
+    snapshot: &pipeline::PipelineDef,
+) -> Result<(), String> {
     let tmp_path = template_path.with_extension("yaml.tmp");
-
     if let Some(parent) = template_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-
-    mark_self_write(&state.recent_writes, &template_path);
-
-    if let Err(e) = std::fs::write(&tmp_path, yaml) {
-        warn!("sync_run_pipeline_to_template: write tmp failed: {e}");
-        return;
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &template_path) {
-        warn!("sync_run_pipeline_to_template: rename failed: {e}");
+    mark_self_write(&state.recent_writes, template_path);
+    std::fs::write(&tmp_path, yaml).map_err(|e| format!("write failed: {e}"))?;
+    if let Err(e) = std::fs::rename(&tmp_path, template_path) {
         let _ = std::fs::remove_file(&tmp_path);
-        return;
+        return Err(format!("rename failed: {e}"));
     }
-
-    // Write each prompt to the canonical `<dir>/<stem>.prompts/<id>.md` location every
-    // reader consults. NOT a flat `<dir>/prompts/<id>.md` dir: no reader looks there,
-    // so run-scoped prompt edits vanish in silence.
     for (node_id, content) in prompts {
-        let prompt_path = pipeline::canonical_prompt_path(&template_path, node_id);
+        let prompt_path = pipeline::canonical_prompt_path(template_path, node_id);
         if let Some(parent) = prompt_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         mark_self_write(&state.recent_writes, &prompt_path);
-        if let Err(e) = std::fs::write(&prompt_path, content) {
-            warn!("sync_run_pipeline_to_template: prompt sync failed for {node_id}: {e}");
-        }
+        std::fs::write(&prompt_path, content)
+            .map_err(|e| format!("prompt write failed for {node_id}: {e}"))?;
     }
+    prune_orphan_prompts(state, template_path, snapshot);
+    Ok(())
+}
 
-    info!(
-        "Synced run {run_id} pipeline to template at {}",
-        template_path.display()
-    );
+/// Where a Run keeps the fingerprint of the shared Pipeline it was launched from
+/// (ADR-0080), beside its snapshot.
+fn run_source_fingerprint_path(repo_root: &Path, run_id: &str) -> PathBuf {
+    repo_root
+        .join(".pdo")
+        .join("runs")
+        .join(run_id)
+        .join("pipeline.source-fingerprint")
+}
+
+/// The content fingerprint of a shared Pipeline: its YAML bytes and every
+/// sidecar prompt, in node-id order. Two reads of an unchanged Pipeline agree;
+/// any edit of the YAML or of one prompt changes it. `None` when the YAML is
+/// unreadable (deleted, renamed).
+fn pipeline_source_fingerprint(pipeline_path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let yaml = std::fs::read(pipeline_path).ok()?;
+    let prompts = read_pipeline_prompts(pipeline_path);
+    let mut ids: Vec<&String> = prompts.keys().collect();
+    ids.sort();
+    let mut hasher = Sha256::new();
+    hasher.update((yaml.len() as u64).to_le_bytes());
+    hasher.update(&yaml);
+    for id in ids {
+        let content = &prompts[id];
+        hasher.update((id.len() as u64).to_le_bytes());
+        hasher.update(id.as_bytes());
+        hasher.update((content.len() as u64).to_le_bytes());
+        hasher.update(content.as_bytes());
+    }
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Gather best-effort diagnostic context the moment a node session is found dead.
@@ -23328,6 +23512,14 @@ fn copy_pipeline_to_run(
         std::fs::create_dir_all(parent).context("create run dir")?;
     }
     std::fs::copy(pipeline_path, &dest_yaml).context("copy pipeline yaml")?;
+    // ADR-0080: remember what the shared Pipeline looked like at launch, so the
+    // overwrite warning can say whether a colleague changed it since. Best
+    // effort: a missing fingerprint only makes that line "unknown".
+    if let Some(fingerprint) = pipeline_source_fingerprint(pipeline_path) {
+        if let Err(e) = std::fs::write(run_source_fingerprint_path(repo_root, run_id), fingerprint) {
+            warn!("run {run_id}: could not record the pipeline launch fingerprint: {e}");
+        }
+    }
 
     let stem = pipeline_path
         .file_stem()
@@ -36037,24 +36229,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_run_pipeline_writes_canonical_prompt_path() {
-        // Run-scoped sync must write each prompt to the canonical
-        // `<stem>.prompts/<id>.md` (where every reader looks) — never the flat
-        // `prompts/<id>.md` dir that no reader consults.
+    async fn overwrite_template_writes_canonical_prompt_path_and_prunes_orphans() {
+        // ADR-0080: overwriting the default Pipeline from a Run must write each
+        // prompt to the canonical `<stem>.prompts/<id>.md` (where every reader
+        // looks) — never the flat `prompts/<id>.md` dir that no reader consults —
+        // and drop the prompt of a node the snapshot no longer has.
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         write_test_pipeline(dir, "auto-issue");
         let state = test_state_with_dir(dir).await;
 
+        let pipelines = dir.join(".pdo").join("pipelines");
+        let template = pipelines.join("auto-issue.yaml");
+        let stale = pipelines.join("auto-issue.prompts").join("gone.md");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "a node the snapshot dropped").unwrap();
+
         let mut prompts = HashMap::new();
         prompts.insert("worker".to_string(), "the role prompt".to_string());
+        let yaml = std::fs::read_to_string(&template).unwrap();
+        let parsed = pipeline::parse_pipeline(&yaml).unwrap().pipeline;
+        overwrite_template_with_snapshot(&state, &template, &yaml, &prompts, &parsed).unwrap();
 
-        let yaml =
-            std::fs::read_to_string(dir.join(".pdo").join("pipelines").join("auto-issue.yaml"))
-                .unwrap();
-        sync_run_pipeline_to_template(&state, "run-xyz", "auto-issue", &yaml, &prompts);
-
-        let pipelines = dir.join(".pdo").join("pipelines");
         let canonical = pipelines.join("auto-issue.prompts").join("worker.md");
         let flat = pipelines.join("prompts").join("worker.md");
 
@@ -36067,6 +36263,40 @@ mod tests {
             !flat.exists(),
             "the flat prompts/ dir must never be written"
         );
+        assert!(!stale.exists(), "the prompt of a dropped node is pruned");
+    }
+
+    #[test]
+    fn pipeline_source_fingerprint_moves_with_yaml_and_prompts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_test_pipeline(dir, "fp");
+        let template = dir.join(".pdo").join("pipelines").join("fp.yaml");
+        let prompts = dir.join(".pdo").join("pipelines").join("fp.prompts");
+        std::fs::create_dir_all(&prompts).unwrap();
+        std::fs::write(prompts.join("worker.md"), "v1").unwrap();
+
+        let first = pipeline_source_fingerprint(&template).unwrap();
+        assert_eq!(
+            pipeline_source_fingerprint(&template).as_deref(),
+            Some(first.as_str()),
+            "an unchanged pipeline reads the same fingerprint"
+        );
+
+        std::fs::write(prompts.join("worker.md"), "v2").unwrap();
+        let after_prompt = pipeline_source_fingerprint(&template).unwrap();
+        assert_ne!(first, after_prompt, "a prompt edit changes the fingerprint");
+
+        let yaml = std::fs::read_to_string(&template).unwrap();
+        std::fs::write(&template, yaml.replace("version: \"1.0\"", "version: \"2.0\"")).unwrap();
+        assert_ne!(
+            after_prompt,
+            pipeline_source_fingerprint(&template).unwrap(),
+            "a YAML edit changes the fingerprint"
+        );
+
+        std::fs::remove_file(&template).unwrap();
+        assert!(pipeline_source_fingerprint(&template).is_none());
     }
 
     /// RAII guard that sets HOME to a temporary directory and restores it on drop.

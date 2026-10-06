@@ -1903,6 +1903,32 @@ export function saveRunPipeline(
   );
 }
 
+/** ADR-0080: what « Overwrite default pipeline » would touch, read before the warning. */
+export interface OverwritePreview {
+  pipeline_id: string;
+  pipeline_exists: boolean;
+  /** `null`: the Run predates the launch fingerprint — unknown, not "no". */
+  modified_since_launch: boolean | null;
+  triggers: { id: string; name: string; enabled: boolean }[];
+}
+
+export function fetchRunPipelineOverwritePreview(runId: string): Promise<OverwritePreview> {
+  return request<OverwritePreview>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/pipeline/overwrite-preview`,
+    { label: `GET /runs/${runId}/pipeline/overwrite-preview` },
+  );
+}
+
+/** ADR-0080: the Run's whole snapshot (YAML + prompts) replaces the shared Pipeline. */
+export function overwriteDefaultPipelineFromRun(runId: string): Promise<{ pipeline_id: string }> {
+  return request<{ pipeline_id: string }>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/pipeline/overwrite-default`,
+    { label: `POST /runs/${runId}/pipeline/overwrite-default` },
+  );
+}
+
 // Pin an operation to a single store. Without it the daemon resolves a bare id
 // repo-then-user, so a `library` (or `user`) entry colliding with a same-named
 // repo pipeline routes to the wrong file (#216). `repo`/`user`/`run` map to the

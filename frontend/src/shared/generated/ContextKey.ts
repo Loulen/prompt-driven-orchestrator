@@ -5,8 +5,8 @@
  */
 export type ContextKey = { 
 /**
- * A top-level key of the context (`page`, `task`); a `when` clause reads
- * what it holds by a dotted path (`task.status`).
+ * A top-level key of the context (`note`, `run`); a `when` clause reads
+ * what it holds by a dotted path (`note.status`).
  */
 key: string, 
 /**

@@ -101,7 +101,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_redirection_answers_401_naming_the_page() {
-        let response = Admission::redirect("/ext/iam/sign-in")
+        let response = Admission::redirect("/ext/gate/sign-in")
             .into_refusal()
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -111,6 +111,6 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"], "unauthenticated");
-        assert_eq!(body["redirect"], "/ext/iam/sign-in");
+        assert_eq!(body["redirect"], "/ext/gate/sign-in");
     }
 }

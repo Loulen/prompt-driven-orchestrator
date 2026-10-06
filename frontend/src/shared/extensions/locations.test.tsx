@@ -120,7 +120,7 @@ afterEach(() => {
   resetExtensions();
 });
 
-const RUN = { entity: { kind: "run", id: "r1", attributes: { "pm/task": "PM-1" } } };
+const RUN = { entity: { kind: "run", id: "r1", attributes: { "test/note": "note-1" } } };
 
 describe("a decoration location", () => {
   it("renders nothing at all without a contribution", async () => {
@@ -139,8 +139,8 @@ describe("a decoration location", () => {
     serve([
       extension("first", [at("run/item", "decoration", "b", "Badge")]),
       extension("second", [
-        at("run/item", "decoration", "b", "Badge", { has: "entity.attributes.pm/task" }),
-        at("run/item", "decoration", "never", "Badge", { has: "entity.attributes.pm/nothing" }),
+        at("run/item", "decoration", "b", "Badge", { has: "entity.attributes.test/note" }),
+        at("run/item", "decoration", "never", "Badge", { has: "entity.attributes.test/nothing" }),
       ]),
     ]);
     render(<ExtensionDecorations<DecorationContext> location="run/item" extra={RUN} />);
@@ -233,30 +233,30 @@ function Host({ onSaved }: { onSaved: (error: string | null) => void }) {
 describe("a section location", () => {
   it("renders every extension's section, which applies its draft only on its host's Save, with the saved id", async () => {
     serve([
-      extension("pm", [at("project/edit", "section", "attach", "DraftSection")]),
+      extension("demo", [at("project/edit", "section", "attach", "DraftSection")]),
       extension("rights", [at("project/edit", "section", "rights", "DraftSection")]),
     ]);
     const done = vi.fn();
     render(<Host onSaved={done} />);
     await waitFor(() => expect(screen.getAllByText("section of PDO")).toHaveLength(2));
-    const [pm, rights] = screen.getAllByTestId(/^extension-section-/);
-    expect(pm).toHaveAttribute("data-testid", "extension-section-pm:attach");
+    const [demo, rights] = screen.getAllByTestId(/^extension-section-/);
+    expect(demo).toHaveAttribute("data-testid", "extension-section-demo:attach");
     expect(rights).toHaveAttribute("data-testid", "extension-section-rights:rights");
-    expect(within(pm).getByText("· Extension pm")).toBeInTheDocument();
+    expect(within(demo).getByText("· Extension demo")).toBeInTheDocument();
 
-    fireEvent.change(within(pm).getByLabelText("draft"), { target: { value: "backlog-1" } });
+    fireEvent.change(within(demo).getByLabelText("draft"), { target: { value: "draft-1" } });
     expect(saves).toEqual([]);
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(done).toHaveBeenCalledWith(null));
     expect(saves).toEqual([
-      { saved: { kind: "project", id: "p-new", name: "PDO", attributes: {} }, draft: "backlog-1" },
+      { saved: { kind: "project", id: "p-new", name: "PDO", attributes: {} }, draft: "draft-1" },
       { saved: { kind: "project", id: "p-new", name: "PDO", attributes: {} }, draft: "" },
     ]);
   });
 
   it("rejects the host's save when a section fails, and runs the cancels on Cancel", async () => {
     serve([
-      extension("pm", [
+      extension("demo", [
         at("project/edit", "section", "attach", "DraftSection"),
         at("project/edit", "section", "fails", "FailingSection"),
       ]),
@@ -271,7 +271,7 @@ describe("a section location", () => {
   });
 
   it("loads the saved entity only when a section takes part in the Save", async () => {
-    serve([extension("pm", [at("project/edit", "section", "attach", "DraftSection")])]);
+    serve([extension("demo", [at("project/edit", "section", "attach", "DraftSection")])]);
     const load = vi.fn(async () => ({ kind: "run", id: "r-new", attributes: { "test/started_by": "alice" } }));
     let host: ReturnType<typeof useSectionForm> | null = null;
     const keep = (sections: ReturnType<typeof useSectionForm>) => {
@@ -299,7 +299,7 @@ describe("a section location", () => {
   });
 
   it("gives no form where the host has none", async () => {
-    serve([extension("pm", [at("run/info", "section", "info", "DraftSection")])]);
+    serve([extension("demo", [at("run/info", "section", "info", "DraftSection")])]);
     render(
       <ExtensionSections location="run/info" extra={{ entity: { kind: "run", id: "r1", name: "Run", attributes: {} } }} />,
     );

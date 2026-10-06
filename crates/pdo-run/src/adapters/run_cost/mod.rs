@@ -1086,7 +1086,7 @@ mod tests {
     fn a_node_given_a_claude_config_dir_is_costed_under_it() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let alice = home.path().join("iam").join("alice");
+        let alice = home.path().join("test").join("alice");
         let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "config-dir-run";

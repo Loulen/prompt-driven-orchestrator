@@ -16,8 +16,8 @@ describe("RunCreator (API 0.8)", () => {
   });
 
   it("says who created the Run", () => {
-    render(<RunCreator run={{ ...base, created_by: { kind: "identified", namespace: "iam", id: "alice" } }} />);
-    expect(screen.getByTestId("run-creator")).toHaveTextContent("alice (iam)");
+    render(<RunCreator run={{ ...base, created_by: { kind: "identified", namespace: "test", id: "alice" } }} />);
+    expect(screen.getByTestId("run-creator")).toHaveTextContent("alice (test)");
     expect(screen.queryByTestId("run-trigger-editor")).not.toBeInTheDocument();
     expect(fetchTrigger).not.toHaveBeenCalled();
   });

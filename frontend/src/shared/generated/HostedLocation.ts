@@ -9,7 +9,7 @@ import type { UiElementKind } from "./UiElementKind";
  * elements through the shared module `@pdo/extension-ui`, with the core's
  * error boundaries and `when` clauses.
  *
- * The id is `<extension>/<name>`, prefixed with the host's own id (`pm/onglet`).
+ * The id is `<extension>/<name>`, prefixed with the host's own id (`a/panneau`).
  * Like a location of the core, a hosted location is a list, and its id, what
  * it accepts and the context it hands over are part of the host's API.
  *

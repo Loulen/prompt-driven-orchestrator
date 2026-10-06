@@ -7,15 +7,15 @@ use crate::{Manifest, ResourceKind, Verb};
 /// rights can set rights on it without knowing the extension.
 ///
 /// `kind` is the kind as the extension names it in its
-/// [`ResourceKind::Extension`] (`tache`); in the catalogue, the Ressource is
-/// `<extension id>/<kind>` (`pm/tache`). `verbs` are the names of the verbs its
+/// [`ResourceKind::Extension`] (`note`); in the catalogue, the Ressource is
+/// `<extension id>/<kind>` (`test/note`). `verbs` are the names of the verbs its
 /// Operations use: `create`, `update`, `delete`, or an action's name
 /// ([`Verb::name`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct ResourceDeclaration {
     pub kind: String,
-    /// What the interface calls it, plural (`Tasks`).
+    /// What the interface calls it, plural (`Notes`).
     pub label: String,
     /// One line of help, empty by default.
     pub description: String,
@@ -47,8 +47,8 @@ impl ResourceDeclaration {
 /// core's, or one an extension declares. What an extension of rights lists to
 /// set rights on, without knowing the others.
 ///
-/// On the wire: `{"resource": "pm/tache", "label": "Tasks", "description":
-/// "…", "verbs": ["create", …], "extension": "pm"}`; `extension` is `null` for
+/// On the wire: `{"resource": "test/note", "label": "Notes", "description":
+/// "…", "verbs": ["create", …], "extension": "test"}`; `extension` is `null` for
 /// the core's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
@@ -305,37 +305,37 @@ mod tests {
             .map(|r| r.resource.as_str())
             .collect();
         assert_eq!(readable, ["run", "project", "repository"]);
-        assert!(Resource::of_core(&ResourceKind::extension("pm", "tache")).is_none());
+        assert!(Resource::of_core(&ResourceKind::extension("test", "note")).is_none());
     }
 
     #[test]
     fn the_catalogue_appends_each_extensions_declarations_in_order() {
-        let pm = Manifest::new("pm", "Project", "1.0.0")
+        let test = Manifest::new("test", "Test", "1.0.0")
             .with_resource(
-                ResourceDeclaration::new("backlog", "Backlogs", ["create", "update"])
-                    .described("The backlogs"),
+                ResourceDeclaration::new("folder", "Folders", ["create", "update"])
+                    .described("The folders"),
             )
             .with_resource(ResourceDeclaration::new(
-                "tache",
-                "Tasks",
-                ["create", "editer"],
+                "note",
+                "Notes",
+                ["create", "archive"],
             ));
         let bare = Manifest::new("bare", "Bare", "0.0.0");
-        let catalogue = catalogue([&pm, &bare]);
+        let catalogue = catalogue([&test, &bare]);
         assert_eq!(catalogue.len(), 21);
-        let tache = catalogue.last().unwrap();
+        let note = catalogue.last().unwrap();
         assert_eq!(
-            serde_json::to_value(tache).unwrap(),
+            serde_json::to_value(note).unwrap(),
             serde_json::json!({
-                "resource": "pm/tache",
-                "label": "Tasks",
+                "resource": "test/note",
+                "label": "Notes",
                 "description": "",
-                "verbs": ["create", "editer"],
-                "extension": "pm",
+                "verbs": ["create", "archive"],
+                "extension": "test",
             })
         );
-        assert_eq!(catalogue[19].resource, "pm/backlog");
-        assert_eq!(catalogue[19].description, "The backlogs");
+        assert_eq!(catalogue[19].resource, "test/folder");
+        assert_eq!(catalogue[19].description, "The folders");
         assert_eq!(
             serde_json::to_value(&catalogue[0]).unwrap()["extension"],
             serde_json::Value::Null

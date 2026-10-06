@@ -385,15 +385,15 @@ describe("Pipeline info — YAML tab reflects an unsaved edit (#948)", () => {
 describe("Pipeline info — `pipeline/config` extension sections (#948)", () => {
   function serveSection() {
     const ext: ExtensionEntry = {
-      id: "pm",
-      name: "Extension pm",
+      id: "demo",
+      name: "Extension demo",
       version: "1.0.0",
       ui: {
-        bundle_url: "/ext/pm/ui.js",
+        bundle_url: "/ext/demo/ui.js",
         react_major: hostReactMajor(),
         ui_module_major: null,
         contributions: [
-          { location: "pipeline/config", id: "cfg", label: "Project", type: "section", component: "Cfg" } as UiContribution,
+          { location: "pipeline/config", id: "cfg", label: "Demo", type: "section", component: "Cfg" } as UiContribution,
         ],
         commands: [],
         locations: [],

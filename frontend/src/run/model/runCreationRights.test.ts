@@ -16,7 +16,7 @@ function project(id: string, name: string, members: string[]): Project {
 }
 
 const PDO = project("p1", "PDO", ["/home/bob/code/PDO-v2", "/home/bob/code/pdo-docs"]);
-const EXT = project("p2", "pdo-extensions", ["/home/bob/code/pdo-extensions"]);
+const EXT = project("p2", "pdo-widgets", ["/home/bob/code/pdo-widgets"]);
 const SECRET = project("p3", "Secret", ["/home/bob/code/secret"]);
 const ALLOW = { decision: "allow" } as const;
 const DENY = { decision: "deny", reason: "no" } as const;
@@ -62,7 +62,7 @@ describe("the rights to create a Run (CORE-5)", () => {
     const recents = ["/home/bob/code/PDO-v2", "/tmp/scratch"];
     expect(repoGroups(rights, recents, [EXT, PDO, SECRET])).toEqual([
       { label: "PDO", repos: ["/home/bob/code/PDO-v2", "/home/bob/code/pdo-docs"] },
-      { label: "pdo-extensions", repos: ["/home/bob/code/pdo-extensions"] },
+      { label: "pdo-widgets", repos: ["/home/bob/code/pdo-widgets"] },
     ]);
     const outside = { ...rights, outsideProjects: true };
     expect(repoGroups(outside, recents, [EXT, PDO, SECRET]).at(-1)).toEqual({
@@ -80,8 +80,8 @@ describe("the rights to create a Run (CORE-5)", () => {
     });
 
     it("skips a recent repository of a Projet where a Run may not be created", () => {
-      const recent = ["/home/bob/code/secret", "/home/bob/code/pdo-extensions"];
-      expect(prefillRepo(restricted, recent, [PDO, EXT, SECRET])).toBe("/home/bob/code/pdo-extensions");
+      const recent = ["/home/bob/code/secret", "/home/bob/code/pdo-widgets"];
+      expect(prefillRepo(restricted, recent, [PDO, EXT, SECRET])).toBe("/home/bob/code/pdo-widgets");
     });
 
     it("falls back to the first repository offered when no recent one is", () => {

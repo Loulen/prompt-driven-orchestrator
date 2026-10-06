@@ -43,20 +43,20 @@ fn folder(id: &str, name: &str, parent: Option<&str>) -> SkillFolder {
 async fn an_extension_skill_round_trips_its_extension_and_is_locked() {
     let db = db().await;
     let index = SqliteSkillIndex::new(db.clone());
-    let mut provided = skill("ext-pm-pm", "pm", None);
+    let mut provided = skill("ext-demo-demo", "demo", None);
     provided.locked = true;
     provided.extension = Some(ProvidedBy {
-        id: "pm".into(),
+        id: "demo".into(),
         version: "0.3.0".into(),
     });
     index.insert(&provided).await.unwrap();
-    assert_eq!(index.get("ext-pm-pm").await.unwrap().unwrap(), provided);
+    assert_eq!(index.get("ext-demo-demo").await.unwrap().unwrap(), provided);
     provided.extension = Some(ProvidedBy {
-        id: "pm".into(),
+        id: "demo".into(),
         version: "0.4.0".into(),
     });
     index.save(&provided).await.unwrap();
-    assert_eq!(index.get("ext-pm-pm").await.unwrap().unwrap(), provided);
+    assert_eq!(index.get("ext-demo-demo").await.unwrap().unwrap(), provided);
 }
 
 #[tokio::test]

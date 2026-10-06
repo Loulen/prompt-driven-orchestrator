@@ -1235,4 +1235,16 @@ describe("NodeConfigView — the read-only Config of a run followed in « pilota
     );
     expect(screen.getByTestId("node-config-hint")).toHaveTextContent("Edit for this run");
   });
+
+  it("on an archived run, does not point to an Edit button that is not there", () => {
+    seedRunWithSkilledReviewer();
+    render(
+      <TooltipProvider>
+        <NodeConfigView archived />
+      </TooltipProvider>,
+    );
+    const hint = screen.getByTestId("node-config-hint");
+    expect(hint).toHaveTextContent("This run is archived and read-only.");
+    expect(hint).not.toHaveTextContent("Edit for this run");
+  });
 });

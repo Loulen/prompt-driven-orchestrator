@@ -712,10 +712,13 @@ export function NodeConfigView({
   provisioningRepository = "",
   runSkills,
   runNode,
+  archived = false,
 }: {
   provisioningRepository?: string;
   runSkills?: SkillRef[];
   runNode?: NodeState | null;
+  /** An archived run has no Edit button: the hint must not point to it. */
+  archived?: boolean;
 }) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
@@ -757,8 +760,9 @@ export function NodeConfigView({
       </div>
       <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
         <p className="text-fg-4" style={{ fontSize: "10px" }} data-testid="node-config-hint">
-          You are following this run. To change this node, use Edit › Edit for this run in the
-          canvas toolbar.
+          {archived
+            ? "This run is archived and read-only."
+            : "You are following this run. To change this node, use Edit › Edit for this run in the canvas toolbar."}
         </p>
         <SectionHead title="Identity" />
         <div className="flex items-center gap-2 text-fg" data-testid="node-config-name">

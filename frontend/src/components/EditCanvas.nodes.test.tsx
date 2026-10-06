@@ -138,6 +138,23 @@ describe("EditNode slim card (issue #149)", () => {
     expect(screen.queryByTestId("isolation-marker")).toBeNull();
   });
 
+  it("a locked canvas (isConnectable=false) drops every handle's wiring affordance (ADR-0080)", () => {
+    const { container } = render(
+      <EditNode {...({ ...workProps(), isConnectable: false } as Parameters<typeof EditNode>[0])} />,
+      { wrapper: Wrapper },
+    );
+    const handles = container.querySelectorAll(".react-flow__handle");
+    expect(handles.length).toBeGreaterThan(0);
+    handles.forEach((h) => expect(h.classList.contains("connectable")).toBe(false));
+    expect(screen.getByTestId("rim-source-right").style.cursor).toBe("default");
+  });
+
+  it("an editable canvas keeps the rim's wiring cue", () => {
+    render(<EditNode {...workProps()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId("rim-source-right")).toHaveClass("connectable");
+    expect(screen.getByTestId("rim-source-right").style.cursor).toBe("crosshair");
+  });
+
   it("does not render the node id on the card", () => {
     const { container } = render(<EditNode {...workProps()} />, { wrapper: Wrapper });
     // The slim card drops the node id (#149).

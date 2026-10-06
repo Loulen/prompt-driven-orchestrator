@@ -163,11 +163,10 @@ describe("TabBar Save on a run tab (ADR-0080)", () => {
     ...over,
   });
 
-  it("in « pilotage » there is nothing to save, even when another tab is dirty", () => {
+  it("in « pilotage » no Save button is shown, even when another tab is dirty", () => {
     seed([runTab(), tab("other", { dirty: true })], "__run__r1");
     render(<TabBar />);
-    expect(screen.getByTestId("save-button")).toBeDisabled();
-    expect(screen.getByTestId("save-button")).toHaveTextContent("Save");
+    expect(screen.queryByTestId("save-button")).toBeNull();
     expect(screen.queryByTestId("save-menu")).toBeNull();
   });
 

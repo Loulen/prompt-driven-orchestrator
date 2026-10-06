@@ -65,7 +65,8 @@ export default function TabBar() {
 
   const anyDirty = openTabs.some((t) => t.dirty);
   const activeTab = openTabs.find((t) => t.id === activeTabId);
-  // ADR-0080: a run tab in « pilotage » has nothing to save; in « Edit for this
+  // ADR-0080: a run tab in « pilotage » (or archived) has nothing to save, so
+  // no Save button is shown at all; in « Edit for this
   // run » Save writes the Run's snapshot only, and the shared pipeline moves
   // through the menu's explicit, warned overwrite.
   const activeLocked = isRunTabLocked(activeTab);
@@ -187,10 +188,10 @@ export default function TabBar() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-        ) : (
+        ) : activeLocked ? null : (
           <button
             onClick={() => { if (activeTabId) save(activeTabId); }}
-            disabled={!anyDirty || activeLocked}
+            disabled={!anyDirty}
             className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
             style={{ fontSize: "11px" }}
             data-testid="save-button"

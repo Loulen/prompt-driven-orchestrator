@@ -117,7 +117,9 @@ interface EditNodeData {
 }
 
 // Exported for unit tests; co-located with the canvas it renders.
-export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) {
+// `isConnectable` mirrors the canvas's `nodesConnectable` (false while a run is
+// followed or archived, ADR-0080): handles then drop their wiring affordance.
+export function EditNode({ data, id, selected, isConnectable = true }: NodeProps<Node<EditNodeData>>) {
   const selection = useEditStore((s) => s.selection);
   // #844: hovering the rim arms the gesture — a subtle AMBER ring says « a wire
   // starts here », the crosshair on the strip itself says how.
@@ -189,6 +191,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
         id={emergent ? undefined : data.inputs[0]?.name}
         type="target"
         position={SIDE_TO_POSITION[bodyHandleSide]}
+        isConnectable={isConnectable}
         isConnectableStart={false}
         className={`emergent-body-target${isDropTarget ? " is-drop" : ""}`}
         style={{
@@ -216,6 +219,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
             id={anchorHandleId(side)}
             type="target"
             position={position}
+            isConnectable={isConnectable}
             isConnectableStart={false}
             className="emergent-anchor-target"
             style={{
@@ -300,7 +304,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
           and on a higher layer so it wins the pointer over the body target above;
           inside the rim the card still drags. A node that declares no output
           (the End marker) starts no wire and grows no rim. */}
-      {data.outputs.length > 0 && <NodeRimHandles onRimHover={setRimHover} />}
+      {data.outputs.length > 0 && <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} />}
     </NodeCard>
   );
 }

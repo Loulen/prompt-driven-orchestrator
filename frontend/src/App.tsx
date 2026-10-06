@@ -573,6 +573,7 @@ export default function App() {
           provisioningRepository={nodeInspectorProvisioningProps.provisioningRepository}
           runSkills={nodeInspectorProvisioningProps.runSkills}
           runNode={nodeInspectorProvisioningProps.runNode}
+          archived={isActiveRunArchived}
         />
       );
     }

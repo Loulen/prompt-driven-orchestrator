@@ -20,6 +20,48 @@ Add `PDO_ALLOWED_WS_ORIGINS` to the service environment when the daemon runs as 
 in a `pdo.service.d/override.conf` drop-in, which survives unit rewrites including Update (see
 [`pdo service install`](cli.md#cli-commands)).
 
+## WebSockets through a proxy
+
+The UI keeps two kinds of WebSocket open: `/ws` (live Run updates) and `/sessions/<id>/pty` (one
+per node terminal). The proxy must forward the HTTP upgrade and must not close a quiet socket.
+
+| Requirement | Why |
+| --- | --- |
+| Forward `Upgrade` and `Connection: upgrade` over HTTP/1.1 | Without them the upgrade fails and the terminal stays `disconnected` |
+| Read timeout above 60 s (`proxy_read_timeout` in nginx) | The daemon sends a heartbeat on `/ws` every 5 s and pings each terminal socket every 25 s; a shorter timeout cuts a terminal whose agent is thinking |
+| No response buffering on these routes | Buffered frames reach the browser late, or in bursts |
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    # … listen, server_name, TLS, authentication …
+
+    location / {
+        proxy_pass http://127.0.0.1:5172;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+        client_max_body_size 64m;   # ≥ max_attachments_mb, see below
+    }
+}
+```
+
+When a socket drops anyway (network cut, proxy restart, laptop asleep), the UI recovers on its own:
+
+- the live stream reconnects with an increasing delay (1 s, 2 s, 4 s … up to 30 s), treats 15 s
+  without a heartbeat as a dead socket, and re-reads every Run after each reconnection and each
+  return to the tab;
+- a node terminal whose socket closed shows `Terminal connection closed` with a **Reconnect**
+  button, and reconnects by itself when the tab becomes visible again.
+
 ## Attachments through a proxy
 
 A Run's attachments travel in one multipart `POST /runs`. The daemon's own budget is
@@ -44,5 +86,7 @@ location / {
 ## Terminal on a remote origin
 
 If a terminal pane shows `disconnected` on a remote origin, the daemon rejected the WebSocket
-origin: add it to `PDO_ALLOWED_WS_ORIGINS`. Copy and paste in the pane are covered in
+origin: add it to `PDO_ALLOWED_WS_ORIGINS`. If it connects and then shows `Terminal connection
+closed` after a while, the proxy closed it: check the upgrade headers and the read timeout in
+[WebSockets through a proxy](#websockets-through-a-proxy). Copy and paste in the pane are covered in
 [terminal.md](terminal.md).

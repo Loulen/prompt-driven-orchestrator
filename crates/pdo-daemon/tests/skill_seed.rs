@@ -57,11 +57,12 @@ async fn startup_seeds_the_skill_in_the_pdo_folder_and_flags_it_locked() {
     assert_eq!(interactive["folder_id"], "skf-pdo");
     assert_eq!(interactive["locked"], true);
     let interactive_detail = get_json(&daemon, &format!("/settings/skills/{INTERACTIVE_ID}")).await;
-    assert_eq!(interactive_detail["frontmatter"]["skill_version"], 1);
-    assert!(interactive_detail["content"]
-        .as_str()
-        .unwrap()
-        .contains("pdo wait-user"));
+    // #972 bumped it: the banner is a notification, the message is written in
+    // the conversation.
+    assert_eq!(interactive_detail["frontmatter"]["skill_version"], 2);
+    let interactive_content = interactive_detail["content"].as_str().unwrap();
+    assert!(interactive_content.contains("pdo wait-user"));
+    assert!(interactive_content.contains("The banner is a notification, not the message"));
 
     // The detail answers like any skill: content, frontmatter with its
     // `skill_version`, the body the harness will read.

@@ -1199,4 +1199,100 @@ describe("TmuxTerminal", () => {
       expect(screen.queryByTestId("term-watchers")).toBeNull();
     });
   });
+
+  // #972 — a terminal whose socket drops under the user is veiled, offers a
+  // Reconnect, and reconnects on its own when the tab comes back.
+  describe("dropped connection (#972)", () => {
+    const serverDrop = (ws: MockWebSocket) => {
+      ws.readyState = MockWebSocket.CLOSED;
+      ws.fireEvent("close", {});
+    };
+    const settle = () => act(() => new Promise((r) => setTimeout(r, 5)));
+
+    function setVisibility(state: "visible" | "hidden") {
+      Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+
+    afterEach(() => {
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    });
+
+    it("shows no veil while connecting or connected", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+      await settle();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("veils the pane with « Terminal connection closed » when the socket drops", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      act(() => serverDrop(wsInstances[0]));
+      const veil = screen.getByTestId("term-veil");
+      expect(veil.textContent).toContain("Terminal connection closed");
+      expect(within(veil).getByRole("button", { name: /Reconnect/ })).toBeTruthy();
+      // The pane stays mounted underneath.
+      expect(screen.getByTestId("xterm-container")).toBeTruthy();
+    });
+
+    it("Reconnect reopens a socket on the same session and lifts the veil", async () => {
+      render(<TmuxTerminal session="pdo-run-1-cop-iter-1" status="running" />);
+      await settle();
+      act(() => serverDrop(wsInstances[0]));
+      fireEvent.click(screen.getByTestId("term-reconnect"));
+      expect(wsInstances).toHaveLength(2);
+      expect(wsInstances[1].url).toContain("/sessions/pdo-run-1-cop-iter-1/pty");
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+      await settle();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("reconnects on its own when the tab becomes visible again", async () => {
+      render(<TmuxTerminal session="s" status="awaiting_user" />);
+      await settle();
+      act(() => setVisibility("hidden"));
+      act(() => serverDrop(wsInstances[0]));
+      expect(wsInstances).toHaveLength(1);
+      act(() => setVisibility("visible"));
+      expect(wsInstances).toHaveLength(2);
+      await settle();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("a return to the tab leaves a healthy terminal alone", async () => {
+      render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      act(() => setVisibility("hidden"));
+      act(() => setVisibility("visible"));
+      expect(wsInstances).toHaveLength(1);
+    });
+
+    it("does not veil a node whose session was reaped as it settled", async () => {
+      const { rerender } = render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="running"
+          paneSource={{ runId: "run-1", nodeId: "cop", iter: 1 }}
+        />,
+      );
+      await settle();
+      rerender(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={{ runId: "run-1", nodeId: "cop", iter: 1 }}
+        />,
+      );
+      act(() => serverDrop(wsInstances[0]));
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("unmounting closes the socket without veiling anything", async () => {
+      const { unmount } = render(<TmuxTerminal session="s" status="running" />);
+      await settle();
+      unmount();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+  });
 });

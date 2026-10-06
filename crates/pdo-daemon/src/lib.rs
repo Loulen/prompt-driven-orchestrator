@@ -144,6 +144,10 @@ use crate::worktree_ops::{
 const DEFAULT_PORT: u16 = 5172;
 const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+/// #972: the PTY bridge's keep-alive ping. Well under the 60 s `proxy_read_timeout`
+/// nginx applies by default, so a terminal whose agent is thinking is never idle
+/// in the eyes of a proxy.
+const PTY_PING_INTERVAL: Duration = Duration::from_secs(25);
 
 #[derive(Embed)]
 #[folder = "../../frontend/dist"]
@@ -564,6 +568,10 @@ struct AppState {
     node_done_tail_gate: Arc<tokio::sync::Notify>,
     /// Whether the tail gate is currently armed. See [`Self::node_done_tail_gate`].
     node_done_tail_gate_armed: Arc<std::sync::atomic::AtomicBool>,
+    /// #972: how often the PTY bridge pings an open terminal socket, in ms, so no
+    /// reverse proxy drops a silent terminal for inactivity. [`PTY_PING_INTERVAL`]
+    /// in production; tests shorten it through [`DaemonHandle::set_pty_ping_interval`].
+    pty_ping_interval_ms: std::sync::atomic::AtomicU64,
     /// Persistent-service health, computed once at boot and cached so the polled
     /// `GET /sessions` pays zero subprocess cost per request.
     service_health: Arc<ServiceHealth>,
@@ -2894,6 +2902,28 @@ impl DaemonHandle {
 
     /// Release the terminal-tail gate: disarm, then wake every tail
     /// parked at the gate. See [`Self::arm_node_done_gate`].
+    /// Shorten the PTY bridge's keep-alive ping (#972, test seam). Applies to
+    /// the terminal sockets opened afterwards.
+    pub fn set_pty_ping_interval(&self, interval: Duration) {
+        self.state.pty_ping_interval_ms.store(
+            interval.as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Push `count` throwaway messages through the `/ws` broadcast in one
+    /// synchronous burst (#972, test seam): more than the channel holds, so a
+    /// subscriber that has not read them in between lags — the condition that
+    /// makes the daemon send `resync`.
+    pub fn flood_ws_broadcast(&self, count: usize) {
+        for i in 0..count {
+            let _ = self
+                .state
+                .pipeline_tx
+                .send(serde_json::json!({ "type": "test_flood", "seq": i }));
+        }
+    }
+
     pub fn release_node_done_gate(&self) {
         self.state
             .node_done_tail_gate_armed
@@ -3449,6 +3479,9 @@ pub async fn serve_with_config(
         panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(config.panic_on_spawn)),
         node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
         node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+            PTY_PING_INTERVAL.as_millis() as u64
+        ),
         service_health,
         docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
         harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -21256,7 +21289,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("WebSocket client lagged by {n} events");
+                        warn!("WebSocket client lagged by {n} events, asking it to resync");
+                        if send_resync(&mut socket).await.is_err() {
+                            break;
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -21268,7 +21304,12 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("WebSocket client lagged by {n} broadcasts, asking it to resync");
+                        if send_resync(&mut socket).await.is_err() {
+                            break;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -21276,6 +21317,15 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
 
     info!("WebSocket client disconnected");
+}
+
+/// #972: the broadcast dropped messages this client never received, so its
+/// picture of the Runs may miss a transition. Rather than replaying, the daemon
+/// tells it to re-read everything — the same full re-read the client does after
+/// a reconnect.
+async fn send_resync(socket: &mut WebSocket) -> Result<(), axum::Error> {
+    let msg = serde_json::json!({ "type": "resync" });
+    socket.send(Message::Text(msg.to_string().into())).await
 }
 
 fn unix_timestamp_secs() -> String {
@@ -24523,6 +24573,9 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -29752,6 +29805,9 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             service_health: Arc::new(service_health),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
             harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -35679,6 +35735,9 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -42734,6 +42793,9 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
@@ -42945,6 +43007,9 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pty_ping_interval_ms: std::sync::atomic::AtomicU64::new(
+                PTY_PING_INTERVAL.as_millis() as u64
+            ),
             // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {

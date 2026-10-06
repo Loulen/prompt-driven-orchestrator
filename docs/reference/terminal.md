@@ -18,6 +18,8 @@ Ctrl+C without a selection still interrupts the program in the pane. On macOS us
 
 If the pane shows `disconnected` on a remote origin, the daemon rejected the WebSocket origin: add it to `PDO_ALLOWED_WS_ORIGINS` (see [reverse-proxy.md](reverse-proxy.md)).
 
+If the connection of a live pane drops (network cut, proxy, daemon restart), the pane is veiled with `Terminal connection closed` and a **Reconnect** button, which reopens the same terminal without leaving the node. Coming back to the browser tab reconnects it on its own. A node that finishes while you watch is not veiled: its session ends on purpose.
+
 ## Shared terminal: one pilot, spectators
 
 When two browsers show the same terminal (node, Manager, library assistant or Run shell), only one of them pilots it (#867, [ADR-0075](../adr/0075-un-terminal-partage-n-a-qu-un-pilote-qui-seul-pese-sur-la-taille.md)). This stops the flicker of a tmux window resized by each browser in turn.

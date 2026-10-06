@@ -15,6 +15,8 @@
 //! - Binary frames ← stdout of the PTY (terminal output)
 //! - Text frames with JSON `{"type":"role","role":"solo"|"pilot"|"spectator",…}`
 //!   on every role change (see [`super::shared_terminal::RoleMsg`])
+//! - Ping frames every [`super::PTY_PING_INTERVAL`] (#972), so a reverse proxy
+//!   never drops a terminal whose agent is silent
 
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -309,8 +311,19 @@ async fn handle_pty_ws(
         }
     });
 
-    // Task 2: forward PTY output and role frames to the WebSocket
+    // Task 2: forward PTY output and role frames to the WebSocket, and ping it
+    // (#972): an agent that thinks for minutes leaves the socket silent, and a
+    // reverse proxy closes a silent WebSocket once its read timeout runs out.
+    // The browser answers the ping on its own; the pong is ignored below.
+    let ping_every = std::time::Duration::from_millis(
+        state
+            .pty_ping_interval_ms
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .max(1),
+    );
     let ws_send_handle = tokio::spawn(async move {
+        let mut ping =
+            tokio::time::interval_at(tokio::time::Instant::now() + ping_every, ping_every);
         loop {
             let msg = tokio::select! {
                 data = pty_rx.recv() => match data {
@@ -318,6 +331,7 @@ async fn handle_pty_ws(
                     None => break,
                 },
                 Some(frame) = role_rx.recv() => Message::Text(frame.into()),
+                _ = ping.tick() => Message::Ping(Vec::new().into()),
             };
             if ws_sink.send(msg).await.is_err() {
                 break;

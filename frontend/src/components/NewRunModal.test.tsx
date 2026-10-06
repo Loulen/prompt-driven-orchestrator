@@ -608,6 +608,30 @@ describe("NewRunModal — pipeline sections (#974)", () => {
     await waitFor(() => expect(selectedPipeline()).toBe("common"));
   });
 
+  it("moves a default selection to the Projet's pipeline once one is offered", async () => {
+    // The FP finding: a global default held by the draft hid the Projet's pipeline.
+    renderModal();
+    await enterValidRepo("/repos/elsewhere");
+    await waitFor(() => expect(selectedPipeline()).toBe("common"));
+
+    await enterValidRepo("/repos/alpha");
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
+  });
+
+  it("keeps a pipeline the user picked, even when the Projet offers its own", async () => {
+    renderModal();
+    await enterValidRepo("/repos/elsewhere");
+    await openPipelineMenu();
+    await menuUser().click(screen.getByTestId("pipeline-select-option-legacy"));
+    expect(selectedPipeline()).toBe("legacy");
+
+    await enterValidRepo("/repos/alpha");
+    await waitFor(() =>
+      expect(screen.getByTestId("pipeline-select")).not.toBeDisabled(),
+    );
+    expect(selectedPipeline()).toBe("legacy");
+  });
+
   it("gives a repository without a Projet the global pipelines and the test ones", async () => {
     renderModal();
     await enterValidRepo("/repos/elsewhere");

@@ -109,17 +109,22 @@ export default function LibraryRow({
             <span className="truncate font-medium">{name}</span>
           )}
         </div>
+        {/* One line whatever the width: when the hover actions narrow the row, the
+            meta text truncates instead of wrapping (#974 — the row grew on hover). */}
         <div
-          className="mt-0.5 flex items-center gap-1.5 text-fg-4"
+          className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-fg-4"
           style={{ fontSize: "10px" }}
+          data-testid="library-row-meta"
         >
-          <span>{nodeCount} nodes</span>
-          {modified && (
-            <>
-              <span>·</span>
-              <span>edited {new Date(modified).toLocaleDateString()}</span>
-            </>
-          )}
+          <span className="min-w-0 truncate">
+            <span>{nodeCount} nodes</span>
+            {modified && (
+              <>
+                <span> · </span>
+                <span>edited {new Date(modified).toLocaleDateString()}</span>
+              </>
+            )}
+          </span>
           {indicator && <span className="ml-auto flex shrink-0 items-center">{indicator}</span>}
         </div>
       </div>

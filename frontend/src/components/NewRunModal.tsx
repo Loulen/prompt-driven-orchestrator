@@ -167,6 +167,11 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const [allowOverlap, setAllowOverlap] = useState(false);
   const [maxConcurrent, setMaxConcurrent] = useState("");
   const [varsOpen, setVarsOpen] = useState(false);
+  // #974: whether the held pipeline is the user's choice (picked in the menu, or the
+  // edited Trigger's) rather than the form's default. Only a choice is kept by the
+  // draft (#386); a default follows the menu — a Projet pipeline validated since the
+  // last open takes the head of the form instead of an earlier global default.
+  const [pipelineChosen, setPipelineChosen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [provisioning, setProvisioning] = useState<ProvisioningRules>(
@@ -315,6 +320,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     const clearSharedIfFromTrigger = () => {
       if (!cameFromTrigger) return;
       setSelectedPipelineId("");
+      setPipelineChosen(false);
       setInput("");
       setOverrides({});
       resetRepo("");
@@ -342,6 +348,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         setMode("trigger");
         setEditingTriggerId(trigger.id);
         setSelectedPipelineId(trigger.pipeline_id);
+        setPipelineChosen(true);
         // #470: reset the validity verdict with the field. The modal stays
         // mounted (#386), so a `repoValid === true` left over from a previous
         // open would survive next to an EMPTY repo field — reachable by opening
@@ -550,14 +557,23 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     !isOffered(selectedPipeline, repoProject?.id ?? null)
   ) {
     setSelectedPipelineId("");
+    setPipelineChosen(false);
   }
 
   // Auto-select the first offered pipeline: the Projet's, else a global one. A test
-  // Pipeline is never chosen for you.
+  // Pipeline is never chosen for you. Until the user picks one, the selection keeps
+  // following this default (another repository, a Pipeline validated meanwhile).
   const defaultPipeline = sections.project[0] ?? sections.global[0];
   const shouldAutoSelect =
-    open && repoValid && projects != null && defaultPipeline != null && !selectedPipelineId;
+    open &&
+    repoValid &&
+    projects != null &&
+    defaultPipeline != null &&
+    (!selectedPipelineId || (!pipelineChosen && selectedPipelineId !== defaultPipeline.id));
   if (shouldAutoSelect) {
+    // A default replaced by another one takes nothing along: its overrides were
+    // typed for the pipeline being left.
+    if (selectedPipelineId) setOverrides({});
     setSelectedPipelineId(defaultPipeline.id);
   }
 
@@ -576,6 +592,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const handlePipelineChange = useCallback(
     (value: string) => {
       setSelectedPipelineId(value);
+      setPipelineChosen(true);
       setOverrides({});
       setVarsOpen(false);
     },

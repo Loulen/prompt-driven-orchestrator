@@ -85,7 +85,6 @@ seams se découvrent en écrivant des extensions.
 
 ## Amendement #23 : le point d'entrée `main_with(extensions)`
 
-Premier seam découvert ainsi, en écrivant la première distribution (`Loulen/pdo-extensions`).
 Le binaire `pdo` n'est pas que le daemon : les agents appellent `pdo complete` et `pdo wait-user`
 depuis leur session, et `pdo service install` enregistre l'exécutable courant comme daemon. Avec
 `serve` seul, une distribution devait recopier le dispatch de la CLI, donc le contrat de codes de
@@ -109,15 +108,14 @@ daemon » et l'init du tracing, en dépendant de crates hors semver.
 
 ## Amendement #34 : la ressource d'extension et l'Hôte
 
-Seam découvert en préparant l'extension `pm` (`Loulen/pdo-extensions#4`), qui a ses propres
-entités (Backlogs, Tâches, Pages…) et dont chaque mutation doit être refusable, observable et
-annotable par une autre extension, sans que l'une nomme l'autre (ADR-0001 de `pdo-extensions`).
+Une extension peut avoir ses propres entités, dont chaque mutation doit être refusable, observable
+et annotable par une autre extension, sans que l'une nomme l'autre.
 Les hooks ci-dessus ne couvrent que les mutations **du core**.
 
 - **Une ressource générique `ResourceKind::Extension { extension, kind }`**, avec les verbes
   existants. Sur le fil, une ressource s'écrit par son nom : `run`, `agent_profile`… pour celles
-  du core, `<extension>/<kind>` pour celles d'une extension (`pm/tache`). Une extension de droits
-  refuse `pm/tache` × `update` sans rien connaître de `pm`.
+  du core, `<extension>/<kind>` pour celles d'une extension (`test/note`). Une extension de droits
+  refuse `test/note` × `update` sans rien connaître de l'extension `test`.
 - **Un Hôte** (`Host`), remis dans `ExtensionContext::host` à `start`, un par extension. C'est
   par lui qu'une extension fait passer **ses** mutations par les mécanismes du core :
   - `authorize(acteur, opération)` consulte l'Autorisation d'opération de **toutes** les
@@ -160,7 +158,7 @@ Les hooks ci-dessus ne couvrent que les mutations **du core**.
   suppriment leurs `item` par l'Hôte ; le daemon de démo les charge avec `PDO_TEST_INTEROP=1`.
 
 Écartés : **faire enregistrer l'`OperationApplied` par le scope de la requête** (comme pour le
-core) : il ne couvre ni la session WebSocket de `pm` ni un écrit hors requête, et l'aurait publié
+core) : il ne couvre ni la session WebSocket d'une extension ni un écrit hors requête, et l'aurait publié
 en double avec un `applied` explicite. **Stocker les Attributs d'une entité d'extension dans le
 core** : le core devrait alors filtrer des listes qu'il ne sert pas ; l'extension les stocke comme
 le reste de ses entités. **Livrer ses propres événements à l'émettrice** : elle sait ce qu'elle a
@@ -197,7 +195,7 @@ build.rs, et vérifier qu'un `dist` fourni correspond au tag.
 
 ## Amendement #29 : un catalogue d'emplacements nommés, des Commandes, des clauses `when`
 
-Seam découvert en préparant l'extension Projet (`pm`, story `Loulen/pdo-extensions#3`) : quatre
+Quatre
 emplacements figés (navigation, panneau de réglages, filtre de liste, onglet de détail) ne
 suffisent pas, et chaque nouveau besoin aurait ajouté une variante à `Slot`. On suit le modèle
 des *contribution points* de VS Code : peu de types de contribution, beaucoup d'emplacements.
@@ -258,21 +256,19 @@ pas la sélection de l'opérateur.
 
 ## Amendement #32 : des emplacements hébergés par une extension
 
-Seam découvert avec l'extension Projet (`pm`) : une autre extension doit pouvoir ajouter un
-onglet à une Page de `pm`, un badge à une Carte, une action dans la barre d'une Page, une section
-dans sa barre latérale, sans que `pm` la connaisse (ADR-0001 de `pdo-extensions` : « mieux vaut
-trop de points d'extension que pas assez »). Le catalogue du core n'y suffit pas : ces endroits
-sont dans l'interface de `pm`, que le core ne rend pas.
+Une extension doit pouvoir ajouter un onglet, un badge, une action ou une section à l'interface
+d'une autre extension, sans que celle-ci la connaisse. Le catalogue du core n'y suffit pas : ces
+endroits sont dans l'interface de l'extension hôte, que le core ne rend pas.
 
 - **Déclaration** : une extension déclare ses emplacements hébergés (`HostedLocation`) dans
-  `UiContributions::host` : un identifiant `<id de l'extension>/<nom>` (`pm/onglet`), le **type de
+  `UiContributions::host` : un identifiant `<id de l'extension>/<nom>` (`a/panneau`), le **type de
   contribution** accepté (un seul, `UiElementKind`), une description et la **forme du contexte**
   (les clés qu'il ajoute au contexte commun, décrites). `GET /ext` les expose dans
   `ui.locations`. Le daemon écarte, avec un avertissement, une déclaration dont l'identifiant ne
   commence pas par l'id de l'extension, qui reprend un emplacement du core ou un emplacement déjà
   déclaré, ou qui accepte des Pages (une Page appartient au shell du core).
 - **Contribution** : une autre extension y contribue comme au catalogue du core, en nommant
-  l'emplacement (`UiLocation::Hosted("pm/onglet")`, sérialisé par son identifiant). La règle de la
+  l'emplacement (`UiLocation::Hosted("a/panneau")`, sérialisé par son identifiant). La règle de la
   liste vaut : toutes les contributions s'ajoutent, dans l'ordre d'enregistrement puis de
   déclaration. Le daemon vérifie le type contre la déclaration de l'hôte. Une contribution à
   l'emplacement d'une extension absente (ou qui ne le déclare pas) est **ignorée sans erreur** :
@@ -305,7 +301,7 @@ hébergé, sans besoin connu.
 
 ## Amendement #33 : la surface agent, `pdo ext <id>` et les skills d'extension
 
-Seams découverts en spécifiant l'extension Projet (`Loulen/pdo-extensions#4`) : un agent doit
+Un agent doit
 piloter une extension depuis sa session comme il pilote le core, et savoir le faire sans
 consigne du prompt.
 
@@ -354,8 +350,7 @@ une socket qui ne finit jamais : `pdo ext` attendait sans fin, relevé par le FP
 
 ## Amendement #30 : les emplacements d'Action, et les menus du core sur le `DropdownMenu` partagé
 
-Suite de l'amendement #29, préparée pour l'extension Projet (`pm`) et pour ADR-0001 de
-`pdo-extensions` (« mieux vaut trop de points d'extension que pas assez ») : toutes les barres
+Suite de l'amendement #29 : toutes les barres
 d'outils et tous les menus du core accueillent des Actions.
 
 - **Quatorze emplacements d'Action**, qui n'acceptent que des Actions
@@ -398,8 +393,7 @@ verbes y sont utiles sans extension).
 
 ## Amendement #31 : onglets, sections, décorations et filtres ; une Section participe au Save
 
-Suite de #29 pour l'extension Projet (`pm`) et ADR-0001 de `Loulen/pdo-extensions` (« mieux vaut
-trop de points d'extension que pas assez ») : le catalogue s'ouvre à tous les écrans où une
+Suite de #29 : le catalogue s'ouvre à tous les écrans où une
 extension a quelque chose à montrer. On étend le catalogue, sans nouveau type de contribution.
 
 - **Onglets** : `node/detail` (le volet d'un node de Run, après I/O et Orchestration),
@@ -450,8 +444,7 @@ impossible pour un Projet créé, qui n'a pas encore d'id.
 
 ## Amendement CORE-3 : les Projets d'une Opération et le catalogue des Ressources
 
-Seam découvert au grilling de l'extension `iam` (IAM-1 ; ADR-0005 de `pdo-extensions`, qui
-amende son ADR-0001) : une extension de droits règle des Droits par Ressource et par Projet, sans
+Une extension de droits règle des Droits par Ressource et par Projet, sans
 connaître ni les dépôts ni les autres extensions. Deux trous : une Opération ne dit pas dans quel
 Projet elle a lieu, et rien ne liste les Ressources sur lesquelles régler des Droits.
 
@@ -472,7 +465,7 @@ Projet elle a lieu, et rien ne liste les Ressources sur lesquelles régler des D
   Un dépôt appartient à au plus un Projet (ADR-0033), d'où une liste d'au plus un élément pour le
   core. Les membres d'un Projet se comparent tels qu'écrits ; pour qu'un autre chemin du même
   dossier (`/repo/`, `/repo/.`, un lien vers `/repo`) ne sorte pas un Run de son Projet, le dépôt
-  d'un Run est essayé tel quel, puis normalisé, puis résolu sur le disque. Une extension la remplit pour ses Ressources (un Backlog de `pm` peut appartenir à
+  d'un Run est essayé tel quel, puis normalisé, puis résolu sur le disque. Une extension la remplit pour ses Ressources (une de ses entités peut appartenir à
   plusieurs Projets). **Une extension ne recalcule jamais dépôt -> Projet** : elle lit
   `operation.projects`. Une lecture des Projets qui échoue est journalisée et laisse l'Opération
   hors Projet. Sur le fil, l'Opération gagne `"projects": [...]`, dans `/ws` comme dans
@@ -496,15 +489,15 @@ Projet elle a lieu, et rien ne liste les Ressources sur lesquelles régler des D
   Opération reçue avec ses Projets.
 
 Écartés : **laisser l'extension déduire le Projet** du dépôt ou du Run : chaque extension
-refaisait le calcul, avec le risque de diverger du core. **Un Projet unique** (`Option`) : un
-Backlog de `pm` a plusieurs Projets, et le moindre privilège d'`iam` porte sur la liste. **Remplir
+refaisait le calcul, avec le risque de diverger du core. **Un Projet unique** (`Option`) : une
+entité d'extension peut avoir plusieurs Projets, et le moindre privilège d'une extension de droits
+porte sur la liste. **Remplir
 les Projets dans l'Hôte du core**, une fois pour toutes : `authorize` est synchrone et la lecture
 des Projets ne l'est pas ; chaque use case le fait là où il connaît son Run.
 
 ## Amendement CORE-4 : le lancement d'un Node, le Créateur du Run, la suspension d'un Trigger
 
-Pour une extension de responsabilité (`iam`, ADR-0005 de `Loulen/pdo-extensions`) sans rien qui
-lui soit propre : le core dit qui a lancé, laisse une extension contribuer au lancement d'un
+Seams génériques : le core dit qui a lancé, laisse une extension contribuer au lancement d'un
 Node et suspendre un Trigger. Exercé dans le core par l'extension de test (`crates/pdo/tests/
 test_extension/launch.rs`).
 
@@ -544,7 +537,7 @@ le préfixe `PDO_` (une extension doit pouvoir fournir `PDO_TOKEN`).
 
 ## Amendement CORE-5 : les lectures autorisées et la question d'autorisation
 
-Deuxième seam du grilling d'`iam` (IAM-1, ADR-0005 de `pdo-extensions`) : une extension de droits
+Une extension de droits
 cloisonne les Projets. Jusqu'ici l'Autorisation d'opération ne gardait que les mutations : tout
 Acteur voyait tous les Runs, tous les Projets, et pouvait parcourir le disque.
 
@@ -590,7 +583,7 @@ Acteur voyait tous les Runs, tous les Projets, et pouvait parcourir le disque.
 - **Coût** : une question par Run d'une liste, le Projet de chaque dépôt calculé une fois par
   liste. Mesure (test `extension_reads::five_hundred_runs…`, build optimisé) : 500 Runs servis en
   ~35 ms avec une extension qui autorise, sous le seuil de 200 ms demandé.
-- **Version** : `pdo-extension-api` reste en **0.8.0** (vague IAM-1, ajouts : un verbe, des
+- **Version** : `pdo-extension-api` reste en **0.8.0** (ajouts : un verbe, des
   méthodes, `Deserialize`). Effet de bord assumé : une extension qui refusait toute Opération quel
   que soit son verbe masque désormais aussi les Runs et les Projets ; elle doit refuser les
   lectures par leur verbe. L'extension de test (`fixture`) ne refuse jamais une lecture par `all`
@@ -601,16 +594,15 @@ Assumés : le compteur « N / 20 sessions » de la barre d'état reste global (c
 démon, partagée : filtré, il montrerait de la place qui n'existe pas) ; `/stats/performance` reste
 global (des agrégats sans identifiant de Run, hors du périmètre de CORE-5).
 
-Écartés : **un hook `authorize_read` à part**, qui dédoublait la décision d'`iam` (Droit Lecture
-d'une Ressource) et le catalogue ; **filtrer dans l'UI seule**, qui ne cloisonne rien ; **une
+Écartés : **un hook `authorize_read` à part**, qui dédoublait la décision de l'extension de droits
+(lecture d'une Ressource) et le catalogue ; **filtrer dans l'UI seule**, qui ne cloisonne rien ; **une
 question par événement `/ws`**, trop chère pour un Run bavard ; **un endpoint « mes Projets
 permis »** propre au formulaire de Run, qui aurait nommé un besoin dans le core.
 
 ## Amendement CORE-2 : admission, jeton de la CLI, nom d'affichage d'un Acteur
 
-Pour l'extension `iam` de `Loulen/pdo-extensions` (ADR-0005 de ce repo, qui amende son ADR-0001) :
-une extension d'identité doit pouvoir fermer la porte aux anonymes, la CLI doit pouvoir s'identifier,
-et tout le monde doit pouvoir afficher « Alice » sans connaître `iam`. Trois seams génériques,
+Une extension d'identité doit pouvoir fermer la porte aux anonymes, la CLI doit pouvoir s'identifier,
+et tout le monde doit pouvoir afficher « Alice » sans connaître l'extension d'identité. Trois seams génériques,
 exercés par l'extension de test interne (`crates/pdo/tests/test_extension/gate.rs`).
 
 - **Admission d'une requête** (`Extension::admit`, `Admission`) : une requête qu'**aucune**

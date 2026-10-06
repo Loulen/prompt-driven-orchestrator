@@ -57,8 +57,8 @@ en page du mainteneur sur le contenu versionné (appariement fragile, pour un de
 rarement). Le contenu et la mise en page ont été fusionnés **une fois**, validés à l'écran, et le
 fichier entier fait foi depuis.
 
-**7. Un repo tiers est un consommateur de l'outillage, par sa propre config** (amendement, #36 ; 2ᵉ
-grilling de la story `Loulen/pdo-extensions#3`, Q8 et Q9). Le README d'un repo d'extensions veut
+**7. Un repo tiers est un consommateur de l'outillage, par sa propre config** (amendement, #36). Le README
+d'un repo tiers veut
 ses GIF, filmés de la même façon. L'outillage reste dans le core et devient paramétrable : une
 **Config des médias**, une par repo consommateur, déclare ce qui était figé au core (le binaire que
 démarre l'instance de démo, le dossier des Scènes, la fixture, le fichier de sélection, le dossier

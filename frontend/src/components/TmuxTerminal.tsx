@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand } from "lucide-react";
+import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, FileUp } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { attachSession, fetchPane } from "../api";
 import {
@@ -30,6 +30,8 @@ import { posteId } from "../lib/poste";
 import { BASE_FONT_SIZE, spectatorFontSize } from "../lib/spectatorFit";
 import { terminalTheme } from "../lib/terminalTheme";
 import { useTheme } from "../hooks/useTheme";
+import { useFileDropTarget } from "../hooks/useFileDropTarget";
+import { DropOverlay } from "./SkillFileDropZone";
 
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
@@ -61,6 +63,13 @@ interface Props {
   /** #968: extra gestures at the right of the toolbar, before Copy, followed by
    *  a separator. */
   toolbarActions?: ReactNode;
+  /** #971: files given to the node — dropped on the terminal (with the files)
+   *  or asked for with the Import button (empty list). Omit ⇒ no import here
+   *  (the Run shell, a frozen pane). */
+  onImportFiles?: (files: File[]) => void;
+  /** #971: set when the node cannot receive files right now (no live
+   *  session): the Import button is off and says why. */
+  importDisabledReason?: string | null;
 }
 
 /** #968: the exits of the enlarged terminal, named on its collapse button. */
@@ -131,6 +140,8 @@ export default function TmuxTerminal({
   onSpectatingChange,
   toolbarIdentity,
   toolbarActions,
+  onImportFiles,
+  importDisabledReason,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -559,6 +570,16 @@ export default function TmuxTerminal({
     statusLabel = "connected";
   }
 
+  // #971: a file dropped anywhere on the terminal opens the import, pre-filled.
+  // Always claimed while an import handler exists, so a missed drop never
+  // navigates the tab to the file; the modal says when the node cannot take it.
+  const handleFileDrop = useCallback(
+    (dt: DataTransfer) => onImportFiles?.(Array.from(dt.files)),
+    [onImportFiles],
+  );
+  const { dragging: fileDrag, handlers: dropHandlers } = useFileDropTarget(handleFileDrop);
+  const importEnabled = onImportFiles !== undefined;
+
   const spectating = mode === "live" && termRole.role === "spectator";
   const watchers =
     mode === "live" && termRole.role === "pilot" ? termRole.spectators : 0;
@@ -570,9 +591,17 @@ export default function TmuxTerminal({
 
   return (
     <div
-      className="flex flex-1 flex-col overflow-hidden"
+      className="relative flex flex-1 flex-col overflow-hidden"
       data-testid="tmux-terminal"
+      {...(importEnabled ? dropHandlers : {})}
     >
+      {importEnabled && fileDrag !== null && (
+        <DropOverlay
+          count={fileDrag}
+          title={`Drop to import ${fileDrag} file${fileDrag === 1 ? "" : "s"} into this node`}
+          hint={importDisabledReason ?? "You review them before anything is written"}
+        />
+      )}
       {/* Toolbar */}
       <div
         className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
@@ -646,6 +675,26 @@ export default function TmuxTerminal({
             {toolbarActions}
             <span className="mx-1 h-3 w-px bg-line-strong" aria-hidden />
           </>
+        )}
+        {/* #971: import files from this machine into the node's Blackboard. */}
+        {importEnabled && (
+          <Tooltip content={importDisabledReason ?? "Import files into this node"}>
+            <button
+              onClick={() => {
+                if (!importDisabledReason) onImportFiles?.([]);
+              }}
+              aria-disabled={importDisabledReason ? true : undefined}
+              aria-label="Import files"
+              className={`flex h-5 w-5 items-center justify-center rounded transition-colors ${
+                importDisabledReason
+                  ? "cursor-default text-fg-5"
+                  : "cursor-pointer text-fg-3 hover:bg-bg-4 hover:text-fg"
+              }`}
+              data-testid="term-import"
+            >
+              <FileUp size={12} />
+            </button>
+          </Tooltip>
         )}
         {/* #772: copy the browser-side selection; the tooltip doubles as the
             discoverable hint for the keyboard shortcuts. */}

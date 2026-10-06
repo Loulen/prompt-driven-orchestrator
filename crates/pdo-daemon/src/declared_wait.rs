@@ -113,19 +113,26 @@ pub(crate) enum DeclareOutcome {
     Refreshed,
 }
 
-/// Declare the wait of `(run, node, iter)`. Appends one `NodeAwaitingUser` with
-/// `{cause, message}` unless the node already awaits on exactly that, and
-/// forgets any keystroke typed before the declaration (the Enter rule counts
-/// from here).
-pub(crate) async fn declare_wait(
+/// A node iteration that holds a live session, as [`check_live_session`]
+/// found it: the projection it was read from, the iteration, the tmux session.
+pub(crate) struct LiveSession {
+    pub(crate) run_state: event_log::RunState,
+    pub(crate) iter: i64,
+    pub(crate) session: String,
+}
+
+/// The precondition of every gesture that speaks to a node's agent (the declared
+/// wait, the file import and the text sent to its terminal, #971): the Run is
+/// live, the node is an agent node, and `iter` (default: the node's current
+/// iteration) is the current one and holds a session tmux still knows. Refused
+/// by name otherwise — nothing written.
+pub(crate) async fn check_live_session(
     state: &Arc<AppState>,
     run_id: &str,
     node_id: &str,
-    iter: i64,
-    cause: &str,
-    message: Option<&str>,
+    iter: Option<i64>,
     session_alive: impl FnOnce(&str) -> bool,
-) -> Result<DeclareOutcome, WaitRefusal> {
+) -> Result<LiveSession, WaitRefusal> {
     let events = load_events(&state.db, run_id)
         .await
         .map_err(|_| WaitRefusal::RunNotFound)?;
@@ -150,6 +157,7 @@ pub(crate) async fn declare_wait(
     {
         return Err(WaitRefusal::NodeIsScript);
     }
+    let iter = iter.unwrap_or(node.iter);
     let Some(attempt) = node.iterations.iter().find(|a| a.iter == iter) else {
         return Err(WaitRefusal::NodeSessionNotLive);
     };
@@ -163,6 +171,33 @@ pub(crate) async fn declare_wait(
     if !session_alive(&session) {
         return Err(WaitRefusal::NodeSessionNotLive);
     }
+    Ok(LiveSession {
+        run_state,
+        iter,
+        session,
+    })
+}
+
+/// Declare the wait of `(run, node, iter)`. Appends one `NodeAwaitingUser` with
+/// `{cause, message}` unless the node already awaits on exactly that, and
+/// forgets any keystroke typed before the declaration (the Enter rule counts
+/// from here).
+pub(crate) async fn declare_wait(
+    state: &Arc<AppState>,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    cause: &str,
+    message: Option<&str>,
+    session_alive: impl FnOnce(&str) -> bool,
+) -> Result<DeclareOutcome, WaitRefusal> {
+    let live = check_live_session(state, run_id, node_id, Some(iter), session_alive).await?;
+    let node = live
+        .run_state
+        .nodes
+        .get(node_id)
+        .ok_or(WaitRefusal::NodeNotFound)?;
+    let session = live.session;
 
     // The cap is for the agent's `--message`; the daemon's own sentence on a
     // refused completion is authored to fit the banner and stays whole.
@@ -329,6 +364,17 @@ pub(crate) async fn note_pty_input(state: &Arc<AppState>, session_name: &str, by
     if let Err(e) = lift_wait(state, &run_id, &node_id, iter).await {
         warn!("Run {run_id}: failed to lift the wait of {node_id} iter-{iter}: {e}");
     }
+}
+
+/// Text PDO wrote into a node's input on the user's behalf (« Copy and send to
+/// terminal », #971) counts as typed: the Enter the user then presses in the
+/// terminal lifts a declared wait exactly as if they had typed the text.
+pub(crate) fn note_typed_text(state: &Arc<AppState>, session_name: &str) {
+    state
+        .pty_typed
+        .lock()
+        .unwrap()
+        .insert(session_name.to_string());
 }
 
 /// Append `NodeResumed` if the node awaits on a cause a keystroke may lift.

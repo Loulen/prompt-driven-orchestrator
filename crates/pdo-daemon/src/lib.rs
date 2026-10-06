@@ -5203,6 +5203,17 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/runs/{run_id}/nodes/{node_id}/wait-user",
             post(node_wait_user),
         )
+        // #971: import files into a node with a live session. The budget is
+        // `max_attachments_mb`, enforced IN the handler (read fresh per request),
+        // so the route has no static body limit — same rule as `POST /runs`.
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/attachments",
+            post(node_import_files).route_layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/terminal-text",
+            post(node_terminal_text),
+        )
         .route(
             "/runs/{run_id}/nodes/{node_id}/children/wait",
             get(node_children_wait),
@@ -18409,6 +18420,305 @@ async fn node_wait_user(
         }
         Err(refusal) => refusal.into_response(&run_id, &node_id, iter),
     }
+}
+
+#[derive(Deserialize, Default)]
+struct NodeIterQuery {
+    #[serde(default)]
+    iter: Option<i64>,
+}
+
+/// A refused import or terminal write (#971): the status and the sentence that
+/// names why, plus a stable slug for the client.
+fn node_gesture_refusal(status: StatusCode, slug: &str, message: String) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": slug,
+            "recoverable": true,
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
+/// The live session a gesture toward a node's agent needs (#971), or the named
+/// refusal of [`declared_wait::check_live_session`] with `what` (« nothing
+/// imported ») appended, so the user knows nothing happened.
+async fn require_live_node_session(
+    state: &Arc<AppState>,
+    run_id: &str,
+    node_id: &str,
+    iter: Option<i64>,
+    what: &str,
+) -> Result<declared_wait::LiveSession, Box<Response>> {
+    declared_wait::check_live_session(state, run_id, node_id, iter, |session| {
+        state.node_session_alive(session)
+    })
+    .await
+    .map_err(|refusal| {
+        let status = match refusal {
+            declared_wait::WaitRefusal::RunNotFound | declared_wait::WaitRefusal::NodeNotFound => {
+                StatusCode::NOT_FOUND
+            }
+            _ => StatusCode::CONFLICT,
+        };
+        let reason = match refusal {
+            declared_wait::WaitRefusal::RunNotFound => format!("run {run_id} does not exist"),
+            declared_wait::WaitRefusal::RunNotLive => format!("run {run_id} is not running"),
+            declared_wait::WaitRefusal::NodeNotFound => {
+                format!("node {node_id} is not part of run {run_id}")
+            }
+            declared_wait::WaitRefusal::NodeIsScript => {
+                format!("node {node_id} is a script node: no agent runs there")
+            }
+            declared_wait::WaitRefusal::NodeSessionNotLive => {
+                format!("node {node_id} has no live session")
+            }
+        };
+        Box::new(node_gesture_refusal(
+            status,
+            refusal.slug(),
+            format!("{reason}; {what}"),
+        ))
+    })
+}
+
+/// `POST /runs/{run_id}/nodes/{node_id}/attachments[?iter=N]` — import files
+/// from the user's machine into a node that holds a live session (#971, « Fichier
+/// importé en cours de Run »). Multipart, one or more `files` parts.
+///
+/// Every precondition is checked before anything is written: the live session
+/// first (before the body is even read), then the instance attachment budget
+/// (`max_attachments_mb`, per import, read fresh like `POST /runs`), then the
+/// names. The files land in the Run's Blackboard under
+/// `.pdo/artifacts/_attachments/<node-id>/` — never committed, removed with the
+/// Run — and a name already there is suffixed, never overwritten. The answer
+/// gives each file's final path relative to the Run's worktree root. The agent
+/// is not told: the UI hands the user a text to send it.
+async fn node_import_files(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Query(query): Query<NodeIterQuery>,
+    multipart: Result<Multipart, axum::extract::multipart::MultipartRejection>,
+) -> Response {
+    const NOTHING: &str = "nothing imported";
+    let live = match require_live_node_session(&state, &run_id, &node_id, query.iter, NOTHING).await
+    {
+        Ok(live) => live,
+        Err(refusal) => return *refusal,
+    };
+    let Some(worktree) = run_worktree_dir(&state, &live.run_state, &run_id) else {
+        return node_gesture_refusal(
+            StatusCode::CONFLICT,
+            "run_worktree_missing",
+            format!("run {run_id} has no worktree on disk; {NOTHING}"),
+        );
+    };
+    let mut multipart = match multipart {
+        Ok(m) => m,
+        Err(e) => {
+            return node_gesture_refusal(
+                StatusCode::BAD_REQUEST,
+                "bad_multipart",
+                format!("expected a multipart body with `files` parts ({e}); {NOTHING}"),
+            )
+        }
+    };
+    let max_mb = resolve_max_attachments_mb(
+        instance_config::get(&state.db)
+            .await
+            .ok()
+            .and_then(|cfg| cfg.max_attachments_mb),
+    );
+    let max_bytes = (max_mb as u64) * 1024 * 1024;
+
+    // Read every part in memory before writing anything: a refusal (budget,
+    // name, cut upload) must leave the Blackboard untouched.
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total: u64 = 0;
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                let cause = std::error::Error::source(&e)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| e.to_string());
+                return node_gesture_refusal(
+                    StatusCode::BAD_REQUEST,
+                    "upload_interrupted",
+                    format!(
+                        "{}; {NOTHING}",
+                        multipart_cut_message(None, None, total, &cause)
+                    ),
+                );
+            }
+        };
+        let field_name = field.name().unwrap_or("").to_string();
+        if field_name != "files" {
+            return node_gesture_refusal(
+                StatusCode::BAD_REQUEST,
+                "unknown_field",
+                format!("unknown field `{field_name}`; accepted: files; {NOTHING}"),
+            );
+        }
+        let raw_name = field.file_name().unwrap_or("").to_string();
+        let name = match blackboard::sanitize_import_name(&raw_name) {
+            Ok(name) => name,
+            Err(message) => {
+                return node_gesture_refusal(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_filename",
+                    format!("{message}; {NOTHING}"),
+                )
+            }
+        };
+        // Chunk by chunk, so a file far over the budget is cut at the line
+        // instead of being buffered whole.
+        let mut data: Vec<u8> = Vec::new();
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    total += chunk.len() as u64;
+                    if total > max_bytes {
+                        return node_gesture_refusal(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "attachments_too_large",
+                            format!(
+                                "`{name}` takes the import past the limit of {max_mb} MB per \
+                                 import; raise `max_attachments_mb` in Settings or import less. \
+                                 {NOTHING}"
+                            ),
+                        );
+                    }
+                    data.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return node_gesture_refusal(
+                        StatusCode::BAD_REQUEST,
+                        "upload_interrupted",
+                        format!(
+                            "{}; {NOTHING}",
+                            multipart_field_error("files", Some(&raw_name), total, &e)
+                        ),
+                    )
+                }
+            }
+        }
+        files.push((name, data));
+    }
+    if files.is_empty() {
+        return node_gesture_refusal(
+            StatusCode::BAD_REQUEST,
+            "no_files",
+            format!("no file in the import; {NOTHING}"),
+        );
+    }
+
+    let relative_dir =
+        blackboard::node_attachments_dir(Path::new(worktree_ops::RUN_ARTIFACTS_RELATIVE), &node_id);
+    let dir = worktree.join(&relative_dir);
+    let written = match blackboard::import_files(&dir, &files) {
+        Ok(written) => written,
+        Err(e) => {
+            return node_gesture_refusal(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "write_failed",
+                format!(
+                    "failed to write into {}: {e}; {NOTHING}",
+                    relative_dir.display()
+                ),
+            )
+        }
+    };
+    info!(
+        "Run {run_id}: imported {} file(s) for {node_id} iter-{} into {}",
+        written.len(),
+        live.iter,
+        relative_dir.display()
+    );
+    let entries: Vec<serde_json::Value> = written
+        .iter()
+        .zip(&files)
+        .map(|(name, (_, data))| {
+            serde_json::json!({
+                "name": name,
+                "path": relative_dir.join(name).to_string_lossy(),
+                "size": data.len(),
+            })
+        })
+        .collect();
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "iter": live.iter, "files": entries })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct TerminalTextRequest {
+    #[serde(default)]
+    iter: Option<i64>,
+    text: String,
+}
+
+/// The longest text « Copy and send to terminal » writes (#971): a few
+/// paragraphs, never a document.
+const TERMINAL_TEXT_MAX_BYTES: usize = 16 * 1024;
+
+/// `POST /runs/{run_id}/nodes/{node_id}/terminal-text` — write `text` into the
+/// input of a node's live session **without pressing Enter** (#971, « Copy and
+/// send to terminal »). The user completes and submits it themselves: this
+/// never starts an agent turn. The text counts as typed for the declared-wait
+/// Enter rule. Best-effort on the tmux side; the UI copies the text too.
+async fn node_terminal_text(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Json(body): Json<TerminalTextRequest>,
+) -> Response {
+    const NOTHING: &str = "nothing written";
+    if body.text.trim().is_empty() {
+        return node_gesture_refusal(
+            StatusCode::BAD_REQUEST,
+            "empty_text",
+            format!("empty text; {NOTHING}"),
+        );
+    }
+    if body.text.len() > TERMINAL_TEXT_MAX_BYTES {
+        return node_gesture_refusal(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "text_too_long",
+            format!("text over {} KB; {NOTHING}", TERMINAL_TEXT_MAX_BYTES / 1024),
+        );
+    }
+    let live = match require_live_node_session(&state, &run_id, &node_id, body.iter, NOTHING).await
+    {
+        Ok(live) => live,
+        Err(refusal) => return *refusal,
+    };
+    let socket = state.tmux_socket();
+    let session = live.session.clone();
+    let text = body.text.clone();
+    let pasted = tokio::task::spawn_blocking(move || {
+        tmux_session_manager::paste_without_enter(&socket, &session, &text)
+    })
+    .await
+    .unwrap_or(false);
+    if !pasted {
+        return node_gesture_refusal(
+            StatusCode::BAD_GATEWAY,
+            "paste_failed",
+            format!("tmux refused the paste into {}; {NOTHING}", live.session),
+        );
+    }
+    declared_wait::note_typed_text(&state, &live.session);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "iter": live.iter })),
+    )
+        .into_response()
 }
 
 async fn node_done(

@@ -992,6 +992,51 @@ export function fetchPane(
   );
 }
 
+/** One file of an import into a running node (#971): its final name (suffixed
+ *  when the name was taken) and its path relative to the Run's worktree root. */
+export interface ImportedFile {
+  name: string;
+  path: string;
+  size: number;
+}
+
+export interface ImportFilesResponse {
+  iter: number;
+  files: ImportedFile[];
+}
+
+/** #971: import files from this browser's machine into a node holding a live
+ *  session. Refused by name (no live session, over `max_attachments_mb`), in
+ *  which case nothing was written. */
+export function importNodeFiles(
+  runId: string,
+  nodeId: string,
+  iter: number,
+  files: File[],
+): Promise<ImportFilesResponse> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return request<ImportFilesResponse>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/attachments`,
+    { body: form, query: { iter }, label: "Import" },
+  );
+}
+
+/** #971: write `text` into the node's terminal input **without** pressing Enter. */
+export function sendTextToNodeTerminal(
+  runId: string,
+  nodeId: string,
+  iter: number,
+  text: string,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/terminal-text`,
+    { body: { iter, text }, label: "Send to terminal" },
+  );
+}
+
 export function fetchPipelines(): Promise<PipelineListEntry[]> {
   return request<PipelineListEntry[]>("GET", "/pipelines");
 }

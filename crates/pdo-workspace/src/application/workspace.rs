@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::repository_path::member_spellings;
 use pdo_kernel::{Actor, Operation, ResourceKind};
 
 use super::ports::{
@@ -67,14 +68,20 @@ impl Workspace {
     }
 
     /// The Projets the repository `path` is in: the one that owns it, or none
-    /// (also when the Projets cannot be read).
+    /// (also when the Projets cannot be read). Its other spellings are tried
+    /// when it is no member, as the Run context places a Run
+    /// ([`member_spellings`]).
     pub(crate) async fn projects_of_repository(&self, path: &str) -> Vec<String> {
-        match self.projects.owner_of(path).await {
-            Ok(owner) => owner.map(|project| project.id).into_iter().collect(),
-            Err(e) => {
-                tracing::warn!("the Projet owning {path} cannot be read: {e}");
-                Vec::new()
+        for spelling in member_spellings(path) {
+            match self.projects.owner_of(&spelling).await {
+                Ok(Some(owner)) => return vec![owner.id],
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("the Projet owning {path} cannot be read: {e}");
+                    return Vec::new();
+                }
             }
         }
+        Vec::new()
     }
 }

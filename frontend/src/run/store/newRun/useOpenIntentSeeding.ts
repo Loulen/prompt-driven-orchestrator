@@ -4,6 +4,8 @@ import { SETTINGS_CHANGED } from "../../../settings/store/useSettings";
 import { cronToPreset, parseDailyTime } from "../../../trigger/model/cronPresets";
 import { EMPTY_PROVISIONING_RULES } from "../../../workspace/model/provisioning";
 import type { OpenIntent } from "../../model/openIntent";
+import { prefillRepo } from "../../model/runCreationRights";
+import { useRunCreationRightsStore } from "../runCreationRightsStore";
 import type { NewRunState } from "./useNewRunState";
 
 /**
@@ -18,6 +20,10 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
   const autoNameSeeded = useRef(false);
   const prefillDone = useRef(false);
   const openPrefillDone = useRef(false);
+  // The repository the prefill put in the field (CORE-5), until the caller types.
+  const prefilled = useRef<string | null>(null);
+  const rights = useRunCreationRightsStore((st) => st.rights);
+  const rightsProjects = useRunCreationRightsStore((st) => st.projects);
 
   const {
     setSelectedPipelineId, setSourceBranch, clearBranches, targetRepo, handleRepoChange,
@@ -168,17 +174,30 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
   }, [open, openIntent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (!open) {
+      prefillDone.current = false;
+      prefilled.current = null;
+      return;
+    }
     // Apply the recent-repos default only on the "fresh" intents (run /
     // new-trigger); an edit-trigger's own repo wins, so it's excluded.
     const freshEntry = openIntent.kind === "run" || openIntent.kind === "new-trigger";
-    if (open && !prefillDone.current && freshEntry && recentRepos.length > 0 && !targetRepo) {
+    if (!freshEntry) return;
+    // CORE-5: restricted, only a repository the form offers (`prefillRepo`).
+    const repo = prefillRepo(rights, recentRepos, rightsProjects);
+    if (!prefillDone.current && repo && !targetRepo) {
       prefillDone.current = true;
-      handleRepoChange(recentRepos[0]);
+      prefilled.current = repo;
+      handleRepoChange(repo);
+      return;
     }
-    if (!open) {
-      prefillDone.current = false;
+    // The rights arrived after the prefill and refuse its repository: take it
+    // back, unless the caller has typed since.
+    if (prefilled.current !== null && targetRepo === prefilled.current && repo !== prefilled.current) {
+      prefilled.current = repo;
+      handleRepoChange(repo ?? "");
     }
-  }, [open, recentRepos, targetRepo, handleRepoChange, openIntent]);
+  }, [open, recentRepos, targetRepo, handleRepoChange, openIntent, rights, rightsProjects]);
 
   // #410: fetch instance settings on open — the `default_sandbox` label AND the
   // `sandbox_docker` availability probe arrive in one round-trip (the modal did not

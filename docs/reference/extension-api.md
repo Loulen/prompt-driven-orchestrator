@@ -106,6 +106,7 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /projects` | `project` × `read`, per Projet | the Projet is absent |
 | `GET /projects/{id}` | `project` × `read` | `403` |
 | `GET /fs/browse` (the loupe, the explorers) | `repository` × `read`, no target, in no Projet | `403` |
+| `GET /repos/recent` (the New Run prefill) | `run` × `read` on the last Run of each repository, in the repository's Projet | the repository is absent |
 
 A read is in the same Projets as the gestures on its entity: a Run's in the Projet of its primary
 repository, a Projet's in itself. The actor is the one `identify` found: on `/ws`, the one of the

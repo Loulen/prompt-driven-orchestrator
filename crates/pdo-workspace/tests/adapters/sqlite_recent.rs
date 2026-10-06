@@ -2,7 +2,7 @@
 //! as the daemon creates it).
 
 use pdo_workspace::adapters::sqlite::SqliteRecentRepositories;
-use pdo_workspace::application::ports::RecentRepositories;
+use pdo_workspace::application::ports::{RecentRepositories, RecentRepository};
 use sqlx::SqlitePool;
 
 async fn events_db() -> SqlitePool {
@@ -47,7 +47,7 @@ async fn run_started(db: &SqlitePool, seq: u32, repo: Option<&str>) {
 async fn empty_when_no_run_started() {
     let db = events_db().await;
     let recent = SqliteRecentRepositories::new(db);
-    assert!(recent.recent(5).await.unwrap().is_empty());
+    assert!(recent.recent().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -57,19 +57,32 @@ async fn deduplicates_and_orders_by_most_recent() {
     run_started(&db, 2, Some("/repo/b")).await;
     run_started(&db, 3, Some("/repo/a")).await;
     let recent = SqliteRecentRepositories::new(db);
-    assert_eq!(recent.recent(5).await.unwrap(), vec!["/repo/a", "/repo/b"]);
+    assert_eq!(
+        recent.recent().await.unwrap(),
+        vec![
+            RecentRepository::new("/repo/a", "run-3"),
+            RecentRepository::new("/repo/b", "run-2"),
+        ]
+    );
 }
 
 #[tokio::test]
-async fn stops_at_the_limit() {
+async fn is_uncapped_the_caller_keeps_what_it_may_read() {
     let db = events_db().await;
     for i in 0..7 {
         run_started(&db, i, Some(&format!("/repo/{i}"))).await;
     }
     let recent = SqliteRecentRepositories::new(db);
+    let paths: Vec<_> = recent
+        .recent()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.path)
+        .collect();
     assert_eq!(
-        recent.recent(5).await.unwrap(),
-        vec!["/repo/6", "/repo/5", "/repo/4", "/repo/3", "/repo/2"]
+        paths,
+        ["/repo/6", "/repo/5", "/repo/4", "/repo/3", "/repo/2", "/repo/1", "/repo/0"]
     );
 }
 
@@ -86,5 +99,8 @@ async fn ignores_starts_without_a_repo_and_other_events() {
     )
     .await;
     let recent = SqliteRecentRepositories::new(db);
-    assert_eq!(recent.recent(5).await.unwrap(), vec!["/repo/a"]);
+    assert_eq!(
+        recent.recent().await.unwrap(),
+        vec![RecentRepository::new("/repo/a", "run-1")]
+    );
 }

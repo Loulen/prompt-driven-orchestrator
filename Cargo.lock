@@ -2043,6 +2043,7 @@ dependencies = [
  "pdo-extension-api",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

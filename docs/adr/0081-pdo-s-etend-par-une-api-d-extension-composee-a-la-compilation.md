@@ -562,7 +562,8 @@ Acteur voyait tous les Runs, tous les Projets, et pouvait parcourir le disque.
 - **`/ws` filtré par connexion** : l'Acteur est celui de la requête d'upgrade ; un message sur un
   Run (`event`, `run_forgotten`, `operation_applied` sur un Run ou un node, y compris la création
   d'un Run, sans cible : le Run est l'entité produite) n'est envoyé qu'aux connexions qui peuvent
-  lire ce Run. Un `trigger_fired` arrive à toutes, sans le `run_id` d'un Run illisible. La décision est gardée 5 s par connexion et par Run (un Run
+  lire ce Run. Un `trigger_fired` arrive à toutes, sans le `run_id` d'un Run illisible. La
+  décision est gardée 5 s par connexion et par Run (un Run
   bavard ne pose pas une question par événement ; un changement de droits se voit sous ce délai) ;
   un Run oublié est jugé par la dernière décision. Les autres messages passent comme avant.
 - **La question d'autorisation** : `POST /authorize {"operations": [...]}` rend une décision par
@@ -575,6 +576,14 @@ Acteur voyait tous les Runs, tous les Projets, et pouvait parcourir le disque.
   Projet ne le permet ; tant qu'il l'est, l'UI repose la question toutes les 15 s et au retour
   sur la fenêtre (le bouton désactivé ne peut plus ouvrir le formulaire qui la posait). Le
   contexte de `run/new` gagne `targetProject`.
+- **Les dépôts récents sont une liste dérivée des Runs** : `GET /repos/recent` ne garde un dépôt
+  que si l'Acteur peut lire le dernier Run qui y a démarré, dans le Projet du dépôt (sinon le
+  chemin d'un dépôt d'un Projet cloisonné fuirait). Le workspace trouve ce Projet comme le
+  contexte Run (`pdo_kernel::repository_path::member_spellings` : `/repo/`, `/repo/.` ou un lien
+  restent dans le Projet de `/repo`), pour ces lectures comme pour ses gestes sur un dépôt. Le formulaire restreint ne se pré-remplit
+  qu'avec un dépôt qu'il propose : le plus récent d'entre eux, sinon le premier de la liste ; un
+  pré-remplissage que les droits arrivés ensuite refusent est repris, sauf si l'Acteur a tapé
+  depuis.
 - **Une lecture n'est jamais appliquée** : pas d'`OperationApplied`, refus journalisé en `debug`
   seulement (une liste pose une question par entité). **Sans extension, aucune question** :
   `ExtensionHost::allows_everything` court-circuite, les listes sont servies comme avant.

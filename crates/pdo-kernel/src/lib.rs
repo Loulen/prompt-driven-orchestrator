@@ -5,8 +5,9 @@
 //! here), the neutral authorization point, the event bus, the extension host
 //! (with the checks an extension goes through at registration, the delivery of
 //! the events, the `OperationApplied` record, the entity attributes), the shape an
-//! instance default is disclosed with, and the names of the environment
-//! variables the instance defaults read.
+//! instance default is disclosed with, the names of the environment
+//! variables the instance defaults read, and how a repository path matches a
+//! Projet's member.
 //! Keep it small and stable: a concept that belongs to one context lives in that
 //! context's crate.
 
@@ -22,6 +23,7 @@ pub mod extension_host;
 pub mod instance_default;
 pub mod operation;
 pub mod registration;
+pub mod repository_path;
 
 pub use actor::Actor;
 pub use operation::{Operation, ResourceKind, Verb};

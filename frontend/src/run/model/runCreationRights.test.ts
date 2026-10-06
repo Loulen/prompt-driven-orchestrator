@@ -4,6 +4,7 @@ import {
   canCreateSomeRun,
   hiddenProjectsNote,
   isRestricted,
+  prefillRepo,
   repoGroups,
   runCreationQuestions,
   runCreationRights,
@@ -67,6 +68,31 @@ describe("the rights to create a Run (CORE-5)", () => {
     expect(repoGroups(outside, recents, [EXT, PDO, SECRET]).at(-1)).toEqual({
       label: "Other",
       repos: ["/tmp/scratch"],
+    });
+  });
+
+  describe("the repository the form opens on", () => {
+    const restricted = runCreationRights([PDO, EXT, SECRET], [DENY, DENY, ALLOW, ALLOW, DENY]);
+
+    it("is the most recent one when nothing is refused", () => {
+      expect(prefillRepo(UNKNOWN_RIGHTS, ["/home/bob/code/secret", "/x"], [])).toBe("/home/bob/code/secret");
+      expect(prefillRepo(UNKNOWN_RIGHTS, [], [])).toBeNull();
+    });
+
+    it("skips a recent repository of a Projet where a Run may not be created", () => {
+      const recent = ["/home/bob/code/secret", "/home/bob/code/pdo-extensions"];
+      expect(prefillRepo(restricted, recent, [PDO, EXT, SECRET])).toBe("/home/bob/code/pdo-extensions");
+    });
+
+    it("falls back to the first repository offered when no recent one is", () => {
+      expect(prefillRepo(restricted, ["/home/bob/code/secret", "/loose"], [PDO, EXT, SECRET])).toBe(
+        "/home/bob/code/PDO-v2",
+      );
+    });
+
+    it("is none when the form offers nothing", () => {
+      const nowhere = runCreationRights([SECRET], [DENY, DENY, DENY]);
+      expect(prefillRepo(nowhere, ["/home/bob/code/secret"], [SECRET])).toBeNull();
     });
   });
 });

@@ -133,8 +133,13 @@ pub(super) async fn create<S: ProjectSettings>(
     }
 }
 
-pub(super) async fn recent<S: ProjectSettings>(State(http): State<Http<S>>) -> Response {
-    match http.workspace.recent_repositories().await {
+/// `GET /repos/recent`: only the repositories of Runs the caller may read
+/// (CORE-5).
+pub(super) async fn recent<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
+) -> Response {
+    match http.workspace.recent_repositories(&actor).await {
         Ok(repos) => Json(repos).into_response(),
         Err(e) => {
             error!("failed to query recent repos: {e}");

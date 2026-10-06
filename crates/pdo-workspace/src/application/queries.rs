@@ -1,5 +1,6 @@
 //! What the workspace answers without changing anything. The reads guarded by
-//! the Autorisation d'opération (the Projets, the disk) are in
+//! the Autorisation d'opération (the Projets, the disk, the recent
+//! repositories) are in
 //! [`read_access`](super::read_access).
 
 use std::path::{Path, PathBuf};
@@ -173,11 +174,6 @@ impl Workspace {
         self.git.branches(repo)
     }
 
-    /// The last repositories Runs worked in, most recent first, each once.
-    pub async fn recent_repositories(&self) -> StoreResult<Vec<String>> {
-        self.recent.recent(RECENT_REPOSITORIES).await
-    }
-
     /// One level of the directory at `path` (the default chain when `None`).
     pub fn browse(
         &self,
@@ -297,16 +293,6 @@ mod tests {
         assert_eq!(
             err,
             WorkspaceError::Invalid("repository must be an absolute path".into())
-        );
-    }
-
-    #[tokio::test]
-    async fn the_recent_list_is_capped() {
-        let f = fixture();
-        f.recent.set((0..8).map(|i| format!("/r{i}")).collect());
-        assert_eq!(
-            f.workspace.recent_repositories().await.unwrap().len(),
-            RECENT_REPOSITORIES
         );
     }
 }

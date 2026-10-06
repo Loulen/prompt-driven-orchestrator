@@ -62,7 +62,8 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
   par Opération sans rien exécuter ; une `Operation` se désérialise. Le formulaire New Run s'en sert
   (loupe masquée, dépôts groupés par Projet permis, « N Project(s) hidden », « New Run » désactivé
   quand aucun Projet ne le permet, question reposée toutes les 15 s et au retour sur la fenêtre
-  tant qu'il l'est) ; le contexte de `run/new` gagne `targetProject`. Mesure :
+  tant qu'il l'est, pré-remplissage limité aux dépôts proposés) ; le contexte de `run/new` gagne
+  `targetProject`. `GET /repos/recent` ne liste plus que les dépôts des Runs lisibles. Mesure :
   500 Runs listés en ~35 ms (build optimisé) avec une extension qui autorise.
 - **CORE-2, admission d'une requête** (`Extension::admit`) : une extension peut refuser (`401`
   `unauthenticated`) ou renvoyer vers sa page de connexion une requête qu'aucune extension n'a

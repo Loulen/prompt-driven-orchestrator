@@ -83,9 +83,27 @@ pub trait ProvisioningRulesRepository: Send + Sync {
     ) -> BoxFuture<'a, StoreResult<()>>;
 }
 
-/// The repositories Runs worked in, most recent first.
+/// A repository a Run worked in, with the last Run that started there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentRepository {
+    pub path: String,
+    pub run_id: String,
+}
+
+impl RecentRepository {
+    pub fn new(path: impl Into<String>, run_id: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            run_id: run_id.into(),
+        }
+    }
+}
+
+/// The repositories Runs worked in, most recent first, each once with its
+/// last Run. Uncapped: the caller keeps what the actor may read (CORE-5),
+/// then caps.
 pub trait RecentRepositories: Send + Sync {
-    fn recent(&self, limit: usize) -> BoxFuture<'_, StoreResult<Vec<String>>>;
+    fn recent(&self) -> BoxFuture<'_, StoreResult<Vec<RecentRepository>>>;
 }
 
 /// Who hears that a Projet changed (the live pipeline stream).

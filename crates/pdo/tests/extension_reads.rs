@@ -9,6 +9,8 @@
 //!   running anything;
 //! - a refused Projet is absent from `GET /projects`, `403` for its detail; a
 //!   refused browse of the disk is `403`;
+//! - `GET /repos/recent` (the prefill of the New Run form) lists only the
+//!   repositories of Runs the caller may read;
 //! - the measure: 500 Runs listed under 200 ms with an extension that allows.
 
 use std::time::{Duration, Instant};
@@ -486,6 +488,43 @@ async fn a_refused_projet_is_absent_and_a_refused_browse_is_refused() {
     let (status, body) = get(&w.daemon, "/fs/browse").await;
     assert_eq!(status, 403, "{body}");
     assert_eq!(body["reason"], "the test extension refuses read repository");
+}
+
+#[tokio::test]
+async fn the_recent_repositories_are_those_of_the_runs_the_caller_may_read() {
+    let w = world().await;
+    let other_repo = w._other.path().to_string_lossy().into_owned();
+    let (status, recent) = get(&w.daemon, "/repos/recent").await;
+    assert_eq!(status, 200);
+    // The Run of P2 started last: its repository leads the list.
+    assert_eq!(recent, json!([other_repo, w.daemon.target_repo()]));
+
+    w.control
+        .set(Refusal::parse(&format!("run:read@{}~bob", w.p2)).unwrap());
+
+    let (status, as_bob) = send(
+        &w.daemon,
+        reqwest::Method::GET,
+        "/repos/recent",
+        None,
+        Some("bob"),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        as_bob,
+        json!([w.daemon.target_repo()]),
+        "P2's repository is hidden"
+    );
+    let (_, as_alice) = send(
+        &w.daemon,
+        reqwest::Method::GET,
+        "/repos/recent",
+        None,
+        Some("alice"),
+    )
+    .await;
+    assert_eq!(as_alice, json!([other_repo, w.daemon.target_repo()]));
 }
 
 /// The median of `samples`.

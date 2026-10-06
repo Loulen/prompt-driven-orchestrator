@@ -96,6 +96,18 @@ export function repoGroups(rights: RunCreationRights, recentRepos: string[], pro
   return groups;
 }
 
+/**
+ * The repository the form opens on. Unrestricted, the most recent one.
+ * Restricted, the most recent one the form offers ({@link repoGroups}), else
+ * the first one it offers: never a repository of a Projet where a Run may not
+ * be created. `null` when there is none.
+ */
+export function prefillRepo(rights: RunCreationRights, recentRepos: string[], projects: Project[]): string | null {
+  if (!isRestricted(rights)) return recentRepos[0] ?? null;
+  const offered = repoGroups(rights, recentRepos, projects).flatMap((g) => g.repos);
+  return recentRepos.find((repo) => offered.includes(repo)) ?? offered[0] ?? null;
+}
+
 /** « N Project(s) hidden… », or `null` when none is. */
 export function hiddenProjectsNote(rights: RunCreationRights): string | null {
   const n = rights.hiddenProjects.length;

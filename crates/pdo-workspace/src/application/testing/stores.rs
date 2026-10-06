@@ -149,24 +149,17 @@ impl ProvisioningRulesRepository for InMemoryProvisioning {
 }
 
 #[derive(Default)]
-pub struct InMemoryRecent(Mutex<Vec<String>>);
+pub struct InMemoryRecent(Mutex<Vec<RecentRepository>>);
 
 impl InMemoryRecent {
-    pub fn set(&self, repos: Vec<String>) {
+    pub fn set(&self, repos: Vec<RecentRepository>) {
         *self.0.lock().unwrap() = repos;
     }
 }
 
 impl RecentRepositories for InMemoryRecent {
-    fn recent(&self, limit: usize) -> BoxFuture<'_, StoreResult<Vec<String>>> {
-        ready(Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .take(limit)
-            .cloned()
-            .collect()))
+    fn recent(&self) -> BoxFuture<'_, StoreResult<Vec<RecentRepository>>> {
+        ready(Ok(self.0.lock().unwrap().clone()))
     }
 }
 

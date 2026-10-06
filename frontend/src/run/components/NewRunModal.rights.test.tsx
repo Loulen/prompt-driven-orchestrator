@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import NewRunModal from "./NewRunModal";
 import { useRunCreationRightsStore } from "../store/runCreationRightsStore";
-import { UNKNOWN_RIGHTS } from "../model/runCreationRights";
+import { runCreationQuestions, runCreationRights, UNKNOWN_RIGHTS } from "../model/runCreationRights";
+import { useRecentReposStore } from "../../stores/recentReposStore";
 import type { Project } from "../../workspace/model/project";
 import type { Decision, OperationQuestion } from "../../shared/authorization/api";
 
@@ -89,7 +90,10 @@ function answerAsBob(questions: OperationQuestion[]): Decision[] {
 beforeEach(() => {
   vi.mocked(askAuthorization).mockReset();
   useRunCreationRightsStore.setState({ rights: UNKNOWN_RIGHTS, projects: [PDO, EXT, SECRET] });
+  useRecentReposStore.setState({ recentRepos: [] });
 });
+
+const repoField = () => screen.getByTestId("target-repo-input") as HTMLInputElement;
 
 function renderModal() {
   return render(<NewRunModal open={true} onClose={() => {}} onCreated={() => {}} />);
@@ -145,5 +149,48 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
       expect(context().targetProject).toEqual({ id: "p1", name: "PDO", attributes: {} }),
     );
     expect(context().repository).toBe("/home/bob/code/pdo-docs");
+  });
+
+  describe("the repository the form opens on", () => {
+    it("is never one of a Projet where a Run may not be created", async () => {
+      vi.mocked(askAuthorization).mockImplementation(async (q) => answerAsBob(q));
+      useRunCreationRightsStore.setState({
+        rights: runCreationRights([PDO, EXT, SECRET], answerAsBob(runCreationQuestions([PDO, EXT, SECRET]))),
+      });
+      useRecentReposStore.setState({
+        recentRepos: ["/home/bob/code/secret", "/home/bob/code/pdo-extensions"],
+      });
+      renderModal();
+      expect(repoField().value).toBe("/home/bob/code/pdo-extensions");
+    });
+
+    it("is taken back when the rights arrive after it and refuse it", async () => {
+      vi.mocked(askAuthorization).mockImplementation(async (q) => answerAsBob(q));
+      useRecentReposStore.setState({ recentRepos: ["/home/bob/code/secret"] });
+      renderModal();
+      await waitFor(() => expect(repoField().value).toBe("/home/bob/code/PDO-v2"));
+    });
+
+    it("leaves a repository the caller typed alone", async () => {
+      let answer: (d: Decision[]) => void = () => {};
+      vi.mocked(askAuthorization).mockImplementation(
+        (q) => new Promise((resolve) => (answer = () => resolve(answerAsBob(q)))),
+      );
+      renderModal();
+      fireEvent.change(repoField(), { target: { value: "/home/bob/code/secret" } });
+      answer([]);
+      await waitFor(() => expect(useRunCreationRightsStore.getState().rights.known).toBe(true));
+      expect(repoField().value).toBe("/home/bob/code/secret");
+    });
+
+    it("is the most recent one when everything is allowed", async () => {
+      vi.mocked(askAuthorization).mockImplementation(async (q) =>
+        q.map(() => ({ decision: "allow" }) as const),
+      );
+      useRecentReposStore.setState({ recentRepos: ["/home/bob/code/secret", "/x"] });
+      renderModal();
+      await waitFor(() => expect(useRunCreationRightsStore.getState().rights.known).toBe(true));
+      expect(repoField().value).toBe("/home/bob/code/secret");
+    });
   });
 });

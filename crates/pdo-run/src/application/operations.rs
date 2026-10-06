@@ -5,6 +5,7 @@
 //! Both are in the Projet of the Run's primary repository (CORE-3): the one
 //! that owns it, or none ([`Runs::projects_of_run`]).
 
+use pdo_kernel::repository_path::member_spellings;
 use pdo_kernel::{Operation, ResourceKind, Verb};
 use tracing::warn;
 
@@ -34,23 +35,6 @@ fn run_of(operation: &Operation) -> Option<&str> {
         ResourceKind::Node => target.split_once('/').map(|(run, _)| run),
         _ => None,
     }
-}
-
-/// The ways `path` may be spelled as a Projet's member, in order: verbatim,
-/// lexically normalized (no trailing `/`, no `.`), then canonical on disk.
-fn spellings(path: &str) -> Vec<String> {
-    let mut spellings = vec![path.to_string()];
-    let lexical = std::path::Path::new(path)
-        .components()
-        .collect::<std::path::PathBuf>();
-    let canonical = std::fs::canonicalize(path).ok();
-    for other in [Some(lexical), canonical].into_iter().flatten() {
-        let other = other.to_string_lossy().into_owned();
-        if !spellings.contains(&other) {
-            spellings.push(other);
-        }
-    }
-    spellings
 }
 
 /// A repository a request names: a field that is not blank, trimmed.
@@ -85,7 +69,7 @@ impl Runs {
     /// the path itself is no member, its other spellings are tried: without
     /// trailing `/` nor `.`, then resolved on disk.
     pub async fn projects_of_repository(&self, path: &str) -> Vec<String> {
-        for spelling in spellings(path) {
+        for spelling in member_spellings(path) {
             match self.projects.owner_of(&spelling).await {
                 Ok(Some(owner)) => return vec![owner.id],
                 Ok(None) => {}
@@ -136,25 +120,6 @@ impl Runs {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_path_is_tried_verbatim_then_normalized_then_resolved() {
-        assert_eq!(
-            spellings("/no/such/repo/./"),
-            ["/no/such/repo/./", "/no/such/repo"]
-        );
-        assert_eq!(spellings("/no/such/repo"), ["/no/such/repo"]);
-        let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("real");
-        std::fs::create_dir(&real).unwrap();
-        let link = dir.path().join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        let canonical = std::fs::canonicalize(&real).unwrap();
-        assert_eq!(
-            spellings(&link.to_string_lossy()).last().unwrap(),
-            &canonical.to_string_lossy().into_owned()
-        );
-    }
 
     #[test]
     fn a_run_or_node_operation_names_its_run_by_its_target() {

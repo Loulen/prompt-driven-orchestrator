@@ -636,3 +636,57 @@ async fn pty_ws_shell_survives_detach() {
         "the hosted shell died when the terminal was left (#946)"
     );
 }
+
+/// #972: the daemon pings an open terminal socket on its own, so a reverse proxy
+/// never sees it idle while the agent inside is silent — and sends a `heartbeat`
+/// text frame with each ping, the beat the browser's watchdog can actually see.
+#[tokio::test]
+async fn pty_ws_receives_periodic_pings_and_heartbeats() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
+    daemon.set_pty_ping_interval(Duration::from_millis(200));
+    let socket = daemon.tmux_socket();
+
+    let session_name = "pdo-pty-test-ping";
+    kill_tmux_session(&socket, session_name);
+    create_tmux_session_with_cat(&socket, session_name);
+
+    let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session_name);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .expect("WS connect should succeed");
+
+    let mut pings = 0;
+    let mut heartbeats = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while pings < 2 || heartbeats < 2 {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Ping(_)))) => pings += 1,
+            Ok(Some(Ok(Message::Text(text)))) if text.as_str() == r#"{"type":"heartbeat"}"# => {
+                heartbeats += 1
+            }
+            Ok(Some(Ok(_))) => {}
+            _ => break,
+        }
+    }
+
+    assert!(
+        pings >= 2,
+        "expected periodic pings on the PTY socket, got {pings}"
+    );
+    assert!(
+        heartbeats >= 2,
+        "expected periodic heartbeat text frames on the PTY socket, got {heartbeats}"
+    );
+
+    let _ = ws.close(None).await;
+    kill_tmux_session(&socket, session_name);
+}

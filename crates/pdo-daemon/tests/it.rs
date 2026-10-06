@@ -247,6 +247,9 @@ mod turn_end_autocomplete;
 #[path = "waiting_node_starvation.rs"]
 mod waiting_node_starvation;
 
+#[path = "ws_resync.rs"]
+mod ws_resync;
+
 /// `autotests = false` means a new file in `tests/` is compiled only if it is
 /// declared above — otherwise it silently never runs, and nothing fails. Catch
 /// that here: every `tests/*.rs` must appear in this file's `#[path]` list.

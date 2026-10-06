@@ -782,6 +782,22 @@ export default function App() {
 
   useEffect(() => {
     return subscribe((msg) => {
+      // #972: back from an absence (reconnection, return to the tab) or told by
+      // the daemon that this client missed messages — nothing is replayed, so
+      // re-read the whole picture: the Runs, the open Run, sessions, Triggers,
+      // Projets and the Pipeline list.
+      if (msg.type === "resync") {
+        refreshRuns();
+        refreshRun();
+        refreshSessions();
+        refreshTriggers();
+        refreshProjects();
+        loadPipelines();
+        fetchTriggersHealth()
+          .then((h) => setTriggersPaused(h.paused))
+          .catch(() => {});
+        return;
+      }
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
         reloadPipeline(msg.pipeline_id);
         loadPipelines();

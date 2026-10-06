@@ -768,6 +768,24 @@ impl TestDaemon {
         }
     }
 
+    /// Shorten the PTY bridge's keep-alive ping for the sockets opened next
+    /// (#972, test seam).
+    pub fn set_pty_ping_interval(&self, interval: std::time::Duration) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .set_pty_ping_interval(interval);
+    }
+
+    /// Burst `count` throwaway messages through the `/ws` broadcast at once, so a
+    /// subscriber lags (#972, test seam).
+    pub fn flood_ws_broadcast(&self, count: usize) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .flood_ws_broadcast(count);
+    }
+
     /// Force a Trigger's next fire into the past so the next tick treats it as
     /// due (test seam).
     pub async fn force_trigger_due(&self, trigger_id: &str) {

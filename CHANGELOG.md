@@ -10,6 +10,23 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.119.0
+**Interface à jour après une absence** (#972, spec #970).
+
+- Flux temps réel `/ws` : reconnexion avec backoff, watchdog de heartbeat (un socket muet est
+  rouvert), relecture complète de l'état à chaque reconnexion et à chaque retour sur l'onglet.
+  Le daemon envoie `resync` à un client qui a perdu des événements ; le client relit tout.
+- Terminal d'un nœud : voile « Terminal connection closed » + **Reconnect** quand sa connexion
+  tombe (fermeture, passage hors ligne, ou 30 s sans battement) ; reprise automatique avec
+  backoff et au retour sur l'onglet. Le daemon envoie un battement toutes les 10 s sur le socket
+  du terminal, pour qu'aucun proxy ne le coupe pour inactivité.
+- `docs/reference/reverse-proxy.md` : configuration qui laisse passer les WebSockets.
+- Skill seedé `pdo-interactive` : la bannière de `pdo wait-user` est une notification ; la
+  question ou le résultat complet est écrit dans la conversation avant l'appel.
+- **Limite connue** : un nœud terminé pendant que son terminal était voilé peut afficher l'erreur
+  tmux `can't find session` au lieu de `[exited]` après la reprise automatique (statut du nœud
+  juste).
+
 ## 1.118.0
 **Pipelines validés par Projet** (#974, spec #970).
 

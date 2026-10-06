@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, FileUp } from "lucide-react";
+import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, RefreshCw, FileUp } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { attachSession, fetchPane } from "../api";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../lib/terminalClipboard";
 import { resizeAvoidingAltBufferCorruption, type Dimensions } from "../lib/altBufferResize";
 import {
+  isHeartbeatFrame,
   isTakenOver,
   parseRoleFrame,
   READ_ONLY_HINT,
@@ -30,6 +31,7 @@ import { posteId } from "../lib/poste";
 import { BASE_FONT_SIZE, spectatorFontSize } from "../lib/spectatorFit";
 import { terminalTheme } from "../lib/terminalTheme";
 import { useTheme } from "../hooks/useTheme";
+import { reconnectDelay } from "../hooks/useDaemonSocket";
 import { useFileDropTarget } from "../hooks/useFileDropTarget";
 import { DropOverlay } from "./SkillFileDropZone";
 
@@ -71,6 +73,18 @@ interface Props {
    *  session): the Import button is off and says why. */
   importDisabledReason?: string | null;
 }
+
+/** #972: the veil over a live terminal whose socket dropped. */
+export const CONNECTION_CLOSED_LABEL = "Terminal connection closed";
+export const RECONNECT_LABEL = "Reconnect";
+
+/**
+ * #972: the daemon beats every terminal socket every 10 s (`PTY_PING_INTERVAL`).
+ * Three missed beats and the socket is deemed dead even if the browser never saw
+ * it close — a half-open connection (laptop asleep, Wi-Fi gone behind a proxy)
+ * never fires `close`, and would leave a frozen pane badged « attached · live ».
+ */
+export const PTY_SILENCE_TIMEOUT_MS = 30_000;
 
 /** #968: the exits of the enlarged terminal, named on its collapse button. */
 const COLLAPSE_LABEL = "Collapse terminal · Esc · click outside";
@@ -152,6 +166,15 @@ export default function TmuxTerminal({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  // #972: the live socket closed under the user (network cut, proxy, daemon
+  // restart) — as opposed to never opened yet. Drives the veil.
+  const [dropped, setDropped] = useState(false);
+  // #972: failed attempts since the socket was last open — paces the automatic
+  // retries of a veiled terminal (same backoff as the daemon's `/ws`).
+  const [drops, setDrops] = useState(0);
+  // #972: bumped to open a fresh socket on the same session (Reconnect button,
+  // return to the tab). The attach effect keys on it.
+  const [attachKey, setAttachKey] = useState(0);
   // #867: the role the daemon gave this socket. The ref is what the xterm
   // callbacks read (they outlive renders); the state drives the toolbar.
   const [termRole, setTermRole] = useState<TerminalRole>(SOLO);
@@ -185,7 +208,45 @@ export default function TmuxTerminal({
     setDecidedFor(session);
     setMode(reaped ? "probing" : "live");
     setFrozen(null);
+    setDropped(false);
+    setDrops(0);
   }
+
+  // #972: a node that settles under the user's eyes loses its session on
+  // purpose (the reap) — its closed socket is no fault to veil.
+  const veiled = mode === "live" && dropped && !reaped;
+
+  const reconnect = useCallback(() => {
+    setDropped(false);
+    setAttachKey((k) => k + 1);
+  }, []);
+
+  // #972: a veiled terminal keeps trying on its own, with an increasing delay,
+  // so the user who stays on the tab finds it back once the daemon or the
+  // network is. The veil stays up until a socket actually opens. A hidden tab
+  // does not retry: its return is the wake-up below.
+  useEffect(() => {
+    if (!veiled) return;
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState === "visible") setAttachKey((k) => k + 1);
+    }, reconnectDelay(drops - 1));
+    return () => window.clearTimeout(timer);
+  }, [veiled, drops]);
+
+  // #972: back on the tab (or back online) with a dropped terminal ⇒ reconnect
+  // on its own, no click needed.
+  useEffect(() => {
+    if (!veiled) return;
+    const wake = () => {
+      if (document.visibilityState === "visible") reconnect();
+    };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("online", wake);
+    return () => {
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("online", wake);
+    };
+  }, [veiled, reconnect]);
 
   // #588: report the live-socket state to the parent (banner hint A1 vs A4).
   useEffect(() => {
@@ -439,28 +500,76 @@ export default function TmuxTerminal({
       layout();
     };
 
+    // #972: the cleanup below closes the socket on purpose — not a drop.
+    let disposed = false;
+    // #972: the socket's single exit (closed, errored, gone silent, offline) is
+    // taken once; a late `close` after the watchdog gave up is ignored.
+    let gone = false;
+    let lastFrameAt = Date.now();
+    let silenceTimer: number | undefined;
+
+    // A closed socket has no role left: back to the plain fit.
+    const dropRole = () => {
+      if (disposed || gone) return;
+      gone = true;
+      window.clearTimeout(silenceTimer);
+      setConnected(false);
+      setDropped(true);
+      setDrops((n) => n + 1);
+      if (roleRef.current.role !== "solo") applyRole(SOLO);
+    };
+
+    // #972: a socket that stopped beating, or a browser that went offline, is
+    // given up on now rather than when a `close` that may never come arrives.
+    const giveUp = () => {
+      if (!ws || disposed || gone) return;
+      dropRole();
+      ws.close();
+    };
+    const armSilence = () => {
+      lastFrameAt = Date.now();
+      window.clearTimeout(silenceTimer);
+      silenceTimer = window.setTimeout(giveUp, PTY_SILENCE_TIMEOUT_MS);
+    };
+    // A hidden tab's timers are throttled: judge the silence again on return.
+    const judgeSilence = () => {
+      if (
+        document.visibilityState === "visible" &&
+        ws?.readyState === WebSocket.OPEN &&
+        Date.now() - lastFrameAt > PTY_SILENCE_TIMEOUT_MS
+      ) {
+        giveUp();
+      }
+    };
+    if (ws) {
+      window.addEventListener("offline", giveUp);
+      document.addEventListener("visibilitychange", judgeSilence);
+    }
+
     ws?.addEventListener("open", () => {
+      if (disposed || gone) return;
       setConnected(true);
+      setDropped(false);
+      setDrops(0);
+      armSilence();
       sendResize(ws, fitAddon.proposeDimensions());
     });
 
     ws?.addEventListener("message", (event) => {
+      if (disposed || gone) return;
+      armSilence();
       if (event.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(event.data));
       } else if (typeof event.data === "string") {
-        // Text frames carry the daemon's control messages (the role); anything
-        // else is written as before.
+        // Text frames carry the daemon's control messages (the role, the
+        // heartbeat); anything else is written as before.
+        if (isHeartbeatFrame(event.data)) return;
         const role = parseRoleFrame(event.data);
         if (role) applyRole(role);
         else term.write(event.data);
       }
     });
 
-    // A closed socket has no role left: back to the plain fit.
-    const dropRole = () => {
-      setConnected(false);
-      if (roleRef.current.role !== "solo") applyRole(SOLO);
-    };
     ws?.addEventListener("close", dropRole);
     ws?.addEventListener("error", dropRole);
 
@@ -524,6 +633,10 @@ export default function TmuxTerminal({
       resizeObserver.disconnect();
       inputDisposable.dispose();
       binaryDisposable.dispose();
+      disposed = true;
+      window.clearTimeout(silenceTimer);
+      window.removeEventListener("offline", giveUp);
+      document.removeEventListener("visibilitychange", judgeSilence);
       ws?.close();
       roleRef.current = SOLO;
       setTermRole(SOLO);
@@ -537,7 +650,7 @@ export default function TmuxTerminal({
     // theme switch would drop the scrollback and the attached socket. The effect
     // below repaints the live instance instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, mode, frozen]);
+  }, [session, mode, frozen, attachKey]);
 
   // #759: repaint an already-open terminal when the theme switches.
   useEffect(() => {
@@ -756,15 +869,39 @@ export default function TmuxTerminal({
           only enabled for a spectator — unwrapping the container instead would
           remount it and lose the xterm inside. A spectator's grid may be larger
           than the area at the font floor: then the area scrolls. */}
-      <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
-        <div
-          ref={containerRef}
-          className={`min-h-0 flex-1 bg-bg-0${spectating ? " overflow-auto" : ""}`}
-          style={TERMINAL_TYPOGRAPHY_RESET}
-          data-testid="xterm-container"
-          data-role={mode === "live" ? termRole.role : undefined}
-        />
-      </Tooltip>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
+          <div
+            ref={containerRef}
+            className={`min-h-0 flex-1 bg-bg-0${spectating ? " overflow-auto" : ""}`}
+            style={TERMINAL_TYPOGRAPHY_RESET}
+            data-testid="xterm-container"
+            data-role={mode === "live" ? termRole.role : undefined}
+          />
+        </Tooltip>
+        {/* #972: typing into a dead socket goes nowhere — say so over the pane,
+            which stays readable underneath, and offer the way back. */}
+        {veiled && (
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 bg-bg-0/60 backdrop-blur-sm"
+            data-testid="term-veil"
+            role="status"
+          >
+            <span className="text-fg-2" style={{ fontSize: "12px" }}>
+              {CONNECTION_CLOSED_LABEL}
+            </span>
+            <button
+              onClick={reconnect}
+              className="flex cursor-pointer items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+              style={{ fontSize: "11px" }}
+              data-testid="term-reconnect"
+            >
+              <RefreshCw size={11} />
+              {RECONNECT_LABEL}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -1240,7 +1240,11 @@ export interface WsMessage {
     | "trigger_deleted"
     | "triggers_paused"
     | "project_changed"
-    | "pipeline_validation_changed";
+    | "pipeline_validation_changed"
+    /** #972: re-read everything — sent by the daemon when this client lagged
+     *  behind its broadcast, and emitted by `useDaemonSocket` itself after a
+     *  reconnection or a return to the tab. */
+    | "resync";
   event?: DaemonEvent;
   pipeline_id?: string;
   path?: string;

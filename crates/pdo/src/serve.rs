@@ -12,6 +12,7 @@ use axum::Router;
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::{ExtensionHost, Extensions, HostServices};
 use pdo_platform::domain::release_channel::UpdateChannel;
+use pdo_run::adapters::extension_runs::ExtensionRuns;
 
 use crate::attributes::SqliteAttributes;
 use crate::contexts::{self, ContextResources};
@@ -226,7 +227,10 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
             bus: resources.bus.clone(),
             data_root: extensions_data_root(&resources),
         });
-        contexts::wire(resources, contexts_host.clone())
+        let contexts = contexts::wire(resources, contexts_host.clone());
+        // API 0.9: an extension's `Host::create_run` creates through the Runs.
+        started.serve_runs(Arc::new(ExtensionRuns::of(&contexts.run)));
+        contexts
     })
 }
 

@@ -32,7 +32,7 @@ export default function ExtensionSections<C extends LocationContext>({
   const sections = useContributions<SectionProps<C>>(location, context);
   // Each section's registrations carry its rank: the host saves in screen order.
   const forms = useMemo(
-    () => (form ? sections.map((_, rank) => rankedForm(form, rank)) : []),
+    () => (form ? sections.map(({ extension }, rank) => rankedForm(form, rank, extension.id)) : []),
     [form, sections],
   );
   if (sections.length === 0) return null;

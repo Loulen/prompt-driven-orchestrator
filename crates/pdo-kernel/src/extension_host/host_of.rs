@@ -4,8 +4,8 @@
 use std::sync::Weak;
 
 use pdo_extension_api::{
-    ActorDisplay, Attributes, Authorization, EntityRef, ExtensionEvent, Host, OperationApplied,
-    Resource,
+    ActorDisplay, Attributes, Authorization, EntityRef, ExtensionData, ExtensionEvent, Host,
+    NewRun, OperationApplied, Resource, RunCreation, RunNotCreated,
 };
 
 use super::{ExtensionHost, Extensions, Registry};
@@ -53,7 +53,9 @@ impl Host for ExtensionHostOf {
 
     fn on_create(&self, actor: &Actor, entity: &EntityRef) -> Attributes {
         self.extensions()
-            .map(|extensions| extensions.stamps(actor, entity, Some(&self.id)))
+            .map(|extensions| {
+                extensions.stamps(actor, entity, &ExtensionData::new(), Some(&self.id))
+            })
             .unwrap_or_default()
     }
 
@@ -66,6 +68,19 @@ impl Host for ExtensionHostOf {
         match self.extensions() {
             Some(extensions) => ExtensionHost::catalogue(&extensions),
             None => pdo_extension_api::core_resources(),
+        }
+    }
+
+    fn create_run(&self, actor: &Actor, run: NewRun) -> RunCreation {
+        let runs = self
+            .registry
+            .upgrade()
+            .and_then(|registry| registry.runs.get().cloned());
+        match runs {
+            Some(runs) => runs.create_run(actor.clone(), run),
+            None => Box::pin(std::future::ready(Err(RunNotCreated::unavailable(
+                "the daemon creates no Run yet (starting or stopping)",
+            )))),
         }
     }
 }

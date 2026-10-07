@@ -10,12 +10,27 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.18.0 — Emplacements d'UI `stats/tab` et `settings/page` (CORE-30)
+## 2.18.0 — Seams de création d'un Run (CORE-29) et emplacements d'UI `stats/tab` et `settings/page` (CORE-30)
 
 `pdo-extension-api` passe en **0.9.0** : ajouts seulement, une extension 0.1 à 0.8 compile et
 tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Détail : ADR-0081,
-amendement CORE-30, et `docs/reference/extension-ui.md`.
+amendements CORE-29 et CORE-30, `docs/reference/extension-api.md` (« The creation of a Run ») et
+`docs/reference/extension-ui.md`.
 
+- **Données d'extension d'un Run** : `POST /runs` prend `extensions` (id d'extension -> valeur
+  JSON libre, aussi en multipart). Un id non installé répond `400` comme un champ inconnu ;
+  l'extension concernée valide sa valeur (`Extension::validate_create`) après l'autorisation et
+  avant tout effet : un refus répond `400` avec sa raison, sans Run ni événement. La valeur est
+  figée dans `RunStarted` (`extensions`) et un `retry_all` la reporte sur le jumeau.
+- **Marquage avant le premier Node** : `Extension::on_create_with_data` reçoit la valeur
+  (défaut : `on_create`). Les attributs d'un Run sont désormais posés **avant** le lancement de
+  son premier Node, pour un geste comme pour un fire de Trigger ; le jumeau d'un `retry_all` est
+  marqué lui aussi (il ne l'était pas).
+- **`Host::create_run(actor, NewRun)`** : une extension crée un Run au nom d'un Acteur, avec la
+  même autorisation et les mêmes hooks que `POST /runs`.
+- **CLI** : `pdo run create … --ext <id>.<clé>=<valeur>` (répétable).
+- **New Run** : une section `run/new` peut fournir une valeur (`SectionForm.provide`), envoyée
+  sous l'id de son extension ; le contexte de `run/new` gagne `input` et `name`.
 - **`stats/tab`** : une extension ajoute un onglet au rail des Stats, après Performance, rendu
   dans le cadre des Stats ; son contexte porte la période affichée et le compteur de Refresh.
 - **`settings/page`** : une extension ajoute une page entière aux Settings, une entrée de rail
@@ -23,6 +38,10 @@ amendement CORE-30, et `docs/reference/extension-ui.md`.
   joignable par `#/ext/<extension>/settings/page/<chemin>`. Le pied Save des Settings est
   masqué sur une telle page : elle enregistre à sa façon.
 - Le module partagé `@pdo/extension-ui` passe en `0.9.0` avec l'API (même majeure `0`).
+- L'extension de test du core refuse une valeur commençant par `refuse`, marque `data.<clé>`,
+  trace l'ordre marquage / lancement (`GET /ext/test/creations`), crée un Run par son Hôte
+  (`POST /ext/test/runs`) et sa section `run/new` fournit `cle` ; elle contribue aussi les
+  onglets « Test stats » et « Exploding » et la page « Test settings ».
 
 ## 2.17.1 — Le core ne nomme aucune extension (CORE-28)
 

@@ -10,6 +10,10 @@ import type { InstanceSettings } from "../../settings/model/settings";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { Trigger } from "../../shared/generated/Trigger";
 import { legacyScope } from "../../test/legacy";
+import { useEffect } from "react";
+import { resetExtensions, setBundleLoader } from "../../shared/extensions/store";
+import { hostReactMajor } from "../../shared/extensions/shared";
+import type { RunNewContext, SectionProps } from "../../shared/extensions/contract";
 
 // #571: a branch is `{name, kind}`. Terse constructors for fixtures.
 const local = (name: string): BranchRef => ({ upstream: null, ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false, name, kind: "local" });
@@ -3299,5 +3303,86 @@ describe("NewRunModal — a Trigger's source branch warns on a local one (#804)"
     expect(screen.getByTestId("source-branch-local-warning")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("mode-run"));
     expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewRunModal — a run/new section provides a value (API 0.9)", () => {
+  type Props = SectionProps<RunNewContext>;
+  const contexts: unknown[] = [];
+
+  function serveSection(component: string) {
+    // The earlier tests of this file may have read the catalogue already.
+    resetExtensions();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(
+              JSON.stringify([
+                {
+                  id: "test",
+                  name: "Test extension",
+                  version: "0.0.0",
+                  ui: {
+                    bundle_url: "/ext/test/ui.js",
+                    react_major: hostReactMajor(),
+                    ui_module_major: null,
+                    contributions: [
+                      { location: "run/new", id: "s", label: "Test", type: "section", component },
+                    ],
+                    commands: [],
+                    locations: [],
+                  },
+                },
+              ]),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            )
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    setBundleLoader(async () => ({
+      Providing: ({ form, context }: Props) => {
+        contexts.push(context);
+        useEffect(() => form?.provide?.(() => ({ cle: `from ${context.name || "nothing"}` })), [form, context.name]);
+        return <p>providing section</p>;
+      },
+      Silent: () => <p>silent section</p>,
+    }));
+  }
+
+  afterEach(() => {
+    resetExtensions();
+    vi.unstubAllGlobals();
+    contexts.length = 0;
+  });
+
+  async function launch(sectionText: string) {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline()]);
+    renderModal();
+    await enterValidRepo();
+    await screen.findByText(sectionText);
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    return vi.mocked(createRun).mock.calls[0][0];
+  }
+
+  it("sends what the section provides under its extension's id, and tells it the typed prompt", async () => {
+    serveSection("Providing");
+    const sent = await launch("providing section");
+    expect(sent.extensions).toEqual({ test: { cle: "from nothing" } });
+    // The form empties itself once launched: the context saw the prompt before.
+    expect(contexts).toContainEqual(
+      expect.objectContaining({ location: "run/new", input: "do the thing", name: "" }),
+    );
+  });
+
+  it("sends no extensions without a providing section", async () => {
+    serveSection("Silent");
+    const sent = await launch("silent section");
+    expect(sent).not.toHaveProperty("extensions");
   });
 });

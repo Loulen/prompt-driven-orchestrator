@@ -18,6 +18,8 @@ interface SubmitDeps {
   onTriggerSaved?: () => void;
   /** ADR-0081 (#31): the `run/new` sections' save, run once the Run or the Trigger exists. */
   saveSections?: (saved: EntityContext | (() => Promise<EntityContext>)) => Promise<void>;
+  /** API 0.9: what the `run/new` sections provide, by extension id, asked just before `POST /runs`. */
+  provideSections?: () => Promise<Record<string, unknown>>;
 }
 
 /**
@@ -55,7 +57,7 @@ export async function createdRun(runId: string, runName: string): Promise<Entity
  */
 export function useNewRunSubmit(
   s: NewRunState,
-  { flushPendingSaves, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections }: SubmitDeps,
+  { flushPendingSaves, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections, provideSections }: SubmitDeps,
 ) {
   const {
     selectedPipeline, sourceBranch, targetRepo, repoValid, runName, setRunName, autoName,
@@ -131,6 +133,9 @@ export function useNewRunSubmit(
 
     try {
       await flushPendingSaves();
+      // A section that fails to provide keeps the form open, like the
+      // extension's refusal of what it provided (a 400 naming the reason).
+      const extensions = provideSections ? await provideSections() : {};
       const resp = await createRun({
         ...newRunForm.buildRunPayload({
           selectedPipeline,
@@ -150,6 +155,7 @@ export function useNewRunSubmit(
         }),
         ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
         ...(hasProvisioningRules(provisioning) ? { provisioning } : {}),
+        ...(Object.keys(extensions).length > 0 ? { extensions } : {}),
       });
       onCreated(resp.run_id);
       await saveSectionsOf(saveSections, () => createdRun(resp.run_id, runName));
@@ -171,7 +177,7 @@ export function useNewRunSubmit(
     } finally {
       setSubmitting(false);
     }
-  }, [saveSections, selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, setAttachmentError, setAttachmentHint, setAttachments, setAutoName, setError, setInput, setOverrides, setProvisioning, setRunName, setSkills, setSubmitting]);
+  }, [saveSections, provideSections, selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, setAttachmentError, setAttachmentHint, setAttachments, setAutoName, setError, setInput, setOverrides, setProvisioning, setRunName, setSkills, setSubmitting]);
 
   const canLaunch = provisioningValid && !attachmentsOverLimit && newRunForm.canLaunch({
     repoValid,

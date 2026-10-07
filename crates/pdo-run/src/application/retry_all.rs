@@ -58,6 +58,12 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
     // Read the RESOLVED repo, not the raw field: an old run carries
     // `target_repo: null`, and forwarding that raw would 400 at the chokepoint
     // AFTER `cleanup_run` archived the original — archived with no replacement.
+    // API 0.9: the twin carries the original's extension data, as frozen (its
+    // extensions accepted it at the create; they stamp the twin with it).
+    let extensions: pdo_kernel::attributes::ExtensionData = run_started_payload
+        .and_then(|p| p.get("extensions"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
     let target_repo = Some(
         effective_repo_root(state, &run_state)
             .to_string_lossy()
@@ -140,6 +146,7 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
         // Preserve the explicit Run tier. Instance and Project are resolved
         // afresh for this new Run, while its per-Run override remains stable.
         provisioning: run_tier(&run_state.provisioning_rules),
+        extensions,
         // NOT carried over from the original (#804): the reason a fetch
         // failed minutes or days ago says nothing about this new cut, and
         // a retry is a manual gesture — it fetches no more than any other

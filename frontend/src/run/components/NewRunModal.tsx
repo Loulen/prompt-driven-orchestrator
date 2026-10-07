@@ -50,6 +50,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const {
     sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, handleProvisioningValidity,
     handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
+    input, runName, triggerName,
   } = form;
   // CORE-5: where a Run may be created, asked again at each open (a right may
   // have changed since the Projets were last read).
@@ -66,13 +67,15 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         mode,
         pipeline: selectedPipelineId || null,
         repository: targetRepo,
+        input,
+        name: mode === "trigger" ? triggerName : runName,
         targetProject: target
           ? { id: target.id, name: target.name, attributes: target.attributes ?? {} }
           : null,
         trigger: editingTriggerId ?? null,
       };
     },
-    [mode, selectedPipelineId, targetRepo, editingTriggerId, projects],
+    [mode, selectedPipelineId, targetRepo, input, runName, triggerName, editingTriggerId, projects],
   );
 
   if (!open) return null;

@@ -201,6 +201,15 @@ export function EntityTab({ entity, context }) {
 // record of what the host saved, posted to `/ext/test/sections`.
 export function EntitySection({ context, entity, form }) {
   const [saved, setSaved] = React.useState(null);
+  // API 0.9: at `run/new`, provides `{ cle: <value> }` to the Run about to be
+  // launched (sent as `extensions.test`); a value starting with `refuse` is
+  // refused by the extension, and the form stays open with the reason.
+  const [value, setValue] = React.useState("from-the-section");
+  const provides = context.location === "run/new" && context.mode === "run";
+  React.useEffect(() => {
+    if (!form?.provide || !provides) return undefined;
+    return form.provide(() => (value ? { cle: value } : undefined));
+  }, [form, provides, value]);
   React.useEffect(() => {
     if (!form) return undefined;
     return form.onSave(async (what) => {
@@ -214,7 +223,7 @@ export function EntitySection({ context, entity, form }) {
   }, [form, context.location]);
   const extra =
     context.location === "run/new"
-      ? `${context.mode} · pipeline ${context.pipeline ?? "none"}`
+      ? `${context.mode} · pipeline ${context.pipeline ?? "none"} · name ${context.name || "none"} · prompt ${context.input ? `${context.input.length} chars` : "empty"}`
       : context.location === "node/config"
         ? `pipeline ${context.pipeline?.name}`
         : null;
@@ -224,6 +233,18 @@ export function EntitySection({ context, entity, form }) {
     h("p", null, describeEntity(entity)),
     extra && h("p", { style: muted }, extra),
     form && h("p", { style: muted }, saved ? `Saved: ${describeEntity(saved)}` : "Takes part in Save"),
+    provides &&
+      h(
+        "label",
+        { style: { ...muted, display: "flex", gap: "6px", alignItems: "center" } },
+        "Provides cle =",
+        h("input", {
+          "data-testid": "test-section-provided",
+          value,
+          onChange: (e) => setValue(e.target.value),
+          style: { fontSize: "11px", flex: 1 },
+        }),
+      ),
   );
 }
 

@@ -21,6 +21,8 @@ default, and with no extension the daemon behaves as if none existed.
 | `display_name(actor)` (0.8) | wherever an Actor is shown; the first `Some` wins, a panic is skipped | `None`: shown as without extension |
 | `authorize(actor, operation)` | before every mutation of an actor, and every guarded read (0.8, below); the first refusal wins, a panic refuses | allow |
 | `on_create(actor, entity)` | after a creation; attributes prefixed `<id>/` | none |
+| `validate_create(actor, kind, value)` (0.9) | before a creation carrying a value for this extension, after the authorization; `Err(reason)` refuses with `400`, a panic refuses | accept |
+| `on_create_with_data(actor, entity, data)` (0.9) | in place of `on_create`, with the value the creation carried (`None` without one); a Run's before its first Node | `on_create(actor, entity)` |
 | `on_event(event)` | off the request path, on the extension's own thread | ignore |
 | `routes()` | once; nested under `/ext/<id>/` | none |
 | `ui()` | on every `GET /ext` | none |
@@ -153,9 +155,12 @@ core's mechanisms (amendment #34):
 - `catalogue()` (0.8): the catalogue of the Ressources, below.
 - `display_name(actor)` (0.8): how an Actor shows, the first extension that names it (the
   caller's included); `None` when none does.
+- `create_run(actor, NewRun)` (0.9): create a Run on behalf of `actor`, as `POST /runs` does for
+  that caller (below); answers its id or the refusal (`RunNotCreated`: status, message, body).
 
-`NeutralHost` allows everything, publishes nothing and answers the core's catalogue alone: the
-host of `ExtensionContext::new`, and a stand-in in an extension's tests.
+`NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone and
+creates no Run (`503`): the host of `ExtensionContext::new`, and a stand-in in an extension's
+tests.
 
 ## Admission of a request
 
@@ -251,6 +256,39 @@ the Run and its last editor then), `repository` (the Run's primary repository) a
 The Run carries who created it on the API: `created_by` on `GET /runs/<id>` and `GET /runs`,
 `trigger_editor` on a fired Run (`GET /runs/<id>`); a Trigger carries `last_editor`, set at its
 creation and at each `PATCH`. All three are the Actor's JSON, absent when unknown.
+
+## The creation of a Run (0.9)
+
+A request that creates a Run may carry a value per extension: `POST /runs` (JSON, or a multipart
+`extensions` field holding the JSON) takes `"extensions": {"<id>": <any JSON>}`. The core never
+interprets a value; in order, before any effect:
+
+1. an `<id>` no installed extension has is refused like an unknown field: `400`
+   `{"error": "unknown extension `<id>` in `extensions`; installed extensions: …"}`;
+2. the Autorisation d'opération (`run` × `create`) is asked;
+3. each extension whose id is present checks its value: `validate_create(actor, ResourceKind::Run,
+   value)`. A refusal answers `400` `{"error": "extension `<id>` refused the creation: <reason>",
+   "extension", "reason"}`; no Run, no event.
+
+Then the Run is created: the data is frozen in `RunStarted` (`"extensions"`, only when
+non-empty), and each extension receives its value in `on_create_with_data(actor, entity, data)`
+**before the Run's first Node is launched** (its `node_env` comes after), whatever the path: a
+gesture, a Trigger's fire (no data), a `retry_all` (the twin carries the original's data, not
+checked again). An extension that only overrides `on_create` keeps working: the default of
+`on_create_with_data` calls it.
+
+The surfaces that fill `extensions`:
+
+- `pdo run create … --ext <id>.<key>=<value>` (repeatable): `extensions.<id>.<key>` = the string
+  `<value>` (split at the first `=`; the same key twice is refused);
+- the New Run form: a `run/new` section that `provide`s a value
+  ([extension-ui.md](extension-ui.md#sections));
+- `Host::create_run(actor, run)`: `NewRun::new(pipeline, input).in_repo(RunRepo::new(path))
+  .named(name).with_extension(id, value)`; the first repository is the primary (its
+  `from_branch` is the source branch), the others are secondaries. The Run is created as `POST
+  /runs` creates it for `actor`: the same authorization (a refused Actor gets `403`
+  `operation_refused`), the same checks, the same stamps, `created_by` = `actor`, a root Run. Await
+  it from a route or a task; never from a hook of the creation it starts.
 
 ## A suspended Trigger (0.8)
 

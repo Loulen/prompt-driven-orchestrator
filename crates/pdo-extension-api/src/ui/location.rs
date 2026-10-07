@@ -194,8 +194,20 @@ pub enum UiLocation {
     /// skill or the folder as `entity`.
     #[serde(rename = "skill/menu")]
     SkillMenu,
+    /// A tab of the Stats surface: a [`UiElement::Tab`] per contribution, on
+    /// the rail after the core's tabs (after Performance), rendered in the
+    /// same frame (header, period, Refresh). Hands over the period on screen.
+    /// Since 0.9.
+    #[serde(rename = "stats/tab")]
+    StatsTab,
+    /// A page of the Settings surface: a [`UiElement::Page`] per
+    /// contribution, a rail entry of its own labelled with the contribution's
+    /// label, after the core's categories and the Extensions page (the
+    /// `settings` location, whose sections it leaves untouched). Since 0.9.
+    #[serde(rename = "settings/page")]
+    SettingsPage,
     /// A location an extension hosts, by its id `<extension>/<name>`
-    /// (`pm/onglet`): what it accepts and hands over is the host's
+    /// (`a/panneau`): what it accepts and hands over is the host's
     /// [`HostedLocation`](super::HostedLocation) declaration. A contribution to
     /// the location of an extension that is not loaded, or that does not
     /// declare it, is left out without error.
@@ -244,6 +256,8 @@ impl UiLocation {
         UiLocation::ReviewToolbar,
         UiLocation::ReviewFile,
         UiLocation::SkillMenu,
+        UiLocation::StatsTab,
+        UiLocation::SettingsPage,
     ];
 
     /// The stable id: what the wire, the deep links (`#/ext/<extension>/<id>/…`)
@@ -287,6 +301,8 @@ impl UiLocation {
             UiLocation::ReviewToolbar => "review/toolbar",
             UiLocation::ReviewFile => "review/file",
             UiLocation::SkillMenu => "skill/menu",
+            UiLocation::StatsTab => "stats/tab",
+            UiLocation::SettingsPage => "settings/page",
             UiLocation::Hosted(id) => id,
         }
     }
@@ -298,7 +314,9 @@ impl UiLocation {
     /// checks it against the declaration, this answers `true`.
     pub fn accepts(self, element: &UiElement) -> bool {
         match self {
-            UiLocation::TopbarStart => matches!(element, UiElement::Page { .. }),
+            UiLocation::TopbarStart | UiLocation::SettingsPage => {
+                matches!(element, UiElement::Page { .. })
+            }
             UiLocation::TopbarEnd => {
                 matches!(element, UiElement::Page { .. } | UiElement::Action { .. })
             }
@@ -321,7 +339,8 @@ impl UiLocation {
             UiLocation::RunDetail
             | UiLocation::NodeDetail
             | UiLocation::TriggerDetail
-            | UiLocation::SkillDetail => matches!(element, UiElement::Tab { .. }),
+            | UiLocation::SkillDetail
+            | UiLocation::StatsTab => matches!(element, UiElement::Tab { .. }),
             UiLocation::RunItem
             | UiLocation::TriggerItem
             | UiLocation::PipelineItem
@@ -413,6 +432,20 @@ mod tests {
         assert!(UiLocation::ReviewFile.accepts(&decoration));
         assert!(UiLocation::ReviewFile.accepts(&action));
         assert!(!UiLocation::ReviewFile.accepts(&section));
+        assert!(UiLocation::StatsTab.accepts(&tab));
+        assert!(!UiLocation::StatsTab.accepts(&page));
+        assert!(!UiLocation::StatsTab.accepts(&section));
+        assert!(UiLocation::SettingsPage.accepts(&page));
+        assert!(!UiLocation::SettingsPage.accepts(&section));
+        assert!(!UiLocation::SettingsPage.accepts(&action));
+    }
+
+    #[test]
+    fn stats_and_settings_take_a_tab_and_a_page() {
+        assert_eq!(UiLocation::StatsTab.id(), "stats/tab");
+        assert_eq!(UiLocation::SettingsPage.id(), "settings/page");
+        assert!(UiLocation::ALL.contains(&UiLocation::StatsTab));
+        assert!(UiLocation::ALL.contains(&UiLocation::SettingsPage));
     }
 
     #[test]
@@ -492,9 +525,9 @@ mod tests {
 
     #[test]
     fn a_hosted_location_serializes_as_its_id() {
-        let hosted = UiLocation::Hosted("pm/onglet");
-        assert_eq!(hosted.id(), "pm/onglet");
-        assert_eq!(serde_json::to_value(hosted).unwrap(), "pm/onglet");
+        let hosted = UiLocation::Hosted("a/panneau");
+        assert_eq!(hosted.id(), "a/panneau");
+        assert_eq!(serde_json::to_value(hosted).unwrap(), "a/panneau");
         assert!(!UiLocation::ALL.contains(&hosted));
     }
 }

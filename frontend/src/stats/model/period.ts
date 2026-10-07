@@ -18,7 +18,9 @@ function utcDayStart(date: Date): string {
   ).toISOString();
 }
 
-export function presetPeriod(preset: Preset) {
+export type Bucket = "day" | "week" | "month";
+
+export function presetPeriod(preset: Preset): { from: string; to: string; bucket: Bucket } {
   const now = new Date();
   const tomorrow = new Date(now);
   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);

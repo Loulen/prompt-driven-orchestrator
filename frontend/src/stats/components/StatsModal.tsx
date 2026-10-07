@@ -1,6 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { RotateCw } from "lucide-react";
 import FullWindowShell from "../../shared/ui/FullWindowShell";
+import { useLocationContext, useStatsTabs } from "../../shared/extensions/catalogue";
+import type { StatsTabContext } from "../../shared/extensions/contract";
+import ExtensionStatsTab from "../../shared/extensions/ExtensionStatsTab";
 import { fetchStatsAbsorptions } from "../api/absorptions";
 import { syncCostPrices } from "../api/prices";
 import { useStats } from "../store/useStats";
@@ -37,6 +40,8 @@ const TABS: { id: StatsTab; label: string }[] = [
   { id: "performance", label: "Performance" },
 ];
 
+const isCoreTab = (id: string): id is StatsTab => TABS.some((item) => item.id === id);
+
 /**
  * **Réglages de Stats éphémères** (#819, CONTEXT.md): a close forgets every
  * setting, an open rebuilds them. The settings live in plain `useState` on the
@@ -61,7 +66,14 @@ function StatsSurface({
   initialPricingOpen = false,
 }: Omit<Props, "open">) {
   const [preset, setPreset] = useState<Preset>("30d");
-  const [tab, setTab] = useState<StatsTab>(initialTab);
+  // The rail entry on screen: a core tab, or the key (`<extension>:<id>`) of a
+  // tab the `stats/tab` location adds after Performance.
+  const [active, setActive] = useState<string>(initialTab);
+  const extensionTabs = useStatsTabs();
+  const extensionTab = extensionTabs.find((item) => item.key === active) ?? null;
+  // A core tab, else none: an extension's tab, or one whose extension left
+  // (back to Runs then).
+  const tab: StatsTab | null = isCoreTab(active) ? active : extensionTab ? null : "runs";
   // #819 — the filter state, plain `useState` on literal defaults: nothing is
   // read from or written to this browser, so every mount of the surface opens
   // on the defaults (« Réglages de Stats éphémères »). The shell owns it
@@ -104,6 +116,11 @@ function StatsSurface({
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const period = useMemo(() => presetPeriod(preset), [preset]);
+  const extensionExtra = useMemo(
+    () => ({ period: { preset, ...period }, refresh: reloadKey }),
+    [preset, period, reloadKey],
+  );
+  const extensionContext = useLocationContext<StatsTabContext>("stats/tab", extensionExtra);
 
   const {
     overview,
@@ -167,8 +184,12 @@ function StatsSurface({
   };
 
   // No rail badge, whatever the band says (#819): the band is on screen, and a
-  // deliberate reading is not an anomaly to flag.
-  const rail = TABS;
+  // deliberate reading is not an anomaly to flag. The extensions' tabs follow
+  // the core's.
+  const rail = [
+    ...TABS,
+    ...extensionTabs.map((item) => ({ id: item.key, label: item.contribution.label })),
+  ];
 
   const onSyncPrices = async () => {
     setSyncing(true);
@@ -201,9 +222,9 @@ function StatsSurface({
       onEscape={onEscape}
       closeLabel="Close stats"
       rail={rail}
-      activeRail={tab}
+      activeRail={tab ?? active}
       onRailChange={(id) => {
-        setTab(id as StatsTab);
+        setActive(id);
         if (id !== "cost") setPricingOpen(false);
       }}
       railAriaLabel="Stats sections"
@@ -311,7 +332,7 @@ function StatsSurface({
           : null
       }
     >
-      {error && (
+      {tab && error && (
         <div
           className="mb-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
           data-testid="stats-error"
@@ -319,6 +340,8 @@ function StatsSurface({
           {error}
         </div>
       )}
+      {extensionTab && <ExtensionStatsTab tab={extensionTab} context={extensionContext} />}
+      {tab && (
       <Suspense
         fallback={
           <div
@@ -348,6 +371,7 @@ function StatsSurface({
           showUncombined={hasAbsorptions || uncombined}
         />
       </Suspense>
+      )}
     </FullWindowShell>
   );
 }

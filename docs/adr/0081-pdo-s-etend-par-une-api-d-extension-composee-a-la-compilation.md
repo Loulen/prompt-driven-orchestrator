@@ -650,3 +650,35 @@ serveur, la page ne saurait pas où revenir) ; un type de contribution « menu �
 (l'en-tête nom, e-mail, badge et les libellés à droite des entrées sont propres à chaque
 extension) ; consulter l'admission pour les fichiers de la SPA (ils ne portent aucune donnée, et
 sans eux rien ne suit la redirection).
+
+## Amendement CORE-30 : un onglet des Stats, une page des Settings
+
+Deux surfaces plein écran du core n'avaient pas d'emplacement : une extension qui mesure son
+propre domaine n'avait pas d'onglet dans les Stats, et une extension aux réglages trop riches pour
+une Section n'avait pas de page à elle dans les Settings. Deux emplacements du catalogue, sans
+nouveau type de contribution, exercés par l'extension de test interne.
+
+- **`stats/tab`** (accepte un Onglet) : une entrée du rail des Stats par contribution, **après
+  Performance**, rendue dans le cadre des Stats (en-tête, période, « Computed », Refresh) ; le
+  composant ne fournit que le contenu. Le contexte porte la période affichée (`period` : preset,
+  `from`, `to`, `bucket`) et `refresh`, qui augmente à chaque Refresh : l'onglet recharge ses
+  données sans que le core sache lesquelles. Les Réglages de Stats éphémères valent pour lui : la
+  période revient à 30 jours à chaque ouverture.
+- **`settings/page`** (accepte une Page) : une entrée du rail des Settings par contribution,
+  libellée par l'extension, après les catégories du core et l'entrée « Extensions », qui garde son
+  comportement de base (une Section par contribution de `settings`). La page reçoit le contrat
+  d'une Page (`PageContext`, `navigate`, `shell`) : son fil d'Ariane et ses actions vont dans
+  l'en-tête des Settings, `close()` ferme les Settings (avec la garde du brouillon). Elle
+  s'enregistre comme son extension l'entend, jamais avec le Save du formulaire de l'instance.
+  Lien profond : `#/ext/<extension>/settings/page/<chemin>` ouvre les Settings sur la page ;
+  quitter la page ou fermer les Settings retire le lien de la barre d'adresse.
+- **Frontière d'erreur** : un onglet ou une page qui plante affiche « This element of the
+  extension … failed » à sa place ; les autres entrées du rail restent utilisables.
+- **Sans contribution**, les Stats gardent leurs cinq onglets et les Settings leurs catégories.
+- **Version** : `pdo-extension-api` passe en **0.9.0** (après 0.8.0, amendement CORE-2 ; ajout :
+  deux variantes de `UiLocation`, non exhaustif). Une extension 0.1 à 0.8 compile et tourne
+  toujours ; le module partagé `@pdo/extension-ui` suit la version de l'API.
+
+Écartés : un onglet de Stats qui apporterait son propre cadre (une Page de `topbar/end` le fait
+déjà, au prix d'une surface de plus) ; une Section géante sous « Extensions » (elle partage la
+page avec les autres extensions et n'a ni lien profond ni en-tête).

@@ -516,6 +516,9 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("triggers/filter", "list_filter", "triggers-started-by"),
         triple("pipelines/filter", "list_filter", "pipelines-started-by"),
         triple("projects/filter", "list_filter", "projects-started-by"),
+        triple("stats/tab", "tab", "stats-tab"),
+        triple("stats/tab", "tab", "stats-exploding"),
+        triple("settings/page", "page", "settings-page"),
     ]);
     // One action at each Action location (#30), then the command that fails.
     expected.extend(

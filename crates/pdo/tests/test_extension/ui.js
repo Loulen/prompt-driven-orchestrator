@@ -251,8 +251,39 @@ export function EntityBadge({ entity, context }) {
   );
 }
 
+// Tab of `stats/tab` (0.9): the period of the Stats header and the Refresh
+// count, as its context hands them over.
+export function StatsTab({ context }) {
+  const period = context?.period;
+  return h(
+    "div",
+    { style: box, "data-testid": "test-extension-stats-tab" },
+    h("h2", { style: { fontSize: "15px", fontWeight: 600 } }, "Stats of the test extension"),
+    h("p", { "data-testid": "test-stats-period" }, period ? `Period: ${period.preset} (${period.bucket})` : "No period"),
+    h("p", { "data-testid": "test-stats-refresh" }, `Refreshed ${context?.refresh ?? 0} times`),
+  );
+}
+
+// Page of `settings/page` (0.9): its own rail entry in the Settings, and the
+// path of its deep link.
+export function SettingsPage({ context, navigate }) {
+  const path = context?.path ?? "";
+  return h(
+    "div",
+    { style: box, "data-testid": "test-extension-settings-page" },
+    h("h2", { style: { fontSize: "15px", fontWeight: 600 } }, "Settings page of the test extension"),
+    h("p", { "data-testid": "test-settings-page-path" }, `Path: ${path || "(none)"}`),
+    h(
+      "button",
+      { type: "button", onClick: () => navigate("deep/inside"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
+      "Go to deep/inside",
+    ),
+  );
+}
+
 // A decoration that throws: its boundary shows a mark in its place, and nothing
-// else of the status bar moves.
+// else of the status bar moves. Also a tab of `stats/tab`: its tab says it
+// failed, and the other tabs of Stats still open.
 export function Exploding() {
   throw new Error("the test extension's exploding decoration");
 }

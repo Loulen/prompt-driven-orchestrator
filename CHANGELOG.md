@@ -10,6 +10,19 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.18.0 — Emplacements d'UI `stats/tab` et `settings/page` (CORE-30)
+
+`pdo-extension-api` passe en **0.9.0** : ajouts seulement, une extension 0.1 à 0.8 compile et
+tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Détail : ADR-0081,
+amendement CORE-30, et `docs/reference/extension-ui.md`.
+
+- **`stats/tab`** : une extension ajoute un onglet au rail des Stats, après Performance, rendu
+  dans le cadre des Stats ; son contexte porte la période affichée et le compteur de Refresh.
+- **`settings/page`** : une extension ajoute une page entière aux Settings, une entrée de rail
+  par contribution après « Extensions » (qui liste toujours les Sections de `settings`) ;
+  joignable par `#/ext/<extension>/settings/page/<chemin>`.
+- Le module partagé `@pdo/extension-ui` passe en `0.9.0` avec l'API (même majeure `0`).
+
 ## 2.17.0 — Seams d'identité et de droits pour `iam` (IAM-1)
 
 `pdo-extension-api` passe en **0.8.0** : ajouts seulement, une extension 0.1 à 0.7 compile et

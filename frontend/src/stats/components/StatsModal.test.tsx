@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const fetchStatsOverviewMock = vi.fn();
 const fetchStatsCostMock = vi.fn();
@@ -101,6 +101,15 @@ import type { PerformanceBand } from "../model/statsFilters";
 import type { StatsCost } from "../../shared/generated/StatsCost";
 import type { StatsOverview } from "../../shared/generated/StatsOverview";
 import type { SyncCostPricesReport } from "../model/prices";
+import type { ExtensionEntry } from "../../shared/generated/ExtensionEntry";
+import type { UiContribution } from "../../shared/generated/UiContribution";
+import type { StatsTabProps } from "../../shared/extensions/contract";
+import { hostReactMajor } from "../../shared/extensions/shared";
+import {
+  resetExtensions,
+  useExtensionsStore,
+  type BundleModule,
+} from "../../shared/extensions/store";
 
 // The charts are a `React.lazy` chunk: its first import in a file transforms a
 // tree of modules, longer than the default 1 s of `findBy*` on a loaded machine.
@@ -821,5 +830,107 @@ describe("StatsModal — Pricing details in the shell's secondary panel (#944)",
     await user.click(await screen.findByTestId("stats-pricing-details-close"));
     expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
     expect(screen.getByTestId("stats-tab-cost")).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+describe("StatsModal — the `stats/tab` location (extensions' tabs)", () => {
+  function serveTabs(module: BundleModule, contributions: UiContribution[]) {
+    const entry: ExtensionEntry = {
+      id: "demo",
+      name: "Demo",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/demo/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        contributions,
+        commands: [],
+        locations: [],
+      },
+    };
+    useExtensionsStore.setState({
+      extensions: [{ entry, status: "ready", module }],
+      started: true,
+      loaded: true,
+    });
+  }
+  const tab = (id: string, label: string, component: string) =>
+    ({ location: "stats/tab", id, label, type: "tab", component }) as UiContribution;
+
+  afterEach(() => resetExtensions());
+
+  it("keeps the core's five tabs when no extension contributes one", async () => {
+    resetExtensions();
+    render(<StatsModal open onClose={() => {}} />);
+    const rail = await screen.findByRole("tablist", { name: "Stats sections" });
+    expect(within(rail).getAllByRole("tab").map((b) => b.textContent)).toEqual([
+      "Runs",
+      "Sessions",
+      "Triggers",
+      "Cost",
+      "Performance",
+    ]);
+  });
+
+  it("adds the extension's tab after Performance, opened in the same frame with the period", async () => {
+    serveTabs(
+      {
+        Flow: ({ context, extension }: StatsTabProps) => (
+          <p data-testid="flow">
+            {`${extension.id} ${context.location} ${context.period.preset} ${context.period.bucket} ${context.refresh}`}
+          </p>
+        ),
+      },
+      [tab("flow", "Flow", "Flow")],
+    );
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+    const rail = await screen.findByRole("tablist", { name: "Stats sections" });
+    await waitFor(() =>
+      expect(within(rail).getAllByRole("tab").map((b) => b.textContent)).toEqual([
+        "Runs",
+        "Sessions",
+        "Triggers",
+        "Cost",
+        "Performance",
+        "Flow",
+      ]),
+    );
+    await user.click(screen.getByTestId("stats-tab-demo:flow"));
+    expect(screen.getByTestId("flow")).toHaveTextContent("demo stats/tab 30d day 0");
+    expect(screen.queryByTestId("stats-charts-stub")).not.toBeInTheDocument();
+    // The frame's header stays: the period and Refresh reach the tab.
+    await user.click(screen.getByTestId("stats-period-90d"));
+    expect(screen.getByTestId("flow")).toHaveTextContent("demo stats/tab 90d week 0");
+    await waitFor(() => expect(screen.getByTestId("stats-refresh")).toBeEnabled());
+    await user.click(screen.getByTestId("stats-refresh"));
+    expect(screen.getByTestId("flow")).toHaveTextContent("90d week 1");
+    // Back to a core tab.
+    await user.click(screen.getByTestId("stats-tab-runs"));
+    expect(await screen.findByTestId("stats-charts-stub", {}, CHARTS_CHUNK)).toBeInTheDocument();
+    expect(screen.queryByTestId("flow")).not.toBeInTheDocument();
+  });
+
+  it("keeps a tab that throws to its own content", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    serveTabs(
+      {
+        Boom: () => {
+          throw new Error("boom");
+        },
+      },
+      [tab("boom", "Boom", "Boom")],
+    );
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+    await user.click(await screen.findByTestId("stats-tab-demo:boom"));
+    expect(screen.getByTestId("extension-failed-demo")).toHaveTextContent(
+      "This element of the extension demo failed.",
+    );
+    expect(screen.getByTestId("stats-modal")).toBeInTheDocument();
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    expect(screen.getByTestId("stats-pricing-trigger")).toBeInTheDocument();
+    vi.restoreAllMocks();
   });
 });

@@ -3,10 +3,10 @@ import { formatDeepLink, formatRunLink, isDeepLink, isRunLink, parseDeepLink, pa
 
 describe("a deep link", () => {
   it("names the extension, its page location and the path", () => {
-    expect(parseDeepLink("#/ext/pm/topbar/end/backlog/metier")).toEqual({
-      extension: "pm",
+    expect(parseDeepLink("#/ext/demo/topbar/end/board/open")).toEqual({
+      extension: "demo",
       location: "topbar/end",
-      path: "backlog/metier",
+      path: "board/open",
     });
     expect(parseDeepLink("http://localhost:6280/#/ext/test/topbar/start")).toEqual({
       extension: "test",
@@ -17,8 +17,8 @@ describe("a deep link", () => {
 
   it("names no location when what follows the id is not a page location", () => {
     expect(parseDeepLink("#/ext/audit/journal")).toEqual({ extension: "audit", location: null, path: "journal" });
-    expect(parseDeepLink("#/ext/pm/topbar/endless")).toEqual({
-      extension: "pm",
+    expect(parseDeepLink("#/ext/demo/topbar/endless")).toEqual({
+      extension: "demo",
       location: null,
       path: "topbar/endless",
     });
@@ -27,12 +27,12 @@ describe("a deep link", () => {
   });
 
   it("round-trips through its written form", () => {
-    const link = formatDeepLink("pm", "topbar/end", "/page/Doc é");
-    expect(link).toBe("#/ext/pm/topbar/end/page/Doc%20%C3%A9");
+    const link = formatDeepLink("demo", "topbar/end", "/page/Doc é");
+    expect(link).toBe("#/ext/demo/topbar/end/page/Doc%20%C3%A9");
     expect(parseDeepLink(link)?.path).toBe("page/Doc é");
     expect(isDeepLink(link)).toBe(true);
-    expect(isDeepLink("/#/ext/pm/topbar/end")).toBe(true);
-    expect(isDeepLink("https://example.com/#/ext/pm")).toBe(false);
+    expect(isDeepLink("/#/ext/demo/topbar/end")).toBe(true);
+    expect(isDeepLink("https://example.com/#/ext/demo")).toBe(false);
   });
 });
 
@@ -44,14 +44,27 @@ describe("a link toward a Run", () => {
     expect(parseRunLink(formatRunLink("a b"))).toBe("a b");
     expect(parseRunLink("#/runs/")).toBeNull();
     expect(parseRunLink("#/runs/r1/review")).toBeNull();
-    expect(parseRunLink("#/ext/pm/topbar/end")).toBeNull();
+    expect(parseRunLink("#/ext/demo/topbar/end")).toBeNull();
   });
 
   it("is a link of its own, not an extension's", () => {
     expect(isRunLink("#/runs/r1")).toBe(true);
     expect(isRunLink("/#/runs/r1")).toBe(true);
-    expect(isRunLink("#/ext/pm")).toBe(false);
+    expect(isRunLink("#/ext/demo")).toBe(false);
     expect(isDeepLink("#/runs/r1")).toBe(false);
     expect(parseDeepLink("#/runs/r1")).toBeNull();
+  });
+});
+
+describe("a deep link toward a page of the Settings", () => {
+  it("names the `settings/page` location, before the `settings` prefix", () => {
+    expect(parseDeepLink("#/ext/test/settings/page/deep/inside")).toEqual({
+      extension: "test",
+      location: "settings/page",
+      path: "deep/inside",
+    });
+    expect(parseDeepLink("#/ext/test/settings/page")?.location).toBe("settings/page");
+    expect(parseDeepLink("#/ext/test/settings")?.location).toBeNull();
+    expect(formatDeepLink("test", "settings/page", "a")).toBe("#/ext/test/settings/page/a");
   });
 });

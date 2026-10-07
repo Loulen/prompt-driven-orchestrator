@@ -130,6 +130,43 @@ selected Run, or when its repository belongs to no Projet.
 - **Context**: `LocationContext`.
 - **0.1**: the `SettingsPanel` slot.
 
+### `settings/page`
+
+- **Accepts**: page.
+- **Renders**: a rail entry of the Settings per page, labelled with its label, after the core's
+  categories and the Extensions entry (which keeps listing the `settings` sections). The entry
+  opens the page in the Settings' content pane, behind its error boundary; the Settings header
+  shows its breadcrumb and its actions (`shell.setBreadcrumb`, `shell.setActions`), `shell.close()`
+  closes the Settings. The page saves the way its extension decides, never with the instance
+  form. Nothing without a contribution.
+- **Context**: `PageContext` ([Pages](#pages)); `navigate(path)` changes `context.path`.
+- **Deep link**: `#/ext/<extension>/settings/page/<path>` opens the Settings on the page. As
+  for the other page locations, the link names the extension's **first** page there: an
+  extension with two Settings pages reaches the second from its rail entry, not by link.
+- **Since**: 0.9.
+
+### `stats/tab`
+
+- **Accepts**: tab.
+- **Renders**: a rail entry of the Stats per tab, labelled with its label, **after Performance**.
+  The tab renders in the Stats frame: its header (period presets, « Computed », Refresh, ✕) stays
+  the core's, the component fills the content pane, behind its error boundary (a component that
+  throws shows « This element of the extension … failed » in its tab, the other tabs still open).
+  Nothing without a contribution.
+- **Context**: `StatsTabContext`:
+
+  ```ts
+  interface StatsPeriod { preset: "7d" | "30d" | "90d" | "all"; from: string; to: string; bucket: "day" | "week" | "month" }
+  interface StatsTabContext extends LocationContext { period: StatsPeriod; refresh: number }
+  interface StatsTabProps { extension: ExtensionRef; context: StatsTabContext }
+  ```
+
+  `period` is the window the header shows (ISO instants, `to` excluded, whole UTC days) and the
+  bucket the core's charts fold by; `refresh` grows by one at each click on Refresh: a tab reloads
+  what it shows when it changes. Like every Stats setting, the period is back to 30 days at each
+  open.
+- **Since**: 0.9.
+
 ### `runs/filter`
 
 - **Accepts**: list filter.
@@ -515,7 +552,8 @@ interface PageShell {
 interface PageProps { extension: ExtensionRef; context: PageContext; navigate(path: string): void; shell: PageShell }
 ```
 
-A page shows in the full-window shell Settings and Stats use: its header (icon, title, breadcrumb,
+A page of `topbar/start` or `topbar/end` shows in the full-window shell Settings and Stats use
+(a page of `settings/page` shows inside the Settings, [above](#settingspage)): its header (icon, title, breadcrumb,
 actions, ✕) and its Escape handling. `shell` keeps its identity for the page's lifetime, so it can
 sit in an effect's dependencies.
 

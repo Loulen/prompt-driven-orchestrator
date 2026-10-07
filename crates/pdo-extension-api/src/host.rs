@@ -1,7 +1,8 @@
 use serde::Serialize;
 
 use crate::{
-    Actor, ActorDisplay, Attributes, Authorization, EntityRef, OperationApplied, Resource,
+    Actor, ActorDisplay, Attributes, Authorization, EntityRef, NewRun, OperationApplied, Resource,
+    RunCreation, RunNotCreated,
 };
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
@@ -72,6 +73,25 @@ pub trait Host: Send + Sync {
     /// registration order. By default, the core's alone.
     fn catalogue(&self) -> Vec<Resource> {
         crate::core_resources()
+    }
+
+    /// Create a Run on behalf of `actor` (API 0.9), as `POST /runs` creates
+    /// one for that caller: the same Autorisation d'opération (`run` ×
+    /// `create`, in the Projet of its primary repository), the same checks of
+    /// the extension data ([`Extension::validate_create`](crate::Extension::validate_create),
+    /// the calling extension's included), the same attributes stamped before
+    /// its first Node. Answers the new Run's id, or the refusal `POST /runs`
+    /// would have answered.
+    ///
+    /// The Run is a root Run (no node session), created by `actor`
+    /// (`created_by`). Never call it from a hook of the creation it starts
+    /// (`authorize`, `validate_create`, `on_create*`): those are asked again,
+    /// without end. By default (and with the [`NeutralHost`]), `503`: no Run
+    /// is created.
+    fn create_run(&self, _actor: &Actor, _run: NewRun) -> RunCreation {
+        Box::pin(std::future::ready(Err(RunNotCreated::unavailable(
+            "this host cannot create a Run",
+        ))))
     }
 }
 
@@ -161,5 +181,15 @@ mod tests {
         host.publish(ExtensionEvent::new("x", serde_json::Value::Null));
         host.applied(OperationApplied::new(Actor::LocalOperator, op, None));
         assert_eq!(host.catalogue(), crate::core_resources());
+    }
+
+    #[tokio::test]
+    async fn the_neutral_host_creates_no_run() {
+        let refused = NeutralHost
+            .create_run(&Actor::LocalOperator, NewRun::new("relay", "go"))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status, 503);
+        assert_eq!(refused.message, "this host cannot create a Run");
     }
 }

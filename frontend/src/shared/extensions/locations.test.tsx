@@ -3,7 +3,7 @@
  * they take part in their host's Save and Cancel), decorations and list filters.
  */
 
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect, useState } from "react";
 import type { ExtensionEntry } from "../generated/ExtensionEntry";
@@ -63,6 +63,20 @@ const bundle: BundleModule = {
   ),
   Boom: () => {
     throw new Error("boom");
+  },
+  // API 0.9: provides `{ [key]: draft }` before its host submits.
+  ProvidingSection: ({ form }: SectionProps) => {
+    const [draft, setDraft] = useState("typed");
+    useEffect(() => form?.provide?.(() => ({ k: draft })), [form, draft]);
+    return <input aria-label="provided" value={draft} onChange={(e) => setDraft(e.target.value)} />;
+  },
+  RefusingProvider: ({ form }: SectionProps) => {
+    useEffect(() => form?.provide?.(() => Promise.reject(new Error("pick a task first"))), [form]);
+    return <p>refusing provider</p>;
+  },
+  NothingProvider: ({ form }: SectionProps) => {
+    useEffect(() => form?.provide?.(() => undefined), [form]);
+    return <p>nothing provider</p>;
   },
   DraftSection: ({ entity, form }: SectionProps) => {
     const [draft, setDraft] = useState("");
@@ -304,6 +318,57 @@ describe("a section location", () => {
       <ExtensionSections location="run/info" extra={{ entity: { kind: "run", id: "r1", name: "Run", attributes: {} } }} />,
     );
     expect(await screen.findByText("section of Run")).toBeInTheDocument();
+  });
+});
+
+describe("a run/new section that provides a value (API 0.9)", () => {
+  function ProvidingHost({ keep }: { keep: (host: ReturnType<typeof useSectionForm>) => void }) {
+    const sections = useSectionForm();
+    useEffect(() => {
+      keep(sections);
+    }, [sections, keep]);
+    return <ExtensionSections location="run/new" extra={{ mode: "run" }} form={sections.form} />;
+  }
+
+  it("places each value under its section's extension, merging one extension's objects", async () => {
+    serve([
+      extension("acme", [
+        at("run/new", "section", "first", "ProvidingSection"),
+        at("run/new", "section", "second", "NothingProvider"),
+      ]),
+      extension("other", [at("run/new", "section", "third", "DraftSection")]),
+    ]);
+    let host: ReturnType<typeof useSectionForm> | null = null;
+    render(<ProvidingHost keep={(h) => (host = h)} />);
+    await screen.findByText("nothing provider");
+    fireEvent.change(screen.getByLabelText("provided"), { target: { value: "T-1" } });
+    await waitFor(async () =>
+      expect(await host!.provided()).toEqual({ acme: { k: "T-1" } }),
+    );
+  });
+
+  it("provides nothing without a providing section", async () => {
+    let host: ReturnType<typeof useSectionForm> | null = null;
+    serve([extension("other", [at("run/new", "section", "third", "DraftSection")])]);
+    render(<ProvidingHost keep={(h) => (host = h)} />);
+    await screen.findByLabelText("draft");
+    await expect(host!.provided()).resolves.toEqual({});
+  });
+
+  it("rejects when a provider fails", async () => {
+    let host: ReturnType<typeof useSectionForm> | null = null;
+    serve([extension("acme", [at("run/new", "section", "refuses", "RefusingProvider")])]);
+    render(<ProvidingHost keep={(h) => (host = h)} />);
+    await screen.findByText("refusing provider");
+    await expect(host!.provided()).rejects.toThrow("pick a task first");
+  });
+
+  it("merges the objects two sections of one extension provide", () => {
+    const host = renderHook(() => useSectionForm()).result.current;
+    host.form.provide(() => ({ a: 1 }), 0, "acme");
+    host.form.provide(() => ({ b: 2 }), 1, "acme");
+    host.form.provide(() => "flat", 2, "other");
+    return expect(host.provided()).resolves.toEqual({ acme: { a: 1, b: 2 }, other: "flat" });
   });
 });
 

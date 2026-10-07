@@ -483,6 +483,10 @@ mod tests {
             "true",
             "--provisioning",
             r#"{}"#,
+            "--ext",
+            "test.cle=valeur",
+            "--ext",
+            "test2.x=y",
         ])
         .unwrap();
         let Commands::Run { action } = cli.command else {
@@ -506,10 +510,12 @@ mod tests {
             auto_name,
             auto_fail,
             provisioning,
+            ext,
         } = *action
         else {
             panic!("expected `run create`");
         };
+        assert_eq!(ext, vec!["test.cle=valeur", "test2.x=y"], "--ext repeats");
         assert_eq!(pipeline, "my-pipeline");
         assert_eq!(input, "do the work");
         assert!(input_file.is_none());

@@ -8,7 +8,8 @@ use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
     ActorDisplay, Admission, Attributes, Authorization, EntityRef, Extension, ExtensionContext,
-    Host, Manifest, NodeLaunch, RequestParts, Resource, TriggerRef, EXTENSION_EVENT,
+    ExtensionData, Host, Manifest, NodeLaunch, RequestParts, Resource, ResourceKind, TriggerRef,
+    EXTENSION_EVENT,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -20,95 +21,20 @@ use crate::event_bus::EventBus;
 use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
+mod creation;
 mod host_of;
 mod identity;
 mod launch;
 mod neutral;
+mod port;
 mod skills;
+pub use creation::{CreationRefusal, RunCreator};
 use host_of::{panic_message, ExtensionHostOf};
 pub use identity::Identification;
 pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
 pub use neutral::NoExtensions;
+pub use port::ExtensionHost;
 pub use skills::ProvidedSkills;
-
-/// The core's view of its extensions.
-pub trait ExtensionHost: Send + Sync {
-    /// The actor behind a request. Never fails: the core has its own default.
-    fn identify(&self, request: &RequestParts) -> Actor;
-
-    /// The actor behind a request, and whether to serve it: a request no
-    /// extension identified goes through every extension's `admit`. Admitted,
-    /// with the actor of [`Self::identify`], by default.
-    fn identify_request(&self, request: &RequestParts) -> Identification {
-        Identification {
-            actor: self.identify(request),
-            admission: Admission::Admit,
-        }
-    }
-
-    /// How `actor` shows to a person, when an extension knows it. None by
-    /// default.
-    fn display_name(&self, _actor: &Actor) -> Option<ActorDisplay> {
-        None
-    }
-
-    /// Whether `actor` may run `operation`.
-    fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization;
-
-    /// Hand an event to every extension, without waiting for any.
-    fn publish(&self, event: &Value);
-
-    /// Broadcast an event the core makes for the extensions (an
-    /// `OperationApplied`): on the bus, hence on `/ws` and to every
-    /// extension, once the daemon started with extensions. By default, only
-    /// to the extensions.
-    fn announce(&self, event: Value) {
-        self.publish(&event);
-    }
-
-    /// The attributes the extensions stamp on `entity`, which `actor` just
-    /// created, each key prefixed with its extension's id. None by default.
-    fn on_create(&self, _actor: &Actor, _entity: &EntityRef) -> Attributes {
-        Attributes::new()
-    }
-
-    /// Where the entity attributes are stored.
-    fn attributes(&self) -> Arc<dyn AttributeStore> {
-        Arc::new(NoAttributes)
-    }
-
-    /// The skills each extension brings, in registration order, an empty list
-    /// included (it has stopped providing its skills); an extension that
-    /// panicked saying so is left out. None by default.
-    fn skills(&self) -> Vec<ProvidedSkills> {
-        Vec::new()
-    }
-
-    /// The catalogue of the Ressources: the core's, then each extension's
-    /// declarations, in registration order. The core's alone by default.
-    fn catalogue(&self) -> Vec<Resource> {
-        pdo_extension_api::core_resources()
-    }
-
-    /// What the extensions add to the launch of a Node: their environment
-    /// variables and their preamble ([`NodeContribution`]). Nothing by default.
-    fn node_launch(&self, _launch: &NodeLaunch) -> NodeContribution {
-        NodeContribution::default()
-    }
-
-    /// The extension that suspends `trigger`, and why, if one does. None by
-    /// default.
-    fn trigger_suspension(&self, _trigger: &TriggerRef) -> Option<TriggerSuspension> {
-        None
-    }
-
-    /// Whether no extension can refuse anything: the reads then skip the
-    /// question altogether (CORE-5), so a daemon without extension serves its
-    /// lists exactly as before. `false` by default.
-    fn allows_everything(&self) -> bool {
-        false
-    }
-}
 
 /// What the daemon gives its extension host once its resources are open.
 pub struct HostServices {
@@ -134,6 +60,9 @@ struct Registry {
     registered: Vec<Registered>,
     attributes: OnceLock<Arc<dyn AttributeStore>>,
     bus: OnceLock<Arc<dyn EventBus>>,
+    /// What creates a Run for [`Host::create_run`], once the daemon wired
+    /// its contexts.
+    runs: OnceLock<Arc<dyn RunCreator>>,
 }
 
 /// The host of the extensions registered at startup, in registration order.
@@ -250,6 +179,15 @@ impl Extensions {
         }
     }
 
+    /// Plug in what creates a Run for the extensions' [`Host::create_run`],
+    /// once the daemon wired its contexts (after [`Self::start`]). Until then
+    /// a `create_run` answers `503`.
+    pub fn serve_runs(&self, runs: Arc<dyn RunCreator>) {
+        if self.registry.runs.set(runs).is_err() {
+            tracing::warn!("the Runs of the extensions were plugged twice; the second is ignored");
+        }
+    }
+
     /// Hand every event of the bus subscription `events` to the extensions.
     fn relay(&self, mut events: tokio::sync::broadcast::Receiver<Value>) {
         // Weak: the relay must not keep the extensions (and their delivery
@@ -280,14 +218,24 @@ impl Extensions {
         }
     }
 
-    /// Every extension's attributes for `entity`, but those of `except`.
-    fn stamps(&self, actor: &Actor, entity: &EntityRef, except: Option<&str>) -> Attributes {
+    /// Every extension's attributes for `entity`, but those of `except`, each
+    /// handed its value of `data`.
+    fn stamps(
+        &self,
+        actor: &Actor,
+        entity: &EntityRef,
+        data: &ExtensionData,
+        except: Option<&str>,
+    ) -> Attributes {
         let mut stamped = Attributes::new();
         for r in &self.registry.registered {
             if Some(r.manifest.id.as_str()) == except {
                 continue;
             }
-            match catch_unwind(AssertUnwindSafe(|| r.extension.on_create(actor, entity))) {
+            let value = data.get(&r.manifest.id);
+            match catch_unwind(AssertUnwindSafe(|| {
+                r.extension.on_create_with_data(actor, entity, value)
+            })) {
                 Ok(attributes) => stamped.extend(prefixed(&r.manifest.id, attributes)),
                 Err(_) => tracing::warn!(
                     "extension `{}` panicked in on_create; it stamps nothing",
@@ -365,7 +313,31 @@ impl ExtensionHost for Extensions {
     }
 
     fn on_create(&self, actor: &Actor, entity: &EntityRef) -> Attributes {
-        self.stamps(actor, entity, None)
+        self.stamps(actor, entity, &ExtensionData::new(), None)
+    }
+
+    fn on_create_with_data(
+        &self,
+        actor: &Actor,
+        entity: &EntityRef,
+        data: &ExtensionData,
+    ) -> Attributes {
+        self.stamps(actor, entity, data, None)
+    }
+
+    fn installed(&self) -> Vec<String> {
+        self.iter()
+            .map(|(manifest, _)| manifest.id.clone())
+            .collect()
+    }
+
+    fn validate_create(
+        &self,
+        actor: &Actor,
+        kind: &ResourceKind,
+        data: &ExtensionData,
+    ) -> Result<(), CreationRefusal> {
+        creation::validate(self, actor, kind, data)
     }
 
     fn attributes(&self) -> Arc<dyn AttributeStore> {

@@ -1,8 +1,8 @@
 //! The `RunStarted` of a new Run: everything it freezes, written once here,
 //! never re-decided by a later edit of the pipeline, the instance, the bank or
 //! the Trigger — the graph, the input and variables, the repositories, the
-//! isolation, the harness choice, the skills, the preferences, the name and the
-//! provenance.
+//! isolation, the harness choice, the skills, the preferences, the name, the
+//! provenance and the data of the extensions.
 
 use pdo_skill::domain::selection::ActiveSkill;
 use pdo_workspace::domain::provisioning::ScopedRules;
@@ -266,6 +266,12 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
     }
     if let Some(editor) = &req.trigger_editor {
         run_payload["trigger_editor"] = serde_json::json!(editor);
+    }
+    // API 0.9: FREEZE the data the Run carries for the extensions, as checked
+    // by them at the create. Written only when non-empty, so a Run carrying
+    // none keeps its shape.
+    if !req.extensions.is_empty() {
+        run_payload["extensions"] = serde_json::json!(req.extensions);
     }
     // ADR-0064: FREEZE the mechanical parent provenance — decided by the daemon
     // from the verified session claim, never read from the body (which refuses

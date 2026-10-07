@@ -38,6 +38,7 @@ pub(super) async fn parse_multipart_create_run(
     let mut auto_name: Option<bool> = None;
     let mut auto_fail: Option<bool> = None;
     let mut provisioning = provisioning::ProvisioningRules::default();
+    let mut extensions = pdo_kernel::attributes::ExtensionData::new();
     let mut attachments: Vec<InputFile> = Vec::new();
     let mut attachment_bytes: u64 = 0;
 
@@ -248,6 +249,18 @@ pub(super) async fn parse_multipart_create_run(
                 provisioning =
                     serde_json::from_str(&v).map_err(|e| format!("bad field provisioning: {e}"))?;
             }
+            "extensions" => {
+                // API 0.9: a JSON object, extension id → its value, like the
+                // JSON path's `extensions`.
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|e| multipart_field_error("extensions", None, received_bytes, &e))?;
+                if !value.trim().is_empty() {
+                    extensions = serde_json::from_str(&value)
+                        .map_err(|e| format!("invalid extensions JSON: {e}"))?;
+                }
+            }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
                 let data = field.bytes().await.map_err(|e| {
@@ -303,6 +316,7 @@ pub(super) async fn parse_multipart_create_run(
         auto_name,
         auto_fail,
         provisioning,
+        extensions,
         // A multipart `POST /runs` is a manual launch: the form already fetched
         // before it opened, so nothing is refreshed here (#804, ADR-0070 §3).
         source_fetch_error: None,

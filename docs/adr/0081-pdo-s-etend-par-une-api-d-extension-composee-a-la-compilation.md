@@ -642,3 +642,39 @@ serveur, la page ne saurait pas où revenir) ; un type de contribution « menu �
 (l'en-tête nom, e-mail, badge et les libellés à droite des entrées sont propres à chaque
 extension) ; consulter l'admission pour les fichiers de la SPA (ils ne portent aucune donnée, et
 sans eux rien ne suit la redirection).
+
+## Amendement CORE-29 : les données d'extension à la création d'un Run, et un Run créé par une extension
+
+Une extension doit pouvoir rattacher ses propres données à un Run **dès sa création**, et créer
+un Run depuis son backend, sans que le core sache ce qu'elle en fait. Exercé dans le core par
+l'extension de test (`crates/pdo/tests/test_extension/creation.rs`).
+
+- **Données d'extension** (`ExtensionData`, id d'extension -> valeur JSON libre) : `POST /runs`
+  prend `extensions`. Un id qu'aucune extension installée n'a est refusé (`400`) comme un champ
+  inconnu, avant l'autorisation ; la valeur est figée dans `RunStarted` (`extensions`, seulement
+  non vide). Le core ne l'interprète jamais.
+- **`validate_create(actor, kind, value) -> Result<(), String>`** : appelé pour la seule extension
+  dont la clé est présente, après l'Autorisation d'opération et avant tout effet. Un refus répond
+  `400` avec la raison ; aucun Run, aucun événement. Une panique refuse.
+- **`on_create_with_data(actor, entity, data)`** : variante de `on_create` qui reçoit la valeur ;
+  par défaut elle délègue à `on_create`, donc une extension existante ne change pas. Pour un Run,
+  le marquage a lieu **avant le lancement du premier Node**, sur tous les chemins qui lancent
+  (geste, fire d'un Trigger, `retry_all`, dont le jumeau reprend les données de l'original) : ce
+  que l'extension rattache existe quand le Node le lit.
+- **`Host::create_run(actor, NewRun) -> RunCreation`** : une extension crée un Run au nom d'un
+  Acteur, par le même chemin que `POST /runs` (même autorisation, mêmes vérifications, mêmes
+  marquages, `created_by` = l'Acteur, Run racine). Le core le branche une fois ses contextes
+  câblés (port `RunCreator`) ; avant, et avec le `NeutralHost`, `503`.
+- **Surfaces** : `pdo run create --ext <id>.<clé>=<valeur>` (répétable, valeur chaîne) ; le
+  formulaire « New Run », où une section `run/new` peut **fournir** une valeur avant la soumission
+  (`SectionForm.provide`), placée par l'hôte sous l'id de son extension ; le contexte de `run/new`
+  expose aussi l'entrée et le nom saisis.
+- **Version** : `pdo-extension-api` passe en **0.9.0**, par ajout (hooks à défaut, méthode à
+  défaut sur `Host`, types `#[non_exhaustive]`). Une extension 0.1 à 0.8 compile et tourne
+  toujours.
+
+Écartés : créer le Run puis rattacher les données par un second appel (le premier Node peut
+partir avant le rattachement, et un refus laisserait un Run créé) ; valider dans `authorize`
+(l'Opération ne porte pas les données, et un refus de valeur n'est pas un refus de droit : `400`,
+pas `403`) ; des attributs posés par la requête (les attributs sont des chaînes que l'extension
+calcule ; la donnée d'origine est à elle, le core ne doit pas lui donner de forme).

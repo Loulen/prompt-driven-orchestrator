@@ -78,6 +78,7 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
     onClose,
     onTriggerSaved,
     saveSections: sections?.save,
+    provideSections: sections?.provided,
   });
 
   return {

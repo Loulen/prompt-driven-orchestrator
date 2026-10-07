@@ -188,6 +188,7 @@ host has a Save and a Cancel, `form`:
 interface SectionForm {
   onSave(handler: (saved: EntityContext) => unknown): () => void; // returns its unregistration
   onCancel(handler: () => unknown): () => void;
+  provide?(handler: () => unknown): () => void; // 0.9, `run/new` only
 }
 interface SectionProps { extension: ExtensionRef; context: LocationContext; entity?: EditedEntity | EntityContext; form?: SectionForm }
 ```
@@ -199,6 +200,17 @@ created by the editor has no id before). A throw or a rejection keeps the form o
 message; what the core saved stays saved. `onCancel` handlers run when the form is cancelled or
 closed without saving. A section's handlers are dropped when it unmounts: register them in an
 effect and return the unregistration.
+
+**A section may provide a value to the creation** (0.9, `provide`): the host calls every
+`provide` handler just before it submits, in the sections' order, each awaited, and sends what it
+answers under the id of the section's extension (`POST /runs` `extensions.<id>`); `undefined`
+provides nothing, and the objects two sections of one extension provide are merged key by key.
+The daemon hands the value to that extension's `validate_create`, then to its
+`on_create_with_data` before the Run's first Node ([extension-api.md](extension-api.md#the-creation-of-a-run-09)).
+A throw or a rejection of the handler, like the extension's refusal of the value (`400` with its
+reason), keeps the form open and shows the message; nothing is created. Only `run/new` calls it,
+and only when it launches a Run (not a Trigger); without a providing section, the request is
+unchanged.
 
 ### `project/edit`
 
@@ -219,8 +231,10 @@ effect and return the unregistration.
   both of its modes (a Run, a Trigger).
 - **Context**: `RunNewContext` = `LocationContext` + `mode` (`"run"` or `"trigger"`) + `pipeline`
   (the id picked, or `null`) + `repository` (the target repository, as typed) + `targetProject`
-  (the Projet owning that repository, compared verbatim, or `null`; CORE-5) + `trigger` (the id
-  of the Trigger being edited, or `null`). `form` is present; `onSave` receives the Run launched
+  (the Projet owning that repository, compared verbatim, or `null`; CORE-5) + `input` (the
+  prompt, as typed; 0.9) + `name` (the Run's name as typed, the Trigger's in `trigger` mode, `""`
+  for none; 0.9) + `trigger` (the id of the Trigger being edited, or `null`). `form` is present;
+  `provide` (0.9) sends a value with the Run being launched, see *Sections*; `onSave` receives the Run launched
   (`{ kind: "run", id, name?, attributes }`, read back so it carries the Attributes the
   extensions stamped on the create) or the Trigger saved (`{ kind: "trigger", id, name, attributes }`). The
   Run or the Trigger exists whatever the handlers answer: a failure is an error toast, and the form

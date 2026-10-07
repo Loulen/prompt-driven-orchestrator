@@ -1,13 +1,15 @@
 //! Creating a Run (`POST /runs`, `pdo run create`): the one create path the
 //! JSON, multipart, CLI, retry and Trigger-fire callers converge on.
 //!
-//! [`Runs::create_run`] is the gesture of an actor: it asks the Autorisation
-//! d'opération (`run` × `create`) first. [`Runs::start_run`] is the creation
-//! itself, for a caller that has already passed its own gate: a `retry_all`
-//! command, a Trigger fire. In order: the session claim (ADR-0064), the
-//! repositories ([`target`]), the pipeline, the provisioning and the isolation
-//! ([`freeze`]), the `RunStarted` payload ([`payload`]), the Run on disk
-//! ([`materialize`]), then its start ([`launch`]).
+//! [`Runs::create_run`] is the gesture of an actor: it refuses an unknown
+//! extension id, asks the Autorisation d'opération (`run` × `create`), then
+//! each extension whose data the request carries (`validate_create`), before
+//! any effect. [`Runs::start_run`] is the creation itself, for a caller that
+//! has already passed its own gate: a `retry_all` command, a Trigger fire. In
+//! order: the session claim (ADR-0064), the repositories ([`target`]), the
+//! pipeline, the provisioning and the isolation ([`freeze`]), the `RunStarted`
+//! payload ([`payload`]), the Run on disk ([`materialize`]), the extensions'
+//! attributes, then its start ([`launch`]).
 
 pub mod freeze;
 mod launch;
@@ -23,7 +25,8 @@ use std::sync::Arc;
 use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use pdo_kernel::attributes::{self, Attributes, EntityRef};
+use pdo_kernel::attributes::{self, Attributes, EntityRef, ExtensionData};
+use pdo_kernel::extension_host::CreationRefusal;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::{info, warn};
 
@@ -49,26 +52,37 @@ impl Runs {
         attachments: Vec<InputFile>,
         session: Option<SessionClaim>,
     ) -> Response {
+        // API 0.9: an extension id nobody installed is a client mistake named
+        // like an unknown field, before anything else.
+        let installed = self.extensions().installed();
+        if let Some(id) = req.extensions.keys().find(|id| !installed.contains(id)) {
+            let refusal = CreationRefusal::UnknownExtension {
+                id: id.clone(),
+                installed,
+            };
+            return (StatusCode::BAD_REQUEST, Json(refusal.body())).into_response();
+        }
         let operation = Operation::new(ResourceKind::Run, Verb::Create)
             .in_projects(self.projects_of_new_run(&req, session.as_ref()).await);
         if let Err(denied) = self.authorize(actor, &operation).await {
             return denied.into_response();
         }
-        req.created_by = Some(actor.clone());
-        match self.start_run(req, attachments, session).await {
-            Ok(run_id) => {
-                self.stamp_run(actor, &run_id).await;
-                (StatusCode::CREATED, Json(CreateRunResponse { run_id })).into_response()
-            }
-            Err((status, body)) => (status, Json(body)).into_response(),
+        // Then each extension checks its value, before any effect.
+        if let Err(refusal) =
+            self.extensions()
+                .validate_create(actor, &ResourceKind::Run, &req.extensions)
+        {
+            return (StatusCode::BAD_REQUEST, Json(refusal.body())).into_response();
         }
+        req.created_by = Some(actor.clone());
+        self.create_run_response(req, attachments, session).await
     }
 
     /// Stamp the extensions' attributes on the Run `run_id`, which `actor` just
-    /// created (a gesture's creation, or a Trigger's fire). Returns them.
-    pub async fn stamp_run(&self, actor: &Actor, run_id: &str) -> Attributes {
+    /// created, each extension handed its value of `data`. Returns them.
+    async fn stamp_run(&self, actor: &Actor, run_id: &str, data: &ExtensionData) -> Attributes {
         let entity = EntityRef::new(ResourceKind::Run, run_id);
-        attributes::stamp(self.extensions(), actor, entity).await
+        attributes::stamp_with(self.extensions(), actor, entity, data).await
     }
 
     /// [`Self::start_run`], answered as `POST /runs` answers it: `201` and the
@@ -170,6 +184,15 @@ impl Runs {
         // tab's manual start is always available, which is what keeps the
         // setting honest — and it applies to future Runs only: a live Run is
         // unaffected by a mid-flight toggle.
+        // The extensions stamp the Run (each handed its value of `extensions`)
+        // BEFORE its first Node is launched, on every path that launches one
+        // (a gesture, a Trigger's fire, a retry): what they stamp is there
+        // when the Node reads it. A Run nobody is known to have created (a
+        // retry of a Run older than `created_by`) is stamped by nobody.
+        if let Some(actor) = &req.created_by {
+            self.stamp_run(actor, &run_id, &req.extensions).await;
+        }
+
         let manager_enabled = self
             .settings
             .defaults()

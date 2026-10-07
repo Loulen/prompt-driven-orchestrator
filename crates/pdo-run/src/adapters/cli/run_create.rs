@@ -36,6 +36,32 @@ pub(crate) fn parse_skills_arg(raw: &str) -> Result<serde_json::Value> {
     Ok(serde_json::json!(refs))
 }
 
+/// `--ext <id>.<key>=<value>` (repeatable): the `extensions` object of `POST
+/// /runs`, `{"<id>": {"<key>": "<value>", …}, …}`. The value is a string, split
+/// at the first `=` only (it may hold `=` and `.`); the id at the first `.`.
+/// The same key given twice is refused rather than one silently dropped.
+pub(crate) fn parse_ext_args(raw: &[String]) -> Result<serde_json::Value> {
+    let mut extensions = serde_json::Map::new();
+    for arg in raw {
+        let malformed = || anyhow::anyhow!("invalid --ext {arg}: expected <id>.<key>=<value>");
+        let (path, value) = arg.split_once('=').ok_or_else(malformed)?;
+        let (id, key) = path.split_once('.').ok_or_else(malformed)?;
+        let (id, key) = (id.trim(), key.trim());
+        if id.is_empty() || key.is_empty() {
+            return Err(malformed());
+        }
+        let entry = extensions
+            .entry(id.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let object = entry.as_object_mut().expect("built as an object");
+        if object.contains_key(key) {
+            anyhow::bail!("--ext {id}.{key} given twice");
+        }
+        object.insert(key.to_string(), serde_json::json!(value));
+    }
+    Ok(serde_json::Value::Object(extensions))
+}
+
 /// One-shot `pdo run create` (issue #721, ADR-0064): the thin CLI client of the
 /// daemon's `POST /runs`. Like the other one-shots, blocking `reqwest` and no
 /// tokio runtime (see `crates/pdo/src/entry.rs`); plain `Result` → `0`/`1` exit mapping — only
@@ -64,6 +90,7 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
         auto_name,
         auto_fail,
         provisioning,
+        ext,
     } = action
     else {
         anyhow::bail!("`pdo run create` only: `wait` and `list` have their own entry points");
@@ -121,6 +148,9 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
     }
     if let Some(v) = provisioning {
         body.insert("provisioning".into(), parse_json_arg("provisioning", &v)?);
+    }
+    if !ext.is_empty() {
+        body.insert("extensions".into(), parse_ext_args(&ext)?);
     }
 
     let session = session_env_claim();
@@ -205,5 +235,26 @@ mod tests {
         let parsed = parse_skills_arg(r#"[{"id":"a","name":"A"}]"#).unwrap();
         assert_eq!(parsed, serde_json::json!([{ "id": "a", "name": "A" }]));
         assert!(parse_skills_arg("[broken").is_err());
+    }
+
+    #[test]
+    fn ext_flags_fill_the_extensions_object() {
+        let raw: Vec<String> = ["test.cle=valeur", "test.autre=a=b.c", "test2.x="]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            parse_ext_args(&raw).unwrap(),
+            serde_json::json!({
+                "test": { "cle": "valeur", "autre": "a=b.c" },
+                "test2": { "x": "" },
+            })
+        );
+        for bad in ["test", "test=v", ".k=v", "test.=v"] {
+            let err = parse_ext_args(&[bad.to_string()]).unwrap_err().to_string();
+            assert!(err.contains("expected <id>.<key>=<value>"), "{bad}: {err}");
+        }
+        let twice = parse_ext_args(&["t.k=1".into(), "t.k=2".into()]).unwrap_err();
+        assert_eq!(twice.to_string(), "--ext t.k given twice");
     }
 }

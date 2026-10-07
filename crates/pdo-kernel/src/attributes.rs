@@ -15,7 +15,7 @@ use std::pin::Pin;
 use crate::applied;
 use crate::extension_host::ExtensionHost;
 use crate::Actor;
-pub use pdo_extension_api::{Attributes, EntityRef, ResourceKind};
+pub use pdo_extension_api::{Attributes, EntityRef, ExtensionData, ResourceKind};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -78,8 +78,19 @@ pub fn prefixed(extension_id: &str, attributes: Attributes) -> Attributes {
 /// just created, and store them. Returns what was stamped. A storage failure
 /// is logged, never fatal: the creation already happened.
 pub async fn stamp(host: &dyn ExtensionHost, actor: &Actor, entity: EntityRef) -> Attributes {
+    stamp_with(host, actor, entity, &ExtensionData::new()).await
+}
+
+/// [`stamp`], each extension handed its value of the creation's `data` (API
+/// 0.9, a Run's `extensions`).
+pub async fn stamp_with(
+    host: &dyn ExtensionHost,
+    actor: &Actor,
+    entity: EntityRef,
+    data: &ExtensionData,
+) -> Attributes {
     applied::created(&entity);
-    let attributes = host.on_create(actor, &entity);
+    let attributes = host.on_create_with_data(actor, &entity, data);
     if !attributes.is_empty() {
         if let Err(e) = host.attributes().put(&entity, &attributes).await {
             tracing::error!(

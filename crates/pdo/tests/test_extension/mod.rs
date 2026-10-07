@@ -54,6 +54,11 @@
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
 //!   0.8, `launch.rs`): the variables, the preamble and the suspensions the
 //!   test sets ([`Control::launch`]).
+//! - **`validate_create`** / **`on_create_with_data`** (API 0.9,
+//!   `creation.rs`): refuses a value holding a string starting with `refuse`,
+//!   records each creation and the order of the stamps and the launches,
+//!   stamps `data.<key>`; `POST /ext/test/runs` creates a Run through its
+//!   `Host` ([`Control::creation`]).
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, so two extensions share a location.
 //!
@@ -69,6 +74,7 @@
 //!
 //! [`Host`]: pdo::extension_api::Host
 
+pub mod creation;
 pub mod gate;
 pub mod hosted;
 pub mod interop;
@@ -320,6 +326,8 @@ pub struct Control {
     gate: gate::SharedGate,
     /// Its launch hooks and its suspensions of Triggers (API 0.8).
     pub launch: launch::Launch,
+    /// What it saw of the creations, and its Host (API 0.9).
+    pub creation: creation::Creation,
 }
 
 impl Default for Control {
@@ -336,6 +344,7 @@ impl Default for Control {
             sections: Arc::default(),
             gate: Arc::default(),
             launch: launch::Launch::default(),
+            creation: creation::Creation::default(),
         }
     }
 }
@@ -501,9 +510,11 @@ impl Extension for TestExtension {
 
     fn start(&self, context: &ExtensionContext) {
         *self.control.data_dir.lock().unwrap() = Some(context.data_dir.clone());
+        self.control.creation.keep_host(context.host.clone());
     }
 
     fn node_env(&self, launch: &NodeLaunch) -> NodeEnv {
+        self.control.creation.launched(launch);
         self.control.launch.node_env(launch)
     }
 
@@ -521,6 +532,33 @@ impl Extension for TestExtension {
             other => other.kind().to_string(),
         };
         Attributes::from([("started_by".to_string(), started_by)])
+    }
+
+    fn validate_create(
+        &self,
+        _actor: &Actor,
+        kind: &ResourceKind,
+        value: &Value,
+    ) -> Result<(), String> {
+        if !creation::is_run(kind) {
+            return Err(format!(
+                "the test extension takes data for a Run only, not {kind}"
+            ));
+        }
+        self.control.creation.validate(value)
+    }
+
+    fn on_create_with_data(
+        &self,
+        actor: &Actor,
+        entity: &EntityRef,
+        data: Option<&Value>,
+    ) -> Attributes {
+        let mut attributes = self.on_create(actor, entity);
+        if creation::is_run(&entity.kind) {
+            attributes.extend(self.control.creation.stamped(actor, entity, data));
+        }
+        attributes
     }
 
     fn on_event(&self, event: &Value) {

@@ -20,7 +20,8 @@ amendement CORE-30, et `docs/reference/extension-ui.md`.
   dans le cadre des Stats ; son contexte porte la période affichée et le compteur de Refresh.
 - **`settings/page`** : une extension ajoute une page entière aux Settings, une entrée de rail
   par contribution après « Extensions » (qui liste toujours les Sections de `settings`) ;
-  joignable par `#/ext/<extension>/settings/page/<chemin>`.
+  joignable par `#/ext/<extension>/settings/page/<chemin>`. Le pied Save des Settings est
+  masqué sur une telle page : elle enregistre à sa façon.
 - Le module partagé `@pdo/extension-ui` passe en `0.9.0` avec l'API (même majeure `0`).
 
 ## 2.17.1 — Le core ne nomme aucune extension (CORE-28)

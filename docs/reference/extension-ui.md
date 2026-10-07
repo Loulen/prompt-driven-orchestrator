@@ -138,7 +138,8 @@ selected Run, or when its repository belongs to no Projet.
   opens the page in the Settings' content pane, behind its error boundary; the Settings header
   shows its breadcrumb and its actions (`shell.setBreadcrumb`, `shell.setActions`), `shell.close()`
   closes the Settings. The page saves the way its extension decides, never with the instance
-  form. Nothing without a contribution.
+  form: the Settings' Save footer is hidden while the page is on screen. Nothing without a
+  contribution.
 - **Context**: `PageContext` ([Pages](#pages)); `navigate(path)` changes `context.path`.
 - **Deep link**: `#/ext/<extension>/settings/page/<path>` opens the Settings on the page. As
   for the other page locations, the link names the extension's **first** page there: an
@@ -151,7 +152,8 @@ selected Run, or when its repository belongs to no Projet.
 - **Renders**: a rail entry of the Stats per tab, labelled with its label, **after Performance**.
   The tab renders in the Stats frame: its header (period presets, « Computed », Refresh, ✕) stays
   the core's, the component fills the content pane, behind its error boundary (a component that
-  throws shows « This element of the extension … failed » in its tab, the other tabs still open).
+  throws shows « This element of the extension … failed » in its tab, the other tabs, the
+  extension's included, still open).
   Nothing without a contribution.
 - **Context**: `StatsTabContext`:
 

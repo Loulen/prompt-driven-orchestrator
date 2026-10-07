@@ -259,14 +259,10 @@ export default function SettingsSurface({
             Esc closes · ↑↓ on the rail switch category
           </span>,
         )}
-        footer={
-          <SettingsFooter
-            form={form}
-            saveButtonRef={saveButtonRef}
-            loaded={!!settings}
-            onCancel={requestClose}
-          />
-        }
+        // An extension's page owns its writes: Save would read as saving it.
+        footer={!extensionPages.active && (
+          <SettingsFooter form={form} saveButtonRef={saveButtonRef} loaded={!!settings} onCancel={requestClose} />
+        )}
         drawer={shellDrawer}
       >
         {SETTINGS_CATEGORIES.map((item) => (

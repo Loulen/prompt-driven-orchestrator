@@ -340,7 +340,10 @@ function StatsSurface({
           {error}
         </div>
       )}
-      {extensionTab && <ExtensionStatsTab tab={extensionTab} context={extensionContext} />}
+      {extensionTab && (
+        // Keyed per tab: one tab's error boundary must not carry over to the next.
+        <ExtensionStatsTab key={extensionTab.key} tab={extensionTab} context={extensionContext} />
+      )}
       {tab && (
       <Suspense
         fallback={

@@ -3,8 +3,8 @@ import { SETTINGS_CATEGORIES } from "../../model/settingsCategories";
 import type { SettingsForm } from "../../store/useSettingsForm";
 
 /**
- * The Save footer, visible on every category: where the unsaved changes are, the daemon's
- * refusal next to Save, Cancel.
+ * The Save footer, visible on every core category (not on an extension's page, which owns
+ * its writes): where the unsaved changes are, the daemon's refusal next to Save, Cancel.
  */
 export default function SettingsFooter({
   form,

@@ -933,4 +933,27 @@ describe("StatsModal — the `stats/tab` location (extensions' tabs)", () => {
     expect(screen.getByTestId("stats-pricing-trigger")).toBeInTheDocument();
     vi.restoreAllMocks();
   });
+
+  it("does not carry a failed tab's error over to the next extension tab", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    serveTabs(
+      {
+        Boom: () => {
+          throw new Error("boom");
+        },
+        Flow: () => <p data-testid="flow">flow</p>,
+      },
+      [tab("boom", "Boom", "Boom"), tab("flow", "Flow", "Flow")],
+    );
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+    await user.click(await screen.findByTestId("stats-tab-demo:boom"));
+    expect(screen.getByTestId("extension-failed-demo")).toBeInTheDocument();
+    // Straight from the failed tab to its neighbour, no core tab in between.
+    await user.click(screen.getByTestId("stats-tab-demo:flow"));
+    expect(screen.getByTestId("flow")).toHaveTextContent("flow");
+    expect(screen.queryByTestId("extension-failed-demo")).not.toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
 });

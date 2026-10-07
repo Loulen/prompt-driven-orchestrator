@@ -3537,6 +3537,8 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
     await user.click(screen.getByTestId("settings-category-demo:prefs"));
     expect(screen.getByTestId("prefs")).toHaveTextContent("demo settings/page path=");
     expect(window.location.hash).toBe("#/ext/demo/settings/page");
+    // The page owns its writes: the core's Save footer is not in view.
+    expect(screen.queryByTestId("settings-footer")).not.toBeInTheDocument();
     await user.click(screen.getByText("deeper"));
     expect(screen.getByTestId("prefs")).toHaveTextContent("path=deep/inside");
     expect(window.location.hash).toBe("#/ext/demo/settings/page/deep/inside");
@@ -3545,6 +3547,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
     expect(screen.getByText("panel of the extension")).toBeVisible();
     expect(screen.queryByTestId("prefs")).not.toBeInTheDocument();
     expect(window.location.hash).toBe("");
+    expect(screen.getByTestId("settings-footer")).toBeInTheDocument();
   });
 
   it("lands on the page its deep link names, and leaves the link on close", async () => {

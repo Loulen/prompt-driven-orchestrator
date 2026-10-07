@@ -10,6 +10,11 @@
 //! still reaches the connection, without the `run_id` of a Run it may not
 //! read. The other messages (Triggers, pipelines, Projets, the extensions'
 //! events…) pass as before.
+//!
+//! The client's Close frame is answered before the connection ends (ADR-0083
+//! §3): a closing without it counts as a failure for the browser. Every
+//! opening, closing and refused upgrade has its line in the journal
+//! ([`ws_log`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,12 +25,14 @@ use axum::extract::{State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
+use futures_util::SinkExt;
 use pdo_kernel::Actor;
-use pdo_session::adapters::http::origin::{check_origin, origin_for_log};
+use pdo_session::adapters::http::origin::check_origin;
+use pdo_session::adapters::http::ws_log::{self, Closing, NO_STATUS};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::time;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::Runs;
 
@@ -38,6 +45,9 @@ pub const READ_DECISION_TTL: Duration = Duration::from_secs(5);
 /// has no Projet any more) is judged by the last decision about its Run.
 const FORGET_DECISIONS_AFTER: Duration = Duration::from_secs(600);
 
+/// The path of the stream, as the journal names it.
+const PATH: &str = "/ws";
+
 pub(super) async fn upgrade(
     State(runs): State<Arc<Runs>>,
     Extension(actor): Extension<Actor>,
@@ -48,26 +58,29 @@ pub(super) async fn upgrade(
     // any web page open in the operator's browser could subscribe and exfiltrate
     // repos/prompts/verdicts. `headers` MUST precede `ws`: the upgrade extractor
     // consumes the request, so it stays last (axum 0.8).
+    let requested = Instant::now();
     let options = runs.options();
     if !check_origin(&headers, options.daemon_port, &options.allowed_ws_origins) {
-        warn!(
-            "Rejected /ws WebSocket upgrade: Origin not allowed ({})",
-            origin_for_log(&headers)
-        );
+        ws_log::refused(PATH, StatusCode::FORBIDDEN, "Origin not allowed", &headers);
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
-    ws.on_upgrade(move |socket| relay(socket, runs, actor))
+    ws.on_upgrade(move |socket| async move {
+        ws_log::opened(PATH, requested.elapsed());
+        let opened = Instant::now();
+        let closing = relay(socket, runs, actor).await;
+        ws_log::closed(PATH, closing, opened.elapsed());
+    })
 }
 
-async fn relay(mut socket: WebSocket, runs: Arc<Runs>, actor: Actor) {
-    info!("WebSocket client connected");
+/// Relay the bus to `socket` until either side ends it; how it ended.
+async fn relay(mut socket: WebSocket, runs: Arc<Runs>, actor: Actor) -> Closing {
     let ready = serde_json::json!({ "type": "ready" });
     if socket
         .send(Message::Text(ready.to_string().into()))
         .await
         .is_err()
     {
-        return;
+        return Closing::Dropped;
     }
 
     let mut bus = runs.bus().subscribe();
@@ -83,7 +96,21 @@ async fn relay(mut socket: WebSocket, runs: Arc<Runs>, actor: Actor) {
                     "ts": unix_timestamp_secs(),
                 });
                 if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
-                    break;
+                    return Closing::Dropped;
+                }
+            }
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Close(frame))) => {
+                        // The answer is queued by the protocol; flushing sends
+                        // it before the connection is dropped.
+                        let _ = socket.flush().await;
+                        return Closing::ByClient(frame.map_or(NO_STATUS, |f| f.code));
+                    }
+                    // The client has nothing to say on this stream; pings are
+                    // answered by the protocol itself.
+                    Some(Ok(_)) => {}
+                    None | Some(Err(_)) => return Closing::Dropped,
                 }
             }
             message = bus.recv() => {
@@ -93,19 +120,20 @@ async fn relay(mut socket: WebSocket, runs: Arc<Runs>, actor: Actor) {
                             continue;
                         };
                         if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
-                            break;
+                            return Closing::Dropped;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("WebSocket client lagged by {n} events");
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        let _ = socket.close().await;
+                        return Closing::ByDaemon;
+                    }
                 }
             }
         }
     }
-
-    info!("WebSocket client disconnected");
 }
 
 /// What one connection may see of the Runs, with the decisions it got.

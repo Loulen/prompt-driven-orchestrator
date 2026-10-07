@@ -15,16 +15,23 @@
 //! - Binary frames ← stdout of the PTY (terminal output)
 //! - Text frames with JSON `{"type":"role","role":"solo"|"pilot"|"spectator",…}`
 //!   on every role change (see [`RoleMsg`](crate::domain::shared_terminal::RoleMsg))
+//!
+//! The client's Close frame is answered before the connection ends (ADR-0083
+//! §3); the opening and the closing have their lines in the journal
+//! ([`ws_log`](crate::adapters::http::ws_log)).
 
 use std::io::{Read, Write};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use pdo_kernel::Actor;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{error, warn};
+
+use crate::adapters::http::ws_log::{self, Closing, NO_STATUS};
 
 use crate::domain::pty_protocol::{decode_resize, is_take_control};
 use crate::domain::shared_terminal::{TermSize, INITIAL_SIZE};
@@ -42,16 +49,31 @@ fn write_input(
         .write_all(data)
 }
 
-/// Bridge an upgraded socket to `session_id` until either side closes.
+/// Bridge an upgraded socket to `session_id` until either side closes, with
+/// its lines in the journal; `to_upgrade` is the time the upgrade took.
 pub(crate) async fn handle_pty_ws(
     socket: WebSocket,
     session_id: String,
     poste: Option<String>,
     actor: Actor,
     session: Arc<Session>,
+    to_upgrade: Duration,
 ) {
+    let path = format!("/sessions/{session_id}/pty");
+    ws_log::opened(&path, to_upgrade);
+    let opened = Instant::now();
+    let closing = bridge(socket, session_id, poste, actor, session).await;
+    ws_log::closed(&path, closing, opened.elapsed());
+}
+
+async fn bridge(
+    socket: WebSocket,
+    session_id: String,
+    poste: Option<String>,
+    actor: Actor,
+    session: Arc<Session>,
+) -> Closing {
     let terminals = session.terminals();
-    info!("PTY WebSocket opened for session {session_id}");
 
     let pty_system = native_pty_system();
     let initial_size = PtySize {
@@ -65,7 +87,7 @@ pub(crate) async fn handle_pty_ws(
         Ok(p) => p,
         Err(e) => {
             error!("Failed to open PTY: {e}");
-            return;
+            return Closing::ByDaemon;
         }
     };
 
@@ -99,7 +121,7 @@ pub(crate) async fn handle_pty_ws(
         Err(e) => {
             error!("Failed to clone PTY reader: {e}");
             terminals.registry().leave(&session_id, conn_id);
-            return;
+            return Closing::ByDaemon;
         }
     };
     let pty_writer = match pair.master.take_writer() {
@@ -107,7 +129,7 @@ pub(crate) async fn handle_pty_ws(
         Err(e) => {
             error!("Failed to take PTY writer: {e}");
             terminals.registry().leave(&session_id, conn_id);
-            return;
+            return Closing::ByDaemon;
         }
     };
 
@@ -116,7 +138,7 @@ pub(crate) async fn handle_pty_ws(
         Err(e) => {
             error!("Failed to spawn tmux attach for {session_id}: {e}");
             terminals.registry().leave(&session_id, conn_id);
-            return;
+            return Closing::ByDaemon;
         }
     };
 
@@ -163,6 +185,10 @@ pub(crate) async fn handle_pty_ws(
         }
     });
 
+    // The input task tells the output task that the client sent its Close:
+    // the answer goes out through the sink, which the output task owns.
+    let (client_closed_tx, mut client_closed_rx) = oneshot::channel::<()>();
+
     // Task 2: forward PTY output and role frames to the WebSocket
     let ws_send_handle = tokio::spawn(async move {
         loop {
@@ -172,11 +198,14 @@ pub(crate) async fn handle_pty_ws(
                     None => break,
                 },
                 Some(frame) = role_rx.recv() => Message::Text(frame.into()),
+                _ = &mut client_closed_rx => break,
             };
             if ws_sink.send(msg).await.is_err() {
                 break;
             }
         }
+        // Answers the client's Close when it sent one (queued by the
+        // protocol), sends the daemon's own otherwise.
         let _ = ws_sink.close().await;
     });
 
@@ -185,6 +214,7 @@ pub(crate) async fn handle_pty_ws(
     let input_context = session.clone();
     let ws_recv_handle = tokio::spawn(async move {
         let terminals = input_context.terminals();
+        let mut closing = Closing::Dropped;
         while let Some(Ok(msg)) = ws_stream.next().await {
             match msg {
                 // ADR-0075 §3: a spectator is read-only. Its keystrokes (and the
@@ -241,18 +271,23 @@ pub(crate) async fn handle_pty_ws(
                         );
                     }
                 }
-                Message::Close(_) => break,
+                Message::Close(frame) => {
+                    closing = Closing::ByClient(frame.map_or(NO_STATUS, |f| f.code));
+                    let _ = client_closed_tx.send(());
+                    break;
+                }
                 _ => {}
             }
         }
+        closing
     });
 
     // Wait for any task to finish, then clean up
-    tokio::select! {
-        _ = read_handle => {}
-        _ = ws_send_handle => {}
-        _ = ws_recv_handle => {}
-    }
+    let closing = tokio::select! {
+        _ = read_handle => Closing::ByDaemon,
+        _ = ws_send_handle => Closing::ByDaemon,
+        closing = ws_recv_handle => closing.unwrap_or(Closing::Dropped),
+    };
 
     // Leave before the reap: the hand passes on (and the remaining clients'
     // `ignore-size` flips) while this client is still being torn down.
@@ -282,5 +317,5 @@ pub(crate) async fn handle_pty_ws(
     // other handle and releases it just as harmlessly when its socket ends.
     drop(pty_writer);
 
-    info!("PTY WebSocket closed for session {session_id}");
+    closing
 }

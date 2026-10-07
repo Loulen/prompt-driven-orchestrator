@@ -27,6 +27,7 @@ use pdo_extension_api::Admission;
 use pdo_kernel::applied;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::Actor;
+use pdo_session::adapters::http::ws_log;
 
 /// `router`, with the actors' routes, the admission in front of every route
 /// (not the fallback), and `identify` in front of everything.
@@ -60,11 +61,25 @@ async fn identify(
 /// Refuse a route to a request the extensions did not admit. Also layered on
 /// every router nested under `/ext` (`extensions::mount`): `route_layer` does
 /// not reach the fallbacks a nested router brings.
+///
+/// A refused WebSocket upgrade has its line in the journal (ADR-0083): the
+/// browser learns nothing of the refusal, the operator does.
 pub(crate) async fn admit(request: Request, next: Next) -> Response {
     match request.extensions().get::<Admission>().cloned() {
-        Some(admission) if !admission.is_admitted() => admission
-            .into_refusal()
-            .unwrap_or_else(|| StatusCode::UNAUTHORIZED.into_response()),
+        Some(admission) if !admission.is_admitted() => {
+            let refusal = admission
+                .into_refusal()
+                .unwrap_or_else(|| StatusCode::UNAUTHORIZED.into_response());
+            if ws_log::is_upgrade(request.headers()) {
+                ws_log::refused(
+                    request.uri().path(),
+                    refusal.status(),
+                    "not admitted",
+                    request.headers(),
+                );
+            }
+            refusal
+        }
         _ => next.run(request).await,
     }
 }

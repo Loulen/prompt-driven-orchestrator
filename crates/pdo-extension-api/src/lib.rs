@@ -86,6 +86,6 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// amendment #34; 0.4 only added to 0.3, amendment #32; 0.8 only added
 /// fields, methods, hooks, types, the verb `read` and the `topbar/account`
 /// location, amendments CORE-3, CORE-4, CORE-5 and CORE-2; 0.9 only added the
-/// extension data of a creation, its hooks and `Host::create_run`, amendment
-/// CORE-29).
+/// extension data of a creation, its hooks, `Host::create_run` and the
+/// `stats/tab` and `settings/page` locations, amendments CORE-29 and CORE-30).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

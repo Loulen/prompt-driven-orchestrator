@@ -10,9 +10,8 @@ use pdo_kernel::{Operation, ResourceKind, Verb};
 use tracing::warn;
 
 use crate::application::create_run::CreateRunRequest;
-use crate::application::paths::effective_repo_root;
+use crate::application::paths::effective_repo_of;
 use crate::application::session_claim::SessionClaim;
-use crate::domain::projection::project;
 use crate::Runs;
 
 /// `action` on the node `node_id` of `run_id`.
@@ -44,20 +43,19 @@ fn named_repo(field: Option<&str>) -> Option<&str> {
 
 impl Runs {
     /// The Projets the Run `run_id` is in: the one that owns its primary
-    /// repository. None for an unknown Run, for a repository no Projet owns,
-    /// or when the Projets cannot be read (logged).
+    /// repository, read from its Résumé (ADR-0084), never its log. None for
+    /// an unknown Run, for a repository no Projet owns, or when the Projets
+    /// cannot be read (logged).
     pub async fn projects_of_run(&self, run_id: &str) -> Vec<String> {
-        let events = match self.store.events(run_id).await {
-            Ok(events) => events,
+        let summary = match self.store.summary(run_id).await {
+            Ok(Some(summary)) => summary,
+            Ok(None) => return Vec::new(),
             Err(e) => {
                 warn!("the Projets of run {run_id} cannot be read: {e:#}");
                 return Vec::new();
             }
         };
-        let Some(run) = project(&events) else {
-            return Vec::new();
-        };
-        let repo = effective_repo_root(self, &run);
+        let repo = effective_repo_of(self, summary.target_repo.as_deref());
         self.projects_of_repository(&repo.to_string_lossy()).await
     }
 

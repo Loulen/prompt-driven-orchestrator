@@ -3,7 +3,7 @@ name = "pdo-extension-api"
 # The public contract of PDO's extensions (ADR-0081). Versioned on its own, 0.x
 # until a real extension runs on the published API alone (D22). Every other crate
 # of the workspace follows the product version and promises nothing.
-version = "0.9.0"
+version = "0.10.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

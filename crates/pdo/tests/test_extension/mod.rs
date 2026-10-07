@@ -35,7 +35,8 @@
 //!   four locations of 0.1 through their 0.1 slots (`Navigation`,
 //!   `SettingsPanel`, `ListFilter`/`DetailTab` of the Runs), so they prove the
 //!   0.1 form still renders; `topbar/end` through 0.2 contributions: a page with
-//!   its icon, an action calling [`SHOW_CONTEXT`] while a Run is selected, and
+//!   its icon (which opens `/ws` through `openProbedSocket` of
+//!   `@pdo/extension-ui`, 0.10, and shows the socket's state), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
 //!   an action whose `when` never holds. Every Action location (#30) through
 //!   one action each ([`ACTION_LOCATIONS`]), titled `Test <location>`, calling
 //!   the same function; the one of `run/item/menu` only while the row's Run is

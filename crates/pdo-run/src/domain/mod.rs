@@ -9,6 +9,7 @@
 //!   [`completion_refusal`], [`retry_verdict`], [`restart_verdict`],
 //!   [`reap_policy`], [`auto_fail`], [`child_awaiting`].
 //! - [`review_comment`]: the review comments a Run folds.
+//! - [`run_summary`]: the Résumé de Run the lists read (ADR-0084).
 //! - What a Run costs: [`prices`] (the price table's tiers) and [`run_cost`]
 //!   (the contributions and a transcript's usage).
 
@@ -34,6 +35,7 @@ pub mod review_comment;
 pub mod run_cost;
 pub mod run_refs;
 pub mod run_stall;
+pub mod run_summary;
 pub mod scheduler;
 pub mod state;
 pub mod switch_router;

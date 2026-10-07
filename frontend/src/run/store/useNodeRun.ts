@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { killNode, restartNode } from "../api/commands";
 import { markNodeDone, releaseNodeCompletion } from "../api/completion";
 import type { MarkNodeDoneOutcome, ReleaseNodeCompletionOutcome } from "../api/completion";
@@ -13,6 +13,8 @@ import {
 import type { PortIO } from "../api/nodes";
 import type { NodeState } from "../../shared/generated/NodeState";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
+import type { WsMessage } from "../model/liveStream";
+import { useLiveRefresh } from "./useLiveRefresh";
 
 function pollInterval(status: NodeStatus): number | null {
   switch (status) {
@@ -132,6 +134,7 @@ export function useNodeRun(
   const [actionVerdict, setActionVerdict] = useState<ActionVerdict | null>(null);
 
   const interval = pollInterval(node.status);
+  const reloadIORef = useRef<() => void>(() => {});
   const isStaleIter = selectedIter !== node.iter;
 
   // #315: the per-iter *rendered* prompt lives in the node's working dir, which
@@ -193,12 +196,22 @@ export function useNodeRun(
     }
 
     pollIO();
-    const timer = setInterval(pollIO, interval);
+    reloadIORef.current = () => void pollIO();
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      reloadIORef.current = () => {};
     };
   }, [interval, node.node_id, selectedIter, runId, isStaleIter, node.status]);
+
+  // ADR-0084: the I/O follow the Run's events while the event stream is open
+  // (a slow safety net aside), and the `pollInterval` cadence only while it is
+  // not.
+  const reloadIO = useCallback(() => reloadIORef.current(), []);
+  const concernsRun = useCallback(
+    (msg: WsMessage) => msg.type === "event" && msg.event?.run_id === runId,
+    [runId],
+  );
+  useLiveRefresh(reloadIO, concernsRun, interval, interval !== null && !isStaleIter);
 
   const stop = useCallback(async () => {
     try {

@@ -1,14 +1,18 @@
 //! The event log over SQLite: the `events` table and the tombstones of the
-//! forgotten Runs (ADR-0024).
+//! forgotten Runs (ADR-0024), with the Résumé de Run each append keeps in its
+//! own transaction (ADR-0084, `sqlite_run_summaries`).
 //!
 //! The free functions are what the readers outside a use case call directly
 //! (the session context's Run-side ports, the boot's schema), beside the
 //! [`EventStore`] port.
 
 use anyhow::{Context, Result};
+use sqlx::SqliteConnection;
 
+use super::sqlite_run_summaries as summaries;
 use crate::application::ports::{BoxFuture, EventStore};
 use crate::domain::event::{Event, EventKind};
+use crate::domain::run_summary::RunSummary;
 
 /// Create the log's tables and indexes. Idempotent.
 pub async fn init(db: &sqlx::SqlitePool) -> Result<()> {
@@ -51,11 +55,12 @@ pub async fn init(db: &sqlx::SqlitePool) -> Result<()> {
     .execute(db)
     .await
     .context("failed to create forgotten_runs table")?;
-    Ok(())
+    summaries::init(db).await
 }
 
-/// Insert `event`. Refuses a tombstoned run in the SAME statement as the
-/// insert, or a concurrent forget opens a TOCTOU window (ADR-0024).
+/// Insert `event`, and write its Run's Résumé in the same transaction
+/// (ADR-0084). Refuses a tombstoned run in the SAME statement as the insert,
+/// or a concurrent forget opens a TOCTOU window (ADR-0024).
 pub async fn append(db: &sqlx::SqlitePool, event: &Event) -> Result<()> {
     let kind_str = serde_json::to_value(&event.kind)
         .unwrap()
@@ -64,6 +69,9 @@ pub async fn append(db: &sqlx::SqlitePool, event: &Event) -> Result<()> {
         .to_string();
     let payload_str = event.payload.as_ref().map(|p| p.to_string());
 
+    // The insert comes first: it takes the write lock, so the log the Résumé
+    // is computed from is the one the transaction commits.
+    let mut tx = db.begin().await?;
     let result = sqlx::query(
         "INSERT INTO events (run_id, ts, kind, node_id, iter, payload)
          SELECT ?, ?, ?, ?, ?, ?
@@ -76,22 +84,30 @@ pub async fn append(db: &sqlx::SqlitePool, event: &Event) -> Result<()> {
     .bind(event.iter)
     .bind(&payload_str)
     .bind(&event.run_id)
-    .execute(db)
+    .execute(&mut *tx)
     .await
     .context("failed to append event")?;
     if result.rows_affected() == 0 {
         anyhow::bail!("run {} has been forgotten", event.run_id);
     }
+    summaries::write_in(&mut tx, &event.run_id, result.last_insert_rowid()).await?;
+    tx.commit().await.context("failed to commit the event")?;
     Ok(())
 }
 
 /// Every event of `run_id`, in append order.
 pub async fn load(db: &sqlx::SqlitePool, run_id: &str) -> Result<Vec<Event>> {
+    let mut conn = db.acquire().await.context("failed to load events")?;
+    load_in(&mut conn, run_id).await
+}
+
+/// [`load`], on `conn` (a transaction's included).
+pub(crate) async fn load_in(conn: &mut SqliteConnection, run_id: &str) -> Result<Vec<Event>> {
     let rows = sqlx::query_as::<_, EventRow>(
         "SELECT id, run_id, ts, kind, node_id, iter, payload FROM events WHERE run_id = ? ORDER BY id",
     )
     .bind(run_id)
-    .fetch_all(db)
+    .fetch_all(conn)
     .await
     .context("failed to load events")?;
 
@@ -134,6 +150,7 @@ pub async fn forget(db: &sqlx::SqlitePool, run_id: &str) -> Result<()> {
         .bind(run_id)
         .execute(&mut *tx)
         .await?;
+    summaries::drop_in(&mut tx, run_id).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -223,6 +240,22 @@ impl EventStore for SqliteEventStore {
 
     fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(forget(&self.db, run_id))
+    }
+
+    fn summaries(&self) -> BoxFuture<'_, Result<Vec<RunSummary>>> {
+        Box::pin(summaries::list(&self.db))
+    }
+
+    fn summary<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<Option<RunSummary>>> {
+        Box::pin(summaries::get(&self.db, run_id))
+    }
+
+    fn summaries_current(&self) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(summaries::current(&self.db))
+    }
+
+    fn replace_summaries(&self, all: Vec<RunSummary>) -> BoxFuture<'_, Result<()>> {
+        Box::pin(summaries::replace(&self.db, all))
     }
 }
 
@@ -368,6 +401,154 @@ mod tests {
             .is_err());
         // Forgetting twice is harmless.
         store.forget("gone").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_append_writes_its_run_s_summary_in_its_transaction() {
+        let store = store().await;
+        assert!(store.summaries().await.unwrap().is_empty());
+        store
+            .append(&event(
+                "r1",
+                EventKind::RunStarted,
+                Some(serde_json::json!({ "pipeline_name": "p", "target_repo": "/repo" })),
+            ))
+            .await
+            .unwrap();
+        // A log without `RunStarted` projects no Run: no Résumé.
+        store
+            .append(&event("orphan", EventKind::NodeStarted, None))
+            .await
+            .unwrap();
+        let summary = store.summary("r1").await.unwrap().unwrap();
+        assert_eq!(summary.pipeline_name, "p");
+        assert_eq!(summary.target_repo.as_deref(), Some("/repo"));
+        assert_eq!(store.summary("orphan").await.unwrap(), None);
+        assert_eq!(store.summaries().await.unwrap(), vec![summary]);
+
+        // A refused append (forgotten Run) writes nothing; forgetting drops
+        // the Résumé with the log.
+        store.forget("r1").await.unwrap();
+        assert_eq!(store.summary("r1").await.unwrap(), None);
+        assert!(store
+            .append(&event(
+                "r1",
+                EventKind::RunStarted,
+                Some(serde_json::json!({}))
+            ))
+            .await
+            .is_err());
+        assert_eq!(store.summary("r1").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn the_summaries_are_current_from_a_rebuild_on_until_a_write_they_missed() {
+        let store = store().await;
+        assert!(!store.summaries_current().await.unwrap(), "never built");
+        store.replace_summaries(Vec::new()).await.unwrap();
+        assert!(store.summaries_current().await.unwrap());
+
+        // The appends keep them current.
+        let started = event(
+            "r1",
+            EventKind::RunStarted,
+            Some(serde_json::json!({ "pipeline_name": "p" })),
+        );
+        store.append(&started).await.unwrap();
+        store
+            .append(&event("r1", EventKind::NodeStarted, None))
+            .await
+            .unwrap();
+        assert!(store.summaries_current().await.unwrap());
+
+        // A daemon that does not keep them writes to the log: not current.
+        sqlx::query("INSERT INTO events (run_id, ts, kind) VALUES ('r2', 't', 'run_started')")
+            .execute(&store.db)
+            .await
+            .unwrap();
+        assert!(!store.summaries_current().await.unwrap());
+        // And later appends do not hide it.
+        store
+            .append(&event("r1", EventKind::NodeCompleted, None))
+            .await
+            .unwrap();
+        assert!(!store.summaries_current().await.unwrap());
+
+        // Rebuilt; then such a daemon purges a Run's log but not its Résumé.
+        store.replace_summaries(Vec::new()).await.unwrap();
+        assert!(store.summaries_current().await.unwrap());
+        sqlx::query("INSERT INTO run_summaries (run_id, summary) VALUES ('ghost', '{}')")
+            .execute(&store.db)
+            .await
+            .unwrap();
+        assert!(!store.summaries_current().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_read_catches_up_with_events_written_behind_the_daemon() {
+        use crate::domain::run_summary::summarize;
+        let store = store().await;
+        store.replace_summaries(Vec::new()).await.unwrap();
+        store
+            .append(&event(
+                "r1",
+                EventKind::RunStarted,
+                Some(serde_json::json!({ "pipeline_name": "p" })),
+            ))
+            .await
+            .unwrap();
+
+        // A tool seeds the database of the running instance: two Runs, one
+        // event of r1.
+        for (run, kind, payload) in [
+            ("r2", "run_started", Some(r#"{"pipeline_name":"seeded"}"#)),
+            ("r3", "run_started", Some(r#"{"pipeline_name":"seeded"}"#)),
+            ("r1", "run_completed", None),
+        ] {
+            sqlx::query("INSERT INTO events (run_id, ts, kind, payload) VALUES (?, 't', ?, ?)")
+                .bind(run)
+                .bind(kind)
+                .bind(payload)
+                .execute(&store.db)
+                .await
+                .unwrap();
+        }
+        assert!(!store.summaries_current().await.unwrap());
+
+        // The daemon appends behind them: its Résumé is written, the mark
+        // stays behind the events it did not write.
+        store
+            .append(&event("r3", EventKind::NodeStarted, None))
+            .await
+            .unwrap();
+        assert!(!store.summaries_current().await.unwrap());
+
+        // The next read sees them all, and the mark is the log's again.
+        let r2 = store.summary("r2").await.unwrap().unwrap();
+        assert_eq!(r2.pipeline_name, "seeded");
+        let mut listed: Vec<String> = store
+            .summaries()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.run_id)
+            .collect();
+        listed.sort();
+        assert_eq!(listed, ["r1", "r2", "r3"]);
+        for run in ["r1", "r3"] {
+            assert_eq!(
+                store.summary(run).await.unwrap().unwrap(),
+                summarize(&store.events(run).await.unwrap()).unwrap()
+            );
+        }
+        assert!(store.summaries_current().await.unwrap());
+
+        // The appends keep them current from there.
+        store
+            .append(&event("r2", EventKind::NodeStarted, None))
+            .await
+            .unwrap();
+        assert!(store.summaries_current().await.unwrap());
     }
 
     #[tokio::test]

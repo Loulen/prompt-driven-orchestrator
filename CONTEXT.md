@@ -680,7 +680,7 @@ Les commandes disent **la vérité sur leur effet** : cible inconnue ⇒ 400 ava
 
 Toutes les transitions d'état d'un Pipeline Run sont des **événements append-only** dans une SQLite locale (`~/.pdo/pdo.db`). L'état courant d'un Run = projection des événements. Pas de « state.yaml » stocké en plus.
 
-**Résumé de Run** *(terme, ADR-0084)* : la projection persistée de ce que les listes et les contrôles d'accès lisent d'un Run (statut, nom, pipeline, parent, Projets), écrite dans la même transaction que l'événement qui la change. Jamais en retard sur l'event log, qui reste la seule source de vérité et le reconstruit entièrement. Le détail d'un Run, lui, projette toujours ses événements. _Éviter_ : « cache » (rien ne l'invalide, il n'est jamais périmé), « état du Run » (c'est la projection complète).
+**Résumé de Run** *(terme, ADR-0084)* : la projection persistée de ce que les listes et les contrôles d'accès lisent d'un Run (statut, nom, pipeline, parent, dépôt principal, dont se déduisent ses Projets), écrite dans la même transaction que l'événement qui la change. Jamais en retard sur l'event log, qui reste la seule source de vérité et le reconstruit entièrement. Le détail d'un Run, lui, projette toujours ses événements. _Éviter_ : « cache » (rien ne l'invalide, il n'est jamais périmé), « état du Run » (c'est la projection complète).
 
 ### Daemon PDO
 

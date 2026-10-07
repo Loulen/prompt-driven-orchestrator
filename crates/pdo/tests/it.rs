@@ -251,6 +251,11 @@ mod project_harness_resolution;
 #[path = "pty_bridge.rs"]
 mod pty_bridge;
 
+// ADR-0083: `/ws` and the PTY answer the client's Close; the journal of the
+// WebSockets (openings, closings, refused upgrades).
+#[path = "ws_closing.rs"]
+mod ws_closing;
+
 #[path = "shared_terminal.rs"]
 mod shared_terminal;
 

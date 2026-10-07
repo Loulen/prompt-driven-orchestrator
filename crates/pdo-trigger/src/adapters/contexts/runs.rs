@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use pdo_kernel::Actor;
 use pdo_run::application::create_run::{CreateRunRequest, TargetRepoInput};
-use pdo_run::domain::projection::project;
 use pdo_run::domain::state::SandboxMode;
 use pdo_run::Runs;
 use pdo_workspace::domain::provisioning::ProvisioningRules;
@@ -25,26 +24,19 @@ impl TriggerRuns for RunsOfTriggers {
     /// "max simultaneous live" hold with no extra state to track.
     fn live_count<'a>(&'a self, trigger_id: &'a str) -> BoxFuture<'a, usize> {
         Box::pin(async move {
-            let store = self.0.store();
-            let run_ids = match store.run_ids().await {
-                Ok(ids) => ids,
+            // The Résumés (ADR-0084): no Run's log is replayed.
+            match self.0.store().summaries().await {
+                Ok(summaries) => summaries
+                    .iter()
+                    .filter(|run| {
+                        run.triggered_by.as_deref() == Some(trigger_id) && run.status.is_live()
+                    })
+                    .count(),
                 Err(e) => {
-                    warn!("trigger scheduler: failed to load run ids: {e}");
-                    return 0;
-                }
-            };
-            let mut count = 0usize;
-            for run_id in run_ids {
-                let Ok(events) = store.events(&run_id).await else {
-                    continue;
-                };
-                if let Some(state) = project(&events) {
-                    if state.triggered_by.as_deref() == Some(trigger_id) && state.status.is_live() {
-                        count += 1;
-                    }
+                    warn!("trigger scheduler: failed to load the runs: {e}");
+                    0
                 }
             }
-            count
         })
     }
 

@@ -11,6 +11,7 @@ mod pane;
 mod sessions;
 mod terminal;
 mod wait;
+pub mod ws_log;
 
 use std::sync::Arc;
 

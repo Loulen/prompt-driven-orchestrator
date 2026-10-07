@@ -1,88 +1,111 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ABNORMAL_CLOSURE, probeSignIn } from "../../shared/http/signIn";
+import { useEffect, useSyncExternalStore } from "react";
+import { openProbedSocket, type ProbedSocket, type ProbedSocketState } from "../../shared/http/probedSocket";
 import type { WsMessage } from "../model/liveStream";
 
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
 
-const RECONNECT_INTERVAL = 3000;
+/** The `performance` mark of each opening of the event stream. */
+export const STREAM_OPEN_MARK = "ws:ouvert";
 
-export function useDaemonSocket() {
-  const [status, setStatus] = useState<ConnectionStatus>("disconnected");
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const listenersRef = useRef<Set<(msg: WsMessage) => void>>(new Set());
+/** The messages the stream hands its subscribers. */
+const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
+  "event",
+  "pipeline_changed",
+  "trigger_created",
+  "trigger_fired",
+  "trigger_deleted",
+  // #348: without this one the global-pause event is silently dropped here
+  // before it reaches the App dispatcher, so a second client's banner would
+  // never light up. (This transport allowlist is the easiest line in the
+  // ticket to miss.)
+  "triggers_paused",
+]);
 
-  const subscribe = useCallback((listener: (msg: WsMessage) => void) => {
-    listenersRef.current.add(listener);
-    return () => {
-      listenersRef.current.delete(listener);
-    };
-  }, []);
+/**
+ * The tab's one event stream (`/ws`), shared by everything that listens to
+ * it: the App, the Review page (ADR-0083: one stream per tab). Opened, through
+ * the probe, by the first user and closed with the last.
+ */
+const listeners = new Set<(msg: WsMessage) => void>();
+const statusListeners = new Set<() => void>();
+let stream: ProbedSocket | null = null;
+let users = 0;
+let status: ConnectionStatus = "disconnected";
 
-  useEffect(() => {
-    // `close()` in the cleanup fires the socket's "close" event asynchronously,
-    // after the effect is gone: without this flag its handler would schedule a
-    // reconnect nobody clears (a second socket after a StrictMode remount, a
-    // timer firing after a test environment is torn down).
-    let disposed = false;
-    function connect() {
-      if (disposed) return;
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${protocol}//${window.location.host}/ws`;
+function statusOf(state: ProbedSocketState): ConnectionStatus {
+  switch (state) {
+    case "ouvert":
+      return "connected";
+    case "hors_ligne":
+      return "reconnecting";
+    case "connexion":
+      return "disconnected";
+  }
+}
 
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
+function setStatus(next: ConnectionStatus) {
+  status = next;
+  for (const listener of statusListeners) listener();
+}
 
-      ws.addEventListener("open", () => {
-        setStatus("connected");
-      });
-
-      ws.addEventListener("message", (e) => {
-        try {
-          const msg: WsMessage = JSON.parse(e.data);
-          if (
-            msg.type === "event" ||
-            msg.type === "pipeline_changed" ||
-            msg.type === "trigger_created" ||
-            msg.type === "trigger_fired" ||
-            msg.type === "trigger_deleted" ||
-            // #348: without this line the global-pause event is silently dropped
-            // here before it reaches the App dispatcher, so a second client's
-            // banner would never light up. (This transport allowlist is the
-            // easiest line in the ticket to miss.)
-            msg.type === "triggers_paused"
-          ) {
-            for (const listener of listenersRef.current) {
-              listener(msg);
-            }
-          }
-        } catch {
-          // ignore malformed messages
-        }
-      });
-
-      ws.addEventListener("close", (event) => {
-        if (disposed) return;
-        setStatus("reconnecting");
-        wsRef.current = null;
-        // 0.8: a refused upgrade (1006, no handshake) says nothing to the
-        // browser; ask whether the UI must sign in first.
-        if (event.code === ABNORMAL_CLOSURE) void probeSignIn();
-        reconnectTimer.current = setTimeout(connect, RECONNECT_INTERVAL);
-      });
-
-      ws.addEventListener("error", () => {
-        ws.close();
-      });
+function acquire() {
+  users += 1;
+  if (stream) return;
+  const socket = openProbedSocket("/ws");
+  stream = socket;
+  socket.onState((state) => {
+    if (state === "ouvert") performance.mark?.(STREAM_OPEN_MARK);
+    setStatus(statusOf(state));
+  });
+  socket.onMessage((data) => {
+    if (typeof data !== "string") return;
+    let msg: WsMessage;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return; // ignore malformed messages
     }
+    if (!RELAYED.has(msg.type)) return;
+    for (const listener of listeners) listener(msg);
+  });
+}
 
-    connect();
-    return () => {
-      disposed = true;
-      clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
-    };
+function release() {
+  users -= 1;
+  if (users > 0 || !stream) return;
+  stream.close();
+  stream = null;
+  setStatus("disconnected");
+}
+
+/** Listen to the stream's messages; returns the unsubscribe. */
+export function subscribe(listener: (msg: WsMessage) => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function watchStatus(listener: () => void) {
+  statusListeners.add(listener);
+  return () => {
+    statusListeners.delete(listener);
+  };
+}
+
+/** The stream's status, without opening it: for a view inside the App, which
+ *  holds the stream. */
+export function useDaemonStreamStatus(): ConnectionStatus {
+  return useSyncExternalStore(watchStatus, () => status);
+}
+
+/** The tab's event stream: its status and its subscription. Every caller
+ *  shares one socket. */
+export function useDaemonSocket() {
+  const current = useSyncExternalStore(watchStatus, () => status);
+  useEffect(() => {
+    acquire();
+    return release;
   }, []);
-
-  return { status, subscribe };
+  return { status: current, subscribe };
 }

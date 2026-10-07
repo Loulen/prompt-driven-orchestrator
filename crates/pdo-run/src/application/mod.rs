@@ -2,7 +2,8 @@
 //!
 //! - Reading and writing the log: [`append_event`] (a transition, which never
 //!   asks the Autorisation d'opération, D10), [`events`], [`read_run`],
-//!   [`projections`], [`run_id`].
+//!   [`projections`], [`run_id`]; the Résumés de Run the lists read, rebuilt
+//!   from the log when they are not its own ([`run_summary`], ADR-0084).
 //! - The scheduler ([`scheduler`]): the interpreter of the evaluators'
 //!   actions and its drivers (advance, node completion, the retry of waiting
 //!   nodes, the run-level stall). A transition: it never asks the
@@ -59,6 +60,7 @@ pub mod retry_all;
 pub mod retry_node;
 pub mod run_id;
 pub mod run_pipeline;
+pub mod run_summary;
 pub mod runs;
 pub mod sandbox;
 pub mod sandbox_prep;

@@ -6,6 +6,12 @@
 //! this crate, as `PDO_FRONTEND_EMBED_DIR`: the `compression` feature of
 //! rust-embed refuses an absolute `folder`. Release builds compile the files in;
 //! debug builds read them from that folder at runtime (no `debug-embed`).
+//!
+//! Caching: a file of `assets/` carries the hash of its content in its name
+//! (Vite), so the browser keeps it for good (`immutable`); everything else
+//! (`index.html`, which names those files, and the unhashed shared modules of
+//! the extensions) is revalidated on every load (`no-cache`), so an update
+//! reaches the browser without emptying its cache.
 
 use axum::http::{header, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
@@ -15,7 +21,23 @@ use rust_embed::Embed;
 #[folder = "$PDO_FRONTEND_EMBED_DIR"]
 struct FrontendAssets;
 
+/// The folder Vite writes its hashed files to.
+const HASHED_DIR: &str = "assets/";
+
+/// A file whose name changes with its content: kept for good.
+const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
+/// Any other file: revalidated on every load.
+const REVALIDATE: &str = "no-cache";
+
 pub(crate) async fn static_handler(method: Method, uri: Uri) -> Response {
+    serve(method, &uri, |path| {
+        FrontendAssets::get(path).map(|content| content.data.into_owned())
+    })
+}
+
+/// The answer to `uri`, the files read through `file`.
+fn serve(method: Method, uri: &Uri, file: impl Fn(&str) -> Option<Vec<u8>>) -> Response {
     if method != Method::GET && method != Method::HEAD {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -23,34 +45,47 @@ pub(crate) async fn static_handler(method: Method, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
 
     if path.is_empty() || path == "index.html" {
-        return serve_index();
+        return serve_index(&file);
     }
 
-    match FrontendAssets::get(path) {
+    match file(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
             (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                content.data.into_owned(),
+                [
+                    (header::CONTENT_TYPE, mime.as_ref()),
+                    (header::CACHE_CONTROL, cache_control(path)),
+                ],
+                content,
             )
                 .into_response()
         }
-        None => serve_index(),
+        None => serve_index(&file),
     }
 }
 
-fn serve_index() -> Response {
-    match FrontendAssets::get("index.html") {
-        Some(content) => Html(content.data.into_owned()).into_response(),
+/// The `Cache-Control` of the file `path`.
+fn cache_control(path: &str) -> &'static str {
+    if path.starts_with(HASHED_DIR) {
+        IMMUTABLE
+    } else {
+        REVALIDATE
+    }
+}
+
+fn serve_index(file: &impl Fn(&str) -> Option<Vec<u8>>) -> Response {
+    let page = match file("index.html") {
+        Some(content) => Html(content).into_response(),
         None => {
             if cfg!(debug_assertions) {
                 Html(DEV_PLACEHOLDER).into_response()
             } else {
-                (StatusCode::NOT_FOUND, "frontend assets not found").into_response()
+                return (StatusCode::NOT_FOUND, "frontend assets not found").into_response();
             }
         }
-    }
+    };
+    ([(header::CACHE_CONTROL, REVALIDATE)], page).into_response()
 }
 
 const DEV_PLACEHOLDER: &str = r#"<!DOCTYPE html>
@@ -96,6 +131,50 @@ mod tests {
             .unwrap();
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("<!DOCTYPE html>") || text.contains("<!doctype html>"));
+    }
+
+    /// The SPA over two files: its page and one hashed asset.
+    fn files(path: &str) -> Option<Vec<u8>> {
+        match path {
+            "index.html" => {
+                Some(b"<!doctype html><script src=\"/assets/index-abc123.js\">".to_vec())
+            }
+            "assets/index-abc123.js" => Some(b"export {};".to_vec()),
+            "shared/react.js" => Some(b"export default {};".to_vec()),
+            _ => None,
+        }
+    }
+
+    fn cache_control_of(path: &str) -> String {
+        let response = serve(Method::GET, &path.parse::<Uri>().unwrap(), files);
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        response.headers()[header::CACHE_CONTROL]
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn a_hashed_asset_is_kept_for_good_and_the_page_revalidated() {
+        assert_eq!(
+            cache_control_of("/assets/index-abc123.js"),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(cache_control_of("/"), "no-cache");
+        assert_eq!(cache_control_of("/index.html"), "no-cache");
+        // A route of the front gets the page, revalidated like it.
+        assert_eq!(cache_control_of("/runs/r1/review"), "no-cache");
+        // An unhashed file keeps its name across versions.
+        assert_eq!(cache_control_of("/shared/react.js"), "no-cache");
+    }
+
+    #[tokio::test]
+    async fn the_embedded_page_is_revalidated() {
+        let resp = spa_app()
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.headers()[header::CACHE_CONTROL], "no-cache");
     }
 
     #[tokio::test]

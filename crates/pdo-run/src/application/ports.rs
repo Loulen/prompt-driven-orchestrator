@@ -13,15 +13,21 @@ use pdo_workspace::domain::project::Project;
 use pdo_workspace::domain::provisioning::{ProvisioningRules, ScopedRules};
 
 use crate::domain::event::Event;
+use crate::domain::run_summary::RunSummary;
 use crate::domain::state::{CostStat, RunState};
 
 /// The future an async port method returns (the ports are `dyn`, D23).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// The append-only event log of every Run.
+/// The append-only event log of every Run, and the Résumé de Run of each
+/// (ADR-0084).
 pub trait EventStore: Send + Sync {
     /// Record `event` at the end of its Run's log. Refused when the Run has
     /// been forgotten (ADR-0024), in the same step as the write.
+    ///
+    /// In the same transaction, the Résumé of the event's Run becomes
+    /// [`summarize`](crate::domain::run_summary::summarize) of its whole log,
+    /// the event included: a refused or failed append changes neither.
     fn append<'a>(&'a self, event: &'a Event) -> BoxFuture<'a, anyhow::Result<()>>;
     /// Every event of `run_id`, in append order. Empty for an unknown Run.
     fn events<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<Vec<Event>>>;
@@ -33,9 +39,21 @@ pub trait EventStore: Send + Sync {
     /// Whether a Run was started as a child of `run_id`. `true` when the log
     /// cannot tell: the caller then takes the slow, exact path.
     fn has_children<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, bool>;
-    /// Forget `run_id` for good (ADR-0024): tombstone it and purge its log in
-    /// one step, so no late writer resurrects it.
+    /// Forget `run_id` for good (ADR-0024): tombstone it and purge its log
+    /// and its Résumé in one step, so no late writer resurrects it.
     fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>>;
+    /// The Résumé of every Run, newest first (ADR-0084).
+    fn summaries(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunSummary>>>;
+    /// The Résumé of `run_id`; `None` for an unknown Run.
+    fn summary<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<Option<RunSummary>>>;
+    /// Whether the Résumés are those of the log: written under
+    /// [`SUMMARY_VERSION`](crate::domain::run_summary::SUMMARY_VERSION) and
+    /// up to its last event. `false` before the first rebuild, and after a
+    /// daemon that did not keep them wrote to the log.
+    fn summaries_current(&self) -> BoxFuture<'_, anyhow::Result<bool>>;
+    /// Replace every Résumé by `summaries`, in one step, and mark them
+    /// current.
+    fn replace_summaries(&self, summaries: Vec<RunSummary>) -> BoxFuture<'_, anyhow::Result<()>>;
 }
 
 /// The reads across every Run's log that the downstream contexts aggregate

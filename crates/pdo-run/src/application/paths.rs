@@ -18,9 +18,13 @@ use pdo_workspace::adapters::git::worktrees::worktree_dir_for_run;
 /// `target_repo` is required where there is a caller to answer 400 to, and resolved
 /// where there is only a past record to interpret.
 pub fn effective_repo_root(state: &Runs, run_state: &state::RunState) -> PathBuf {
-    run_state
-        .target_repo
-        .as_ref()
+    effective_repo_of(state, run_state.target_repo.as_deref())
+}
+
+/// [`effective_repo_root`] of a Run whose `target_repo` is `target_repo` (a
+/// Résumé de Run's, ADR-0084).
+pub fn effective_repo_of(state: &Runs, target_repo: Option<&str>) -> PathBuf {
+    target_repo
         .map(PathBuf::from)
         .unwrap_or_else(|| state.repo_root.clone())
 }

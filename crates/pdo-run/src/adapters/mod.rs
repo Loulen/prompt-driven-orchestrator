@@ -17,3 +17,4 @@ pub mod run_cost;
 pub mod run_dir_watch;
 pub mod sqlite_event_store;
 pub mod sqlite_event_windows;
+mod sqlite_run_summaries;

@@ -145,8 +145,14 @@ async fn seed_extension_skills(seeding: &pdo_skill::Skills, host: &dyn Extension
 }
 
 pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
-    // The event log and the tombstones of the forgotten Runs (ADR-0024).
+    // The event log and the tombstones of the forgotten Runs (ADR-0024), with
+    // the Résumés de Run (ADR-0084), rebuilt from the log unless they are its
+    // own — before the daemon serves anything.
     pdo_run::adapters::sqlite_event_store::init(db).await?;
+    let events = pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone());
+    pdo_run::application::run_summary::ensure_summaries(&events)
+        .await
+        .context("failed to rebuild the run summaries")?;
 
     // The Triggers' tables belong to the trigger context (#927).
     pdo_trigger::adapters::sqlite::init(db)

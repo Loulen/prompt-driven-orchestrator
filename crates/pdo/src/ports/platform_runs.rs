@@ -6,7 +6,6 @@ use std::sync::Arc;
 use pdo_platform::application::ports::{BoxFuture, Runs as PlatformRuns};
 use pdo_run::application::session_claim::{verify_session_claim, SessionClaim};
 use pdo_run::domain::event::{Event, EventKind};
-use pdo_run::domain::projection::project;
 use pdo_run::Runs;
 
 /// The run context behind the platform's port.
@@ -63,22 +62,11 @@ impl PlatformRuns for RunsOfPlatform {
     /// confirm dialog counts.
     fn count_live(&self) -> BoxFuture<'_, usize> {
         Box::pin(async move {
-            let store = self.0.store();
-            let Ok(run_ids) = store.run_ids().await else {
+            // The Résumés (ADR-0084): no Run's log is replayed.
+            let Ok(summaries) = self.0.store().summaries().await else {
                 return 0;
             };
-            let mut live = 0;
-            for run_id in run_ids {
-                let Ok(events) = store.events(&run_id).await else {
-                    continue;
-                };
-                if let Some(run_state) = project(&events) {
-                    if run_state.status.is_live() {
-                        live += 1;
-                    }
-                }
-            }
-            live
+            summaries.iter().filter(|run| run.status.is_live()).count()
         })
     }
 }

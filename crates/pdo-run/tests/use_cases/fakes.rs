@@ -11,6 +11,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_run::application::ports::*;
 use pdo_run::domain::event::{Event, EventKind};
+use pdo_run::domain::run_summary::{summarize, RunSummary};
 use pdo_run::domain::state::{CostStat, RunState};
 use pdo_run::{Runs, RunsOptions, RunsPorts};
 use pdo_sandbox::application::ports::{SandboxProfileRepository, StoreError};
@@ -23,13 +24,19 @@ use pdo_workspace::domain::project::Project;
 use pdo_workspace::domain::provisioning::{ProvisioningRules, ProvisioningScope, ScopedRules};
 use tokio::sync::broadcast;
 
-/// The event log, as a list. A Run listed in `forgotten` refuses every append;
-/// `broken` makes every read fail.
+/// The event log, as a list, with the Résumé de Run of each (ADR-0084). A
+/// Run listed in `forgotten` refuses every append; `broken` makes every read
+/// fail; `failing_summary` makes the next append fail once its event is
+/// written, as a failed transaction would: neither the event nor the Résumé
+/// stays. `summaries_current` is the mark of a rebuild.
 #[derive(Default)]
 pub struct Store {
     pub events: Mutex<Vec<Event>>,
     pub forgotten: Mutex<HashSet<String>>,
     pub broken: bool,
+    pub summaries: Mutex<BTreeMap<String, RunSummary>>,
+    pub summaries_current: Mutex<bool>,
+    pub failing_summary: Mutex<bool>,
 }
 
 impl EventStore for Store {
@@ -41,6 +48,20 @@ impl EventStore for Store {
             let mut events = self.events.lock().unwrap();
             let mut stored = event.clone();
             stored.id = Some(events.len() as i64 + 1);
+            let mut log: Vec<Event> = events
+                .iter()
+                .filter(|e| e.run_id == event.run_id)
+                .cloned()
+                .collect();
+            log.push(stored.clone());
+            if std::mem::take(&mut *self.failing_summary.lock().unwrap()) {
+                anyhow::bail!("failed to write the run summary");
+            }
+            let mut summaries = self.summaries.lock().unwrap();
+            match summarize(&log) {
+                Some(summary) => summaries.insert(event.run_id.clone(), summary),
+                None => summaries.remove(&event.run_id),
+            };
             events.push(stored);
             Ok(())
         })
@@ -99,6 +120,42 @@ impl EventStore for Store {
         Box::pin(async move {
             self.forgotten.lock().unwrap().insert(run_id.to_string());
             self.events.lock().unwrap().retain(|e| e.run_id != run_id);
+            self.summaries.lock().unwrap().remove(run_id);
+            Ok(())
+        })
+    }
+
+    fn summaries(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunSummary>>> {
+        Box::pin(async move {
+            if self.broken {
+                anyhow::bail!("failed to load the run summaries");
+            }
+            Ok(self
+                .summaries
+                .lock()
+                .unwrap()
+                .values()
+                .rev()
+                .cloned()
+                .collect())
+        })
+    }
+
+    fn summary<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<Option<RunSummary>>> {
+        Box::pin(async move { Ok(self.summaries.lock().unwrap().get(run_id).cloned()) })
+    }
+
+    fn summaries_current(&self) -> BoxFuture<'_, anyhow::Result<bool>> {
+        Box::pin(async move { Ok(*self.summaries_current.lock().unwrap()) })
+    }
+
+    fn replace_summaries(&self, all: Vec<RunSummary>) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async move {
+            *self.summaries.lock().unwrap() = all
+                .into_iter()
+                .map(|summary| (summary.run_id.clone(), summary))
+                .collect();
+            *self.summaries_current.lock().unwrap() = true;
             Ok(())
         })
     }

@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use pdo_kernel::authorization::{authorize_read, Denied};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
-use crate::application::paths::effective_repo_root;
+use crate::application::paths::effective_repo_of;
+use crate::domain::run_summary::RunSummary;
 use crate::domain::state::RunState;
 use crate::Runs;
 
@@ -56,12 +57,12 @@ pub struct ReadableRuns<'a> {
 
 impl ReadableRuns<'_> {
     /// Whether the actor may read `run`.
-    pub async fn keeps(&mut self, run: &RunState) -> bool {
+    pub async fn keeps(&mut self, run: &impl ListedRun) -> bool {
         let host = self.runs.extensions();
         if host.allows_everything() {
             return true;
         }
-        let repo = effective_repo_root(self.runs, run)
+        let repo = effective_repo_of(self.runs, run.target_repo())
             .to_string_lossy()
             .into_owned();
         let projects = match self.projects.get(&repo) {
@@ -72,12 +73,12 @@ impl ReadableRuns<'_> {
                 projects
             }
         };
-        let operation = read_run(&run.run_id).in_projects(projects);
+        let operation = read_run(run.run_id()).in_projects(projects);
         authorize_read(host, self.actor, &operation).is_ok()
     }
 
     /// `runs`, without those the actor may not read.
-    pub async fn retain(&mut self, runs: &mut Vec<RunState>) {
+    pub async fn retain<R: ListedRun>(&mut self, runs: &mut Vec<R>) {
         let mut kept = Vec::with_capacity(runs.len());
         for run in runs.drain(..) {
             if self.keeps(&run).await {
@@ -85,5 +86,30 @@ impl ReadableRuns<'_> {
             }
         }
         *runs = kept;
+    }
+}
+
+/// A Run of a list, as the read filter reads it: a projected state or a
+/// Résumé de Run (ADR-0084).
+pub trait ListedRun {
+    fn run_id(&self) -> &str;
+    fn target_repo(&self) -> Option<&str>;
+}
+
+impl ListedRun for RunState {
+    fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    fn target_repo(&self) -> Option<&str> {
+        self.target_repo.as_deref()
+    }
+}
+
+impl ListedRun for RunSummary {
+    fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    fn target_repo(&self) -> Option<&str> {
+        self.target_repo.as_deref()
     }
 }

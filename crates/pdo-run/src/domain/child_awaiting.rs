@@ -7,10 +7,11 @@
 //! tree is free because the overlay is recursive (a grandchild's wait climbs
 //! through its parent to the grandparent).
 //!
-//! Pure: takes the projected states of every run and rewrites the parents in
-//! place. The HTTP reads (`GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/children`)
-//! all go through [`overlay`] so the list dot, the node banner and the
-//! Orchestration tab can never disagree about the same child.
+//! Pure: takes every run and rewrites the parents in place. The HTTP reads
+//! (`GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/children`) all go through
+//! [`overlay`] so the list dot, the node banner and the Orchestration tab can
+//! never disagree about the same child. It works on the projected states (the
+//! detail) as on the Résumés de Run (the lists, ADR-0084): [`AwaitingTree`].
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,25 +24,49 @@ pub fn child_awaiting_reason(child_name: &str) -> String {
     format!("child run {child_name} is awaiting you")
 }
 
+/// The awaiting child a parent is lifted by.
+#[derive(Debug, Clone)]
+pub struct ChildWait {
+    pub child_id: String,
+    /// Its name, else its id.
+    pub child_name: String,
+    /// The node of the parent the child hangs from.
+    pub parent_node: Option<String>,
+    /// When the child started waiting, when it says.
+    pub since: Option<String>,
+}
+
+/// A Run as the overlay reads and lifts it.
+pub trait AwaitingTree {
+    fn run_id(&self) -> &str;
+    fn parent_run_id(&self) -> Option<&str>;
+    fn status(&self) -> &RunStatus;
+    /// What a parent of this Run is lifted by, this Run awaiting.
+    fn as_child_wait(&self) -> ChildWait;
+    /// Become awaiting because of `child`.
+    fn lift(&mut self, child: &ChildWait);
+}
+
 /// Apply the derived overlay to every run of `runs`. A `Running` run whose
 /// (live) child is `AwaitingUser` — itself possibly by derivation — becomes
-/// `AwaitingUser` with the reason naming the child; the parent **node** the
-/// child hangs from (`parent_node_id`) becomes `AwaitingUser` too when it holds
-/// a session, with `cause = child_awaiting` and the child's id for the « Open
-/// <child> → » link. Nothing is written anywhere.
+/// `AwaitingUser` with the reason naming the child; for a projected state, the
+/// parent **node** the child hangs from (`parent_node_id`) becomes
+/// `AwaitingUser` too when it holds a session, with `cause = child_awaiting`
+/// and the child's id for the « Open <child> → » link. Nothing is written
+/// anywhere.
 ///
 /// Only a **`Running`** parent is lifted: a paused or terminal parent is not
 /// waiting on anyone, and a parent already `AwaitingUser` on its own account
 /// keeps its own reason (its own wait comes first).
-pub fn overlay(runs: &mut [RunState]) {
+pub fn overlay<T: AwaitingTree>(runs: &mut [T]) {
     let index: HashMap<String, usize> = runs
         .iter()
         .enumerate()
-        .map(|(i, r)| (r.run_id.clone(), i))
+        .map(|(i, r)| (r.run_id().to_string(), i))
         .collect();
     let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
     for (i, run) in runs.iter().enumerate() {
-        if let Some(parent) = run.parent_run_id.as_deref().and_then(|p| index.get(p)) {
+        if let Some(parent) = run.parent_run_id().and_then(|p| index.get(p)) {
             children.entry(*parent).or_default().push(i);
         }
     }
@@ -55,9 +80,9 @@ pub fn overlay(runs: &mut [RunState]) {
 /// Is run `i` awaiting its user, on its own account or by derivation? Rewrites
 /// the run when the answer comes from a child. Memoised; the `visiting` set
 /// guards against a (malformed) cycle in the provenance links.
-fn effective_awaiting(
+fn effective_awaiting<T: AwaitingTree>(
     i: usize,
-    runs: &mut [RunState],
+    runs: &mut [T],
     children: &HashMap<usize, Vec<usize>>,
     memo: &mut HashMap<usize, bool>,
     visiting: &mut HashSet<usize>,
@@ -68,10 +93,9 @@ fn effective_awaiting(
     if !visiting.insert(i) {
         return false;
     }
-    let own = runs[i].status == RunStatus::AwaitingUser;
-    let result = if own {
+    let result = if *runs[i].status() == RunStatus::AwaitingUser {
         true
-    } else if runs[i].status != RunStatus::Running {
+    } else if *runs[i].status() != RunStatus::Running {
         false
     } else {
         // The first awaiting child, in a stable order (children are pushed in
@@ -79,7 +103,7 @@ fn effective_awaiting(
         let kids = children.get(&i).cloned().unwrap_or_default();
         let mut awaiting_child: Option<usize> = None;
         for k in kids {
-            if !runs[k].status.is_live() {
+            if !runs[k].status().is_live() {
                 continue;
             }
             if effective_awaiting(k, runs, children, memo, visiting) {
@@ -90,38 +114,8 @@ fn effective_awaiting(
         match awaiting_child {
             None => false,
             Some(k) => {
-                let child_id = runs[k].run_id.clone();
-                let child_name = runs[k].name.clone().unwrap_or_else(|| child_id.clone());
-                let parent_node = runs[k].parent_node_id.clone();
-                // The child's own `since` when it has one, so the parent's
-                // « waiting N min » counts from the same instant.
-                let since = parent_awaiting_since(&runs[k]);
-                let parent = &mut runs[i];
-                parent.status = RunStatus::AwaitingUser;
-                if parent.awaiting_reason.is_none() {
-                    parent.awaiting_reason = Some(child_awaiting_reason(&child_name));
-                }
-                if let Some(node) = parent_node.and_then(|id| parent.nodes.get_mut(&id)) {
-                    if node.status == NodeStatus::Running {
-                        node.status = NodeStatus::AwaitingUser;
-                        // The node detail renders the iteration **on screen**
-                        // (#617), so the latest iteration must agree with the
-                        // rollup or the banner never shows (FP #793, finding 1).
-                        let latest = node.iter;
-                        if let Some(attempt) = node.iterations.iter_mut().find(|a| a.iter == latest)
-                        {
-                            if attempt.status == NodeStatus::Running {
-                                attempt.status = NodeStatus::AwaitingUser;
-                            }
-                        }
-                        node.awaiting = Some(AwaitingInfo {
-                            cause: AWAITING_CAUSE_CHILD_AWAITING.to_string(),
-                            message: Some(child_awaiting_reason(&child_name)),
-                            since: since.unwrap_or_else(pdo_kernel::clock::now_iso),
-                            child_run_id: Some(child_id),
-                        });
-                    }
-                }
+                let wait = runs[k].as_child_wait();
+                runs[i].lift(&wait);
                 true
             }
         }
@@ -129,6 +123,67 @@ fn effective_awaiting(
     visiting.remove(&i);
     memo.insert(i, result);
     result
+}
+
+impl AwaitingTree for RunState {
+    fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    fn parent_run_id(&self) -> Option<&str> {
+        self.parent_run_id.as_deref()
+    }
+
+    fn status(&self) -> &RunStatus {
+        &self.status
+    }
+
+    fn as_child_wait(&self) -> ChildWait {
+        ChildWait {
+            child_id: self.run_id.clone(),
+            child_name: self.name.clone().unwrap_or_else(|| self.run_id.clone()),
+            parent_node: self.parent_node_id.clone(),
+            // The child's own `since` when it has one, so the parent's
+            // « waiting N min » counts from the same instant.
+            since: parent_awaiting_since(self),
+        }
+    }
+
+    fn lift(&mut self, child: &ChildWait) {
+        self.status = RunStatus::AwaitingUser;
+        if self.awaiting_reason.is_none() {
+            self.awaiting_reason = Some(child_awaiting_reason(&child.child_name));
+        }
+        let Some(node) = child
+            .parent_node
+            .as_ref()
+            .and_then(|id| self.nodes.get_mut(id))
+        else {
+            return;
+        };
+        if node.status != NodeStatus::Running {
+            return;
+        }
+        node.status = NodeStatus::AwaitingUser;
+        // The node detail renders the iteration **on screen** (#617), so the
+        // latest iteration must agree with the rollup or the banner never
+        // shows (FP #793, finding 1).
+        let latest = node.iter;
+        if let Some(attempt) = node.iterations.iter_mut().find(|a| a.iter == latest) {
+            if attempt.status == NodeStatus::Running {
+                attempt.status = NodeStatus::AwaitingUser;
+            }
+        }
+        node.awaiting = Some(AwaitingInfo {
+            cause: AWAITING_CAUSE_CHILD_AWAITING.to_string(),
+            message: Some(child_awaiting_reason(&child.child_name)),
+            since: child
+                .since
+                .clone()
+                .unwrap_or_else(pdo_kernel::clock::now_iso),
+            child_run_id: Some(child.child_id.clone()),
+        });
+    }
 }
 
 fn parent_awaiting_since(child: &RunState) -> Option<String> {

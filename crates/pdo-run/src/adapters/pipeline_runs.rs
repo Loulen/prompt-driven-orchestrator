@@ -7,7 +7,6 @@ use std::sync::Arc;
 use pdo_pipeline::application::ports::{ActiveRuns, BoxFuture};
 
 use crate::application::ports::EventStore;
-use crate::domain::projection::project;
 use crate::domain::state::RunStatus;
 
 /// The Runs of the event log.
@@ -21,24 +20,18 @@ impl ActiveRuns for PipelineRuns {
     /// by stem), so they refuse.
     fn using<'a>(&'a self, pipeline_id: &'a str) -> BoxFuture<'a, usize> {
         Box::pin(async move {
-            let mut active_count: usize = 0;
-            if let Ok(run_ids) = self.0.run_ids().await {
-                for run_id in &run_ids {
-                    let Ok(events) = self.0.events(run_id).await else {
-                        continue;
-                    };
-                    let Some(run_state) = project(&events) else {
-                        continue;
-                    };
-                    if run_state.pipeline_name == pipeline_id
-                        && run_state.status != RunStatus::Completed
-                        && run_state.status != RunStatus::Archived
-                    {
-                        active_count += 1;
-                    }
-                }
-            }
-            active_count
+            // The Résumés (ADR-0084): no Run's log is replayed.
+            let Ok(summaries) = self.0.summaries().await else {
+                return 0;
+            };
+            summaries
+                .iter()
+                .filter(|run| {
+                    run.pipeline_name == pipeline_id
+                        && run.status != RunStatus::Completed
+                        && run.status != RunStatus::Archived
+                })
+                .count()
         })
     }
 }

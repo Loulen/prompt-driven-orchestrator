@@ -13,9 +13,8 @@ use ts_rs::TS;
 
 use crate::application::events::reload_run_state_with;
 use crate::domain::child_awaiting;
-use crate::domain::event::Event;
-use crate::domain::projection::{is_stalled, project};
-use crate::domain::state::{CostStat, RunState, RunStatus};
+use crate::domain::projection::project;
+use crate::domain::state::{CostStat, RunStatus};
 use crate::Runs;
 
 /// One child Run of `GET /runs/{run_id}/children` — the read model the
@@ -77,7 +76,9 @@ impl Runs {
     /// `GET /runs` — the global list stays cheap (ADR-0052: derived on read, never
     /// persisted).
     ///
-    /// Only the children `actor` may read (CORE-5).
+    /// Only the children `actor` may read (CORE-5). The children are found
+    /// in the Résumés (ADR-0084); only a child's own log is replayed, for its
+    /// cost.
     pub async fn run_children(&self, actor: &Actor, run_id: &str) -> Response {
         let state = self;
         let run_id = run_id.to_string();
@@ -87,48 +88,27 @@ impl Runs {
             return (StatusCode::NOT_FOUND, "run not found").into_response();
         };
 
-        let run_ids = match state.store().run_ids().await {
-            Ok(ids) => ids,
+        let mut summaries = match state.store().summaries().await {
+            Ok(summaries) => summaries,
             Err(e) => {
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
         };
-
-        let mut by_node: HashMap<Option<String>, Vec<RunChildEntry>> = HashMap::new();
-        let mut projected: Vec<(Vec<Event>, RunState)> = Vec::new();
-        for child_id in run_ids {
-            if child_id == run_id {
-                continue;
-            }
-            let events = match state.store().events(&child_id).await {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let Some(child) = project(&events) else {
-                continue;
-            };
-            projected.push((events, child));
-        }
         // #588 / ADR-0069 §4: a grandchild's wait shows on the child row too, so
         // the Orchestration tab and the run list agree about the same child.
-        let mut states: Vec<RunState> = projected.iter().map(|(_, s)| s.clone()).collect();
-        child_awaiting::overlay(&mut states);
-        let mut readable = self.readable(actor);
-        for ((events, _), child) in projected.into_iter().zip(states) {
-            if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
-                continue;
-            }
-            if !readable.keeps(&child).await {
-                continue;
-            }
-            let cost = state.live_facts.cost(&child, &events).await;
-            let stalled = is_stalled(&child);
+        child_awaiting::overlay(&mut summaries);
+        summaries.retain(|child| child.parent_run_id.as_deref() == Some(run_id.as_str()));
+        self.readable(actor).retain(&mut summaries).await;
+
+        let mut by_node: HashMap<Option<String>, Vec<RunChildEntry>> = HashMap::new();
+        for child in summaries {
+            let cost = self.cost_of(&child.run_id).await;
             let entry = RunChildEntry {
                 run_id: child.run_id,
                 pipeline_name: child.pipeline_name,
                 name: child.name,
                 status: child.status,
-                stalled,
+                stalled: child.stalled,
                 started_at: child.started_at,
                 completed_at: child.completed_at,
                 cost,
@@ -166,5 +146,13 @@ impl Runs {
         }
 
         Json(RunChildrenResponse { run_id, nodes }).into_response()
+    }
+
+    /// The cost of the child `run_id`, derived on read from its log
+    /// (ADR-0052): the one log the children read replays, a child's own.
+    async fn cost_of(&self, run_id: &str) -> Option<CostStat> {
+        let events = self.store().events(run_id).await.ok()?;
+        let child = project(&events)?;
+        self.live_facts.cost(&child, &events).await
     }
 }

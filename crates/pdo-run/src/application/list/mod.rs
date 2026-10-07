@@ -1,6 +1,7 @@
 //! The reads of the Runs as a list: every Run as the list shows it
 //! (`GET /runs`), the terminal ones whose disk can be reclaimed ([`reapable`]),
-//! and a Run's children ([`children`]).
+//! and a Run's children ([`children`]). The list and the children read the
+//! Résumés de Run (ADR-0084), never a Run's log.
 
 pub mod children;
 pub mod reapable;
@@ -13,9 +14,8 @@ use pdo_kernel::{Actor, ResourceKind};
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::application::paths::effective_repo_root;
+use crate::application::paths::effective_repo_of;
 use crate::domain::child_awaiting;
-use crate::domain::projection::{is_stalled, project};
 use crate::domain::state::RunStatus;
 use crate::Runs;
 
@@ -27,7 +27,8 @@ pub struct RunListEntry {
     pub status: RunStatus,
     /// Display-only "no forward progress" overlay: true when the run has no
     /// running/waiting node and a stale node, so its dot renders amber even
-    /// though `status` stays `running`. Derived per read by `crate::domain::projection::is_stalled`.
+    /// though `status` stays `running`. Derived by `crate::domain::projection::is_stalled`
+    /// into the Résumé.
     pub stalled: bool,
     pub started_at: Option<String>,
     /// Why the Run ended non-green. Carried on the *list* entry so the red dot has
@@ -79,61 +80,46 @@ pub struct RunListEntry {
 impl Runs {
     /// `GET /runs`: every Run `actor` may read (CORE-5) carrying the
     /// attributes `filter` asks for, as the list shows it, with its
-    /// attributes.
+    /// attributes. Read from the Résumés (ADR-0084).
     pub async fn list_runs(&self, actor: &Actor, filter: AttributeFilter) -> Response {
-        let state = self;
-        let run_ids = match state.store().run_ids().await {
-            Ok(ids) => ids,
+        let mut summaries = match self.store().summaries().await {
+            Ok(summaries) => summaries,
             Err(e) => {
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
         };
-
-        let mut states = Vec::new();
-        for run_id in run_ids {
-            let events = match state.store().events(&run_id).await {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if let Some(run_state) = project(&events) {
-                states.push(run_state);
-            }
-        }
         // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read.
-        child_awaiting::overlay(&mut states);
+        child_awaiting::overlay(&mut summaries);
         let attributed = AttributedList::read(self.extensions(), ResourceKind::Run, filter).await;
-        states.retain(|run_state| attributed.keeps(&run_state.run_id));
-        self.readable(actor).retain(&mut states).await;
+        summaries.retain(|summary| attributed.keeps(&summary.run_id));
+        self.readable(actor).retain(&mut summaries).await;
 
-        let mut runs = Vec::new();
-        for run_state in states {
-            {
-                let stalled = is_stalled(&run_state);
-                // Must be computed before `run_state`'s fields move into the literal:
-                // `effective_repo_root` borrows `&run_state`.
-                let effective_repo = effective_repo_root(state, &run_state)
+        let runs: Vec<RunListEntry> = summaries
+            .into_iter()
+            .map(|summary| {
+                let effective_repo = effective_repo_of(self, summary.target_repo.as_deref())
                     .to_string_lossy()
                     .into_owned();
-                let attributes = attributed.of(&run_state.run_id);
-                runs.push(RunListEntry {
-                    run_id: run_state.run_id,
-                    pipeline_name: run_state.pipeline_name,
-                    status: run_state.status,
-                    stalled,
-                    started_at: run_state.started_at,
-                    failure_reason: run_state.failure_reason,
-                    awaiting_reason: run_state.awaiting_reason,
-                    awaiting_reason_code: run_state.awaiting_reason_code,
-                    name: run_state.name,
-                    triggered_by: run_state.triggered_by,
-                    created_by: run_state.created_by,
-                    parent_run_id: run_state.parent_run_id,
-                    parent_node_id: run_state.parent_node_id,
+                let attributes = attributed.of(&summary.run_id);
+                RunListEntry {
+                    run_id: summary.run_id,
+                    pipeline_name: summary.pipeline_name,
+                    status: summary.status,
+                    stalled: summary.stalled,
+                    started_at: summary.started_at,
+                    failure_reason: summary.failure_reason,
+                    awaiting_reason: summary.awaiting_reason,
+                    awaiting_reason_code: summary.awaiting_reason_code,
+                    name: summary.name,
+                    triggered_by: summary.triggered_by,
+                    created_by: summary.created_by,
+                    parent_run_id: summary.parent_run_id,
+                    parent_node_id: summary.parent_node_id,
                     effective_repo,
                     attributes,
-                });
-            }
-        }
+                }
+            })
+            .collect();
 
         Json(runs).into_response()
     }

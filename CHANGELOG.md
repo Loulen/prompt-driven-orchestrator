@@ -20,12 +20,15 @@ ADR-0084, ADR-0081 (amendement CORE-32) et `docs/reference/extension-ui.md` (« 
   sonde HTTP réussie (`GET /actors/me`) ; tant qu'elle échoue, la sonde se répète (backoff avec
   jitter, ~1 s à ~30 s), un onglet caché ne sonde pas. Le flux d'événements, les terminaux et,
   par `openProbedSocket` du module `@pdo/extension-ui` (0.10.0), les interfaces des extensions.
-  Un onglet n'ouvre qu'un flux d'événements, la page Review comprise.
+  Un onglet n'ouvre qu'un flux d'événements, la page Review comprise. Le terminal d'une node
+  se rattache seul après un redémarrage du daemon (`reconnect: "after-drop"`) ; fermé par le
+  daemon (session terminée), il le reste.
 - **Fermetures propres** : `/ws` et le PTY répondent à la trame Close du client.
 - **Journal** : une ligne par ouverture, fermeture et upgrade refusé d'un WebSocket.
 - **Cache-Control** : `assets/` (noms hachés) `immutable`, le reste `no-cache`.
 - **Résumé de Run** : nouvelle table `run_summaries`, reconstruite depuis l'event log au premier
-  démarrage (et après un daemon qui ne la tenait pas). `GET /runs`, `GET /runs/{id}/children`
+  démarrage (et après un daemon qui ne la tenait pas) ; des événements écrits dans la base d'une
+  instance lancée, hors du daemon, sont rattrapés à la lecture suivante. `GET /runs`, `GET /runs/{id}/children`
   et les contrôles d'accès d'un Run la lisent ; contrat HTTP inchangé. Le front regroupe ses
   rafraîchissements (~300 ms) et ne poll plus les enfants d'un Run ni les I/O d'une node tant
   que le flux est ouvert.

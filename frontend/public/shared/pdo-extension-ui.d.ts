@@ -86,8 +86,12 @@ export interface ProbedSocket {
 /** Open `path` (`/ext/<id>/…`) on the daemon of the page, only after an HTTP
  *  probe succeeded; while it fails, the probe repeats (backoff with jitter), a
  *  hidden tab does not probe, a refused session goes to the sign-in page.
- *  `reconnect: false`: never reopened once it ended. Since 0.10. */
-export function openProbedSocket(path: string, options?: { reconnect?: boolean }): ProbedSocket;
+ *  `reconnect: false`: never reopened once it ended; `"after-drop"`: reopened
+ *  only when it dropped without the daemon's Close. Since 0.10. */
+export function openProbedSocket(
+  path: string,
+  options?: { reconnect?: boolean | "after-drop" },
+): ProbedSocket;
 
 declare const ExtensionUi: {
   version: string;

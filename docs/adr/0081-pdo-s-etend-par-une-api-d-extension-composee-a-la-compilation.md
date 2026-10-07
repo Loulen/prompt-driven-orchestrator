@@ -721,7 +721,8 @@ une boucle de reconnexion à elle.
 - **Contrat** : la connexion rendue offre `send` (faux tant qu'elle n'est pas ouverte),
   `onMessage` (texte en `string`, binaire en `ArrayBuffer`), `onState` (`connexion`, `ouvert` à
   chaque ouverture, `hors_ligne`), `state` et `close()` (code 1000). `reconnect: false` : sondée
-  avant sa seule ouverture, jamais rouverte.
+  avant sa seule ouverture, jamais rouverte ; `reconnect: "after-drop"` : rouverte seulement
+  après une coupure sans trame Close du daemon (daemon arrêté ou relancé).
 - **Politique** : celle du core, une seule implémentation (sonde `GET /actors/me`, backoff avec
   jitter sur la sonde, pas de sonde dans un onglet caché, redirection vers la connexion sur une
   session refusée).

@@ -51,7 +51,7 @@ function daemon(status: number | null, body: unknown = {}) {
   return fetchMock;
 }
 
-const open = (path = "/ws", reconnect?: boolean) => {
+const open = (path = "/ws", reconnect?: boolean | "after-drop") => {
   socket = openProbedSocket(path, reconnect === undefined ? {} : { reconnect });
   return socket;
 };
@@ -280,5 +280,71 @@ describe("openProbedSocket", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(assign).toHaveBeenCalledTimes(1);
     expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("reconnecting after a drop, reopens once the daemon is back when the socket dropped without a Close", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    daemon(200);
+    const s = open("/sessions/pdo-x/pty", "after-drop");
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.instances[0].fire("open");
+
+    // The daemon restarts: the socket drops, the probe repeats meanwhile.
+    daemon(null);
+    FakeSocket.instances[0].fire("close", { code: 1006 });
+    expect(s.state).toBe("hors_ligne");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    daemon(200);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    FakeSocket.instances[1].fire("open");
+    expect(s.state).toBe("ouvert");
+  });
+
+  it("reconnecting after a drop, stays down once the daemon closed it", async () => {
+    daemon(200);
+    const s = open("/sessions/pdo-x/pty", "after-drop");
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.instances[0].fire("open");
+    // The session ended: the daemon sends its Close (no status code).
+    const fetchMock = daemon(200);
+    FakeSocket.instances[0].fire("close", { code: 1005 });
+    expect(s.state).toBe("hors_ligne");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("reconnecting after a drop, stays down when refused at its upgrade, and asks whether to sign in", async () => {
+    daemon(200);
+    const s = open("/sessions/pdo-x/pty", "after-drop");
+    await vi.advanceTimersByTimeAsync(0);
+    const fetchMock = daemon(200);
+    FakeSocket.instances[0].fire("close", { code: 1006 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(s.state).toBe("hors_ligne");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("reconnecting after a drop, reopens after a daemon going away (1001), and stays down when the reopening is refused", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    daemon(200);
+    const s = open("/sessions/pdo-x/pty", "after-drop");
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.instances[0].fire("open");
+    FakeSocket.instances[0].fire("close", { code: 1001 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+
+    // The session ended meanwhile: the reopening is refused at its upgrade.
+    const fetchMock = daemon(200);
+    FakeSocket.instances[1].fire("close", { code: 1006 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(s.state).toBe("hors_ligne");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeSocket.instances).toHaveLength(2);
   });
 });

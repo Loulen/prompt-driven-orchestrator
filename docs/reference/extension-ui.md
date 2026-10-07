@@ -777,8 +777,10 @@ socket.close(); // 1000
 - **The state**: `connexion` until the first opening or the first failure, `ouvert` while open
   (each opening fires it again: the state to read again after a cut), `hors_ligne` while down.
 - **Messages**: text as a `string`, binary as an `ArrayBuffer` (`binaryType = "arraybuffer"`).
-- **`reconnect: false`**: probed before its one opening, never reopened once it ended (the core's
-  terminals open their PTY so).
+- **`reconnect: false`**: probed before its one opening, never reopened once it ended.
+- **`reconnect: "after-drop"`**: reopened (through the probe) only when it was open and dropped
+  without the daemon's Close (`1006`, or `1001`): the daemon stopped or restarted. A Close from
+  the daemon, or an upgrade refused, ends it for good. The core's terminals open their PTY so.
 - **The server side** answers the client's Close frame before ending the connection: a closing
   without it is a `1006`, which the browser counts as a failure. An extension serving a WebSocket
   route keeps reading after the Close it received until the answer is flushed.

@@ -33,10 +33,13 @@ export type ProbedSocketData = string | ArrayBuffer;
 export interface ProbedSocketOptions {
   /**
    * Whether a socket that ended is reopened (after a probe). Default `true`.
-   * `false` for a connection that must not come back on its own (a
-   * terminal's PTY): it still probes before its one opening.
+   * `false` for a connection that must not come back on its own: it still
+   * probes before its one opening. `"after-drop"` (a terminal's PTY) reopens
+   * only a socket that was open and dropped without the daemon's Close (the
+   * daemon stopped or restarted); a Close from the daemon, or a refused
+   * upgrade, ends it for good.
    */
-  reconnect?: boolean;
+  reconnect?: boolean | "after-drop";
 }
 
 /** A WebSocket to the daemon, opened through the probe. */
@@ -64,6 +67,10 @@ export const BACKOFF_MAX_MS = 30_000;
 
 /** The normal closure. */
 const NORMAL_CLOSURE = 1000;
+/** The closures of a connection that went away rather than ended: the server
+ *  going away, and the browser's own code for a drop without a Close frame. */
+const GOING_AWAY = 1001;
+const ABNORMAL_CLOSURE = 1006;
 
 type ProbeOutcome = "admitted" | "refused" | "unreachable";
 
@@ -174,11 +181,12 @@ export function openProbedSocket(path: string, options: ProbedSocketOptions = {}
     ws.addEventListener("open", () => {
       opened = true;
     });
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (event: CloseEvent) => {
       if (socket !== ws) return;
       socket = null;
       if (done) return;
-      if (!reconnect) {
+      const dropped = opened && (event.code === ABNORMAL_CLOSURE || event.code === GOING_AWAY);
+      if (!reconnect || (reconnect === "after-drop" && !dropped)) {
         done = true;
         setState("hors_ligne");
         // Refused at its upgrade (a session that expired since the probe):

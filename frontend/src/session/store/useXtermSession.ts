@@ -202,10 +202,10 @@ export function useXtermSession(
     // surface of every finished node; the snapshot is written straight into the same
     // xterm instead, so scrollback, colours and selection all keep working.
     //
-    // ADR-0083: the PTY opens through the probe, and is never reopened on its
-    // own (a PTY that ended stays ended).
+    // ADR-0083: the PTY opens through the probe. Closed by the daemon, it stays
+    // closed; dropped by a daemon that restarted, it reattaches once it answers.
     const ptyPath = `/sessions/${encodeURIComponent(session)}/pty?poste=${encodeURIComponent(posteId())}`;
-    const ws = isFrozen ? null : openProbedSocket(ptyPath, { reconnect: false });
+    const ws = isFrozen ? null : openProbedSocket(ptyPath, { reconnect: "after-drop" });
     wsRef.current = ws;
 
     if (isFrozen) {

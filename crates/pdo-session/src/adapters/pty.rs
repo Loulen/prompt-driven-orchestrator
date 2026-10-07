@@ -66,6 +66,13 @@ pub(crate) async fn handle_pty_ws(
     ws_log::closed(&path, closing, opened.elapsed());
 }
 
+/// End a socket the daemon cannot bridge with its own Close: a socket left
+/// without one reads as a dropped daemon (`1006`), which the interface reopens.
+async fn give_up(mut socket: WebSocket) -> Closing {
+    let _ = socket.send(Message::Close(None)).await;
+    Closing::ByDaemon
+}
+
 async fn bridge(
     socket: WebSocket,
     session_id: String,
@@ -87,7 +94,7 @@ async fn bridge(
         Ok(p) => p,
         Err(e) => {
             error!("Failed to open PTY: {e}");
-            return Closing::ByDaemon;
+            return give_up(socket).await;
         }
     };
 
@@ -121,7 +128,7 @@ async fn bridge(
         Err(e) => {
             error!("Failed to clone PTY reader: {e}");
             terminals.registry().leave(&session_id, conn_id);
-            return Closing::ByDaemon;
+            return give_up(socket).await;
         }
     };
     let pty_writer = match pair.master.take_writer() {
@@ -129,7 +136,7 @@ async fn bridge(
         Err(e) => {
             error!("Failed to take PTY writer: {e}");
             terminals.registry().leave(&session_id, conn_id);
-            return Closing::ByDaemon;
+            return give_up(socket).await;
         }
     };
 
@@ -138,7 +145,7 @@ async fn bridge(
         Err(e) => {
             error!("Failed to spawn tmux attach for {session_id}: {e}");
             terminals.registry().leave(&session_id, conn_id);
-            return Closing::ByDaemon;
+            return give_up(socket).await;
         }
     };
 

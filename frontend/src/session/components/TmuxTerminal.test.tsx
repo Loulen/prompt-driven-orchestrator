@@ -282,9 +282,9 @@ describe("TmuxTerminal", () => {
     expect(wsInstances[0].url).toContain(
       "/sessions/pdo-run1-impl-iter-1/pty",
     );
-    // Through the probe, never reopened on its own (ADR-0083).
+    // Through the probe, reattached only after a drop (ADR-0083).
     expect(probedOpens).toEqual([
-      { path: expect.stringContaining("/sessions/pdo-run1-impl-iter-1/pty"), options: { reconnect: false } },
+      { path: expect.stringContaining("/sessions/pdo-run1-impl-iter-1/pty"), options: { reconnect: "after-drop" } },
     ]);
   });
 

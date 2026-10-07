@@ -15,4 +15,5 @@ export const {
   HostedContributions,
   useCurrentActor,
   useActorDisplay,
+  openProbedSocket,
 } = ExtensionUi;

@@ -66,6 +66,29 @@ export function useCurrentActor(): { actor: Actor; display: ActorDisplay | null 
  *  names it (since 0.8). */
 export function useActorDisplay(actor: Actor | null | undefined): ActorDisplay | null;
 
+/** Where a probed socket stands (since 0.10): probing or connecting for the
+ *  first time, open, or down (probing again, or closed for good). */
+export type ProbedSocketState = "connexion" | "ouvert" | "hors_ligne";
+
+/** A WebSocket to the daemon, opened through the probe (since 0.10). */
+export interface ProbedSocket {
+  readonly state: ProbedSocketState;
+  /** Send when open; whether it was sent. */
+  send(data: string | ArrayBuffer | ArrayBufferView<ArrayBuffer> | Blob): boolean;
+  /** Every message: text as is, binary as an `ArrayBuffer`. Returns the unsubscribe. */
+  onMessage(listener: (data: string | ArrayBuffer) => void): () => void;
+  /** Every change of state (`ouvert` at each opening). Returns the unsubscribe. */
+  onState(listener: (state: ProbedSocketState) => void): () => void;
+  /** Close for good, with 1000. */
+  close(): void;
+}
+
+/** Open `path` (`/ext/<id>/…`) on the daemon of the page, only after an HTTP
+ *  probe succeeded; while it fails, the probe repeats (backoff with jitter), a
+ *  hidden tab does not probe, a refused session goes to the sign-in page.
+ *  `reconnect: false`: never reopened once it ended. Since 0.10. */
+export function openProbedSocket(path: string, options?: { reconnect?: boolean }): ProbedSocket;
+
 declare const ExtensionUi: {
   version: string;
   major: number;
@@ -75,5 +98,6 @@ declare const ExtensionUi: {
   HostedContributions: typeof HostedContributions;
   useCurrentActor: typeof useCurrentActor;
   useActorDisplay: typeof useActorDisplay;
+  openProbedSocket: typeof openProbedSocket;
 };
 export default ExtensionUi;

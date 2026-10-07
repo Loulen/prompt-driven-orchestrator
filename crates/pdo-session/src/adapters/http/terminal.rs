@@ -47,13 +47,9 @@ pub(super) async fn pty(
         .authorize_attach(&actor, &session_id)
         .await
     {
-        ws_log::refused(
-            &path,
-            StatusCode::FORBIDDEN,
-            "attach not authorized",
-            &headers,
-        );
-        return denied.into_response();
+        let refusal = denied.into_response();
+        ws_log::refused(&path, refusal.status(), "attach not authorized", &headers);
+        return refusal;
     }
 
     let poste = sanitize_poste(query.poste.as_deref());

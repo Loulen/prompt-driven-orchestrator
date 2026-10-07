@@ -718,6 +718,7 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `HostedContributions({ location, context?, props?, wrap? })` | Every element through `HostedContribution`, each wrapped by `wrap(element, rendered)` when given; `null` without element |
 | `runHostedCommand(element)` | Call an action's command, as its button does |
 | `useCurrentActor()`, `useActorDisplay(actor)` | The Actors' names, since 0.8 ([The Actors' names](#the-actors-names)) |
+| `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10 ([WebSockets](#websockets)) |
 | `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
 
 - **Context**: an element receives the host's `context`, merged over the context every location
@@ -748,6 +749,43 @@ the `actor_display` of each row of the audit journal (`GET /audit`).
 Over HTTP: `GET /actors/me` (`{actor, display}`) and `POST /actors/display` (`{actors: [Actor]}`
 → `{displays: [ActorDisplay | null]}`, in order).
 
+## WebSockets
+
+An extension's interface opens its WebSockets to the daemon with `openProbedSocket` of
+`@pdo/extension-ui` (since 0.10, ADR-0083), never with `new WebSocket` and its own reconnection
+loop. A browser admits one connecting WebSocket per host, every tab and port together, and delays
+the attempts towards an endpoint that failed: a socket retried blindly towards a stopped daemon
+holds the sockets of every other tab of the host.
+
+```ts
+import { openProbedSocket } from "@pdo/extension-ui";
+
+const socket = openProbedSocket("/ext/a/stream");
+const stopState = socket.onState((state) => setIndicator(state)); // connexion | ouvert | hors_ligne
+const stopMessages = socket.onMessage((data) => apply(data)); // string, or ArrayBuffer
+socket.send(JSON.stringify({ hello: true })); // false while not open
+socket.close(); // 1000
+```
+
+- **The probe**: before every opening, `GET /actors/me` (2 s timeout). While the daemon does not
+  answer (or answers `5xx`), the probe repeats, never the socket: about 1 s, then twice as long
+  each time up to about 30 s, a random half taken off. An opening resets the wait.
+- **A hidden tab** (`document.visibilityState`) does not probe; it probes at once when it shows
+  again. An open socket stays open whatever the visibility.
+- **A refused session** (`401`) goes to the sign-in page the refusal names, as every request does
+  ([Signing in](#signing-in)); no socket is opened.
+- **The state**: `connexion` until the first opening or the first failure, `ouvert` while open
+  (each opening fires it again: the state to read again after a cut), `hors_ligne` while down.
+- **Messages**: text as a `string`, binary as an `ArrayBuffer` (`binaryType = "arraybuffer"`).
+- **`reconnect: false`**: probed before its one opening, never reopened once it ended (the core's
+  terminals open their PTY so).
+- **The server side** answers the client's Close frame before ending the connection: a closing
+  without it is a `1006`, which the browser counts as a failure. An extension serving a WebSocket
+  route keeps reading after the Close it received until the answer is flushed.
+
+The core's own event stream and terminals open through the same function. The test extension `test`
+opens `/ws` through it on its page and shows the state.
+
 ## Signing in
 
 An extension may refuse a request no extension identified (`Extension::admit`, 0.8): `401`
@@ -755,8 +793,9 @@ An extension may refuse a request no extension identified (`Extension::admit`, 0
 when it redirects. The interface's files always load; before rendering anything it asks
 `GET /actors/me`, and any call refused with a `redirect` sends the browser there, once, with
 `next=<path, query and hash>` appended so the sign-in page brings the person back to the deep
-link they opened. `/ws` and a terminal's PTY are refused at their upgrade; their sockets ask
-`GET /actors/me` when they close abnormally and follow the redirection the same way.
+link they opened. `/ws` and a terminal's PTY are refused at their upgrade; their sockets are
+opened through the probe (`GET /actors/me`, [WebSockets](#websockets)), which follows the
+redirection the same way.
 
 The sign-in page is the extension's: a route under `/ext/<id>/` it admits itself (by its path),
 served as a full HTML page outside the SPA.

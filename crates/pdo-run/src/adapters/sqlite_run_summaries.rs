@@ -115,7 +115,8 @@ fn parse(run_id: &str, summary: &str) -> Option<RunSummary> {
         .ok()
 }
 
-/// Whether the mark is this version's and the log's last event.
+/// Whether the mark is this version's and the log's last event, and every
+/// Résumé has its log.
 pub(crate) async fn current(db: &sqlx::SqlitePool) -> Result<bool> {
     let mark: Option<(i64, i64)> =
         sqlx::query_as("SELECT version, last_event_id FROM run_summaries_mark WHERE id = 1")
@@ -126,7 +127,15 @@ pub(crate) async fn current(db: &sqlx::SqlitePool) -> Result<bool> {
         .fetch_one(db)
         .await
         .context("failed to read the last event")?;
-    Ok(mark == Some((SUMMARY_VERSION, last)))
+    // A Run forgotten by a daemon that did not keep the Résumés leaves one
+    // behind, whatever the last event.
+    let orphans: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM run_summaries WHERE run_id NOT IN (SELECT run_id FROM events)",
+    )
+    .fetch_one(db)
+    .await
+    .context("failed to check the run summaries")?;
+    Ok(mark == Some((SUMMARY_VERSION, last)) && orphans == 0)
 }
 
 /// Replace every Résumé and mark them current, in one transaction.

@@ -201,12 +201,13 @@ async fn bridge(
                 _ = &mut client_closed_rx => break,
             };
             if ws_sink.send(msg).await.is_err() {
-                break;
+                return Closing::Dropped;
             }
         }
         // Answers the client's Close when it sent one (queued by the
         // protocol), sends the daemon's own otherwise.
         let _ = ws_sink.close().await;
+        Closing::ByDaemon
     });
 
     // Task 3: read from WebSocket, write to PTY stdin (+ handle resize)
@@ -283,10 +284,12 @@ async fn bridge(
     });
 
     // Wait for any task to finish, then clean up
+    // The client's Close first: it also ends the output task at once.
     let closing = tokio::select! {
-        _ = read_handle => Closing::ByDaemon,
-        _ = ws_send_handle => Closing::ByDaemon,
+        biased;
         closing = ws_recv_handle => closing.unwrap_or(Closing::Dropped),
+        closing = ws_send_handle => closing.unwrap_or(Closing::Dropped),
+        _ = read_handle => Closing::ByDaemon,
     };
 
     // Leave before the reap: the hand passes on (and the remaining clients'

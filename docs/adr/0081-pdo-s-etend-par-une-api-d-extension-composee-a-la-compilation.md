@@ -711,3 +711,24 @@ nouveau type de contribution, exercés par l'extension de test interne.
 Écartés : un onglet de Stats qui apporterait son propre cadre (une Page de `topbar/end` le fait
 déjà, au prix d'une surface de plus) ; une Section géante sous « Extensions » (elle partage la
 page avec les autres extensions et n'a ni lien profond ni en-tête).
+
+## Amendement CORE-32 : l'ouverture sondée des WebSockets d'une extension
+
+Une interface d'extension ouvre ses WebSockets vers le daemon par `openProbedSocket(path,
+options?)` du module partagé `@pdo/extension-ui` (ADR-0083), jamais par `new WebSocket` ni par
+une boucle de reconnexion à elle.
+
+- **Contrat** : la connexion rendue offre `send` (faux tant qu'elle n'est pas ouverte),
+  `onMessage` (texte en `string`, binaire en `ArrayBuffer`), `onState` (`connexion`, `ouvert` à
+  chaque ouverture, `hors_ligne`), `state` et `close()` (code 1000). `reconnect: false` : sondée
+  avant sa seule ouverture, jamais rouverte.
+- **Politique** : celle du core, une seule implémentation (sonde `GET /actors/me`, backoff avec
+  jitter sur la sonde, pas de sonde dans un onglet caché, redirection vers la connexion sur une
+  session refusée).
+- **Côté serveur** : une route WebSocket d'extension répond à la trame Close du client avant de
+  rendre la connexion (sans quoi le navigateur compte un échec, 1006).
+- **Version** : `pdo-extension-api` **0.10.0**, par ajout ; le module partagé suit. Une
+  extension 0.1 à 0.9 compile et tourne toujours.
+
+L'extension de test `test` ouvre `/ws` par la fonction sur sa page et en affiche l'état.
+

@@ -56,6 +56,49 @@ class MockWebSocket {
 
 vi.stubGlobal("WebSocket", MockWebSocket);
 
+// ADR-0083: the terminal opens its PTY through the probe. The probe has its
+// own tests (`probedSocket.test.ts`); here it always succeeds at once, so the
+// socket exists as soon as the terminal mounts, as these tests read it.
+const { probedOpens } = vi.hoisted(() => ({
+  probedOpens: [] as { path: string; options: unknown }[],
+}));
+vi.mock("../../shared/http/probedSocket", () => ({
+  openProbedSocket(path: string, options: unknown) {
+    probedOpens.push({ path, options });
+    const ws = new MockWebSocket(`ws://localhost${path}`);
+    ws.binaryType = "arraybuffer";
+    let state = "connexion";
+    const stateListeners: ((s: string) => void)[] = [];
+    const setState = (next: string) => {
+      state = next;
+      stateListeners.forEach((l) => l(next));
+    };
+    ws.addEventListener("open", () => setState("ouvert"));
+    ws.addEventListener("close", () => setState("hors_ligne"));
+    return {
+      get state() {
+        return state;
+      },
+      send(data: unknown) {
+        if (ws.readyState !== MockWebSocket.OPEN) return false;
+        ws.send(data);
+        return true;
+      },
+      onMessage(listener: (data: unknown) => void) {
+        ws.addEventListener("message", (e) => listener((e as { data: unknown }).data));
+        return () => {};
+      },
+      onState(listener: (s: string) => void) {
+        stateListeners.push(listener);
+        return () => {};
+      },
+      close() {
+        ws.close();
+      },
+    };
+  },
+}));
+
 // Use vi.hoisted to create mocks that are accessible in vi.mock factories
 const { mockTerminalCalls, mockTerminalInstances, proposeDimensionsImpl } = vi.hoisted(() => {
   const calls: unknown[][] = [];
@@ -233,11 +276,30 @@ describe("TmuxTerminal", () => {
   });
 
   it("connects WebSocket to /sessions/<id>/pty", () => {
+    probedOpens.length = 0;
     render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     expect(wsInstances.length).toBe(1);
     expect(wsInstances[0].url).toContain(
       "/sessions/pdo-run1-impl-iter-1/pty",
     );
+    // Through the probe, never reopened on its own (ADR-0083).
+    expect(probedOpens).toEqual([
+      { path: expect.stringContaining("/sessions/pdo-run1-impl-iter-1/pty"), options: { reconnect: false } },
+    ]);
+  });
+
+  it("marks the terminal ready at its first byte, once", async () => {
+    const mark = vi.spyOn(performance, "mark");
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
+    await new Promise((r) => setTimeout(r, 10));
+    const ws = wsInstances[0];
+    expect(mark).not.toHaveBeenCalledWith("terminal:pret");
+    act(() => {
+      ws.fireEvent("message", { data: new Uint8Array([104, 105]).buffer });
+      ws.fireEvent("message", { data: new Uint8Array([33]).buffer });
+    });
+    expect(mark.mock.calls.filter(([name]) => name === "terminal:pret")).toHaveLength(1);
+    mark.mockRestore();
   });
 
   it("displays session name in toolbar", () => {

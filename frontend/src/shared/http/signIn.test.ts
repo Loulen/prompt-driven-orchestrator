@@ -3,7 +3,6 @@ import { request } from "./client";
 import {
   followSignIn,
   isRedirectingToSignIn,
-  probeSignIn,
   resetSignInForTests,
   setSignInReturnLink,
   signInRedirect,
@@ -80,14 +79,5 @@ describe("the sign-in redirection", () => {
     respond(403, { ...REFUSED, error: "operation_refused" });
     await expect(request("GET", "/runs")).rejects.toMatchObject({ status: 403 });
     expect(assign).not.toHaveBeenCalled();
-  });
-
-  it("a socket's probe follows it, and an admitted UI stays", async () => {
-    respond(200, { actor: { kind: "local_operator" }, display: null });
-    await probeSignIn();
-    expect(assign).not.toHaveBeenCalled();
-    respond(401, REFUSED);
-    await probeSignIn();
-    expect(assign).toHaveBeenCalledTimes(1);
   });
 });

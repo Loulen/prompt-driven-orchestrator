@@ -30,7 +30,10 @@ import {
   type PaneMode,
 } from "../model/terminalPane";
 import { useTheme } from "../../hooks/useTheme";
-import { ABNORMAL_CLOSURE, probeSignIn } from "../../shared/http/signIn";
+import { openProbedSocket, type ProbedSocket } from "../../shared/http/probedSocket";
+
+/** The `performance` mark of a terminal's first byte. */
+export const TERMINAL_READY_MARK = "terminal:pret";
 
 /** What the xterm of one session exposes to its toolbar. */
 export interface XtermSession {
@@ -64,7 +67,7 @@ export function useXtermSession(
   // it cannot follow a CSS token on its own).
   const { resolved } = useTheme();
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const wsRef = useRef<ProbedSocket | null>(null);
   const [connected, setConnected] = useState(false);
   // #867: the ref is what the xterm callbacks read (they outlive renders); the
   // state drives the toolbar.
@@ -90,8 +93,7 @@ export function useXtermSession(
   // #870: a spectator takes control. No confirmation, and no optimistic change:
   // the daemon answers with the new role, which is what flips the toolbar.
   const takeControl = useCallback(() => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(TAKE_CONTROL_FRAME);
+    wsRef.current?.send(TAKE_CONTROL_FRAME);
   }, []);
 
   useEffect(() => {
@@ -199,12 +201,11 @@ export function useXtermSession(
     // daemon already reaped is what put tmux's `can't find session:` on the primary
     // surface of every finished node; the snapshot is written straight into the same
     // xterm instead, so scrollback, colours and selection all keep working.
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/sessions/${encodeURIComponent(session)}/pty?poste=${encodeURIComponent(posteId())}`;
-    const ws = isFrozen ? null : new WebSocket(wsUrl);
-    if (ws) {
-      ws.binaryType = "arraybuffer";
-    }
+    //
+    // ADR-0083: the PTY opens through the probe, and is never reopened on its
+    // own (a PTY that ended stays ended).
+    const ptyPath = `/sessions/${encodeURIComponent(session)}/pty?poste=${encodeURIComponent(posteId())}`;
+    const ws = isFrozen ? null : openProbedSocket(ptyPath, { reconnect: false });
     wsRef.current = ws;
 
     if (isFrozen) {
@@ -274,34 +275,35 @@ export function useXtermSession(
       layout();
     };
 
-    ws?.addEventListener("open", () => {
-      setConnected(true);
-      sendResize(ws, fitAddon.proposeDimensions());
-    });
-
-    ws?.addEventListener("message", (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(event.data));
-      } else if (typeof event.data === "string") {
-        // Text frames carry the daemon's control messages (the role); anything
-        // else is written as before.
-        const role = parseRoleFrame(event.data);
-        if (role) applyRole(role);
-        else term.write(event.data);
-      }
-    });
-
     // A closed socket has no role left: back to the plain fit.
     const dropRole = () => {
       setConnected(false);
       if (roleRef.current.role !== "solo") applyRole(SOLO);
     };
-    ws?.addEventListener("close", dropRole);
-    ws?.addEventListener("error", dropRole);
-    // 0.8: a refused upgrade (1006, no handshake) says nothing to the browser;
-    // ask whether the UI must sign in first.
-    ws?.addEventListener("close", (event) => {
-      if (event.code === ABNORMAL_CLOSURE) void probeSignIn();
+    ws?.onState((state) => {
+      if (state === "ouvert") {
+        setConnected(true);
+        sendResize(ws, fitAddon.proposeDimensions());
+      } else {
+        dropRole();
+      }
+    });
+
+    let ready = false;
+    ws?.onMessage((data) => {
+      if (data instanceof ArrayBuffer) {
+        if (!ready) {
+          ready = true;
+          performance.mark?.(TERMINAL_READY_MARK);
+        }
+        term.write(new Uint8Array(data));
+      } else {
+        // Text frames carry the daemon's control messages (the role); anything
+        // else is written as before.
+        const role = parseRoleFrame(data);
+        if (role) applyRole(role);
+        else term.write(data);
+      }
     });
 
     // ADR-0075 §3: a spectator is read-only. The daemon drops its input anyway;
@@ -309,14 +311,14 @@ export function useXtermSession(
     const canType = () => roleRef.current.role !== "spectator";
 
     const inputDisposable = term.onData((data) => {
-      if (ws && ws.readyState === WebSocket.OPEN && canType()) {
+      if (ws && ws.state === "ouvert" && canType()) {
         const encoder = new TextEncoder();
         ws.send(encoder.encode(data));
       }
     });
 
     const binaryDisposable = term.onBinary((data) => {
-      if (ws && ws.readyState === WebSocket.OPEN && canType()) {
+      if (ws && ws.state === "ouvert" && canType()) {
         const buffer = new Uint8Array(data.length);
         for (let i = 0; i < data.length; i++) {
           buffer[i] = data.charCodeAt(i);

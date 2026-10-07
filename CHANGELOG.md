@@ -10,6 +10,28 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.19.0 — Ouverture sondée des WebSockets, Résumé de Run (CORE-32)
+
+`pdo-extension-api` passe en **0.10.0** : ajout seulement, une extension 0.1 à 0.9 compile et
+tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Détail : ADR-0083,
+ADR-0084, ADR-0081 (amendement CORE-32) et `docs/reference/extension-ui.md` (« WebSockets »).
+
+- **Ouverture sondée** : un WebSocket de l'interface ne s'ouvre, ni ne se rouvre, qu'après une
+  sonde HTTP réussie (`GET /actors/me`) ; tant qu'elle échoue, la sonde se répète (backoff avec
+  jitter, ~1 s à ~30 s), un onglet caché ne sonde pas. Le flux d'événements, les terminaux et,
+  par `openProbedSocket` du module `@pdo/extension-ui` (0.10.0), les interfaces des extensions.
+  Un onglet n'ouvre qu'un flux d'événements, la page Review comprise.
+- **Fermetures propres** : `/ws` et le PTY répondent à la trame Close du client.
+- **Journal** : une ligne par ouverture, fermeture et upgrade refusé d'un WebSocket.
+- **Cache-Control** : `assets/` (noms hachés) `immutable`, le reste `no-cache`.
+- **Résumé de Run** : nouvelle table `run_summaries`, reconstruite depuis l'event log au premier
+  démarrage (et après un daemon qui ne la tenait pas). `GET /runs`, `GET /runs/{id}/children`
+  et les contrôles d'accès d'un Run la lisent ; contrat HTTP inchangé. Le front regroupe ses
+  rafraîchissements (~300 ms) et ne poll plus les enfants d'un Run ni les I/O d'une node tant
+  que le flux est ouvert.
+- Les marques `performance` `ws:ouvert` (ouverture du flux) et `terminal:pret` (premier octet
+  d'un PTY) sont posées par l'interface.
+
 ## 2.18.0 — Seams de création d'un Run (CORE-29) et emplacements d'UI `stats/tab` et `settings/page` (CORE-30)
 
 `pdo-extension-api` passe en **0.9.0** : ajouts seulement, une extension 0.1 à 0.8 compile et

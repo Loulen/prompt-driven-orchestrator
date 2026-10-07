@@ -1,10 +1,12 @@
 // #723 — Orchestration read model shared by the Orchestration tab, the tab-header
 // pastilles and the canvas pastilles, so the three surfaces can never disagree.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { HarnessCost } from "../../shared/generated/HarnessCost";
 import type { RunStatus } from "../../shared/generated/RunStatus";
 import { isLiveRun } from "./runStatus";
 import { formatEstCost } from "./costLabel";
+import type { WsMessage } from "./liveStream";
+import { useLiveRefresh } from "../store/useLiveRefresh";
 
 /** One child of `GET /runs/{id}/children` (daemon `RunChildEntry`). */
 export interface RunChildEntry {
@@ -104,16 +106,22 @@ export function childCostKnown(cost?: RunChildEntry["cost"]): number | null {
   return cost.usd;
 }
 
+/** How often the children are read while the event stream is down. */
+const CHILDREN_POLL_MS = 3000;
+
 /**
- * Poll `GET /runs/{id}/children` at the same cadence as the run view refresh
- * (never pushed — design §3). Non-2xx and network errors keep the last good
- * read: a momentarily unreachable daemon must not blank a surface the user is
- * reading. The response is NEVER reset to null between runs — `childrenOfNode`
- * guards on the response's own `run_id`, so a stale read can never dress
- * another run's cards (no setState-in-effect reset to trip the compiler).
+ * Read `GET /runs/{id}/children`, then again on every event of the Run or of
+ * one of its children, and on the start of a Run naming it as parent
+ * (ADR-0084: no poll while the event stream is open; every 3 s while it is
+ * not). Non-2xx and network errors keep the last good read: a momentarily
+ * unreachable daemon must not blank a surface the user is reading. The
+ * response is NEVER reset to null between runs — `childrenOfNode` guards on
+ * the response's own `run_id`, so a stale read can never dress another run's
+ * cards (no setState-in-effect reset to trip the compiler).
  */
 export function useRunChildren(runId: string | null, enabled: boolean): RunChildrenResponse | null {
   const [data, setData] = useState<RunChildrenResponse | null>(null);
+  const loadRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (!runId || !enabled) return;
     let cancelled = false;
@@ -127,14 +135,40 @@ export function useRunChildren(runId: string | null, enabled: boolean): RunChild
         /* keep the last good read */
       }
     };
+    loadRef.current = () => void load();
     void load();
-    const id = setInterval(load, 3000);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      loadRef.current = () => {};
     };
   }, [runId, enabled]);
+  const reload = useCallback(() => loadRef.current(), []);
+  const concerns = useCallback(
+    (msg: WsMessage) => concernsChildren(msg, runId, data),
+    [runId, data],
+  );
+  useLiveRefresh(reload, concerns, CHILDREN_POLL_MS, !!runId && enabled);
   return data;
+}
+
+/** Whether `msg` may change the children of `runId`: an event of the Run, of
+ *  one of its known children, the start of a Run naming it as parent, or a
+ *  wait starting or ending anywhere (a grandchild's lifts a child). */
+export function concernsChildren(
+  msg: WsMessage,
+  runId: string | null,
+  data: RunChildrenResponse | null,
+): boolean {
+  const event = msg.type === "event" ? msg.event : undefined;
+  if (!runId || !event) return false;
+  if (event.run_id === runId) return true;
+  if (event.kind === "run_started" && event.payload?.parent_run_id === runId) return true;
+  // A grandchild's wait lifts its parent, one of the children (#588).
+  if (event.kind === "node_awaiting_user" || event.kind === "node_resumed") return true;
+  return (
+    data?.run_id === runId &&
+    data.nodes.some((group) => group.children.some((child) => child.run_id === event.run_id))
+  );
 }
 
 /** This node's slice of the children response, in the daemon's (chronological)

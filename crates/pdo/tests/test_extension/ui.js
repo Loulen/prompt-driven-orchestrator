@@ -3,7 +3,7 @@
 // A plain ES module, no build step: `react` is the front's own, shared through
 // its import map.
 import React from "react";
-import { useCurrentActor } from "@pdo/extension-ui";
+import { openProbedSocket, useCurrentActor } from "@pdo/extension-ui";
 
 const h = React.createElement;
 
@@ -121,12 +121,28 @@ export function RunTab({ entity }) {
   );
 }
 
+// The state of a WebSocket the page opens on the core's `/ws` through the
+// probe of `@pdo/extension-ui` (0.10), and how many messages it received.
+function useProbedStream() {
+  const [state, setState] = React.useState("connexion");
+  const [received, setReceived] = React.useState(0);
+  React.useEffect(() => {
+    const socket = openProbedSocket("/ws");
+    socket.onState(setState);
+    socket.onMessage(() => setReceived((n) => n + 1));
+    return () => socket.close();
+  }, []);
+  return { state, received };
+}
+
 // Page of `topbar/end`: the context it is opened with (the selected Run and its
-// Projet) and the path of the deep link, in the shell's breadcrumb too.
+// Projet), the path of the deep link, in the shell's breadcrumb too, and the
+// state of its probed socket.
 export function TestPage({ context, navigate, shell }) {
   const run = context?.run ?? null;
   const project = context?.project ?? null;
   const path = context?.path ?? "";
+  const stream = useProbedStream();
   React.useEffect(() => {
     shell?.setBreadcrumb(path ? path.split("/") : []);
   }, [shell, path]);
@@ -136,6 +152,11 @@ export function TestPage({ context, navigate, shell }) {
     h("p", { "data-testid": "test-page-run" }, run ? `Run ${run.id} (${run.status})` : "No Run selected"),
     h("p", { "data-testid": "test-page-project" }, project ? `Project ${project.name}` : "No Project"),
     h("p", { "data-testid": "test-page-path" }, `Path: ${path || "(none)"}`),
+    h(
+      "p",
+      { "data-testid": "test-page-socket" },
+      `Socket: ${stream.state}${stream.received > 0 ? " (receiving)" : ""}`,
+    ),
     h(
       "button",
       { type: "button", onClick: () => navigate("deep/inside"), style: { alignSelf: "flex-start", textDecoration: "underline" } },

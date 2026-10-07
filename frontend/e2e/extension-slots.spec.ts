@@ -302,6 +302,9 @@ test("topbar/end: an icon before Stats, its page with the context, a command, a 
   // A deep link opens the page on its path; one toward an absent extension says so.
   await page.goto("/#/ext/test/topbar/end/deep/path");
   await expect(page.getByTestId("test-page-path")).toHaveText("Path: deep/path");
+  // Its socket, opened through `openProbedSocket` of `@pdo/extension-ui`
+  // (ADR-0083), is open and receives the stream (`ready`, then heartbeats).
+  await expect(page.getByTestId("test-page-socket")).toHaveText("Socket: ouvert (receiving)", { timeout: 10_000 });
   await page.goto("/#/ext/audit/journal");
   await expect(page.getByTestId("toast-error")).toContainText("Extension “audit” is not installed");
 });
@@ -341,8 +344,10 @@ test("Action locations: the header, a row's « ⋯ » menu with its when, a fail
   await page.keyboard.press("Escape");
 
   // `runs/bulk`: the selection's ids reach the command.
-  await row.getByTestId("run-status-dot").hover();
-  await row.getByRole("button", { name: /^Select / }).click();
+  // The status dot is the row's checkbox (#577): hidden on hover, the ring
+  // takes its place.
+  await row.hover();
+  await row.getByRole("checkbox", { name: /^Select / }).click();
   await page.getByTestId("bulk-action-test:at-runs-bulk").click();
   expect(played.commands()).toContainEqual(
     expect.objectContaining({ location: "runs/bulk", selection: { kind: "run", ids: [runId] } }),

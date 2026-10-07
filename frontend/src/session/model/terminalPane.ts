@@ -60,11 +60,11 @@ export function toTerminalNewlines(content: string): string {
 // daemon's resize decoder rejects zero values, and historically would treat
 // the rejected JSON as user input — injecting stray characters into whatever
 // has focus in tmux. Guarding here closes that hole at the source.
-export function sendResize(ws: WebSocket, dims: Dimensions | undefined): void {
-  if (ws.readyState !== WebSocket.OPEN) return;
+export function sendResize(ws: { send(data: string): boolean }, dims: Dimensions | undefined): void {
   if (!dims) return;
   if (!Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
   if (dims.cols <= 0 || dims.rows <= 0) return;
+  // Not open yet: nothing is sent, the opening sends the size.
   ws.send(
     JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
   );

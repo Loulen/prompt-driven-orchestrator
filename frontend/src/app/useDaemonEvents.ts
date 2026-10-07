@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useEditStore } from "../pipeline/store/editStore";
+import { trailingWindow } from "../shared/lib/trailingWindow";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -41,8 +42,20 @@ export function useDaemonEvents({
     selectedTriggerIdRef.current = selectedTriggerId;
   }, [selectedTriggerId]);
 
+  // The latest refreshers, so the batched calls below survive a change of
+  // them (another Run selected) instead of being dropped with the effect.
+  const refreshers = useRef({ refreshRuns, refreshRun, refreshSessions });
   useEffect(() => {
-    return subscribe((msg) => {
+    refreshers.current = { refreshRuns, refreshRun, refreshSessions };
+  }, [refreshRuns, refreshRun, refreshSessions]);
+
+  useEffect(() => {
+    // ADR-0084: a burst of events costs one refresh of each list per window
+    // (~300 ms), not one per event.
+    const runs = trailingWindow(() => refreshers.current.refreshRuns());
+    const run = trailingWindow(() => refreshers.current.refreshRun());
+    const sessions = trailingWindow(() => refreshers.current.refreshSessions());
+    const unsubscribe = subscribe((msg) => {
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
         reloadPipeline(msg.pipeline_id);
         loadPipelines();
@@ -72,7 +85,7 @@ export function useDaemonEvents({
       ) {
         refreshTriggers();
         if (msg.type === "trigger_fired") {
-          refreshRuns();
+          runs();
           // #341 + #368: only the OPEN trigger's panel refetches, so an
           // unrelated fire doesn't flash/reload the currently-viewed history.
           // Read the ref (not selectedTriggerId) to keep this stable callback
@@ -88,11 +101,17 @@ export function useDaemonEvents({
       // on `run_archived`. `refreshRun` below flips the run's status to
       // `archived`, which turns the open canvas read-only in place — the run the
       // user is watching stays put instead of vanishing.
-      refreshRuns();
-      refreshRun();
+      runs();
+      run();
       // Node start/complete/fail/waiting transitions change the live session
       // count (#159) — keep the status-bar counter current.
-      refreshSessions();
+      sessions();
     });
-  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, setTriggersPaused, refreshProjects, reloadPipeline, loadPipelines, bumpFiresRefreshKey]);
+    return () => {
+      unsubscribe();
+      runs.cancel();
+      run.cancel();
+      sessions.cancel();
+    };
+  }, [subscribe, refreshTriggers, setTriggersPaused, refreshProjects, reloadPipeline, loadPipelines, bumpFiresRefreshKey]);
 }

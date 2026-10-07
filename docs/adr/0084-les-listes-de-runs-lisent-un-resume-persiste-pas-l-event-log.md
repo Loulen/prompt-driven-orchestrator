@@ -26,6 +26,17 @@ Le coût croît avec le nombre de Runs et la longueur de leurs journaux, pas ave
 3. **Les listes de Runs, les enfants d'un Run et l'autorisation d'attacher un terminal lisent le
    Résumé**, sans rejouer d'event log. Le détail d'un Run continue de projeter ses événements.
 
+Précisions de l'implémentation (CORE-32) :
+
+- Les **Projets** d'un Run ne sont pas copiés dans le Résumé : il porte le dépôt principal du
+  Run, et ses Projets sont ceux de ce dépôt, résolus à la lecture. Les membres d'un Projet
+  changent hors de l'event log ; une copie serait périmée au premier changement de membres.
+- Le **coût** d'un enfant reste dérivé à la lecture (ADR-0052) : la lecture des enfants ne rejoue
+  que le journal de chaque enfant, jamais celui de tous les Runs.
+- Une **marque** (version du Résumé, dernier événement couvert) dit si les Résumés sont ceux du
+  journal ; sinon (premier démarrage, forme changée, daemon antérieur qui a écrit dans le
+  journal) le démarrage les reconstruit tous, avant de servir.
+
 ## Options écartées
 
 - **Un cache en mémoire invalidé par événement.** Un état de plus à garder cohérent, perdu à chaque

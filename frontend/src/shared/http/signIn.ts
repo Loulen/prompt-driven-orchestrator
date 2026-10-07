@@ -5,13 +5,9 @@
  * there once, telling it where to come back: `next=<path + query + hash>`, the
  * deep link included.
  *
- * Every call of {@link request} follows it; `/ws` and a terminal's PTY cannot
- * read the status of a refused upgrade, so their sockets ask {@link probeSignIn}
- * when they close.
+ * Every call of {@link request} follows it; a WebSocket cannot read the status
+ * of a refused upgrade, so its probe (`probedSocket.ts`, ADR-0083) asks first.
  */
-
-/** The close code of a socket whose upgrade failed (a refused one included). */
-export const ABNORMAL_CLOSURE = 1006;
 
 /** The `error` slug of a request the extensions did not admit. */
 export const UNAUTHENTICATED = "unauthenticated";
@@ -68,22 +64,6 @@ export function followSignInOf(body: unknown): boolean {
   if (redirect === null) return false;
   followSignIn(redirect);
   return true;
-}
-
-/**
- * Ask the daemon whether the UI is still admitted (`GET /actors/me`), and go
- * to the sign-in page if it is not. What a socket does when it closes: a
- * refused upgrade tells the browser nothing.
- */
-export async function probeSignIn(): Promise<void> {
-  if (redirecting) return;
-  try {
-    const resp = await fetch("/actors/me");
-    if (resp.status !== 401) return;
-    followSignInOf(await resp.json().catch(() => null));
-  } catch {
-    // The daemon is down: the socket's own reconnection says so.
-  }
 }
 
 /** Tests: forget a redirection. */

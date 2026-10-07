@@ -473,6 +473,15 @@ mod tests {
             .await
             .unwrap();
         assert!(!store.summaries_current().await.unwrap());
+
+        // Rebuilt; then such a daemon purges a Run's log but not its Résumé.
+        store.replace_summaries(Vec::new()).await.unwrap();
+        assert!(store.summaries_current().await.unwrap());
+        sqlx::query("INSERT INTO run_summaries (run_id, summary) VALUES ('ghost', '{}')")
+            .execute(&store.db)
+            .await
+            .unwrap();
+        assert!(!store.summaries_current().await.unwrap());
     }
 
     #[tokio::test]

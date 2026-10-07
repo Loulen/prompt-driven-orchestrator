@@ -202,23 +202,23 @@ mod tests {
 
     #[test]
     fn a_page_declares_its_location_component_and_icon_on_the_wire() {
-        let page = UiContribution::page(UiLocation::TopbarEnd, "home", "Project", "HomePage")
-            .with_icon("/ext/pm/icon.svg");
+        let page = UiContribution::page(UiLocation::TopbarEnd, "home", "Notes", "HomePage")
+            .with_icon("/ext/test/icon.svg");
         assert_eq!(
             serde_json::to_value(&page).unwrap(),
             json!({
-                "location": "topbar/end", "id": "home", "label": "Project",
-                "type": "page", "component": "HomePage", "icon": "/ext/pm/icon.svg",
+                "location": "topbar/end", "id": "home", "label": "Notes",
+                "type": "page", "component": "HomePage", "icon": "/ext/test/icon.svg",
             })
         );
     }
 
     #[test]
     fn an_element_kind_is_its_type_on_the_wire() {
-        let tab = UiContribution::tab(UiLocation::Hosted("pm/onglet"), "audit", "Audit", "Audit");
+        let tab = UiContribution::tab(UiLocation::Hosted("a/panneau"), "audit", "Audit", "Audit");
         assert_eq!(tab.element.kind(), UiElementKind::Tab);
         let wire = serde_json::to_value(&tab).unwrap();
-        assert_eq!(wire["location"], "pm/onglet");
+        assert_eq!(wire["location"], "a/panneau");
         assert_eq!(
             wire["type"],
             serde_json::to_value(UiElementKind::Tab).unwrap()
@@ -231,15 +231,15 @@ mod tests {
 
     #[test]
     fn an_action_names_its_command_and_takes_its_title() {
-        let command = UiCommand::new("pm.new-task", "New task", "newTask");
-        let action = UiContribution::action(UiLocation::TopbarEnd, "new-task", &command)
+        let command = UiCommand::new("test.new-note", "New note", "newNote");
+        let action = UiContribution::action(UiLocation::TopbarEnd, "new-note", &command)
             .when(When::has("run"))
             .with_icon("/ignored.svg");
         assert_eq!(
             serde_json::to_value(&action).unwrap(),
             json!({
-                "location": "topbar/end", "id": "new-task", "label": "New task",
-                "type": "action", "command": "pm.new-task", "when": { "has": "run" },
+                "location": "topbar/end", "id": "new-note", "label": "New note",
+                "type": "action", "command": "test.new-note", "when": { "has": "run" },
             })
         );
     }

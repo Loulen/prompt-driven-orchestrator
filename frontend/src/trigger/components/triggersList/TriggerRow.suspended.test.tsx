@@ -37,16 +37,16 @@ function renderRow(t: Trigger, onToggle = vi.fn()) {
 }
 
 describe("TriggerRow — suspended by an extension (API 0.8)", () => {
-  const suspension = { extension: "iam", reason: "Emma Leroy was disabled" };
+  const suspension = { extension: "test", reason: "alice is on leave" };
 
   it("shows the switch off and an amber « suspended » pill naming the reason", () => {
     renderRow(trigger({ suspension }));
     const toggle = screen.getByTestId("trigger-toggle");
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(toggle.getAttribute("title")).toContain("Emma Leroy was disabled");
+    expect(toggle.getAttribute("title")).toContain("alice is on leave");
     const pill = screen.getByTestId("trigger-suspended");
     expect(pill).toHaveTextContent("suspended");
-    expect(pill).toHaveAccessibleName("Suspended: Emma Leroy was disabled");
+    expect(pill).toHaveAccessibleName("Suspended: alice is on leave");
     // A suspended Trigger is not also labelled « disabled ».
     expect(screen.queryByText("disabled")).not.toBeInTheDocument();
   });
@@ -55,8 +55,8 @@ describe("TriggerRow — suspended by an extension (API 0.8)", () => {
     renderRow(trigger({ suspension }));
     fireEvent.focus(screen.getByTestId("trigger-suspended"));
     const tip = await screen.findAllByTestId("tooltip-content");
-    expect(tip[0]).toHaveTextContent("Emma Leroy was disabled");
-    expect(tip[0]).toHaveTextContent("Suspended by the extension iam.");
+    expect(tip[0]).toHaveTextContent("alice is on leave");
+    expect(tip[0]).toHaveTextContent("Suspended by the extension test.");
   });
 
   it("keeps the toggle working: it switches the stored bit", () => {

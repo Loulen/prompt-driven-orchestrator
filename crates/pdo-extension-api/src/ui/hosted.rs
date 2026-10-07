@@ -8,7 +8,7 @@ use super::{UiElementKind, UiLocation};
 /// elements through the shared module `@pdo/extension-ui`, with the core's
 /// error boundaries and `when` clauses.
 ///
-/// The id is `<extension>/<name>`, prefixed with the host's own id (`pm/onglet`).
+/// The id is `<extension>/<name>`, prefixed with the host's own id (`a/panneau`).
 /// Like a location of the core, a hosted location is a list, and its id, what
 /// it accepts and the context it hands over are part of the host's API.
 ///
@@ -39,8 +39,8 @@ pub struct HostedLocation {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[non_exhaustive]
 pub struct ContextKey {
-    /// A top-level key of the context (`page`, `task`); a `when` clause reads
-    /// what it holds by a dotted path (`task.status`).
+    /// A top-level key of the context (`note`, `run`); a `when` clause reads
+    /// what it holds by a dotted path (`note.status`).
     pub key: String,
     /// What it holds.
     pub description: String,
@@ -87,31 +87,31 @@ mod tests {
 
     #[test]
     fn declares_its_id_kind_and_context_on_the_wire() {
-        let tab = HostedLocation::new("pm/onglet", UiElementKind::Tab)
-            .describe("A tab of a Page, after History.")
-            .context_key("page", "The Page shown: { id, title }");
+        let tab = HostedLocation::new("a/panneau", UiElementKind::Tab)
+            .describe("A tab of the panel, after History.")
+            .context_key("note", "The note shown: { id, title }");
         assert_eq!(
             serde_json::to_value(&tab).unwrap(),
             json!({
-                "id": "pm/onglet",
+                "id": "a/panneau",
                 "accepts": "tab",
-                "description": "A tab of a Page, after History.",
-                "context": [{ "key": "page", "description": "The Page shown: { id, title }" }],
+                "description": "A tab of the panel, after History.",
+                "context": [{ "key": "note", "description": "The note shown: { id, title }" }],
             })
         );
-        let bare = HostedLocation::new("pm/badge-carte", UiElementKind::Decoration);
+        let bare = HostedLocation::new("a/badge", UiElementKind::Decoration);
         assert_eq!(
             serde_json::to_value(&bare).unwrap(),
             json!({
-                "id": "pm/badge-carte", "accepts": "decoration", "description": "", "context": [],
+                "id": "a/badge", "accepts": "decoration", "description": "", "context": [],
             })
         );
     }
 
     #[test]
     fn a_contribution_names_it_through_its_location() {
-        let tab = HostedLocation::new("pm/onglet", UiElementKind::Tab);
+        let tab = HostedLocation::new("a/panneau", UiElementKind::Tab);
         let audit = UiContribution::tab(tab.location(), "audit", "Audit", "AuditTab");
-        assert_eq!(audit.location, UiLocation::Hosted("pm/onglet"));
+        assert_eq!(audit.location, UiLocation::Hosted("a/panneau"));
     }
 }

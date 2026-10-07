@@ -14,7 +14,7 @@ use crate::fakes::{request, world, World};
 
 fn alice() -> Actor {
     Actor::Identified {
-        namespace: "iam".into(),
+        namespace: "test".into(),
         id: "alice".into(),
     }
 }
@@ -45,7 +45,7 @@ async fn the_creator_is_the_first_editor_and_each_edit_takes_over() {
     assert_eq!(w.store.one(&created.id).unwrap().last_editor, Some(alice()));
 
     let bob = Actor::Identified {
-        namespace: "iam".into(),
+        namespace: "test".into(),
         id: "bob".into(),
     };
     let updated = w
@@ -92,10 +92,10 @@ async fn the_extension_is_asked_with_the_trigger_and_its_last_editor() {
 async fn every_read_carries_the_suspension_and_its_reason() {
     let w = world();
     let id = w.create_standard().await;
-    w.suspend(&id, "Emma Leroy was disabled");
+    w.suspend(&id, "alice is on leave");
     let expected = Some(Suspension {
         extension: "test".into(),
-        reason: "Emma Leroy was disabled".into(),
+        reason: "alice is on leave".into(),
     });
 
     let listed = w.triggers.list(Default::default()).await.unwrap();
@@ -116,7 +116,7 @@ async fn a_suspended_trigger_spends_its_slot_without_firing_and_says_why() {
     let w = world();
     let id = w.create_standard().await;
     make_due(&w, &id);
-    w.suspend(&id, "Emma Leroy was disabled");
+    w.suspend(&id, "alice is on leave");
 
     w.triggers.tick().await;
 
@@ -124,7 +124,7 @@ async fn a_suspended_trigger_spends_its_slot_without_firing_and_says_why() {
     assert!(w.guard.ran.lock().unwrap().is_empty(), "no guard");
     let fire = &w.store.fires_of(&id)[0];
     assert_eq!(fire.outcome, SKIPPED_SUSPENDED);
-    assert_eq!(fire.reason.as_deref(), Some("Emma Leroy was disabled"));
+    assert_eq!(fire.reason.as_deref(), Some("alice is on leave"));
     let next = w.store.one(&id).unwrap().next_fire_at.unwrap();
     assert!(next.as_str() > "2020-01-01", "the slot is spent: {next}");
 
@@ -139,14 +139,14 @@ async fn a_suspended_trigger_spends_its_slot_without_firing_and_says_why() {
 async fn run_now_refuses_a_suspended_trigger_with_its_reason() {
     let w = world();
     let id = w.create_standard().await;
-    w.suspend(&id, "Emma Leroy was disabled");
+    w.suspend(&id, "alice is on leave");
 
     let refusal = w.triggers.run_now(&Actor::LocalOperator, &id).await;
 
     match refusal {
         Err(TriggerError::Conflict(message)) => {
             assert!(message.contains("suspended"), "{message}");
-            assert!(message.contains("Emma Leroy was disabled"), "{message}");
+            assert!(message.contains("alice is on leave"), "{message}");
         }
         other => panic!("expected a 409, got {other:?}"),
     }

@@ -35,7 +35,7 @@ pub enum Upgrade {
 /// The release channel of this binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateChannel {
-    /// Shown in the UI (`PDO`, `pdo-dist`…).
+    /// Shown in the UI (`PDO`, `acme-pdo`…).
     pub name: String,
     /// The version compared with the releases of `source_url`.
     pub installed_version: String,

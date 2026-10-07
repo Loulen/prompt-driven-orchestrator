@@ -1961,7 +1961,7 @@ mod tests {
             None,
             None,
             &ext_env(&[
-                ("CLAUDE_CONFIG_DIR", "/home/u/.pdo/iam/alice"),
+                ("CLAUDE_CONFIG_DIR", "/home/u/.pdo/test/alice"),
                 ("HOME", "/x"),
             ]),
         );

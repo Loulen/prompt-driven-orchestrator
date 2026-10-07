@@ -279,7 +279,7 @@ mod tests {
                 "type": "operation_applied",
                 "operation": { "resource": "trigger", "verb": "update", "target": "t1" },
             }),
-            json!({ "type": "extension_event", "extension": "pm", "name": "x", "payload": {} }),
+            json!({ "type": "extension_event", "extension": "test", "name": "x", "payload": {} }),
         ] {
             assert_eq!(run_of_message(&message), None, "{message}");
         }

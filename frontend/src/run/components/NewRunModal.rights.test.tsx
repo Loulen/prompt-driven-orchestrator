@@ -75,10 +75,10 @@ function project(id: string, name: string, members: string[]): Project {
   return { id, name, members, attributes: {} } as unknown as Project;
 }
 const PDO = project("p1", "PDO", ["/home/bob/code/PDO-v2", "/home/bob/code/pdo-docs"]);
-const EXT = project("p2", "pdo-extensions", ["/home/bob/code/pdo-extensions"]);
+const EXT = project("p2", "pdo-widgets", ["/home/bob/code/pdo-widgets"]);
 const SECRET = project("p3", "Secret", ["/home/bob/code/secret"]);
 
-/** Bob: no loupe, no Run in no Projet, Runs in PDO and pdo-extensions only. */
+/** Bob: no loupe, no Run in no Projet, Runs in PDO and pdo-widgets only. */
 function answerAsBob(questions: OperationQuestion[]): Decision[] {
   return questions.map((q) => {
     const allowed =
@@ -115,11 +115,11 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
     );
     fireEvent.click(screen.getByTestId("repo-groups-trigger"));
     const groups = screen.getAllByTestId("repo-group").map((g) => g.getAttribute("aria-label"));
-    expect(groups).toEqual(["PDO", "pdo-extensions"]);
+    expect(groups).toEqual(["PDO", "pdo-widgets"]);
     expect(screen.getAllByTestId("repo-group-item").map((i) => i.textContent)).toEqual([
       "~/code/PDO-v2",
       "~/code/pdo-docs",
-      "~/code/pdo-extensions",
+      "~/code/pdo-widgets",
     ]);
     expect(screen.getByTestId("repo-groups-note")).toHaveTextContent(
       "1 Project(s) hidden: you can't create Runs there.",
@@ -158,10 +158,10 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
         rights: runCreationRights([PDO, EXT, SECRET], answerAsBob(runCreationQuestions([PDO, EXT, SECRET]))),
       });
       useRecentReposStore.setState({
-        recentRepos: ["/home/bob/code/secret", "/home/bob/code/pdo-extensions"],
+        recentRepos: ["/home/bob/code/secret", "/home/bob/code/pdo-widgets"],
       });
       renderModal();
-      expect(repoField().value).toBe("/home/bob/code/pdo-extensions");
+      expect(repoField().value).toBe("/home/bob/code/pdo-widgets");
     });
 
     it("is taken back when the rights arrive after it and refuse it", async () => {

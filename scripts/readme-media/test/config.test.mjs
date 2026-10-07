@@ -177,10 +177,10 @@ describe("the command line with another repo's config", () => {
   });
 
   test("record with an absent binary fails naming its path, and records nothing", () => {
-    const { dir, file } = consumerRepo({ binary: "./bin/pdo-dist" });
+    const { dir, file } = consumerRepo({ binary: "./bin/acme-pdo" });
     const out = run(["record", `--config=${file}`]);
     assert.equal(out.status, 1);
-    assert.ok(out.stderr.includes(`\`binary\` → ${path.join(dir, "media", "bin", "pdo-dist")}: no such file`), out.stderr);
+    assert.ok(out.stderr.includes(`\`binary\` → ${path.join(dir, "media", "bin", "acme-pdo")}: no such file`), out.stderr);
     assert.ok(!fs.existsSync(path.join(dir, ".readme-media")), "no review folder");
   });
 

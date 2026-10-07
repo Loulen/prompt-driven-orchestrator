@@ -23,12 +23,23 @@ amendement CORE-30, et `docs/reference/extension-ui.md`.
   joignable par `#/ext/<extension>/settings/page/<chemin>`.
 - Le module partagé `@pdo/extension-ui` passe en `0.9.0` avec l'API (même majeure `0`).
 
-## 2.17.0 — Seams d'identité et de droits pour `iam` (IAM-1)
+## 2.17.1 — Le core ne nomme aucune extension (CORE-28)
+
+Aucun changement de contrat : `pdo-extension-api` reste en **0.8.0**. Détail : ADR-0081.
+
+- Commentaires de doc (et types TypeScript régénérés), tests Rust et front,
+  `docs/reference/extension-api.md`, `docs/reference/extension-ui.md` et les entrées passées de
+  ce fichier décrivent chaque seam pour lui-même, avec les extensions de test du core (`test`,
+  `demo`, `a/panneau`, `gate`) et une distribution d'exemple, `acme-pdo`. Mêmes assertions,
+  autres données.
+- Un dépôt créé de zéro signe son commit initial de sa propre identité (`user.name` /
+  `user.email`), même quand des variables `GIT_AUTHOR_*` / `GIT_COMMITTER_*` sont héritées.
+
+## 2.17.0 — Seams d'identité et de droits (CORE-2 à CORE-5)
 
 `pdo-extension-api` passe en **0.8.0** : ajouts seulement, une extension 0.1 à 0.7 compile et
-tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du Backlog `CORE` de
-`pm`, US IAM-1 de `pdo-extensions` ; détail : ADR-0081, amendements CORE-3, CORE-4, CORE-5 et CORE-2, et
-`docs/reference/extension-api.md`.
+tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Détail : ADR-0081,
+amendements CORE-3, CORE-4, CORE-5 et CORE-2, et `docs/reference/extension-api.md`.
 
 - **CORE-3, Projets d'une Opération** : une `Operation` porte `projects` (vide : hors Projet).
   Le core la remplit : un Run, ses nodes, ses sessions et ses commentaires de Review sont dans le
@@ -96,20 +107,19 @@ tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`). Tickets du 
 - CORE-2 : nouvelles routes de premier niveau `/actors/*` : un reverse proxy qui filtre par préfixe doit
   les laisser passer.
 
-## 2.16.0 — Lien profond vers un Run, factory du core dans `pm` (CORE-1)
+## 2.16.0 — Lien profond vers un Run, factory du core hors des issues GitHub (CORE-1)
 
 Aucun changement du crate : `pdo-extension-api` reste en **0.7.0**. Aucun changement daemon.
-Ticket CORE-1 du Backlog `CORE` de `pm` (US PM-13 de `pdo-extensions`).
+Ticket CORE-1.
 
 - `#/runs/<run_id>` est un lien profond du core : le suivre ferme la page d'extension ouverte,
   sélectionne le Run dans la liste et ouvre son détail. Il marche depuis la barre d'adresse, un
   lien markdown, une page qui écrit `location.hash`, et `CommandHost.open`, qui l'accepte en plus
   de `#/ext/…`. Un Run inconnu affiche un toast d'erreur et ne change rien. Référence :
   `docs/reference/extension-ui.md`, « Toward a Run ».
-- La factory du core passe dans `pm` : backlogs métier et technique dans le Backlog `CORE`
-  (Propriété `type` : `metier` / `tech`), spec en sous-page de l'US, plus de `gh issue` ni de
-  `Closes #N` pour le nouveau travail. Les issues GitHub encore ouvertes y restent jusqu'à leur
-  clôture.
+- La factory du core quitte les issues GitHub : son suivi métier et technique passe dans un
+  outil de l'instance (outillage de dev, `docs/agents/`), plus de `gh issue` ni de `Closes #N`
+  pour le nouveau travail. Les issues GitHub encore ouvertes y restent jusqu'à leur clôture.
 
 ## 2.15.0 — Tour Overview, sur un vrai Run de nodes script (#46)
 
@@ -231,7 +241,6 @@ un checkout du core, `make readme-media CONFIG=<fichier>` puis
 `make readme-media-publish CONFIG=<fichier>` (référence : `scripts/readme-media/README.md`).
 Le core passe par sa propre config : ses commandes et ses médias publiés ne changent pas.
 `make readme-media-export` / `-import` restent propres au core et refusent une config tierce.
-`pdo-extensions` épingle `v2.8.0`.
 
 ## 2.7.0 — Catalogue d'emplacements : onglets, sections, décorations et filtres (#31)
 
@@ -274,7 +283,7 @@ et tourne sans changement (ADR-0081, amendement #30 ; référence : `docs/refere
 
 Le merge de #33 dans `main` (v2.5.0) appelait `self.registered` au lieu de
 `self.registry.registered` dans `Extensions::skills` (`pdo-kernel`) : le crate ne compilait
-pas, donc aucun consommateur du tag (`pdo-extensions`) non plus. Aucun changement d'API :
+pas, donc aucun consommateur du tag non plus. Aucun changement d'API :
 `pdo-extension-api` reste en **0.5.0**. Épingler `v2.5.1`, jamais `v2.5.0`.
 
 ## 2.5.0 — Surface agent : `pdo ext <id>` et skills d'extension (#33)
@@ -322,8 +331,8 @@ compile et tourne sans changement (ADR-0081, amendement #32 ; référence : `doc
 propres mutations par les mécanismes du core, pour que deux extensions installées ensemble
 interopèrent sans se nommer.
 
-- **`ResourceKind::Extension { extension, kind }`** (`ResourceKind::extension("pm", "tache")`),
-  nommée `pm/tache` sur le fil. Les ressources du core gardent leur nom (`agent_profile`…).
+- **`ResourceKind::Extension { extension, kind }`** (`ResourceKind::extension("test", "note")`),
+  nommée `test/note` sur le fil. Les ressources du core gardent leur nom (`agent_profile`…).
 - **`Host`**, dans `ExtensionContext::host` à `start` : `authorize` (toutes les extensions,
   l'émettrice comprise ; une panique refuse), `publish(ExtensionEvent)` (sur `/ws` et vers les
   autres extensions, enveloppe `{"type": "extension_event", "extension", "name", "payload"}`),
@@ -341,7 +350,7 @@ interopèrent sans se nommer.
   pas.
 - `ExtensionContext` porte un champ `host` et n'implémente plus ses traits par `derive` (même
   comportement, égalité comprise). `ExtensionContext::new(data_dir)` reste valable.
-- Une extension qui ne comptait pas sur `Copy` (dont `pdo-ext-hello`) compile sans changement et
+- Une extension qui ne comptait pas sur `Copy` compile sans changement et
   reste acceptée : `OLDEST_COMPATIBLE_API_VERSION` reste `0.1.0`, la casse ne touchant que la
   compilation.
 
@@ -368,7 +377,7 @@ tourne sans changement (ADR-0081, amendement #29 ; référence : `docs/reference
 
 ## 2.1.0 — Distributions tierces : `main_with`, frontend préconstruit, canal de mise à jour, 404 sous `/ext` (#21, #22, #23, #24)
 
-Seams découverts en écrivant la première distribution (`Loulen/pdo-extensions`). Ajout
+Seams des distributions tierces. Ajout
 rétrocompatible au contrat de `crates/pdo` : la CLI, ses codes de sortie et le daemon ne
 bougent pas (sortie de `--help` identique pour chaque sous-commande). `pdo-extension-api` reste
 en 0.1.1.

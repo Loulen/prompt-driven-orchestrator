@@ -174,12 +174,12 @@ mod tests {
 
     #[test]
     fn declares_its_hosted_locations_and_the_shared_module_it_imports() {
-        let ui = UiContributions::bundle("/ext/pm/ui.js", 19)
+        let ui = UiContributions::bundle("/ext/a/ui.js", 19)
             .importing_ui_module()
-            .host(HostedLocation::new("pm/onglet", UiElementKind::Tab));
+            .host(HostedLocation::new("a/panneau", UiElementKind::Tab));
         let wire = serde_json::to_value(&ui).unwrap();
         assert_eq!(wire["ui_module_major"], UI_MODULE_MAJOR);
-        assert_eq!(wire["locations"][0]["id"], "pm/onglet");
+        assert_eq!(wire["locations"][0]["id"], "a/panneau");
         assert_eq!(wire["locations"][0]["accepts"], "tab");
     }
 

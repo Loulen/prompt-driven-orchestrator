@@ -36,10 +36,10 @@ default, and with no extension the daemon behaves as if none existed.
 use pdo_extension_api::{Manifest, ResourceDeclaration};
 
 fn manifest(&self) -> Manifest {
-    Manifest::new("pm", "Project", env!("CARGO_PKG_VERSION"))
+    Manifest::new("test", "Test", env!("CARGO_PKG_VERSION"))
         .with_resource(
-            ResourceDeclaration::new("tache", "Tasks", ["create", "update", "delete", "editer"])
-                .described("The tasks of a Backlog"),
+            ResourceDeclaration::new("note", "Notes", ["create", "update", "delete", "archive"])
+                .described("The notes of a folder"),
         )
 }
 ```
@@ -63,7 +63,7 @@ in. So is every read the core guards (0.8, CORE-5, below).
 ```
 
 - `resource`: the wire name of a `ResourceKind`: one of the core's (`run`, `node`, `project`…, the
-  list is `ResourceKind::CORE`) or `<extension>/<kind>` (`pm/tache`).
+  list is `ResourceKind::CORE`) or `<extension>/<kind>` (`test/note`).
   `ResourceKind::from_wire_name` reads one back.
 - `verb`: `"read"` (0.8), `"create"`, `"update"`, `"delete"`, or `{"action": "<name>"}`.
   `Verb::name` gives the bare name the catalogue lists (`"fire"`).
@@ -185,15 +185,15 @@ use pdo_extension_api::{Actor, ActorDisplay};
 
 fn display_name(&self, actor: &Actor) -> Option<ActorDisplay> {
     match actor {
-        Actor::Identified { namespace, id } if namespace == "iam" => {
-            self.users.name_of(id).map(|name| ActorDisplay::new(name).with_avatar(format!("/ext/iam/avatars/{id}")))
+        Actor::Identified { namespace, id } if namespace == "test" => {
+            self.users.name_of(id).map(|name| ActorDisplay::new(name).with_avatar(format!("/ext/test/avatars/{id}")))
         }
         _ => None,
     }
 }
 ```
 
-`ActorDisplay` is `{ "name": "Alice", "avatar_url": "/ext/iam/avatars/alice" | null }`. Where it
+`ActorDisplay` is `{ "name": "Alice", "avatar_url": "/ext/test/avatars/alice" | null }`. Where it
 shows:
 
 - `GET /actors/me`: `{ "actor": <Actor>, "display": <ActorDisplay> | null }`, the caller.
@@ -219,8 +219,8 @@ GET /resources
 [
   { "resource": "run", "label": "Runs", "description": "See, create, steer, archive and delete Runs",
     "verbs": ["read", "create", "delete", "edit_repos", "…"], "extension": null },
-  { "resource": "pm/tache", "label": "Tasks", "description": "The tasks of a Backlog",
-    "verbs": ["create", "update", "delete", "editer"], "extension": "pm" }
+  { "resource": "test/note", "label": "Notes", "description": "The notes of a folder",
+    "verbs": ["create", "update", "delete", "archive"], "extension": "test" }
 ]
 ```
 

@@ -22,7 +22,7 @@ function renderCombobox(overrides: Partial<Parameters<typeof RepoCombobox>[0]> =
 
 const GROUPS = [
   { label: "PDO", repos: ["/home/bob/code/PDO-v2", "/home/bob/code/pdo-docs"] },
-  { label: "pdo-extensions", repos: ["/home/bob/code/pdo-extensions"] },
+  { label: "pdo-widgets", repos: ["/home/bob/code/pdo-widgets"] },
 ];
 
 describe("RepoCombobox under the rights of the caller (CORE-5)", () => {
@@ -48,12 +48,12 @@ describe("RepoCombobox under the rights of the caller (CORE-5)", () => {
     });
     fireEvent.click(screen.getByTestId("repo-groups-trigger"));
     const groups = screen.getAllByTestId("repo-group");
-    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["PDO", "pdo-extensions"]);
+    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["PDO", "pdo-widgets"]);
     const items = screen.getAllByTestId("repo-group-item");
     expect(items.map((i) => i.textContent)).toEqual([
       "~/code/PDO-v2",
       "~/code/pdo-docs",
-      "~/code/pdo-extensions",
+      "~/code/pdo-widgets",
     ]);
     expect(screen.getByTestId("repo-groups-note")).toHaveTextContent(
       "1 Project(s) hidden: you can't create Runs there.",
@@ -61,7 +61,7 @@ describe("RepoCombobox under the rights of the caller (CORE-5)", () => {
     // The recent repositories are not offered: the groups replace them.
     expect(screen.queryByTestId("recent-repos-dropdown")).toBeNull();
     fireEvent.mouseDown(items[2]);
-    expect(props.onChange).toHaveBeenCalledWith("/home/bob/code/pdo-extensions");
+    expect(props.onChange).toHaveBeenCalledWith("/home/bob/code/pdo-widgets");
   });
 
   it("narrows the groups to what is typed", () => {

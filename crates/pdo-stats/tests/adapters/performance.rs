@@ -2028,13 +2028,13 @@ async fn stats_performance_steering_counts_typed_turns_after_launch_per_harness(
     );
 
     // Infrastructure: « runtime messages only », never 0.
-    let pm = &body["infrastructure"][0];
-    assert_eq!(pm["id"], "pipeline-manager");
-    let pm_claude = harness(pm, "claude");
-    assert_eq!(pm_claude["steering"]["expected"], 1);
-    assert_eq!(pm_claude["steering"]["measured"], 0);
+    let manager = &body["infrastructure"][0];
+    assert_eq!(manager["id"], "pipeline-manager");
+    let manager_claude = harness(manager, "claude");
+    assert_eq!(manager_claude["steering"]["expected"], 1);
+    assert_eq!(manager_claude["steering"]["measured"], 0);
     assert_eq!(
-        pm_claude["steering"]["missing_reasons"],
+        manager_claude["steering"]["missing_reasons"],
         serde_json::json!(["runtime messages only"])
     );
     let infra_total = harness(&body["infrastructure_total"], "claude");

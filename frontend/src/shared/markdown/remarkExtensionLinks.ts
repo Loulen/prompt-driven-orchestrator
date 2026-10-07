@@ -1,6 +1,6 @@
 /**
  * A remark plugin: a deep link written as plain text in markdown
- * (`#/ext/pm/topbar/end/task/PM-12`) becomes a link, so every markdown render
+ * (`#/ext/test/topbar/end/note/note-12`) becomes a link, so every markdown render
  * of the core makes it clickable (ADR-0081, amendment #29). Text inside a link,
  * inline code or a code block is left alone; trailing punctuation stays text.
  */

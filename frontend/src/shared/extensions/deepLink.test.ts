@@ -3,10 +3,10 @@ import { formatDeepLink, formatRunLink, isDeepLink, isRunLink, parseDeepLink, pa
 
 describe("a deep link", () => {
   it("names the extension, its page location and the path", () => {
-    expect(parseDeepLink("#/ext/demo/topbar/end/board/open")).toEqual({
+    expect(parseDeepLink("#/ext/demo/topbar/end/folder/drafts")).toEqual({
       extension: "demo",
       location: "topbar/end",
-      path: "board/open",
+      path: "folder/drafts",
     });
     expect(parseDeepLink("http://localhost:6280/#/ext/test/topbar/start")).toEqual({
       extension: "test",

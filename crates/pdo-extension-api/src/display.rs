@@ -38,8 +38,9 @@ mod tests {
     #[test]
     fn serializes_its_name_and_avatar() {
         assert_eq!(
-            serde_json::to_value(ActorDisplay::new("Alice").with_avatar("/ext/iam/a.png")).unwrap(),
-            serde_json::json!({ "name": "Alice", "avatar_url": "/ext/iam/a.png" })
+            serde_json::to_value(ActorDisplay::new("Alice").with_avatar("/ext/test/a.png"))
+                .unwrap(),
+            serde_json::json!({ "name": "Alice", "avatar_url": "/ext/test/a.png" })
         );
         assert_eq!(
             serde_json::to_value(ActorDisplay::new("Bob")).unwrap(),

@@ -19,19 +19,19 @@ An extension returns its contributions from `Extension::ui`:
 use pdo_extension_api::{UiCommand, UiContribution, UiContributions, UiLocation, When};
 
 fn ui(&self) -> Option<UiContributions> {
-    let new_task = UiCommand::new("pm.new-task", "New task", "newTask")
-        .with_icon("/ext/pm/new-task.svg");
+    let new_note = UiCommand::new("test.new-note", "New note", "newNote")
+        .with_icon("/ext/test/new-note.svg");
     Some(
-        UiContributions::bundle("/ext/pm/ui.js", 19)
+        UiContributions::bundle("/ext/test/ui.js", 19)
             .contribute(
-                UiContribution::page(UiLocation::TopbarEnd, "home", "Project", "PmPage")
-                    .with_icon("/ext/pm/icon.svg"),
+                UiContribution::page(UiLocation::TopbarEnd, "home", "Notes", "NotesPage")
+                    .with_icon("/ext/test/icon.svg"),
             )
             .contribute(
-                UiContribution::action(UiLocation::TopbarEnd, "new-task", &new_task)
+                UiContribution::action(UiLocation::TopbarEnd, "new-note", &new_note)
                     .when(When::has("run")),
             )
-            .command(new_task),
+            .command(new_note),
     )
 }
 ```
@@ -40,10 +40,10 @@ An action goes to any Action location the same way, with a `when` on what that l
 over:
 
 ```rust
-let link = UiCommand::new("pm.link-task", "Link to a task…", "linkTask");
-UiContributions::bundle("/ext/pm/ui.js", 19)
+let link = UiCommand::new("test.link-note", "Link to a note…", "linkNote");
+UiContributions::bundle("/ext/test/ui.js", 19)
     .contribute(
-        UiContribution::action(UiLocation::RunItemMenu, "link-task", &link)
+        UiContribution::action(UiLocation::RunItemMenu, "link-note", &link)
             .when(When::not(When::eq("entity.status", "archived"))),
     )
     .command(link)
@@ -52,7 +52,7 @@ UiContributions::bundle("/ext/pm/ui.js", 19)
 - The bundle (`bundle_url`) is one ES module. It imports `react`, `react/jsx-runtime` and
   `react-dom` as bare specifiers: the front shares its own React through an import map. A bundle
   built for another React major (`react_major`) is never loaded, and a banner says so.
-- A component-backed contribution names the component the bundle exports (`PmPage`); an action
+- A component-backed contribution names the component the bundle exports (`NotesPage`); an action
   names one of the extension's commands.
 - Contribution ids are unique within the extension; the front keys each element
   `<extension id>:<contribution id>`.
@@ -300,7 +300,7 @@ its own error boundary (a failing one becomes a small « ! » whose tooltip name
 **Without a contribution nothing is rendered at all**: the item keeps its layout. Several wrap
 rather than push the item's own text out. The component receives `entity` and `context`:
 `DecorationContext` = `LocationContext` + `entity` (`EntityContext`, `null` on the status bar).
-Its `when` clause sees the entity: `When::has("entity.attributes.pm/task")` marks only the items
+Its `when` clause sees the entity: `When::has("entity.attributes.test/note")` marks only the items
 that carry the attribute.
 
 A decoration sits inside its item, often a button: keep it small (a badge of one line), and call
@@ -570,7 +570,7 @@ declaration order, whatever its `when`) and hands `<path>` to it as `context.pat
   the new one; closing the page leaves it. « Back » and « Forward » follow.
 - A deep link is clickable in every markdown render of the core: artifacts, Review comments,
   `SKILL.md`, the changelog. Written as a markdown link whose target is the deep link, or as
-  plain text (`#/ext/pm/topbar/end/task/PM-12`); text in code is left alone. From the Review page,
+  plain text (`#/ext/test/topbar/end/note/note-12`); text in code is left alone. From the Review page,
   the link loads the app on the page.
 - A link toward an extension that is not installed, whose interface is not loaded, or that has no
   page at that location shows an error toast and opens nothing.
@@ -625,24 +625,25 @@ An operator the front does not know is false: the element stays hidden.
 
 An extension may host locations in its own interface (amendment #32): the other extensions
 contribute there exactly as to the core's catalogue, and the host renders their elements with the
-shared module `@pdo/extension-ui`. `pm` hosts `pm/onglet`, `pm/action-page`, `pm/badge-carte` and
-`pm/section-barre-laterale`; its own documentation lists what each hands over.
+shared module `@pdo/extension-ui`. The core's test extension `a` hosts `a/panneau` (sections, under
+each item of its page) and `a/actions` (actions, in its page's header); a host's own documentation
+lists what each of its locations hands over.
 
 ### Declaring one
 
 ```rust
 use pdo_extension_api::{HostedLocation, UiContributions, UiElementKind};
 
-pub const TAB: &str = "pm/onglet";
+pub const PANEL: &str = "a/panneau";
 
 fn ui(&self) -> Option<UiContributions> {
     Some(
-        UiContributions::bundle("/ext/pm/ui.js", 19)
+        UiContributions::bundle("/ext/a/ui.js", 19)
             .importing_ui_module()
             .host(
-                HostedLocation::new(TAB, UiElementKind::Tab)
-                    .describe("A tab of a Page or a Task, after History.")
-                    .context_key("page", "The Page shown: { id, title, kind }"),
+                HostedLocation::new(PANEL, UiElementKind::Section)
+                    .describe("Under each item of A's page, one section per contribution.")
+                    .context_key("item", "The item the section sits under: { id, title }"),
             ),
     )
 }
@@ -665,7 +666,7 @@ fn ui(&self) -> Option<UiContributions> {
 use pdo_extension_api::{UiContribution, UiLocation};
 
 UiContributions::bundle("/ext/audit/ui.js", 19)
-    .contribute(UiContribution::tab(UiLocation::Hosted("pm/onglet"), "audit", "Audit", "AuditTab"))
+    .contribute(UiContribution::section(UiLocation::Hosted("a/panneau"), "audit", "Audit", "AuditSection"))
 ```
 
 - The element's kind must be the one the host accepts; the daemon leaves out, with a warning,
@@ -686,10 +687,10 @@ A bundle imports it as a bare specifier and never embeds it: with Vite, list it 
 import { HostedContribution, HostedContributions, useHostedContributions } from "@pdo/extension-ui";
 
 // Every element, in order; nothing at all without contribution.
-<HostedContributions location="pm/badge-carte" context={context} />
+<HostedContributions location="a/panneau" context={context} />
 
 // Or the list, to lay it out yourself (tab headers, then the selected tab's body).
-const tabs = useHostedContributions("pm/onglet", context);
+const tabs = useHostedContributions("a/tabs", context);
 tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.label}</button>);
 <HostedContribution element={selected} />
 ```

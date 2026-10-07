@@ -680,9 +680,13 @@ Les commandes disent **la vérité sur leur effet** : cible inconnue ⇒ 400 ava
 
 Toutes les transitions d'état d'un Pipeline Run sont des **événements append-only** dans une SQLite locale (`~/.pdo/pdo.db`). L'état courant d'un Run = projection des événements. Pas de « state.yaml » stocké en plus.
 
+**Résumé de Run** *(terme, ADR-0084)* : la projection persistée de ce que les listes et les contrôles d'accès lisent d'un Run (statut, nom, pipeline, parent, Projets), écrite dans la même transaction que l'événement qui la change. Jamais en retard sur l'event log, qui reste la seule source de vérité et le reconstruit entièrement. Le détail d'un Run, lui, projette toujours ses événements. _Éviter_ : « cache » (rien ne l'invalide, il n'est jamais périmé), « état du Run » (c'est la projection complète).
+
 ### Daemon PDO
 
 Process local qui héberge le **serveur HTTP** (REST + WebSocket), est l'**ordonnanceur** (lit l'event log, spawn les sessions tmux + sous-worktrees, écoute les complétions), et sert d'**API surface** unique pour le manager, l'UI et tout futur client.
+
+**Ouverture sondée** *(terme, ADR-0083)* : un client de l'interface n'ouvre, ni ne rouvre, un WebSocket vers le daemon qu'après une requête HTTP réussie vers ce même daemon ; tant qu'elle échoue, c'est la **sonde** qui se répète, espacée, jamais le socket, et un onglet caché ne sonde pas. Raison : le navigateur n'admet qu'un WebSocket en cours de connexion par hôte, tous onglets confondus, et retarde ceux qui échouent ; un socket tenté en boucle vers un daemon arrêté retarde tous les autres. Vaut pour le flux d'événements, les terminaux et les sockets des Extensions, qui la reçoivent du module partagé `@pdo/extension-ui`. _Éviter_ : « reconnexion » seule (ce qui se répète, c'est la sonde), « heartbeat » (le battement d'un flux déjà ouvert), « multiplexage » (écarté).
 
 ### Conséquence pour la prompt augmentation
 

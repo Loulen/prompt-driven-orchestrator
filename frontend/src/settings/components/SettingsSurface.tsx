@@ -7,6 +7,7 @@ import SkillBankPanel from "../../skill/components/SkillBankPanel";
 import { announceSkillsChanged, useSkillBank } from "../../skill/store/useSkillBank";
 import ExtensionSettingsPanels from "../../shared/extensions/ExtensionSettingsPanels";
 import { useSettingsPanels } from "../../shared/extensions/catalogue";
+import { leaveSettingsPage } from "../../shared/extensions/deepLink";
 import StatsAbsorptionsPanel from "../../stats/components/StatsAbsorptionsPanel";
 import { updateSettings } from "../api/settings";
 import {
@@ -17,6 +18,7 @@ import {
 import { announceAgentProfilesChanged, useAgentProfiles } from "../store/useAgentProfiles";
 import { announceSettingsChanged, useSettings } from "../store/useSettings";
 import { useSettingsForm } from "../store/useSettingsForm";
+import { settingsPageOpen, useSettingsExtensionPages } from "../store/useSettingsExtensionPages";
 import AgentsSections from "./settingsSurface/AgentsSections";
 import CategoryPage from "./settingsSurface/CategoryPage";
 import { HarnessDescriptorRows, PriceTableRows } from "./settingsSurface/DiagnosticsRows";
@@ -71,6 +73,7 @@ interface Props {
 
 const RAIL_WIDTH = 176;
 
+
 /** The rail entry of the extensions' settings panels (ADR-0081), shown only when one exists. */
 const EXTENSIONS = "extensions";
 
@@ -113,9 +116,10 @@ export default function SettingsSurface({
   const { values, rollup, isDirty, setField } = form;
 
   // Position — survives a close (the surface is unmounted-by-render below, so this state
-  // IS the page-session memory, story 17). A reload remounts and lands on General.
-  const [category, setCategory] = useState<SettingsCategoryId | typeof EXTENSIONS>(
-    initialPosition?.category ?? "general",
+  // IS the page-session memory, story 17). A reload remounts and lands on General, or on
+  // the extension page (`settings/page`) its deep link names.
+  const [category, setCategory] = useState<string>(
+    () => initialPosition?.category ?? settingsPageOpen()?.key ?? "general",
   );
   const extensionPanels = useSettingsPanels();
   const [lastSection, setLastSection] = useState<
@@ -142,6 +146,7 @@ export default function SettingsSurface({
     form.reset();
     setDrawerOpen(false);
     setConfirmClose(false);
+    leaveSettingsPage();
     onClose();
     // #823: a tour parked by `startTourAfterClose` runs once the surface is
     // actually gone — a Projecteur aiming at the app under a full-window
@@ -156,6 +161,7 @@ export default function SettingsSurface({
     if (isDirty) setConfirmClose(true);
     else closeNow();
   };
+  const extensionPages = useSettingsExtensionPages({ open, category, setCategory, requestClose });
 
   /**
    * #823 — Tutorials › Start / Replay. The tour goes through the SAME dirty guard
@@ -190,6 +196,10 @@ export default function SettingsSurface({
     dirty: rollup.categories.has(item.id),
   }));
   if (extensionPanels.length > 0) rail.push({ id: EXTENSIONS, label: "Extensions", dirty: false });
+  rail.push(...extensionPages.rail);
+  const known = SETTINGS_CATEGORIES.some((item) => item.id === category) || extensionPages.active;
+  // An extension page (or the Extensions entry) whose extension left: back to General.
+  const shownCategory = known || (category === EXTENSIONS && extensionPanels.length > 0) ? category : "general";
   const catalog = settings ? harnessCatalog(settings.harness_descriptors) : null;
   const formProps = values && settings ? { values, settings, dirty: rollup.fields, setField } : null;
 
@@ -238,31 +248,28 @@ export default function SettingsSurface({
         onEscape={onEscape}
         closeLabel="Close settings"
         rail={rail}
-        activeRail={category}
-        onRailChange={(id) => setCategory(id as SettingsCategoryId | typeof EXTENSIONS)}
+        activeRail={shownCategory}
+        onRailChange={extensionPages.select}
         railWidth={RAIL_WIDTH}
         railAriaLabel="Settings categories"
         railTestIdPrefix="settings-category"
-        headerActions={
+        headerExtras={extensionPages.headerExtras}
+        headerActions={extensionPages.headerActions(
           <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
             Esc closes · ↑↓ on the rail switch category
-          </span>
-        }
-        footer={
-          <SettingsFooter
-            form={form}
-            saveButtonRef={saveButtonRef}
-            loaded={!!settings}
-            onCancel={requestClose}
-          />
-        }
+          </span>,
+        )}
+        // An extension's page owns its writes: Save would read as saving it.
+        footer={!extensionPages.active && (
+          <SettingsFooter form={form} saveButtonRef={saveButtonRef} loaded={!!settings} onCancel={requestClose} />
+        )}
         drawer={shellDrawer}
       >
         {SETTINGS_CATEGORIES.map((item) => (
           <CategoryPage
             key={item.id}
             categoryId={item.id}
-            active={category === item.id}
+            active={shownCategory === item.id}
             ready={settled}
             initialSection={lastSection[item.id]}
             highlight={initialPosition?.category === item.id && !!initialPosition.section}
@@ -361,7 +368,8 @@ export default function SettingsSurface({
               ))}
           </CategoryPage>
         ))}
-        {extensionPanels.length > 0 && <ExtensionSettingsPanels active={category === EXTENSIONS} />}
+        {extensionPanels.length > 0 && <ExtensionSettingsPanels active={shownCategory === EXTENSIONS} />}
+        {extensionPages.content}
       </FullWindowShell>
 
       {confirmClose && (

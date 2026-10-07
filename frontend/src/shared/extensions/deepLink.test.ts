@@ -55,3 +55,16 @@ describe("a link toward a Run", () => {
     expect(parseDeepLink("#/runs/r1")).toBeNull();
   });
 });
+
+describe("a deep link toward a page of the Settings", () => {
+  it("names the `settings/page` location, before the `settings` prefix", () => {
+    expect(parseDeepLink("#/ext/test/settings/page/deep/inside")).toEqual({
+      extension: "test",
+      location: "settings/page",
+      path: "deep/inside",
+    });
+    expect(parseDeepLink("#/ext/test/settings/page")?.location).toBe("settings/page");
+    expect(parseDeepLink("#/ext/test/settings")?.location).toBeNull();
+    expect(formatDeepLink("test", "settings/page", "a")).toBe("#/ext/test/settings/page/a");
+  });
+});

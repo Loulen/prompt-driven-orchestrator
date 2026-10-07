@@ -62,14 +62,16 @@ export default function ExtensionPageHost() {
     window.history.replaceState(window.history.state, "", address);
   }, [requested, loaded, extensions]);
 
-  if (!open) return null;
+  // A page of the Settings shows in the Settings surface, on its rail entry.
+  if (!open || open.location === "settings/page") return null;
   const pages = elementsAt<PageProps>(extensions, open.location);
   const active = pages.find((p) => p.key === open.key);
   if (!active) return null;
   return <ExtensionPage key={active.key} open={open} active={active} pages={pages} />;
 }
 
-function Breadcrumb({ items }: { items: string[] }) {
+/** A page's crumbs, after its title in the shell's header. */
+export function Breadcrumb({ items }: { items: string[] }) {
   if (items.length === 0) return null;
   return (
     <nav

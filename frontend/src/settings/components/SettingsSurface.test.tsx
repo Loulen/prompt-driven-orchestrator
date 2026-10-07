@@ -6,7 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const fetchSettingsMock = vi.fn();
 const updateSettingsMock = vi.fn();
@@ -134,6 +134,16 @@ vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
 }));
 
 import SettingsSurface from "./SettingsSurface";
+import type { ExtensionEntry } from "../../shared/generated/ExtensionEntry";
+import type { UiContribution } from "../../shared/generated/UiContribution";
+import type { PageProps } from "../../shared/extensions/contract";
+import { openPage, resetPages, usePages } from "../../shared/extensions/deepLink";
+import { hostReactMajor } from "../../shared/extensions/shared";
+import {
+  resetExtensions,
+  useExtensionsStore,
+  type BundleModule,
+} from "../../shared/extensions/store";
 import { useEditStore } from "../../pipeline/store/editStore";
 import { useWiringStore } from "../../stores/wiringStore";
 import type { InstanceSettings } from "../model/settings";
@@ -3448,5 +3458,129 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
     rerender(<SettingsSurface open={false} onClose={() => {}} />);
     rerender(<SettingsSurface open onClose={() => {}} />);
     expect(await screen.findByText("Digest v3")).toBeInTheDocument();
+  });
+});
+
+describe("SettingsSurface — the `settings/page` location (extensions' pages)", () => {
+  function serve(module: BundleModule, contributions: UiContribution[]) {
+    const entry: ExtensionEntry = {
+      id: "demo",
+      name: "Demo",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/demo/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        contributions,
+        commands: [],
+        locations: [],
+      },
+    };
+    useExtensionsStore.setState({
+      extensions: [{ entry, status: "ready", module }],
+      started: true,
+      loaded: true,
+    });
+  }
+  const page = { location: "settings/page", id: "prefs", label: "Demo settings", type: "page", component: "Prefs" } as UiContribution;
+  const section = { location: "settings", id: "panel", label: "Demo panel", type: "section", component: "Panel" } as UiContribution;
+  const bundle: BundleModule = {
+    Prefs: ({ context, navigate, extension }: PageProps) => (
+      <div data-testid="prefs">
+        <p>{`${extension.id} ${context.location} path=${context.path}`}</p>
+        <button type="button" onClick={() => navigate("deep/inside")}>
+          deeper
+        </button>
+      </div>
+    ),
+    Panel: () => <p>panel of the extension</p>,
+  };
+  const railLabels = async () => {
+    const rail = await screen.findByRole("tablist", { name: "Settings categories" });
+    return within(rail)
+      .getAllByRole("tab")
+      .map((t) => t.textContent);
+  };
+
+  beforeEach(() => {
+    fetchSettingsMock.mockReset().mockResolvedValue(sample());
+    resetProfileMocks();
+    fetchInstanceProvisioningMock.mockReset().mockResolvedValue({ copy: [], hardlink: [], symlink: [] });
+    resetPages();
+    window.history.replaceState(null, "", "/");
+  });
+  afterEach(() => {
+    resetExtensions();
+    resetPages();
+  });
+
+  it("keeps the core's categories when no extension contributes", async () => {
+    resetExtensions();
+    render(<SettingsSurface open onClose={() => {}} />);
+    expect(await railLabels()).toEqual(["General", "Agents", "Sandbox & worktrees", "Diagnostics"]);
+  });
+
+  it("adds a rail row per page next to Extensions, which still lists the sections", async () => {
+    serve(bundle, [section, page]);
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={() => {}} />);
+    await waitFor(async () =>
+      expect(await railLabels()).toEqual([
+        "General",
+        "Agents",
+        "Sandbox & worktrees",
+        "Diagnostics",
+        "Extensions",
+        "Demo settings",
+      ]),
+    );
+    await user.click(screen.getByTestId("settings-category-demo:prefs"));
+    expect(screen.getByTestId("prefs")).toHaveTextContent("demo settings/page path=");
+    expect(window.location.hash).toBe("#/ext/demo/settings/page");
+    // The page owns its writes: the core's Save footer is not in view.
+    expect(screen.queryByTestId("settings-footer")).not.toBeInTheDocument();
+    await user.click(screen.getByText("deeper"));
+    expect(screen.getByTestId("prefs")).toHaveTextContent("path=deep/inside");
+    expect(window.location.hash).toBe("#/ext/demo/settings/page/deep/inside");
+
+    await user.click(screen.getByTestId("settings-category-extensions"));
+    expect(screen.getByText("panel of the extension")).toBeVisible();
+    expect(screen.queryByTestId("prefs")).not.toBeInTheDocument();
+    expect(window.location.hash).toBe("");
+    expect(screen.getByTestId("settings-footer")).toBeInTheDocument();
+  });
+
+  it("lands on the page its deep link names, and leaves the link on close", async () => {
+    serve(bundle, [page]);
+    openPage({ key: "demo:prefs", extension: "demo", location: "settings/page", path: "a/b" });
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={onClose} />);
+    expect(await screen.findByTestId("prefs")).toHaveTextContent("path=a/b");
+    expect(screen.getByTestId("settings-category-demo:prefs")).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(onClose).toHaveBeenCalled();
+    expect(usePages.getState().open).toBeNull();
+    expect(window.location.hash).toBe("");
+  });
+
+  it("keeps a page that throws to its own content", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    serve(
+      {
+        Prefs: () => {
+          throw new Error("boom");
+        },
+      },
+      [page],
+    );
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={() => {}} />);
+    await user.click(await screen.findByTestId("settings-category-demo:prefs"));
+    expect(screen.getByTestId("extension-failed-demo")).toBeInTheDocument();
+    await user.click(screen.getByTestId("settings-category-general"));
+    expect(screen.getByTestId("settings-surface")).toBeInTheDocument();
+    vi.restoreAllMocks();
   });
 });

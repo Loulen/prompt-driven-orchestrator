@@ -10,8 +10,12 @@
 import { create } from "zustand";
 import type { UiLocation } from "../generated/UiLocation";
 
-/** The locations whose elements are pages, hence reachable by deep link. */
-export const PAGE_LOCATIONS = ["topbar/start", "topbar/end"] as const satisfies readonly UiLocation[];
+/**
+ * The locations whose elements are pages, hence reachable by deep link. A
+ * page of `settings/page` shows in the Settings surface, on its rail entry;
+ * the others full-window (`ExtensionPageHost`).
+ */
+export const PAGE_LOCATIONS = ["topbar/start", "topbar/end", "settings/page"] as const satisfies readonly UiLocation[];
 export type PageLocation = (typeof PAGE_LOCATIONS)[number];
 
 export const DEEP_LINK_PREFIX = "#/ext/";
@@ -123,6 +127,11 @@ export function navigatePage(path: string): void {
 export function closePage(): void {
   usePages.setState({ open: null, requested: null });
   writeAddress(null);
+}
+
+/** Close the open page if it is one of the Settings (`settings/page`), and leave its deep link. */
+export function leaveSettingsPage(): void {
+  if (usePages.getState().open?.location === "settings/page") closePage();
 }
 
 /** Forget any page and request (tests). */

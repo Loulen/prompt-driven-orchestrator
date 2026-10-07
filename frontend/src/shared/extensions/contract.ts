@@ -35,7 +35,7 @@ export interface ContributionProps<C extends LocationContext = LocationContext> 
   context: C;
 }
 
-/** A page (`topbar/start`, `topbar/end`): the path of its deep link. */
+/** A page (`topbar/start`, `topbar/end`, `settings/page`): the path of its deep link. */
 export interface PageContext extends LocationContext {
   /** What follows `#/ext/<extension>/<location>/`; `""` from its entry. */
   path: string;
@@ -56,6 +56,27 @@ export interface PageProps extends ContributionProps<PageContext> {
   navigate(path: string): void;
   shell: PageShell;
 }
+
+/**
+ * The period the Stats surface shows (`stats/tab`): the preset of its header,
+ * its window (ISO instants, `to` excluded) and the bucket the core's charts
+ * fold by.
+ */
+export interface StatsPeriod {
+  preset: "7d" | "30d" | "90d" | "all";
+  from: string;
+  to: string;
+  bucket: "day" | "week" | "month";
+}
+
+/** `stats/tab`: the period on screen, and the count of the header's Refresh. */
+export interface StatsTabContext extends LocationContext {
+  period: StatsPeriod;
+  /** Bumped by each click on Refresh: a tab reloads what it shows when it changes. */
+  refresh: number;
+}
+
+export type StatsTabProps = ContributionProps<StatsTabContext>;
 
 /**
  * How a section takes part in its host form's Save and Cancel (`project/edit`,

@@ -19,7 +19,9 @@ import { useBaseContext } from "./context";
 import type {
   EntityContext,
   LocationContext,
+  PageProps,
   SectionProps,
+  StatsTabProps,
   TabContext,
   TabProps,
 } from "./contract";
@@ -89,6 +91,24 @@ export function useContributions<P = unknown>(
 export function useSettingsPanels(): ContributionElement<SectionProps>[] {
   const context = useLocationContext("settings");
   return useContributions<SectionProps>("settings", context);
+}
+
+/**
+ * The `settings/page` location's pages, each a rail entry of the Settings;
+ * none without a contribution.
+ */
+export function useSettingsPages(): ContributionElement<PageProps>[] {
+  const context = useLocationContext("settings/page");
+  return useContributions<PageProps>("settings/page", context);
+}
+
+/**
+ * The `stats/tab` location's tabs, after the core's on the Stats rail; none
+ * without a contribution. Their `when` sees the selected Run and its Projet.
+ */
+export function useStatsTabs(): ContributionElement<StatsTabProps>[] {
+  const context = useLocationContext("stats/tab");
+  return useContributions<StatsTabProps>("stats/tab", context);
 }
 
 /** The locations that render tabs: a detail's. */

@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { leaveSettingsPage, usePages, type OpenPage } from "../shared/extensions/deepLink";
 import type { SettingsPosition, StatsOpenIntent } from "../settings/components/SettingsSurface";
 
 /** Settings and Stats: which is open, and how each was entered. */
@@ -18,7 +19,11 @@ export function useSurfaces() {
     key: 0,
   });
   const openSettings = useCallback((position?: SettingsPosition) => {
-    if (position) setSettingsEntry((entry) => ({ key: entry.key + 1, position }));
+    if (position) {
+      // A position names a category of the core: it leaves an extension's page.
+      leaveSettingsPage();
+      setSettingsEntry((entry) => ({ key: entry.key + 1, position }));
+    }
     setStatsOpen(false);
     setSettingsOpen(true);
   }, []);
@@ -31,6 +36,19 @@ export function useSurfaces() {
     setStatsEntry((entry) => ({ key: entry.key + 1, intent }));
     setSettingsOpen(false);
     setStatsOpen(true);
+  }, []);
+  // A page of `settings/page` opened by its deep link (or by `openPage`): the
+  // Settings surface shows it, so it opens; the surface picks the page itself.
+  useEffect(() => {
+    const show = (page: OpenPage | null) => {
+      if (page?.location !== "settings/page") return;
+      setStatsOpen(false);
+      setSettingsOpen(true);
+    };
+    show(usePages.getState().open);
+    return usePages.subscribe((state, previous) => {
+      if (state.open !== previous.open) show(state.open);
+    });
   }, []);
   return {
     settingsOpen,

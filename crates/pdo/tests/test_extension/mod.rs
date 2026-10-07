@@ -49,6 +49,9 @@
 //!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
 //! - `topbar/account` (0.8): `AccountMenu`, an avatar opening a menu that
 //!   names the signed-in Actor through `useCurrentActor` of `@pdo/extension-ui`.
+//! - `stats/tab` (0.9): `StatsTab`, which shows the period and the Refresh
+//!   count it is handed, and `Exploding`, a tab that throws; `settings/page`
+//!   (0.9): `SettingsPage`, which shows its deep link's path.
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
@@ -747,6 +750,26 @@ impl Extension for TestExtension {
                 "projects-started-by",
                 "Project started by",
                 "StartedByFilter",
+            ))
+            // 0.9: a tab of Stats after Performance, one that throws (its
+            // boundary keeps it to its own tab), and a page of Settings.
+            .contribute(UiContribution::tab(
+                UiLocation::StatsTab,
+                "stats-tab",
+                "Test stats",
+                "StatsTab",
+            ))
+            .contribute(UiContribution::tab(
+                UiLocation::StatsTab,
+                "stats-exploding",
+                "Exploding",
+                "Exploding",
+            ))
+            .contribute(UiContribution::page(
+                UiLocation::SettingsPage,
+                "settings-page",
+                "Test settings",
+                "SettingsPage",
             ));
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);

@@ -541,7 +541,9 @@ impl Extension for TestExtension {
         value: &Value,
     ) -> Result<(), String> {
         if !creation::is_run(kind) {
-            return Err(format!("the test extension takes data for a Run only, not {kind}"));
+            return Err(format!(
+                "the test extension takes data for a Run only, not {kind}"
+            ));
         }
         self.control.creation.validate(value)
     }

@@ -178,7 +178,10 @@ async fn an_accepted_value_is_stamped_before_the_first_node_and_frozen() {
 async fn a_run_without_data_keeps_its_shape() {
     let (daemon, control) = daemon().await;
     let run_id = crate::common::flow::create_run(&daemon, "solo").await;
-    assert!(run_started(&daemon, &run_id).await.get("extensions").is_none());
+    assert!(run_started(&daemon, &run_id)
+        .await
+        .get("extensions")
+        .is_none());
     timeline_once_launched(&control, &run_id).await;
     let creation = control
         .creation

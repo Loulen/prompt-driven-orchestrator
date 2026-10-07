@@ -778,6 +778,7 @@ fn create_run_known_fields_cover_the_struct() {
         "auto_name": null,
         "auto_fail": null,
         "provisioning": {},
+        "extensions": {},
     });
     // The payload's keys are exactly the allow-list (pins the lock-step).
     let keys: std::collections::BTreeSet<String> =

@@ -3,7 +3,7 @@
  * they take part in their host's Save and Cancel), decorations and list filters.
  */
 
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect, useState } from "react";
 import type { ExtensionEntry } from "../generated/ExtensionEntry";
@@ -364,17 +364,11 @@ describe("a run/new section that provides a value (API 0.9)", () => {
   });
 
   it("merges the objects two sections of one extension provide", () => {
-    let host: ReturnType<typeof useSectionForm> | null = null;
-    function Bare() {
-      const sections = useSectionForm();
-      host = sections;
-      return null;
-    }
-    render(<Bare />);
-    host!.form.provide(() => ({ a: 1 }), 0, "acme");
-    host!.form.provide(() => ({ b: 2 }), 1, "acme");
-    host!.form.provide(() => "flat", 2, "other");
-    return expect(host!.provided()).resolves.toEqual({ acme: { a: 1, b: 2 }, other: "flat" });
+    const host = renderHook(() => useSectionForm()).result.current;
+    host.form.provide(() => ({ a: 1 }), 0, "acme");
+    host.form.provide(() => ({ b: 2 }), 1, "acme");
+    host.form.provide(() => "flat", 2, "other");
+    return expect(host.provided()).resolves.toEqual({ acme: { a: 1, b: 2 }, other: "flat" });
   });
 });
 

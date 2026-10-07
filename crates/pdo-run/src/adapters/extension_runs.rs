@@ -32,7 +32,10 @@ impl RunCreator for ExtensionRuns {
             reject_unknown_create_run_fields(&body)
                 .map_err(|(status, body)| RunNotCreated::new(status.as_u16(), body))?;
             let request: CreateRunRequest = serde_json::from_value(body).map_err(|e| {
-                RunNotCreated::new(400, serde_json::json!({ "error": format!("invalid run: {e}") }))
+                RunNotCreated::new(
+                    400,
+                    serde_json::json!({ "error": format!("invalid run: {e}") }),
+                )
             })?;
             // A root Run (no node session), created by `actor`.
             let response = runs.create_run(&actor, request, Vec::new(), None).await;

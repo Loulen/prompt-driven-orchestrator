@@ -15,10 +15,7 @@ use crate::Actor;
 pub enum CreationRefusal {
     /// The data names an extension that is not installed, like an unknown
     /// field.
-    UnknownExtension {
-        id: String,
-        installed: Vec<String>,
-    },
+    UnknownExtension { id: String, installed: Vec<String> },
     /// The extension refused its value, with this reason.
     Refused { extension: String, reason: String },
 }
@@ -167,10 +164,17 @@ mod tests {
             refusal.body(),
             json!({ "error": "unknown extension `ghost` in `extensions`; installed extensions: picky" })
         );
-        assert!(seen.lock().unwrap().is_empty(), "nothing asked before the ids pass");
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "nothing asked before the ids pass"
+        );
         assert_eq!(
             crate::extension_host::NoExtensions
-                .validate_create(&Actor::LocalOperator, &ResourceKind::Run, &data(&[("x", json!(1))]))
+                .validate_create(
+                    &Actor::LocalOperator,
+                    &ResourceKind::Run,
+                    &data(&[("x", json!(1))])
+                )
                 .unwrap_err()
                 .body()["error"],
             "unknown extension `x` in `extensions`; no extension is installed"
@@ -180,23 +184,28 @@ mod tests {
     #[test]
     fn only_the_present_extensions_check_their_value() {
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let host = Extensions::register(vec![
-            Box::new(Picky(seen.clone())),
-            Box::new(Panicky),
-        ])
-        .unwrap();
+        let host =
+            Extensions::register(vec![Box::new(Picky(seen.clone())), Box::new(Panicky)]).unwrap();
         let actor = Actor::LocalOperator;
         assert_eq!(
             host.validate_create(&actor, &ResourceKind::Run, &ExtensionData::new()),
             Ok(())
         );
         assert_eq!(
-            host.validate_create(&actor, &ResourceKind::Run, &data(&[("picky", json!({"k": 1}))])),
+            host.validate_create(
+                &actor,
+                &ResourceKind::Run,
+                &data(&[("picky", json!({"k": 1}))])
+            ),
             Ok(()),
             "Panicky has no value: never asked"
         );
         let refusal = host
-            .validate_create(&actor, &ResourceKind::Run, &data(&[("picky", json!("flat"))]))
+            .validate_create(
+                &actor,
+                &ResourceKind::Run,
+                &data(&[("picky", json!("flat"))]),
+            )
             .unwrap_err();
         assert_eq!(
             refusal.body(),

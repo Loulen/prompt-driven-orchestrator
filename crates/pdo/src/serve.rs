@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use axum::Router;
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::{ExtensionHost, Extensions, HostServices};
-use pdo_run::adapters::extension_runs::ExtensionRuns;
 use pdo_platform::domain::release_channel::UpdateChannel;
+use pdo_run::adapters::extension_runs::ExtensionRuns;
 
 use crate::attributes::SqliteAttributes;
 use crate::contexts::{self, ContextResources};

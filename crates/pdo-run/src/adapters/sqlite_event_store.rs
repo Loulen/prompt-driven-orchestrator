@@ -485,6 +485,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_read_catches_up_with_events_written_behind_the_daemon() {
+        use crate::domain::run_summary::summarize;
+        let store = store().await;
+        store.replace_summaries(Vec::new()).await.unwrap();
+        store
+            .append(&event(
+                "r1",
+                EventKind::RunStarted,
+                Some(serde_json::json!({ "pipeline_name": "p" })),
+            ))
+            .await
+            .unwrap();
+
+        // A tool seeds the database of the running instance: two Runs, one
+        // event of r1.
+        for (run, kind, payload) in [
+            ("r2", "run_started", Some(r#"{"pipeline_name":"seeded"}"#)),
+            ("r3", "run_started", Some(r#"{"pipeline_name":"seeded"}"#)),
+            ("r1", "run_completed", None),
+        ] {
+            sqlx::query("INSERT INTO events (run_id, ts, kind, payload) VALUES (?, 't', ?, ?)")
+                .bind(run)
+                .bind(kind)
+                .bind(payload)
+                .execute(&store.db)
+                .await
+                .unwrap();
+        }
+        assert!(!store.summaries_current().await.unwrap());
+
+        // The daemon appends behind them: its Résumé is written, the mark
+        // stays behind the events it did not write.
+        store
+            .append(&event("r3", EventKind::NodeStarted, None))
+            .await
+            .unwrap();
+        assert!(!store.summaries_current().await.unwrap());
+
+        // The next read sees them all, and the mark is the log's again.
+        let r2 = store.summary("r2").await.unwrap().unwrap();
+        assert_eq!(r2.pipeline_name, "seeded");
+        let mut listed: Vec<String> = store
+            .summaries()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.run_id)
+            .collect();
+        listed.sort();
+        assert_eq!(listed, ["r1", "r2", "r3"]);
+        for run in ["r1", "r3"] {
+            assert_eq!(
+                store.summary(run).await.unwrap().unwrap(),
+                summarize(&store.events(run).await.unwrap()).unwrap()
+            );
+        }
+        assert!(store.summaries_current().await.unwrap());
+
+        // The appends keep them current from there.
+        store
+            .append(&event("r2", EventKind::NodeStarted, None))
+            .await
+            .unwrap();
+        assert!(store.summaries_current().await.unwrap());
+    }
+
+    #[tokio::test]
     async fn init_is_idempotent() {
         let store = store().await;
         init(&store.db).await.unwrap();

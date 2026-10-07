@@ -36,6 +36,10 @@ Précisions de l'implémentation (CORE-32) :
 - Une **marque** (version du Résumé, dernier événement couvert) dit si les Résumés sont ceux du
   journal ; sinon (premier démarrage, forme changée, daemon antérieur qui a écrit dans le
   journal) le démarrage les reconstruit tous, avant de servir.
+- Des événements écrits dans le journal **pendant que le daemon tourne**, hors de ses appends
+  (un outil qui peuple la base d'une instance lancée), laissent la marque en arrière. La lecture
+  suivante du Résumé les rattrape : elle réécrit le Résumé des Runs de ces événements, puis avance
+  la marque, dans une transaction. Quand rien n'a été manqué, il ne coûte qu'une lecture indexée.
 
 ## Options écartées
 

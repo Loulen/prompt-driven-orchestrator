@@ -6,7 +6,8 @@ export type RunListEntry = { run_id: string, pipeline_name: string, status: RunS
 /**
  * Display-only "no forward progress" overlay: true when the run has no
  * running/waiting node and a stale node, so its dot renders amber even
- * though `status` stays `running`. Derived per read by `crate::domain::projection::is_stalled`.
+ * though `status` stays `running`. Derived by `crate::domain::projection::is_stalled`
+ * into the Résumé.
  */
 stalled: boolean, started_at: string | null, 
 /**

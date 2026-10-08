@@ -11,6 +11,7 @@ class FakeSocket {
   binaryType = "blob";
   sent: unknown[] = [];
   closedWith: number | undefined;
+  closed = false;
   listeners = new Map<string, ((event: object) => void)[]>();
   constructor(url: string) {
     this.url = url;
@@ -24,6 +25,7 @@ class FakeSocket {
   }
   /** Like a browser: the "close" event comes later, not inside `close()`. */
   close(code?: number) {
+    this.closed = true;
     this.closedWith = code;
   }
   fire(type: string, event: object = {}) {
@@ -51,8 +53,11 @@ function daemon(status: number | null, body: unknown = {}) {
   return fetchMock;
 }
 
-const open = (path = "/ws", reconnect?: boolean | "after-drop") => {
-  socket = openProbedSocket(path, reconnect === undefined ? {} : { reconnect });
+const open = (path = "/ws", reconnect?: boolean | "after-drop", silenceMs?: number) => {
+  socket = openProbedSocket(path, {
+    ...(reconnect === undefined ? {} : { reconnect }),
+    ...(silenceMs === undefined ? {} : { silenceMs }),
+  });
   return socket;
 };
 
@@ -346,5 +351,127 @@ describe("openProbedSocket", () => {
     expect(s.state).toBe("hors_ligne");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(FakeSocket.instances).toHaveLength(2);
+  });
+});
+
+describe("the delay of silence", () => {
+  const SILENCE = 30_000;
+
+  it("closes a socket that heard nothing for the delay, and probes again before reopening", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    const fetchMock = daemon(200);
+    const s = open("/ws", true, SILENCE);
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = FakeSocket.instances[0];
+    ws.fire("open");
+
+    await vi.advanceTimersByTimeAsync(SILENCE - 1);
+    expect(ws.closed).toBe(false);
+    expect(s.state).toBe("ouvert");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.closed).toBe(true);
+    expect(s.state).toBe("hors_ligne");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Its late `close` changes nothing; the probe comes after the backoff.
+    ws.fire("close", { code: 1006 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(FakeSocket.instances).toHaveLength(2);
+    FakeSocket.instances[1].fire("open");
+    expect(s.state).toBe("ouvert");
+  });
+
+  it("starts again on every message, the daemon's beat included", async () => {
+    daemon(200);
+    const s = open("/ws", true, SILENCE);
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = FakeSocket.instances[0];
+    ws.fire("open");
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(SILENCE - 1_000);
+      ws.fire("message", { data: '{"type":"heartbeat"}' });
+    }
+    expect(s.state).toBe("ouvert");
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("counts as a drop for a terminal that reopens only after a drop", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    daemon(200);
+    const s = open("/sessions/pdo-x/pty", "after-drop", SILENCE);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.instances[0].fire("open");
+    await vi.advanceTimersByTimeAsync(SILENCE);
+    expect(s.state).toBe("hors_ligne");
+    // A drop, not the daemon's Close: the terminal comes back on its own.
+    FakeSocket.instances[0].fire("close", { code: 1000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    FakeSocket.instances[1].fire("open");
+    expect(s.state).toBe("ouvert");
+  });
+
+  it("without reconnection, stays down once silent", async () => {
+    const fetchMock = daemon(200);
+    const s = open("/sessions/pdo-x/pty", false, SILENCE);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.instances[0].fire("open");
+    await vi.advanceTimersByTimeAsync(SILENCE);
+    expect(s.state).toBe("hors_ligne");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("drops the socket at once when the browser goes offline, and probes at once when it is back", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    daemon(200);
+    const s = open("/ws", true, SILENCE);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.instances[0].fire("open");
+
+    const offline = daemon(null);
+    window.dispatchEvent(new Event("offline"));
+    expect(s.state).toBe("hors_ligne");
+    // Probes fail while offline, ever later (1 s, 2 s, 4 s, 8 s…).
+    await vi.advanceTimersByTimeAsync(10_000);
+    const probesOffline = offline.mock.calls.length;
+    expect(probesOffline).toBeGreaterThan(0);
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    const back = daemon(200);
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it("judges the silence again when a hidden tab shows, its timers being throttled", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    daemon(200);
+    const s = open("/ws", true, SILENCE);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.instances[0].fire("open");
+    setVisibility("hidden");
+    // The browser held the timer back: the clock moved, the timer did not fire.
+    vi.setSystemTime(Date.now() + SILENCE + 5_000);
+    setVisibility("visible");
+    expect(s.state).toBe("hors_ligne");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it("without the option, a silent socket stays open, offline or not", async () => {
+    daemon(200);
+    const s = open("/ws");
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = FakeSocket.instances[0];
+    ws.fire("open");
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    window.dispatchEvent(new Event("offline"));
+    expect(s.state).toBe("ouvert");
+    expect(ws.closed).toBe(false);
+    expect(FakeSocket.instances).toHaveLength(1);
   });
 });

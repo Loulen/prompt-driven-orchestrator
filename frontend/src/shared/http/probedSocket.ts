@@ -15,7 +15,13 @@
  *   visibility: an established socket holds no queue;
  * - a session the extensions refuse (`401`) goes to their sign-in page, as
  *   every request does, and no socket is opened;
- * - `close()` closes the socket with 1000.
+ * - `close()` closes the socket with 1000;
+ * - with a delay of silence (`silenceMs`), a socket muet is a dead socket
+ *   (ADR-0083 §5): an open socket that received nothing for that long, or
+ *   whose browser went offline, is closed and goes through the probe again,
+ *   as a drop does; back online, a pending probe is sent at once. A half-open
+ *   connection (sleep, network change, a proxy that cut it) fires no `close`:
+ *   without the delay, the tab stays frozen.
  *
  * The one implementation: the event stream and the terminals use it, and the
  * extensions' interfaces get it from the shared module `@pdo/extension-ui`.
@@ -40,6 +46,14 @@ export interface ProbedSocketOptions {
    * upgrade, ends it for good.
    */
   reconnect?: boolean | "after-drop";
+  /**
+   * The delay of silence, in ms (ADR-0083 §5). Set, an open socket that
+   * received no message (data or the daemon's beat) for that long is closed
+   * and counts as a drop: reopened through the probe unless `reconnect` is
+   * `false`, and so for `"after-drop"` too. Going offline drops it at once;
+   * coming back online probes at once. Unset (the default): no delay.
+   */
+  silenceMs?: number;
 }
 
 /** A WebSocket to the daemon, opened through the probe. */
@@ -116,6 +130,7 @@ function hidden(): boolean {
 /** Open `path` (`/ws`, `/ext/<id>/…`) on the daemon of this page, through the probe. */
 export function openProbedSocket(path: string, options: ProbedSocketOptions = {}): ProbedSocket {
   const reconnect = options.reconnect ?? true;
+  const silenceMs = options.silenceMs;
   const messageListeners = new Set<(data: ProbedSocketData) => void>();
   const stateListeners = new Set<(state: ProbedSocketState) => void>();
   let state: ProbedSocketState = "connexion";
@@ -128,6 +143,10 @@ export function openProbedSocket(path: string, options: ProbedSocketOptions = {}
   let closed = false;
   // A probe came due while the tab was hidden.
   let waitingToShow = false;
+  // The delay of silence: when the open socket last heard anything, and the
+  // timer that gives up on it.
+  let lastHeard = 0;
+  let silenceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const setState = (next: ProbedSocketState) => {
     if (state === next) return;
@@ -164,6 +183,30 @@ export function openProbedSocket(path: string, options: ProbedSocketOptions = {}
     later();
   }
 
+  /** Heard from the open socket: the delay of silence starts again. */
+  function heard() {
+    if (silenceMs === undefined) return;
+    lastHeard = Date.now();
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(silent, silenceMs);
+  }
+
+  /** The open socket went silent, or offline: close it, and treat it as a
+   *  drop. Forgotten first, so its late `close` changes nothing. */
+  function silent() {
+    const ws = socket;
+    if (!ws || ws.readyState !== WebSocket.OPEN || done) return;
+    socket = null;
+    clearTimeout(silenceTimer);
+    ws.close();
+    if (!reconnect) {
+      done = true;
+      setState("hors_ligne");
+      return;
+    }
+    later();
+  }
+
   function open() {
     const ws = new WebSocket(socketUrl(path));
     ws.binaryType = "arraybuffer";
@@ -171,10 +214,12 @@ export function openProbedSocket(path: string, options: ProbedSocketOptions = {}
     ws.addEventListener("open", () => {
       if (socket !== ws) return;
       failures = 0;
+      heard();
       setState("ouvert");
     });
     ws.addEventListener("message", (event: MessageEvent) => {
       if (socket !== ws) return;
+      heard();
       for (const listener of messageListeners) listener(event.data as ProbedSocketData);
     });
     let opened = false;
@@ -184,6 +229,7 @@ export function openProbedSocket(path: string, options: ProbedSocketOptions = {}
     ws.addEventListener("close", (event: CloseEvent) => {
       if (socket !== ws) return;
       socket = null;
+      clearTimeout(silenceTimer);
       if (done) return;
       const dropped = opened && (event.code === ABNORMAL_CLOSURE || event.code === GOING_AWAY);
       if (!reconnect || (reconnect === "after-drop" && !dropped)) {
@@ -199,17 +245,35 @@ export function openProbedSocket(path: string, options: ProbedSocketOptions = {}
     });
   }
 
-  const onVisibility = () => {
+  // Back to probing at once: the tab shows again, or the network is back.
+  const probeNow = () => {
     if (hidden() || done || socket || probing) return;
-    // Back in sight: probe now, whether a probe came due while hidden or a
-    // backoff is still running.
+    // Back in sight (or online): probe now, whether a probe came due while
+    // hidden or a backoff is still running.
     if (waitingToShow || timer !== undefined) {
       waitingToShow = false;
       clearTimeout(timer);
       void attempt();
     }
   };
+  const onVisibility = () => {
+    // A hidden tab's timers are throttled: judge the silence again on return.
+    if (
+      silenceMs !== undefined &&
+      !hidden() &&
+      socket?.readyState === WebSocket.OPEN &&
+      Date.now() - lastHeard > silenceMs
+    ) {
+      silent();
+    }
+    probeNow();
+  };
   document.addEventListener("visibilitychange", onVisibility);
+  const watchesNetwork = silenceMs !== undefined && typeof window !== "undefined";
+  if (watchesNetwork) {
+    window.addEventListener("offline", silent);
+    window.addEventListener("online", probeNow);
+  }
 
   void attempt();
 
@@ -239,7 +303,12 @@ export function openProbedSocket(path: string, options: ProbedSocketOptions = {}
       closed = true;
       done = true;
       clearTimeout(timer);
+      clearTimeout(silenceTimer);
       document.removeEventListener("visibilitychange", onVisibility);
+      if (watchesNetwork) {
+        window.removeEventListener("offline", silent);
+        window.removeEventListener("online", probeNow);
+      }
       const ws = socket;
       socket = null;
       ws?.close(NORMAL_CLOSURE);

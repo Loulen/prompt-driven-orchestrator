@@ -23,7 +23,9 @@ pub mod application;
 pub mod domain;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use pdo_kernel::extension_host::ExtensionHost;
 
@@ -95,6 +97,10 @@ pub struct Session {
     close_assistant: CloseAssistant,
     declare_focus: DeclareFocus,
     save_focused: SaveFocused,
+    /// How often the PTY bridge beats a terminal socket, in ms: the
+    /// [`TERMINAL_BEAT_INTERVAL`](domain::pty_protocol::TERMINAL_BEAT_INTERVAL),
+    /// shortened by tests.
+    terminal_beat_ms: AtomicU64,
 }
 
 impl Session {
@@ -166,7 +172,21 @@ impl Session {
             tmux,
             focus,
             options,
+            terminal_beat_ms: AtomicU64::new(
+                domain::pty_protocol::TERMINAL_BEAT_INTERVAL.as_millis() as u64,
+            ),
         })
+    }
+
+    /// How often the PTY bridge beats the terminal sockets it opens.
+    pub fn terminal_beat_interval(&self) -> Duration {
+        Duration::from_millis(self.terminal_beat_ms.load(Ordering::Relaxed).max(1))
+    }
+
+    /// Change the beat of the terminal sockets opened afterwards (test seam).
+    pub fn set_terminal_beat_interval(&self, interval: Duration) {
+        self.terminal_beat_ms
+            .store(interval.as_millis() as u64, Ordering::Relaxed);
     }
 
     /// tmux, on the daemon's private socket: the one way the rest of PDO

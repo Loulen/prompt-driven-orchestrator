@@ -3,12 +3,6 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import {
-  clipboardKeyAction,
-  forcedSelectionEvent,
-  isMacPlatform,
-  swallowsMotionReport,
-} from "../model/terminalClipboard";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 import { resizeAvoidingAltBufferCorruption } from "../model/altBufferResize";
 import {
@@ -20,6 +14,7 @@ import {
   type TerminalRole,
 } from "../model/terminalRole";
 import { posteId } from "../model/poste";
+import { isHeartbeatFrame, TERMINAL_SILENCE_MS, VEIL_GRACE_MS } from "../model/terminalConnection";
 import { BASE_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
 import { terminalTheme } from "../model/terminalTheme";
 import {
@@ -31,6 +26,7 @@ import {
 } from "../model/terminalPane";
 import { useTheme } from "../../hooks/useTheme";
 import { openProbedSocket, type ProbedSocket } from "../../shared/http/probedSocket";
+import { wirePointerAndKeys } from "./xtermPointer";
 
 /** The `performance` mark of a terminal's first byte. */
 export const TERMINAL_READY_MARK = "terminal:pret";
@@ -38,6 +34,12 @@ export const TERMINAL_READY_MARK = "terminal:pret";
 /** What the xterm of one session exposes to its toolbar. */
 export interface XtermSession {
   connected: boolean;
+  /** ADR-0083 §5: the live socket was open and fell (closed, offline, or
+   *  silent) at least {@link VEIL_GRACE_MS} ago, and no socket opened since. */
+  dropped: boolean;
+  /** Open a fresh socket on the same session, in the same xterm (the veil's
+   *  Reconnect). */
+  reconnect: () => void;
   /** #867: the role the daemon gave this socket. */
   termRole: TerminalRole;
   /** #870: « Another browser took control », up for a few seconds after this
@@ -69,6 +71,13 @@ export function useXtermSession(
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<ProbedSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  // ADR-0083 §5: the session whose live socket fell, until one opens again.
+  // Keyed by session, so another session starts unveiled.
+  const [droppedSession, setDroppedSession] = useState<string | null>(null);
+  // Opens a fresh socket in place of the live one (Reconnect, back on the tab
+  // or online while veiled): the xterm, and what it shows, stay.
+  const reattachRef = useRef<(() => void) | null>(null);
+  const reconnect = useCallback(() => reattachRef.current?.(), []);
   // #867: the ref is what the xterm callbacks read (they outlive renders); the
   // state drives the toolbar.
   const [termRole, setTermRole] = useState<TerminalRole>(SOLO);
@@ -136,62 +145,8 @@ export function useXtermSession(
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // #772: copy/paste from the pane. tmux mouse mode (enabled by the daemon so
-    // the wheel scrolls tmux scrollback) makes xterm.js report every drag to the
-    // pty instead of selecting: the text ends up in tmux's paste buffer on the
-    // daemon host, xterm drops tmux's OSC 52 reply, and Ctrl+Shift+C copies "".
-    // Rewrite a plain mousedown into the platform's "force selection" form in
-    // capture phase, before xterm's own listeners, so the browser owns the drag
-    // while the wheel path below stays untouched. Shift/Option+drag already
-    // worked and still does.
-    const isMac = isMacPlatform();
-    const handleMouseDown = (e: MouseEvent) => {
-      const clone = forcedSelectionEvent(e, {
-        mouseTrackingActive: term.modes.mouseTrackingMode !== "none",
-        isMac,
-      });
-      if (!clone) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      e.target?.dispatchEvent(clone);
-    };
-    container.addEventListener("mousedown", handleMouseDown, { capture: true });
-
-    // #788: with all-motion tracking xterm reports every buttonless pointer
-    // move to the pty and clears its own selection on that "user input", so
-    // the selection made above dies as soon as the pointer moves again. Stop
-    // such moves in capture phase; drags, clicks and the wheel still go through.
-    const handleMouseMove = (e: MouseEvent) => {
-      if (
-        swallowsMotionReport(e, {
-          hasSelection: term.hasSelection(),
-          mouseTrackingActive: term.modes.mouseTrackingMode !== "none",
-        })
-      ) {
-        e.stopImmediatePropagation();
-      }
-    };
-    container.addEventListener("mousemove", handleMouseMove, { capture: true });
-
-    // Ctrl+C with a selection copies it (SIGINT otherwise); Ctrl+V pastes like
-    // Ctrl+Shift+V instead of sending ^V, which Claude Code reads as "paste
-    // image". Returning `false` hands the key to the browser, whose native
-    // copy/paste events xterm already serves — no navigator.clipboard, so this
-    // works over plain http on a remote daemon.
-    term.attachCustomKeyEventHandler((ev) => {
-      const action = clipboardKeyAction(ev, {
-        hasSelection: term.hasSelection(),
-        isMac,
-      });
-      if (action === "copy") {
-        // Let the native copy event read the selection first, then drop it so
-        // the next Ctrl+C is a SIGINT again.
-        window.setTimeout(() => term.clearSelection(), 0);
-        return false;
-      }
-      if (action === "paste") return false;
-      return true;
-    });
+    // #772 / #788: the mouse, the clipboard keys and the wheel of the pane.
+    const stopPointer = wirePointerAndKeys(term, container);
 
     const selectionDisposable = term.onSelectionChange(() => {
       setHasSelection(term.hasSelection());
@@ -204,9 +159,12 @@ export function useXtermSession(
     //
     // ADR-0083: the PTY opens through the probe. Closed by the daemon, it stays
     // closed; dropped by a daemon that restarted, it reattaches once it answers.
+    // §5: a socket silent for 30 s (the daemon beats every 10 s), or whose
+    // browser went offline, counts as dropped too, and reattaches the same way.
     const ptyPath = `/sessions/${encodeURIComponent(session)}/pty?poste=${encodeURIComponent(posteId())}`;
-    const ws = isFrozen ? null : openProbedSocket(ptyPath, { reconnect: "after-drop" });
-    wsRef.current = ws;
+    // The live socket: replaced in place by a reattachment, so everything
+    // below reads it when called.
+    let ws: ProbedSocket | null = null;
 
     if (isFrozen) {
       term.write(toTerminalNewlines(frozen?.content ?? ""));
@@ -280,17 +238,15 @@ export function useXtermSession(
       setConnected(false);
       if (roleRef.current.role !== "solo") applyRole(SOLO);
     };
-    ws?.onState((state) => {
-      if (state === "ouvert") {
-        setConnected(true);
-        sendResize(ws, fitAddon.proposeDimensions());
-      } else {
-        dropRole();
-      }
-    });
-
+    // The cleanup below closes the socket on purpose: no fall to veil.
+    let disposed = false;
+    // A socket of this terminal was open: a fall after it is veiled, once the
+    // grace is over and the socket is still down.
+    let everOpened = false;
+    let veilTimer: number | undefined;
     let ready = false;
-    ws?.onMessage((data) => {
+
+    const onData = (data: string | ArrayBuffer) => {
       if (data instanceof ArrayBuffer) {
         if (!ready) {
           ready = true;
@@ -298,13 +254,44 @@ export function useXtermSession(
         }
         term.write(new Uint8Array(data));
       } else {
-        // Text frames carry the daemon's control messages (the role); anything
-        // else is written as before.
+        // Text frames carry the daemon's control messages (the role, the
+        // beat); anything else is written as before.
+        if (isHeartbeatFrame(data)) return;
         const role = parseRoleFrame(data);
         if (role) applyRole(role);
         else term.write(data);
       }
-    });
+    };
+
+    const attach = () => {
+      const previous = ws;
+      const socket = openProbedSocket(ptyPath, { reconnect: "after-drop", silenceMs: TERMINAL_SILENCE_MS });
+      ws = socket;
+      wsRef.current = socket;
+      // Closed on purpose: its last state is ignored below.
+      previous?.close();
+      socket.onState((state) => {
+        if (disposed || ws !== socket) return;
+        if (state === "ouvert") {
+          everOpened = true;
+          window.clearTimeout(veilTimer);
+          setConnected(true);
+          setDroppedSession(null);
+          sendResize(socket, fitAddon.proposeDimensions());
+        } else {
+          dropRole();
+          if (everOpened) {
+            window.clearTimeout(veilTimer);
+            veilTimer = window.setTimeout(() => setDroppedSession(session), VEIL_GRACE_MS);
+          }
+        }
+      });
+      socket.onMessage((data) => {
+        if (ws === socket) onData(data);
+      });
+    };
+    if (!isFrozen) attach();
+    reattachRef.current = isFrozen ? null : attach;
 
     // ADR-0075 §3: a spectator is read-only. The daemon drops its input anyway;
     // not sending it keeps the pane's own echo from lying about what happened.
@@ -327,45 +314,19 @@ export function useXtermSession(
       }
     });
 
-    // xterm.js's own viewport handler translates wheel into Application-Cursor
-    // arrow-key escapes (ESC O A / ESC O B) when the inner buffer is in
-    // alt-screen mode + DECCKM — which is the normal case for any TUI we host
-    // (Claude Code, vim, less, etc.). Real wheel events fire on .xterm-screen
-    // deep inside the container, so a bubble-phase listener here would arrive
-    // *after* xterm's handler has already pushed those bytes to the WS. We
-    // register in capture phase so we run first and can stopImmediatePropagation
-    // before xterm's handler sees the event.
-    //
-    // However, when tmux has mouse mode enabled, it requests mouse tracking
-    // from the terminal. In that mode xterm.js correctly encodes wheel events
-    // as mouse-report escape sequences (not arrow keys). We must let those
-    // through so tmux can enter copy-mode and scroll its own scrollback.
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.shiftKey || e.metaKey) return;
-      if (term.modes.mouseTrackingMode !== "none") return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      if (term.buffer.active.type === "alternate") return;
-      const lines = Math.round(e.deltaY / 25) || (e.deltaY > 0 ? 1 : -1);
-      term.scrollLines(lines);
-    };
-    container.addEventListener("wheel", handleWheel, {
-      passive: false,
-      capture: true,
-    });
-
     const resizeObserver = new ResizeObserver(layout);
     resizeObserver.observe(container);
 
     return () => {
-      container.removeEventListener("wheel", handleWheel, { capture: true });
-      container.removeEventListener("mousedown", handleMouseDown, { capture: true });
-      container.removeEventListener("mousemove", handleMouseMove, { capture: true });
+      stopPointer();
       selectionDisposable.dispose();
       setHasSelection(false);
       resizeObserver.disconnect();
       inputDisposable.dispose();
       binaryDisposable.dispose();
+      disposed = true;
+      window.clearTimeout(veilTimer);
+      reattachRef.current = null;
       ws?.close();
       roleRef.current = SOLO;
       setTermRole(SOLO);
@@ -390,6 +351,8 @@ export function useXtermSession(
 
   return {
     connected,
+    dropped: droppedSession === session,
+    reconnect,
     termRole,
     takenOver,
     hasSelection,

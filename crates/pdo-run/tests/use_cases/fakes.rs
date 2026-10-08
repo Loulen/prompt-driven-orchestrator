@@ -497,7 +497,9 @@ impl SourcePipelines for Shared {
     fn fingerprint(&self, id: &str) -> Option<String> {
         let shared = self.0.lock().unwrap();
         let (yaml, prompts) = shared.get(id)?;
-        Some(pdo_pipeline::domain::fingerprint::fingerprint(yaml, prompts))
+        Some(pdo_pipeline::domain::fingerprint::fingerprint(
+            yaml, prompts,
+        ))
     }
     fn overwrite<'a>(
         &'a self,

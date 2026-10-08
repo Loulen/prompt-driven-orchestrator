@@ -18,9 +18,23 @@ interface Args {
   onTipMoved: () => void;
 }
 
+/** The live node `to` shows (`live:<node>`), when its delivery moved between
+ *  the two reads of the Run. */
+export function deliveredSince(
+  before: RunState,
+  after: RunState,
+  to: string,
+): { nodeId: string; iter: number } | null {
+  if (!to.startsWith("live:")) return null;
+  const nodeId = to.slice("live:".length);
+  const node = after.nodes[nodeId];
+  if (!node?.delivery || node.delivery.after === before.nodes[nodeId]?.delivery?.after) return null;
+  return { nodeId, iter: node.iter };
+}
+
 /**
  * The Run's WebSocket, as the Review page listens to it: every event of the
- * Run refreshes it, to detect "tip moved" (the delivery signature changed since
+ * Run refreshes it (and so does a `resync`), to detect "tip moved" (the delivery signature changed since
  * the diff was loaded) and "node delivered" (the live branch on display is
  * gone), and to flash the card of a reply that landed live (#751).
  */
@@ -40,14 +54,24 @@ export function useReviewLive({ runId, runRef, setRun, sigAtLoad, pairRef, onTip
   const { subscribe } = useDaemonSocket();
   useEffect(() => {
     return subscribe((msg) => {
-      if (msg.type !== "event" || !msg.event || msg.event.run_id !== runId) return;
-      const ev = msg.event;
+      // ADR-0083 §6: a `resync` (the stream reopened, the tab shows again, the
+      // network is back, or the daemon lost messages) reads the Run again as
+      // one of its events would.
+      const resync = msg.type === "resync";
+      if (!resync && (msg.type !== "event" || !msg.event || msg.event.run_id !== runId)) return;
+      const ev = resync ? null : msg.event;
       fetchRun(runId)
         .then((r) => {
           const before = runRef.current;
           setRun(r);
           const sig = deliverySignature(r.nodes);
           if (sigAtLoad.current !== null && sig !== sigAtLoad.current) onTipMovedRef.current();
+          // The `node_delivered` missed while away: the live node on display
+          // delivered since the last read.
+          if (resync && before) {
+            const delivered = deliveredSince(before, r, pairRef.current.to);
+            if (delivered) setNodeDelivered(delivered);
+          }
           // #751: a reply landed live — flash its card for a moment. The dot
           // follows from `seen` (the snapshot does not know this reply).
           if (before) {
@@ -72,7 +96,7 @@ export function useReviewLive({ runId, runRef, setRun, sigAtLoad, pairRef, onTip
           }
         })
         .catch(() => {});
-      if (ev.kind === "node_delivered" && ev.node_id && pairRef.current.to === `live:${ev.node_id}`) {
+      if (ev?.kind === "node_delivered" && ev.node_id && pairRef.current.to === `live:${ev.node_id}`) {
         setNodeDelivered({ nodeId: ev.node_id, iter: ev.iter ?? 1 });
       }
     });

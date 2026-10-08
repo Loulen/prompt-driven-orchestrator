@@ -232,6 +232,7 @@ export default function App() {
     refreshTriggers,
     refreshProjects,
     setTriggersPaused,
+    refreshTriggersPaused: hydrateTriggersPause,
     bumpFiresRefreshKey,
   });
 

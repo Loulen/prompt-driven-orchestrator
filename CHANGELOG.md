@@ -10,6 +10,23 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.26.0 — Interface à jour après une absence (CORE-40)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : `openProbedSocket` y reçoit l'option `silenceMs`, ajout seulement.
+
+- **Relecture après une absence** : à chaque (ré)ouverture du flux `/ws`, au retour sur l'onglet,
+  au retour du réseau et sur la trame `{"type":"resync"}` que le daemon envoie à un client qui a
+  perdu des événements, l'interface relit Runs, Run ouvert, sessions, Triggers et leur pause,
+  Projets, Pipelines et les gestes permis. Rien n'est rejoué.
+- **Terminal d'un nœud** : le daemon bat toutes les 10 s sur son socket (Ping + trame
+  `heartbeat`). Sans rien reçu pendant 30 s, hors ligne ou à la fermeture, le terminal se voile
+  (« Terminal connection closed », bouton **Reconnect**) et se rattache seul dans le même xterm.
+  Derrière un reverse proxy, son délai de lecture doit dépasser le battement : voir la section
+  WebSockets du guide.
+- **Skill seedé `pdo-interactive` v2** : la bannière de `pdo wait-user` est une notification ; la
+  question ou le résultat complet s'écrit dans la conversation avant l'appel.
+
 ## 2.25.0 — Finitions de la liste de Runs (CORE-44)
 
 `pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée

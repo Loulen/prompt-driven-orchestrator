@@ -87,10 +87,13 @@ export interface ProbedSocket {
  *  probe succeeded; while it fails, the probe repeats (backoff with jitter), a
  *  hidden tab does not probe, a refused session goes to the sign-in page.
  *  `reconnect: false`: never reopened once it ended; `"after-drop"`: reopened
- *  only when it dropped without the daemon's Close. Since 0.10. */
+ *  only when it dropped without the daemon's Close. Since 0.10.
+ *  `silenceMs` (since 0.11): an open socket that received nothing for that
+ *  long, or whose browser went offline, is closed and counts as a drop; back
+ *  online, a pending probe is sent at once. */
 export function openProbedSocket(
   path: string,
-  options?: { reconnect?: boolean | "after-drop" },
+  options?: { reconnect?: boolean | "after-drop"; silenceMs?: number },
 ): ProbedSocket;
 
 /** Put `text` on the clipboard from a user gesture: the Clipboard API, or

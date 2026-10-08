@@ -82,6 +82,9 @@ export function computeSyncState(
     // `resolveIsolation` on both sides so a silence and a spelled-out default
     // read alike (an entry saved before #655 states no line).
     resolveIsolation(entry.type, entry.isolated_worktree) === nodeIsolation(node) &&
+    // ADR-0086: an on-demand node is not the same content as one the runtime
+    // launches.
+    (entry.on_demand ?? false) === (node.on_demand ?? false) &&
     entry.prompt === prompt &&
     portsMatch(node.inputs, entry.inputs) &&
     portsMatch(node.outputs, entry.outputs)

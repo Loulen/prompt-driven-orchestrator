@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { ScopedProvisioningRules } from "../../shared/generated/ScopedProvisioningRules";
 import type { NodeState } from "../../shared/generated/NodeState";
 import { useNodeRun } from "../store/useNodeRun";
+import { useNodePlay } from "../store/useNodePlay";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { ArtifactSource } from "./MarkdownArtifactModal";
 import { nodeReviewTarget } from "../model/runRefs";
@@ -37,6 +38,8 @@ interface Props {
   onOpenChildRun?: (childRunId: string) => void;
   /** #723: land on the Orchestration tab (the back arrow from a child run). */
   initialDetailTab?: "io" | "orchestration";
+  /** ADR-0086: the node is an on-demand node — its Start is its ▶. */
+  isOnDemand?: boolean;
 }
 
 export default function NodeDetailPanel({
@@ -51,6 +54,7 @@ export default function NodeDetailPanel({
   isOrchestratorNode = false,
   onOpenChildRun,
   initialDetailTab = "io",
+  isOnDemand = false,
 }: Props) {
   const [modal, setModal] = useState<ModalState | null>(null);
   // #588: whether the inline terminal has a live PTY socket (the banner's hint
@@ -127,6 +131,23 @@ export default function NodeDetailPanel({
     isArchived,
     onRetryStarted: showTerminalSplit,
   });
+
+  // ADR-0086: the ▶ of an on-demand node not launched yet, or of a skipped
+  // node, is hidden when the Autorisation d'opération would refuse it.
+  const playKind = isArchived
+    ? null
+    : node.status === "skipped"
+      ? ("retry" as const)
+      : isOnDemand && node.status === "pending"
+        ? ("start" as const)
+        : null;
+  const playCandidates = useMemo(
+    () => (playKind ? [{ nodeId: node.node_id, kind: playKind }] : []),
+    [playKind, node.node_id],
+  );
+  const { canPlay } = useNodePlay(runId, playCandidates);
+  const canStart = playKind !== "start" || canPlay(node.node_id, "start");
+  const canRetry = playKind !== "retry" || canPlay(node.node_id, "retry");
 
   const sessionName = `pdo-${runId}-${node.node_id}-iter-${selectedIter}`;
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
@@ -213,6 +234,8 @@ export default function NodeDetailPanel({
           restartIteration={restartIteration}
           start={start}
           retry={retry}
+          canStart={canStart}
+          canRetry={canRetry}
         />
       )}
 

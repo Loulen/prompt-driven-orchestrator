@@ -4,6 +4,7 @@
  */
 
 import { Info, Box, Loader, CloudOff } from "lucide-react";
+import { waitingForStartedNodesLabel } from "../../run/model/nodePlay";
 import { SectionHead } from "./InspectorPrimitives";
 import type { RunState } from "../../shared/generated/RunState";
 import { isLiveRun } from "../../run/model/runStatus";
@@ -163,6 +164,19 @@ export function InfoTab({
               {run.awaiting_reason_code ? "Interrupted · awaiting you" : "Awaiting you"}
             </div>
             <div className="mt-0.5 break-words">{run.awaiting_reason}</div>
+          </div>
+        )}
+        {/* ADR-0086: past `End`, the Run still waits for nodes it launched. */}
+        {run?.waiting_for_started_nodes != null && run.waiting_for_started_nodes > 0 && (
+          <div
+            className="mt-2 rounded border border-st-await/30 bg-st-await-bg px-2 py-1.5 text-fg-2"
+            style={{ fontSize: "10.5px" }}
+            data-testid="run-waiting-started-nodes-reason"
+          >
+            <div className="font-medium text-st-await">
+              Reached End, {waitingForStartedNodesLabel(run.waiting_for_started_nodes)}
+            </div>
+            <div className="mt-0.5 break-words">The run ends by itself when they are done.</div>
           </div>
         )}
         {/* #804 / ADR-0070 §1: a Trigger fire that could not refresh the remotes

@@ -186,6 +186,18 @@ describe("Pipeline info — Info tab on a template (#948)", () => {
     expect(pipelineNow().prompt_required).toBe(true);
   });
 
+  it("'Wait for started nodes' is off by default and writes wait_for_started_nodes when checked (ADR-0086)", () => {
+    render(<StorePanel />);
+    const checkbox = screen.getByTestId("wait-for-started-nodes-checkbox") as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    expect(serializePipeline(pipelineNow())).not.toContain("wait_for_started_nodes");
+    fireEvent.click(checkbox);
+    expect(pipelineNow().wait_for_started_nodes).toBe(true);
+    expect(serializePipeline(pipelineNow())).toContain("wait_for_started_nodes: true");
+    fireEvent.click(checkbox);
+    expect(pipelineNow().wait_for_started_nodes).toBeUndefined();
+  });
+
   it("adds, renames, retypes, sets the default of and deletes a variable", () => {
     render(<StorePanel />);
     fireEvent.click(screen.getByTestId("pipeline-variable-add"));

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { ChevronDown, ChevronRight, Pause, Pencil, Play, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun } from "../../model/runStatus";
+import { waitingForStartedNodesLabel } from "../../model/nodePlay";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
 import type { RunTreeNode } from "../../model/runTree";
 import { ChildCountPills } from "../OrchestrationTab";
@@ -137,7 +138,13 @@ export default function RunRow({
         dotClass={dot}
         ringClass={ring}
         pulse={run.status === "running" && !run.stalled}
-        dotTitle={run.failure_reason ?? run.awaiting_reason ?? undefined}
+        dotTitle={
+          run.failure_reason ??
+          run.awaiting_reason ??
+          (run.waiting_for_started_nodes
+            ? `Reached End, ${waitingForStartedNodesLabel(run.waiting_for_started_nodes)}`
+            : undefined)
+        }
         dotTestId="run-status-dot"
         testId="run-select-control"
         label={rowSelected ? `Deselect ${run.name || run.run_id}` : `Select ${run.name || run.run_id}`}

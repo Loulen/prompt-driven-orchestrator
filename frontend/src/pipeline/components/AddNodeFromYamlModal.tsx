@@ -69,6 +69,8 @@ export default function AddNodeFromYamlModal({
         // #653/ADR-0060: carry the pasted node's workspace through. Dropping it
         // would silently fork a sub-worktree for a node that opted out.
         isolated_worktree: result.spec.isolated_worktree ?? null,
+        // ADR-0086: a pasted on-demand node stays on demand.
+        on_demand: result.spec.on_demand ?? false,
         pin_harness: result.spec.pin_harness ?? null,
         harnesses: result.spec.harnesses ?? undefined,
         // Fallback flat values (a legacy library/export with no `harnesses` map);

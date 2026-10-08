@@ -80,6 +80,9 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
   // pipeline chose one — absent, it follows the reader's global default, and an
   // untouched pipeline round-trips byte for byte. Layout (`layoutFields.ts`).
   if (p.grid_size) obj.grid_size = p.grid_size;
+  // ADR-0086: « Attente des nœuds lancés », emitted only when on — a pipeline
+  // without it serializes byte-identically. Semantic (`layoutFields.ts`).
+  if (p.wait_for_started_nodes) obj.wait_for_started_nodes = true;
   if (Object.keys(p.variables).length > 0) {
     const vars: Record<string, unknown> = {};
     // Short form (`name: <default>`) when the daemon would infer the declared
@@ -108,6 +111,9 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
     // its pre-#723 shape. Must be mirrored in `exportNodeAsYaml` below and
     // classified in `layoutFields.ts` (SEMANTIC_FIELDS.node).
     if (n.orchestrator) node.orchestrator = true;
+    // ADR-0086: the « on demand » option, emitted only when on, like
+    // `orchestrator`. Mirrored in `exportNodeAsYaml`, SEMANTIC in `layoutFields.ts`.
+    if (n.on_demand) node.on_demand = true;
     // The node's own auto-fail override (true or false), emitted only when set:
     // absent means "inherit". Dropping it here lost it on every editor save.
     if (n.auto_fail !== undefined && n.auto_fail !== null) node.auto_fail = n.auto_fail;

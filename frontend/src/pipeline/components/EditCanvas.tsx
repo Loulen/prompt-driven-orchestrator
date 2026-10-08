@@ -11,6 +11,9 @@ import type { LibraryEntry } from "../model/library";
 import type { LibraryPipelineEntry } from "../api/libraryPipelines";
 import RunShellModal from "../../session/components/RunShellModal";
 import RetryAllConfirmModal from "../../run/components/runsList/RetryAllConfirmModal";
+import RetryConfirmDialog from "../../run/components/nodeDetail/RetryConfirmDialog";
+import { nodePlayKind } from "../../run/model/nodePlay";
+import { useNodePlay, type PlayCandidate } from "../../run/store/useNodePlay";
 import { buildNoteNodes, deriveEditNodes } from "./editNodeDerivation";
 import { buildLoopRegionNodes } from "./loopRegionDerivation";
 import { deriveEditEdges, edgeIndexFromId } from "./editEdgeDerivation";
@@ -23,6 +26,7 @@ import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import LintBanner from "./LintBanner";
+import WaitingForStartedNodesBanner from "../../run/components/WaitingForStartedNodesBanner";
 import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider } from "./DragHighlightContext";
 import { useWiringGridStep } from "../../hooks/useWiringGrid";
@@ -162,9 +166,31 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // nodes whose frozen `orchestrator` toggle is on. Template tabs never poll
   // (no run state → no children) and stay untouched.
   const runChildren = useRunChildren(activeRunState?.run_id ?? null, activeRunState != null);
+  // ADR-0086 — the ▶ of the cards: an on-demand node never launched starts, a
+  // skipped node retries. Asked to the Autorisation d'opération once per set.
+  const playCandidates = useMemo<PlayCandidate[]>(() => {
+    if (!pipeline || !activeRunState) return [];
+    return pipeline.nodes.flatMap((n) => {
+      const kind = nodePlayKind({
+        onDemand: n.on_demand ?? false,
+        status: activeRunState.nodes[n.id]?.status ?? "pending",
+        runStatus: activeRunState.status,
+      });
+      return kind ? [{ nodeId: n.id, kind }] : [];
+    });
+  }, [pipeline, activeRunState]);
+  const nodePlay = useNodePlay(activeRunState?.run_id ?? null, playCandidates);
+  const { canPlay, play } = nodePlay;
   const derivedNodes = useMemo(() => {
     if (!pipeline) return [];
     const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds).map((card) => {
+      const candidate = playCandidates.find((c) => c.nodeId === card.id);
+      if (!candidate || !canPlay(candidate.nodeId, candidate.kind)) return card;
+      return {
+        ...card,
+        data: { ...card.data, play: candidate.kind, onPlay: () => void play(candidate.nodeId, candidate.kind) },
+      };
+    }).map((card) => {
       if (!(card.data as { orchestrator?: boolean }).orchestrator) return card;
       const runId = activeRunState?.run_id ?? null;
       if (!runId) return card;
@@ -185,7 +211,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     // pipeline alone (independent of run state).
     const noteNodes: Node[] = buildNoteNodes(pipeline);
     return [...regionNodes, ...cards, ...noteNodes];
-  }, [pipeline, activeRunState, agentProfileIds, runChildren]);
+  }, [pipeline, activeRunState, agentProfileIds, runChildren, playCandidates, canPlay, play]);
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),
     [pipeline],
@@ -269,6 +295,13 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
           deliberate trade-off ratified at PR time. `tab` is non-null here (early
           return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
+      {/* ADR-0086: a Run past `End` that still waits for nodes it launched
+          says so above its canvas. */}
+      {activeRunState?.waiting_for_started_nodes != null && activeRunState.waiting_for_started_nodes > 0 && (
+        <div className="absolute left-0 right-0 top-10 z-10">
+          <WaitingForStartedNodesBanner count={activeRunState.waiting_for_started_nodes} />
+        </div>
+      )}
       {visibleItems.length > 0 && tab.runId == null && (
         <div className="absolute left-0 right-0 top-10 z-10">
           <LintBanner items={visibleItems} onDismiss={dismiss} />
@@ -380,6 +413,13 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           modals, reusing the exact components the left-panel row uses. */}
       {runShell.shell && <RunShellModal session={runShell.shell.session} onClose={runShell.close} />}
       {confirmRetryAll && <RetryAllConfirmModal onConfirm={handleRetryAll} onCancel={() => setConfirmRetryAll(false)} />}
+      {nodePlay.retryConfirm && (
+        <RetryConfirmDialog
+          retryConfirm={nodePlay.retryConfirm}
+          confirmRetry={() => void nodePlay.confirmRetry()}
+          cancelRetry={nodePlay.cancelRetry}
+        />
+      )}
       {finishConfirm && <FinishEditingConfirmModal {...finishConfirm} />}
     </div>
   );

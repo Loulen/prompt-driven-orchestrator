@@ -1,4 +1,4 @@
-import { GitFork, Lock, TriangleAlert } from "lucide-react";
+import { GitFork, Lock, Play, TriangleAlert } from "lucide-react";
 import type { NodeState } from "../../../shared/generated/NodeState";
 import type { SkillRef } from "../../../shared/generated/SkillRef";
 import { SectionHead } from "../InspectorPrimitives";
@@ -7,7 +7,8 @@ import type { EditorNodeDef } from "../../model/pipeline";
 
 /**
  * Behavior: the « Interactive » and « Orchestrator » toggles, each seeding its
- * own skill (#588/ADR-0069, #723/ADR-0064).
+ * own skill (#588/ADR-0069, #723/ADR-0064), and the « On demand » toggle
+ * (ADR-0086).
  */
 export default function BehaviorSection({
   node,
@@ -62,10 +63,49 @@ export default function BehaviorSection({
     handleField("skills", [...(node.skills ?? []), ORCHESTRATE_SKILL_REF]);
   }
 
+  // ADR-0086 — « On demand »: the runtime never launches the node, the user's
+  // ▶ does. Frozen once the node was launched in this Run, like Orchestrator.
+  const isOnDemand = node.on_demand ?? false;
+  const onDemandFrozen = runNode != null && runNode.status !== "pending";
+
   return (
     <>
         {/* Behavior */}
         <SectionHead title="Behavior" />
+        <Tooltip
+          content="The runtime never launches nor skips this node: it waits for your ▶ in the Run. It reads what its upstream nodes already produced, and holds no downstream node until you launch it."
+          side="left"
+        >
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-fg-3">
+                <Play size={11} className="text-fg-4" />
+                On demand
+                {onDemandFrozen && <Lock size={9} className="text-fg-4" />}
+              </span>
+              <button
+                data-testid="node-on-demand-toggle"
+                aria-pressed={isOnDemand}
+                disabled={onDemandFrozen || readOnly}
+                onClick={() => handleField("on_demand", !isOnDemand)}
+                className={`relative h-5 w-9 rounded-full transition-colors ${
+                  onDemandFrozen || readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+                } ${isOnDemand ? "bg-acc" : "bg-bg-5"}`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
+                    isOnDemand ? "translate-x-[16px]" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+            {onDemandFrozen && (
+              <span className="text-fg-4" style={{ fontSize: "9.5px" }}>
+                Already launched in this run.
+              </span>
+            )}
+          </div>
+        </Tooltip>
         {/* #588/ADR-0069: the « Interactive » toggle guards the node's completion
             (released from the run-mode UI) and seeds the `pdo-interactive` skill —
             the conduct (declare the wait with `pdo wait-user`, never block the

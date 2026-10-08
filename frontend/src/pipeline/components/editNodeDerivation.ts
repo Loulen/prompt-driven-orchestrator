@@ -108,6 +108,11 @@ export function deriveEditNodes(
         // (EditCanvas) attach the child counters to cards where this is true.
         orchestrator:
           runState?.node_defs?.find((d) => d.id === n.id)?.orchestrator ?? n.orchestrator ?? false,
+        // ADR-0086: the « on demand » option, as the document says — the
+        // runtime reads the Run's pipeline, so an edit for this run counts. An
+        // on-demand node the Run never launched is drawn greyed with its ▶.
+        onDemand: n.on_demand ?? false,
+        inRun: runState != null,
       },
     };
   });

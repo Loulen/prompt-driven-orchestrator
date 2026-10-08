@@ -11,12 +11,18 @@ export default function NodeControls({
   restartIteration,
   start,
   retry,
+  canStart = true,
+  canRetry = true,
 }: {
   node: NodeState;
   stop: () => void;
   restartIteration: () => void;
   start: () => void;
   retry: () => void;
+  /** ADR-0086: the Autorisation d'opération would allow the Start. */
+  canStart?: boolean;
+  /** ADR-0086: the Autorisation d'opération would allow the Retry. */
+  canRetry?: boolean;
 }) {
   return (
     <div
@@ -48,7 +54,7 @@ export default function NodeControls({
           Restart
         </button>
       )}
-      {node.status === "pending" && (
+      {node.status === "pending" && canStart && (
         <button
           data-testid="start-btn"
           onClick={start}
@@ -59,7 +65,7 @@ export default function NodeControls({
           Start
         </button>
       )}
-      <RetryPlayButton status={node.status} onClick={retry} />
+      {canRetry && <RetryPlayButton status={node.status} onClick={retry} />}
     </div>
   );
 }

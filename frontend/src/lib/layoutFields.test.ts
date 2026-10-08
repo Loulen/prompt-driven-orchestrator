@@ -83,6 +83,8 @@ const NODE: Complete<EditorNodeDef> = {
   // field; the emission proof lives in `serializePipeline.test.ts` ("the
   // orchestrator toggle lands in the YAML object").
   orchestrator: true,
+  // ADR-0086: same caveat — the emission proof is in `serializePipeline.test.ts`.
+  on_demand: true,
   // #915: the generated type revealed it; the serializer now emits it.
   auto_fail: true,
 };
@@ -131,6 +133,7 @@ const PIPELINE: Complete<EditorPipelineDef> = {
   notes: [NOTE],
   prompt_required: false, // must be exactly `false` to emit
   grid_size: "S", // emitted only when the pipeline chose a size (#877)
+  wait_for_started_nodes: true, // emitted only when on (ADR-0086)
 };
 
 const sortedKeys = (o: unknown) =>

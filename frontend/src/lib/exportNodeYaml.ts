@@ -98,6 +98,8 @@ export function exportNodeAsYaml(node: EditorNodeDef, prompt: string): string {
   // #723/ADR-0064: same conditional emit as `pipelineToYamlObject` — the
   // « Orchestrator » toggle travels with an exported node.
   if (node.orchestrator) obj.orchestrator = true;
+  // ADR-0086: an exported on-demand node stays on demand.
+  if (node.on_demand) obj.on_demand = true;
   if (node.auto_fail !== undefined && node.auto_fail !== null) obj.auto_fail = node.auto_fail;
   if (node.pin_harness) obj.pin_harness = node.pin_harness;
   if (node.agent_choice && node.agent_choice.mode !== "inherit") {

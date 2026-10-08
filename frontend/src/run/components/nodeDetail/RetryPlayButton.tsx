@@ -43,11 +43,15 @@ export default function RetryPlayButton({
   // to hit "resume the run first" now just works. Without this the panel offered
   // no way out of an interrupted node (issue: an interactive node with a dead
   // session had no resume affordance).
+  //
+  // ADR-0086 « Forcer un nœud skipped »: `skipped` joins it too — the retry
+  // runs the branch as if it had been taken, re-opening a finished Run.
   if (
     status === "failed" ||
     status === "stopped" ||
     status === "stale" ||
-    status === "interrupted"
+    status === "interrupted" ||
+    status === "skipped"
   ) {
     return (
       <button

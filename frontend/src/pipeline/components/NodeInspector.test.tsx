@@ -714,6 +714,8 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
       // #655: isolation-aware too — a node silent about its workspace stars on
       // its type's resolved default, not on the silence.
       isolated_worktree: true,
+      // ADR-0086: and on-demand-aware.
+      on_demand: false,
       prompt: "Review this code.",
     });
   });
@@ -1171,6 +1173,18 @@ describe("NodeInspector — toggle skills (#588 / ADR-0069)", () => {
     expect(node().interactive).toBe(false);
     expect(node().skills).toBeUndefined();
     expect(screen.queryByTestId("node-toggle-prompt-amendment")).toBeNull();
+  });
+
+  it("the On demand toggle sets the option on and off (ADR-0086)", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    const toggle = screen.getByTestId("node-on-demand-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+    expect(node().on_demand).toBe(true);
+    expect(screen.getByTestId("node-on-demand-toggle")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByTestId("node-on-demand-toggle"));
+    expect(node().on_demand).toBe(false);
   });
 
   it("lists both invocation lines in spawn order when both toggles are on", () => {

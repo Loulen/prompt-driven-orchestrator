@@ -222,7 +222,7 @@ export interface EditState {
 
   /** `grid_size: null` clears the pipeline's own size (it follows the global
    *  default again) — the key is then dropped from the document, not nulled. */
-  updatePipelineMeta: (updates: Partial<Pick<EditorPipelineDef, "name" | "version" | "variables" | "prompt_required" | "grid_size">>) => void;
+  updatePipelineMeta: (updates: Partial<Pick<EditorPipelineDef, "name" | "version" | "variables" | "prompt_required" | "wait_for_started_nodes" | "grid_size">>) => void;
 
   updatePrompt: (nodeId: string, content: string) => void;
 

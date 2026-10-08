@@ -146,6 +146,7 @@ export default function RightPane({
           inheritedProvisioning={selectedRun.provisioning_rules}
           provisioningGitRef={`pdo/run-${selectedRun.run_id}`}
           isOrchestratorNode={selectedRun.node_defs?.find((d) => d.id === selection.id)?.orchestrator ?? false}
+          isOnDemand={editNode?.on_demand ?? false}
           onOpenChildRun={handleOpenChildRun}
           initialDetailTab={landOnOrchestration === runNode.node_id ? "orchestration" : "io"}
         />
@@ -304,6 +305,7 @@ export default function RightPane({
                 isArchived={isArchived}
                 nodeName={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.name}
                 isOrchestratorNode={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.orchestrator ?? false}
+                isOnDemand={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.on_demand ?? false}
                 onOpenChildRun={handleOpenChildRun}
                 initialDetailTab={landOnOrchestration === selectedNode.node_id ? "orchestration" : "io"}
               />

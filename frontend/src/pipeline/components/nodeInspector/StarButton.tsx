@@ -75,6 +75,8 @@ export default function StarButton({
       // sitting silently on its type's default stars on that default instead of
       // on a silence — a silence would read `diverged` the instant it was saved.
       isolated_worktree: nodeIsolation(node),
+      // ADR-0086: the « on demand » option is starred with the node.
+      on_demand: node.on_demand ?? false,
       prompt,
     };
   }
@@ -118,6 +120,7 @@ export default function StarButton({
         // #655/ADR-0060: and the workspace — resetting to the library must put
         // the node back where the entry says it works, not where its type would.
         isolated_worktree: result.spec.isolated_worktree ?? null,
+        on_demand: result.spec.on_demand ?? false,
       });
       updatePromptFn(result.prompt);
       setPopoverOpen(false);

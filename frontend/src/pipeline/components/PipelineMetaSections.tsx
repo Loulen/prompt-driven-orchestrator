@@ -36,6 +36,7 @@ export default function PipelineMetaSections({
   const ownGridSize = isGridSize(pipeline.grid_size) ? pipeline.grid_size : null;
   const effectiveGridSize = resolveGridSize(pipeline.grid_size, globalGridSize);
   const promptRequired = pipeline.prompt_required !== false;
+  const waitForStartedNodes = pipeline.wait_for_started_nodes === true;
 
   function handleAddVariable() {
     let name = "new_var";
@@ -88,6 +89,9 @@ export default function PipelineMetaSections({
             <ReadOnlyRow label="Prompt required" testid="pipeline-meta-prompt-required">
               {promptRequired ? "Yes" : "No"}
             </ReadOnlyRow>
+            <ReadOnlyRow label="Wait for started nodes" testid="pipeline-meta-wait-for-started-nodes">
+              {waitForStartedNodes ? "Yes" : "No"}
+            </ReadOnlyRow>
           </>
         ) : (
           <>
@@ -119,6 +123,23 @@ export default function PipelineMetaSections({
                 data-testid="prompt-required-checkbox"
               />
               Prompt required
+            </label>
+            {/* ADR-0086 « Attente des nœuds lancés ». Off by default: a Run ends
+                at End. On, a Run that reaches End waits until no node it
+                launched is still running, waiting or awaiting you. */}
+            <label
+              className="flex items-center gap-2 text-fg-2"
+              style={{ fontSize: "11px" }}
+              title="A Run that reaches End keeps running until every node it launched is done (none running, waiting or awaiting you). An on-demand node never launched holds nothing."
+            >
+              <input
+                type="checkbox"
+                className="accent-acc"
+                checked={waitForStartedNodes}
+                onChange={(e) => updateMeta({ wait_for_started_nodes: e.target.checked })}
+                data-testid="wait-for-started-nodes-checkbox"
+              />
+              Wait for started nodes
             </label>
           </>
         )}

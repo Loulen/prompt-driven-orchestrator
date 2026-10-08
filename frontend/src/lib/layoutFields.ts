@@ -39,7 +39,8 @@ export type SerializerScope =
   | "note";
 
 export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
-  pipeline: ["name", "version", "prompt_required", "variables", "nodes", "edges", "loops"] satisfies (keyof EditorPipelineDef)[],
+  // ADR-0086: `wait_for_started_nodes` is SEMANTIC — it changes when a Run ends.
+  pipeline: ["name", "version", "prompt_required", "wait_for_started_nodes", "variables", "nodes", "edges", "loops"] satisfies (keyof EditorPipelineDef)[],
   // #550/ADR-0046: the harness axis replaces the flat `model`/`effort` (#296/#424)
   // the serializer used to emit. `pin_harness` and the per-harness `harnesses` map
   // are SEMANTIC — they change what runs the node and how — so they belong in the
@@ -57,7 +58,9 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // #915: `auto_fail` (the node's override of the Run's auto-fail) and a port's
   // `required` are SEMANTIC: they change how the node completes or fails. The
   // generated types revealed the serializer used to drop both.
-  node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "orchestrator", "auto_fail", "inputs", "outputs"] satisfies (keyof EditorNodeDef)[],
+  // ADR-0086: `on_demand` is SEMANTIC — it decides whether the runtime
+  // launches the node at all.
+  node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "orchestrator", "on_demand", "auto_fail", "inputs", "outputs"] satisfies (keyof EditorNodeDef)[],
   // `side` is SEMANTIC today (emitted, not stripped) — deliberate, see #355 D5:
   // the node-library star already treats port side as identity, so the pipeline
   // diff must agree or the two stars contradict each other on the same edit.

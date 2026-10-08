@@ -8,6 +8,11 @@ in `pm`, Backlog `CORE` (`docs/agents/business-backlog.md`), and the Property **
 - `tech` — a technical ticket (the technical backlog, `docs/agents/issue-tracker.md`). A spec is
   not a Tâche: it is a sub-page of its story.
 
+**Who writes `type=tech`.** Only `/to-tickets`, at the end of a grilling (story → `/grill-with-docs`
+→ `/to-spec` → `/to-tickets`). Everything else that enters a Backlog — a gap, a bug, a feature an
+extension needs, a missing seam, even when written by an agent with a technical title — is a
+business story, `type=metier`: it is grilled (alone or in a batch) before it becomes tickets.
+
 | Canonical role    | In `pm`                           | Meaning                                              |
 | ----------------- | --------------------------------- | ---------------------------------------------------- |
 | `needs-triage`    | _(a Commentaire)_                 | Say it in a comment; the maintainer evaluates        |

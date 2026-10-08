@@ -1,7 +1,8 @@
 # Un WebSocket ne s'ouvre qu'après une sonde HTTP réussie
 
-> Statut : accepted (grilling du 2026-10-07, CORE-31). Vocabulaire : CONTEXT.md « Ouverture
-> sondée ».
+> Statut : accepted (grilling du 2026-10-07, CORE-31) ; points 5 et 6 ajoutés au grilling du
+> 2026-10-08 (CORE-33, rattrapage de l'interface à jour après une absence). Vocabulaire :
+> CONTEXT.md « Ouverture sondée ».
 
 ## Contexte
 
@@ -39,6 +40,13 @@ Le client sondait déjà `/actors/me` après une coupure, mais rouvrait le socke
 4. **Une seule implémentation**, dans le front du core, qui l'utilise pour son flux d'événements et
    ses terminaux, et qui l'expose aux interfaces des Extensions par le module partagé
    `@pdo/extension-ui` (ADR-0081). Une Extension n'écrit pas sa propre boucle de reconnexion.
+5. **Un socket muet est un socket mort.** Le daemon bat sur chaque socket (flux d'événements et
+   terminal) ; un client qui n'a rien reçu pendant le délai de silence ferme le socket et repasse
+   par la sonde. Une connexion TCP à moitié ouverte (veille, changement de réseau, proxy qui coupe
+   pour inactivité) ne se signale par aucune fermeture : sans ce délai, l'onglet reste figé.
+6. **Toute (ré)ouverture relit l'état complet**, de même que le retour sur un onglet caché et le
+   `resync` que le daemon envoie à un client qui a perdu des événements : le flux ne rejoue pas ce
+   qui s'est passé pendant la coupure.
 
 ## Options écartées
 

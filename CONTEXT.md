@@ -13,8 +13,10 @@ Un **Pipeline** est un DAG nommé, à **orchestration déterministe**, qui décr
 
 - **Orchestration déterministe** : aucun *LLM-router*. Le routage entre nœuds suit des prédicats mécaniques portés par les edges conditionnelles (`when:`/`else`) et les régions de boucle du bloc `loops:` (ADR-0011). Aucun LLM ne décide à l'exécution quel nœud activer.
 - **Pas de routage probabiliste** : le déterminisme porte sur la *structure d'orchestration* (qui appelle qui dans quel ordre), pas sur le contenu produit par chaque nœud (les LLM aux feuilles restent stochastiques).
-- **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. L'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007) et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run*).
+- **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. En mode *Éditer pour ce Run*, l'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007, ADR-0085) et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run*).
 - **Multiples pipelines plutôt qu'embranchements** : pour gérer des trade-offs coût/complexité (ex. *quick-fix* vs *feature-with-adversarial-review*), on définit plusieurs pipelines distincts. Pas un seul pipeline avec des branches.
+
+- **Pipeline validé** : Pipeline rendu disponible au lancement pour un ou plusieurs **Projets**, ou pour **tous les Projets** (actuels et futurs). Un Pipeline que PDO crée, duplique ou importe naît **non validé** — c'est un **Pipeline de test** : il n'est proposé au lancement (New Run, Trigger) que derrière « Afficher les Pipelines de test ». Un Pipeline sans validation enregistrée vaut « tous les Projets ». La validation est une donnée de l'instance, pas du YAML : un export n'emporte pas ses Projets. _Éviter_ : « favori », « accès rapide », « publié » (pas de modèle draft/published).
 
 Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-router), TPM workflow (orchestrateur LLM qui décide quand spawner).
 
@@ -30,6 +32,8 @@ Un Node se définit par :
 - **Prompt système** — le rôle, écrit dans la zone de texte qui s'ouvre à l'édition.
 - **Ports de sortie — déclarés.** Un ou plusieurs documents produits, chacun un port nommé : c'est le **contrat de production** du Node (avec son schéma de frontmatter optionnel, cf. *Blackboard*). Multi-fan-out supporté. Rendu : les ports sont listés sur la carte ; une edge se démarre depuis le bord du node et porte le premier output par défaut (cf. *Edges — structure*).
 - **Ports d'entrée — émergents.** Un Node ne **déclare pas** ses entrées : elles sont *dérivées des edges entrantes*. Connecter `debugger.repro_steps` vers un Node y crée de facto une entrée `repro_steps`. Plusieurs edges de même nom **poolent** dans une seule entrée-liste — pooling **sémantique**, jamais un groupement visuel des flèches. Sur collision de noms *distincts*, on qualifie par source. L'accumulation cross-itérations est un flag `repeated` porté par l'**edge**, pas par l'entrée.
+
+- **Nœud à la demande** *(terme, YAML `on_demand: true`)* : option d'un Node `agent` ou `script` — comme `interactive` et `orchestrator`, ce n'est pas un type de node. Le runtime ne le lance jamais de lui-même et ne le skippe jamais : il attend que l'utilisateur clique ▶, tant que le Run n'est pas archivé (sur un Run terminé, le clic le ré-ouvre). Ses inputs ne sont pas requis : à son lancement il reçoit la dernière itération terminée de chaque amont connecté, et le préambule dit qu'un input est absent. Ses edges sortantes ne retiennent pas l'aval, qui ne l'attend pas ; une fois terminé, elles partent normalement vers un aval pas encore lancé, et un aval déjà terminé n'est pas relancé. _Éviter_ : « nœud manuel », « nœud optionnel » ; ne pas confondre avec le **Pipeline Manager on demand**.
 
 Asymétrie assumée : le Node *connaît* ses sorties, *découvre* ses entrées au câblage. Conséquence sur la bibliothèque : un Node réutilisable porte ses **outputs + rôle + type**, pas ses inputs (purement pipeline-spécifiques).
 
@@ -172,7 +176,7 @@ Le modèle à id autorise de *déclarer* `inner ⊂ outer`, mais la sémantique 
 
 ### Édition pendant un Run & intra-Run
 
-Supprimer l'edge qui retire le **dernier cycle** d'une boucle `bounded` déclenche un popup de confirmation ; confirmé, l'entrée `loops:` part avec son état. L'interaction avec un Run actif est régie par ADR-0007. Les compteurs `iter` repartent de zéro à chaque Run.
+Supprimer l'edge qui retire le **dernier cycle** d'une boucle `bounded` déclenche un popup de confirmation ; confirmé, l'entrée `loops:` part avec son état. L'interaction avec un Run actif est régie par ADR-0007 et ADR-0085. Les compteurs `iter` repartent de zéro à chaque Run.
 
 ---
 
@@ -259,6 +263,10 @@ Un Node peut **déclarer le schéma de frontmatter attendu** sur chacun de ses o
 Types supportés v1 : `enum` (avec `allowed`), `int`, `string`, `bool`, `list` (de strings). Si un cas concret force plus, on étend.
 
 **Pas de typage côté input** — l'agent fait du best-effort sur ce qu'il reçoit. Asymétrie volontaire : l'output est un contrat de production mécaniquement vérifiable ; l'input est un contexte que l'agent interprète.
+
+### Output intermédiaire
+
+**Output intermédiaire** *(terme)* : output port coché « intermediate ». L'agent le remplit et le met à jour **au fil du travail**, pour que les humains suivent ce qu'il produit pendant le Run ; `pdo complete` ne le vérifie jamais (ni présence, ni frontmatter). Il sert aux humains seulement : il ne part sur aucune edge et ne nourrit aucun aval — un contenu utile à l'aval passe par un output ordinaire. Tous les types d'output s'y prêtent. _Éviter_ : « artefact intermédiaire », « artefact publié », « running artifact » ; ne pas confondre avec l'**output partiel** d'une tentative `Interrupted` (ADR-0049).
 
 ### Validation à la complétion + fallback tmux
 
@@ -369,12 +377,17 @@ Conséquences :
 
 ## Édition pendant un Run
 
-Le canvas est **toujours interactif** (ADR-0007) — un seul mode d'édition, qui s'adapte selon que la pipeline tourne ou pas.
+Suivre un Run et modifier un Pipeline sont deux gestes distincts (ADR-0085, amende ADR-0007).
+
+- **Pilotage** *(défaut d'un onglet de Run)* : le canvas est verrouillé — ni déplacement, ni connexion, ni ajout ; la **Config** d'un nœud (prompt, skills) se lit en lecture seule. Seuls restent les contrôles de Run.
+- **Éditer pour ce Run** : geste explicite qui déverrouille l'édition à chaud sur le **snapshot run-scope** ; « Terminer l'édition » revient au pilotage. _Éviter_ : « mode Edit » sans préciser pour qui.
+- **Éditer le Pipeline source** : ouvre l'onglet du Pipeline, qui s'édite directement comme hors Run.
 
 ### Modèle de mutation
 
-- **Aucun Run en cours** : l'édition modifie directement la template en bibliothèque.
-- **Run en cours** : l'édition modifie le **snapshot run-scope** (`<repo>/.pdo/runs/<run-id>/pipeline.yaml`) ET propage vers la template d'origine (auto-sync montant). Le watcher émet `PipelineModified` ; le scheduler se réajuste au prochain tick.
+- **Onglet de Pipeline** : l'édition modifie directement le Pipeline partagé (la template en bibliothèque).
+- **Éditer pour ce Run** : « Enregistrer pour ce Run » n'écrit **que** le snapshot run-scope. Le watcher émet `PipelineModified` ; le scheduler se réajuste au prochain tick.
+- **Écraser le Pipeline par défaut** : geste distinct, après un avertissement qui dit qui sera touché (tous les futurs Runs, les Triggers qui le référencent) ; le snapshot du Run remplace entièrement le Pipeline partagé. Il n'y a plus d'auto-sync montant. _Éviter_ : « sync », « publier ».
 - **`PipelineModified` est un signal passif** (#221) : il ne ré-ouvre **aucun** Run terminal (intégrité de l'état terminal). Reprendre un Run terminé est une opération **explicite** (`resume_run`), jamais un effet de bord du watcher.
 
 ### Politique de mutation pendant un Run
@@ -385,7 +398,7 @@ Le canvas est **toujours interactif** (ADR-0007) — un seul mode d'édition, qu
 
 ### Étanchéité
 
-Modif d'un run-snapshot n'impacte aucun autre run ; modif d'une template hors-Run n'impacte aucun run en cours ; l'auto-sync ne va que du run-scope vers la template, jamais l'inverse.
+Modif d'un run-snapshot n'impacte ni le Pipeline partagé ni aucun autre run ; modif d'un Pipeline partagé n'impacte aucun run en cours. Seul « Écraser le Pipeline par défaut » fait passer une modification d'un Run vers le Pipeline partagé.
 
 ---
 
@@ -399,12 +412,15 @@ L'input peut aussi être **construit interactivement** via un nœud d'entrée `i
 
 - **Saisie persistante de la modale New Run** : le contenu saisi survit à une fermeture/réouverture et n'est vidé qu'après un lancement réussi.
 - **Images d'input** : téléversables à côté du prompt, stockées dans `_input/` du Blackboard, listées dans le préambule du nœud d'entrée, affichées sur la carte Start et dans son inspecteur.
+- **Fichier importé en cours de Run** : l'utilisateur donne un fichier de son poste à un nœud **à session vive**, en le glissant sur son terminal ou via l'import du terminal — le même geste sur une instance locale ou distante. Le fichier est déposé dans le Blackboard du Run (jamais commité, nettoyé avec le Run) sous le budget de pièces jointes de l'instance ; PDO ne prévient pas l'agent de lui-même : il rend un texte qui donne le chemin, que l'utilisateur copie ou fait **écrire dans le terminal sans le valider** (le geste de l'utilisateur, jamais un envoi). _Éviter_ : « upload » (le geste est un import vers un nœud), « input » (l'input est celui du Run).
 
 ### `prompt_required` — pipeline runnable sans prompt
 
 Flag racine du YAML, défaut `true`. Mis à `false`, le pipeline est *self-sufficient* : son nœud d'entrée sait trouver son propre travail (backlog, `git diff`…). Le champ prompt du New Run devient optionnel ; un prompt fourni est passé comme *additional info*.
 
 ### Termination
+
+**Attente des nœuds lancés** *(terme, option du Pipeline, désactivée par défaut)* : activée, un Run qui atteint `End` ne se termine qu'une fois **tous les nœuds lancés** aboutis (aucun nœud `running`, `waiting` ou `awaiting_user`) ; d'ici là il reste `Running` et dit combien de nœuds il attend. Un Nœud à la demande jamais lancé ne retient rien. Désactivée, rien ne change : le Run se termine à `End`, et un nœud encore vivant voit sa complétion refusée tant que le Run n'est pas ré-ouvert.
 
 À la fin d'un Run réussi, **niveau 0** par défaut : la branche `pdo/run-<run-id>` reste en l'état, le worktree reste sur disque. PDO ne fait **pas** de PR auto, **pas** d'auto-merge. Si un projet veut ce comportement, il ajoute un nœud « Shipper » dans son pipeline.
 
@@ -423,6 +439,8 @@ Flag racine du YAML, défaut `true`. Mis à `false`, le pipeline est *self-suffi
 **`reopen_run`** *(terme)* : la commande **globale** de ré-ouverture (« re-projette + drive le nouveau »), surfacée par un bouton Play dans la toolbar de niveau Run ; la seule qui ne cible aucun node (utile sur un Run halted-`unrouted`). Les commandes ciblées (retry/restart/start/complete/inject) embarquent leur propre ré-ouverture, **en un temps** (atomique, plus de course de re-fail). _Éviter_ : `resume_run` (renommé), `retry_all` (archive + Run neuf, run-id différent).
 
 **Skip local** *(terme)* : sauter un node **sans terminer le Run** ; output vide par défaut, surchargeable via `overrides` ; compte comme satisfait pour la re-projection ; l'aval avance. _Éviter_ : `pdo skip` / `RunSkipped` (no-op **run-level** qui termine tout, #245).
+
+**Forcer un nœud skipped** *(terme)* : le ▶ d'un node `Skipped` (auto-skip ou skip local) le relance avec la sémantique de **Retry** : itération suivante, aval invalidé puis réévalué, Run ré-ouvert. La branche skippée s'exécute comme si elle avait été prise. _Éviter_ : « Start » pour ce geste (Start ne touche pas l'aval, qui resterait skippé).
 
 **`force_route`** *(terme)* : sortie explicite d'une région ou d'un node vers une cible qui **court-circuite les `when:`** des edges — débloque un verdict non-`PASS` (CI verte, MR mergeable) qui n'atteindrait jamais `End`. _Éviter_ : `end_region` (qui, lui, respecte les `when:`).
 
@@ -515,8 +533,8 @@ Trois commandes agissent sur le **Run entier** — `pause_run`, `resume_run`, `r
 
 Un run créé depuis la session d'un nœud porte une **filiation** posée par le daemon (`parent_run_id`, jamais déclarée par l'appelant). La liste de runs la rend en **arbre**, pas en liste plate.
 
-- **Run racine** *(terme)* : run sans parent **vivant dans la liste** — soit il n'a pas de parent, soit son parent a été oublié ou archivé. Il s'affiche au premier niveau.
-- **Run enfant** *(terme)* : run dont le parent est présent dans la liste. Il ne s'affiche **jamais** au premier niveau : il se replie sous son parent, indenté, ouvert par la **flèche** du parent (chevron sous le dot de statut). Un enfant suit son parent partout : même section actifs/archivés, même groupe Projet, quels que soient son propre statut ou son propre repo. Un enfant qui a des enfants porte sa propre flèche.
+- **Run racine** *(terme)* : run sans parent **dans sa section** (actifs ou archivés) — soit il n'a pas de parent, soit son parent a été oublié ou se trouve dans l'autre section. Il s'affiche au premier niveau ; s'il a un parent, la ligne porte un lien vers lui.
+- **Run enfant** *(terme)* : run dont le parent est présent dans sa section. La section des archivés rend l'arbre comme celle des actifs. Il ne s'affiche **jamais** au premier niveau : il se replie sous son parent, indenté, ouvert par la **flèche** du parent (chevron sous le dot de statut). Un enfant suit son parent partout : même section actifs/archivés, même groupe Projet, quels que soient son propre statut ou son propre repo. Un enfant qui a des enfants porte sa propre flèche.
 - **Arbre de runs** *(terme)* : une racine et tous ses descendants. Un filtre (Projet, Pipeline, Trigger) garde un parent dès qu'un descendant matche, et l'ouvre sur les enfants qui matchent. Sélectionner un run masqué (onglet Orchestration, retour arrière) ouvre ses ancêtres.
 - **Compteurs d'enfants** *(terme)* : quatre pastilles à nombre — **finished** (terminal non failed), **failed**, **stale** (vivant et `stalled`, orange), **running** (vivant non stalled : running, awaiting_user, paused) — quatre ensembles disjoints dont la somme est le nombre de descendants. Sur une ligne de la liste ils agrègent **tout le sous-arbre** ; sur un nœud orchestrateur ils portent sur les enfants de ce nœud. Une pastille à zéro ne s'affiche pas. `stalled` d'un enfant est dérivé par le daemon à la lecture, comme sur la liste (#180).
 - **Déplié / replié par défaut** : préférence d'interface **par navigateur** (comme le thème), déplié par défaut. Elle fixe l'état au chargement et celui du bouton global **déplier tout / replier tout** (chevron haut quand tout est déplié) ; les bascules par ligne ne sont pas mémorisées.
@@ -563,6 +581,7 @@ Un **Projet** est un regroupement **nommé** de dépôts qui se travaillent ense
 
 - **Un chemin appartient à au plus un Projet**, et le Projet d'un Run est celui qui possède son **dépôt primaire**. Un secondaire membre d'un autre Projet n'y change rien : c'est un contexte read-only, pas une appartenance (ADR-0042).
 - **Matérialisé à la demande, jamais seedé** : tant qu'aucun nom n'est donné ni aucun réglage attaché, il n'existe pas de Projet — les listes se groupent sur le libellé dérivé du chemin. Nommer un en-tête de groupe est ce qui crée l'entité, avec ses membres initiaux : c'est une seule Opération de création (cf. *Extensions*).
+- **Pipelines validés** : un Projet propose au lancement les Pipelines validés pour lui, avant les Pipelines validés pour tous les Projets (cf. *Pipeline validé*).
 - **Réglages portés** : le harnais agentique, dont il est le tier intermédiaire (ADR-0046), et ses skills sélectionnés (cf. *Banque de skills*).
 
 _Éviter_ : « projet » pour un dépôt seul (c'est le *repo cible*) ou pour le `projects/` d'un home stagé.
@@ -793,7 +812,7 @@ Hors du pont, un `tmux attach` direct ou « Détacher » restent des clients tmu
 
 ### Nœuds interactifs — attente déclarée et signal de complétion
 
-**Attente déclarée** *(terme, #588, ADR-0069 — declared wait)* : l'état `awaiting_user` d'un nœud à session vivante est **déclaré par l'agent** (`pdo wait-user [--message "<question>"]`, le message devient la raison en prose de la bannière du run) et **levé par la frappe humaine** (touche Entrée traversant le pont PTY de l'UI) ou par la libération de la complétion. Jamais inféré : ni au spawn d'un nœud interactif, ni d'un silence. Accepté sur tout nœud à session vivante, interactif ou non (un nœud coincé sur une question devient visible) ; refus nommé sur un nœud `script` ou sans session. Un `tmux attach` direct contourne le pont : le clic reste le second chemin. _Éviter_ : « attente interactive » pour désigner l'état (c'est la *cause*, pas le signal), « wait for user » (le nom CLI est `wait-user`), « détection d'inactivité ».
+**Attente déclarée** *(terme, #588, ADR-0069 — declared wait)* : l'état `awaiting_user` d'un nœud à session vivante est **déclaré par l'agent** (`pdo wait-user [--message "<question>"]`, le message devient la raison en prose de la bannière du run — une **notification** qui dit à l'utilisateur que c'est son tour, jamais le message lui-même : la question ou le résultat complet est écrit dans la conversation du terminal) et **levé par la frappe humaine** (touche Entrée traversant le pont PTY de l'UI) ou par la libération de la complétion. Jamais inféré : ni au spawn d'un nœud interactif, ni d'un silence. Accepté sur tout nœud à session vivante, interactif ou non (un nœud coincé sur une question devient visible) ; refus nommé sur un nœud `script` ou sans session. Un `tmux attach` direct contourne le pont : le clic reste le second chemin. _Éviter_ : « attente interactive » pour désigner l'état (c'est la *cause*, pas le signal), « wait for user » (le nom CLI est `wait-user`), « détection d'inactivité ».
 
 
 Un Node `interactive: true` spawn une session normale et **n'auto-complète jamais tant que sa complétion n'est pas libérée**. Deux gestes, **depuis l'UI**, côte à côte (pas de slash-command in-session : les boutons restent accessibles sans être attaché) :

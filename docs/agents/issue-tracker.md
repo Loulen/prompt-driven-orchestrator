@@ -40,6 +40,6 @@ The core's issues still open on `Loulen/PDO-v2` stay on GitHub until they are cl
 ## Extensions live elsewhere
 
 A ticket that only concerns an extension or `pdo-dist` goes to the extensions' Backlogs (`PM`,
-`IAM`), implemented on `Loulen/pdo-extensions`. A seam the extension API lacks is a `CORE` Tâche:
+`IAM`), implemented on `Loulen/pdo-extensions`. A seam the extension API lacks is a `CORE` story (`type=metier`, grilled into tickets):
 the extension ticket is blocked by it (`tache block PM-17 --by CORE-1`) until the core tag that
 ships it is pinned in `pdo-extensions`.

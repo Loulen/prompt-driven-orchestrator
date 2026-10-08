@@ -3,12 +3,15 @@
 //! context, the Projets of the workspace, the skills and their bank, the
 //! staging profiles over SQLite, the pipeline watcher and the daemon's own
 //! writes, the instance settings and the agentic profiles of the settings
-//! context, and the page mounts an archive releases (the platform's).
+//! context, the page mounts an archive releases (the platform's), the shared
+//! pipelines a Run overwrites (the pipeline context's registry) and the
+//! Triggers that fire them (the trigger context's store).
 
 use std::sync::Arc;
 
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_pipeline::adapters::skill_bank::BankOfSkills;
+use pdo_pipeline::Pipelines;
 use pdo_platform::Platform;
 use pdo_run::adapters::contexts::{ContextSkills, SessionWaits, WorkspaceProjects};
 use pdo_run::adapters::disk_live_facts::DiskLiveFacts;
@@ -18,11 +21,14 @@ use pdo_run::{Runs, RunsOptions, RunsPorts};
 use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_session::Session;
 use pdo_settings::adapters::contexts::RunInstanceSettings;
+use pdo_trigger::adapters::contexts::TriggersOfRuns;
+use pdo_trigger::adapters::sqlite::SqliteTriggers;
 use pdo_skill::Skills;
 use pdo_workspace::application::Workspace;
 
 use super::{ContextResources, StoredSettings};
 use crate::ports::run_pages::PlatformPages;
+use crate::ports::source_pipelines::RegistryPipelines;
 use crate::ports::Late;
 
 /// What the run context is wired over.
@@ -33,6 +39,7 @@ pub(super) struct RunWiring<'a> {
     pub skills: &'a Arc<Skills>,
     pub stored: &'a StoredSettings,
     pub platform: &'a Late<Platform>,
+    pub pipelines: &'a Late<Pipelines>,
     pub host: Arc<dyn ExtensionHost>,
 }
 
@@ -60,6 +67,10 @@ pub(super) fn run(w: RunWiring<'_>) -> Arc<Runs> {
             pages: Arc::new(PlatformPages(w.platform.clone())),
             run_dirs: r.run_dirs.clone(),
             self_writes: r.self_writes.clone(),
+            source_pipelines: Arc::new(RegistryPipelines(w.pipelines.clone())),
+            pipeline_triggers: Arc::new(TriggersOfRuns(Arc::new(SqliteTriggers::new(
+                r.db.clone(),
+            )))),
             extensions: w.host,
         },
         RunsOptions {

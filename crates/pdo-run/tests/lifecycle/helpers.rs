@@ -220,6 +220,7 @@ pub fn commit_and_merge_sub_worktree(
         node_id,
         iter,
         None,
+        &pdo_workspace::adapters::git::worktrees::CommitIdentity::default(),
     )
 }
 

@@ -23,6 +23,7 @@ fn commit_and_merge_sub_worktree(
         node_id,
         iter,
         None,
+        &CommitIdentity::default(),
     )
 }
 
@@ -308,6 +309,7 @@ fn merge_back_survives_node_rebase() {
         "ship",
         1,
         Some(&node.spawn_base),
+        &CommitIdentity::default(),
     )
     .unwrap();
 
@@ -348,6 +350,7 @@ fn resolving_in_the_node_favour_keeps_the_old_tip_reachable() {
         "ship",
         1,
         Some(&node.spawn_base),
+        &CommitIdentity::default(),
     )
     .unwrap();
     let MergeResult::ResolvedInNodeFavour(adoption) = result else {
@@ -419,6 +422,7 @@ fn genuine_semantic_conflict_still_fails() {
         "impl-1",
         1,
         Some(&base_1),
+        &CommitIdentity::default(),
     )
     .unwrap();
     assert!(matches!(r1, MergeResult::Success));
@@ -430,6 +434,7 @@ fn genuine_semantic_conflict_still_fails() {
         "impl-2",
         1,
         Some(&base_2),
+        &CommitIdentity::default(),
     )
     .unwrap();
     assert!(
@@ -475,6 +480,7 @@ fn a_rebased_node_whose_base_went_stale_still_conflicts() {
         "ship",
         1,
         Some(&node.spawn_base),
+        &CommitIdentity::default(),
     )
     .unwrap();
     assert!(
@@ -501,6 +507,7 @@ fn an_unknown_spawn_base_is_never_adopted() {
         "ship",
         1,
         None,
+        &CommitIdentity::default(),
     )
     .unwrap();
     assert!(matches!(result, MergeResult::Conflict(_)));
@@ -520,6 +527,7 @@ fn conflict_detail_is_not_empty() {
         "ship",
         1,
         None,
+        &CommitIdentity::default(),
     )
     .unwrap();
     let MergeResult::Conflict(conflict) = result else {
@@ -549,6 +557,7 @@ fn conflict_detail_names_the_files_and_both_tips() {
         "ship",
         1,
         None,
+        &CommitIdentity::default(),
     )
     .unwrap();
     let MergeResult::Conflict(conflict) = result else {
@@ -584,6 +593,7 @@ fn a_clean_node_rebase_needs_no_resolution_at_all() {
         "ship",
         1,
         Some(&node.spawn_base),
+        &CommitIdentity::default(),
     )
     .unwrap();
     assert!(
@@ -658,7 +668,10 @@ fn stage_and_commit_takes_no_empty_commit() {
     init_test_repo(repo);
     let before = rev_parse(repo, "HEAD").unwrap();
 
-    assert_eq!(stage_and_commit(repo, "n", 1).unwrap(), None);
+    assert_eq!(
+        stage_and_commit(repo, "n", 1, &CommitIdentity::default()).unwrap(),
+        None
+    );
     assert_eq!(rev_parse(repo, "HEAD").unwrap(), before);
 }
 
@@ -688,7 +701,9 @@ fn stage_and_commit_follows_add_dash_a_and_the_repo_gitignore() {
     std::fs::create_dir_all(repo.join("ignored")).unwrap();
     std::fs::write(repo.join("ignored/noise.txt"), "noise\n").unwrap();
 
-    let sha = stage_and_commit(repo, "impl-1", 3).unwrap().unwrap();
+    let sha = stage_and_commit(repo, "impl-1", 3, &CommitIdentity::default())
+        .unwrap()
+        .unwrap();
     assert_eq!(sha, rev_parse(repo, "HEAD").unwrap());
 
     let subject = String::from_utf8_lossy(&git(&["log", "--format=%s", "-1"]).stdout)
@@ -736,7 +751,9 @@ fn stage_and_commit_keeps_the_run_artifacts_out_of_the_branch() {
     std::fs::write(&fresh, b"png").unwrap();
     std::fs::write(repo.join("src.rs"), "pub fn work() {}\n").unwrap();
 
-    let sha = stage_and_commit(repo, "tester", 1).unwrap().unwrap();
+    let sha = stage_and_commit(repo, "tester", 1, &CommitIdentity::default())
+        .unwrap()
+        .unwrap();
     assert_eq!(sha, rev_parse(repo, "HEAD").unwrap());
 
     let files =
@@ -776,7 +793,9 @@ fn stage_and_commit_still_delivers_other_pdo_paths() {
     std::fs::create_dir_all(yaml.parent().unwrap()).unwrap();
     std::fs::write(&yaml, "name: p\n").unwrap();
 
-    stage_and_commit(repo, "editor", 1).unwrap().unwrap();
+    stage_and_commit(repo, "editor", 1, &CommitIdentity::default())
+        .unwrap()
+        .unwrap();
     let files =
         String::from_utf8_lossy(&git(&["show", "--name-status", "--format="]).stdout).to_string();
     assert!(files.contains("A\t.pdo/pipelines/p.yaml"), "{files}");
@@ -793,7 +812,9 @@ fn stage_and_commit_bails_on_a_staging_failure() {
     std::fs::write(repo.join("work.rs"), "pub fn work() {}\n").unwrap();
     std::fs::write(repo.join(".git/index.lock"), "").unwrap();
 
-    let err = stage_and_commit(repo, "n", 1).unwrap_err().to_string();
+    let err = stage_and_commit(repo, "n", 1, &CommitIdentity::default())
+        .unwrap_err()
+        .to_string();
     assert!(
         err.contains("git add -A"),
         "the error names the step: {err}"
@@ -818,8 +839,17 @@ fn deliver_in_place_commits_on_the_run_branch() {
     create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
     std::fs::write(wt_dir.join("shared.rs"), "pub fn shared() {}\n").unwrap();
 
-    let outcome =
-        deliver_node_work(&wt_dir, &wt_dir, false, "unused", "shared-1", 1, None).unwrap();
+    let outcome = deliver_node_work(
+        &wt_dir,
+        &wt_dir,
+        false,
+        "unused",
+        "shared-1",
+        1,
+        None,
+        &CommitIdentity::default(),
+    )
+    .unwrap();
     let DeliveryOutcome::Delivered(d) = outcome else {
         panic!("a non-isolated delivery never conflicts");
     };
@@ -859,8 +889,17 @@ fn deliver_in_place_excludes_resources_materialized_by_provisioning() {
         .unwrap();
     assert!(staged.status.success());
 
-    let outcome =
-        deliver_node_work(&wt_dir, &wt_dir, false, "unused", "shared-1", 1, None).unwrap();
+    let outcome = deliver_node_work(
+        &wt_dir,
+        &wt_dir,
+        false,
+        "unused",
+        "shared-1",
+        1,
+        None,
+        &CommitIdentity::default(),
+    )
+    .unwrap();
     let DeliveryOutcome::Delivered(delivered) = outcome else {
         panic!("expected a delivery");
     };
@@ -891,8 +930,17 @@ fn deliver_in_place_on_a_clean_tree_is_a_no_op() {
     let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
     create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
 
-    let outcome =
-        deliver_node_work(&wt_dir, &wt_dir, false, "unused", "shared-1", 1, None).unwrap();
+    let outcome = deliver_node_work(
+        &wt_dir,
+        &wt_dir,
+        false,
+        "unused",
+        "shared-1",
+        1,
+        None,
+        &CommitIdentity::default(),
+    )
+    .unwrap();
     let DeliveryOutcome::Delivered(d) = outcome else {
         panic!("expected a delivery");
     };
@@ -916,8 +964,17 @@ fn deliver_isolated_commits_then_merges_back() {
     create_sub_worktree(repo, &sub_wt, &sub_branch, &pipeline_branch).unwrap();
     std::fs::write(sub_wt.join("forked.rs"), "pub fn forked() {}\n").unwrap();
 
-    let outcome =
-        deliver_node_work(&wt_dir, &sub_wt, true, &sub_branch, "forked-1", 1, None).unwrap();
+    let outcome = deliver_node_work(
+        &wt_dir,
+        &sub_wt,
+        true,
+        &sub_branch,
+        "forked-1",
+        1,
+        None,
+        &CommitIdentity::default(),
+    )
+    .unwrap();
     let DeliveryOutcome::Delivered(d) = outcome else {
         panic!("a clean merge-back delivers");
     };
@@ -954,8 +1011,17 @@ fn deliver_isolated_excludes_resources_materialized_in_the_sub_worktree() {
     pdo_workspace::adapters::fs::provisioner::provision_missing(repo, &sub_wt, &plan).unwrap();
     std::fs::write(sub_wt.join("isolated-work.rs"), "pub fn isolated() {}\n").unwrap();
 
-    let outcome =
-        deliver_node_work(&wt_dir, &sub_wt, true, &sub_branch, "forked-1", 1, None).unwrap();
+    let outcome = deliver_node_work(
+        &wt_dir,
+        &sub_wt,
+        true,
+        &sub_branch,
+        "forked-1",
+        1,
+        None,
+        &CommitIdentity::default(),
+    )
+    .unwrap();
     let DeliveryOutcome::Delivered(delivered) = outcome else {
         panic!("expected a delivery");
     };
@@ -1791,4 +1857,134 @@ fn remove_secondary_snapshot_prunes_registration_anti_498() {
         "re-add at the same path must succeed (no dangling registration): {}",
         String::from_utf8_lossy(&re_add.stderr)
     );
+}
+
+// ── the identity of a delivery (CORE-43) ─────────────────────────────────────
+
+/// Alice as a Node's environment gives her: author and committer.
+fn alice() -> CommitIdentity {
+    let env: std::collections::BTreeMap<String, String> = [
+        ("GIT_AUTHOR_NAME", "Alice"),
+        ("GIT_AUTHOR_EMAIL", "alice@example.com"),
+        ("GIT_COMMITTER_NAME", "Alice"),
+        ("GIT_COMMITTER_EMAIL", "alice@example.com"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    CommitIdentity::from_env(&env)
+}
+
+/// `author / committer` of `rev`, as `git log` prints them.
+fn signed_by(dir: &std::path::Path, rev: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%an %ae / %cn %ce", rev])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+const ALICE: &str = "Alice alice@example.com / Alice alice@example.com";
+
+#[test]
+fn deliver_in_place_signs_the_delivery_commit_with_the_given_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_test_repo(repo);
+
+    let run_id = "test-deliver-identity";
+    let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+    create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
+    std::fs::write(wt_dir.join("shared.rs"), "pub fn shared() {}\n").unwrap();
+
+    deliver_node_work(
+        &wt_dir,
+        &wt_dir,
+        false,
+        "unused",
+        "worker",
+        1,
+        None,
+        &alice(),
+    )
+    .unwrap();
+    assert_eq!(signed_by(&wt_dir, "HEAD"), ALICE);
+}
+
+/// The sub-worktree's commit and the merge commit that brings it back are both
+/// Alice's: the Run's branch moved while the node worked, so the merge-back is a
+/// true merge, not a fast-forward.
+#[test]
+fn deliver_isolated_signs_the_commit_and_the_merge_with_the_given_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_test_repo(repo);
+
+    let run_id = "test-deliver-isolated-identity";
+    let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+    let pipeline_branch = format!("pdo/run-{run_id}");
+    create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+    let sub_wt = sub_worktree_path(repo, run_id, "forked", 1);
+    let sub_branch = sub_worktree_branch(run_id, "forked", 1);
+    create_sub_worktree(repo, &sub_wt, &sub_branch, &pipeline_branch).unwrap();
+    std::fs::write(wt_dir.join("sibling.rs"), "pub fn sibling() {}\n").unwrap();
+    stage_and_commit(&wt_dir, "sibling", 1, &CommitIdentity::default()).unwrap();
+    std::fs::write(sub_wt.join("forked.rs"), "pub fn forked() {}\n").unwrap();
+
+    let outcome = deliver_node_work(
+        &wt_dir,
+        &sub_wt,
+        true,
+        &sub_branch,
+        "forked",
+        1,
+        None,
+        &alice(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, DeliveryOutcome::Delivered(_)));
+    assert_eq!(signed_by(&sub_wt, "HEAD"), ALICE, "the sub-worktree commit");
+    assert_eq!(
+        rev_parse(&wt_dir, "HEAD^2").unwrap(),
+        rev_parse(&sub_wt, "HEAD").unwrap(),
+        "the merge-back is a merge commit"
+    );
+    assert_eq!(signed_by(&wt_dir, "HEAD"), ALICE, "the merge commit");
+}
+
+#[test]
+fn the_resolution_in_the_node_favour_is_signed_with_the_given_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let node = rebased_terminal_node_repo(&tmp, true);
+
+    let result = commit_and_merge_sub_worktree_inner(
+        &node.sub_wt,
+        &node.pipeline_wt,
+        &node.sub_branch,
+        "ship",
+        1,
+        Some(&node.spawn_base),
+        &alice(),
+    )
+    .unwrap();
+    let MergeResult::ResolvedInNodeFavour(adoption) = result else {
+        panic!("expected the merge-back to be resolved in the node's favour");
+    };
+    assert_eq!(signed_by(&node.pipeline_wt, &adoption.merge_commit), ALICE);
+}
+
+/// Without a frozen identity, git signs with what the repository says.
+#[test]
+fn an_empty_identity_keeps_the_repository_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_test_repo(repo);
+    std::fs::write(repo.join("work.rs"), "pub fn work() {}\n").unwrap();
+
+    let sha = stage_and_commit(repo, "n", 1, &CommitIdentity::default())
+        .unwrap()
+        .unwrap();
+    assert_ne!(signed_by(repo, &sha), ALICE);
 }

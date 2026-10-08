@@ -69,7 +69,7 @@ ignore = "0.4"
 # fails when they drift from the Rust structs.
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
-pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.10.0" }
+pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.11.0" }
 pdo-kernel = { path = "crates/pdo-kernel" }
 pdo-workspace = { path = "crates/pdo-workspace" }
 pdo-skill = { path = "crates/pdo-skill" }

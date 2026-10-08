@@ -482,9 +482,12 @@ impl RunDirWatch for Watcher {
     }
 }
 
+/// A shared pipeline in memory: its YAML and its prompts by node.
+pub type SharedPipeline = (String, HashMap<String, String>);
+
 /// The shared pipelines, in memory: `id → (yaml, prompts)`.
 #[derive(Default)]
-pub struct Shared(pub Mutex<HashMap<String, (String, HashMap<String, String>)>>);
+pub struct Shared(pub Mutex<HashMap<String, SharedPipeline>>);
 
 impl SourcePipelines for Shared {
     fn exists(&self, id: &str) -> bool {

@@ -4,7 +4,7 @@ What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 
 amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
 source of truth for signatures; this page says what each part is for and what goes on the wire.
 
-Version: **0.10.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+Version: **0.11.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -228,6 +228,10 @@ GET /resources
     "verbs": ["create", "update", "delete", "archive"], "extension": "test" }
 ]
 ```
+
+Since 0.11, `node` lists `import_files` (the files a user imports into a node with a live session)
+and `send_text` (a text written into its terminal input, without Enter): an extension of rights
+that maps the node verbs maps these two as well, or they follow its default.
 
 The same list comes from `Host::catalogue()` inside the daemon, and `core_resources()` /
 `catalogue(manifests)` build it without a daemon. An extension of rights reads it to list what

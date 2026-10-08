@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.20.0
+
+`pdo-extension-api` et `@pdo/extension-ui` passent en **0.11.0** : ajouts seulement, une
+extension 0.1 à 0.10 compile et tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste
+`0.1.0`).
+
+- **Fichier importé en cours de Run** : deux Opérations nouvelles sur la Ressource `node`,
+  `import_files` et `send_text` (catalogue des Ressources). Une extension de Droits qui
+  énumère les verbes d'un Node doit les mapper ; sinon elles suivent sa règle par défaut.
+  L'import compte dans le même budget `max_attachments_mb` que les fichiers joints au lancement
+  d'un Run, par import : derrière un reverse proxy, `client_max_body_size` doit le suivre.
+
 ## 2.19.0 — Ouverture sondée des WebSockets, Résumé de Run (CORE-32)
 
 `pdo-extension-api` passe en **0.10.0** : ajout seulement, une extension 0.1 à 0.9 compile et

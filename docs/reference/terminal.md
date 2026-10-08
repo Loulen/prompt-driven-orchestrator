@@ -34,3 +34,15 @@ When the pilot closes the terminal, the first browser to have arrived among the 
 
 A direct `tmux attach` (over SSH) and **Detach to OS terminal** open ordinary tmux clients outside these roles: they still weigh on the window size and can type.
 
+
+## Import a file into a running node
+
+A node with a live session (running or waiting for you) can receive files from your machine, on a local or a remote instance alike, over `http://` too.
+
+1. Drop one or more files on the node's terminal, or click the import icon in the terminal toolbar. The import window opens with the files listed; nothing is written yet.
+2. **Import** writes them into the Run's Blackboard, under `.pdo/artifacts/_attachments/<node-id>/` of the Run worktree. These files are never committed and are removed with the Run. A name already there gets a suffix (`contrat-1.pdf`): nothing is overwritten.
+3. The window then shows a ready-to-use text with each file's path relative to the worktree root. The copy icon copies it. **Copy & send to terminal** copies it too, writes it into the agent's input **without pressing Enter**, and closes the window: complete your message in the terminal and submit it yourself. PDO never tells the agent on its own. On a node waiting for you, your Enter lifts the wait as if you had typed the text.
+
+The import is refused, and nothing is written, when the node has no live session (a `script` node, a finished node or Run, a Run without its worktree) or when the files exceed `max_attachments_mb` (Settings, 50 MB by default, counted per import, the same budget as the files attached to a new Run). Behind a reverse proxy, the proxy's own body limit (nginx `client_max_body_size`) must allow the same size (see [reverse-proxy.md](reverse-proxy.md)).
+
+API: `POST /runs/<run-id>/nodes/<node-id>/attachments[?iter=N]` (multipart, `files` parts; `201` with the iteration and each file's `name`, `path` and `size`) and `POST /runs/<run-id>/nodes/<node-id>/terminal-text` (`{"text": "…", "iter": N}`, 16 KB at most, pasted on one line without Enter: a line break becomes a space). An extension of rights authorizes them as `node` × `import_files` and `node` × `send_text`.

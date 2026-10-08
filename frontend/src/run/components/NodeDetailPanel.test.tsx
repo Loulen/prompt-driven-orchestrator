@@ -65,6 +65,16 @@ vi.mock("../api/nodes", () => ({
   startNode: (...args: unknown[]) => startNodeMock(...args),
 }));
 
+// ADR-0086: the ▶ of an on-demand or skipped node asks the Autorisation
+// d'opération. Allowed unless a test says otherwise.
+const askAuthorizationMock = vi.fn((questions: unknown[]) =>
+  Promise.resolve(questions.map(() => ({ decision: "allow" }))),
+);
+vi.mock("../../shared/authorization/api", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  askAuthorization: (questions: unknown[]) => askAuthorizationMock(questions),
+}));
+
 vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../workspace/api/provisioning")>()),
   previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
@@ -146,6 +156,8 @@ import NodeDetailPanel from "./NodeDetailPanel";
 import { useTerminalOverlayStore } from "../../session/store/terminalOverlayStore";
 import { TooltipProvider } from "../../shared/ui/tooltip";
 import type { NodeState } from "../../shared/generated/NodeState";
+import { useGestureRightsStore, useRunViewGestures } from "../store/gestureRightsStore";
+import { NOTHING_REFUSED } from "../model/runGestures";
 
 function makeNode(overrides?: Partial<NodeState>): NodeState {
   return { frontmatter_retries: 0,
@@ -1703,6 +1715,46 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("node-controls")).toBeInTheDocument();
       expect(screen.getByTestId("stop-btn")).toBeDisabled();
       expect(screen.getByTestId("start-btn")).toBeInTheDocument();
+    });
+
+    it("an on-demand node not launched keeps its Start, hidden when refused (ADR-0086)", async () => {
+      const { unmount } = render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("start-btn")).toBeInTheDocument();
+      // No « Pending »: the node waits for the user's ▶, not for the runtime.
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("On demand");
+      unmount();
+
+      // CORE-42: the view of the Run asks the rights once; a refused Start is hidden.
+      askAuthorizationMock.mockImplementationOnce((questions: unknown[]) =>
+        Promise.resolve(questions.map(() => ({ decision: "deny", reason: "reader" }))),
+      );
+      function RunView() {
+        useRunViewGestures("run-1", ["test-node"]);
+        return <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />;
+      }
+      render(
+        <TooltipProvider>
+          <RunView />
+        </TooltipProvider>,
+      );
+      await waitFor(() => expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument());
+      useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
+    });
+
+    it("a skipped node offers Play, which retries it (ADR-0086)", async () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "skipped" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      const playBtn = screen.getByTestId("play-retry-btn");
+      expect(playBtn).toHaveTextContent("Play");
+      fireEvent.click(playBtn);
+      await waitFor(() => expect(retryNodeMock).toHaveBeenCalledWith("run-1", expect.any(String)));
     });
 
     it("does not show controls for archived runs", () => {

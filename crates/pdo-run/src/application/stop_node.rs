@@ -103,6 +103,9 @@ impl Runs {
 
         // Stopping a running node freed its session slot.
         retry_waiting_nodes(state).await;
+        // ADR-0086: it may have been the last started node a Run past `End`
+        // waited for.
+        crate::application::scheduler::node_completion::reevaluate_end(state, &run_id).await;
 
         info!("node_stop: stopped {node_id} iter {iter} in run {run_id}");
         (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()

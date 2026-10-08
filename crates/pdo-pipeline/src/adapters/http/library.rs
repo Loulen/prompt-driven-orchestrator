@@ -79,6 +79,8 @@ pub(super) async fn instantiate(
             // of its own on every instantiation. `null` for the types that
             // carry no isolation — the canvas leaves the key off those.
             "isolated_worktree": entry.isolated_worktree,
+            // ADR-0086: an on-demand entry instantiates an on-demand node.
+            "on_demand": entry.on_demand,
         },
         "prompt": prompt,
     }))

@@ -39,6 +39,31 @@ pub fn evaluate_outgoing_edges_full(
     frontmatter_fields: &HashMap<String, serde_yaml::Value>,
     frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
 ) -> Vec<SchedulerAction> {
+    let actions = route_outgoing_edges(
+        pipeline,
+        run_state,
+        completed_node_id,
+        resolved_vars,
+        frontmatter_fields,
+        frontmatter_by_node,
+    );
+    // ADR-0086: a Run that waits for its started nodes does not end at `End`
+    // while one of them is alive — the last completion ends it.
+    defer_end_for_started_nodes(pipeline, run_state, actions)
+}
+
+/// What `completed_node_id`'s outgoing edges ask for, before the « Attente
+/// des nœuds lancés » defers the end. The end evaluation replays it
+/// ([`end_reached_action`]) so `End` is reached exactly as routing reaches it
+/// (forced routes, Switch ports, regions included).
+pub(super) fn route_outgoing_edges(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    completed_node_id: &str,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+    frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
 
     let source_iter = run_state
@@ -211,6 +236,10 @@ pub fn evaluate_outgoing_edges_full(
             ));
         } else {
             let target_node = pipeline.nodes.iter().find(|n| n.id == *target_id);
+            // ADR-0086: an edge never launches an on-demand node.
+            if target_node.is_some_and(|n| n.on_demand) {
+                continue;
+            }
             let is_loop_target = target_node.is_some_and(|n| n.node_type == NodeType::Loop);
 
             let is_switch_target = target_node.is_some_and(|n| n.node_type == NodeType::Switch);

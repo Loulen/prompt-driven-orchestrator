@@ -83,6 +83,10 @@ pub(super) fn finalize(state: &mut RunState) {
             state.awaiting_reason = node.awaiting.as_ref().and_then(|a| a.message.clone());
         }
     }
+
+    // ADR-0086: a `Running` Run past `End` says how many started nodes it
+    // still waits for.
+    state.waiting_for_started_nodes = crate::domain::on_demand::started_nodes_waited(state);
 }
 
 /// Is this Run *stalled* (#180)? A run with no node currently `running` or

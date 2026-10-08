@@ -50,7 +50,16 @@ pub(super) fn push_inputs(
             // When the pipeline is prompt-optional and no prompt was supplied,
             // the node must source its own work; a supplied prompt is merely
             // additional info layered on the node's own brief.
-            if input.from_start && !ctx.pipeline.prompt_required {
+            if !input.from_start && ctx.absent_sources.contains(&input.source_node) {
+                // ADR-0086: a node launched ahead of its producer (an on-demand
+                // node, a force-start) gets no file for this input. Say so,
+                // rather than point at a path nothing wrote.
+                preamble.push_str(&format!(
+                    "- `{}`: not available yet — its upstream `{}` has produced nothing in \
+                     this Run. Work without it.\n",
+                    input.port_name, input.source_node
+                ));
+            } else if input.from_start && !ctx.pipeline.prompt_required {
                 // `from_start` is always a single path.
                 let path = input
                     .paths

@@ -32,6 +32,8 @@ const KNOWN_NODE_KEYS: &[&str] = &[
     // virtually every pasted node spec — announcing it as an ignored field would
     // be a warning about a loss that never happens.
     "isolated_worktree",
+    // ADR-0086: the « on demand » option.
+    "on_demand",
     // Accepted-and-dropped, not a semantic loss → no warning.
     "id",
     "view",
@@ -147,6 +149,8 @@ pub fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             "agent_choice": agent_choice,
             // #653: where the node works.
             "isolated_worktree": entry.isolated_worktree,
+            // ADR-0086: the node waits for the user's ▶.
+            "on_demand": entry.on_demand,
             "max_iter": entry.max_iter,
             "branches": entry.branches,
         },
@@ -179,6 +183,18 @@ mod tests {
         assert_eq!(body["spec"]["isolated_worktree"], false);
         assert_eq!(body["prompt"], "Write an ADR.\n");
         assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
+    }
+
+    /// ADR-0086: a pasted on-demand node stays on demand, without an
+    /// ignored-field warning; a structural one is refused.
+    #[test]
+    fn parse_node_spec_carries_on_demand() {
+        let body = parse_node_spec("name: Review\ntype: agent\non_demand: true\n").unwrap();
+        assert_eq!(body["spec"]["on_demand"], true);
+        assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
+        let plain = parse_node_spec("name: Work\ntype: script\n").unwrap();
+        assert_eq!(plain["spec"]["on_demand"], false);
+        assert!(parse_node_spec("name: E\ntype: end\non_demand: true\n").is_err());
     }
 
     /// #653 / ADR-0060: a node pasted with no isolation line gets its type's

@@ -64,6 +64,30 @@ pub fn resolved_source_iters(
         .collect()
 }
 
+/// The upstream nodes feeding `node_id` that have no completed iteration yet:
+/// what a node launched ahead of its producers — an on-demand node (ADR-0086),
+/// a force-started node — finds absent. `Start` is never absent (it is the
+/// Run's prompt).
+pub fn absent_sources(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    node_id: &str,
+) -> std::collections::HashSet<String> {
+    pipeline
+        .edges
+        .iter()
+        .filter(|e| e.target.node == node_id)
+        .map(|e| e.source.node.as_str())
+        .filter(|src| {
+            !pipeline.nodes.iter().any(|n| {
+                n.id == *src && n.node_type == pdo_pipeline::domain::pipeline::NodeType::Start
+            })
+        })
+        .filter(|src| run_state.latest_completed_iter(src).is_none())
+        .map(str::to_string)
+        .collect()
+}
+
 /// For one consumer node, the set of completed source iterations of every
 /// `repeated` incoming edge: `source node id -> completed iters (asc)` (#353).
 ///
@@ -102,6 +126,8 @@ pub fn resolved_repeated_iters(
 pub struct ResolvedInput {
     /// The consumer-side (target) port this input feeds.
     pub port: String,
+    /// The upstream node the input comes from.
+    pub source_node: String,
     /// True when the source is the Start node — the input is the run's user
     /// prompt (`_input/output.md`), not a per-iteration artifact.
     pub from_start: bool,
@@ -193,6 +219,7 @@ pub fn resolve_consumer_inputs(
 
                     ResolvedInput {
                         port: input_name,
+                        source_node: source_node.clone(),
                         from_start,
                         repeated,
                         paths,
@@ -332,6 +359,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let state = state_with(vec![
             node_with_iterations(
@@ -380,6 +408,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let state = state_with(vec![
             node_with_iterations(
@@ -424,6 +453,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let state = state_with(vec![node_with_iterations(
             "reviewer",
@@ -459,6 +489,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -491,6 +522,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -639,6 +671,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 

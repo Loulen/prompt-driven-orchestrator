@@ -58,6 +58,11 @@ pub struct NodeDefInfo {
     /// unbound; `skip_serializing_if` keeps the wire byte-identical when unset.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub orchestrator: bool,
+    /// The « on demand » option (ADR-0086) as the Run's snapshot froze it:
+    /// `true` ⇒ only the user's ▶ launches this node, and until then it holds
+    /// nothing. `skip_serializing_if` keeps the wire byte-identical when unset.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_demand: bool,
     pub view_x: Option<f64>,
     pub view_y: Option<f64>,
     pub inputs: Vec<PortBrief>,
@@ -89,6 +94,8 @@ pub fn node_def_from_pipeline(n: &pipeline::NodeDef) -> NodeDefInfo {
         // what the strong binding gate reads to know whether this node's NodeRun
         // is held while its child runs are non-terminal.
         orchestrator: n.orchestrator,
+        // ADR-0086: frozen like the other node options.
+        on_demand: n.on_demand,
         view_x: n.view.as_ref().map(|v| v.x),
         view_y: n.view.as_ref().map(|v| v.y),
         inputs: n.inputs.iter().map(|p| port_brief(p, "left")).collect(),

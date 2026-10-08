@@ -4,6 +4,7 @@
  */
 
 import { Info, Box, Loader, CloudOff } from "lucide-react";
+import { WaitingForStartedNodesReason } from "../../run/components/WaitingForStartedNodesBanner";
 import { SectionHead } from "./InspectorPrimitives";
 import type { RunState } from "../../shared/generated/RunState";
 import { isLiveRun } from "../../run/model/runStatus";
@@ -165,6 +166,7 @@ export function InfoTab({
             <div className="mt-0.5 break-words">{run.awaiting_reason}</div>
           </div>
         )}
+        <WaitingForStartedNodesReason run={run ?? null} />
         {/* #804 / ADR-0070 §1: a Trigger fire that could not refresh the remotes
             before cutting. Deliberately NOT red and NOT a failure — this Run ran;
             it simply started from the last state known locally, which is the one

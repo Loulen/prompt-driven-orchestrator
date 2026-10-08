@@ -11,7 +11,7 @@ use pdo_kernel::event_bus::EventBus;
 use tracing::info;
 
 use crate::application::ports::EventStore;
-use crate::domain::event::Event;
+use crate::domain::event::{Event, EventKind};
 use crate::domain::projection::project;
 use crate::domain::transition_guard::{validate_transition, Verdict};
 
@@ -33,7 +33,7 @@ impl AppendEvent {
     /// merge) must also validate before acting. A no-op verdict appends
     /// nothing and is not an error; a rejection is.
     pub async fn execute(&self, event: &Event) -> anyhow::Result<()> {
-        if event.is_node_transition() {
+        if event.is_node_transition() || event.kind == EventKind::RunCompleted {
             let events = self.store.events(&event.run_id).await?;
             match validate_transition(project(&events).as_ref(), event) {
                 Verdict::Allow => {}

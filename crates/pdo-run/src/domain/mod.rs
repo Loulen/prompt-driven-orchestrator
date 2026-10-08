@@ -4,7 +4,7 @@
 //! - [`state`] and [`projection`]: the Run as the fold of its events.
 //! - The graph a Run walks: [`graph_resolver`], [`loop_region`],
 //!   [`edge_router`], [`switch_router`], [`condition`], [`variable_resolver`],
-//!   [`input_resolution`], [`blackboard`].
+//!   [`input_resolution`], [`blackboard`], [`on_demand`] (ADR-0086).
 //! - What a Run allows: [`transition_guard`], [`admission`] (the session cap),
 //!   [`completion_refusal`], [`retry_verdict`], [`restart_verdict`],
 //!   [`reap_policy`], [`auto_fail`], [`child_awaiting`].
@@ -27,6 +27,7 @@ pub mod input_resolution;
 pub mod live_session;
 pub mod loop_region;
 pub mod merge_action;
+pub mod on_demand;
 pub mod prices;
 pub mod projection;
 pub mod reap_policy;

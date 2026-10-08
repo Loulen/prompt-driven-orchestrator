@@ -19,7 +19,7 @@ import { NodeCard } from "./NodeCard";
 import { useIsDropTarget } from "./DragHighlightContext";
 import { anchorHandleId, landsByDrop } from "../../lib/anchorSide";
 import { WIRE, WIRE_SOFT } from "../../lib/wiringColors";
-import { Bookmark, SlidersHorizontal, TriangleAlert } from "lucide-react";
+import { Bookmark, Play, SlidersHorizontal, TriangleAlert } from "lucide-react";
 // #723 — orchestrator pastilles on the run-view node card.
 import { ChildCountPills } from "../../run/components/OrchestrationTab";
 import { totalChildren } from "../../run/model/orchestration";
@@ -52,7 +52,8 @@ interface EditNodeData {
   outputs: PortBrief[];
   interactive: boolean;
   status: NodeStatus;
-  // True only for start/end markers on a completed run — see `markerReached`.
+  // True only for start/end markers on a completed run, or one waiting at End
+  // for its started nodes — see `markerReached`.
   reached?: boolean;
   // Filenames of images uploaded with the run's input. Only the start marker
   // surfaces these (issue #145); undefined/empty on every other node.
@@ -66,6 +67,13 @@ interface EditNodeData {
   orchestrator?: boolean;
   /** #723: child-run counters of an orchestrator node (run view only). */
   childCounts?: ChildCounts;
+  /** ADR-0086: the node carries the « on demand » option. */
+  onDemand?: boolean;
+  /** The card is drawn for a Run (not a template). */
+  inRun?: boolean;
+  /** ADR-0086: what the card's ▶ does, when it has one (run view only). */
+  play?: "start" | "retry";
+  onPlay?: () => void;
   [key: string]: unknown;
 }
 
@@ -121,14 +129,23 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   // not a hardcoded left. Moot for a lands-by-drop body (edges bind to the
   // per-side anchor handles below), but kept consistent.
   const bodyHandleSide = data.inputs[0]?.side ?? "left";
+  // ADR-0086: an on-demand node the Run never launched is drawn greyed — no
+  // status of its own, it waits for the user's ▶.
+  const awaitingPlay = data.onDemand === true && data.inRun === true && data.status === "pending";
 
   return (
+    <>
     <NodeCard
       status={cardStatus}
       selected={isSelected}
       style={{
         minWidth: 160,
         fontSize: "12px",
+        // The dashes take a light, thicker stroke: the card's dimming would
+        // otherwise fade them into the canvas.
+        ...(awaitingPlay
+          ? { opacity: 0.6, borderStyle: "dashed", borderWidth: 2, borderColor: "var(--color-fg-2)" }
+          : null),
         // Amber is the wiring colour throughout (#844): the same family the
         // selected edge uses. Green is the app's accent and already means
         // something else on a card. The soft ring arms the gesture on rim hover;
@@ -212,6 +229,11 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         </span>
         <span className="font-medium text-fg">{data.label}</span>
         <IsolationMarker isolated={data.isolated === true} />
+        {data.onDemand && !data.inRun && (
+          <span title="On demand — launched by your ▶ in a run" data-testid="on-demand-marker">
+            <Play size={10} className="shrink-0 text-fg-4" />
+          </span>
+        )}
         {data.loopBadge && (
           <span
             data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
@@ -275,5 +297,26 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           (the End marker) starts no wire and grows no rim. */}
       {data.outputs.length > 0 && <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} />}
     </NodeCard>
+    {/* ADR-0086: the ▶ — start an on-demand node, or run a skipped branch as
+        if it had been taken. Outside the card so the greyed card does not dim
+        it; `nodrag` keeps the click from moving the node. */}
+    {data.play && data.onPlay && (
+      <button
+        type="button"
+        data-testid="node-play-btn"
+        data-play={data.play}
+        aria-label={data.play === "start" ? `Start ${data.label}` : `Run ${data.label} again`}
+        title={data.play === "start" ? "Start this node" : "Run this skipped node as if its branch had been taken"}
+        onClick={(e) => {
+          e.stopPropagation();
+          data.onPlay?.();
+        }}
+        className="nodrag nopan absolute z-[4] flex cursor-pointer items-center justify-center rounded-full border border-acc bg-bg-1 text-acc shadow transition-colors hover:bg-acc hover:text-bg-1"
+        style={{ top: -9, right: -9, width: 20, height: 20 }}
+      >
+        <Play size={10} />
+      </button>
+    )}
+    </>
   );
 }

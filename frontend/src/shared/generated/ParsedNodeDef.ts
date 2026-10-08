@@ -69,4 +69,13 @@ isolated_worktree?: boolean | null,
  * the binding contract (plus the #723 prompt amendment and skill reference).
  * Semantic, not layout — in the diff and the library content hash.
  */
-orchestrator?: boolean, };
+orchestrator?: boolean, 
+/**
+ * The « on demand » option (ADR-0086): the runtime never launches this
+ * node (not as a root, not through an incoming edge) and never skips it;
+ * only the user's ▶ does. Its edges hold no downstream node until it is
+ * launched. An option of an `agent` or a `script`, refused on a structural
+ * node at parse ([`super::normalize::normalize_node_value`]). Semantic,
+ * not layout — in the diff and the library content hash.
+ */
+on_demand?: boolean, };

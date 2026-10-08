@@ -66,10 +66,26 @@ node whose every branch died is skipped; if that makes `End` unreachable, the ru
 (« unrouted ») instead of stalling. There is no dedicated Merge node: the converging node carries its
 own prompt, so it can do real synthesis work.
 
+A skipped node keeps a ▶: it runs the branch as if it had been taken (a Retry: next iteration, the
+skipped nodes downstream evaluated again, a finished run re-opened).
+
+Some nodes you only want when you ask for them: a review, a diagnosis, a report. Turn **On demand**
+on (an `agent` or a `script`) and the runtime never launches the node nor skips it. In the run its
+card stays greyed with a ▶; you launch it while the run goes or after it ended (the ▶ re-opens a
+finished run, which ends again once the node is done). It reads the last completed output of each
+upstream node; an input whose upstream produced nothing yet is named absent in its preamble, and a
+script gets an empty `PDO_INPUT_<PORT>`. It holds no downstream node until you launch it; once it
+completes, a downstream node not launched yet runs, one already done is not run again.
+
+By default a run ends at `End`, even if a node it launched still works. In Pipeline info, **Wait for
+started nodes** makes it wait: the run stays running, says « waiting for N started nodes » (its End
+card already reached), and ends when the last of them completes.
+
 Decisions: [ADR-0002](adr/0002-mechanical-conditionals-only.md),
 [ADR-0011](adr/0011-conditional-edges-and-loop-regions.md),
 [ADR-0026](adr/0026-collection-region-live-wiring.md),
-[ADR-0082](adr/0082-la-convergence-est-portee-par-tout-noeud-le-merge-est-retire.md).
+[ADR-0082](adr/0082-la-convergence-est-portee-par-tout-noeud-le-merge-est-retire.md),
+[ADR-0086](adr/0086-un-noeud-a-la-demande-n-est-ni-attendu-ni-skippe-par-le-graphe.md).
 
 ## Typed outputs
 

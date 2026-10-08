@@ -23,4 +23,10 @@ isolated_worktree?: boolean,
  * holds this node's NodeRun. `false` (default) keeps every pre-#723 run
  * unbound; `skip_serializing_if` keeps the wire byte-identical when unset.
  */
-orchestrator?: boolean, view_x: number | null, view_y: number | null, inputs: Array<PortBrief>, outputs: Array<PortBrief>, };
+orchestrator?: boolean, 
+/**
+ * The « on demand » option (ADR-0086) as the Run's snapshot froze it:
+ * `true` ⇒ only the user's ▶ launches this node, and until then it holds
+ * nothing. `skip_serializing_if` keeps the wire byte-identical when unset.
+ */
+on_demand?: boolean, view_x: number | null, view_y: number | null, inputs: Array<PortBrief>, outputs: Array<PortBrief>, };

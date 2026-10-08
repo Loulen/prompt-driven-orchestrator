@@ -19,6 +19,11 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
         if run_state.nodes.contains_key(&node.id) {
             continue;
         }
+        // ADR-0086: an on-demand node is launched by the user's ▶ only — never
+        // as a root, never through an incoming edge.
+        if node.on_demand {
+            continue;
+        }
 
         // A `collection` region member (ADR-0011 / #269) is spawned by the
         // region fan-out (one lap per item), never by the readiness sweep —
@@ -48,11 +53,20 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
         // conditional is never an entry point: it is spawned solely by the
         // producer's edge evaluation. (A node with no incoming edges at all is a
         // root and stays ready.)
+        //
+        // ADR-0086: an edge from an on-demand node not launched yet is absent
+        // for the barrier. A node fed by such edges alone is no root: it waits
+        // for them, like a node fed by a conditional edge.
+        let wired = pipeline.edges.iter().any(|e| e.target.node == node.id);
         let incoming: Vec<&pdo_pipeline::domain::pipeline::EdgeDef> = pipeline
             .edges
             .iter()
             .filter(|e| e.target.node == node.id)
+            .filter(|e| crate::domain::on_demand::edge_counts(pipeline, run_state, e))
             .collect();
+        if wired && incoming.is_empty() {
+            continue;
+        }
         let unconditional_in: Vec<&&pdo_pipeline::domain::pipeline::EdgeDef> = incoming
             .iter()
             .filter(|e| e.when.is_none() && !e.is_else)
@@ -323,6 +337,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -392,6 +407,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -443,6 +459,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 

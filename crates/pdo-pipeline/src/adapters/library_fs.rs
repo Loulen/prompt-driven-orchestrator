@@ -293,6 +293,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -341,6 +342,7 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
 
             let entry1 = LibraryEntry {
+                on_demand: false,
                 name: "Alpha".to_string(),
                 node_type: crate::domain::pipeline::NodeType::Agent,
                 isolated_worktree: Some(true),
@@ -360,6 +362,7 @@ mod tests {
             std::fs::write(
                 dir.join("beta.yaml"),
                 serde_yaml::to_string(&LibraryEntry {
+                    on_demand: false,
                     name: "Beta Original".to_string(),
                     ..entry1.clone()
                 })
@@ -368,6 +371,7 @@ mod tests {
             .unwrap();
 
             let entry2 = LibraryEntry {
+                on_demand: false,
                 name: "Beta".to_string(),
                 ..entry1
             };
@@ -386,6 +390,7 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
 
             let entry = LibraryEntry {
+                on_demand: false,
                 name: "Typed Reviewer".to_string(),
                 node_type: crate::domain::pipeline::NodeType::Agent,
                 isolated_worktree: Some(true),
@@ -444,6 +449,7 @@ mod tests {
     #[test]
     fn yaml_round_trip_lossless() {
         let entry = LibraryEntry {
+            on_demand: false,
             name: "Complex Node".to_string(),
             node_type: crate::domain::pipeline::NodeType::Agent,
             isolated_worktree: Some(true),
@@ -512,6 +518,7 @@ mod tests {
         // A node on the account default must not emit a `model:` key: an entry
         // that does reads `diverged` against a library file that never had one.
         let entry = LibraryEntry {
+            on_demand: false,
             name: "Plain".to_string(),
             node_type: crate::domain::pipeline::NodeType::Agent,
             isolated_worktree: Some(true),
@@ -544,6 +551,7 @@ mod tests {
         // Same invariant as `model`: an unset node must stay byte-identical to a
         // library entry written before the key existed.
         let entry = LibraryEntry {
+            on_demand: false,
             name: "Plain".to_string(),
             node_type: crate::domain::pipeline::NodeType::Agent,
             isolated_worktree: Some(true),
@@ -590,6 +598,22 @@ mod tests {
             assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
 
             set_claude_entry(&mut node, None, None);
+            assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
+        });
+    }
+
+    /// ADR-0086: « on demand » is part of what gets starred — it survives the
+    /// disk, and toggling it makes the node diverge from its entry.
+    #[test]
+    fn on_demand_round_trips_and_diverges() {
+        with_temp_home(|| {
+            let mut node = make_node("Reviewer");
+            node.on_demand = true;
+            save(&entry_from_node(&node, "prompt")).unwrap();
+            assert!(get("Reviewer").unwrap().on_demand);
+            assert_eq!(sync_state(&node, "prompt"), SyncState::Synced);
+
+            node.on_demand = false;
             assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
         });
     }
@@ -711,6 +735,7 @@ mod tests {
     fn list_is_sorted_alphabetically() {
         with_temp_home(|| {
             let base = LibraryEntry {
+                on_demand: false,
                 name: String::new(),
                 node_type: crate::domain::pipeline::NodeType::Agent,
                 isolated_worktree: Some(true),
@@ -753,6 +778,7 @@ mod tests {
     #[test]
     fn json_round_trip_preserves_all_port_fields() {
         let entry = LibraryEntry {
+            on_demand: false,
             name: "Typed Node".to_string(),
             node_type: crate::domain::pipeline::NodeType::Agent,
             isolated_worktree: Some(true),
@@ -851,6 +877,7 @@ mod tests {
     fn json_round_trip_via_disk_preserves_port_fields() {
         with_temp_home(|| {
             let entry = LibraryEntry {
+                on_demand: false,
                 name: "Schema Node".to_string(),
                 node_type: crate::domain::pipeline::NodeType::Agent,
                 isolated_worktree: Some(true),

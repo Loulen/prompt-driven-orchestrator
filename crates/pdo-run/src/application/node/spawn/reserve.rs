@@ -111,7 +111,7 @@ pub(super) async fn reserve(
         // #465: the secondary repos come from the SAME fresh projection, resolved to
         // absolute snapshot paths for injection (the sub-worktree does not inherit
         // the snapshot files).
-        let (source_iters, repeated_iters, secondary_repos, run_started_at) =
+        let (source_iters, repeated_iters, absent_sources, secondary_repos, run_started_at) =
             match reload_run_state_with(deps.runs, run_id).await {
                 Some((_, fresh_state)) => (
                     input_resolution::resolved_source_iters(
@@ -125,6 +125,7 @@ pub(super) async fn reserve(
                         &fresh_state,
                         &node.id,
                     ),
+                    input_resolution::absent_sources(spawn_ctx.pipeline, &fresh_state, &node.id),
                     prompt_augmenter::secondary_repo_contexts(
                         spawn_ctx.repo_root,
                         run_id,
@@ -138,7 +139,13 @@ pub(super) async fn reserve(
                             .map(|dt| dt.with_timezone(&chrono::Utc))
                     }),
                 ),
-                None => (HashMap::new(), HashMap::new(), Vec::new(), None),
+                None => (
+                    HashMap::new(),
+                    HashMap::new(),
+                    Default::default(),
+                    Vec::new(),
+                    None,
+                ),
             };
 
         // Precompute whether the Start prompt carries content so `build_preamble`
@@ -197,6 +204,7 @@ pub(super) async fn reserve(
             input_files,
             start_prompt_present,
             source_iters,
+            absent_sources,
             repeated_iters,
             secondary_repos,
             // #516: both computed above (outside this span), borrowed read-only

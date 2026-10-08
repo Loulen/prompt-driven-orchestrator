@@ -80,7 +80,15 @@ pub async fn advance_run(state: &Runs, run_id: &str) {
         // Don't use [`expected_completion_node_ids`] here: this site must judge
         // against the *current* (post-YAML-edit) pipeline, not the run's frozen
         // snapshot, or an edited run stays dangling in Running forever.
-        let pipeline_node_ids: Vec<String> = pipeline.nodes.iter().map(|n| n.id.clone()).collect();
+        //
+        // ADR-0086: an on-demand node never launched is not expected — the Run
+        // does not wait for a node only the user may launch.
+        let pipeline_node_ids: Vec<String> = pipeline
+            .nodes
+            .iter()
+            .filter(|n| !crate::domain::on_demand::is_unlaunched(&pipeline, &run_state, &n.id))
+            .map(|n| n.id.clone())
+            .collect();
         maybe_complete_run(state, run_id, &pipeline_node_ids, &run_state, false).await;
         return;
     }
@@ -176,42 +184,7 @@ pub(super) async fn sweep_auto_skips(state: &Runs, run_id: &str) {
             return;
         }
 
-        let no_overrides = std::collections::HashMap::new();
-        let mut skipped_ids = Vec::new();
-        for (node_id, reason) in &skips {
-            // A structurally-unreachable node never started, so it skips at iter 1.
-            let iter = 1;
-            if let Err(e) = crate::application::node::primitives::write_skip_outputs(
-                &pipeline,
-                node_id,
-                iter,
-                &no_overrides,
-                &artifacts_dir,
-            ) {
-                error!("auto-skip: failed to write outputs for {node_id} in {run_id}: {e}");
-                continue;
-            }
-            let event = event::Event {
-                id: None,
-                run_id: run_id.to_string(),
-                ts: pdo_kernel::clock::now_iso(),
-                kind: event::EventKind::NodeCompleted,
-                node_id: Some(node_id.clone()),
-                iter: Some(iter),
-                payload: Some(serde_json::json!({
-                    "source": "auto_skip_unreachable",
-                    "skipped": true,
-                    "reason": reason,
-                })),
-            };
-            match append_event(state, &event).await {
-                Ok(()) => {
-                    info!("auto-skip: node {node_id} in run {run_id} unreachable — {reason}");
-                    skipped_ids.push(node_id.clone());
-                }
-                Err(e) => error!("auto-skip: failed to append skip for {node_id}: {e}"),
-            }
-        }
+        let skipped_ids = append_auto_skips(state, run_id, &pipeline, &artifacts_dir, &skips).await;
 
         if skipped_ids.is_empty() {
             return;
@@ -222,6 +195,56 @@ pub(super) async fn sweep_auto_skips(state: &Runs, run_id: &str) {
             fire_edges(state, run_id, node_id).await;
         }
     }
+}
+
+/// Skip each of `skips` — `(node_id, reason)` as [`scheduler::unreachable_nodes`]
+/// returns them — with an empty output, so a downstream resolver finds a
+/// concrete artifact rather than a missing file. Returns the nodes skipped.
+/// Fires no edge: that is the caller's business.
+pub(crate) async fn append_auto_skips(
+    state: &Runs,
+    run_id: &str,
+    pipeline: &pipeline::PipelineDef,
+    artifacts_dir: &std::path::Path,
+    skips: &[(String, String)],
+) -> Vec<String> {
+    let no_overrides = std::collections::HashMap::new();
+    let mut skipped_ids = Vec::new();
+    for (node_id, reason) in skips {
+        // A structurally-unreachable node never started, so it skips at iter 1.
+        let iter = 1;
+        if let Err(e) = crate::application::node::primitives::write_skip_outputs(
+            pipeline,
+            node_id,
+            iter,
+            &no_overrides,
+            artifacts_dir,
+        ) {
+            error!("auto-skip: failed to write outputs for {node_id} in {run_id}: {e}");
+            continue;
+        }
+        let event = event::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: event::EventKind::NodeCompleted,
+            node_id: Some(node_id.clone()),
+            iter: Some(iter),
+            payload: Some(serde_json::json!({
+                "source": "auto_skip_unreachable",
+                "skipped": true,
+                "reason": reason,
+            })),
+        };
+        match append_event(state, &event).await {
+            Ok(()) => {
+                info!("auto-skip: node {node_id} in run {run_id} unreachable — {reason}");
+                skipped_ids.push(node_id.clone());
+            }
+            Err(e) => error!("auto-skip: failed to append skip for {node_id}: {e}"),
+        }
+    }
+    skipped_ids
 }
 
 /// Spawn each node in `ready_set` through [`spawn_node`].
@@ -248,9 +271,16 @@ pub async fn spawn_each(
 /// fallback exists only for legacy runs with no snapshot.
 ///
 /// [`advance_run`]'s own completion branch deliberately uses a *different* set.
+///
+/// An on-demand node never launched is not expected (ADR-0086).
 pub fn expected_completion_node_ids(run_state: &state::RunState) -> Vec<String> {
     if !run_state.node_defs.is_empty() {
-        run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
+        run_state
+            .node_defs
+            .iter()
+            .filter(|nd| !nd.on_demand || run_state.nodes.contains_key(&nd.id))
+            .map(|nd| nd.id.clone())
+            .collect()
     } else {
         run_state.nodes.keys().cloned().collect()
     }
@@ -378,6 +408,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -394,6 +425,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -401,6 +433,7 @@ mod tests {
         NodeDefInfo {
             isolated_worktree: None,
             orchestrator: false,
+            on_demand: false,
             id: id.into(),
             name: None,
             node_type: "agent".into(),
@@ -564,6 +597,30 @@ mod tests {
         let mut ids = expected_completion_node_ids(&state);
         ids.sort();
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    /// ADR-0086: the Run does not wait for an on-demand node nobody launched;
+    /// once launched, it is expected like any node.
+    #[test]
+    fn expected_ids_leave_out_an_on_demand_node_never_launched() {
+        let mut state = RunState::new("run-1".into(), "p".into());
+        let mut review = node_def_info("review");
+        review.on_demand = true;
+        state.node_defs = vec![node_def_info("a"), review];
+        state.nodes.insert("a".into(), completed_node("a"));
+
+        assert_eq!(expected_completion_node_ids(&state), vec!["a".to_string()]);
+        assert!(should_complete_run(
+            &state,
+            &expected_completion_node_ids(&state),
+            false
+        ));
+
+        state.nodes.insert("review".into(), running_node("review"));
+        let mut ids = expected_completion_node_ids(&state);
+        ids.sort();
+        assert_eq!(ids, vec!["a".to_string(), "review".to_string()]);
+        assert!(!should_complete_run(&state, &ids, false));
     }
 
     #[test]

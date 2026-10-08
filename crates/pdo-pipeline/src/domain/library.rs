@@ -52,6 +52,13 @@ pub struct LibraryEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub isolated_worktree: Option<bool>,
+    /// The « on demand » option (ADR-0086), starred with the node: an entry
+    /// that dropped it would instantiate a node the runtime launches at once.
+    /// Omitted when `false`, so an entry starred before the option reads
+    /// `synced` against a node that does not carry it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional = nullable)]
+    pub on_demand: bool,
 }
 
 impl LibraryEntry {
@@ -136,6 +143,7 @@ pub fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
         // stars as its type's default rather than as a silence — otherwise the
         // very node that produced the entry would read `diverged` against it.
         isolated_worktree: node.isolated_worktree,
+        on_demand: node.on_demand,
     };
     entry.stamp_isolation();
     entry

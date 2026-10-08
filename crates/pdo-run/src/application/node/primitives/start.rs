@@ -116,6 +116,11 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             params.run_state,
             params.node_id,
         ),
+        absent_sources: crate::domain::input_resolution::absent_sources(
+            params.pipeline,
+            params.run_state,
+            params.node_id,
+        ),
         // Absolute snapshot paths: the sub-worktree does not inherit the snapshot
         // files.
         secondary_repos: crate::application::node::prompt::secondary_repo_contexts(

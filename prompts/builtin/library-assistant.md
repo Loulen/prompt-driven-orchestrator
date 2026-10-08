@@ -67,6 +67,9 @@ nodes:
 - `agent` — a node that runs an agentic harness on its system prompt.
   Add `interactive: true` for a node a human drives and marks done by hand.
 - `script` — deterministic author-written bash instead of an agent (ADR-0017).
+  An `agent` or a `script` may carry `on_demand: true` (ADR-0086): the run never
+  launches it nor skips it, the user's ▶ does, and it holds no downstream node
+  until then. Never on `start`, `end` or `switch`.
 - `switch` — mechanical fan-out on a typed value.
 
 **Where a node works** (`isolated_worktree:`, ADR-0060). Every `agent` and every

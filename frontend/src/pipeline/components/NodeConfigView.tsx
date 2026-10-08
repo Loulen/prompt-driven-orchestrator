@@ -80,6 +80,11 @@ export default function NodeConfigView({
           <span className="font-medium">{node.name || node.id}</span>
           <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>{node.id}</span>
         </div>
+        {node.on_demand && (
+          <p className="text-fg-3" style={{ fontSize: "10.5px" }} data-testid="node-config-on-demand">
+            On demand — the runtime never launches it; the ▶ on its card does.
+          </p>
+        )}
 
         {!isScript && (
           <>

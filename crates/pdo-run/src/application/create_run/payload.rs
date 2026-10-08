@@ -82,6 +82,11 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
     if let Some(vars) = variables_json {
         run_payload["variables"] = vars;
     }
+    // ADR-0086: written only when set, so a Run without the option keeps the
+    // historical payload byte-identical.
+    if pipeline.wait_for_started_nodes {
+        run_payload["wait_for_started_nodes"] = serde_json::json!(true);
+    }
     // Persist the canonical (trimmed, validated) path, never the raw field. Historical
     // events keep their legitimate `null`; the read side resolves those (ADR-0033).
     run_payload["target_repo"] = serde_json::json!(target.run_repo_root.to_string_lossy());

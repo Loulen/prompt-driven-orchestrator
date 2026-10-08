@@ -10,6 +10,27 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.28.0 — Nœud à la demande, nœud skipped forcé, attente des nœuds lancés (CORE-46)
+
+- **Nœud à la demande** (ADR-0086) : option `on_demand` d'un Node `agent` ou `script` (refusée
+  sur un nœud structurel), portée par la bibliothèque, l'export portable et le snapshot du Run.
+  Le runtime ne le lance ni ne le skippe ; son ▶ (carte grisée, panneau du nœud) passe par
+  `node` × `start` et ré-ouvre un Run terminé.
+- **Option de Pipeline `wait_for_started_nodes`** (absente quand elle vaut `false`, le
+  défaut) : un Run qui atteint `End` reste `running` tant qu'un nœud est `running`, `waiting` ou
+  `awaiting_user`, qu'il doive s'y terminer ou s'y arrêter (edge vers `End` avec `reason:`).
+  La complétion ou l'arrêt du dernier de ces nœuds termine le Run. Le Run fige l'option à
+  son lancement (champ `wait_for_started_nodes` de `GET /runs/{id}`). Pour un Run qui l'a,
+  `GET /runs/{id}` et `GET /runs` portent `waiting_for_started_nodes` (nombre de nœuds attendus) ;
+  le Résumé de Run passe en version 2 et se reconstruit au démarrage. Sans l'option, un Run
+  ré-ouvert par un ▶ se termine à nouveau quand son nœud aboutit, sans bannière d'attente.
+- **Un Run terminé marque `Skipped` les branches non prises**, au lieu de les laisser en
+  attente : elles gardent ainsi leur ▶ (Retry, `node` × `retry`).
+- Le préambule d'un nœud lancé avant son amont dit que l'input est absent, et le
+  `PDO_INPUT_<PORT>` d'un script est vide, au lieu de donner un chemin vers un fichier qui
+  n'existe pas.
+- Un second `RunCompleted` sur un Run déjà terminé n'est plus écrit.
+
 ## 2.27.0 — Pipelines validés par Projet (CORE-39)
 
 `pdo-extension-api` reste en **0.11.0** : la Ressource `pipeline` gagne le verbe `validate`.

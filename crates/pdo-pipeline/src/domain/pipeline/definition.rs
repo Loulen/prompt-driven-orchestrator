@@ -121,6 +121,14 @@ pub struct PipelineDef {
     /// not semantics — excluded from the semantic pipeline-diff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_size: Option<GridSize>,
+    /// « Attente des nœuds lancés » (ADR-0086). `true` ⇒ a Run that reaches
+    /// `End` completes only once no node is `running`, `waiting` or
+    /// `awaiting_user`; until then it stays `Running`. `false` (the default)
+    /// keeps the Run ending at `End`, and is omitted from YAML so an untouched
+    /// pipeline round-trips byte for byte. Semantic, not layout.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub wait_for_started_nodes: bool,
 }
 
 /// The three wiring-grid sizes (#877 / ADR-0076): `S` = 20px, `M` = 30px,
@@ -141,6 +149,10 @@ fn default_prompt_required() -> bool {
 
 fn is_true(b: &bool) -> bool {
     *b
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn infer_variable_type(val: &serde_yaml::Value) -> VariableType {

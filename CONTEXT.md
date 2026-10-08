@@ -440,7 +440,7 @@ Flag racine du YAML, défaut `true`. Mis à `false`, le pipeline est *self-suffi
 
 **Skip local** *(terme)* : sauter un node **sans terminer le Run** ; output vide par défaut, surchargeable via `overrides` ; compte comme satisfait pour la re-projection ; l'aval avance. _Éviter_ : `pdo skip` / `RunSkipped` (no-op **run-level** qui termine tout, #245).
 
-**Forcer un nœud skipped** *(terme)* : le ▶ d'un node `Skipped` (auto-skip ou skip local) le relance avec la sémantique de **Retry** : itération suivante, aval invalidé puis réévalué, Run ré-ouvert. La branche skippée s'exécute comme si elle avait été prise. _Éviter_ : « Start » pour ce geste (Start ne touche pas l'aval, qui resterait skippé).
+**Forcer un nœud skipped** *(terme)* : le ▶ d'un node `Skipped` (auto-skip ou skip local) le relance avec la sémantique de **Retry** : itération suivante, aval invalidé puis réévalué, Run ré-ouvert. La branche skippée s'exécute comme si elle avait été prise. Un Run qui se termine marque `Skipped` les branches qu'il n'a pas prises, au lieu de les laisser en attente : elles gardent ainsi leur ▶. _Éviter_ : « Start » pour ce geste (Start ne touche pas l'aval, qui resterait skippé).
 
 **`force_route`** *(terme)* : sortie explicite d'une région ou d'un node vers une cible qui **court-circuite les `when:`** des edges — débloque un verdict non-`PASS` (CI verte, MR mergeable) qui n'atteindrait jamais `End`. _Éviter_ : `end_region` (qui, lui, respecte les `when:`).
 

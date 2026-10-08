@@ -38,6 +38,9 @@ mod cost_prices;
 #[path = "declared_wait.rs"]
 mod declared_wait;
 
+#[path = "wait_for_started_nodes.rs"]
+mod wait_for_started_nodes;
+
 #[path = "daemon_bind.rs"]
 mod daemon_bind;
 

@@ -195,6 +195,11 @@ pub fn validate_transition(state: Option<&RunState>, event: &Event) -> Verdict {
         EventKind::NodeStale => validate_stale(state, event),
         EventKind::NodeFailed => validate_fail(state, event),
         EventKind::NodeInterrupted => validate_interrupt(state, event),
+        // Two completions racing to end the same Run (ADR-0086: the last two
+        // started nodes completing at once) write one `RunCompleted`, not two.
+        EventKind::RunCompleted if state.status == RunStatus::Completed => Verdict::NoOp {
+            reason: "the run is already completed".into(),
+        },
         _ => Verdict::Allow,
     }
 }
@@ -904,6 +909,22 @@ mod tests {
             let verdict = validate_transition(Some(&state), &ev(kind, Some("worker"), Some(1)));
             assert_eq!(verdict, Verdict::Allow);
         }
+    }
+
+    /// ADR-0086: two completions racing to end a Run write one `RunCompleted`.
+    #[test]
+    fn a_second_run_completed_is_a_no_op() {
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::RunCompleted, None, None),
+        ]);
+        let verdict = validate_transition(Some(&state), &ev(EventKind::RunCompleted, None, None));
+        assert!(matches!(verdict, Verdict::NoOp { .. }), "{verdict:?}");
+        let running = state_from(&[ev(EventKind::RunStarted, None, None)]);
+        assert_eq!(
+            validate_transition(Some(&running), &ev(EventKind::RunCompleted, None, None)),
+            Verdict::Allow
+        );
     }
 
     #[test]

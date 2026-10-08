@@ -187,6 +187,13 @@ describe("markerReached", () => {
     }
   });
 
+  it("is true for the markers of a running run that waits at End for its started nodes (ADR-0086)", () => {
+    const waiting = { ...runWith("running"), waiting_for_started_nodes: 1 };
+    expect(markerReached("start", waiting)).toBe(true);
+    expect(markerReached("end", waiting)).toBe(true);
+    expect(markerReached("agent", waiting)).toBe(false);
+  });
+
   it("is false when there is no run state (library/template editing)", () => {
     expect(markerReached("start", null)).toBe(false);
     expect(markerReached("end", undefined)).toBe(false);

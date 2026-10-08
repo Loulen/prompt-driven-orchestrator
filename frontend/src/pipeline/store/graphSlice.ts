@@ -251,6 +251,12 @@ export function graphSlice(set: Set, get: Get): Partial<EditState> {
       if (updates.version !== undefined) tab.pipeline.version = updates.version;
       if (updates.variables !== undefined) tab.pipeline.variables = updates.variables;
       if (updates.prompt_required !== undefined) tab.pipeline.prompt_required = updates.prompt_required;
+      // ADR-0086: off is the absence of the key, so an untouched pipeline
+      // round-trips byte for byte.
+      if (updates.wait_for_started_nodes !== undefined) {
+        if (updates.wait_for_started_nodes) tab.pipeline.wait_for_started_nodes = true;
+        else delete tab.pipeline.wait_for_started_nodes;
+      }
       if (updates.grid_size !== undefined) {
         if (updates.grid_size) tab.pipeline.grid_size = updates.grid_size;
         else delete tab.pipeline.grid_size;

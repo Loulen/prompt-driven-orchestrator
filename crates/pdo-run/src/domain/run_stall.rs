@@ -219,6 +219,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -250,6 +251,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: false,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -342,6 +344,7 @@ mod tests {
         rs.node_defs.push(event_log::NodeDefInfo {
             isolated_worktree: None,
             orchestrator: false,
+            on_demand: false,
             id: node_id.into(),
             name: None,
             node_type: node_type.into(),
@@ -486,6 +489,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: false,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let mut run_state = event_log::RunState::new("20260613-loop".into(), "cond".into());
         // Entry node `a` completed; nothing else live or schedulable.

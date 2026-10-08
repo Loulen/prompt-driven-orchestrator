@@ -260,6 +260,23 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toContain("orchestrator: true");
   });
 
+  it("serializes « on demand » and the wait for started nodes only when on (ADR-0086)", () => {
+    const plain: EditorNodeDef = {
+      id: "plain", name: "plain", type: "script",
+      inputs: [],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false,
+    };
+    const untouched = serializePipeline(makeFullPipeline([plain]));
+    expect(untouched).not.toContain("on_demand");
+    expect(untouched).not.toContain("wait_for_started_nodes");
+
+    const pipeline = makeFullPipeline([{ ...plain, on_demand: true }]);
+    const yaml = serializePipeline({ ...pipeline, wait_for_started_nodes: true });
+    expect(yaml).toContain("on_demand: true");
+    expect(yaml).toContain("wait_for_started_nodes: true");
+  });
+
   it("round-trips multiline output instructions and omits blank values", () => {
     const reviewer: EditorNodeDef = {
       id: "reviewer", name: "reviewer", type: "agent",

@@ -49,6 +49,8 @@ export interface LibraryEntry {
    * daemon for `agent`/`script` (stamped at the type's default when the entry
    * predates #655); `null` for the types that carry no isolation. */
   isolated_worktree?: boolean | null;
+  /** ADR-0086: the entry is an on-demand node. Absent ⇒ `false`. */
+  on_demand?: boolean;
 }
 
 export interface LibrarySaveSpec {
@@ -65,6 +67,8 @@ export interface LibrarySaveSpec {
   /** #655/ADR-0060: where the starred node works. Omitted ⇒ the daemon stamps
    * the type's default; `null` for a type that carries no isolation. */
   isolated_worktree?: boolean | null;
+  /** ADR-0086: star the « on demand » option with the node. */
+  on_demand?: boolean;
 }
 
 export interface InstantiateResult {
@@ -82,6 +86,8 @@ export interface InstantiateResult {
      * node. Dropping it would fall back to the type default and silently fork a
      * worktree for an Agent starred in the Run's. */
     isolated_worktree?: boolean | null;
+    /** ADR-0086: an on-demand entry instantiates an on-demand node. */
+    on_demand?: boolean;
   };
   prompt: string;
 }
@@ -109,6 +115,8 @@ export interface ParseNodeResult {
     /** #653/ADR-0060: where the node works. `null` for the types that carry no
      *  isolation (`start`, `end`). */
     isolated_worktree?: boolean | null;
+    /** ADR-0086: the pasted node waits for the user's ▶. */
+    on_demand?: boolean;
     max_iter?: number | string | null;
     branches?: number | null;
   };

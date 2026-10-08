@@ -18,6 +18,7 @@ pub(crate) const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
     "notes",
     "prompt_required",
     "grid_size",
+    "wait_for_started_nodes",
 ];
 
 pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {

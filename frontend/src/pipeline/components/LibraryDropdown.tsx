@@ -67,6 +67,8 @@ export default function LibraryDropdown({
         // falls back to its type's default, so an Agent starred in the Run's
         // worktree would fork one of its own on every instantiation.
         isolated_worktree: result.spec.isolated_worktree ?? null,
+        // ADR-0086: and on demand when the entry is.
+        on_demand: result.spec.on_demand ?? false,
         view,
       };
       addNode(node);

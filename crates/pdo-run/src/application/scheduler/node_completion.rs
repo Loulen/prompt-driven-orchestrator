@@ -187,6 +187,60 @@ pub async fn handle_node_completion(
             }
         }
     }
+
+    // ADR-0086: this completion may be the one a Run past `End` waits for —
+    // the last started node of a Run that waits for them, or a node launched
+    // after the Run went past `End`, which re-opened it.
+    reevaluate_end(state, run_id).await;
+}
+
+/// Evaluate the end of a Run again (ADR-0086), on its state as it is now:
+/// once no started node is alive, a Run whose routing went past `End` ends
+/// (`Complete`, or `Halt` for an edge into `End` with a `reason:`). Called
+/// after a node completes, and after a node is stopped — the gestures that
+/// can leave the last started node of a Run past `End` settled.
+pub async fn reevaluate_end(state: &Runs, run_id: &str) {
+    let Some((events, run_state)) = reload_run_state(state, run_id).await else {
+        return;
+    };
+    if run_state.status != state::RunStatus::Running {
+        return;
+    }
+    let repo_root = effective_repo_root(state, &run_state);
+    let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
+    let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+        return;
+    };
+    let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+        return;
+    };
+    let pipeline = parse_result.pipeline;
+    let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
+    let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
+    let frontmatter = resolve_completed_frontmatter(&pipeline, &run_state, &artifacts_dir);
+    let vars = resolve_run_variables(&pipeline, &events);
+    let Some(action) = scheduler::end_reached_action(&pipeline, &run_state, &frontmatter, &vars)
+    else {
+        return;
+    };
+    let spawn_ctx = SpawnContext {
+        pipeline: &pipeline,
+        run_id,
+        pipeline_path: &pipeline_path,
+        worktree_dir: &worktree_dir,
+        artifacts_dir: &artifacts_dir,
+        resolved_vars: &vars,
+        repo_root: &repo_root,
+    };
+    let _ = scheduler_interpreter::interpret(
+        state,
+        &spawn_ctx,
+        &run_state,
+        SpawnDedup::InternalOnly,
+        1,
+        &action,
+    )
+    .await;
 }
 
 /// Thin shim over the single-pass advancement tick owned by

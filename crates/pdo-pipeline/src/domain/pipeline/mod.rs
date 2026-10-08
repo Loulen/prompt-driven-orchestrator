@@ -2033,6 +2033,7 @@ skills:
             skills: Vec::new(),
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         };
         let yaml = serde_yaml::to_string(&node).unwrap();
         assert!(yaml.contains("type: script"), "serializes to kebab: {yaml}");
@@ -3954,6 +3955,101 @@ nodes: []
             .contains("grid_size"));
     }
 
+    /// ADR-0086: « on demand » is a node option that round-trips, omitted when
+    /// false so an untouched pipeline stays byte-identical.
+    #[test]
+    fn on_demand_round_trips_and_false_is_omitted() {
+        let yaml = with_start_end(
+            r#"
+name: on-demand-pipe
+nodes:
+  - id: ab000001
+    name: reviewer
+    type: agent
+    isolated_worktree: true
+    on_demand: true
+  - id: ab000002
+    name: report
+    type: script
+    isolated_worktree: false
+    on_demand: true
+  - id: ab000003
+    name: worker
+    type: agent
+    isolated_worktree: true
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let flag = |id: &str| {
+            result
+                .pipeline
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap()
+                .on_demand
+        };
+        assert!(flag("ab000001"));
+        assert!(flag("ab000002"));
+        assert!(!flag("ab000003"));
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        assert_eq!(
+            serialized.matches("on_demand: true").count(),
+            2,
+            "{serialized}"
+        );
+        assert!(!serialized.contains("on_demand: false"), "{serialized}");
+        let reparsed = parse_pipeline(&serialized).unwrap();
+        assert!(reparsed
+            .pipeline
+            .nodes
+            .iter()
+            .any(|n| n.id == "ab000002" && n.on_demand));
+    }
+
+    /// ADR-0086: a structural node has nothing to launch — the option is
+    /// refused at parse, named, rather than carried in silence.
+    #[test]
+    fn on_demand_is_refused_on_a_structural_node() {
+        for node_type in ["start", "end", "switch", "loop"] {
+            let yaml = format!(
+                "name: p\nnodes:\n  - id: s\n    name: S\n    type: {node_type}\n    on_demand: true\n"
+            );
+            let err = parse_pipeline(&yaml).unwrap_err().to_string();
+            assert!(err.contains("on_demand"), "{node_type}: {err}");
+            assert!(err.contains(node_type), "{node_type}: {err}");
+        }
+    }
+
+    /// ADR-0086: « Attente des nœuds lancés » is a root option, off by
+    /// default and absent from the YAML when off.
+    #[test]
+    fn wait_for_started_nodes_round_trips_and_false_is_omitted() {
+        let yaml = with_start_end("name: waiting\nwait_for_started_nodes: true\nnodes: []\n");
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.pipeline.wait_for_started_nodes);
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        assert!(
+            serialized.contains("wait_for_started_nodes: true"),
+            "{serialized}"
+        );
+        assert!(
+            parse_pipeline(&serialized)
+                .unwrap()
+                .pipeline
+                .wait_for_started_nodes
+        );
+
+        let plain = parse_pipeline(&with_start_end("name: plain\nnodes: []\n")).unwrap();
+        assert!(!plain.pipeline.wait_for_started_nodes);
+        assert!(!serde_yaml::to_string(&plain.pipeline)
+            .unwrap()
+            .contains("wait_for_started_nodes"));
+    }
+
     #[test]
     fn deterministic_output_instructions_are_preserved_with_a_non_blocking_diagnostic() {
         let yaml = VALID_MINIMAL.replace(
@@ -4003,6 +4099,7 @@ variables:
   max_iter_review: 3
 prompt_required: false
 grid_size: S
+wait_for_started_nodes: true
 nodes:
   - id: start
     name: Start

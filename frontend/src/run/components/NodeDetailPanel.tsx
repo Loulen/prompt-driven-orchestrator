@@ -38,6 +38,8 @@ interface Props {
   onOpenChildRun?: (childRunId: string) => void;
   /** #723: land on the Orchestration tab (the back arrow from a child run). */
   initialDetailTab?: "io" | "orchestration";
+  /** ADR-0086: the node is an on-demand node — its Start is its ▶. */
+  isOnDemand?: boolean;
 }
 
 export default function NodeDetailPanel({
@@ -52,6 +54,7 @@ export default function NodeDetailPanel({
   isOrchestratorNode = false,
   onOpenChildRun,
   initialDetailTab = "io",
+  isOnDemand = false,
 }: Props) {
   const [modal, setModal] = useState<ModalState | null>(null);
   // #588: whether the inline terminal has a live PTY socket (the banner's hint
@@ -215,6 +218,7 @@ export default function NodeDetailPanel({
         hasMultipleIters={hasMultipleIters}
         selectedIter={selectedIter}
         onSelectIter={setSelectedIter}
+        statusLabel={isOnDemand && node.status === "pending" ? "On demand" : undefined}
       />
 
       <NodeProvisioning

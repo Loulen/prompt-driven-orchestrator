@@ -19,6 +19,7 @@ use super::request::InputFile;
 use super::target::{Launchable, Refusal, Target};
 use crate::application::events::append_event;
 use crate::application::paths::{run_scoped_pipeline_path, run_scoped_prompts_dir};
+use crate::application::run_pipeline::record_launch_source;
 use crate::Runs;
 
 /// What the Run is made of on disk.
@@ -156,12 +157,17 @@ pub(super) async fn materialize(
 
     if let Err(e) = copy_pipeline_to_run(run_repo_root, &launchable.pipeline_path, run_id) {
         error!("failed to copy pipeline to run dir: {e}");
-    } else if *run_repo_root == state.repo_root {
-        // Run dirs are watched individually and non-recursively, so each new one must
-        // be registered. Runs in another target repo stay unwatched — the watcher's
-        // run-id detection is rooted at `state.repo_root`.
-        if let Some(run_dir) = run_scoped_pipeline_path(run_repo_root, run_id).parent() {
-            state.run_dirs.watch(run_dir);
+    } else {
+        // ADR-0085: remember which shared pipeline the Run came from and what
+        // it looked like, so the overwrite warning can say whether it changed.
+        record_launch_source(state, run_repo_root, run_id, &launchable.pipeline_path);
+        if *run_repo_root == state.repo_root {
+            // Run dirs are watched individually and non-recursively, so each new one must
+            // be registered. Runs in another target repo stay unwatched — the watcher's
+            // run-id detection is rooted at `state.repo_root`.
+            if let Some(run_dir) = run_scoped_pipeline_path(run_repo_root, run_id).parent() {
+                state.run_dirs.watch(run_dir);
+            }
         }
     }
 

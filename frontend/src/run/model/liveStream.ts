@@ -25,7 +25,8 @@ export interface WsMessage {
   pipeline_id?: string;
   path?: string;
   ts?: string;
-  /** Set on trigger_* messages (#160). */
+  /** Set on trigger_* messages (#160); a `trigger_updated` without it is
+   *  about every Trigger (an extension signalled their suspensions). */
   trigger_id?: string;
   outcome?: string;
   run_id?: string | null;

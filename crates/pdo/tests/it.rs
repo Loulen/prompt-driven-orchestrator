@@ -84,6 +84,13 @@ mod extension_trigger_fire;
 #[path = "extension_node_launch.rs"]
 mod extension_node_launch;
 
+// CORE-43: the delivery of a Node signed by the identity an extension gives it.
+#[path = "delivery_identity.rs"]
+mod delivery_identity;
+
+#[path = "extension_overwrite.rs"]
+mod extension_overwrite;
+
 // API 0.9: the extension data of a Run's creation, `--ext`, `Host::create_run`.
 #[path = "extension_run_creation.rs"]
 mod extension_run_creation;
@@ -108,6 +115,11 @@ mod extension_catalogue;
 // authorization, with the measure of `GET /runs` over 500 Runs.
 #[path = "extension_reads.rs"]
 mod extension_reads;
+
+// API 0.11: the name of a Projet for an extension, the signal of the
+// Triggers, the Triggers read in the Projets of their repository.
+#[path = "extension_projets_triggers.rs"]
+mod extension_projets_triggers;
 
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]

@@ -71,7 +71,7 @@ impl Workspace {
                 .await
                 .map_err(failed("add member to"))?,
         }
-        self.events.project_changed(id);
+        self.events.project_changed(id).await;
         Ok(MemberAdded::Attached(
             self.projects.get(id).await.ok().flatten(),
         ))

@@ -10,17 +10,61 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.20.0
+## 2.23.0 — Fichier importé en cours de Run (CORE-37)
 
-`pdo-extension-api` et `@pdo/extension-ui` passent en **0.11.0** : ajouts seulement, une
-extension 0.1 à 0.10 compile et tourne telle quelle (`OLDEST_COMPATIBLE_API_VERSION` reste
-`0.1.0`).
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit deux verbes de plus, ajouts seulement.
 
 - **Fichier importé en cours de Run** : deux Opérations nouvelles sur la Ressource `node`,
   `import_files` et `send_text` (catalogue des Ressources). Une extension de Droits qui
   énumère les verbes d'un Node doit les mapper ; sinon elles suivent sa règle par défaut.
   L'import compte dans le même budget `max_attachments_mb` que les fichiers joints au lancement
   d'un Run, par import : derrière un reverse proxy, `client_max_body_size` doit le suivre.
+
+## 2.22.0 — Livraison signée par l'identité git du Node (CORE-43)
+
+`pdo-extension-api` reste en **0.11.0** : seule la documentation de `node_env` change. Détail :
+ADR-0081 et `docs/reference/extension-api.md` (« Git identity »).
+
+- Les variables `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` et
+  `GIT_COMMITTER_EMAIL` qu'une extension donne à un Node sont gelées sur son `NodeStarted`
+  (`git_identity`, ces quatre seulement) et signent toute sa livraison : le commit
+  `<node> iter-<N>: completed`, le commit du sous-worktree d'un Node isolé, son merge et le
+  commit de résolution en faveur du Node.
+- Un daemon sans identité git livre désormais, pourvu que les quatre soient données ; une
+  variable absente ou vide retombe sur l'identité du daemon. Sans elles, rien ne change.
+
+## 2.21.0 — Pilotage d'un Run en lecture seule (CORE-38)
+
+- **« Save » dans un Run n'écrit plus le Pipeline partagé** (CORE-38, ADR-0085, amende ADR-0007) :
+  `PUT /runs/{id}/pipeline` ne modifie que le snapshot du Run, ni le Pipeline partagé ni les
+  autres Runs. Un onglet de Run s'ouvre en lecture seule ; le crayon de la barre propose « Edit
+  for this run » et « Edit source pipeline ». Pour rendre une modification définitive : « Save ›
+  Overwrite default pipeline… », qui avertit (futurs Runs, Triggers qui référencent le Pipeline,
+  Pipeline partagé modifié depuis le lancement) puis copie le snapshot entier, prompts orphelins
+  retirés. API : `GET /runs/{id}/pipeline/overwrite-preview`,
+  `POST /runs/{id}/pipeline/overwrite-default`. L'écrasement demande `run` × `edit_pipeline`
+  **et** `pipeline` × `update` : une extension de Droits n'a pas de verbe nouveau à mapper.
+  Un Run lancé avant la mise à jour n'a pas d'empreinte de lancement : l'avertissement dit qu'il
+  ne sait pas si le Pipeline partagé a changé.
+
+## 2.20.0
+
+`pdo-extension-api` passe en **0.11.0**, et le module `@pdo/extension-ui` avec lui : ajouts
+seulement, une extension 0.1 à 0.10 compile et tourne telle quelle. Détail :
+`docs/reference/extension-api.md`.
+
+- **Nom d'un Projet** (CORE-41) : `Host::project_name(id)` donne le nom d'un Projet, ou rien
+  pour un id inconnu, de façon synchrone (y compris depuis `authorize`). Le daemon lit les
+  Projets avant de servir et relit un Projet à chaque changement, avant de l'annoncer.
+- **Triggers en direct** (CORE-41) : le flux de l'interface relaie `trigger_updated` et
+  `project_changed`, qu'il jetait ; un Trigger modifié ou un Projet renommé ailleurs se met à
+  jour sans recharger. `Host::triggers_changed()` annonce un `trigger_updated` sans
+  `trigger_id`, et la liste des Triggers relit tout.
+- **Triggers lus dans leur Projet** (CORE-41) : les Opérations sur un Trigger sont dans le
+  Projet de son dépôt cible (aucun sans dépôt cible). `GET /triggers`, `GET /triggers/{id}`,
+  ses tirs et ce que `/ws` dit d'un Trigger demandent `trigger` × `read`. Une extension qui
+  refusait toute Opération quel que soit son verbe masque désormais aussi les Triggers.
 
 ## 2.19.0 — Ouverture sondée des WebSockets, Résumé de Run (CORE-32)
 

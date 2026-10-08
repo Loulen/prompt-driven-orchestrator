@@ -225,6 +225,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
         ),
         call(
             "POST",
+            "/runs/{run_id}/pipeline/overwrite-default",
+            format!("/runs/{RUN}/pipeline/overwrite-default"),
+            None,
+        ),
+        call(
+            "POST",
             "/runs/{run_id}/manager/start",
             format!("/runs/{RUN}/manager/start"),
             None,

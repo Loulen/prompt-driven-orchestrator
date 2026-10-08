@@ -59,6 +59,16 @@ pub fn router(runs: Arc<Runs>) -> Router {
         )
         .route("/runs/{run_id}/repos", patch(runs::edit_repos))
         .route("/runs/{run_id}/pipeline", put(runs::save_pipeline))
+        // ADR-0085: what « Overwrite default pipeline » would touch, then the
+        // overwrite itself — the only way a Run's edit reaches the shared one.
+        .route(
+            "/runs/{run_id}/pipeline/overwrite-preview",
+            get(runs::overwrite_preview),
+        )
+        .route(
+            "/runs/{run_id}/pipeline/overwrite-default",
+            post(runs::overwrite_default),
+        )
         // Manager on demand: start/stop the Run's Pipeline Manager from the
         // Manager tab. Start is idempotent (a double-click is a benign
         // re-answer); stop on a dead session is a calm no-op.

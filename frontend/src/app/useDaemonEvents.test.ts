@@ -42,6 +42,21 @@ describe("useDaemonEvents", () => {
     expect(targets.refreshRuns).toHaveBeenCalledTimes(2);
   });
 
+  it("reads every Trigger again on a trigger_updated, with or without its id", () => {
+    const { targets, emit } = mount();
+    emit({ type: "trigger_updated", trigger_id: "t1" });
+    emit({ type: "trigger_updated" });
+    expect(targets.refreshTriggers).toHaveBeenCalledTimes(2);
+    expect(targets.refreshRuns).not.toHaveBeenCalled();
+  });
+
+  it("reads the Projets again on a project_changed", () => {
+    const { targets, emit } = mount();
+    emit({ type: "project_changed", project_id: "p1" });
+    expect(targets.refreshProjects).toHaveBeenCalledTimes(1);
+    expect(targets.refreshTriggers).not.toHaveBeenCalled();
+  });
+
   it("drops a pending refresh once unmounted", () => {
     const { targets, hook, emit } = mount();
     emit({ type: "event" });

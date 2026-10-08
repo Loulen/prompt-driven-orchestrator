@@ -106,9 +106,11 @@ pub trait RecentRepositories: Send + Sync {
     fn recent(&self) -> BoxFuture<'_, StoreResult<Vec<RecentRepository>>>;
 }
 
-/// Who hears that a Projet changed (the live pipeline stream).
+/// Who hears that a Projet changed (the live pipeline stream, the names the
+/// extensions read). Awaited once the change is stored, before the gesture
+/// answers: whoever hears it next reads the Projet as it now is.
 pub trait ProjectEvents: Send + Sync {
-    fn project_changed(&self, project_id: &str);
+    fn project_changed<'a>(&'a self, project_id: &'a str) -> BoxFuture<'a, ()>;
 }
 
 /// Git. One adapter implements it, tested against real temporary repositories.

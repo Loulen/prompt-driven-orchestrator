@@ -71,6 +71,9 @@ pub enum MergeResult {
 /// (`merge_action::spawn_base_sha`). `None` — a pre-#503 Run, or a spawn that
 /// recorded none — forbids the #503 resolution: an unknown base is not a licence to
 /// rewrite a branch.
+///
+/// `identity` signs the commit in the sub-worktree, the merge commit and the
+/// #503 resolution commit (CORE-43); empty, git keeps the daemon's own.
 pub fn commit_and_merge_sub_worktree_inner(
     sub_worktree_dir: &std::path::Path,
     pipeline_worktree_dir: &std::path::Path,
@@ -78,10 +81,11 @@ pub fn commit_and_merge_sub_worktree_inner(
     node_id: &str,
     iter: i64,
     spawn_base: Option<&str>,
+    identity: &CommitIdentity,
 ) -> Result<MergeResult> {
     // The node's own commits are kept; only what it left uncommitted becomes a
     // commit here, and nothing at all when it left nothing (#654).
-    stage_and_commit(sub_worktree_dir, node_id, iter)?;
+    stage_and_commit(sub_worktree_dir, node_id, iter, identity)?;
 
     // Both tips, read BEFORE the merge mutates either worktree (#503 AC4): a
     // post-mortem that has to rediscover these two SHAs by hand is the
@@ -100,6 +104,7 @@ pub fn commit_and_merge_sub_worktree_inner(
     // byte-for-byte the old behaviour.
     let output = std::process::Command::new("git")
         .args(["merge", &node_tip, "--no-edit"])
+        .envs(identity.vars())
         .current_dir(pipeline_worktree_dir)
         .output()
         .context("git merge failed")?;
@@ -132,6 +137,7 @@ pub fn commit_and_merge_sub_worktree_inner(
                 &node_tip,
                 node_id,
                 iter,
+                identity,
             )?;
             warn!(
                 "Merge-back of {sub_branch} conflicted on {} file(s) and was resolved in the \
@@ -296,6 +302,7 @@ pub fn resolve_in_node_favour(
     node_tip: &str,
     node_id: &str,
     iter: i64,
+    identity: &CommitIdentity,
 ) -> Result<String> {
     let node_tree = rev_parse(pipeline_worktree_dir, &format!("{node_tip}^{{tree}}"))?;
     let message = format!(
@@ -321,6 +328,7 @@ pub fn resolve_in_node_favour(
             node_tip,
         ])
         .args(["-m", &message])
+        .envs(identity.vars())
         .current_dir(pipeline_worktree_dir)
         .output()
         .context("failed to run git commit-tree for the node-favour resolution")?;

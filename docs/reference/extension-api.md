@@ -83,6 +83,7 @@ The core fills `projects` for its own Operations:
 | `review_comment` | the Projets of the Run in its target |
 | `project` (targeted) | that Projet |
 | `repository` (`fetch`, `fast_forward`) | the Projet owning the repository |
+| `trigger` (0.11) | the Projet owning the Trigger's target repository, matched as a Run's; a creation: the repository it names; a Trigger without a target repository is in none. An edit moving it to another Projet's repository is asked, and announced applied, in each |
 | everything else | none |
 
 A repository belongs to one Projet at most, so the core's lists hold one id at most. A Run's
@@ -109,9 +110,12 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /projects/{id}` | `project` × `read` | `403` |
 | `GET /fs/browse` (the loupe, the explorers) | `repository` × `read`, no target, in no Projet | `403` |
 | `GET /repos/recent` (the New Run prefill) | `run` × `read` on the last Run of each repository, in the repository's Projet | the repository is absent |
+| `GET /triggers` (0.11) | `trigger` × `read`, targeted, per Trigger listed, in the Projet of its target repository | the Trigger is absent |
+| `GET /triggers/{id}`, `/triggers/{id}/fires` (0.11) | `trigger` × `read` on `{id}` | `403` `operation_refused` |
+| `/ws`, about a Trigger (0.11) | `trigger` × `read` on the Trigger a message is about (`trigger_created`, `trigger_updated`, `trigger_deleted`, `trigger_fired`, `operation_applied` on it), in its Projet, per connection (answer kept 5 s) | the message is not sent to that connection |
 
 A read is in the same Projets as the gestures on its entity: a Run's in the Projet of its primary
-repository, a Projet's in itself. The actor is the one `identify` found: on `/ws`, the one of the
+repository, a Trigger's in the Projet of its target repository, a Projet's in itself. The actor is the one `identify` found: on `/ws`, the one of the
 upgrade request. A read is never announced as `operation_applied`, and a refusal is logged at
 `debug` only. Without extension nothing is asked: the lists are served as before.
 
@@ -157,9 +161,17 @@ core's mechanisms (amendment #34):
   caller's included); `None` when none does.
 - `create_run(actor, NewRun)` (0.9): create a Run on behalf of `actor`, as `POST /runs` does for
   that caller (below); answers its id or the refusal (`RunNotCreated`: status, message, body).
+- `project_name(project_id)` (0.11): the name of a Projet (`"P1"`), or `None` for an id the core
+  does not know. Synchronous and quick: call it from your own `authorize` to name the Projet in a
+  refusal's reason. The core reads the Projets once before it serves and again at each change, so
+  the name follows a renaming before the change is announced; a deleted Projet has none.
+- `triggers_changed()` (0.11): the suspensions of the Triggers changed for a cause outside a
+  Trigger's mutation, one the extension holds itself. The core announces
+  `{"type": "trigger_updated"}`, without `trigger_id`, and the list of the Triggers reads them all
+  again (below).
 
-`NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone and
-creates no Run (`503`): the host of `ExtensionContext::new`, and a stand-in in an extension's
+`NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
+Run (`503`), names no Projet and signals nothing: the host of `ExtensionContext::new`, and a stand-in in an extension's
 tests.
 
 ## Admission of a request
@@ -254,6 +266,14 @@ the Run and its last editor then), `repository` (the Run's primary repository) a
 - **`CLAUDE_CONFIG_DIR`**: when a Node gets one, it is frozen on its `NodeStarted`
   (`claude_config_dir`), and the core reads that Node's Claude Code transcripts, for its cost
   and its liveness, under `$CLAUDE_CONFIG_DIR/projects/`.
+- **Git identity** (`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`,
+  `GIT_COMMITTER_EMAIL`): the ones a Node gets are frozen on its `NodeStarted` (`git_identity`,
+  these four only: the rest of the environment may hold secrets and is never written to the
+  event log). They sign every commit of the Node's delivery: `<node> iter-<N>: completed`, the
+  commit in an isolated Node's sub-worktree, its merge into the Run's worktree and the
+  resolution commit in the Node's favour. A daemon with no git identity of its own then
+  delivers, provided all four are given (a missing or empty one falls back to the daemon's).
+  Without them, the delivery keeps the daemon's identity.
 - **Preamble** (`node_preamble`): placed at the very top of an agent's prompt, before
   `# PDO Runtime Preamble`, followed by a blank line. Never asked for a script.
 
@@ -306,6 +326,10 @@ stops giving one, and the Trigger fires again at its next slot. While suspended:
 - `GET /triggers`, `GET /triggers/<id>`, and the answers of a create or an edit carry
   `"suspension": {"extension": "<id>", "reason": "…"}`; the interface shows the Trigger switched
   off with an amber « suspended » pill, the reason in its tooltip and in the Trigger's detail.
+
+The suspension is asked again at each read. When its cause changes outside any mutation of a
+Trigger, call `Host::triggers_changed()` (0.11): an interface open on the Triggers then shows the
+pill appear or go without reloading.
 
 ## Events
 

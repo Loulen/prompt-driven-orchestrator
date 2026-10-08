@@ -83,6 +83,28 @@ describe("useDaemonSocket", () => {
     unmount();
   });
 
+  it("relays the changes of the Triggers and of the Projets made elsewhere", async () => {
+    const { result, unmount } = renderHook(() => useDaemonSocket());
+    await settle();
+    const seen: WsMessage[] = [];
+    const stop = result.current.subscribe((msg) => seen.push(msg));
+    const ws = FakeSocket.instances[0];
+    act(() => {
+      ws.fire("open");
+      ws.fire("message", { data: JSON.stringify({ type: "trigger_updated", trigger_id: "t1" }) });
+      // An extension's signal: every Trigger, no id.
+      ws.fire("message", { data: JSON.stringify({ type: "trigger_updated" }) });
+      ws.fire("message", { data: JSON.stringify({ type: "project_changed", project_id: "p1" }) });
+    });
+    expect(seen).toEqual([
+      { type: "trigger_updated", trigger_id: "t1" },
+      { type: "trigger_updated" },
+      { type: "project_changed", project_id: "p1" },
+    ]);
+    stop();
+    unmount();
+  });
+
   it("probes again, never reopens blindly, after the daemon drops the socket", async () => {
     const { result, unmount } = renderHook(() => useDaemonSocket());
     await settle();

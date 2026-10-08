@@ -14,6 +14,7 @@ pub mod tick;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
+use pdo_kernel::Verb;
 use tracing::warn;
 
 use super::ports::RunFromTrigger;
@@ -143,12 +144,16 @@ impl Triggers {
         if let Err(e) = self.store.record_fire(trigger_id, record).await {
             warn!("trigger scheduler: record_fire failed for {trigger_id}: {e}");
         }
-        self.announce(serde_json::json!({
-            "type": "trigger_fired",
-            "trigger_id": trigger_id,
-            "outcome": record.outcome,
-            "run_id": record.run_id,
-        }));
+        let read = self.on_trigger(Verb::Read, trigger_id).await;
+        self.announce_about(
+            serde_json::json!({
+                "type": "trigger_fired",
+                "trigger_id": trigger_id,
+                "outcome": record.outcome,
+                "run_id": record.run_id,
+            }),
+            &read,
+        );
     }
 
     /// The target pipeline's `prompt_required` flag; `true` for a missing or

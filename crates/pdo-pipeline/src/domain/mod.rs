@@ -2,6 +2,7 @@
 //! socket or a process.
 
 pub mod cycles;
+pub mod fingerprint;
 pub mod frontmatter;
 pub mod library;
 pub mod loops;

@@ -1,3 +1,4 @@
+use pdo_kernel::Actor;
 use pdo_trigger::application::TriggerError;
 
 use crate::fakes::{world, REPO};
@@ -15,7 +16,11 @@ async fn the_list_resolves_the_effective_repo_without_touching_the_raw_one() {
         .filter(|t| t.id == legacy)
         .for_each(|t| t.target_repo = None);
 
-    let list = w.triggers.list(Default::default()).await.unwrap();
+    let list = w
+        .triggers
+        .list(&Actor::LocalOperator, Default::default())
+        .await
+        .unwrap();
     let of = |id: &str| list.iter().find(|e| e.trigger.id == id).unwrap();
     assert_eq!(of(&id).effective_repo, REPO);
     assert_eq!(of(&legacy).effective_repo, "/daemon/root");
@@ -34,7 +39,12 @@ async fn one_trigger_its_fires_and_the_health() {
     );
     let id = w.create_standard().await;
     assert_eq!(w.triggers.get(&id).await.unwrap().name, "T");
-    assert!(w.triggers.fires(&id).await.unwrap().is_empty());
+    assert!(w
+        .triggers
+        .fires(&Actor::LocalOperator, &id)
+        .await
+        .unwrap()
+        .is_empty());
 
     let health = w.triggers.health().await;
     assert_eq!(health.last_tick_at, None, "never ticked");

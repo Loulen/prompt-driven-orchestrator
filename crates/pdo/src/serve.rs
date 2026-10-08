@@ -227,6 +227,9 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
             bus: resources.bus.clone(),
             data_root: extensions_data_root(&resources),
         });
+        // API 0.11: an extension's `Host::project_name` reads the names the
+        // workspace context keeps current.
+        started.serve_project_names(resources.project_names.clone());
         let contexts = contexts::wire(resources, contexts_host.clone());
         // API 0.9: an extension's `Host::create_run` creates through the Runs.
         started.serve_runs(Arc::new(ExtensionRuns::of(&contexts.run)));

@@ -60,6 +60,13 @@ export interface OpenPipeline {
   dirty: boolean;
   externalDirty: boolean;
   runId?: string;
+  /**
+   * ADR-0085: a run tab opens in « pilotage », locked, with no authoring
+   * gesture. `true` once the user chose « Edit for this run »; « Finish
+   * editing » drops it. Meaningless on a pipeline tab (no `runId`), which is
+   * always editable.
+   */
+  runEditing?: boolean;
   conflict?: ConflictData;
   saveError?: SaveErrorData;
   /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
@@ -78,6 +85,20 @@ export interface OpenPipeline {
  */
 export function hasUnsavedWork(t: OpenPipeline): boolean {
   return t.dirty || t.conflict != null || t.saveError != null;
+}
+
+/**
+ * ADR-0085: a run tab in « pilotage », followed and never modified. Every
+ * definition mutation of the store is a no-op on such a tab, so no gesture
+ * (canvas, inspector, keyboard) changes it without « Edit for this run ».
+ */
+export function isRunTabLocked(t: OpenPipeline | undefined | null): boolean {
+  return t?.runId != null && !t.runEditing;
+}
+
+/** The active tab is a locked run tab (point-of-use selector). */
+export function selectActiveTabLocked(s: { openTabs: OpenPipeline[]; activeTabId: string | null }): boolean {
+  return isRunTabLocked(s.openTabs.find((t) => t.id === s.activeTabId));
 }
 
 /**
@@ -220,6 +241,19 @@ export interface EditState {
   renamePipeline: (id: string, name: string) => Promise<void>;
 
   save: (id: string) => Promise<void>;
+  /** ADR-0085: « Edit for this run », a run tab unlocked for hot editing. */
+  startRunEditing: (id: string) => void;
+  /**
+   * ADR-0085: « Finish editing », back to « pilotage ». Unsaved edits are
+   * discarded (the caller confirmed): the tab re-reads the Run's snapshot.
+   */
+  finishRunEditing: (id: string) => Promise<void>;
+  /**
+   * ADR-0085: « Overwrite default pipeline », the run tab saved for this Run
+   * first if needed, then the shared pipeline replaced by the Run's whole
+   * snapshot. Rejects with the daemon's message when either fails.
+   */
+  overwriteDefaultPipeline: (id: string) => Promise<void>;
   flushPendingSaves: () => Promise<void>;
   clearSaveError: (id: string) => void;
 

@@ -26,7 +26,7 @@ mod resolve;
 mod warnings;
 mod worktree;
 
-pub(crate) use reserve::freeze_claude_config_dir;
+pub(crate) use reserve::freeze_extension_env;
 
 pub struct SpawnContext<'a> {
     pub pipeline: &'a pipeline::PipelineDef,

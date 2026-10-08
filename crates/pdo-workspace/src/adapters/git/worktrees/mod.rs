@@ -24,4 +24,5 @@ pub use merge::*;
 pub use reap::*;
 pub use registry::*;
 
+pub use crate::domain::commit_identity::CommitIdentity;
 pub use crate::domain::worktree_layout::*;

@@ -91,7 +91,9 @@ mod tests {
 
     struct Silent;
     impl ProjectEvents for Silent {
-        fn project_changed(&self, _project_id: &str) {}
+        fn project_changed<'a>(&'a self, _project_id: &'a str) -> BoxFuture<'a, ()> {
+            Box::pin(async {})
+        }
     }
 
     /// Stage 3: the Projets as the workspace context stores them in SQLite,

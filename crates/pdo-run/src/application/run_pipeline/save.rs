@@ -1,6 +1,8 @@
-//! The mid-run edit of a Run's pipeline: validated against what the Run's
-//! progress forbids (the pipeline context's rules), written to the run-scoped
-//! copy, then synced to the template it came from.
+//! The mid-run edit of a Run's pipeline (« Save for this run », ADR-0085):
+//! validated against what the Run's progress forbids (the pipeline context's
+//! rules), written to the run-scoped copy only. The shared pipeline moves
+//! through the explicit, warned overwrite ([`super::overwrite`]), never as a
+//! side effect of a save.
 
 use std::collections::HashMap;
 
@@ -14,7 +16,7 @@ use tracing::{info, warn};
 
 use crate::application::operations::on_run;
 use crate::application::paths::{
-    effective_repo_root, resolve_pipeline_path, run_scoped_pipeline_path, run_scoped_prompts_dir,
+    effective_repo_root, run_scoped_pipeline_path, run_scoped_prompts_dir,
 };
 use crate::domain::projection::project;
 use crate::domain::state::RunState;
@@ -70,9 +72,9 @@ pub struct SaveRunPipelineRequest {
 
 impl Runs {
     /// `PUT /runs/{run_id}/pipeline`: edit the Run's pipeline mid-run, within
-    /// what its progress allows, and sync the edit to the template. A gesture
-    /// of an actor: it asks the Autorisation d'opération (`run` ×
-    /// `edit_pipeline`).
+    /// what its progress allows. Writes the Run's snapshot only: neither the
+    /// shared pipeline nor another Run moves. A gesture of an actor: it asks
+    /// the Autorisation d'opération (`run` × `edit_pipeline`).
     pub async fn save_run_pipeline(
         &self,
         actor: &Actor,
@@ -180,61 +182,7 @@ impl Runs {
             }
         }
 
-        sync_run_pipeline_to_template(
-            state,
-            run_id,
-            &run_state.pipeline_name,
-            &req.yaml,
-            &req.prompts,
-        );
-
-        info!("Run-scoped pipeline for {run_id} saved (validated + synced to template)");
+        info!("Run-scoped pipeline for {run_id} saved (validated, snapshot only)");
         (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
     }
-}
-
-pub fn sync_run_pipeline_to_template(
-    state: &Runs,
-    run_id: &str,
-    pipeline_name: &str,
-    yaml: &str,
-    prompts: &HashMap<String, String>,
-) {
-    let template_path = resolve_pipeline_path(&state.repo_root, pipeline_name);
-    let tmp_path = template_path.with_extension("yaml.tmp");
-
-    if let Some(parent) = template_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    state.self_writes.mark(&template_path);
-
-    if let Err(e) = std::fs::write(&tmp_path, yaml) {
-        warn!("sync_run_pipeline_to_template: write tmp failed: {e}");
-        return;
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &template_path) {
-        warn!("sync_run_pipeline_to_template: rename failed: {e}");
-        let _ = std::fs::remove_file(&tmp_path);
-        return;
-    }
-
-    // Write each prompt to the canonical `<dir>/<stem>.prompts/<id>.md` location every
-    // reader consults. NOT a flat `<dir>/prompts/<id>.md` dir: no reader looks there,
-    // so run-scoped prompt edits vanish in silence.
-    for (node_id, content) in prompts {
-        let prompt_path = pipeline::canonical_prompt_path(&template_path, node_id);
-        if let Some(parent) = prompt_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        state.self_writes.mark(&prompt_path);
-        if let Err(e) = std::fs::write(&prompt_path, content) {
-            warn!("sync_run_pipeline_to_template: prompt sync failed for {node_id}: {e}");
-        }
-    }
-
-    info!(
-        "Synced run {run_id} pipeline to template at {}",
-        template_path.display()
-    );
 }

@@ -4,7 +4,6 @@
 
 #![allow(unused_imports)]
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,38 +42,6 @@ use pdo_workspace::adapters::git::worktrees::{
     self, create_sub_worktree, create_worktree, sub_worktree_branch, sub_worktree_path,
     worktree_dir_for_run,
 };
-
-#[tokio::test]
-async fn sync_run_pipeline_writes_canonical_prompt_path() {
-    // Run-scoped sync must write each prompt to the canonical
-    // `<stem>.prompts/<id>.md` (where every reader looks) — never the flat
-    // `prompts/<id>.md` dir that no reader consults.
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path();
-    write_test_pipeline(dir, "auto-issue");
-    let state = test_state_with_dir(dir).await;
-
-    let mut prompts = HashMap::new();
-    prompts.insert("worker".to_string(), "the role prompt".to_string());
-
-    let yaml = std::fs::read_to_string(dir.join(".pdo").join("pipelines").join("auto-issue.yaml"))
-        .unwrap();
-    sync_run_pipeline_to_template(&state, "run-xyz", "auto-issue", &yaml, &prompts);
-
-    let pipelines = dir.join(".pdo").join("pipelines");
-    let canonical = pipelines.join("auto-issue.prompts").join("worker.md");
-    let flat = pipelines.join("prompts").join("worker.md");
-
-    assert_eq!(
-        std::fs::read_to_string(&canonical).unwrap(),
-        "the role prompt",
-        "prompt must be written to the canonical <stem>.prompts/ dir"
-    );
-    assert!(
-        !flat.exists(),
-        "the flat prompts/ dir must never be written"
-    );
-}
 
 #[test]
 fn sanitize_image_filename_accepts_valid_extensions() {

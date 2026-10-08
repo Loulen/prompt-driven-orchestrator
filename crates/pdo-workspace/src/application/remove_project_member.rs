@@ -52,7 +52,7 @@ impl Workspace {
             .remove_member(path)
             .await
             .map_err(|e| StorageError(format!("failed to remove member from project {id}: {e}")))?;
-        self.events.project_changed(id);
+        self.events.project_changed(id).await;
         Ok(MemberRemoved::Detached(
             self.projects.get(id).await.ok().flatten(),
         ))

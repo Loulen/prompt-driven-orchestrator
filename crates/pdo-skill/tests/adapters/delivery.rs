@@ -260,7 +260,13 @@ fn the_completion_commit_filters_a_skill_the_agent_force_added() {
         &["add", "-f", ".agents/skills/tdd", ".claude/skills/tdd"],
     );
     std::fs::write(wt.join("work.txt"), "done\n").unwrap();
-    let sha = stage_and_commit(&wt, "n", 1).unwrap();
+    let sha = stage_and_commit(
+        &wt,
+        "n",
+        1,
+        &pdo_workspace::adapters::git::worktrees::CommitIdentity::default(),
+    )
+    .unwrap();
     assert!(sha.is_some());
     let files = git(&wt, &["show", "--name-only", "--format=", "HEAD"]);
     assert_eq!(files.trim(), "work.txt");

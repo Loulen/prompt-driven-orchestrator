@@ -173,7 +173,8 @@ impl RecordingEvents {
 }
 
 impl ProjectEvents for RecordingEvents {
-    fn project_changed(&self, project_id: &str) {
+    fn project_changed<'a>(&'a self, project_id: &'a str) -> BoxFuture<'a, ()> {
         self.0.lock().unwrap().push(project_id.to_string());
+        ready(())
     }
 }

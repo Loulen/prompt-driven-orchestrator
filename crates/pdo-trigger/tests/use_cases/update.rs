@@ -6,7 +6,7 @@ use pdo_trigger::domain::trigger::Trigger;
 use pdo_trigger::domain::trigger::UpdateTrigger;
 use serde_json::json;
 
-use crate::fakes::{world, World, REPO};
+use crate::fakes::{read_guard, world, World, REPO};
 
 fn patch(body: serde_json::Value) -> PatchTriggerRequest {
     serde_json::from_value(body).unwrap()
@@ -72,7 +72,7 @@ async fn a_disable_journals_before_true_and_after_false() {
     assert_eq!(e.after.as_ref().unwrap()["enabled"], false);
     assert_eq!(
         w.announced(),
-        vec![json!({ "type": "trigger_updated", "trigger_id": id })]
+        vec![json!({ "type": "trigger_updated", "trigger_id": id, "read_guard": read_guard(&id) })]
     );
     assert_eq!(
         w.host.asked.lock().unwrap().last().cloned(),

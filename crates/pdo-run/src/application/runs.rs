@@ -18,8 +18,8 @@ use pdo_pipeline::adapters::self_writes::SelfWrites;
 use pdo_pipeline::application::ports::SkillBank;
 
 use super::ports::{
-    DeclaredWaits, EventStore, InstanceSettings, LiveFacts, ManagerSessions, NodeSkills, Projects,
-    RunDirWatch, RunPages,
+    DeclaredWaits, EventStore, InstanceSettings, LiveFacts, ManagerSessions, NodeSkills,
+    PipelineTriggers, Projects, RunDirWatch, RunPages, SourcePipelines,
 };
 use super::read_run::ReadRun;
 
@@ -55,6 +55,11 @@ pub struct RunsPorts {
     /// The daemon's own writes, which the pipeline watcher does not announce:
     /// an edit of the run-scoped pipeline marks what it writes.
     pub self_writes: SelfWrites,
+    /// The shared pipelines a Run's snapshot may overwrite (the pipeline
+    /// context's registry, ADR-0085).
+    pub source_pipelines: Arc<dyn SourcePipelines>,
+    /// The Triggers that fire a pipeline (the trigger context).
+    pub pipeline_triggers: Arc<dyn PipelineTriggers>,
     /// Asked before every gesture of an actor, never before a transition.
     pub extensions: Arc<dyn ExtensionHost>,
 }
@@ -98,6 +103,8 @@ pub struct Runs {
     pub(crate) pages: Arc<dyn RunPages>,
     pub(crate) run_dirs: Arc<dyn RunDirWatch>,
     pub(crate) self_writes: SelfWrites,
+    pub(crate) source_pipelines: Arc<dyn SourcePipelines>,
+    pub(crate) pipeline_triggers: Arc<dyn PipelineTriggers>,
     extensions: Arc<dyn ExtensionHost>,
     pub(crate) repo_root: PathBuf,
     pub(crate) port: u16,
@@ -157,6 +164,8 @@ impl Runs {
             pages,
             run_dirs,
             self_writes,
+            source_pipelines,
+            pipeline_triggers,
             extensions,
         } = ports;
         Arc::new(Self {
@@ -175,6 +184,8 @@ impl Runs {
             pages,
             run_dirs,
             self_writes,
+            source_pipelines,
+            pipeline_triggers,
             extensions,
             repo_root: options.repo_root.clone(),
             port: options.daemon_port,

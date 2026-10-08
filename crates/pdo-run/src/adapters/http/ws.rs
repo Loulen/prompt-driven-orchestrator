@@ -8,7 +8,10 @@
 //! [`READ_DECISION_TTL`], so a busy Run asks once per few seconds, not once
 //! per event; a change of rights shows within that delay. A `trigger_fired`
 //! still reaches the connection, without the `run_id` of a Run it may not
-//! read. The other messages (Triggers, pipelines, Projets, the extensions'
+//! read. A message guarded by a read ([`READ_GUARD`]: what a Trigger
+//! announces, in its Projets) and an `operation_applied` on a Trigger reach
+//! a connection only if its Actor may run that read; the guard never leaves
+//! the daemon. The other messages (pipelines, Projets, the extensions'
 //! events…) pass as before.
 //!
 //! The client's Close frame is answered before the connection ends (ADR-0083
@@ -26,7 +29,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use futures_util::SinkExt;
-use pdo_kernel::Actor;
+use pdo_kernel::authorization::authorize_read;
+use pdo_kernel::event_bus::READ_GUARD;
+use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use pdo_session::adapters::http::origin::check_origin;
 use pdo_session::adapters::http::ws_log::{self, Closing, NO_STATUS};
 use serde_json::Value;
@@ -141,6 +146,8 @@ struct Visibility<'a> {
     runs: &'a Runs,
     actor: Actor,
     decisions: HashMap<String, (bool, Instant)>,
+    /// The decisions on the guarded reads, by the read's JSON.
+    guards: HashMap<String, (bool, Instant)>,
 }
 
 impl<'a> Visibility<'a> {
@@ -149,14 +156,23 @@ impl<'a> Visibility<'a> {
             runs,
             actor,
             decisions: HashMap::new(),
+            guards: HashMap::new(),
         }
     }
 
     /// What of `message` reaches the connection: all of it, the message
-    /// without the Run it may not read, or nothing.
+    /// without the Run it may not read, or nothing. Never its guard.
     async fn filter(&mut self, mut message: Value) -> Option<Value> {
+        let guard = message
+            .as_object_mut()
+            .and_then(|fields| fields.remove(READ_GUARD));
         if self.runs.extensions().allows_everything() {
             return Some(message);
+        }
+        if let Some(read) = guard.or_else(|| trigger_read_of(&message)) {
+            if !self.may_run(read) {
+                return None;
+            }
         }
         if let Some((run_id, gone)) = run_of_message(&message) {
             let run_id = run_id.to_string();
@@ -185,10 +201,31 @@ impl<'a> Visibility<'a> {
         readable
     }
 
+    /// Whether the connection may run the guarded `read` (an Operation's
+    /// JSON). A guard that is no read Operation refuses.
+    fn may_run(&mut self, read: Value) -> bool {
+        let key = read.to_string();
+        if let Some((allowed, at)) = self.guards.get(&key) {
+            if at.elapsed() < READ_DECISION_TTL {
+                return *allowed;
+            }
+        }
+        let allowed = match serde_json::from_value::<Operation>(read) {
+            Ok(read) if read.is_read() => {
+                authorize_read(self.runs.extensions(), &self.actor, &read).is_ok()
+            }
+            _ => false,
+        };
+        self.guards.insert(key, (allowed, Instant::now()));
+        allowed
+    }
+
     /// Drop the decisions nobody needs any more.
     fn forget_old(&mut self) {
         self.decisions
             .retain(|_, (_, at)| at.elapsed() < FORGET_DECISIONS_AFTER);
+        self.guards
+            .retain(|_, (_, at)| at.elapsed() < READ_DECISION_TTL);
     }
 }
 
@@ -214,6 +251,26 @@ fn run_of_message(message: &Value) -> Option<(&str, bool)> {
         }
         _ => None,
     }
+}
+
+/// The read of the Trigger an `operation_applied` on a Trigger is about, in
+/// the Projets of its Operation: its target, or the Trigger it created.
+fn trigger_read_of(message: &Value) -> Option<Value> {
+    if message["type"] != "operation_applied" {
+        return None;
+    }
+    let operation: Operation = serde_json::from_value(message["operation"].clone()).ok()?;
+    if operation.resource != ResourceKind::Trigger {
+        return None;
+    }
+    let target = match operation.target {
+        Some(target) => target,
+        None => message["entity"]["id"].as_str()?.to_string(),
+    };
+    let read = Operation::new(ResourceKind::Trigger, Verb::Read)
+        .on(target)
+        .in_projects(operation.projects);
+    serde_json::to_value(read).ok()
 }
 
 /// The Run a message about something else names in passing: the Run a
@@ -293,6 +350,37 @@ mod tests {
         );
         assert_eq!(
             run_mentioned_by(&json!({ "type": "event", "event": { "run_id": "r1" } })),
+            None
+        );
+    }
+
+    #[test]
+    fn an_operation_on_a_trigger_is_guarded_by_its_read_in_its_projets() {
+        let applied = |target: Value| {
+            json!({
+                "type": "operation_applied",
+                "operation": {
+                    "resource": "trigger", "verb": "update", "target": target, "projects": ["p2"],
+                },
+                "entity": { "kind": "trigger", "id": "t9" },
+            })
+        };
+        let read = |id: &str| json!({ "resource": "trigger", "verb": "read", "target": id, "projects": ["p2"] });
+        assert_eq!(trigger_read_of(&applied(json!("t1"))), Some(read("t1")));
+        assert_eq!(
+            trigger_read_of(&applied(Value::Null)),
+            Some(read("t9")),
+            "a creation is about the Trigger it produced"
+        );
+        assert_eq!(
+            trigger_read_of(&json!({
+                "type": "operation_applied",
+                "operation": { "resource": "run", "verb": "delete", "target": "r1" },
+            })),
+            None
+        );
+        assert_eq!(
+            trigger_read_of(&json!({ "type": "trigger_updated", "trigger_id": "t1" })),
             None
         );
     }

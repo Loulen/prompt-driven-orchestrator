@@ -232,6 +232,32 @@ impl TestDaemon {
         })
     }
 
+    /// [`TestDaemon::spawn_with_extensions`] over an existing `repo_root`
+    /// (and its `.pdo/pdo.db`): what a daemon restarted with extensions finds.
+    pub async fn spawn_at_with_extensions(
+        repo_root: &Path,
+        extensions: Vec<Box<dyn pdo::extension_api::Extension>>,
+    ) -> Result<Self> {
+        let tempdir = tempfile::tempdir()?;
+        let mut config = DaemonConfig {
+            tmux_cmd_override: Some("exec sleep 600".to_string()),
+            sandbox_home_override: Some(tempdir.path().join("home")),
+            ..DaemonConfig::default()
+        };
+        pdo::compose(&mut config, extensions, None)?;
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            repo_root.to_path_buf(),
+            config,
+        )
+        .await?;
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
     /// Spawn a daemon whose sandbox wiring shells out to a **fake `docker`** (#407).
     ///
     /// `docker_cmd` is the command every sandbox docker call runs instead of the

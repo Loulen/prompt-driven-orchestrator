@@ -11,6 +11,10 @@ use pdo_extension_api::{
 use super::{ExtensionHost, Extensions, Registry};
 use crate::{Actor, Operation};
 
+/// The announcement of a change of the Triggers on `/ws`; without
+/// `trigger_id`, it is about them all.
+pub(super) const TRIGGER_UPDATED: &str = "trigger_updated";
+
 /// The [`Host`] of one extension, `id`.
 pub(super) struct ExtensionHostOf {
     pub(super) id: String,
@@ -68,6 +72,20 @@ impl Host for ExtensionHostOf {
         match self.extensions() {
             Some(extensions) => ExtensionHost::catalogue(&extensions),
             None => pdo_extension_api::core_resources(),
+        }
+    }
+
+    fn project_name(&self, project_id: &str) -> Option<String> {
+        self.registry
+            .upgrade()?
+            .project_names
+            .get()?
+            .name(project_id)
+    }
+
+    fn triggers_changed(&self) {
+        if let Some(extensions) = self.extensions() {
+            extensions.broadcast(serde_json::json!({ "type": TRIGGER_UPDATED }));
         }
     }
 

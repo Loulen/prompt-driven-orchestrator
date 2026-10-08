@@ -200,6 +200,21 @@ pub(super) async fn save_pipeline(
     runs.save_run_pipeline(&actor, &run_id, request).await
 }
 
+pub(super) async fn overwrite_preview(
+    State(runs): State<Arc<Runs>>,
+    Path(run_id): Path<String>,
+) -> Response {
+    runs.overwrite_preview(&run_id).await
+}
+
+pub(super) async fn overwrite_default(
+    State(runs): State<Arc<Runs>>,
+    Extension(actor): Extension<Actor>,
+    Path(run_id): Path<String>,
+) -> Response {
+    runs.overwrite_default_pipeline(&actor, &run_id).await
+}
+
 pub(super) async fn edit_repos(
     State(runs): State<Arc<Runs>>,
     Extension(actor): Extension<Actor>,

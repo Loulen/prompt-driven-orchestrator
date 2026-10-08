@@ -1,8 +1,10 @@
 //! What the trigger context reads of the other contexts, behind its own ports:
 //! the Runs a fire starts (`runs`), the repositories it names
 //! (`repositories`), the pipelines it fires, the staging profiles its `sandbox`
-//! names and the audit journal (here).
+//! names and the audit journal (here); and the Triggers as the run context
+//! reads them (`pipeline_triggers`).
 
+mod pipeline_triggers;
 mod repositories;
 mod runs;
 
@@ -15,8 +17,9 @@ use pdo_platform::Platform;
 use pdo_run::application::paths::resolve_pipeline_path;
 use pdo_sandbox::application::ports::SandboxProfileRepository;
 
+pub use pipeline_triggers::TriggersOfRuns;
 pub use repositories::GitRepositories;
-pub use runs::RunsOfTriggers;
+pub use runs::{ProjectsOfRuns, RunsOfTriggers};
 
 use crate::application::ports::{
     AuditTrail, BoxFuture, PipelineFacts, SandboxProfiles, TriggerPipelines,

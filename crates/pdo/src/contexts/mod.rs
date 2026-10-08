@@ -1,9 +1,10 @@
 //! The wiring of the bounded contexts (ADR-0079): each context's adapters
 //! plugged onto its ports, over the resources the boot opened, one file per
 //! context. The order follows the context map: a context is wired after the
-//! ones it reads. The two that read a context wired after them (the session
-//! context's Run-side ports, the page mounts the Runs release) get it through
-//! a [`Late`] handle, bound here once everything is wired.
+//! ones it reads. The ones that read a context wired after them (the session
+//! context's Run-side ports, the page mounts the Runs release, the shared
+//! pipelines a Run overwrites) get it through a [`Late`] handle, bound here
+//! once everything is wired.
 
 mod pipeline;
 mod platform;
@@ -82,6 +83,9 @@ pub struct ContextResources {
     pub panic_on_trigger_name: Option<String>,
     pub price_source_url: Option<String>,
     pub price_refresh_at_boot: bool,
+    /// The names of the Projets the extensions read (API 0.11): the
+    /// workspace context keeps them current, the boot fills them.
+    pub project_names: Arc<pdo_kernel::project_names::ProjectNames>,
 }
 
 /// The contexts, wired: the handles the daemon drives (its loops, its test
@@ -120,6 +124,7 @@ pub(crate) fn wire_over(
     };
     let late_runs = Late::new();
     let late_platform = Late::new();
+    let late_pipelines = Late::new();
     let workspace = workspace::workspace(&r, host.clone());
     let skills = skill::skills(&r.db, &r.repo_root, host.clone());
     let sandbox = sandbox::router(&r, host.clone());
@@ -131,6 +136,7 @@ pub(crate) fn wire_over(
         skills: &skills,
         stored: &stored,
         platform: &late_platform,
+        pipelines: &late_pipelines,
         host: host.clone(),
     });
     let review = review::review(&run, &stored, host.clone());
@@ -149,6 +155,7 @@ pub(crate) fn wire_over(
     let settings = settings::settings(&r, stored, &platform, host.clone());
     late_runs.set(&run);
     late_platform.set(&platform);
+    late_pipelines.set(&pipelines);
 
     // ROUTER TRAP: any NEW top-level path prefix (`/nodes`, `/stats`, `/fs`,
     // `/audit`, `/projects`, …) also needs its own entry in the Vite dev proxy
@@ -266,6 +273,7 @@ pub(crate) mod testing {
                 panic_on_trigger_name: None,
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                project_names: Default::default(),
             };
             let host = Arc::new(pdo_kernel::extension_host::NoExtensions);
             let contexts = match options.tmux {

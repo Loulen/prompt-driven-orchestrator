@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Save, X } from "lucide-react";
 import { useEditStore } from "../store/editStore";
-import { hasUnsavedWork } from "../store/editState";
+import { hasUnsavedWork, isRunTabLocked } from "../store/editState";
 import type { OpenPipeline } from "../store/editState";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
+import RunSaveGroup from "./RunSaveGroup";
 import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
 import type { PipelineEntity } from "../../shared/extensions/contract";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "../../shared/ui/dropdown-menu";
@@ -59,6 +60,10 @@ export default function TabBar() {
   );
 
   const anyDirty = openTabs.some((t) => t.dirty);
+  // ADR-0085: a Run tab in « pilotage » (or archived) has nothing to save, so no
+  // Save is shown; in « Edit for this run » Save writes the Run's snapshot only.
+  const activeTab = openTabs.find((t) => t.id === activeTabId);
+  const activeLocked = isRunTabLocked(activeTab);
   const activeLastSaved = activeTabId ? lastSavedAt[activeTabId] : undefined;
   const savedAgo = useRelativeTime(activeLastSaved);
 
@@ -136,16 +141,20 @@ export default function TabBar() {
             {savedAgo}
           </span>
         )}
-        <button
-          onClick={() => { if (activeTabId) save(activeTabId); }}
-          disabled={!anyDirty}
-          className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
-          style={{ fontSize: "11px" }}
-          data-testid="save-button"
-        >
-          <Save size={11} />
-          Save
-        </button>
+        {activeTab?.runId != null && !activeLocked ? (
+          <RunSaveGroup tab={{ ...activeTab, runId: activeTab.runId }} />
+        ) : activeLocked ? null : (
+          <button
+            onClick={() => { if (activeTabId) save(activeTabId); }}
+            disabled={!anyDirty}
+            className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+            style={{ fontSize: "11px" }}
+            data-testid="save-button"
+          >
+            <Save size={11} />
+            Save
+          </button>
+        )}
       </div>
     </div>
 

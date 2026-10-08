@@ -91,7 +91,7 @@ impl Workspace {
         }
         match self.projects.get(id).await.map_err(failed("reload"))? {
             Some(project) => {
-                self.events.project_changed(id);
+                self.events.project_changed(id).await;
                 Ok(project)
             }
             None => Err(WorkspaceError::NotFound),

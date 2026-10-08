@@ -89,7 +89,9 @@ impl Triggers {
         hint: ActorHint,
         req: CreateTriggerRequest,
     ) -> Result<Trigger, TriggerError> {
-        self.authorize(actor, &operation(Verb::Create, None))?;
+        let create = operation(Verb::Create, None)
+            .in_projects(self.projects_of_repo(req.target_repo.as_deref()).await);
+        self.authorize(actor, &create)?;
         if !rules::valid_name(&req.name) {
             return Err(TriggerError::Invalid(EMPTY_NAME.to_string()));
         }
@@ -179,10 +181,14 @@ impl Triggers {
             error!("failed to create trigger: {e}");
             TriggerError::Storage("failed to persist trigger".to_string())
         })?;
-        self.announce(serde_json::json!({
-            "type": "trigger_created",
-            "trigger_id": trigger.id,
-        }));
+        let read = operation(Verb::Read, Some(&trigger.id)).in_projects(create.projects.clone());
+        self.announce_about(
+            serde_json::json!({
+                "type": "trigger_created",
+                "trigger_id": trigger.id,
+            }),
+            &read,
+        );
         self.journal(
             hint,
             "trigger.created",

@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.25.0 — Output intermédiaire (CORE-45)
+
+- **Output intermédiaire** : un output port peut être coché « intermediate » (champ
+  `intermediate: true` du port, omis quand il est faux). L'agent le remplit et le met à jour
+  pendant son travail, le préambule le liste à part avec sa consigne, et la ligne du panneau
+  de nœud le suit en direct. `pdo complete` ne le vérifie jamais, un skip n'écrit rien pour lui.
+- **Refus nouveau au parse** : un Pipeline dont une edge porte un Output intermédiaire est
+  refusé, avec le port et l'edge en cause. Un Pipeline sans l'option ne change pas.
+- La réponse de `GET /runs/{id}/nodes/{node}/io` porte `intermediate` sur chaque port, et le
+  `PortBrief` des `node_defs` d'un Run le porte quand il est vrai.
+
 ## 2.24.0 — Gestes selon les Droits, flux gardé par la lecture (CORE-42)
 
 `pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée

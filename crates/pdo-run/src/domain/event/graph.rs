@@ -30,6 +30,12 @@ pub struct PortBrief {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
+    /// An *Output intermédiaire* (CONTEXT.md): shown to humans while the node
+    /// works, never checked, never wired. Absent from the wire when `false`,
+    /// so a pre-option snapshot reads unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional = nullable)]
+    pub intermediate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -72,6 +78,7 @@ fn port_brief(p: &pipeline::Port, default_side: &str) -> PortBrief {
             .map(|s| s.to_string())
             .unwrap_or_else(|| default_side.into()),
         description: p.description.clone(),
+        intermediate: p.intermediate,
     }
 }
 

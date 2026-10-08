@@ -130,113 +130,136 @@ pub(super) fn push_inputs(
     }
 }
 
-/// What the node writes: each output port, with its schema and conduct.
+/// What the node writes: each ordinary output port, with its schema and conduct,
+/// then its *Outputs intermédiaires* apart, with the conduct they call for.
 pub(super) fn push_outputs(
     preamble: &mut String,
     ctx: &AugmentContext<'_>,
     outputs: &[OutputDeclaration],
 ) {
+    let (intermediate, ordinary): (Vec<_>, Vec<_>) =
+        outputs.iter().partition(|output| output.intermediate);
+
     preamble.push_str("## Outputs\n\n");
-    if outputs.is_empty() {
+    if ordinary.is_empty() {
         preamble.push_str("No outputs declared.\n\n");
     } else {
-        let ext_list = IMAGE_EXTENSIONS.join(", .");
-        for output in outputs {
-            let instructions = (ctx.node.node_type == NodeType::Agent)
-                .then(|| {
-                    ctx.node
-                        .outputs
-                        .iter()
-                        .find(|port| port.name == output.port_name)
-                        .and_then(|port| port.instructions.as_deref())
-                })
-                .flatten();
-            match output.port_type {
-                PortType::Image => {
-                    preamble.push_str(&format!(
-                        "- `{}` (image): drop exactly one image file in `{}`\n",
-                        output.port_name,
-                        output.path.display(),
-                    ));
-                    append_output_instructions(preamble, instructions);
-                    preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
-                }
-                PortType::ImageList => {
-                    preamble.push_str(&format!(
-                        "- `{}` (image_list): drop one or more image files in `{}`\n",
-                        output.port_name,
-                        output.path.display(),
-                    ));
-                    append_output_instructions(preamble, instructions);
-                    preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
-                }
-                PortType::Markdown => {
-                    preamble.push_str(&format!(
-                        "- `{}`: write to `{}`\n",
-                        output.port_name,
-                        output.path.display()
-                    ));
-                    append_output_instructions(preamble, instructions);
-
-                    let schema = ctx
-                        .node
-                        .outputs
-                        .iter()
-                        .find(|p| p.name == output.port_name)
-                        .and_then(|p| p.frontmatter.as_ref());
-
-                    if let Some(schema) = schema {
-                        preamble.push_str("  Required YAML frontmatter:\n");
-                        for (field_name, field_decl) in schema {
-                            if let Some(ref allowed) = field_decl.allowed {
-                                preamble.push_str(&format!(
-                                    "  - `{}`: {} (allowed: {})\n",
-                                    field_name,
-                                    field_decl.field_type,
-                                    allowed.join(", ")
-                                ));
-                            } else {
-                                preamble.push_str(&format!(
-                                    "  - `{}`: {}\n",
-                                    field_name, field_decl.field_type
-                                ));
-                            }
-                        }
-                    }
-                }
-                // No frontmatter block, and the agent must know the page renders
-                // offline in a scriptless sandboxed iframe (ADR-0028).
-                PortType::Html => {
-                    preamble.push_str(&format!(
-                        "- `{}` (html): write a single self-contained HTML file to `{}`\n",
-                        output.port_name,
-                        output.path.display(),
-                    ));
-                    append_output_instructions(preamble, instructions);
-                    preamble.push_str(
-                        "  Inline all CSS in a `<style>` tag and use no external network \
-                         requests (no CDN links, web fonts, or remote assets) — the artifact is \
-                         rendered offline.\n\
-                         \x20 **JavaScript will NOT run**: the file is displayed in a sandboxed \
-                         iframe with scripts disabled. Do not rely on `<script>`, inline event \
-                         handlers, or any interactivity — everything must be conveyed through \
-                         static HTML and CSS.\n",
-                    );
-                }
-            }
-        }
-
-        fn append_output_instructions(preamble: &mut String, instructions: Option<&str>) {
-            if let Some(instructions) = instructions {
-                let mut lines = instructions.lines();
-                if let Some(first_line) = lines.next() {
-                    preamble.push_str(&format!("  Expected content: {first_line}\n"));
-                }
-                for line in lines {
-                    preamble.push_str(&format!("  {line}\n"));
-                }
-            }
+        for output in ordinary {
+            push_output_entry(preamble, ctx, output);
         }
         preamble.push('\n');
+    }
+
+    if !intermediate.is_empty() {
+        preamble.push_str("## Intermediate outputs\n\n");
+        preamble.push_str(
+            "These outputs let the humans follow your work while you do it. Fill each \
+             one **early**, then **update it as you work**. They are **never checked**: \
+             `pdo complete` ignores them (presence, content, frontmatter), and no other \
+             node reads them. Write every update in one go: write a temporary file next \
+             to the target, then rename it onto the target path, so nobody reads a \
+             half-written file.\n",
+        );
+        for output in intermediate {
+            push_output_entry(preamble, ctx, output);
+        }
+        preamble.push('\n');
+    }
+}
+
+/// One output port's line: where to write it, its expected content, and the
+/// format constraints of its type. An intermediate output never describes a
+/// frontmatter schema: nothing would validate it.
+fn push_output_entry(preamble: &mut String, ctx: &AugmentContext<'_>, output: &OutputDeclaration) {
+    let ext_list = IMAGE_EXTENSIONS.join(", .");
+    let port = ctx
+        .node
+        .outputs
+        .iter()
+        .find(|port| port.name == output.port_name);
+    let instructions = (ctx.node.node_type == NodeType::Agent)
+        .then(|| port.and_then(|port| port.instructions.as_deref()))
+        .flatten();
+    match output.port_type {
+        PortType::Image => {
+            preamble.push_str(&format!(
+                "- `{}` (image): drop exactly one image file in `{}`\n",
+                output.port_name,
+                output.path.display(),
+            ));
+            append_output_instructions(preamble, instructions);
+            preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
+        }
+        PortType::ImageList => {
+            preamble.push_str(&format!(
+                "- `{}` (image_list): drop one or more image files in `{}`\n",
+                output.port_name,
+                output.path.display(),
+            ));
+            append_output_instructions(preamble, instructions);
+            preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
+        }
+        PortType::Markdown => {
+            preamble.push_str(&format!(
+                "- `{}`: write to `{}`\n",
+                output.port_name,
+                output.path.display()
+            ));
+            append_output_instructions(preamble, instructions);
+
+            let schema = port
+                .filter(|_| !output.intermediate)
+                .and_then(|p| p.frontmatter.as_ref());
+
+            if let Some(schema) = schema {
+                preamble.push_str("  Required YAML frontmatter:\n");
+                for (field_name, field_decl) in schema {
+                    if let Some(ref allowed) = field_decl.allowed {
+                        preamble.push_str(&format!(
+                            "  - `{}`: {} (allowed: {})\n",
+                            field_name,
+                            field_decl.field_type,
+                            allowed.join(", ")
+                        ));
+                    } else {
+                        preamble.push_str(&format!(
+                            "  - `{}`: {}\n",
+                            field_name, field_decl.field_type
+                        ));
+                    }
+                }
+            }
+        }
+        // No frontmatter block, and the agent must know the page renders
+        // offline in a scriptless sandboxed iframe (ADR-0028).
+        PortType::Html => {
+            preamble.push_str(&format!(
+                "- `{}` (html): write a single self-contained HTML file to `{}`\n",
+                output.port_name,
+                output.path.display(),
+            ));
+            append_output_instructions(preamble, instructions);
+            preamble.push_str(
+                "  Inline all CSS in a `<style>` tag and use no external network \
+                 requests (no CDN links, web fonts, or remote assets) — the artifact is \
+                 rendered offline.\n\
+                 \x20 **JavaScript will NOT run**: the file is displayed in a sandboxed \
+                 iframe with scripts disabled. Do not rely on `<script>`, inline event \
+                 handlers, or any interactivity — everything must be conveyed through \
+                 static HTML and CSS.\n",
+            );
+        }
+    }
+}
+
+fn append_output_instructions(preamble: &mut String, instructions: Option<&str>) {
+    if let Some(instructions) = instructions {
+        let mut lines = instructions.lines();
+        if let Some(first_line) = lines.next() {
+            preamble.push_str(&format!("  Expected content: {first_line}\n"));
+        }
+        for line in lines {
+            preamble.push_str(&format!("  {line}\n"));
+        }
     }
 }

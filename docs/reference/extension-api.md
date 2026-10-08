@@ -245,6 +245,11 @@ The same list comes from `Host::catalogue()` inside the daemon, and `core_resour
 `catalogue(manifests)` build it without a daemon. An extension of rights reads it to list what
 rights can be set on, without knowing the other extensions.
 
+`pipeline` × `validate` (0.11) sets the Projets a Pipeline is offered to by the launch forms
+(`PUT /pipelines/{id}/validation`, CONTEXT.md « Pipeline validé »). Targeted on the Pipeline's id,
+in no Projet: a Pipeline belongs to the instance. An extension of rights that maps the Pipeline
+verbs maps this one too, or the Validate button is refused.
+
 ## The launch of a Node (0.8)
 
 `node_env` and `node_preamble` receive a `NodeLaunch`: `run_id`, `node_id`, `iter`, `kind`

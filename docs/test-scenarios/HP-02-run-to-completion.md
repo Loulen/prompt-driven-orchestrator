@@ -71,7 +71,8 @@ Features validated while crossing the run screens (grafted from retired per-issu
 1. Open the **New Run** modal → **pick a repo** (use the explorer loupe to browse and select a git
    repo; the field validates with a green border + branch loading).
 2. Choose a pipeline, **enter a prompt** (optionally attach an input image) → **Launch**; capture the
-   resulting run.
+   resulting run. A pipeline created for the journey is born a **test pipeline** (CONTEXT.md
+   « Pipeline validé »): unfold « Show test pipelines » in the menu, or Validate it first.
 3. The canvas shows the **Start node** (▶) and **End node** (◯) with the dataflow between them; within
    a couple of seconds the first work node animates to **running**.
 4. Select the running node → the right panel shows a **live terminal preview** (real `claude` TUI,

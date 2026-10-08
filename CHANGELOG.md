@@ -10,6 +10,28 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.23.0 — Pipelines validés par Projet (CORE-39)
+
+`pdo-extension-api` reste en **0.11.0** : la Ressource `pipeline` gagne le verbe `validate`.
+Détail : `docs/reference/extension-api.md` (« The catalogue of the Ressources »).
+
+- **Les Pipelines créés, dupliqués ou importés après la mise à jour sont des Pipelines de test**
+  tant que personne ne les valide : New Run et le formulaire de Trigger ne les proposent que
+  derrière « Show test pipelines ». Les Pipelines existants restent proposés partout (aucune
+  validation enregistrée = tous les Projets). Un renommage garde la validation, une suppression
+  l'oublie, un export ne l'emporte pas.
+- Supprimer un Projet le retire des validations ; un Pipeline validé pour ce seul Projet devient
+  un Pipeline de test.
+- API : `GET /pipelines` expose `validation` (`{"kind":"all"}`, `{"kind":"none"}` ou
+  `{"kind":"projects","project_ids":[…]}`) ; `PUT /pipelines/{id}/validation` la remplace
+  (`404` Pipeline inconnu, `400` Projet inconnu) et diffuse `pipeline_validation_changed`.
+  Le filtre est celui des formulaires : la création d'un Run accepte tout Pipeline.
+- **Nouveau verbe à mapper** par une extension de Droits : `pipeline` × `validate`. Une extension
+  qui ne le connaît pas et refuse les verbes inconnus refuse désormais le bouton Validate.
+- Tutoriels : étape « Validate the pipeline » dans *First pipeline* ; *First run* crée ou
+  réutilise le Projet « Tutorial », y range le dépôt du tutoriel et valide `tutorial-interactive`
+  pour lui seul.
+
 ## 2.22.0 — Livraison signée par l'identité git du Node (CORE-43)
 
 `pdo-extension-api` reste en **0.11.0** : seule la documentation de `node_env` change. Détail :

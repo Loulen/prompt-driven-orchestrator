@@ -222,7 +222,7 @@ export function InfoTab({
           >
             {run.status === "archived"
               ? "Archived run · read-only · outputs preserved"
-              : "Canvas edits sync to template · run settings are read-only"}
+              : "Canvas edits apply to this run only · run settings are read-only"}
           </div>
         )}
       </div>

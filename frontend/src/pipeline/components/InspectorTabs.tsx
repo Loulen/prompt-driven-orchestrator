@@ -4,12 +4,16 @@ import type { InspectorTab } from "../../hooks/useInspectorTab";
 interface Props {
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
+  /** ADR-0085: a Run followed in « pilotage » (or archived): the second pane is
+   *  the node's read-only « Config », and the tab says so. */
+  configMode?: boolean;
   children: ReactNode;
 }
 
 export default function InspectorTabs({
   activeTab,
   onTabChange,
+  configMode = false,
   children,
 }: Props) {
   return (
@@ -24,8 +28,8 @@ export default function InspectorTabs({
         <TabButton
           active={activeTab === "edit"}
           onClick={() => onTabChange("edit")}
-          label="Edit"
-          testId="inspector-tab-edit"
+          label={configMode ? "Config" : "Edit"}
+          testId={configMode ? "inspector-tab-config" : "inspector-tab-edit"}
         />
       </div>
       <div className="min-h-0 flex-1">{children}</div>

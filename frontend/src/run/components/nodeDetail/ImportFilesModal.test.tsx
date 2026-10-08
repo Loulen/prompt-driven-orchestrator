@@ -85,9 +85,11 @@ describe("ImportFilesModal", () => {
     fireEvent.click(screen.getByTestId("import-submit"));
     await screen.findByTestId("import-done");
     expect(screen.getByTestId("import-done")).toHaveTextContent("2 files imported.");
-    const text = screen.getByTestId("import-text").textContent ?? "";
-    expect(text).toContain(`\`${suffixed}\``);
-    expect(text).toContain(`\`${annexe}\``);
+    const phrases = screen.getAllByTestId("import-phrase").map((p) => p.textContent);
+    expect(phrases).toEqual([
+      `I imported a file for you: \`${suffixed}\` (path relative to the worktree root).`,
+      `I imported a file for you: \`${annexe}\` (path relative to the worktree root).`,
+    ]);
   });
 
   it("over the instance budget: a clear message and Import stays off", async () => {
@@ -149,6 +151,31 @@ describe("ImportFilesModal", () => {
     const failed = await screen.findByTestId("import-send-failed");
     expect(failed).toHaveTextContent("tmux refused the paste");
     expect(failed).toHaveTextContent("in your clipboard");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("the path wraps after a slash, never in the middle of a name", async () => {
+    importMock.mockResolvedValue({ iter: 2, files: [{ name: "contrat.pdf", path: PATH, size: 4 }] });
+    setup();
+    fireEvent.click(screen.getByTestId("import-submit"));
+    await screen.findByTestId("import-done");
+    const phrase = screen.getByTestId("import-phrase");
+    expect(phrase.querySelectorAll("wbr")).toHaveLength(PATH.split("/").length - 1);
+    expect(screen.getByTestId("import-text")).not.toHaveClass("break-all");
+  });
+
+  it("a browser that only watches the terminal can copy the text, not send it", async () => {
+    importMock.mockResolvedValue({ iter: 2, files: [{ name: "contrat.pdf", path: PATH, size: 4 }] });
+    const { onClose } = setup({ sendBlockedReason: "Another browser has control of the terminal." });
+    fireEvent.click(screen.getByTestId("import-submit"));
+    await screen.findByTestId("import-done");
+    const send = screen.getByTestId("import-send");
+    expect(send).toBeDisabled();
+    expect(screen.getByTestId("import-send-blocked")).toHaveTextContent("Another browser has control");
+    fireEvent.click(send);
+    fireEvent.click(screen.getByTestId("import-copy"));
+    await waitFor(() => expect(clipboardMock).toHaveBeenCalledWith(TEXT));
+    expect(sendMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
 

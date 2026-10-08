@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Copy, FileUp, Send, X } from "lucide-react";
+import { AlertCircle, FileUp, Send, X } from "lucide-react";
 import { importNodeFiles } from "../../api/nodes";
 import { sendTextToNodeTerminal } from "../../../session/api/sessions";
 import type { ImportedFileEntry } from "../../../shared/generated/ImportedFileEntry";
@@ -13,6 +13,7 @@ import { writeClipboardText } from "../../../session/model/terminalClipboard";
 import { useSettings } from "../../../settings/store/useSettings";
 import { useFileDropTarget } from "../../../skill/store/useFileDropTarget";
 import { DropOverlay } from "../../../skill/components/SkillFileDropZone";
+import ImportedText from "./ImportedText";
 
 interface Props {
   runId: string;
@@ -25,6 +26,10 @@ interface Props {
   /** Set when the node cannot receive files (no live session): the modal says
    *  why and Import stays off. The daemon refuses the same cases anyway. */
   blockedReason?: string | null;
+  /** Set when this browser may not write into the terminal (ADR-0075: another
+   *  browser has control): « Copy & send to terminal » stays off and says why,
+   *  Copy still works. */
+  sendBlockedReason?: string | null;
   /** Closes the modal: Cancel, Done, Escape, the backdrop, or once the text
    *  went into the terminal. */
   onClose: () => void;
@@ -56,13 +61,13 @@ export default function ImportFilesModal({
   iter,
   initialFiles,
   blockedReason,
+  sendBlockedReason,
   onClose,
 }: Props) {
   const [staged, setStaged] = useState<File[]>(initialFiles);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [imported, setImported] = useState<ImportedFileEntry[] | null>(null);
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [send, setSend] = useState<SendState>({ kind: "idle" });
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -123,15 +128,12 @@ export default function ImportFilesModal({
     }
   };
 
-  const text = imported ? importedFilesText(imported.map((f) => f.path)) : "";
+  const paths = imported ? imported.map((f) => f.path) : [];
+  const text = importedFilesText(paths);
 
-  const copyText = async () => {
-    const ok = await writeClipboardText(text);
-    setCopyState(ok ? "copied" : "failed");
-    window.setTimeout(() => setCopyState("idle"), 1500);
-  };
 
   const copyAndSend = async () => {
+    if (sendBlockedReason) return;
     setSend({ kind: "sending" });
     // Copy first: it is the fallback when the terminal write does not land.
     const copied = await writeClipboardText(text);
@@ -279,22 +281,12 @@ export default function ImportFilesModal({
                 {imported.length === 1 ? "1 file imported." : `${imported.length} files imported.`} Give the agent
                 this text:
               </p>
-              <div className="relative rounded-md border border-line-strong bg-bg-1 p-3 pr-10">
-                <p className="break-all font-mono text-fg" style={{ fontSize: "11px" }} data-testid="import-text">
-                  {text}
+              <ImportedText paths={paths} text={text} />
+              {sendBlockedReason && (
+                <p className="text-fg-3" data-testid="import-send-blocked">
+                  {sendBlockedReason}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void copyText()}
-                  aria-label="Copy text"
-                  title={copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy text"}
-                  className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-bg-5 hover:text-fg"
-                  data-testid="import-copy"
-                  data-feedback={copyState === "idle" ? undefined : copyState}
-                >
-                  {copyState === "copied" ? <Check size={13} /> : <Copy size={13} />}
-                </button>
-              </div>
+              )}
               {send.kind === "failed" && (
                 <p className="text-st-failed" role="alert" data-testid="import-send-failed">
                   Could not write into the terminal ({send.message}).
@@ -342,8 +334,11 @@ export default function ImportFilesModal({
               <button
                 type="button"
                 onClick={() => void copyAndSend()}
-                disabled={send.kind === "sending"}
-                title="Writes the text into the agent's input without submitting it, and copies it"
+                disabled={send.kind === "sending" || !!sendBlockedReason}
+                title={
+                  sendBlockedReason ??
+                  "Writes the text into the agent's input without submitting it, and copies it"
+                }
                 className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc hover:opacity-90 disabled:opacity-40"
                 style={{ fontSize: "12px" }}
                 data-testid="import-send"
@@ -358,3 +353,4 @@ export default function ImportFilesModal({
     </div>
   );
 }
+

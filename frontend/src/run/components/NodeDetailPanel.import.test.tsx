@@ -44,11 +44,14 @@ vi.mock("../../session/components/TmuxTerminal", () => ({
   default: ({
     onImportFiles,
     importDisabledReason,
+    onSpectatingChange,
   }: {
     onImportFiles?: (files: File[]) => void;
     importDisabledReason?: string | null;
+    onSpectatingChange?: (spectating: boolean) => void;
   }) => (
     <div data-testid="tmux-terminal" data-import-reason={importDisabledReason ?? ""}>
+      <button data-testid="fake-spectate" onClick={() => onSpectatingChange?.(true)} />
       {onImportFiles && (
         <>
           <button data-testid="fake-drop" onClick={() => onImportFiles([PDF])} />
@@ -64,15 +67,21 @@ vi.mock("./nodeDetail/ImportFilesModal", () => ({
     iter,
     initialFiles,
     blockedReason,
+    sendBlockedReason,
     onClose,
   }: {
     nodeId: string;
     iter: number;
     initialFiles: File[];
     blockedReason?: string | null;
+    sendBlockedReason?: string | null;
     onClose: () => void;
   }) => (
-    <div data-testid="import-modal" data-reason={blockedReason ?? ""}>
+    <div
+      data-testid="import-modal"
+      data-reason={blockedReason ?? ""}
+      data-send-reason={sendBlockedReason ?? ""}
+    >
       {nodeId} iter {iter}: {initialFiles.map((f) => f.name).join(",") || "none"}
       <button data-testid="close-import" onClick={onClose} />
     </div>
@@ -119,6 +128,15 @@ describe("NodeDetailPanel — file import", () => {
     render(<NodeDetailPanel node={runningNode({ status: "awaiting_user" })} runId="run-1" />);
     fireEvent.click(screen.getByTestId("fake-import"));
     expect(screen.getByTestId("import-modal")).toHaveTextContent("grill iter 2: none");
+  });
+
+  it("a browser that only watches the terminal may import, not send into it", () => {
+    render(<NodeDetailPanel node={runningNode()} runId="run-1" />);
+    fireEvent.click(screen.getByTestId("fake-drop"));
+    expect(screen.getByTestId("import-modal")).toHaveAttribute("data-send-reason", "");
+    fireEvent.click(screen.getByTestId("fake-spectate"));
+    expect(screen.getByTestId("import-modal")).toHaveAttribute("data-reason", "");
+    expect(screen.getByTestId("import-modal").dataset.sendReason).toContain("take control");
   });
 
   it("an archived Run offers no import at all", () => {

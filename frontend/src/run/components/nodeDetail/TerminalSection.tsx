@@ -9,7 +9,7 @@ import {
 } from "../../../shared/ui/resizable";
 import TmuxTerminal from "../../../session/components/TmuxTerminal";
 import { terminalPlaceholder } from "../../model/nodeStatus";
-import { importBlockedReason } from "../../model/nodeImport";
+import { importBlockedReason, SEND_NEEDS_CONTROL } from "../../model/nodeImport";
 import ImportFilesModal from "./ImportFilesModal";
 import { STATUS_BORDER } from "../../../nodeStyles";
 import type { TerminalView } from "./types";
@@ -45,6 +45,7 @@ export default function TerminalSection({
   setTerminalView,
   setTerminalLive,
   setTerminalSpectating,
+  terminalSpectating = false,
   detailsPane,
   completion,
 }: {
@@ -60,6 +61,9 @@ export default function TerminalSection({
   setTerminalView: Dispatch<SetStateAction<TerminalView>>;
   setTerminalLive: (live: boolean) => void;
   setTerminalSpectating: (spectating: boolean) => void;
+  /** This browser only watches the terminal (ADR-0075): it may import, not
+   *  write into the agent's input. */
+  terminalSpectating?: boolean;
   detailsPane: ReactNode;
   completion: TerminalCompletion;
 }) {
@@ -185,6 +189,7 @@ export default function TerminalSection({
           iter={node.iter}
           initialFiles={importFiles}
           blockedReason={importReason}
+          sendBlockedReason={terminalSpectating ? SEND_NEEDS_CONTROL : null}
           onClose={closeImport}
         />
       )}

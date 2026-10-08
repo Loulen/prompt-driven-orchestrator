@@ -10,10 +10,11 @@ describe("importedFilesText", () => {
     );
   });
 
-  it("names every file of a multi-file import on one line", () => {
+  it("gives each file of a multi-file import its own phrase, on one line", () => {
     const text = importedFilesText(["a/x.pdf", "a/y.csv"]);
     expect(text).toBe(
-      "I imported 2 files for you: `a/x.pdf`, `a/y.csv` (paths relative to the worktree root).",
+      "I imported a file for you: `a/x.pdf` (path relative to the worktree root). " +
+        "I imported a file for you: `a/y.csv` (path relative to the worktree root).",
     );
     expect(text).not.toContain("\n");
   });

@@ -2,16 +2,23 @@
 
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 
-/** The ready-to-use text the modal hands the user once the files landed in the
- *  node's Blackboard: one line, so writing it into a terminal never submits half
- *  of it. Paths are relative to the Run's worktree root. */
-export function importedFilesText(paths: string[]): string {
-  const quoted = paths.map((p) => `\`${p}\``).join(", ");
-  if (paths.length === 1) {
-    return `I imported a file for you: ${quoted} (path relative to the worktree root).`;
-  }
-  return `I imported ${paths.length} files for you: ${quoted} (paths relative to the worktree root).`;
+/** The phrase the modal hands the user for one imported file. The path is
+ *  relative to the Run's worktree root. */
+export function importedFilePhrase(path: string): string {
+  return `I imported a file for you: \`${path}\` (path relative to the worktree root).`;
 }
+
+/** The ready-to-use text of an import: one phrase per file, joined by a space
+ *  and never a line break, so writing it into a terminal never submits half of
+ *  it. */
+export function importedFilesText(paths: string[]): string {
+  return paths.map(importedFilePhrase).join(" ");
+}
+
+/** Why « Copy & send to terminal » is off on a browser that is only watching
+ *  the terminal (ADR-0075): writing into the agent's input is the pilot's. */
+export const SEND_NEEDS_CONTROL =
+  "Another browser has control of the terminal: take control with the ✋ icon to send the text, or copy it.";
 
 /** Add `incoming` to the files staged for an import. A file with the same name
  *  replaces the staged one (the user picked it again). */

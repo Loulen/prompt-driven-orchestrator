@@ -255,6 +255,7 @@ export default function NodeDetailPanel({
         setTerminalView={setTerminalView}
         setTerminalLive={setTerminalLive}
         setTerminalSpectating={setTerminalSpectating}
+        terminalSpectating={terminalSpectating}
         // #44: the enlarged terminal carries the panel's completion gestures.
         completion={{
           showGestures:

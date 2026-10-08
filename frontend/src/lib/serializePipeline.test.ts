@@ -102,6 +102,21 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(serializePipeline(absent)).not.toContain("prompt_required");
   });
 
+  it("emits intermediate: true on an Output intermédiaire only (CORE-45)", () => {
+    const impl: EditorNodeDef = {
+      id: "impl", name: "implementer", type: "agent",
+      inputs: [],
+      outputs: [
+        { name: "code", repeated: false, side: "right" },
+        { name: "preview", repeated: false, side: "right", port_type: "html", intermediate: true },
+      ],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(makeFullPipeline([impl]));
+    expect(yaml.match(/intermediate: true/g)).toHaveLength(1);
+    expect(yaml).not.toContain("intermediate: false");
+  });
+
   it("emits a per-node model override when set (#296)", () => {
     const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",

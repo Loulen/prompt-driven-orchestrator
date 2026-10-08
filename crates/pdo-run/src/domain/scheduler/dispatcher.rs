@@ -72,6 +72,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 })
                 .collect(),
             outputs: outputs
@@ -86,6 +87,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 })
                 .collect(),
             interactive: false,

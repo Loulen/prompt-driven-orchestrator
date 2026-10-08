@@ -3,7 +3,7 @@
  * toolbar, lint banner, context menu and modals.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ReactFlow, Background, useNodesState, useEdgesState, useReactFlow, type Node, type Edge, ReactFlowProvider, ViewportPortal } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { RunState } from "../../shared/generated/RunState";
@@ -40,6 +40,7 @@ import { useCanvasReveal } from "../store/useCanvasReveal";
 import { CANVAS_FIT_VIEW_OPTIONS, usePaneToggleReframe } from "../store/usePaneToggleReframe";
 import { useCanvasRunActions } from "../store/useCanvasRunActions";
 import { useCanvasWiring } from "../store/useCanvasWiring";
+import { useCanvasNodeDragStop } from "../store/useCanvasNodeDragStop";
 import { useRunEditing } from "../store/useRunEditing";
 import FinishEditingConfirmModal from "./FinishEditingConfirmModal";
 import { EditNode } from "./EditNode";
@@ -74,12 +75,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
-  const updateNodeViews = useEditStore((s) => s.updateNodeViews);
   const addEdgeToStore = useEditStore((s) => s.addEdge);
   const updateEdge = useEditStore((s) => s.updateEdge);
   const addNodeToStore = useEditStore((s) => s.addNode);
   const addNoteToStore = useEditStore((s) => s.addNote);
-  const moveNote = useEditStore((s) => s.moveNote);
 
   // #345: id of the node whose "Export as YAML…" modal is open (null = closed),
   // and whether the "Add node from YAML…" modal is open. Both are edit-mode
@@ -204,28 +203,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     setEdges(derivedEdges);
   }, [derivedEdges, setEdges]);
 
-  const onNodeDragStop = useCallback(
-    (_: unknown, _node: Node, nodes: Node[]) => {
-      // xyflow hands us EVERY dragged node (the selected set, or just [node] for
-      // a single drag) with final positions, in ONE call (#232). Partition by
-      // type: pipeline nodes persist via `updateNodeViews`, notes via `moveNote`
-      // (#307 trap #1). A note is NOT in `pipeline.nodes`, so `updateNodeViews`
-      // would silently drop its move (unknown id → ignored) and it would snap
-      // back on the next re-derivation. Decorative loop-region boxes are skipped
-      // (draggable:false already, belt-and-suspenders against config drift).
-      const movedNodes: { id: string; x: number; y: number }[] = [];
-      for (const n of nodes) {
-        if (n.type === "loopRegion") continue;
-        if (n.type === "note") {
-          moveNote(n.id, n.position.x, n.position.y);
-          continue;
-        }
-        movedNodes.push({ id: n.id, x: n.position.x, y: n.position.y });
-      }
-      if (movedNodes.length > 0) updateNodeViews(movedNodes);
-    },
-    [updateNodeViews, moveNote],
-  );
+  const onNodeDragStop = useCanvasNodeDragStop();
 
   if (!tab || !pipeline) {
     return (

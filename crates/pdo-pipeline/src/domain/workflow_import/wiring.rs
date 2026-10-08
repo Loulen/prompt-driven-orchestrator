@@ -195,6 +195,7 @@ pub(super) fn plain_port(name: &str) -> Port {
         description: None,
         instructions: None,
         required: false,
+        intermediate: false,
     }
 }
 

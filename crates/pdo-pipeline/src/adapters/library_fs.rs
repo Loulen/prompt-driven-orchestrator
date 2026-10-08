@@ -272,6 +272,7 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
+                intermediate: false,
             }],
             outputs: vec![crate::domain::pipeline::Port {
                 name: "out".to_string(),
@@ -283,6 +284,7 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
+                intermediate: false,
             }],
             interactive: false,
             view: None,
@@ -447,6 +449,24 @@ mod tests {
     }
 
     #[test]
+    fn sync_state_diverged_when_only_the_intermediate_flag_differs() {
+        // The option is semantic: a node whose output became intermediate is not
+        // the starred node any more, and the entry file carries the flag.
+        with_temp_home(|| {
+            let node = make_node("Reviewer");
+            save(&entry_from_node(&node, "p")).unwrap();
+
+            let mut flagged = node.clone();
+            flagged.outputs[0].intermediate = true;
+            assert_eq!(sync_state(&flagged, "p"), SyncState::Diverged);
+
+            save(&entry_from_node(&flagged, "p")).unwrap();
+            assert_eq!(sync_state(&flagged, "p"), SyncState::Synced);
+            assert!(get("Reviewer").unwrap().outputs[0].intermediate);
+        });
+    }
+
+    #[test]
     fn yaml_round_trip_lossless() {
         let entry = LibraryEntry {
             on_demand: false,
@@ -467,6 +487,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 },
                 crate::domain::pipeline::Port {
                     name: "reviews".to_string(),
@@ -478,6 +499,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 },
             ],
             outputs: vec![crate::domain::pipeline::Port {
@@ -500,6 +522,7 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
+                intermediate: false,
             }],
             interactive: true,
             max_iter: Some(5),
@@ -795,6 +818,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 },
                 crate::domain::pipeline::Port {
                     name: "reviews".to_string(),
@@ -806,6 +830,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 },
             ],
             outputs: vec![crate::domain::pipeline::Port {
@@ -849,6 +874,7 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
+                intermediate: false,
             }],
             interactive: true,
             max_iter: Some(5),
@@ -893,6 +919,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 }],
                 outputs: vec![crate::domain::pipeline::Port {
                     name: "result".to_string(),
@@ -914,6 +941,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 }],
                 interactive: false,
                 max_iter: None,

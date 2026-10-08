@@ -22,8 +22,7 @@ use ts_rs::TS;
 
 use crate::adapters::http::runs::attachment_budget_mb;
 use crate::adapters::http::runs::attachments::{
-    format_attachment_bytes, multipart_cut_message, multipart_field_error,
-    sanitize_attachment_filename,
+    multipart_cut_message, multipart_field_error, sanitize_attachment_filename,
 };
 use crate::application::import_files::{ImportError, ImportFile, ImportedFile};
 use crate::Runs;
@@ -208,11 +207,12 @@ async fn read_files(
                         return Err(Box::new(refusal(
                             StatusCode::PAYLOAD_TOO_LARGE,
                             "attachments_too_large",
+                            // The upload stops at the line: its real size is
+                            // unknown here, so the message names no amount.
                             format!(
-                                "attachments exceed the per-import limit of {max_mb} MB (at \
-                                 `{name}`, {} received); raise `max_attachments_mb` in \
-                                 Settings or import less",
-                                format_attachment_bytes(total)
+                                "attachments exceed the per-import limit of {max_mb} MB (the \
+                                 limit was passed while receiving `{name}`); raise \
+                                 `max_attachments_mb` in Settings or import less"
                             ),
                         )));
                     }

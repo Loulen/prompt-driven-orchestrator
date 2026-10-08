@@ -290,7 +290,9 @@ async fn an_import_over_the_budget_is_a_413_naming_the_setting_and_writes_nothin
     assert!(
         message.contains("max_attachments_mb")
             && message.contains("big.pdf")
-            && message.ends_with("nothing imported"),
+            && message.ends_with("nothing imported")
+            // The upload is cut at the line: no partial amount to mislead.
+            && !message.contains("received"),
         "{message}"
     );
     assert!(!attachments_dir(&daemon, &run_id, NODE).exists());

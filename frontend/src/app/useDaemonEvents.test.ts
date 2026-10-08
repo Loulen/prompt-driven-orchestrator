@@ -1,6 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDaemonEvents } from "./useDaemonEvents";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { WsMessage } from "../run/model/liveStream";
 
 describe("useDaemonEvents", () => {
@@ -23,6 +24,7 @@ describe("useDaemonEvents", () => {
       refreshTriggers: vi.fn(),
       refreshProjects: vi.fn(),
       setTriggersPaused: vi.fn(),
+      refreshTriggersPaused: vi.fn(),
       bumpFiresRefreshKey: vi.fn(),
     };
     const hook = renderHook(() => useDaemonEvents(targets));
@@ -63,5 +65,24 @@ describe("useDaemonEvents", () => {
     hook.unmount();
     vi.advanceTimersByTime(1_000);
     expect(targets.refreshRuns).not.toHaveBeenCalled();
+  });
+
+  it("reads every list again on a resync", () => {
+    const original = useEditStore.getState().loadPipelines;
+    const loadPipelines = vi.fn(async () => {});
+    useEditStore.setState({ loadPipelines });
+    const { targets, emit } = mount();
+    emit({ type: "resync" });
+    expect(targets.refreshTriggers).toHaveBeenCalledTimes(1);
+    expect(targets.refreshTriggersPaused).toHaveBeenCalledTimes(1);
+    expect(targets.refreshProjects).toHaveBeenCalledTimes(1);
+    expect(loadPipelines).toHaveBeenCalledTimes(1);
+    // The Runs, the open Run and the sessions, in the window a burst shares.
+    vi.advanceTimersByTime(300);
+    expect(targets.refreshRuns).toHaveBeenCalledTimes(1);
+    expect(targets.refreshRun).toHaveBeenCalledTimes(1);
+    expect(targets.refreshSessions).toHaveBeenCalledTimes(1);
+    expect(targets.bumpFiresRefreshKey).not.toHaveBeenCalled();
+    useEditStore.setState({ loadPipelines: original });
   });
 });

@@ -13,6 +13,8 @@ export interface DaemonEventTargets {
   refreshTriggers: () => void;
   refreshProjects: () => void;
   setTriggersPaused: (paused: boolean) => void;
+  /** Read the global Trigger pause again from the daemon. */
+  refreshTriggersPaused: () => void;
   bumpFiresRefreshKey: () => void;
 }
 
@@ -26,6 +28,7 @@ export function useDaemonEvents({
   refreshTriggers,
   refreshProjects,
   setTriggersPaused,
+  refreshTriggersPaused,
   bumpFiresRefreshKey,
 }: DaemonEventTargets) {
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
@@ -56,6 +59,19 @@ export function useDaemonEvents({
     const run = trailingWindow(() => refreshers.current.refreshRun());
     const sessions = trailingWindow(() => refreshers.current.refreshSessions());
     const unsubscribe = subscribe((msg) => {
+      // ADR-0083 §6: back from an absence (the stream reopened, the tab shows
+      // again, the network is back) or told by the daemon that this client
+      // lost messages. Nothing is replayed: read the whole picture again.
+      if (msg.type === "resync") {
+        runs();
+        run();
+        sessions();
+        refreshTriggers();
+        refreshTriggersPaused();
+        refreshProjects();
+        loadPipelines();
+        return;
+      }
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
         reloadPipeline(msg.pipeline_id);
         loadPipelines();
@@ -113,5 +129,14 @@ export function useDaemonEvents({
       run.cancel();
       sessions.cancel();
     };
-  }, [subscribe, refreshTriggers, setTriggersPaused, refreshProjects, reloadPipeline, loadPipelines, bumpFiresRefreshKey]);
+  }, [
+    subscribe,
+    refreshTriggers,
+    setTriggersPaused,
+    refreshTriggersPaused,
+    refreshProjects,
+    reloadPipeline,
+    loadPipelines,
+    bumpFiresRefreshKey,
+  ]);
 }

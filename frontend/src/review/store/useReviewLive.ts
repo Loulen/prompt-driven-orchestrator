@@ -20,7 +20,7 @@ interface Args {
 
 /**
  * The Run's WebSocket, as the Review page listens to it: every event of the
- * Run refreshes it, to detect "tip moved" (the delivery signature changed since
+ * Run refreshes it (and so does a `resync`), to detect "tip moved" (the delivery signature changed since
  * the diff was loaded) and "node delivered" (the live branch on display is
  * gone), and to flash the card of a reply that landed live (#751).
  */
@@ -40,8 +40,12 @@ export function useReviewLive({ runId, runRef, setRun, sigAtLoad, pairRef, onTip
   const { subscribe } = useDaemonSocket();
   useEffect(() => {
     return subscribe((msg) => {
-      if (msg.type !== "event" || !msg.event || msg.event.run_id !== runId) return;
-      const ev = msg.event;
+      // ADR-0083 §6: a `resync` (the stream reopened, the tab shows again, the
+      // network is back, or the daemon lost messages) reads the Run again as
+      // one of its events would.
+      const resync = msg.type === "resync";
+      if (!resync && (msg.type !== "event" || !msg.event || msg.event.run_id !== runId)) return;
+      const ev = resync ? null : msg.event;
       fetchRun(runId)
         .then((r) => {
           const before = runRef.current;
@@ -72,7 +76,7 @@ export function useReviewLive({ runId, runRef, setRun, sigAtLoad, pairRef, onTip
           }
         })
         .catch(() => {});
-      if (ev.kind === "node_delivered" && ev.node_id && pairRef.current.to === `live:${ev.node_id}`) {
+      if (ev?.kind === "node_delivered" && ev.node_id && pairRef.current.to === `live:${ev.node_id}`) {
         setNodeDelivered({ nodeId: ev.node_id, iter: ev.iter ?? 1 });
       }
     });

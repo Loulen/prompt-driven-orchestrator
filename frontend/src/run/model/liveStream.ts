@@ -1,7 +1,7 @@
 /**
  * The frames of `/ws`, the live stream the run context serves: the daemon's
  * event bus relayed as is (a Run event, or an announcement of another
- * context), plus the `ready` greeting and the heartbeat. Hand-written: the
+ * context), plus the `ready` greeting, the heartbeat and `resync`. Hand-written: the
  * frames are built with `json!` on the daemon side.
  */
 
@@ -20,7 +20,11 @@ export interface WsMessage {
     | "triggers_paused"
     | "project_changed"
     | "cost_prices_synced"
-    | "run_forgotten";
+    | "run_forgotten"
+    /** Re-read the whole state (ADR-0083 §6): sent by the daemon to a client
+     *  that lost messages, and emitted by the stream itself after each
+     *  (re)opening, a return to the tab and a return of the network. */
+    | "resync";
   event?: DaemonEvent;
   pipeline_id?: string;
   path?: string;

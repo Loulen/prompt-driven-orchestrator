@@ -102,6 +102,23 @@ impl DaemonHandle {
         self.run.release_node_done_gate();
     }
 
+    /// Shorten the beat of the terminal sockets opened afterwards, instead of
+    /// waiting the production 10 s.
+    pub fn set_terminal_beat_interval(&self, interval: std::time::Duration) {
+        self.session.set_terminal_beat_interval(interval);
+    }
+
+    /// Publish `count` throwaway messages on the bus in one synchronous burst:
+    /// more than it keeps, so a `/ws` client that could not read them in
+    /// between lags, the condition that makes the daemon send `resync`.
+    pub fn flood_bus(&self, count: usize) {
+        for seq in 0..count {
+            self.run
+                .bus()
+                .publish(serde_json::json!({ "type": "test_flood", "seq": seq }));
+        }
+    }
+
     /// Force a Trigger's next fire into the past so the next
     /// [`Self::run_trigger_tick`] treats it as due. Test seam only — production
     /// next-fire times come from the cron schedule.

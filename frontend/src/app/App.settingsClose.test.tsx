@@ -433,6 +433,13 @@ vi.mock("../platform/api/update", () => ({
   applyUpdate: vi.fn().mockResolvedValue({}),
   fetchUpdateAttemptLog: vi.fn().mockResolvedValue(""),
   checkForUpdateNow: vi.fn().mockResolvedValue({}),
+  fetchUpdateChangelog: vi.fn().mockResolvedValue({
+    installed_version: "9.9.9-test",
+    latest_version: "10.0.0",
+    missed_versions: ["10.0.0"],
+    markdown: "## 10.0.0\n\nWhat changed.",
+    fallback_reason: null,
+  }),
 }));
 
 vi.mock("@xyflow/react", async (importOriginal) => {
@@ -455,6 +462,7 @@ vi.mock("../pipeline/api/document", async (importOriginal) => ({
 
 import App from "./App";
 import { useEditStore } from "../pipeline/store/editStore";
+import { fetchUpdateStatus } from "../platform/api/update";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -529,6 +537,70 @@ describe("App — Settings surface closes (#717 sibling-key regression)", () => 
     await openSettings(user);
     await user.keyboard("{Escape}");
     await expectClosed();
+  }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// « What's new » and « Update » from Settings › Version & update: Settings
+// closes first, and the modal is the one thing on screen over the app.
+// ---------------------------------------------------------------------------
+
+describe("App — the update modals opened from Settings", () => {
+  beforeEach(() => {
+    localStorage.setItem("pdo.tour.offered", "1");
+  });
+
+  /** A newer release is known and the daemon would apply it: Update is offered. */
+  async function offerAnUpdate() {
+    const current = await fetchUpdateStatus();
+    vi.mocked(fetchUpdateStatus).mockResolvedValue({
+      ...current,
+      latest_version: "10.0.0",
+      newer_available: true,
+      can_apply: true,
+    });
+    return () => vi.mocked(fetchUpdateStatus).mockResolvedValue(current);
+  }
+
+  it("« What's new » closes Settings and shows the changelog", async () => {
+    const restore = await offerAnUpdate();
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await openSettings(user);
+      await user.click(await screen.findByTestId("setting-version-whats-new"));
+      await expectClosed();
+      expect(await screen.findByTestId("changelog-modal")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  }, 20_000);
+
+  it("« Update » closes Settings and shows the confirm", async () => {
+    const restore = await offerAnUpdate();
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await openSettings(user);
+      const update = await screen.findByTestId("setting-version-update-button");
+      await waitFor(() => expect(update).not.toBeDisabled());
+      await user.click(update);
+      await expectClosed();
+      expect(await screen.findByTestId("update-confirm")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  }, 20_000);
+
+  it("renders the update modals after the full-window surfaces, so neither can hide them", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByTestId("open-stats"));
+    const stats = await screen.findByTestId("stats-modal");
+    // The status-bar version opens the changelog while Stats is still up.
+    await user.click(await screen.findByTestId("statusbar-version"));
+    const changelog = await screen.findByTestId("changelog-modal");
+    expect(stats.compareDocumentPosition(changelog) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }, 20_000);
 });
 

@@ -10,16 +10,51 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.25.0 — Output intermédiaire (CORE-45)
+## 2.27.0 — Output intermédiaire (CORE-45)
 
 - **Output intermédiaire** : un output port peut être coché « intermediate » (champ
   `intermediate: true` du port, omis quand il est faux). L'agent le remplit et le met à jour
   pendant son travail, le préambule le liste à part avec sa consigne, et la ligne du panneau
-  de nœud le suit en direct. `pdo complete` ne le vérifie jamais, un skip n'écrit rien pour lui.
+  de nœud le suit pendant le Run. Écrire ce fichier n'émet aucun événement : la ligne se met
+  à jour au prochain rafraîchissement, au plus 30 s après. `pdo complete` ne le vérifie
+  jamais, un skip n'écrit rien pour lui.
 - **Refus nouveau au parse** : un Pipeline dont une edge porte un Output intermédiaire est
   refusé, avec le port et l'edge en cause. Un Pipeline sans l'option ne change pas.
 - La réponse de `GET /runs/{id}/nodes/{node}/io` porte `intermediate` sur chaque port, et le
   `PortBrief` des `node_defs` d'un Run le porte quand il est vrai.
+
+## 2.26.0 — Interface à jour après une absence (CORE-40)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : `openProbedSocket` y reçoit l'option `silenceMs`, ajout seulement.
+
+- **Relecture après une absence** : à chaque (ré)ouverture du flux `/ws`, au retour sur l'onglet,
+  au retour du réseau et sur la trame `{"type":"resync"}` que le daemon envoie à un client qui a
+  perdu des événements, l'interface relit Runs, Run ouvert, sessions, Triggers et leur pause,
+  Projets, Pipelines et les gestes permis. Rien n'est rejoué.
+- **Terminal d'un nœud** : le daemon bat toutes les 10 s sur son socket (Ping + trame
+  `heartbeat`). Sans rien reçu pendant 30 s, hors ligne ou à la fermeture, le terminal se voile
+  (« Terminal connection closed », bouton **Reconnect**) et se rattache seul dans le même xterm.
+  Derrière un reverse proxy, son délai de lecture doit dépasser le battement : voir la section
+  WebSockets du guide.
+- **Skill seedé `pdo-interactive` v2** : la bannière de `pdo wait-user` est une notification ; la
+  question ou le résultat complet s'écrit dans la conversation avant l'appel.
+
+## 2.25.0 — Finitions de la liste de Runs (CORE-44)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit l'emplacement `runs/empty` et `copyToClipboard`, ajouts seulement.
+
+- **Liste de Runs vide** : l'emplacement d'UI `runs/empty` (décorations seulement) s'affiche sous
+  « No runs yet » tant que la liste ne contient aucun Run. Le texte du core ne change pas.
+- **Copier hors HTTPS** : `copyToClipboard(text)` de `@pdo/extension-ui` est la copie de tous les
+  boutons Copier du core ; sur une instance servie en http, elle retombe sur
+  `execCommand("copy")`. Elle ne rejette jamais et rend un booléen.
+- **Arbre des archivés** : la section des archivés range les Runs sous leur parent, comme celle des
+  actifs ; la préférence « Child runs » et le bouton global valent pour les deux. Un Run dont le
+  parent est dans l'autre section en est une racine et porte un lien vers lui. Archiver un parent
+  emporte toujours ses enfants terminés et reste refusé tant qu'un enfant vit : ce cas
+  (enfant actif sous parent archivé) ne se produit pas depuis l'UI.
 
 ## 2.24.0 — Gestes selon les Droits, flux gardé par la lecture (CORE-42)
 

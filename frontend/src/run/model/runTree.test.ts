@@ -50,24 +50,53 @@ describe("buildRunTree", () => {
     expect(forest.find((n) => n.run.run_id === "orphan")?.depth).toBe(0);
   });
 
-  it("makes the children of an ARCHIVED parent roots — archive does not touch the child (ADR-0064)", () => {
+  it("keeps the tree inside the archived section: an archived parent holds its archived children", () => {
     const archived: RunListEntry[] = [
+      run("old", { status: "archived" }),
+      run("kid", { parent_run_id: "old", status: "archived" }),
+      run("grand", { parent_run_id: "kid", status: "archived" }),
+    ];
+    const forest = buildRunTree(archived);
+    expect(forest.map((n) => n.run.run_id)).toEqual(["old"]);
+    expect(forest[0].children.map((n) => n.run.run_id)).toEqual(["kid"]);
+    expect(forest[0].children[0].children.map((n) => n.run.run_id)).toEqual(["grand"]);
+    expect(forest[0].counts).toEqual({ finished: 2, failed: 0, stale: 0, running: 0 });
+    expect(forest[0].sectionParentLink).toBeNull();
+    expect(ancestorIds(archived, "grand")).toEqual(["kid", "old"]);
+    expect(rootOf(archived, "grand")?.run_id).toBe("old");
+  });
+
+  it("makes a run whose parent sits in the OTHER section a root linked to that parent", () => {
+    const mixed: RunListEntry[] = [
       run("old", { status: "archived" }),
       run("live", { parent_run_id: "old" }),
       run("done", { parent_run_id: "old", status: "completed" }),
       run("grand", { parent_run_id: "live", status: "failed" }),
+      run("active", {}),
+      run("shelved", { parent_run_id: "active", status: "archived" }),
     ];
-    const forest = buildRunTree(archived);
-    expect(forest.map((n) => n.run.run_id)).toEqual(["old", "live", "done"]);
-    // The archived parent is a leaf: no chevron, no pills.
+    const forest = buildRunTree(mixed);
+    expect(forest.map((n) => n.run.run_id)).toEqual(["old", "live", "done", "active", "shelved"]);
+    // The archived parent keeps no active child: archive does not touch the child (ADR-0064).
     expect(forest[0].children).toEqual([]);
     expect(forest[0].counts).toEqual({ finished: 0, failed: 0, stale: 0, running: 0 });
-    // The released child keeps its own subtree.
+    // The active child is a root of the active section, linked to its archived parent.
+    expect(forest[1].sectionParentLink).toBe("old");
     expect(forest[1].children.map((n) => n.run.run_id)).toEqual(["grand"]);
+    expect(forest[1].children[0].sectionParentLink).toBeNull();
     expect(forest[1].counts).toEqual({ finished: 0, failed: 1, stale: 0, running: 0 });
-    expect(ancestorIds(archived, "grand")).toEqual(["live"]);
-    expect(rootOf(archived, "grand")?.run_id).toBe("live");
-    expect(ancestorIds(archived, "live")).toEqual([]);
+    // And the archived child of an active parent, the other way round.
+    expect(forest[4].sectionParentLink).toBe("active");
+    expect(forest[3].children).toEqual([]);
+    expect(ancestorIds(mixed, "grand")).toEqual(["live"]);
+    expect(rootOf(mixed, "grand")?.run_id).toBe("live");
+    expect(ancestorIds(mixed, "live")).toEqual([]);
+    expect(ancestorIds(mixed, "shelved")).toEqual([]);
+  });
+
+  it("links no parent when the parent is not listed", () => {
+    const forest = buildRunTree(list);
+    expect(forest.find((n) => n.run.run_id === "orphan")?.sectionParentLink).toBeNull();
   });
 
   it("aggregates the four disjoint counts over the WHOLE subtree", () => {

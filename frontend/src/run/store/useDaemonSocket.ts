@@ -7,6 +7,14 @@ export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
 /** The `performance` mark of each opening of the event stream. */
 export const STREAM_OPEN_MARK = "ws:ouvert";
 
+/** The stream's delay of silence (ADR-0083 §5): the daemon beats `/ws` every
+ *  5 s, so three missed beats make a dead socket, closed and probed again. */
+export const STREAM_SILENCE_MS = 15_000;
+
+/** The signal to re-read everything (ADR-0083 §6): nothing missed while away
+ *  is replayed, so a full re-read is the only way back to the real state. */
+export const RESYNC: WsMessage = { type: "resync" };
+
 /** The messages the stream hands its subscribers. */
 const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "event",
@@ -24,12 +32,19 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "triggers_paused",
   // #552: a Projet created, renamed or deleted elsewhere.
   "project_changed",
+  // ADR-0083 §6: the daemon lost messages for this client.
+  "resync",
 ]);
 
 /**
  * The tab's one event stream (`/ws`), shared by everything that listens to
  * it: the App, the Review page (ADR-0083: one stream per tab). Opened, through
- * the probe, by the first user and closed with the last.
+ * the probe, by the first user and closed with the last; a socket silent for
+ * {@link STREAM_SILENCE_MS} is closed and probed again.
+ *
+ * Its listeners get {@link RESYNC} after each (re)opening, on a return to the
+ * tab, on a return of the network, and when the daemon sends it: they re-read
+ * their whole state then.
  */
 const listeners = new Set<(msg: WsMessage) => void>();
 const statusListeners = new Set<() => void>();
@@ -53,14 +68,26 @@ function setStatus(next: ConnectionStatus) {
   for (const listener of statusListeners) listener();
 }
 
+function emit(msg: WsMessage) {
+  for (const listener of listeners) listener(msg);
+}
+
+/** Back on the tab, or back online: an open stream re-reads at once (a
+ *  silent one was just dropped by the probe, and its reopening re-reads). */
+function wake() {
+  if (document.visibilityState === "hidden" || status !== "connected") return;
+  emit(RESYNC);
+}
+
 function acquire() {
   users += 1;
   if (stream) return;
-  const socket = openProbedSocket("/ws");
+  const socket = openProbedSocket("/ws", { silenceMs: STREAM_SILENCE_MS });
   stream = socket;
   socket.onState((state) => {
     if (state === "ouvert") performance.mark?.(STREAM_OPEN_MARK);
     setStatus(statusOf(state));
+    if (state === "ouvert") emit(RESYNC);
   });
   socket.onMessage((data) => {
     if (typeof data !== "string") return;
@@ -71,8 +98,10 @@ function acquire() {
       return; // ignore malformed messages
     }
     if (!RELAYED.has(msg.type)) return;
-    for (const listener of listeners) listener(msg);
+    emit(msg);
   });
+  document.addEventListener("visibilitychange", wake);
+  window.addEventListener("online", wake);
 }
 
 function release() {
@@ -80,6 +109,8 @@ function release() {
   if (users > 0 || !stream) return;
   stream.close();
   stream = null;
+  document.removeEventListener("visibilitychange", wake);
+  window.removeEventListener("online", wake);
   setStatus("disconnected");
 }
 

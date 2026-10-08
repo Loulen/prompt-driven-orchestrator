@@ -42,8 +42,10 @@ export function useLiveRefresh(
       loadRef.current();
     }
     const refresh = trailingWindow(() => loadRef.current());
+    // ADR-0083 §6: a `resync` (back to the tab or online, or messages the
+    // daemon lost for this client) reads again whatever the view shows.
     const unsubscribe = subscribe((msg) => {
-      if (matchesRef.current(msg)) refresh();
+      if (msg.type === "resync" || matchesRef.current(msg)) refresh();
     });
     const net = setInterval(() => loadRef.current(), SAFETY_NET_MS);
     return () => {

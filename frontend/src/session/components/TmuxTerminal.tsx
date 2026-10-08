@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
 import { Tooltip } from "../../shared/ui/tooltip";
 import { attachSession } from "../api/sessions";
 import { READ_ONLY_HINT } from "../model/terminalRole";
-import { paneIndicator, TERMINAL_TYPOGRAPHY_RESET, type PaneSource } from "../model/terminalPane";
+import {
+  paneIndicator,
+  REAPED_STATUSES,
+  TERMINAL_TYPOGRAPHY_RESET,
+  type PaneSource,
+} from "../model/terminalPane";
+import { CONNECTION_CLOSED_LABEL, isVeiled, RECONNECT_LABEL } from "../model/terminalConnection";
 import { usePaneMode } from "../store/usePaneMode";
 import { useXtermSession } from "../store/useXtermSession";
 import { useFileDropTarget } from "../../skill/store/useFileDropTarget";
@@ -58,7 +65,28 @@ export default function TmuxTerminal({
   const containerRef = useRef<HTMLDivElement>(null);
   const { mode, frozen } = usePaneMode(session, status, paneSource);
   const xterm = useXtermSession(containerRef, session, mode, frozen);
-  const { connected, termRole } = xterm;
+  const { connected, termRole, reconnect } = xterm;
+
+  // ADR-0083 §5: a live terminal whose connection fell is veiled. A node that
+  // settles under the user's eyes loses its session on purpose: no veil.
+  const settled = paneSource !== undefined && status !== undefined && REAPED_STATUSES.has(status);
+  const veiled = isVeiled(mode, xterm.dropped, settled);
+
+  // While veiled, the probe reopens the socket on its own (its backoff); back
+  // on the tab or online, a fresh socket is opened at once, which also covers
+  // a socket the daemon closed for good.
+  useEffect(() => {
+    if (!veiled) return;
+    const wake = () => {
+      if (document.visibilityState !== "hidden") reconnect();
+    };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("online", wake);
+    return () => {
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("online", wake);
+    };
+  }, [veiled, reconnect]);
 
   // #588: report the live-socket state to the parent (banner hint A1 vs A4).
   useEffect(() => {
@@ -131,15 +159,40 @@ export default function TmuxTerminal({
           only enabled for a spectator — unwrapping the container instead would
           remount it and lose the xterm inside. A spectator's grid may be larger
           than the area at the font floor: then the area scrolls. */}
-      <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
-        <div
-          ref={containerRef}
-          className={`min-h-0 flex-1 bg-bg-0${spectating ? " overflow-auto" : ""}`}
-          style={TERMINAL_TYPOGRAPHY_RESET}
-          data-testid="xterm-container"
-          data-role={mode === "live" ? termRole.role : undefined}
-        />
-      </Tooltip>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
+          <div
+            ref={containerRef}
+            className={`min-h-0 flex-1 bg-bg-0${spectating ? " overflow-auto" : ""}`}
+            style={TERMINAL_TYPOGRAPHY_RESET}
+            data-testid="xterm-container"
+            data-role={mode === "live" ? termRole.role : undefined}
+          />
+        </Tooltip>
+        {/* Typing into a dead socket goes nowhere: say so over the pane, which
+            stays readable underneath, and offer the way back. */}
+        {veiled && (
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 bg-bg-0/60 backdrop-blur-sm"
+            data-testid="term-veil"
+            role="status"
+          >
+            <span className="text-fg-2" style={{ fontSize: "12px" }}>
+              {CONNECTION_CLOSED_LABEL}
+            </span>
+            <button
+              type="button"
+              onClick={reconnect}
+              className="flex cursor-pointer items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+              style={{ fontSize: "11px" }}
+              data-testid="term-reconnect"
+            >
+              <RefreshCw size={11} />
+              {RECONNECT_LABEL}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

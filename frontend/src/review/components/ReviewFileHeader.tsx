@@ -9,6 +9,7 @@ import type { RefPair } from "../../run/model/runRefs";
 import { plural } from "../model/commentStatus";
 import type { StateCounts } from "../model/commentStatus";
 import { Badge, StateIcon } from "./commentBits";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 interface Props {
   runId: string;
@@ -40,13 +41,11 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
   const letter = statusLetter(file);
   const pureRename = file.status === "renamed" && file.hunks.length === 0;
   const copyPath = () => {
-    navigator.clipboard?.writeText(path).then(
-      () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1200);
-      },
-      () => {},
-    );
+    void copyToClipboard(path).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    });
   };
 
   // ADR-0081: what `review/file` hands its actions (#30) and its decorations (#31).

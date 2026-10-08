@@ -373,6 +373,16 @@ locations.
 - **Renders**: the status bar, right-hand group, before the service health.
 - **Context**: `DecorationContext`, `entity` = `null`.
 
+### `runs/empty`
+
+- **Accepts**: decoration.
+- **Renders**: the empty state of the Runs list, shown while the list holds no Run at all (not
+  while a filter hides every Run), under the core's « No runs yet », which stays. The decorations
+  stack one under the other, each behind its error boundary: say why the list is empty (« No
+  Project yet », and whom to ask). Nothing without a contribution.
+- **Context**: `DecorationContext`, `entity` = `null`.
+- **Since**: 0.11.
+
 ### List filters
 
 A list-filter location renders a row under the list's own filters, one control per contribution.
@@ -718,7 +728,8 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `HostedContributions({ location, context?, props?, wrap? })` | Every element through `HostedContribution`, each wrapped by `wrap(element, rendered)` when given; `null` without element |
 | `runHostedCommand(element)` | Call an action's command, as its button does |
 | `useCurrentActor()`, `useActorDisplay(actor)` | The Actors' names, since 0.8 ([The Actors' names](#the-actors-names)) |
-| `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10 ([WebSockets](#websockets)) |
+| `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10; its delay of silence since 0.11 ([WebSockets](#websockets)) |
+| `copyToClipboard(text)` | Put `text` on the clipboard from a user gesture, as every Copy button of the core does: the Clipboard API, or outside a secure context (an instance served over plain http) `execCommand("copy")` on a hidden textarea. Resolves to whether the text was written, never rejects. Since 0.11 |
 | `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
 
 - **Context**: an element receives the host's `context`, merged over the context every location
@@ -781,6 +792,14 @@ socket.close(); // 1000
 - **`reconnect: "after-drop"`**: reopened (through the probe) only when it was open and dropped
   without the daemon's Close (`1006`, or `1001`): the daemon stopped or restarted. A Close from
   the daemon, or an upgrade refused, ends it for good. The core's terminals open their PTY so.
+- **`silenceMs`** (since 0.11, ADR-0083 §5): the delay of silence. An open socket that received
+  nothing (a message, or the server's beat) for that long is closed and counts as a drop: it goes
+  through the probe again, `"after-drop"` included, unless `reconnect` is `false`. A browser that
+  goes offline drops it at once, and a browser back online probes at once. A half-open connection
+  (sleep, network change, a proxy that cut it) fires no `close`: without the delay, the interface
+  stays frozen. Beat the socket on the server side more often than the delay: the core's `/ws`
+  beats every 5 s (delay 15 s), a terminal every 10 s (delay 30 s). Without the option, nothing
+  changes.
 - **The server side** answers the client's Close frame before ending the connection: a closing
   without it is a `1006`, which the browser counts as a failure. An extension serving a WebSocket
   route keeps reading after the Close it received until the answer is flushed.

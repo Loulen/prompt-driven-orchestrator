@@ -141,9 +141,9 @@ export default function RunTreeList({
               {flattenVisible(group.items, isExpanded).map(renderRunRow)}
             </div>
           ))}
-      {/* #136 — archived runs in their own flat, collapsible section below
-          the active list. Reuses renderRunRow verbatim (same archived
-          styling / Forget action). The rendered gate is `archivedOpen`
+      {/* #136 — archived runs in their own collapsible section below the
+          active list, rendered as a tree like the active one. Reuses
+          renderRunRow verbatim (same archived styling / Forget action). The rendered gate is `archivedOpen`
           ALONE — never `archivedOpen || some(selected)`, which dead-locks
           the chevron while a selected run is archived (see decision 4). */}
       {archivedCount > 0 && (

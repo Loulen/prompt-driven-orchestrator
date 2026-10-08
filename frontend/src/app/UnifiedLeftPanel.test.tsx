@@ -2117,12 +2117,12 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     expect(scrollSpy).toHaveBeenCalled();
   });
 
-  it("archiving a parent releases its children as ACTIVE roots; the Archived section holds the parent alone (AC #2, ADR-0064)", () => {
+  it("archiving only a parent leaves its children ACTIVE roots, each linked to the archived parent (ADR-0064)", () => {
     const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
     renderPanel({ runs: archivedParent });
-    // Active list: the released children climb back to depth 0 (the grandchild
-    // stays under its own live parent), alongside the orphan and solo. A released
-    // child is grouped by its OWN repo again (kid-trig lives in /repos/b).
+    // Active list: the children climb back to depth 0 (the grandchild stays
+    // under its own live parent), alongside the orphan and solo. A child root
+    // is grouped by its OWN repo again (kid-trig lives in /repos/b).
     expect(row("kid")).toHaveAttribute("data-depth", "0");
     expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
     expect(row("grandkid")).toHaveAttribute("data-depth", "1");
@@ -2133,12 +2133,83 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
       "triage nightly",
       "#733 logout — nightly",
     ]);
+    // A root whose parent sits in the other section links to it; a root whose
+    // parent is not listed, or a nested child, does not.
+    expect(within(row("kid")).getByTestId("run-parent-link")).toHaveTextContent(
+      "Refonte auth — orchestrateur",
+    );
+    expect(within(row("kid-trig")).getByTestId("run-parent-link")).toBeInTheDocument();
+    expect(within(row("grandkid")).queryByTestId("run-parent-link")).toBeNull();
+    expect(within(row("orphan")).queryByTestId("run-parent-link")).toBeNull();
     expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(1)");
     fireEvent.click(screen.getByTestId("run-archived-toggle"));
-    // The archived parent is a leaf: no chevron, no pills, no nested rows.
+    // The archived parent holds no active child: no chevron, no pills.
     expect(labels().slice(-1)).toEqual(["Refonte auth — orchestrateur"]);
     expect(within(row("epic")).queryByTestId("run-tree-chevron")).toBeNull();
     expect(within(row("epic")).queryByTestId("run-child-pills-failed")).toBeNull();
+  });
+
+  it("the archived section renders the tree: archived children fold under their archived parent", () => {
+    const allArchived = runs.map((r) =>
+      ["epic", "kid", "kid-trig", "grandkid"].includes(r.run_id)
+        ? { ...r, status: "archived" as const }
+        : r,
+    );
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    renderPanel({ runs: allArchived });
+    expect(labels()).toEqual(["#700 spike", "triage nightly"]);
+    // The count is the number of archived runs, not of archived roots.
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(4)");
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    // Collapsed by default (the preference holds for both sections).
+    expect(labels().slice(2)).toEqual(["Refonte auth — orchestrateur"]);
+    expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(labels().slice(2)).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "#733 logout — nightly",
+    ]);
+    expect(row("kid")).toHaveAttribute("data-depth", "1");
+    expect(within(row("kid")).queryByTestId("run-parent-link")).toBeNull();
+    // The global button opens every parent of both sections.
+    fireEvent.click(screen.getByTestId("run-tree-toggle-all"));
+    expect(labels().slice(2)).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "review 731",
+      "#733 logout — nightly",
+    ]);
+  });
+
+  it("an archived child of a live parent is an archived root linked to it; the link selects the parent", () => {
+    const shelved = runs.map((r) => (r.run_id === "kid-trig" ? { ...r, status: "archived" as const } : r));
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel runs={shelved} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
+    fireEvent.click(within(row("kid-trig")).getByTestId("run-parent-link"));
+    expect(onSelectRun).toHaveBeenCalledTimes(1);
+    expect(onSelectRun).toHaveBeenCalledWith("epic");
+  });
+
+  it("selecting an archived parent from an active child's link opens the archived section on it", () => {
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
+    const Harness = () => {
+      const [sel, setSel] = useState<string | null>(null);
+      return (
+        <UnifiedLeftPanel runs={archivedParent} selectedRunId={sel} onSelectRun={setSel} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />
+      );
+    };
+    render(<Harness />);
+    expect(row("epic")).toBeNull();
+    fireEvent.click(within(row("kid")).getByTestId("run-parent-link"));
+    expect(row("epic")).not.toBeNull();
+    expect(scrollSpy).toHaveBeenCalled();
   });
 
   it("an archived parent that is FORGOTTEN releases its children as roots", () => {

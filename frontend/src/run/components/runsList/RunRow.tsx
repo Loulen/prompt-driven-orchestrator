@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { ChevronDown, ChevronRight, Pause, Pencil, Play, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, CornerLeftUp, Pause, Pencil, Play, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun } from "../../model/runStatus";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
 import type { RunTreeNode } from "../../model/runTree";
@@ -43,9 +43,13 @@ export default function RunRow({
     isExpanded, setExpanded, runSel, renamingRunId, renameValue, setRenameValue, renameInputRef,
     commitRename, cancelRename, startRename, handlePause, handleResume, setConfirmRetryAll,
     setConfirmCleanup, setConfirmForget, runShell, runsScrollRef, selectRange, toggleSel,
-    visibleRunIds,
+    visibleRunIds, runById,
   } = pane;
   const run = node.run;
+  // A root whose parent sits in the other section (active / archived) links to
+  // it: the click selects the parent, whose section opens if need be.
+  const linkedParent =
+    node.sectionParentLink !== null ? runById.get(node.sectionParentLink) : undefined;
   // ADR-0081 (#31): what the `run/item` decorations mark.
   const decorated = useMemo(
     () => ({
@@ -211,6 +215,24 @@ export default function RunRow({
               }}
             >
               <Zap size={9} />
+            </span>
+          )}
+          {linkedParent && (
+            <span
+              role="button"
+              title={`Child of “${linkedParent.name || linkedParent.run_id}” (${
+                linkedParent.status === "archived" ? "archived" : "active"
+              }) — click to select it`}
+              aria-label={`Go to parent run ${linkedParent.name || linkedParent.run_id}`}
+              className="flex min-w-0 shrink cursor-pointer items-center gap-0.5 rounded px-0.5 font-sans text-fg-3 transition-colors hover:bg-bg-4 hover:text-acc"
+              data-testid="run-parent-link"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectRun(linkedParent.run_id);
+              }}
+            >
+              <CornerLeftUp size={9} className="shrink-0" />
+              <span className="truncate">{linkedParent.name || linkedParent.run_id.slice(0, 20)}</span>
             </span>
           )}
           {/* 0.8: who created the Run, as an extension names it; nothing

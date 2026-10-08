@@ -20,7 +20,7 @@ import {
   type TerminalRole,
 } from "../model/terminalRole";
 import { posteId } from "../model/poste";
-import { isHeartbeatFrame, TERMINAL_SILENCE_MS } from "../model/terminalConnection";
+import { isHeartbeatFrame, TERMINAL_SILENCE_MS, VEIL_GRACE_MS } from "../model/terminalConnection";
 import { BASE_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
 import { terminalTheme } from "../model/terminalTheme";
 import {
@@ -40,9 +40,10 @@ export const TERMINAL_READY_MARK = "terminal:pret";
 export interface XtermSession {
   connected: boolean;
   /** ADR-0083 §5: the live socket was open and fell (closed, offline, or
-   *  silent), and no socket opened since. */
+   *  silent) at least {@link VEIL_GRACE_MS} ago, and no socket opened since. */
   dropped: boolean;
-  /** Open a fresh socket on the same session (the veil's Reconnect). */
+  /** Open a fresh socket on the same session, in the same xterm (the veil's
+   *  Reconnect). */
   reconnect: () => void;
   /** #867: the role the daemon gave this socket. */
   termRole: TerminalRole;
@@ -78,10 +79,10 @@ export function useXtermSession(
   // ADR-0083 §5: the session whose live socket fell, until one opens again.
   // Keyed by session, so another session starts unveiled.
   const [droppedSession, setDroppedSession] = useState<string | null>(null);
-  // Bumped to open a fresh socket on the same session (Reconnect, back on
-  // the tab or online while veiled). The attach effect keys on it.
-  const [attachKey, setAttachKey] = useState(0);
-  const reconnect = useCallback(() => setAttachKey((k) => k + 1), []);
+  // Opens a fresh socket in place of the live one (Reconnect, back on the tab
+  // or online while veiled): the xterm, and what it shows, stay.
+  const reattachRef = useRef<(() => void) | null>(null);
+  const reconnect = useCallback(() => reattachRef.current?.(), []);
   // #867: the ref is what the xterm callbacks read (they outlive renders); the
   // state drives the toolbar.
   const [termRole, setTermRole] = useState<TerminalRole>(SOLO);
@@ -220,10 +221,9 @@ export function useXtermSession(
     // §5: a socket silent for 30 s (the daemon beats every 10 s), or whose
     // browser went offline, counts as dropped too, and reattaches the same way.
     const ptyPath = `/sessions/${encodeURIComponent(session)}/pty?poste=${encodeURIComponent(posteId())}`;
-    const ws = isFrozen
-      ? null
-      : openProbedSocket(ptyPath, { reconnect: "after-drop", silenceMs: TERMINAL_SILENCE_MS });
-    wsRef.current = ws;
+    // The live socket: replaced in place by a reattachment, so everything
+    // below reads it when called.
+    let ws: ProbedSocket | null = null;
 
     if (isFrozen) {
       term.write(toTerminalNewlines(frozen?.content ?? ""));
@@ -299,22 +299,13 @@ export function useXtermSession(
     };
     // The cleanup below closes the socket on purpose: no fall to veil.
     let disposed = false;
-    let opened = false;
-    ws?.onState((state) => {
-      if (disposed) return;
-      if (state === "ouvert") {
-        opened = true;
-        setConnected(true);
-        setDroppedSession(null);
-        sendResize(ws, fitAddon.proposeDimensions());
-      } else {
-        dropRole();
-        if (opened) setDroppedSession(session);
-      }
-    });
-
+    // A socket of this terminal was open: a fall after it is veiled, once the
+    // grace is over and the socket is still down.
+    let everOpened = false;
+    let veilTimer: number | undefined;
     let ready = false;
-    ws?.onMessage((data) => {
+
+    const onData = (data: string | ArrayBuffer) => {
       if (data instanceof ArrayBuffer) {
         if (!ready) {
           ready = true;
@@ -329,7 +320,37 @@ export function useXtermSession(
         if (role) applyRole(role);
         else term.write(data);
       }
-    });
+    };
+
+    const attach = () => {
+      const previous = ws;
+      const socket = openProbedSocket(ptyPath, { reconnect: "after-drop", silenceMs: TERMINAL_SILENCE_MS });
+      ws = socket;
+      wsRef.current = socket;
+      // Closed on purpose: its last state is ignored below.
+      previous?.close();
+      socket.onState((state) => {
+        if (disposed || ws !== socket) return;
+        if (state === "ouvert") {
+          everOpened = true;
+          window.clearTimeout(veilTimer);
+          setConnected(true);
+          setDroppedSession(null);
+          sendResize(socket, fitAddon.proposeDimensions());
+        } else {
+          dropRole();
+          if (everOpened) {
+            window.clearTimeout(veilTimer);
+            veilTimer = window.setTimeout(() => setDroppedSession(session), VEIL_GRACE_MS);
+          }
+        }
+      });
+      socket.onMessage((data) => {
+        if (ws === socket) onData(data);
+      });
+    };
+    if (!isFrozen) attach();
+    reattachRef.current = isFrozen ? null : attach;
 
     // ADR-0075 §3: a spectator is read-only. The daemon drops its input anyway;
     // not sending it keeps the pane's own echo from lying about what happened.
@@ -392,6 +413,8 @@ export function useXtermSession(
       inputDisposable.dispose();
       binaryDisposable.dispose();
       disposed = true;
+      window.clearTimeout(veilTimer);
+      reattachRef.current = null;
       ws?.close();
       roleRef.current = SOLO;
       setTermRole(SOLO);
@@ -405,7 +428,7 @@ export function useXtermSession(
     // theme switch would drop the scrollback and the attached socket. The effect
     // below repaints the live instance instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, mode, frozen, attachKey]);
+  }, [session, mode, frozen]);
 
   // #759: repaint an already-open terminal when the theme switches.
   useEffect(() => {

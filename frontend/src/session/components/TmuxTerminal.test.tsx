@@ -655,57 +655,96 @@ describe("TmuxTerminal", () => {
   // `GET …/pane` was serving the snapshot the whole time, to nobody.
   describe("a connection that falls (ADR-0083 §5)", () => {
     const paneSource = { runId: "run-1", nodeId: "impl", iter: 1 };
-    const opened = () => act(() => new Promise((r) => setTimeout(r, 10)));
+    const GRACE = 2_000;
+    const opened = () =>
+      act(() => {
+        vi.advanceTimersByTime(10);
+      });
+    /** The probe reports the socket down (closed, silent for 30 s, or
+     *  offline), and the grace runs out. */
+    const fall = (index = 0) => {
+      act(() => probedStates[index]("hors_ligne"));
+      act(() => {
+        vi.advanceTimersByTime(GRACE);
+      });
+    };
+    const live = (status = "running") => (
+      <TmuxTerminal session="pdo-run-1-impl-iter-1" status={status} paneSource={paneSource} />
+    );
 
     beforeEach(() => {
+      vi.useFakeTimers();
       probedOpens.length = 0;
       probedStates.length = 0;
     });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    it("veils a live terminal whose connection fell, with Reconnect", async () => {
-      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
-      await opened();
+    it("veils a live terminal whose connection fell, with Reconnect", () => {
+      render(live());
+      opened();
       expect(screen.queryByTestId("term-veil")).toBeNull();
 
-      // Closed, silent for 30 s, or offline: the probe says `hors_ligne`.
       act(() => probedStates[0]("hors_ligne"));
+      // Not at once: a settling node closes its socket before its status arrives.
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(GRACE);
+      });
       const veil = screen.getByTestId("term-veil");
       expect(veil).toHaveTextContent("Terminal connection closed");
       expect(within(veil).getByTestId("term-reconnect")).toHaveTextContent("Reconnect");
     });
 
-    it("does not veil a terminal that never opened", async () => {
-      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
-      act(() => probedStates[0]("hors_ligne"));
+    it("does not veil a terminal that never opened", () => {
+      render(live());
+      fall();
       expect(screen.queryByTestId("term-veil")).toBeNull();
     });
 
-    it("lifts the veil once the probe reopened the socket on its own", async () => {
-      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
-      await opened();
+    it("does not veil a connection back within the grace", () => {
+      render(live());
+      opened();
       act(() => probedStates[0]("hors_ligne"));
+      act(() => probedStates[0]("ouvert"));
+      act(() => {
+        vi.advanceTimersByTime(GRACE);
+      });
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("lifts the veil once the probe reopened the socket on its own", () => {
+      render(live());
+      opened();
+      fall();
       expect(screen.getByTestId("term-veil")).toBeInTheDocument();
       act(() => probedStates[0]("ouvert"));
       expect(screen.queryByTestId("term-veil")).toBeNull();
       expect(probedOpens).toHaveLength(1);
     });
 
-    it("opens a fresh socket on Reconnect, the veil up until it opens", async () => {
-      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
-      await opened();
-      act(() => probedStates[0]("hors_ligne"));
+    it("opens a fresh socket on Reconnect, in the same xterm, the veil up until it opens", () => {
+      render(live());
+      opened();
+      fall();
       fireEvent.click(screen.getByTestId("term-reconnect"));
       expect(probedOpens).toHaveLength(2);
       expect(probedOpens[1].path).toContain("/sessions/pdo-run-1-impl-iter-1/pty");
+      // The pane stays readable under the veil: no new terminal.
+      expect(mockTerminalInstances).toHaveLength(1);
       expect(screen.getByTestId("term-veil")).toBeInTheDocument();
-      await opened();
+      opened();
       expect(screen.queryByTestId("term-veil")).toBeNull();
+      // What the new socket receives goes to the same xterm.
+      act(() => wsInstances[1].fireEvent("message", { data: "back" }));
+      expect(mockTerminalInstances[0].write).toHaveBeenCalledWith("back");
     });
 
-    it("reconnects at once when the tab shows again, or the network is back", async () => {
-      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
-      await opened();
-      act(() => probedStates[0]("hors_ligne"));
+    it("reconnects at once when the tab shows again, or the network is back", () => {
+      render(live());
+      opened();
+      fall();
       act(() => {
         document.dispatchEvent(new Event("visibilitychange"));
       });
@@ -714,7 +753,7 @@ describe("TmuxTerminal", () => {
         window.dispatchEvent(new Event("online"));
       });
       expect(probedOpens).toHaveLength(3);
-      await opened();
+      opened();
       // Unveiled: the tab and the network no longer reconnect anything.
       act(() => {
         window.dispatchEvent(new Event("online"));
@@ -722,19 +761,23 @@ describe("TmuxTerminal", () => {
       expect(probedOpens).toHaveLength(3);
     });
 
-    it("does not veil a node that settled under the user's eyes", async () => {
-      const { rerender } = render(
-        <TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />,
-      );
-      await opened();
-      rerender(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="completed" paneSource={paneSource} />);
+    it("does not veil a node that settled under the user's eyes, its status arriving after the close", () => {
+      const { rerender } = render(live());
+      opened();
       act(() => probedStates[0]("hors_ligne"));
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      rerender(live("completed"));
+      act(() => {
+        vi.advanceTimersByTime(GRACE);
+      });
       expect(screen.queryByTestId("term-veil")).toBeNull();
     });
 
-    it("never writes the daemon's beat into the pane", async () => {
-      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
-      await opened();
+    it("never writes the daemon's beat into the pane", () => {
+      render(live());
+      opened();
       act(() => {
         wsInstances[0].fireEvent("message", { data: '{"type":"heartbeat"}' });
         wsInstances[0].fireEvent("message", { data: "plain text" });

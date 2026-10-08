@@ -13,6 +13,7 @@
 //! - The gestures of an actor, one use case each, each asking the
 //!   authorization: [`complete_node`], [`release_completion`], [`fail_node`],
 //!   [`skip_node`], [`start_node`], [`stop_node`], [`retry_node`],
+//!   [`import_files`],
 //!   [`children_wait`], [`node_diff`] and the Pipeline Manager's
 //!   [`commands`].
 //! - The Run's surfaces: creating a Run ([`create_run`]), forgetting one
@@ -42,6 +43,7 @@ pub mod edit_repos;
 pub mod events;
 pub mod fail_node;
 pub mod forget_run;
+pub mod import_files;
 pub mod list;
 pub mod manager;
 pub mod node;

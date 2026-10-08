@@ -32,11 +32,48 @@ pub fn input_path(artifacts_dir: &Path) -> PathBuf {
     artifacts_dir.join("_input").join("output.md")
 }
 
+/// The Blackboard folder of the files a user imported into a running node, a
+/// sibling of `_input/`: inside the artifacts, so never committed and removed
+/// with the Run.
+const ATTACHMENTS_DIR: &str = "_attachments";
+
+/// `<artifacts>/_attachments/<node-id>/`: one folder per node, so who received
+/// what stays readable.
+pub fn node_attachments_dir(artifacts_dir: &Path, node_id: &str) -> PathBuf {
+    artifacts_dir.join(ATTACHMENTS_DIR).join(node_id)
+}
+
+/// The `n`-th variant of a name already taken: `contrat.pdf` -> `contrat-1.pdf`,
+/// `README` -> `README-1`, `.env` -> `.env-1`.
+pub fn suffixed_name(name: &str, n: u32) -> String {
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => format!("{}-{n}{}", &name[..dot], &name[dot..]),
+        _ => format!("{name}-{n}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
+
+    #[test]
+    fn node_attachments_dir_is_a_sibling_of_input() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        assert_eq!(
+            node_attachments_dir(dir, "grill"),
+            PathBuf::from("/repo/.pdo/artifacts/_attachments/grill")
+        );
+    }
+
+    #[test]
+    fn suffixed_name_goes_before_the_extension() {
+        assert_eq!(suffixed_name("contrat.pdf", 1), "contrat-1.pdf");
+        assert_eq!(suffixed_name("archive.tar.gz", 2), "archive.tar-2.gz");
+        assert_eq!(suffixed_name("README", 2), "README-2");
+        assert_eq!(suffixed_name(".env", 1), ".env-1");
+    }
 
     #[test]
     fn single_port_single_iter_path() {

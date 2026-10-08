@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useEditStore } from "../pipeline/store/editStore";
 import { trailingWindow } from "../shared/lib/trailingWindow";
+import { refreshGestureRights } from "../run/store/gestureRightsStore";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -13,6 +14,8 @@ export interface DaemonEventTargets {
   refreshTriggers: () => void;
   refreshProjects: () => void;
   setTriggersPaused: (paused: boolean) => void;
+  /** Read the global Trigger pause again from the daemon. */
+  refreshTriggersPaused: () => void;
   bumpFiresRefreshKey: () => void;
 }
 
@@ -26,6 +29,7 @@ export function useDaemonEvents({
   refreshTriggers,
   refreshProjects,
   setTriggersPaused,
+  refreshTriggersPaused,
   bumpFiresRefreshKey,
 }: DaemonEventTargets) {
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
@@ -55,7 +59,28 @@ export function useDaemonEvents({
     const runs = trailingWindow(() => refreshers.current.refreshRuns());
     const run = trailingWindow(() => refreshers.current.refreshRun());
     const sessions = trailingWindow(() => refreshers.current.refreshSessions());
+    // What only a resync re-reads, in one window too: the daemon may send
+    // several in a burst, and the stream's own may follow one.
+    const lists = trailingWindow(() => {
+      refreshTriggers();
+      refreshTriggersPaused();
+      refreshProjects();
+      void loadPipelines();
+    });
+    // CORE-42: the gestures shown follow the rights and the Projets.
+    const gestures = trailingWindow(refreshGestureRights);
     const unsubscribe = subscribe((msg) => {
+      // ADR-0083 §6: back from an absence (the stream reopened, the tab shows
+      // again, the network is back) or told by the daemon that this client
+      // lost messages. Nothing is replayed: read the whole picture again.
+      if (msg.type === "resync") {
+        runs();
+        run();
+        sessions();
+        lists();
+        gestures();
+        return;
+      }
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
         reloadPipeline(msg.pipeline_id);
         loadPipelines();
@@ -79,6 +104,7 @@ export function useDaemonEvents({
       // Triggers rows themselves are unchanged, so only the Projet list refetches.
       if (msg.type === "project_changed") {
         refreshProjects();
+        gestures();
         return;
       }
       // Trigger lifecycle (#160/#162): create/update/delete refreshes the
@@ -90,6 +116,9 @@ export function useDaemonEvents({
         msg.type === "trigger_fired"
       ) {
         refreshTriggers();
+        // A `trigger_updated` about every Trigger: an extension signalled that
+        // the suspensions changed, as when an Actor's rights change.
+        if (msg.type === "trigger_updated" && !msg.trigger_id) gestures();
         if (msg.type === "trigger_fired") {
           runs();
           // #341 + #368: only the OPEN trigger's panel refetches, so an
@@ -118,6 +147,17 @@ export function useDaemonEvents({
       runs.cancel();
       run.cancel();
       sessions.cancel();
+      lists.cancel();
+      gestures.cancel();
     };
-  }, [subscribe, refreshTriggers, setTriggersPaused, refreshProjects, reloadPipeline, loadPipelines, bumpFiresRefreshKey]);
+  }, [
+    subscribe,
+    refreshTriggers,
+    setTriggersPaused,
+    refreshTriggersPaused,
+    refreshProjects,
+    reloadPipeline,
+    loadPipelines,
+    bumpFiresRefreshKey,
+  ]);
 }

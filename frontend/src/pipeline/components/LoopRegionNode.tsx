@@ -2,6 +2,8 @@ import { type Node, type NodeProps } from "@xyflow/react";
 import type { LoopKind } from "../../shared/generated/LoopKind";
 import { useEditStore } from "../store/editStore";
 import { endRegion } from "../../run/api/commands";
+import { useMayOnRun } from "../../run/store/gestureRightsStore";
+import { toastRefusal } from "../../shared/authorization/refusal";
 
 /**
  * Data carried by a `loopRegion` canvas node (ADR-0011 / #148, #150). A loop
@@ -53,6 +55,8 @@ export interface LoopRegionNodeData {
 
 export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
   const setSelection = useEditStore((s) => s.setSelection);
+  // CORE-42: « route from manager » only when the caller may end the region.
+  const mayEndRegion = useMayOnRun(data.runId as string | null | undefined)("end_region");
 
   const accent = data.exhausted
     ? "var(--color-st-blocked)"
@@ -135,7 +139,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
           }}
         >
           exhausted — unrouted
-          {data.runId != null && (
+          {data.runId != null && mayEndRegion && (
             // The run overlay on an exhausted-unrouted region offers a "route
             // from manager" affordance (ADR-0011 / #152): ending the region by
             // id fires its completion and the daemon resumes the run.
@@ -149,7 +153,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                void endRegion(data.runId as string, data.regionId);
+                endRegion(data.runId as string, data.regionId).catch(toastRefusal);
               }}
             >
               route from manager

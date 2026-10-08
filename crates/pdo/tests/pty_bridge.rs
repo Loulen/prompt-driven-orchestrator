@@ -627,3 +627,52 @@ async fn pty_ws_shell_survives_detach() {
         "the hosted shell died when the terminal was left (#946)"
     );
 }
+
+/// ADR-0083 §5: the daemon beats an open terminal socket on its own, so a
+/// reverse proxy never sees it idle while the agent inside is silent: a Ping,
+/// then a `heartbeat` Text frame, the beat the browser can actually see.
+#[tokio::test]
+async fn pty_ws_beats_with_pings_and_heartbeats() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
+    daemon.set_terminal_beat_interval(Duration::from_millis(200));
+    let socket = daemon.tmux_socket();
+
+    let session_name = "pdo-pty-test-beat";
+    kill_tmux_session(&socket, session_name);
+    create_tmux_session_with_cat(&socket, session_name);
+
+    let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session_name);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .expect("WS connect should succeed");
+
+    let mut pings = 0;
+    let mut heartbeats = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while pings < 2 || heartbeats < 2 {
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Ping(_)))) => pings += 1,
+            Ok(Some(Ok(Message::Text(text)))) if text.as_str() == r#"{"type":"heartbeat"}"# => {
+                heartbeats += 1
+            }
+            Ok(Some(Ok(_))) => {}
+            _ => break,
+        }
+    }
+
+    let _ = ws.close(None).await;
+    kill_tmux_session(&socket, session_name);
+    assert!(
+        pings >= 2,
+        "expected periodic pings on the PTY socket, got {pings}"
+    );
+    assert!(
+        heartbeats >= 2,
+        "expected periodic heartbeat frames on the PTY socket, got {heartbeats}"
+    );
+}

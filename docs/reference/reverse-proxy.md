@@ -20,6 +20,55 @@ Add `PDO_ALLOWED_WS_ORIGINS` to the service environment when the daemon runs as 
 in a `pdo.service.d/override.conf` drop-in, which survives unit rewrites including Update (see
 [`pdo service install`](cli.md#cli-commands)).
 
+## WebSockets through a proxy
+
+The UI keeps two kinds of WebSocket open: `/ws` (the live stream of Runs, Triggers, Projets and
+Pipelines) and `/sessions/<id>/pty` (one per node terminal). The proxy must forward the upgrade and
+must not close a quiet socket.
+
+| Requirement | Why |
+| --- | --- |
+| Forward `Upgrade` and `Connection: upgrade` over HTTP/1.1 | Without them the upgrade fails and the terminal stays `disconnected` |
+| Read timeout above 30 s (`proxy_read_timeout` in nginx; its 60 s default is enough) | The daemon beats `/ws` every 5 s and each terminal socket every 10 s, so a socket is never idle longer than that; a timeout under the beat cuts a terminal whose agent is thinking |
+| No response buffering on these routes (`proxy_buffering off`) | Buffered frames reach the browser late, or in bursts |
+| Body size at or above `max_attachments_mb` (`client_max_body_size`) | Attachments of a new Run and files imported into a node travel in one request each (see [Attachments through a proxy](#attachments-through-a-proxy)) |
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    # … listen, server_name, TLS, authentication …
+
+    location / {
+        proxy_pass http://127.0.0.1:5172;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+        client_max_body_size 64m;   # ≥ max_attachments_mb
+    }
+}
+```
+
+When a socket drops anyway (network cut, proxy restart, laptop asleep), the UI recovers without a
+reload:
+
+- the UI opens a socket only after an HTTP request to the daemon succeeded; while it fails, that
+  request repeats, about 1 s, then twice as long each time up to about 30 s;
+- a socket silent for longer than its delay (15 s for `/ws`, 30 s for a terminal) is closed and
+  reopened that way, and so is a socket whose browser went offline;
+- after each reopening of `/ws`, each return to the tab and each return of the network, the UI
+  re-reads its whole state (Runs, the open Run, sessions, Triggers and their pause, Projets,
+  Pipelines); the daemon sends `resync` to a client that lost messages, with the same effect;
+- a node terminal whose connection fell shows `Terminal connection closed` with a **Reconnect**
+  button, and reattaches on its own (see [terminal.md](terminal.md)).
+
 ## Attachments through a proxy
 
 A Run's attachments travel in one multipart `POST /runs`. The daemon's own budget is
@@ -44,5 +93,7 @@ location / {
 ## Terminal on a remote origin
 
 If a terminal pane shows `disconnected` on a remote origin, the daemon rejected the WebSocket
-origin: add it to `PDO_ALLOWED_WS_ORIGINS`. Copy and paste in the pane are covered in
+origin: add it to `PDO_ALLOWED_WS_ORIGINS`. If it connects and then shows `Terminal connection
+closed` after a while, the proxy closed it: check the upgrade headers and the read timeout in
+[WebSockets through a proxy](#websockets-through-a-proxy). Copy and paste in the pane are covered in
 [terminal.md](terminal.md).

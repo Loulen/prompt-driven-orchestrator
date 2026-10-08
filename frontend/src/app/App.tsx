@@ -3,6 +3,7 @@ import { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
 import { useSelectedRun } from "../run/store/useSelectedRun";
+import { useSelectedRunGestures } from "../run/store/gestureRightsStore";
 import { useDaemonSessions } from "../session/store/useDaemonSessions";
 import { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import { useLibassistLifecycle } from "../session/store/useLibassistLifecycle";
@@ -79,6 +80,7 @@ export default function App() {
   const [triggerOpenedTabId, setTriggerOpenedTabId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
+  useSelectedRunGestures(selectedRun); // CORE-42: the gestures the view of a Run may offer
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const updates = useUpdateFlow(updateStatus, status);
   const { setChangelogOpen, setUpdateConfirmOpen } = updates;
@@ -230,6 +232,7 @@ export default function App() {
     refreshTriggers,
     refreshProjects,
     setTriggersPaused,
+    refreshTriggersPaused: hydrateTriggersPause,
     bumpFiresRefreshKey,
   });
 
@@ -348,7 +351,6 @@ export default function App() {
         update={updateStatus}
         onOpenVersion={() => setChangelogOpen(true)}
       />
-      <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
       <NewRunModal
         open={launch.newRunModalOpen}
         onClose={handleCloseNewRunModal}
@@ -377,6 +379,8 @@ export default function App() {
         onStartTour={startTourById}
         onStartFullTour={startFullTour}
       />
+      {/* After the full-window surfaces, which it must paint over. */}
+      <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
       <EditorModals
         conflictTab={conflictTab}
         saveErrorTab={saveErrorTab}

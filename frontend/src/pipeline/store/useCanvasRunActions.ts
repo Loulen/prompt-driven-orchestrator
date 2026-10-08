@@ -10,6 +10,8 @@ import { reviewUrl } from "../../run/model/runRefs";
 import { useReviewSeen } from "../../review/store/useReviewUnread";
 import { reopenRun, retryAll } from "../../run/api/commands";
 import { useRunShell } from "../../session/store/useRunShell";
+import { useMayOnRun } from "../../run/store/gestureRightsStore";
+import { toastRefusal } from "../../shared/authorization/refusal";
 // #723 — orchestrator pastilles on the run-view node card.
 
 export function useCanvasRunActions(activeRunState: RunState | null, onSelectRun?: (runId: string) => void) {
@@ -47,9 +49,11 @@ export function useCanvasRunActions(activeRunState: RunState | null, onSelectRun
     // its own. No modal (contrast with Retry-all) — one click, one round-trip.
     try {
       await reopenRun(activeRunState.run_id);
-    } catch {
+    } catch (e) {
       // The daemon gate may 409 (e.g. a live run raced terminal); nothing
-      // actionable here — the run state refresh will reconcile the UI.
+      // actionable here — the run state refresh will reconcile the UI. A
+      // refusal of the caller's rights is said (CORE-42).
+      toastRefusal(e);
     }
   }, [activeRunState]);
 
@@ -59,8 +63,9 @@ export function useCanvasRunActions(activeRunState: RunState | null, onSelectRun
     try {
       const { run_id } = await retryAll(activeRunState.run_id);
       onSelectRun?.(run_id);
-    } catch {
-      // Silent — mirrors the left-panel Retry-all.
+    } catch (e) {
+      // Silent — mirrors the left-panel Retry-all; a refusal is said.
+      toastRefusal(e);
     }
   }, [activeRunState, onSelectRun]);
 
@@ -68,5 +73,9 @@ export function useCanvasRunActions(activeRunState: RunState | null, onSelectRun
   const handleOpenShell = useCallback(async () => {
     if (activeRunState) await openShell(activeRunState.run_id);
   }, [activeRunState, openShell]);
-  return { reviewHref, reviewPending, reviewTone, reviewTitle, finishedRun, runShell, confirmRetryAll, setConfirmRetryAll, handleReopen, handleRetryAll, handleOpenShell };
+  // CORE-42: Reopen and Retry all only when the caller may make them.
+  const mayOnRun = useMayOnRun(activeRunState?.run_id);
+  const mayReopen = mayOnRun("reopen_run");
+  const mayRetryAll = mayOnRun("retry_all");
+  return { reviewHref, reviewPending, reviewTone, reviewTitle, finishedRun, runShell, confirmRetryAll, setConfirmRetryAll, handleReopen, handleRetryAll, handleOpenShell, mayReopen, mayRetryAll };
 }

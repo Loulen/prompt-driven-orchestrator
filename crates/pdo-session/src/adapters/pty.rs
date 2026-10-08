@@ -15,6 +15,11 @@
 //! - Binary frames ← stdout of the PTY (terminal output)
 //! - Text frames with JSON `{"type":"role","role":"solo"|"pilot"|"spectator",…}`
 //!   on every role change (see [`RoleMsg`](crate::domain::shared_terminal::RoleMsg))
+//! - Every [`terminal_beat_interval`](crate::Session::terminal_beat_interval)
+//!   (ADR-0083 §5): a Ping frame, so no reverse proxy drops a terminal whose
+//!   agent is silent, then the Text frame [`HEARTBEAT_FRAME`]: the browser
+//!   never sees pings, and this beat is how it tells a silent terminal from a
+//!   dead connection (half-open TCP, network cut without a close)
 //!
 //! The client's Close frame is answered before the connection ends (ADR-0083
 //! §3); the opening and the closing have their lines in the journal
@@ -33,7 +38,7 @@ use tracing::{error, warn};
 
 use crate::adapters::http::ws_log::{self, Closing, NO_STATUS};
 
-use crate::domain::pty_protocol::{decode_resize, is_take_control};
+use crate::domain::pty_protocol::{decode_resize, is_take_control, HEARTBEAT_FRAME};
 use crate::domain::shared_terminal::{TermSize, INITIAL_SIZE};
 use crate::Session;
 
@@ -196,8 +201,15 @@ async fn bridge(
     // the answer goes out through the sink, which the output task owns.
     let (client_closed_tx, mut client_closed_rx) = oneshot::channel::<()>();
 
-    // Task 2: forward PTY output and role frames to the WebSocket
+    // Task 2: forward PTY output and role frames to the WebSocket, and beat it
+    // (ADR-0083 §5): an agent that thinks for minutes leaves the socket silent,
+    // and a reverse proxy closes a silent WebSocket once its read timeout runs
+    // out. The browser answers the Ping on its own but cannot see it: the
+    // heartbeat Text frame is what its silence delay reads.
+    let beat_every = session.terminal_beat_interval();
     let ws_send_handle = tokio::spawn(async move {
+        let mut beat =
+            tokio::time::interval_at(tokio::time::Instant::now() + beat_every, beat_every);
         loop {
             let msg = tokio::select! {
                 data = pty_rx.recv() => match data {
@@ -205,6 +217,12 @@ async fn bridge(
                     None => break,
                 },
                 Some(frame) = role_rx.recv() => Message::Text(frame.into()),
+                _ = beat.tick() => {
+                    if ws_sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        return Closing::Dropped;
+                    }
+                    Message::Text(HEARTBEAT_FRAME.into())
+                }
                 _ = &mut client_closed_rx => break,
             };
             if ws_sink.send(msg).await.is_err() {

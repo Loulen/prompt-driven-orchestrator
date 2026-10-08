@@ -121,6 +121,11 @@ mod extension_reads;
 #[path = "extension_projets_triggers.rs"]
 mod extension_projets_triggers;
 
+// API 0.11: an extension's event guarded by a read on `/ws`, and the
+// `operation_applied` on an extension's Ressource guarded by its entity's.
+#[path = "extension_event_guard.rs"]
+mod extension_event_guard;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;
@@ -245,6 +250,9 @@ mod node_delivery;
 #[path = "node_done_detach.rs"]
 mod node_done_detach;
 
+#[path = "node_import.rs"]
+mod node_import;
+
 #[path = "node_io.rs"]
 mod node_io;
 
@@ -270,6 +278,10 @@ mod pty_bridge;
 // WebSockets (openings, closings, refused upgrades).
 #[path = "ws_closing.rs"]
 mod ws_closing;
+
+// ADR-0083 §6: a `/ws` client that lost messages is told to `resync`.
+#[path = "ws_resync.rs"]
+mod ws_resync;
 
 #[path = "shared_terminal.rs"]
 mod shared_terminal;

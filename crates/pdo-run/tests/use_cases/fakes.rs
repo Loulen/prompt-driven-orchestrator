@@ -295,6 +295,10 @@ impl Tmux for FakeTmux {
     fn paste(&self, name: &str, text: &str) {
         self.send_keys(name, text);
     }
+    fn paste_without_enter(&self, name: &str, text: &str) -> bool {
+        self.send_keys(name, text);
+        true
+    }
     fn attach_argv(&self, _name: &str, _ignore_size: bool) -> Vec<String> {
         Vec::new()
     }
@@ -496,7 +500,9 @@ impl SourcePipelines for Shared {
     fn fingerprint(&self, id: &str) -> Option<String> {
         let shared = self.0.lock().unwrap();
         let (yaml, prompts) = shared.get(id)?;
-        Some(pdo_pipeline::domain::fingerprint::fingerprint(yaml, prompts))
+        Some(pdo_pipeline::domain::fingerprint::fingerprint(
+            yaml, prompts,
+        ))
     }
     fn overwrite<'a>(
         &'a self,

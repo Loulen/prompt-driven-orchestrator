@@ -805,6 +805,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_guarded_event_rides_the_bus_with_its_guard_and_reaches_the_others_without() {
+        let (a, _) = Peer::new("a", false);
+        let (b, seen_by_b) = Peer::new("b", false);
+        let extensions = Extensions::register(vec![Box::new(a), Box::new(b)]).unwrap();
+        let bus = Arc::new(crate::event_bus::BroadcastEventBus::new(16));
+        let mut ws = bus.subscribe();
+        let root =
+            std::env::temp_dir().join(format!("pdo-kernel-guard-{}", std::process::id()));
+        extensions.start(HostServices {
+            attributes: Arc::new(crate::attributes::InMemoryAttributes::default()),
+            bus,
+            data_root: root.clone(),
+        });
+        let read = Operation::new(item(), Verb::Read)
+            .on("i1")
+            .in_projects(["p2"]);
+        extensions.host_of("a").publish(
+            ExtensionEvent::new("item_changed", serde_json::json!({ "id": "i1" }))
+                .guarded_by(read),
+        );
+
+        let unguarded = serde_json::json!({
+            "type": "extension_event", "extension": "a", "name": "item_changed",
+            "payload": { "id": "i1" },
+        });
+        let on_the_bus = ws.recv().await.unwrap();
+        assert_eq!(
+            on_the_bus[crate::event_bus::READ_GUARD],
+            serde_json::json!({
+                "resource": "a/item", "verb": "read", "target": "i1", "projects": ["p2"],
+            })
+        );
+        assert_eq!(
+            crate::event_bus::unguarded(&on_the_bus).into_owned(),
+            unguarded
+        );
+        assert_eq!(wait_for(&seen_by_b, 1).await, vec![unguarded]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn what_an_extension_publishes_in_start_reaches_the_others() {
         struct Greets;
         impl Extension for Greets {

@@ -1,7 +1,20 @@
 //! The PTY bridge's wire protocol (WS `/sessions/{id}/pty`): the control frames a
 //! browser sends on the Text channel, and the operator's extra WebSocket origins.
 
+use std::time::Duration;
+
 use serde::Deserialize;
+
+/// How often the bridge beats an open terminal socket (ADR-0083 §5): well
+/// under the 60 s read timeout a reverse proxy applies by default, so a
+/// terminal whose agent thinks for minutes is never idle in its eyes; short
+/// enough for the browser, which never sees pings, to call a socket that
+/// missed three beats dead (its 30 s silence delay).
+pub const TERMINAL_BEAT_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The Text frame of each beat, sent after its Ping: what the browser's
+/// silence delay reads. Never written to the pane.
+pub const HEARTBEAT_FRAME: &str = r#"{"type":"heartbeat"}"#;
 
 /// Parse the raw `PDO_ALLOWED_WS_ORIGINS` value into a normalised, ready-to-
 /// compare list. **Pure** (takes the raw string, touches no env), so the truth

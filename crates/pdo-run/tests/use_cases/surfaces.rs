@@ -193,10 +193,14 @@ async fn a_created_run_starts_in_its_repository_with_its_directory_watched() {
 /// shared pipelines.
 fn share_relay(w: &World) {
     let pipelines = w.repo.path().join(".pdo/pipelines");
-    let prompts = pdo_pipeline::adapters::registry::read_prompts_dir(&pipelines.join("relay.prompts"));
+    let prompts =
+        pdo_pipeline::adapters::registry::read_prompts_dir(&pipelines.join("relay.prompts"));
     w.shared.0.lock().unwrap().insert(
         "relay".into(),
-        (std::fs::read_to_string(pipelines.join("relay.yaml")).unwrap(), prompts),
+        (
+            std::fs::read_to_string(pipelines.join("relay.yaml")).unwrap(),
+            prompts,
+        ),
     );
 }
 
@@ -240,7 +244,11 @@ async fn a_run_saves_for_itself_and_overwrites_the_shared_pipeline_only_on_reque
     )
     .await;
     assert_eq!(status, 200, "{answer}");
-    assert_eq!(w.shared.0.lock().unwrap()["relay"], shared_before, "the shared pipeline is untouched");
+    assert_eq!(
+        w.shared.0.lock().unwrap()["relay"],
+        shared_before,
+        "the shared pipeline is untouched"
+    );
 
     let (status, preview) = body(w.runs.overwrite_preview(&run_id).await).await;
     assert_eq!(status, 200, "{preview}");
@@ -253,7 +261,14 @@ async fn a_run_saves_for_itself_and_overwrites_the_shared_pipeline_only_on_reque
     );
 
     // Someone edits the shared pipeline after the launch.
-    w.shared.0.lock().unwrap().get_mut("relay").unwrap().1.insert("worker".into(), "A colleague's.\n".into());
+    w.shared
+        .0
+        .lock()
+        .unwrap()
+        .get_mut("relay")
+        .unwrap()
+        .1
+        .insert("worker".into(), "A colleague's.\n".into());
     let (_, preview) = body(w.runs.overwrite_preview(&run_id).await).await;
     assert_eq!(preview["modified_since_launch"], true);
 

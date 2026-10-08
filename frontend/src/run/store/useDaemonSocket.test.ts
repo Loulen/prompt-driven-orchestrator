@@ -1,6 +1,6 @@
 import { renderHook, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { STREAM_OPEN_MARK, useDaemonSocket } from "./useDaemonSocket";
+import { STREAM_OPEN_MARK, STREAM_SILENCE_MS, useDaemonSocket } from "./useDaemonSocket";
 import { useReviewLive } from "../../review/store/useReviewLive";
 import type { WsMessage } from "../model/liveStream";
 
@@ -78,7 +78,8 @@ describe("useDaemonSocket", () => {
       ws.fire("message", { data: JSON.stringify({ type: "event", event: { run_id: "r1" } }) });
       ws.fire("message", { data: "not json" });
     });
-    expect(seen.map((m) => m.type)).toEqual(["event"]);
+    // The opening re-reads, then the Run's event.
+    expect(seen.map((m) => m.type)).toEqual(["resync", "event"]);
     stop();
     unmount();
   });
@@ -89,8 +90,9 @@ describe("useDaemonSocket", () => {
     const seen: WsMessage[] = [];
     const stop = result.current.subscribe((msg) => seen.push(msg));
     const ws = FakeSocket.instances[0];
+    act(() => ws.fire("open"));
+    seen.length = 0;
     act(() => {
-      ws.fire("open");
       ws.fire("message", { data: JSON.stringify({ type: "trigger_updated", trigger_id: "t1" }) });
       // An extension's signal: every Trigger, no id.
       ws.fire("message", { data: JSON.stringify({ type: "trigger_updated" }) });
@@ -159,5 +161,106 @@ describe("useDaemonSocket", () => {
     socket.fire("close", { code: 1000 });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  describe("the signal to re-read everything", () => {
+    let visibility: DocumentVisibilityState = "visible";
+    beforeEach(() => {
+      visibility = "visible";
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+    });
+    const setVisibility = (next: DocumentVisibilityState) => {
+      visibility = next;
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+
+    /** The stream open, with what its subscriber received since. */
+    async function openStream() {
+      const hook = renderHook(() => useDaemonSocket());
+      await settle();
+      const seen: string[] = [];
+      const stop = hook.result.current.subscribe((msg) => seen.push(msg.type));
+      act(() => FakeSocket.instances[0].fire("open"));
+      return { hook, seen, stop };
+    }
+
+    it("goes out at the opening and at each reopening of the stream", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(1);
+      const { hook, seen } = await openStream();
+      expect(seen).toEqual(["resync"]);
+      act(() => FakeSocket.instances[0].fire("close", { code: 1006 }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      act(() => FakeSocket.instances[1].fire("open"));
+      expect(seen).toEqual(["resync", "resync"]);
+      hook.unmount();
+    });
+
+    it("goes out when the tab shows again, not while it hides", async () => {
+      const { hook, seen } = await openStream();
+      seen.length = 0;
+      act(() => setVisibility("hidden"));
+      expect(seen).toEqual([]);
+      act(() => setVisibility("visible"));
+      expect(seen).toEqual(["resync"]);
+      hook.unmount();
+    });
+
+    it("goes out when the network is back", async () => {
+      const { hook, seen } = await openStream();
+      seen.length = 0;
+      act(() => {
+        window.dispatchEvent(new Event("online"));
+      });
+      expect(seen).toEqual(["resync"]);
+      hook.unmount();
+    });
+
+    it("relays the daemon's resync", async () => {
+      const { hook, seen } = await openStream();
+      seen.length = 0;
+      act(() => FakeSocket.instances[0].fire("message", { data: JSON.stringify({ type: "resync" }) }));
+      expect(seen).toEqual(["resync"]);
+      hook.unmount();
+    });
+
+    it("closes a silent stream and re-reads once it is open again", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(1);
+      const { hook, seen } = await openStream();
+      seen.length = 0;
+      const ws = FakeSocket.instances[0];
+      // The beats keep it open.
+      for (let i = 0; i < 3; i++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(STREAM_SILENCE_MS - 1_000);
+        });
+        act(() => ws.fire("message", { data: JSON.stringify({ type: "heartbeat" }) }));
+      }
+      expect(hook.result.current.status).toBe("connected");
+      // Then nothing: dropped, probed, reopened.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STREAM_SILENCE_MS);
+      });
+      expect(hook.result.current.status).toBe("reconnecting");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(FakeSocket.instances).toHaveLength(2);
+      act(() => FakeSocket.instances[1].fire("open"));
+      expect(seen).toEqual(["resync"]);
+      hook.unmount();
+    });
+
+    it("stops listening to the tab and the network once its last user left", async () => {
+      const { hook, seen } = await openStream();
+      seen.length = 0;
+      hook.unmount();
+      act(() => {
+        setVisibility("visible");
+        window.dispatchEvent(new Event("online"));
+      });
+      expect(seen).toEqual([]);
+    });
   });
 });

@@ -15,6 +15,7 @@ import {
   upToDate,
 } from "../model/updateStatus";
 import { KeyValueRow } from "../../shared/ui/key-value-row";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 /**
  * Version & update (#697) — the daemon's cached version check, read from `GET /update`
@@ -118,14 +119,11 @@ export default function VersionUpdateSection({
 
   const copy = async () => {
     if (!status?.manual_command) return;
-    try {
-      await navigator.clipboard.writeText(status.manual_command);
-      setCopied(true);
-      if (copiedTimer.current) clearTimeout(copiedTimer.current);
-      copiedTimer.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable: the command is selectable text anyway */
-    }
+    // Clipboard unavailable: the command is selectable text anyway.
+    if (!(await copyToClipboard(status.manual_command))) return;
+    setCopied(true);
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    copiedTimer.current = setTimeout(() => setCopied(false), 1500);
   };
 
   if (!status) {

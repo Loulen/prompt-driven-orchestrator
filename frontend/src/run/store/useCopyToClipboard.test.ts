@@ -16,6 +16,15 @@ function setClipboard(clipboard: unknown) {
   });
 }
 
+/** The `execCommand("copy")` fallback of an insecure context (plain http). */
+function setExecCommand(execCommand: unknown) {
+  Object.defineProperty(document, "execCommand", {
+    value: execCommand,
+    configurable: true,
+    writable: true,
+  });
+}
+
 describe("useCopyToClipboard (#41)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -23,6 +32,7 @@ describe("useCopyToClipboard (#41)", () => {
   afterEach(() => {
     vi.useRealTimers();
     setClipboard(undefined);
+    setExecCommand(undefined);
   });
 
   it("goes copied once writeText resolves, then back to idle after 1.5 s", async () => {
@@ -60,8 +70,9 @@ describe("useCopyToClipboard (#41)", () => {
     expect(result.current.status).toBe("copied");
   });
 
-  it("goes failed with the reason when writeText rejects, then idle after 3 s", async () => {
+  it("goes failed with the reason when writeText rejects and the fallback fails, then idle after 3 s", async () => {
     setClipboard({ writeText: vi.fn().mockRejectedValue(new DOMException("denied")) });
+    setExecCommand(vi.fn(() => false));
     const { result } = renderHook(() => useCopyToClipboard());
 
     await act(() => result.current.copy("text"));
@@ -75,13 +86,25 @@ describe("useCopyToClipboard (#41)", () => {
     expect(result.current.error).toBeUndefined();
   });
 
-  it("fails (never copied) when navigator.clipboard is absent", async () => {
+  it("fails (never copied) when neither navigator.clipboard nor the fallback works", async () => {
     setClipboard(undefined);
+    setExecCommand(vi.fn(() => false));
     const { result } = renderHook(() => useCopyToClipboard());
 
     await act(() => result.current.copy("text"));
     expect(result.current.status).toBe("failed");
     expect(result.current.error).toBe(CLIPBOARD_REFUSED);
+  });
+
+  it("copies through the execCommand fallback outside a secure context (no navigator.clipboard)", async () => {
+    setClipboard(undefined);
+    const execCommand = vi.fn(() => true);
+    setExecCommand(execCommand);
+    const { result } = renderHook(() => useCopyToClipboard());
+
+    await act(() => result.current.copy("over-http"));
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(result.current.status).toBe("copied");
   });
 
   it("writes what the loader produces", async () => {

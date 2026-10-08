@@ -10,6 +10,7 @@ import { serializePipeline } from "../../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
 import type { EditorPipelineDef } from "../model/pipeline";
 import { useEditStore } from "../store/editStore";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 export function YamlTab({
   pipeline,
@@ -87,11 +88,10 @@ export function YamlTab({
 
   async function copyDocument() {
     setCopyError(false);
-    try {
-      await navigator.clipboard.writeText(yaml);
+    if (await copyToClipboard(yaml)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
-    } catch {
+    } else {
       setCopyError(true);
     }
   }

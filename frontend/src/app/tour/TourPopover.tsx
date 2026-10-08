@@ -4,6 +4,7 @@ import { placePopover, type PopoverSide } from "../../lib/tourPlacement";
 import type { TourRect } from "../../hooks/tour/tourView";
 import type { TourChecklistItem, TourDef, TourStep } from "../../lib/tourDef";
 import type { TourIllustration } from "../../lib/tourPanels";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 /**
  * The instruction card of a running tour (#823).
@@ -100,7 +101,7 @@ export default function TourPopover({
 
   const copy = () => {
     if (!step.copyBlock) return;
-    void navigator.clipboard?.writeText(step.copyBlock).catch(() => {});
+    void copyToClipboard(step.copyBlock);
     setCopiedStep(step.id);
   };
 

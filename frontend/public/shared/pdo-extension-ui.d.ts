@@ -93,6 +93,12 @@ export function openProbedSocket(
   options?: { reconnect?: boolean | "after-drop" },
 ): ProbedSocket;
 
+/** Put `text` on the clipboard from a user gesture: the Clipboard API, or
+ *  outside a secure context (an instance served over plain http) a fallback
+ *  through `execCommand("copy")`. Resolves to whether the text was written;
+ *  never rejects. Since 0.11. */
+export function copyToClipboard(text: string): Promise<boolean>;
+
 declare const ExtensionUi: {
   version: string;
   major: number;
@@ -103,5 +109,6 @@ declare const ExtensionUi: {
   useCurrentActor: typeof useCurrentActor;
   useActorDisplay: typeof useActorDisplay;
   openProbedSocket: typeof openProbedSocket;
+  copyToClipboard: typeof copyToClipboard;
 };
 export default ExtensionUi;

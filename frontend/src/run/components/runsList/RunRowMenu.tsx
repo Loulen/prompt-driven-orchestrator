@@ -8,6 +8,7 @@ import { DropdownMenuSeparator } from "../../../shared/ui/dropdown-menu";
 import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../../shared/ui/RowMenu";
 import { toast } from "../../../shared/ui/toast";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
+import { copyToClipboard } from "../../../shared/lib/clipboard";
 
 /**
  * The row's « ⋯ » menu (#30): the row's verbs (those of its hover icons, plus
@@ -99,8 +100,7 @@ function runEntity(run: RunListEntry): RunEntity {
 }
 
 function copyRunId(runId: string) {
-  navigator.clipboard?.writeText(runId).then(
-    () => toast("Run id copied"),
-    () => toast("The clipboard is not available", "error"),
+  void copyToClipboard(runId).then((ok) =>
+    ok ? toast("Run id copied") : toast("The clipboard is not available", "error"),
   );
 }

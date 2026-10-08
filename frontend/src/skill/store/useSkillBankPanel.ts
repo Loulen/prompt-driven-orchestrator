@@ -18,6 +18,7 @@ import { displaySourceUrl } from "../model/skillSource";
 import { folderCounts, type TreeNodeRef } from "../model/skillTree";
 import { newScanId } from "../model/scanId";
 import { tildify } from "../../lib/homePath";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 const UNDO_MS = 6000;
 
@@ -312,13 +313,10 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
 
   const copyId = async (id: string) => {
     setMenuFor(null);
-    try {
-      await navigator.clipboard?.writeText(id);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable: nothing to do */
-    }
+    // Clipboard unavailable: nothing to do.
+    if (!(await copyToClipboard(id))) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
   };
 
   const startUpdateFromSource = async (folder: SkillFolder) => {

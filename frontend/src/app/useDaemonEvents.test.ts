@@ -72,13 +72,15 @@ describe("useDaemonEvents", () => {
     const loadPipelines = vi.fn(async () => {});
     useEditStore.setState({ loadPipelines });
     const { targets, emit } = mount();
+    // A burst of them costs one read of each, in the window.
     emit({ type: "resync" });
+    emit({ type: "resync" });
+    expect(targets.refreshTriggers).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(300);
     expect(targets.refreshTriggers).toHaveBeenCalledTimes(1);
     expect(targets.refreshTriggersPaused).toHaveBeenCalledTimes(1);
     expect(targets.refreshProjects).toHaveBeenCalledTimes(1);
     expect(loadPipelines).toHaveBeenCalledTimes(1);
-    // The Runs, the open Run and the sessions, in the window a burst shares.
-    vi.advanceTimersByTime(300);
     expect(targets.refreshRuns).toHaveBeenCalledTimes(1);
     expect(targets.refreshRun).toHaveBeenCalledTimes(1);
     expect(targets.refreshSessions).toHaveBeenCalledTimes(1);

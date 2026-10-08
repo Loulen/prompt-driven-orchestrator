@@ -58,6 +58,14 @@ export function useDaemonEvents({
     const runs = trailingWindow(() => refreshers.current.refreshRuns());
     const run = trailingWindow(() => refreshers.current.refreshRun());
     const sessions = trailingWindow(() => refreshers.current.refreshSessions());
+    // What only a resync re-reads, in one window too: the daemon may send
+    // several in a burst, and the stream's own may follow one.
+    const lists = trailingWindow(() => {
+      refreshTriggers();
+      refreshTriggersPaused();
+      refreshProjects();
+      void loadPipelines();
+    });
     const unsubscribe = subscribe((msg) => {
       // ADR-0083 §6: back from an absence (the stream reopened, the tab shows
       // again, the network is back) or told by the daemon that this client
@@ -66,10 +74,7 @@ export function useDaemonEvents({
         runs();
         run();
         sessions();
-        refreshTriggers();
-        refreshTriggersPaused();
-        refreshProjects();
-        loadPipelines();
+        lists();
         return;
       }
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
@@ -128,6 +133,7 @@ export function useDaemonEvents({
       runs.cancel();
       run.cancel();
       sessions.cancel();
+      lists.cancel();
     };
   }, [
     subscribe,

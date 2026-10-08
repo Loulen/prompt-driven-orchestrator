@@ -3,7 +3,7 @@ use pdo_platform::domain::audit::ActorHint;
 use pdo_trigger::application::TriggerError;
 use serde_json::json;
 
-use crate::fakes::world;
+use crate::fakes::{read_guard, world};
 
 #[tokio::test]
 async fn a_deletion_journals_the_whole_row_it_removed() {
@@ -20,7 +20,7 @@ async fn a_deletion_journals_the_whole_row_it_removed() {
     assert!(w.store.one(&id).is_none());
     assert_eq!(
         w.announced(),
-        vec![json!({ "type": "trigger_deleted", "trigger_id": id })]
+        vec![json!({ "type": "trigger_deleted", "trigger_id": id, "read_guard": read_guard(&id) })]
     );
     let entries = w.audit.entries.lock().unwrap().clone();
     let e = entries

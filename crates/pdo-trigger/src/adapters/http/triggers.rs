@@ -19,10 +19,11 @@ use crate::Triggers;
 /// `GET /triggers[?attr.<id>/<key>=<value>…]`.
 pub(super) async fn list(
     State(triggers): State<Arc<Triggers>>,
+    Extension(actor): Extension<Actor>,
     RawQuery(query): RawQuery,
 ) -> Response {
     match triggers
-        .list(AttributeFilter::from_query(query.as_deref()))
+        .list(&actor, AttributeFilter::from_query(query.as_deref()))
         .await
     {
         Ok(entries) => Json(entries).into_response(),
@@ -44,9 +45,10 @@ pub(super) async fn create(
 
 pub(super) async fn get(
     State(triggers): State<Arc<Triggers>>,
+    Extension(actor): Extension<Actor>,
     Path(trigger_id): Path<String>,
 ) -> Response {
-    match triggers.attributed(&trigger_id).await {
+    match triggers.attributed(&actor, &trigger_id).await {
         Ok(trigger) => Json(trigger).into_response(),
         Err(e) => refusal(e),
     }
@@ -79,9 +81,10 @@ pub(super) async fn delete(
 
 pub(super) async fn fires(
     State(triggers): State<Arc<Triggers>>,
+    Extension(actor): Extension<Actor>,
     Path(trigger_id): Path<String>,
 ) -> Response {
-    match triggers.fires(&trigger_id).await {
+    match triggers.fires(&actor, &trigger_id).await {
         Ok(fires) => Json(fires).into_response(),
         Err(e) => refusal(e),
     }

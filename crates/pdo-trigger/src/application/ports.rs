@@ -101,6 +101,14 @@ pub trait Repositories: Send + Sync {
     fn refresh<'a>(&'a self, targets: &'a [String]) -> BoxFuture<'a, Option<FetchError>>;
 }
 
+/// The Projets a Trigger is in: those of its target repository (the
+/// workspace context's Projets, matched as a Run's repository is).
+pub trait TriggerProjects: Send + Sync {
+    /// The Projets owning the repository `path`: one at most, none when no
+    /// Projet owns it or the Projets cannot be read.
+    fn of_repository<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Vec<String>>;
+}
+
 /// The staging profiles a Trigger's `sandbox` may name (the sandbox context).
 pub trait SandboxProfiles: Send + Sync {
     /// The write-time existence gate of a stored `sandbox` value.

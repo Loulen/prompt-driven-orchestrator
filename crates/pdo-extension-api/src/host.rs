@@ -93,6 +93,25 @@ pub trait Host: Send + Sync {
             "this host cannot create a Run",
         ))))
     }
+
+    /// The name of the Projet `project_id` (API 0.11), as a person reads it
+    /// (`P1`), or `None` for an id the core does not know (and by default):
+    /// show the id then. Synchronous and quick, so an extension may call it
+    /// from its own `authorize` to name the Projet in a refusal's reason. It
+    /// follows a renaming as soon as the Projet's `project_changed` is
+    /// announced.
+    fn project_name(&self, _project_id: &str) -> Option<String> {
+        None
+    }
+
+    /// Tell the core that the suspensions of the Triggers changed (API 0.11):
+    /// what [`Extension::trigger_suspension`](crate::Extension::trigger_suspension)
+    /// answers is no longer what it answered, for a cause outside any
+    /// mutation of a Trigger (a cause the extension holds itself). The
+    /// core announces a `trigger_updated` without `trigger_id` on `/ws`, and
+    /// the list of the Triggers reads them all again. Never waits. Nothing by
+    /// default.
+    fn triggers_changed(&self) {}
 }
 
 /// The host of an extension alone: everything allowed, events go nowhere, no
@@ -181,6 +200,27 @@ mod tests {
         host.publish(ExtensionEvent::new("x", serde_json::Value::Null));
         host.applied(OperationApplied::new(Actor::LocalOperator, op, None));
         assert_eq!(host.catalogue(), crate::core_resources());
+        assert_eq!(host.project_name("prj-1"), None);
+        host.triggers_changed();
+    }
+
+    /// API 0.11 is additive: a host written against 0.10 compiles unchanged
+    /// and answers no name.
+    #[test]
+    fn a_host_without_the_new_reads_names_no_projet() {
+        struct Older;
+        impl Host for Older {
+            fn authorize(&self, _actor: &Actor, _operation: &crate::Operation) -> Authorization {
+                Authorization::Allow
+            }
+            fn publish(&self, _event: ExtensionEvent) {}
+            fn applied(&self, _applied: OperationApplied) {}
+            fn on_create(&self, _actor: &Actor, _entity: &EntityRef) -> Attributes {
+                Attributes::new()
+            }
+        }
+        assert_eq!(Older.project_name("prj-1"), None);
+        Older.triggers_changed();
     }
 
     #[tokio::test]

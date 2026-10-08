@@ -1,7 +1,7 @@
 //! The Runs a Trigger produces, through the run context's public use cases: a
 //! fire is a creation the trigger context has already gated (`Runs::start_run`),
 //! whose Run the extensions stamp, before its first Node, with the Trigger as
-//! its Acteur.
+//! its Acteur. The Projets of a Trigger are matched as those of its Runs.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use pdo_run::Runs;
 use pdo_workspace::domain::provisioning::ProvisioningRules;
 use tracing::warn;
 
-use crate::application::ports::{BoxFuture, RunFromTrigger, TriggerRuns};
+use crate::application::ports::{BoxFuture, RunFromTrigger, TriggerProjects, TriggerRuns};
 use crate::domain::trigger::Trigger;
 
 /// The Runs of the run context.
@@ -53,6 +53,17 @@ impl TriggerRuns for RunsOfTriggers {
                     .to_string()),
             }
         })
+    }
+}
+
+/// The Projets of a Trigger's repository, matched as the run context matches
+/// a Run's (its spellings included): a Trigger and the Runs it fires are in
+/// the same Projet.
+pub struct ProjectsOfRuns(pub Arc<Runs>);
+
+impl TriggerProjects for ProjectsOfRuns {
+    fn of_repository<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(self.0.projects_of_repository(path))
     }
 }
 

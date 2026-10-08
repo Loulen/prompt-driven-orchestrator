@@ -14,10 +14,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use pdo_kernel::project_names::ProjectNames;
 use pdo_pipeline::adapters::self_writes::SelfWrites;
 use pdo_pipeline::adapters::watcher as pipeline_watcher;
 use pdo_run::application::boot_recovery;
 use pdo_run::application::paths::instance_pipeline_dir;
+use pdo_workspace::adapters::sqlite::SqliteProjects;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
@@ -25,6 +27,7 @@ pub use config::{DaemonConfig, ExtensionHostHandle};
 pub use handle::DaemonHandle;
 
 use crate::contexts::{ContextResources, Contexts};
+use crate::ports::project_events::load_project_names;
 use background::Loops;
 use router_layer::RouterLayer;
 
@@ -77,6 +80,7 @@ pub async fn serve_with_config(
             "the daemon runs under the composition root (`pdo::serve`), which wires its \
              bounded contexts: no context wiring was given",
         )?;
+    let project_names = Arc::new(ProjectNames::default());
     let resources = ContextResources {
         db: db.clone(),
         repo_root: repo_root.clone(),
@@ -107,6 +111,7 @@ pub async fn serve_with_config(
         panic_on_trigger_name: config.panic_on_trigger_name.clone(),
         price_source_url: config.price_source_url.clone(),
         price_refresh_at_boot: config.price_refresh_at_boot,
+        project_names: project_names.clone(),
     };
     let Contexts {
         platform,
@@ -117,6 +122,9 @@ pub async fn serve_with_config(
         settings,
         router,
     } = wire_contexts(resources);
+    // API 0.11: the extensions read the names of the Projets from the first
+    // request on.
+    load_project_names(&SqliteProjects::new(db.clone()), &project_names).await;
     platform
         .init()
         .await

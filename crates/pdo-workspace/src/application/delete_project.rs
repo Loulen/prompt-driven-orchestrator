@@ -20,7 +20,7 @@ impl Workspace {
         if !deleted {
             return Err(WorkspaceError::NotFound);
         }
-        self.events.project_changed(id);
+        self.events.project_changed(id).await;
         Ok(())
     }
 }

@@ -2,6 +2,8 @@
 //! (`ports.rs`). Every mutation — and every fire, cron or "Run now" — builds an
 //! Operation on the Trigger and goes through the Autorisation d'opération
 //! before it touches anything. A cron fire's Acteur is the Trigger itself.
+//! The Operation on a Trigger is in the Projets of its target repository
+//! (`read_access.rs`), and so are its reads.
 
 pub mod create_trigger;
 pub mod delete_trigger;
@@ -9,6 +11,7 @@ pub mod fire;
 pub mod pause_triggers;
 pub mod ports;
 pub mod read;
+pub mod read_access;
 pub mod suspension;
 pub mod test_guard;
 pub mod triggers;

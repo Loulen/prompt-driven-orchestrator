@@ -113,6 +113,11 @@ mod extension_catalogue;
 #[path = "extension_reads.rs"]
 mod extension_reads;
 
+// API 0.11: the name of a Projet for an extension, the signal of the
+// Triggers, the Triggers read in the Projets of their repository.
+#[path = "extension_projets_triggers.rs"]
+mod extension_projets_triggers;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;

@@ -79,7 +79,7 @@ impl Workspace {
         }
         let entity = EntityRef::new(ResourceKind::Project, project.id.clone());
         project.attributes = stamp(self.host(), actor, entity).await;
-        self.events.project_changed(&project.id);
+        self.events.project_changed(&project.id).await;
         Ok(ProjectCreated::Created(project))
     }
 }

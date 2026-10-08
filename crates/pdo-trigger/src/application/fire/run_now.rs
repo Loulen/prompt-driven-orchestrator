@@ -8,7 +8,7 @@
 use pdo_kernel::{Actor, Verb};
 use tracing::error;
 
-use crate::application::{operation, TriggerError, FIRE};
+use crate::application::{TriggerError, FIRE};
 use crate::domain::schedule::FireSource;
 use crate::domain::trigger::FireRecord;
 use crate::Triggers;
@@ -23,7 +23,8 @@ impl Triggers {
         actor: &Actor,
         id: &str,
     ) -> Result<Option<FireRecord>, TriggerError> {
-        self.authorize(actor, &operation(Verb::Action(FIRE.to_string()), Some(id)))?;
+        let fire = self.on_trigger(Verb::Action(FIRE.to_string()), id).await;
+        self.authorize(actor, &fire)?;
         let trigger = match self.store.get(id).await {
             Ok(Some(t)) => t,
             Ok(None) => return Err(TriggerError::NotFound(format!("trigger not found: {id}"))),

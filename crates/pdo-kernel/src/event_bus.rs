@@ -1,8 +1,38 @@
 //! The event bus: where the core publishes what happened, as the JSON the daemon
 //! broadcasts on `/ws` (D20). The front and the extensions read the same thing.
 
+use std::borrow::Cow;
+
 use serde_json::Value;
 use tokio::sync::broadcast;
+
+use crate::Operation;
+
+/// The field of a message of the bus naming the read that guards it (an
+/// [`Operation`] with the verb `read`): `/ws` relays the message only to the
+/// connections whose Actor may run that read, then without the field. A
+/// message without it reaches every connection, as before.
+pub const READ_GUARD: &str = "read_guard";
+
+/// `message` (an object) guarded by `read`.
+pub fn guarded(mut message: Value, read: &Operation) -> Value {
+    if let (Some(fields), Ok(read)) = (message.as_object_mut(), serde_json::to_value(read)) {
+        fields.insert(READ_GUARD.to_string(), read);
+    }
+    message
+}
+
+/// `message` without its guard: what leaves the daemon of a guarded message.
+pub fn unguarded(message: &Value) -> Cow<'_, Value> {
+    if message.get(READ_GUARD).is_none() {
+        return Cow::Borrowed(message);
+    }
+    let mut stripped = message.clone();
+    if let Some(fields) = stripped.as_object_mut() {
+        fields.remove(READ_GUARD);
+    }
+    Cow::Owned(stripped)
+}
 
 /// Publish events and subscribe to them.
 pub trait EventBus: Send + Sync {
@@ -47,6 +77,26 @@ impl EventBus for BroadcastEventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guarded_message_names_its_read_beside_its_fields() {
+        let read = Operation::new(crate::ResourceKind::Trigger, crate::Verb::Read)
+            .on("t1")
+            .in_projects(["p1"]);
+        assert_eq!(
+            guarded(
+                serde_json::json!({ "type": "trigger_updated", "trigger_id": "t1" }),
+                &read
+            ),
+            serde_json::json!({
+                "type": "trigger_updated",
+                "trigger_id": "t1",
+                "read_guard": {
+                    "resource": "trigger", "verb": "read", "target": "t1", "projects": ["p1"],
+                },
+            })
+        );
+    }
 
     #[tokio::test]
     async fn a_subscriber_receives_what_is_published_after_it_subscribed() {

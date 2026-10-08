@@ -31,8 +31,9 @@ pub(super) fn router(control: Control) -> Router {
     let gate_write = control.clone();
     let launch = control.launch.clone();
     Router::new()
-        .merge(launch_routes(launch))
+        .merge(launch_routes(launch, control.creation.clone()))
         .merge(super::creation::routes(control.creation.clone()))
+        .merge(super::projets::routes(control.creation.clone()))
         // A sub-router with a fallback of its own: what the admission must
         // guard as well as a route (`/ext/test/nested/<anything>`).
         .nest(
@@ -153,7 +154,9 @@ pub(super) fn router(control: Control) -> Router {
 }
 
 /// API 0.8: what the extension gives a Node's launch, and its suspensions.
-fn launch_routes(launch: super::launch::Launch) -> Router {
+/// A suspension set or lifted is signalled to the core (API 0.11), as an
+/// extension whose cause changed outside a Trigger's mutation does.
+fn launch_routes(launch: super::launch::Launch, creation: super::creation::Creation) -> Router {
     let (read, configure, list, suspend, lift) = (
         launch.clone(),
         launch.clone(),
@@ -161,6 +164,7 @@ fn launch_routes(launch: super::launch::Launch) -> Router {
         launch.clone(),
         launch,
     );
+    let (on_suspend, on_lift) = (creation.clone(), creation);
     Router::new()
         .route(
             "/launch",
@@ -186,6 +190,9 @@ fn launch_routes(launch: super::launch::Launch) -> Router {
                     .as_str()
                     .unwrap_or("suspended by the test extension");
                 suspend.suspend(&id, reason);
+                if let Some(host) = on_suspend.host() {
+                    host.triggers_changed();
+                }
                 let all = suspend.suspensions();
                 async move { Json(all) }
             }),
@@ -194,6 +201,9 @@ fn launch_routes(launch: super::launch::Launch) -> Router {
             "/suspensions/{id}",
             delete(move |Path(id): Path<String>| {
                 let lifted = lift.lift(&id);
+                if let Some(host) = on_lift.host() {
+                    host.triggers_changed();
+                }
                 async move { Json(json!({ "lifted": lifted })) }
             }),
         )

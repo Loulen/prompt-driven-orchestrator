@@ -6,14 +6,14 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use pdo_kernel::authorization::{authorize, Denied};
-use pdo_kernel::event_bus::EventBus;
+use pdo_kernel::event_bus::{guarded, EventBus};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_platform::domain::audit::{ActorHint, NewAuditEntry};
 
 use super::ports::{
     AuditTrail, GuardRunner, Repositories, SandboxProfiles, StorageError, TriggerPipelines,
-    TriggerRepository, TriggerRuns, TriggerSettings,
+    TriggerProjects, TriggerRepository, TriggerRuns, TriggerSettings,
 };
 
 /// Every port the context needs, as the composition root plugs them in.
@@ -24,6 +24,9 @@ pub struct TriggersPorts {
     pub settings: Arc<dyn TriggerSettings>,
     pub pipelines: Arc<dyn TriggerPipelines>,
     pub repositories: Arc<dyn Repositories>,
+    /// The Projets of a Trigger's target repository: those its Operations
+    /// and its reads are in.
+    pub projects: Arc<dyn TriggerProjects>,
     pub sandbox_profiles: Arc<dyn SandboxProfiles>,
     /// The Runs a fire starts (implemented over the run context).
     pub runs: Arc<dyn TriggerRuns>,
@@ -52,6 +55,7 @@ pub struct Triggers {
     pub(crate) settings: Arc<dyn TriggerSettings>,
     pub(crate) pipelines: Arc<dyn TriggerPipelines>,
     pub(crate) repositories: Arc<dyn Repositories>,
+    pub(crate) projects: Arc<dyn TriggerProjects>,
     pub(crate) sandbox_profiles: Arc<dyn SandboxProfiles>,
     pub(crate) runs: Arc<dyn TriggerRuns>,
     audit: Arc<dyn AuditTrail>,
@@ -77,6 +81,7 @@ impl Triggers {
             settings,
             pipelines,
             repositories,
+            projects,
             sandbox_profiles,
             runs,
             audit,
@@ -89,6 +94,7 @@ impl Triggers {
             settings,
             pipelines,
             repositories,
+            projects,
             sandbox_profiles,
             runs,
             audit,
@@ -128,6 +134,13 @@ impl Triggers {
     /// Announce on the bus, as `/ws` relays it.
     pub(crate) fn announce(&self, message: serde_json::Value) {
         self.bus.publish(message);
+    }
+
+    /// Announce `message` about one Trigger, guarded by `read` (its read in
+    /// its Projets): `/ws` relays it only to the connections that may read
+    /// the Trigger.
+    pub(crate) fn announce_about(&self, message: serde_json::Value, read: &Operation) {
+        self.bus.publish(guarded(message, read));
     }
 
     /// Journal a configuration mutation, AFTER it committed (ADR-0044 §2·B —

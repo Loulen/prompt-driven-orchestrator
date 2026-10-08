@@ -1,8 +1,9 @@
 //! The reads of the context: the list, one Trigger, its fires, the heartbeat's
-//! health. Reads change nothing, so they ask no one.
+//! health. Reads change nothing: they ask only whether the actor may read the
+//! Trigger, in the Projets of its target repository (`read_access.rs`).
 
 use pdo_kernel::attributes::{self, AttributeFilter, AttributedList};
-use pdo_kernel::ResourceKind;
+use pdo_kernel::{Actor, ResourceKind};
 use serde::Serialize;
 use tracing::error;
 use ts_rs::TS;
@@ -36,13 +37,14 @@ pub struct Health {
 }
 
 impl Triggers {
-    /// Every Trigger carrying the attributes `filter` asks for, each with its
-    /// attributes.
+    /// Every Trigger `actor` may read carrying the attributes `filter` asks
+    /// for, each with its attributes.
     pub async fn list(
         &self,
+        actor: &Actor,
         filter: AttributeFilter,
     ) -> Result<Vec<TriggerListEntry>, TriggerError> {
-        let triggers = self.store.list().await.map_err(|e| {
+        let mut triggers = self.store.list().await.map_err(|e| {
             error!("failed to list triggers: {e}");
             TriggerError::Storage("failed to list triggers".to_string())
         })?;
@@ -52,6 +54,14 @@ impl Triggers {
         // create/update. The raw `target_repo` is left untouched so the badge / detail
         // / Run-now pre-fill keep showing only what the user actually set.
         let repo_root = self.options.repo_root.to_string_lossy().into_owned();
+        let mut readable = self.readable(actor);
+        let mut kept = Vec::with_capacity(triggers.len());
+        for trigger in triggers.drain(..) {
+            if readable.keeps(&trigger).await {
+                kept.push(trigger);
+            }
+        }
+        let triggers = kept;
         let attributed =
             AttributedList::read(self.extensions(), ResourceKind::Trigger, filter).await;
         Ok(triggers
@@ -80,15 +90,18 @@ impl Triggers {
         }
     }
 
-    /// One Trigger, with its attributes.
-    pub async fn attributed(&self, id: &str) -> Result<Trigger, TriggerError> {
+    /// One Trigger `actor` may read, with its attributes.
+    pub async fn attributed(&self, actor: &Actor, id: &str) -> Result<Trigger, TriggerError> {
+        self.authorize_read(actor, id).await?;
         let mut trigger = self.get(id).await?;
         trigger.attributes =
             attributes::of_entity(self.extensions(), ResourceKind::Trigger, id).await;
         Ok(self.with_suspension(trigger))
     }
 
-    pub async fn fires(&self, id: &str) -> Result<Vec<TriggerFire>, TriggerError> {
+    /// The recent fires of a Trigger `actor` may read.
+    pub async fn fires(&self, actor: &Actor, id: &str) -> Result<Vec<TriggerFire>, TriggerError> {
+        self.authorize_read(actor, id).await?;
         self.store.fires(id).await.map_err(|e| {
             error!("failed to list trigger fires: {e}");
             TriggerError::Storage("failed to list trigger fires".to_string())

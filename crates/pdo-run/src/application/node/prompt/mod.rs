@@ -1516,6 +1516,50 @@ mod tests {
     }
 
     #[test]
+    fn an_on_demand_node_launched_ahead_lists_its_intermediate_outputs() {
+        // ADR-0086 × CORE-45: an on-demand node started before its upstream is
+        // told its input is not there yet, and still gets its Intermediate
+        // outputs section like any other node.
+        let mut pipeline = pipeline_with_intermediate_output();
+        let mut reader = pipeline.nodes[0].clone();
+        reader.id = "reader".into();
+        reader.name = "reader".into();
+        reader.on_demand = true;
+        pipeline.nodes.push(reader);
+        pipeline.edges.push(EdgeDef {
+            source: EdgeSource::single("planner", "plan"),
+            target: EdgeEndpoint {
+                node: "reader".into(),
+                port: "work".into(),
+            },
+            ..Default::default()
+        });
+        let node = pipeline.nodes.iter().find(|n| n.id == "reader").unwrap();
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.absent_sources = ["planner".to_string()].into_iter().collect();
+
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains("- `work`: not available yet — its upstream `planner`"),
+            "{preamble}"
+        );
+        let intermediate = preamble
+            .find("## Intermediate outputs\n")
+            .expect("intermediate outputs section");
+        assert!(
+            preamble[intermediate..].contains(
+                "- `preview`: write to `/repo/.pdo/artifacts/reader/iter-1/preview/output.md`"
+            ),
+            "{preamble}"
+        );
+        assert!(
+            !preamble[..intermediate].contains("`preview`"),
+            "the intermediate output is not an ordinary output: {preamble}"
+        );
+    }
+
+    #[test]
     fn no_intermediate_section_without_intermediate_outputs() {
         let pipeline = sample_pipeline();
         let node = &pipeline.nodes[0];

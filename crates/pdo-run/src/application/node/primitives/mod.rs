@@ -967,6 +967,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
@@ -996,6 +997,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");

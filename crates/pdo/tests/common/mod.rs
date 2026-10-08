@@ -900,6 +900,23 @@ impl TestDaemon {
         }
     }
 
+    /// Shorten the beat of the terminal sockets opened next (test seam).
+    pub fn set_terminal_beat_interval(&self, interval: std::time::Duration) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .set_terminal_beat_interval(interval);
+    }
+
+    /// Publish `count` throwaway messages on the bus at once, so a `/ws`
+    /// client lags (test seam).
+    pub fn flood_bus(&self, count: usize) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .flood_bus(count);
+    }
+
     /// Force a Trigger's next fire into the past so the next tick treats it as
     /// due (test seam).
     pub async fn force_trigger_due(&self, trigger_id: &str) {

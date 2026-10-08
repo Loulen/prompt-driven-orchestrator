@@ -1,6 +1,7 @@
 //! `/ws`: the live stream every client subscribes to. It relays the kernel's
 //! bus as is (D20), after a `ready` greeting, with a heartbeat every
-//! [`HEARTBEAT_INTERVAL`].
+//! [`HEARTBEAT_INTERVAL`]. A connection that lagged behind the bus (messages
+//! lost) receives [`RESYNC`] (ADR-0083 §6).
 //!
 //! Filtered per connection (CORE-5): a message about a Run reaches a
 //! connection only if its Actor (the one `identify` set on the upgrade
@@ -42,6 +43,9 @@ use tracing::warn;
 use crate::Runs;
 
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// What a client that lagged behind the bus receives: re-read the whole state.
+pub const RESYNC: &str = r#"{"type":"resync"}"#;
 
 /// How long a connection keeps the answer to « may I read this Run? ».
 pub const READ_DECISION_TTL: Duration = Duration::from_secs(5);
@@ -128,8 +132,14 @@ async fn relay(mut socket: WebSocket, runs: Arc<Runs>, actor: Actor) -> Closing 
                             return Closing::Dropped;
                         }
                     }
+                    // ADR-0083 §6: the bus dropped messages this client never
+                    // got, so its picture may miss a transition. Nothing is
+                    // replayed: the client is told to re-read everything.
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("WebSocket client lagged by {n} events");
+                        warn!("WebSocket client lagged by {n} events, asking it to resync");
+                        if socket.send(Message::Text(RESYNC.into())).await.is_err() {
+                            return Closing::Dropped;
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         let _ = socket.close().await;

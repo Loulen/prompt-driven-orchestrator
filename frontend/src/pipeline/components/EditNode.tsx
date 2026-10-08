@@ -121,6 +121,10 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   // not a hardcoded left. Moot for a lands-by-drop body (edges bind to the
   // per-side anchor handles below), but kept consistent.
   const bodyHandleSide = data.inputs[0]?.side ?? "left";
+  // CORE-45: an Output intermédiaire is shown on the card but starts no wire —
+  // only the ordinary outputs grow the rim a wire is drawn from.
+  const intermediateOutputs = data.outputs.filter((p) => p.intermediate);
+  const wireable = data.outputs.length - intermediateOutputs.length;
 
   return (
     <NodeCard
@@ -227,6 +231,23 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           </span>
         )}
       </div>
+      {/* CORE-45: the Outputs intermédiaires, a row under the title — dashed,
+          because no wire leaves them. Omitted entirely without one. */}
+      {intermediateOutputs.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 pl-[22px]" data-testid="intermediate-outputs-row">
+          {intermediateOutputs.map((p) => (
+            <span
+              key={p.name}
+              data-testid="intermediate-output-chip"
+              title={`${p.name}: intermediate output, shown while the node works, never wired`}
+              className="rounded border border-dashed border-line-strong px-1 font-mono text-fg-4"
+              style={{ fontSize: 9, lineHeight: "14px" }}
+            >
+              {p.name}
+            </span>
+          ))}
+        </div>
+      )}
       {/* #723 — orchestrator pastilles: a row under the title (the card grows
           a line); omitted entirely without children, so a node that never
           orchestrated stays byte-identical. */}
@@ -272,8 +293,9 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       {/* #844: the rim is the drag-source — no output dot any more. Rendered LAST
           and on a higher layer so it wins the pointer over the body target above;
           inside the rim the card still drags. A node that declares no output
-          (the End marker) starts no wire and grows no rim. */}
-      {data.outputs.length > 0 && <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} />}
+          (the End marker), or only Outputs intermédiaires, starts no wire and
+          grows no rim. */}
+      {wireable > 0 && <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} />}
     </NodeCard>
   );
 }

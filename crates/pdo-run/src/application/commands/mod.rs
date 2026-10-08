@@ -773,6 +773,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 }],
                 outputs: vec![Port {
                     name: "pass".into(),
@@ -784,6 +785,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -841,6 +843,7 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
+                    intermediate: false,
                 }],
                 outputs: vec![],
                 interactive: false,

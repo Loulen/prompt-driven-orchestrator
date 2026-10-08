@@ -27,6 +27,12 @@ interface OutputPortCardProps {
   schema: Record<string, FrontmatterFieldDecl> | null | undefined;
   onSchemaChange: (schema: Record<string, FrontmatterFieldDecl> | undefined) => void;
   allowInstructions?: boolean;
+  /**
+   * CORE-45: the edge that carries this output (`designer.preview -> builder.spec`),
+   * or null. A wired output cannot become an Output intermédiaire: the tick is
+   * refused, naming the edge to change first.
+   */
+  wiredBy?: string | null;
 }
 
 export default function OutputPortCard({
@@ -38,8 +44,13 @@ export default function OutputPortCard({
   schema,
   onSchemaChange,
   allowInstructions = false,
+  wiredBy = null,
 }: OutputPortCardProps) {
   const [collapsed, setCollapsed] = useState(false);
+  // CORE-45: why the last tick of « intermediate » was refused, until the next try.
+  const [intermediateRefusal, setIntermediateRefusal] = useState<string | null>(null);
+  const intermediate = port.intermediate === true;
+  const hasSchema = !!schema && Object.keys(schema).length > 0;
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const instructionsContainerRef = useRef<HTMLDivElement>(null);
   const instructionsRef = useRef<HTMLTextAreaElement>(null);
@@ -109,6 +120,47 @@ export default function OutputPortCard({
               ))}
             </select>
           </div>
+          <div className="flex flex-col gap-1 px-2 py-1">
+            <label
+              className="flex items-center gap-2 text-fg-3"
+              style={{ fontSize: "10px" }}
+              title="Filled and updated by the agent while it works, for humans to follow. Never checked at completion, never wired."
+            >
+              <input
+                type="checkbox"
+                checked={intermediate}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  if (next && wiredBy) {
+                    setIntermediateRefusal(
+                      `Output "${port.name}" is carried by edge "${wiredBy}": remove it from that edge before marking it intermediate.`,
+                    );
+                    return;
+                  }
+                  setIntermediateRefusal(null);
+                  onUpdate({ intermediate: next ? true : undefined });
+                }}
+                data-testid="port-intermediate-checkbox"
+              />
+              <span>Intermediate</span>
+              <span className="text-fg-4">shown during the run · never checked · never wired</span>
+            </label>
+            {intermediateRefusal && (
+              <p
+                role="alert"
+                className="text-st-failed"
+                style={{ fontSize: "10px" }}
+                data-testid="port-intermediate-refusal"
+              >
+                {intermediateRefusal}
+              </p>
+            )}
+            {intermediate && isMarkdown && hasSchema && (
+              <p className="text-fg-4" style={{ fontSize: "10px" }} data-testid="port-intermediate-schema-ignored">
+                Its frontmatter schema is kept but ignored while the output is intermediate.
+              </p>
+            )}
+          </div>
           {allowInstructions && (
             <div
               ref={instructionsContainerRef}
@@ -153,7 +205,8 @@ export default function OutputPortCard({
               )}
             </div>
           )}
-          {isMarkdown && (
+          {/* CORE-45: nothing validates an Output intermédiaire's frontmatter. */}
+          {isMarkdown && !intermediate && (
             <OutputSchemaEditor schema={schema} onChange={onSchemaChange} />
           )}
         </div>

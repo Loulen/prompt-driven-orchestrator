@@ -47,6 +47,8 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
 ///   input, so a script knows to `readarray -t files <<< "$PDO_INPUT_<PORT>"`
 ///   (and to `pdo skip` when the value is empty).
 /// - `PDO_OUTPUT_<PORT>` — absolute path the script writes its `output.md` to.
+///   An *Output intermédiaire* gets its path the same way: the script may
+///   rewrite it while it runs, and nothing checks it at the end.
 /// - `PDO_VAR_<NAME>` — each resolved pipeline variable (sorted for determinism).
 ///
 /// The base four (`PDO_RUN_ID`/`NODE_ID`/`NODE_ITER`/`DAEMON_URL`) are exported

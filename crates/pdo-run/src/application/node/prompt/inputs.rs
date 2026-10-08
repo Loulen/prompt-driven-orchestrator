@@ -146,6 +146,7 @@ pub fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> 
             port_name: port.name.clone(),
             path: output_port_path(&ctx.node.id, ctx.artifacts_dir, ctx.iter, port),
             port_type: port.port_type,
+            intermediate: port.intermediate,
         })
         .collect()
 }
@@ -177,8 +178,11 @@ pub fn surviving_partial_outputs(
     // working copy has modified is this run's work (an interrupted attempt
     // overwrote the inherited report) and is handed over like any survivor.
     let tracked = crate::application::node::io::git_tracked_paths(artifacts_dir, &node.id, iter);
+    // An *Output intermédiaire* is no partial output: it is meant to be
+    // rewritten as the work goes, and the preamble already says where it is.
     node.outputs
         .iter()
+        .filter(|port| !port.intermediate)
         .map(|port| output_port_path(&node.id, artifacts_dir, iter, port))
         .filter(|path| path_holds_content(path))
         .filter(|path| !crate::application::node::io::is_inherited(path, run_started_at, &tracked))

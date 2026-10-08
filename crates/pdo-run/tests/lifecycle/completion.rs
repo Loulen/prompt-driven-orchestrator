@@ -1284,6 +1284,109 @@ async fn node_done_returns_409_when_outputs_missing() {
     assert!(missing.iter().any(|v| v == "report"));
 }
 
+/// A `worker` with an ordinary `report` and an intermediate html `preview`
+/// whose kept schema nothing validates.
+fn write_pipeline_with_intermediate_output(dir: &Path, name: &str) {
+    let pipelines_dir = dir.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir).unwrap();
+    let yaml = format!(
+        "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: report\n      - name: preview\n        intermediate: true\n        frontmatter:\n          verdict:\n            type: enum\n            allowed: [PASS, FAIL]\nedges: []\n"
+    );
+    std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
+}
+
+async fn seed_running_worker(state: &Arc<TestState>, run_id: &str, pipe_name: &str) {
+    for event in [
+        event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": pipe_name })),
+        },
+        event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some("worker".into()),
+            iter: Some(1),
+            payload: None,
+        },
+    ] {
+        append_event(state, &event).await.unwrap();
+    }
+}
+
+async fn post_done(state: Arc<TestState>, run_id: &str) -> (StatusCode, String) {
+    let resp = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/runs/{run_id}/nodes/worker/done"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_string(resp).await)
+}
+
+/// An *Output intermédiaire* is never checked: absent, the completion goes
+/// through as long as the ordinary outputs are there.
+#[tokio::test]
+async fn node_done_completes_with_an_absent_intermediate_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pipe_name = "node-done-intermediate";
+    write_pipeline_with_intermediate_output(tmp.path(), pipe_name);
+    let state = test_state_with_dir(tmp.path()).await;
+    let run_id = "node-done-intermediate-absent";
+    seed_running_worker(&state, run_id, pipe_name).await;
+    write_artifact_for(tmp.path(), run_id, "worker", "report", "done");
+
+    let (status, body) = post_done(state.clone(), run_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let events = load_events(&state.db, run_id).await.unwrap();
+    let projected = event_log::project(&events).unwrap();
+    assert_eq!(
+        projected.nodes["worker"].status,
+        event_log::NodeStatus::Completed
+    );
+}
+
+/// A frontmatter that breaks the (kept) schema of an intermediate output is no
+/// mismatch, and the refusal for a missing ordinary output names it alone.
+#[tokio::test]
+async fn node_done_refuses_on_the_ordinary_output_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pipe_name = "node-done-intermediate-refusal";
+    write_pipeline_with_intermediate_output(tmp.path(), pipe_name);
+    let state = test_state_with_dir(tmp.path()).await;
+    let run_id = "node-done-intermediate-refusal";
+    seed_running_worker(&state, run_id, pipe_name).await;
+    write_artifact_for(
+        tmp.path(),
+        run_id,
+        "worker",
+        "preview",
+        "---\nverdict: MAYBE\n---\n",
+    );
+
+    let (status, body) = post_done(state.clone(), run_id).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"], "missing_outputs");
+    assert_eq!(body["missing"], serde_json::json!(["report"]));
+
+    write_artifact_for(tmp.path(), run_id, "worker", "report", "done");
+    let (status, body) = post_done(state, run_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 /// A `script` node whose declared output never landed. The whole point of #490:
 /// this used to answer `200` **after** appending `NodeFailed` + `RunFailed`, so
 /// `pdo complete` printed "marked complete." and exited `0` on a dead run.

@@ -2,4 +2,10 @@
 import type { FileInfo } from "./FileInfo";
 import type { PortType } from "./PortType";
 
-export type PortIO = { port: string, repeated: boolean, port_type: PortType, files: Array<FileInfo>, };
+export type PortIO = { port: string, repeated: boolean, port_type: PortType, 
+/**
+ * An *Output intermédiaire*: the agent writes it while it works, nothing
+ * checks it, and its absence is « not written yet », never an error.
+ * Always `false` on an input.
+ */
+intermediate: boolean, files: Array<FileInfo>, };

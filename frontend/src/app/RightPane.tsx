@@ -2,12 +2,13 @@ import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { NodeState } from "../shared/generated/NodeState";
-import type { OpenPipeline } from "../pipeline/store/editState";
+import { isRunTabLocked, type OpenPipeline } from "../pipeline/store/editState";
 import type { TabId } from "../lib/infoPanelReconcile";
 import type { SettingsPosition } from "../settings/components/SettingsSurface";
 import type { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import NodeDetailPanel from "../run/components/NodeDetailPanel";
 import NodeInspector from "../pipeline/components/NodeInspector";
+import NodeConfigView from "../pipeline/components/NodeConfigView";
 import PipelineInfoPanel from "../pipeline/components/PipelineInfoPanel";
 import StartInspector from "../pipeline/components/StartInspector";
 import EndInspector from "../pipeline/components/EndInspector";
@@ -97,6 +98,9 @@ export default function RightPane({
       : null;
 
   const isEditingRun = editTab?.scope === "run";
+  // ADR-0085: a Run tab in « pilotage » (or archived): the inspector reads,
+  // never writes — Config instead of Edit.
+  const runLocked = isRunTabLocked(editTab);
   // #684: which pane a selected node gets. Markers (start/end) never reach the
   // generic `NodeInspector` — outside a run they get a read-only pane.
   const nodeInspectorKind = resolveNodeInspector({
@@ -154,6 +158,16 @@ export default function RightPane({
   }
 
   function inspectorEditPane() {
+    if (runLocked) {
+      return (
+        <NodeConfigView
+          provisioningRepository={nodeInspectorProvisioningProps.provisioningRepository}
+          runSkills={nodeInspectorProvisioningProps.runSkills}
+          runNode={nodeInspectorProvisioningProps.runNode}
+          archived={isActiveRunArchived}
+        />
+      );
+    }
     switch (editNodeType) {
       // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
       // and hides the model field for it.
@@ -205,7 +219,7 @@ export default function RightPane({
         ) : paneOwner === "editTab" ? (
           <>
             {selection.kind === "node" && editNodeType != null && nodeInspectorKind === "node" ? (
-              <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab}>
+              <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab} configMode={runLocked}>
                 <div hidden={inspectorTab !== "run"} className="h-full" data-testid="inspector-pane-run">
                   {inspectorRunPane()}
                 </div>
@@ -229,15 +243,22 @@ export default function RightPane({
               <NodeInspector
                 libraryEntries={libraryEntries}
                 onLibraryChanged={refreshLibrary}
-                readOnly={isActiveRunArchived}
+                readOnly={isActiveRunArchived || runLocked}
                 {...nodeInspectorProvisioningProps}
               />
-            ) : selection.kind === "edge" ? (
-              <EdgeDetailPanel trigger={edgeTrigger} />
-            ) : selection.kind === "region" ? (
-              <RegionInspector />
-            ) : selection.kind === "note" ? (
-              <NoteInspector />
+            ) : selection.kind === "edge" || selection.kind === "region" || selection.kind === "note" ? (
+              // ADR-0085: in « pilotage » these panes are read, not edited: a
+              // disabled fieldset turns every control off at once (the store
+              // refuses the mutation anyway).
+              <fieldset disabled={runLocked} className="contents" data-testid="inspector-locked" data-locked={runLocked}>
+                {selection.kind === "edge" ? (
+                  <EdgeDetailPanel trigger={edgeTrigger} />
+                ) : selection.kind === "region" ? (
+                  <RegionInspector />
+                ) : (
+                  <NoteInspector />
+                )}
+              </fieldset>
             ) : null}
             {/* `"none"` reaches this on a terminal/paused run (deselect, or
                 selecting the run — #503 red-dot panel). #752: the standalone

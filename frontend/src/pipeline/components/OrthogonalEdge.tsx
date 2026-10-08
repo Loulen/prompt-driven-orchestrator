@@ -15,6 +15,7 @@ import {
   outputLabelPlacement,
 } from "../../lib/edgeLabels";
 import { useEditStore } from "../store/editStore";
+import { selectActiveTabLocked } from "../store/editState";
 import type { EdgeAnchor } from "../../shared/generated/EdgeAnchor";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EdgeWaypoint } from "../../shared/generated/EdgeWaypoint";
@@ -96,6 +97,9 @@ export default function OrthogonalEdge({
   // transient per-element `selected` flag, which is reset when edges are rebuilt.
   const selection = useEditStore((s) => s.selection);
   const setSelection = useEditStore((s) => s.setSelection);
+  // ADR-0085: a Run followed in « pilotage » offers no route or label drag; a
+  // click on a label still selects the edge.
+  const locked = useEditStore(selectActiveTabLocked);
   const { screenToFlowPosition } = useReactFlow();
 
   const route = useEdgeRoute(source, target, sourceX, sourceY, targetX, targetY, data);
@@ -138,7 +142,7 @@ export default function OrthogonalEdge({
       let moved = false;
       const move = (ev: PointerEvent) => {
         if (Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) > 3) moved = true;
-        if (moved) commit(screenToFlowPosition({ x: ev.clientX, y: ev.clientY }));
+        if (moved && !locked) commit(screenToFlowPosition({ x: ev.clientX, y: ev.clientY }));
       };
       const up = () => {
         window.removeEventListener("pointermove", move);
@@ -148,7 +152,7 @@ export default function OrthogonalEdge({
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [edgeIndex, screenToFlowPosition, setSelection],
+    [edgeIndex, locked, screenToFlowPosition, setSelection],
   );
 
   // `EdgeLabelRenderer` portals its children out of the edge's SVG, but a React
@@ -311,6 +315,7 @@ export default function OrthogonalEdge({
             handle does NOTHING now (#844) — a waypoint goes away by being
             dragged into alignment, not by a hidden menu. */}
         {isSelected &&
+          !locked &&
           handles.map((h) => (
             <div
               key={h.segmentIndex}

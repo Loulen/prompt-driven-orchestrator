@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.21.0 — Pilotage d'un Run en lecture seule (CORE-38)
+
+- **« Save » dans un Run n'écrit plus le Pipeline partagé** (CORE-38, ADR-0085, amende ADR-0007) :
+  `PUT /runs/{id}/pipeline` ne modifie que le snapshot du Run, ni le Pipeline partagé ni les
+  autres Runs. Un onglet de Run s'ouvre en lecture seule ; le crayon de la barre propose « Edit
+  for this run » et « Edit source pipeline ». Pour rendre une modification définitive : « Save ›
+  Overwrite default pipeline… », qui avertit (futurs Runs, Triggers qui référencent le Pipeline,
+  Pipeline partagé modifié depuis le lancement) puis copie le snapshot entier, prompts orphelins
+  retirés. API : `GET /runs/{id}/pipeline/overwrite-preview`,
+  `POST /runs/{id}/pipeline/overwrite-default`. L'écrasement demande `run` × `edit_pipeline`
+  **et** `pipeline` × `update` : une extension de Droits n'a pas de verbe nouveau à mapper.
+  Un Run lancé avant la mise à jour n'a pas d'empreinte de lancement : l'avertissement dit qu'il
+  ne sait pas si le Pipeline partagé a changé.
+
 ## 2.20.0
 
 `pdo-extension-api` passe en **0.11.0**, et le module `@pdo/extension-ui` avec lui : ajouts

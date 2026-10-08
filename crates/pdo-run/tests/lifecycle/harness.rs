@@ -113,6 +113,37 @@ impl RunDirWatch for NoWatcher {
     fn watch(&self, _run_dir: &Path) {}
 }
 
+/// No shared pipeline to overwrite.
+struct NoSourcePipelines;
+impl SourcePipelines for NoSourcePipelines {
+    fn exists(&self, _id: &str) -> bool {
+        false
+    }
+    fn fingerprint(&self, _id: &str) -> Option<String> {
+        None
+    }
+    fn overwrite<'a>(
+        &'a self,
+        _actor: &'a pdo_kernel::Actor,
+        _id: &'a str,
+        _yaml: &'a str,
+        _prompts: &'a std::collections::HashMap<String, String>,
+    ) -> Result<(), OverwriteRefusal> {
+        Err(OverwriteRefusal::NotFound)
+    }
+}
+
+/// No Trigger.
+struct NoTriggers;
+impl PipelineTriggers for NoTriggers {
+    fn firing<'a>(
+        &'a self,
+        _pipeline_id: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<PipelineTrigger>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
 /// An empty bank, as the pipeline context reads it.
 struct NoBank;
 impl pdo_pipeline::application::ports::SkillBank for NoBank {
@@ -293,6 +324,8 @@ pub async fn build_with(
             pages: pages.clone(),
             run_dirs: Arc::new(NoWatcher),
             self_writes: SelfWrites::new(),
+            source_pipelines: Arc::new(NoSourcePipelines),
+            pipeline_triggers: Arc::new(NoTriggers),
             extensions: Arc::new(NoExtensions),
         },
         RunsOptions {

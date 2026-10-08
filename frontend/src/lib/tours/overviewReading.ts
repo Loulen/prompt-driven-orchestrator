@@ -32,9 +32,12 @@ export const TRIGGERS_LIST = testId("triggers-list-panel");
 export const NEW_PIPELINE_BUTTON = testId("new-pipeline-button");
 export const PIPELINE_ROW = testId(`library-row-${TUTORIAL_OVERVIEW_PIPELINE_ID}`);
 export const INSPECTOR_RUN = testId("inspector-pane-run");
-export const INSPECTOR_EDIT = testId("inspector-pane-edit");
+/** The pane behind the inspector's Config tab: a node's prompt and skills, read-only on a Run (ADR-0085). */
+export const INSPECTOR_CONFIG = testId("inspector-pane-edit");
 /** The inspector's Run tab — where a node's outputs and terminal live. */
 export const INSPECTOR_TAB_RUN = testId("inspector-tab-run");
+/** The inspector's Config tab: on a Run followed in « pilotage », the Edit tab is gone (ADR-0085). */
+export const INSPECTOR_TAB_CONFIG = testId("inspector-tab-config");
 export const TERMINAL = testId("tmux-terminal");
 /** A finished node's terminal opens folded to this bar, to leave room for its outputs. */
 export const TERMINAL_RESTORE = testId("term-restore");
@@ -64,13 +67,13 @@ export const SETTINGS_BUTTON = testId("open-settings");
 
 /**
  * The inspector's navigation, which a read-only step still lets through (#911):
- * the Run / Edit tabs, the I/O / Orchestration tabs, the « Initial Prompt » fold,
+ * the Run / Config tabs, the I/O / Orchestration tabs, the « Initial Prompt » fold,
  * and the terminal's own unfold / expand / copy. Everything else in the panel
  * that is a control stays refused while the tour shows it.
  */
 export const INSPECTOR_EXPLORE = [
   testId("inspector-tab-run"),
-  testId("inspector-tab-edit"),
+  INSPECTOR_TAB_CONFIG,
   '[data-testid^="detail-tab-"]',
   testId("prompt-toggle"),
   TERMINAL_RESTORE,
@@ -146,22 +149,22 @@ export function endEdgeIndex(app: TourAppState): number {
 
 /**
  * implementer is selected and its inspector is up — on either tab. The reader
- * may explore the Edit tab from the read-only panel (#911); a condition that
+ * may explore the Config tab from the read-only panel (#911); a condition that
  * only knew the Run tab would drop the step back to « Click implementer » and
  * dim the very panel they were looking at.
  */
 export function implementerOpen(o: TourObservation): boolean {
   return (
-    selectedNode(o.app, worker(o.app, "implementer")) && (o.present(INSPECTOR_RUN) || o.present(INSPECTOR_EDIT))
+    selectedNode(o.app, worker(o.app, "implementer")) && (o.present(INSPECTOR_RUN) || o.present(INSPECTOR_CONFIG))
   );
 }
 
 /**
- * The reader left the inspector on its Edit tab (#911): what the Run tab shows —
+ * The reader left the inspector on its Config tab (#911): what the Run tab shows —
  * the outputs, the terminal — is not on screen, and the step points at the tab
  * instead of starving on a target that will not appear by itself.
  */
-export function onEditTab(o: TourObservation): boolean {
+export function onConfigTab(o: TourObservation): boolean {
   return !o.present(INSPECTOR_RUN) && o.present(INSPECTOR_TAB_RUN);
 }
 

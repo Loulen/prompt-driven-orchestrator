@@ -1,7 +1,9 @@
 //! A Run's own pipeline (its run-scoped copy, or the durable one once the Run
 //! is archived): read as the editor reads it, exported as a portable document
-//! with its skills sidecar, and edited mid-run ([`save`]).
+//! with its skills sidecar, edited mid-run for this Run only ([`save`]), and
+//! copied over the shared pipeline it came from ([`overwrite`], ADR-0085).
 
+mod overwrite;
 mod save;
 
 use std::collections::HashMap;
@@ -11,7 +13,9 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pdo_pipeline::domain::pipeline;
 
-pub use save::{sync_run_pipeline_to_template, SaveRunPipelineRequest};
+pub use overwrite::{launch_source_path, LaunchSource, OverwritePreview};
+pub(crate) use overwrite::record_launch_source;
+pub use save::SaveRunPipelineRequest;
 
 use crate::application::paths::{
     archived_or_live_pipeline_yaml, archived_or_live_prompts_dir, run_scoped_pipeline_path,

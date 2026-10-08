@@ -3,17 +3,16 @@
 use pdo_session::application::ports::{
     BoxFuture, NodePanes, NodeWaits, RunLookup, RunProjects, RunShells, ShellTarget,
 };
-use pdo_session::domain::declared_wait::{
-    AwaitingMarker, IterationFacts, NodeWaitFacts, WaitFacts,
-};
+use pdo_session::domain::declared_wait::WaitFacts;
 use pdo_session::domain::launch::ContainerExec;
 use pdo_session::domain::pane::{PaneTarget, ReattachOutcome};
 
 use pdo_run::application::paths::effective_repo_root;
 use pdo_run::application::sandbox::SandboxExec;
 use pdo_run::domain::event::EventKind;
+use pdo_run::domain::live_session::wait_facts;
 use pdo_run::domain::projection::project;
-use pdo_run::domain::state::{NodeStatus, RunState, RunStatus};
+use pdo_run::domain::state::{NodeStatus, RunStatus};
 use pdo_workspace::adapters::git::worktrees::worktree_dir_for_run;
 
 use super::RunSide;
@@ -59,34 +58,6 @@ impl NodeWaits for RunSide {
         payload: serde_json::Value,
     ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(self.record(run_id, node_id, iter, EventKind::NodeResumed, payload))
-    }
-}
-
-/// What the projection says about one node, for a wait.
-fn wait_facts(run: &RunState, node_id: &str) -> WaitFacts {
-    WaitFacts {
-        run_live: run.status.is_live(),
-        defined: run.node_defs.iter().any(|d| d.id == node_id),
-        is_script: run
-            .node_defs
-            .iter()
-            .any(|d| d.id == node_id && d.node_type == "script"),
-        node: run.nodes.get(node_id).map(|node| NodeWaitFacts {
-            iter: node.iter,
-            awaiting: node.status == NodeStatus::AwaitingUser,
-            marker: node.awaiting.as_ref().map(|a| AwaitingMarker {
-                cause: a.cause.clone(),
-                message: a.message.clone(),
-            }),
-            iterations: node
-                .iterations
-                .iter()
-                .map(|a| IterationFacts {
-                    iter: a.iter,
-                    holds_session: a.status.holds_session(),
-                })
-                .collect(),
-        }),
     }
 }
 

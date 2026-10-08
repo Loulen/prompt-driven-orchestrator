@@ -5,7 +5,7 @@ import type { OpenPipeline, Selection } from "./editState";
 import { generatedRegionId } from "../../lib/loopRegions";
 import { pipelinesEquivalent } from "../../hooks/useLibraryPipelines";
 import { ApiError } from "../../shared/http/client";
-import { saveRunPipeline } from "../../run/api/runPipeline";
+import { fetchRunPipeline, overwriteDefaultPipelineFromRun, saveRunPipeline } from "../../run/api/runPipeline";
 import { savePipeline, fetchPipeline, fetchPipelines, deletePipeline, renamePipeline } from "../api/pipelines";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
@@ -42,6 +42,7 @@ vi.mock("../../settings/api/settings", async (importOriginal) => ({
   }),
   savePipeline: vi.fn().mockResolvedValue({ ok: true }),
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
+  overwriteDefaultPipelineFromRun: vi.fn().mockResolvedValue({ pipeline_id: "source-pipe" }),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
   renamePipeline: vi.fn().mockResolvedValue({ ok: true }),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "x", scope: "user" }),
@@ -2181,7 +2182,8 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
           {
             id: tabId, scope: "run",
             pipeline: makePipeline(), prompts: {}, diagnostics: [],
-            dirty: true, externalDirty: false, runId: "archived",
+            // ADR-0085: an edit lands on a run tab only in « Edit for this run ».
+            dirty: true, externalDirty: false, runId: "archived", runEditing: true,
           },
         ],
         activeTabId: tabId,
@@ -2612,5 +2614,127 @@ describe("pipeline rename (#774)", () => {
     await useEditStore.getState().renamePipeline("old-name", "old-name");
 
     expect(useEditStore.getState().openTabs[0].id).toBe("old-name");
+  });
+});
+
+describe("ADR-0085 run tab: « pilotage » locked, « Edit for this run » unlocks", () => {
+  const tabId = "__run__r1";
+  function seedRunTab(extra: Partial<OpenPipeline> = {}) {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: tabId,
+          scope: "run",
+          pipeline: makePipeline([makeNode({ id: "worker" })]),
+          prompts: { worker: "old prompt" },
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+          runId: "r1",
+          ...extra,
+        },
+      ],
+      activeTabId: tabId,
+      selection: { kind: "none", id: null },
+      lastSavedAt: {},
+      history: {},
+    });
+  }
+  const tab = () => useEditStore.getState().openTabs.find((t) => t.id === tabId)!;
+
+  beforeEach(() => {
+    mockSaveRunPipeline.mockClear();
+    vi.mocked(overwriteDefaultPipelineFromRun).mockClear();
+  });
+
+  it("refuses every definition change while the run is followed", () => {
+    seedRunTab();
+    const store = useEditStore.getState();
+    store.addNode(makeNode({ id: "extra" }));
+    store.updateNode("worker", { name: "Renamed" });
+    store.updatePrompt("worker", "new prompt");
+    store.updateNodeViews([{ id: "worker", x: 999, y: 999 }]);
+    store.deleteNode("worker");
+    store.updatePipelineMeta({ name: "renamed" });
+    store.undo();
+    expect(tab().dirty).toBe(false);
+    expect(tab().pipeline.nodes.map((n) => n.id)).toEqual(["worker"]);
+    expect(tab().pipeline.nodes[0].name).toBe("Default");
+    expect(tab().pipeline.nodes[0].view).toEqual({ x: 100, y: 100 });
+    expect(tab().pipeline.name).toBe("test");
+    expect(tab().prompts.worker).toBe("old prompt");
+  });
+
+  it("a pipeline tab stays editable directly", () => {
+    seedTabWithPipeline(makePipeline([makeNode({ id: "worker" })]));
+    useEditStore.getState().updateNode("worker", { name: "Renamed" });
+    const t = useEditStore.getState().openTabs[0];
+    expect(t.dirty).toBe(true);
+    expect(t.pipeline.nodes[0].name).toBe("Renamed");
+  });
+
+  it("« Edit for this run » unlocks the tab; a save writes the run snapshot only", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updatePrompt("worker", "new prompt");
+    expect(tab().dirty).toBe(true);
+    await useEditStore.getState().save(tabId);
+    expect(mockSaveRunPipeline).toHaveBeenCalledWith("r1", expect.any(String), { worker: "new prompt" });
+    expect(overwriteDefaultPipelineFromRun).not.toHaveBeenCalled();
+    expect(tab().dirty).toBe(false);
+  });
+
+  it("« Edit for this run » never unlocks a pipeline tab into a run tab", () => {
+    seedTabWithPipeline(makePipeline([makeNode({ id: "worker" })]));
+    useEditStore.getState().startRunEditing("test-tab");
+    expect(useEditStore.getState().openTabs[0].runEditing).toBeUndefined();
+  });
+
+  it("« Finish editing » with nothing unsaved locks again and keeps the content", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId);
+    await useEditStore.getState().finishRunEditing(tabId);
+    expect(tab().runEditing).toBe(false);
+    expect(tab().prompts.worker).toBe("old prompt");
+    useEditStore.getState().updatePrompt("worker", "again");
+    expect(tab().prompts.worker).toBe("old prompt");
+  });
+
+  it("« Finish editing » discards unsaved edits back to the run snapshot", async () => {
+    seedRunTab();
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce({
+      scope: "run",
+      pipeline: makePipeline([makeNode({ id: "worker" })]),
+      prompts: { worker: "old prompt" },
+      diagnostics: [],
+    } as unknown as Awaited<ReturnType<typeof fetchRunPipeline>>);
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updatePrompt("worker", "draft");
+    await useEditStore.getState().finishRunEditing(tabId);
+    expect(tab().runEditing).toBe(false);
+    expect(tab().dirty).toBe(false);
+    expect(tab().prompts.worker).toBe("old prompt");
+    expect(mockSaveRunPipeline).not.toHaveBeenCalled();
+  });
+
+  it("« Overwrite default pipeline » saves for the run first, then overwrites", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updatePrompt("worker", "new prompt");
+    await useEditStore.getState().overwriteDefaultPipeline(tabId);
+    expect(mockSaveRunPipeline).toHaveBeenCalledTimes(1);
+    expect(overwriteDefaultPipelineFromRun).toHaveBeenCalledWith("r1");
+    const saveOrder = mockSaveRunPipeline.mock.invocationCallOrder[0];
+    const overwriteOrder = vi.mocked(overwriteDefaultPipelineFromRun).mock.invocationCallOrder[0];
+    expect(saveOrder).toBeLessThan(overwriteOrder);
+  });
+
+  it("does not overwrite when the save for the run fails", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updatePrompt("worker", "new prompt");
+    mockSaveRunPipeline.mockRejectedValueOnce(new ApiError("mutation rejected", { status: 409 }));
+    await expect(useEditStore.getState().overwriteDefaultPipeline(tabId)).rejects.toThrow("mutation rejected");
+    expect(overwriteDefaultPipelineFromRun).not.toHaveBeenCalled();
   });
 });

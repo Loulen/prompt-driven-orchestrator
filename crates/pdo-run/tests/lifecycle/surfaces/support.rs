@@ -88,23 +88,6 @@ pub async fn reload_run_state(
     pdo_run::application::events::reload_run_state(&state.run, run_id).await
 }
 
-/// Sync a Run's pipeline edit to its template.
-pub fn sync_run_pipeline_to_template(
-    state: &TestState,
-    run_id: &str,
-    pipeline_name: &str,
-    yaml: &str,
-    prompts: &std::collections::HashMap<String, String>,
-) {
-    pdo_run::application::run_pipeline::sync_run_pipeline_to_template(
-        &state.run,
-        run_id,
-        pipeline_name,
-        yaml,
-        prompts,
-    )
-}
-
 /// Seed a run as `RunStarted` followed by `extra` run-level events (e.g.
 /// `RunCompleted`, `RunFailed`, `RunArchived`), with no nodes spawned. Lets
 /// the `/runs/reapable` tests construct a run in any terminal/live status.
@@ -283,6 +266,9 @@ impl Tmux for AliveTmux {
     }
     fn send_keys(&self, _name: &str, _text: &str) {}
     fn paste(&self, _name: &str, _text: &str) {}
+    fn paste_without_enter(&self, _name: &str, _text: &str) -> bool {
+        false
+    }
     fn attach_argv(&self, _name: &str, _ignore_size: bool) -> Vec<String> {
         Vec::new()
     }

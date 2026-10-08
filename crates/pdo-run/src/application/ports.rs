@@ -1,12 +1,14 @@
 //! What the run context needs from the outside world. The composition root
 //! plugs an adapter into each port; the use cases only ever see the traits.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
 use pdo_harness::agent_choice::{AgentChoice, ResolvedCombo};
+use pdo_kernel::authorization::Denied;
+use pdo_kernel::Actor;
 use pdo_skill::domain::delivery::SkippedSkill;
 use pdo_skill::domain::selection::{ActiveSkill, SkillRef};
 use pdo_workspace::domain::project::Project;
@@ -267,4 +269,54 @@ pub trait DeclaredWaits: Send + Sync {
         node_id: &'a str,
         iter: i64,
     ) -> BoxFuture<'a, ()>;
+}
+
+/// The shared pipelines of the instance, as a Run's overwrite reaches them
+/// (the pipeline context's registry, ADR-0085): the run context never writes
+/// the shared pipeline's files itself.
+pub trait SourcePipelines: Send + Sync {
+    /// Whether the shared pipeline `id` still exists.
+    fn exists(&self, id: &str) -> bool;
+    /// The fingerprint of `id` as it is now (its YAML and its prompts); `None`
+    /// when it cannot be read.
+    fn fingerprint(&self, id: &str) -> Option<String>;
+    /// Replace `id` by `yaml` and `prompts`, the orphan prompts removed, and
+    /// announce `pipeline_changed`. Asks `pipeline` × `update` for `actor`.
+    fn overwrite<'a>(
+        &'a self,
+        actor: &'a Actor,
+        id: &'a str,
+        yaml: &'a str,
+        prompts: &'a HashMap<String, String>,
+    ) -> Result<(), OverwriteRefusal>;
+}
+
+/// Why the shared pipeline was not overwritten.
+#[derive(Debug, Clone)]
+pub enum OverwriteRefusal {
+    /// An extension refused `pipeline` × `update`.
+    Denied(Denied),
+    /// The shared pipeline no longer exists (renamed or deleted).
+    NotFound,
+    /// The snapshot does not parse, or the write failed, in those words.
+    Failed(String),
+}
+
+/// A Trigger that fires a pipeline, as the overwrite warning names it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct PipelineTrigger {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+}
+
+/// The Triggers of the instance, as the run context reads them (the trigger
+/// context).
+pub trait PipelineTriggers: Send + Sync {
+    /// The Triggers that fire the pipeline `pipeline_id`.
+    fn firing<'a>(
+        &'a self,
+        pipeline_id: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<PipelineTrigger>, String>>;
 }

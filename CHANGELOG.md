@@ -10,6 +10,61 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.24.0 — Gestes selon les Droits, flux gardé par la lecture (CORE-42)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit `ExtensionEvent::guarded_by`, ajout seulement.
+
+- **Flux gardé pour les extensions** (CORE-42) : `ExtensionEvent::guarded_by(read)` attache à un
+  événement l'Opération de lecture qui le protège ; `/ws` ne l'envoie qu'aux connexions dont
+  l'Acteur peut la faire, sans la garde. Un `operation_applied` sur une Ressource d'extension est
+  gardé par la lecture de son entité, dans les Projets de son Opération : une extension qui
+  refusait toute Opération quel que soit son verbe masque désormais aussi, sur `/ws`, les
+  `operation_applied` de ses Ressources.
+- **Gestes selon les Droits** (CORE-42) : la vue d'un Run demande `POST /authorize` une fois à son
+  ouverture pour tous les gestes du Run et de ses nodes, et masque ceux qui sont refusés ; les
+  lignes de la liste de Runs, leur menu et les actions groupées suivent la même règle. Relu quand
+  un Projet change ou qu'une extension signale un changement des Triggers. Un geste refusé par le
+  daemon malgré tout (un Droit changé entre-temps) le dit dans un toast, là où il ne disait rien.
+
+## 2.23.0 — Fichier importé en cours de Run (CORE-37)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit deux verbes de plus, ajouts seulement.
+
+- **Fichier importé en cours de Run** : deux Opérations nouvelles sur la Ressource `node`,
+  `import_files` et `send_text` (catalogue des Ressources). Une extension de Droits qui
+  énumère les verbes d'un Node doit les mapper ; sinon elles suivent sa règle par défaut.
+  L'import compte dans le même budget `max_attachments_mb` que les fichiers joints au lancement
+  d'un Run, par import : derrière un reverse proxy, `client_max_body_size` doit le suivre.
+
+## 2.22.0 — Livraison signée par l'identité git du Node (CORE-43)
+
+`pdo-extension-api` reste en **0.11.0** : seule la documentation de `node_env` change. Détail :
+ADR-0081 et `docs/reference/extension-api.md` (« Git identity »).
+
+- Les variables `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` et
+  `GIT_COMMITTER_EMAIL` qu'une extension donne à un Node sont gelées sur son `NodeStarted`
+  (`git_identity`, ces quatre seulement) et signent toute sa livraison : le commit
+  `<node> iter-<N>: completed`, le commit du sous-worktree d'un Node isolé, son merge et le
+  commit de résolution en faveur du Node.
+- Un daemon sans identité git livre désormais, pourvu que les quatre soient données ; une
+  variable absente ou vide retombe sur l'identité du daemon. Sans elles, rien ne change.
+
+## 2.21.0 — Pilotage d'un Run en lecture seule (CORE-38)
+
+- **« Save » dans un Run n'écrit plus le Pipeline partagé** (CORE-38, ADR-0085, amende ADR-0007) :
+  `PUT /runs/{id}/pipeline` ne modifie que le snapshot du Run, ni le Pipeline partagé ni les
+  autres Runs. Un onglet de Run s'ouvre en lecture seule ; le crayon de la barre propose « Edit
+  for this run » et « Edit source pipeline ». Pour rendre une modification définitive : « Save ›
+  Overwrite default pipeline… », qui avertit (futurs Runs, Triggers qui référencent le Pipeline,
+  Pipeline partagé modifié depuis le lancement) puis copie le snapshot entier, prompts orphelins
+  retirés. API : `GET /runs/{id}/pipeline/overwrite-preview`,
+  `POST /runs/{id}/pipeline/overwrite-default`. L'écrasement demande `run` × `edit_pipeline`
+  **et** `pipeline` × `update` : une extension de Droits n'a pas de verbe nouveau à mapper.
+  Un Run lancé avant la mise à jour n'a pas d'empreinte de lancement : l'avertissement dit qu'il
+  ne sait pas si le Pipeline partagé a changé.
+
 ## 2.20.0
 
 `pdo-extension-api` passe en **0.11.0**, et le module `@pdo/extension-ui` avec lui : ajouts
@@ -27,17 +82,6 @@ seulement, une extension 0.1 à 0.10 compile et tourne telle quelle. Détail :
   Projet de son dépôt cible (aucun sans dépôt cible). `GET /triggers`, `GET /triggers/{id}`,
   ses tirs et ce que `/ws` dit d'un Trigger demandent `trigger` × `read`. Une extension qui
   refusait toute Opération quel que soit son verbe masque désormais aussi les Triggers.
-- **Flux gardé pour les extensions** (CORE-42) : `ExtensionEvent::guarded_by(read)` attache à un
-  événement l'Opération de lecture qui le protège ; `/ws` ne l'envoie qu'aux connexions dont
-  l'Acteur peut la faire, sans la garde. Un `operation_applied` sur une Ressource d'extension est
-  gardé par la lecture de son entité, dans les Projets de son Opération : une extension qui
-  refusait toute Opération quel que soit son verbe masque désormais aussi, sur `/ws`, les
-  `operation_applied` de ses Ressources.
-- **Gestes selon les Droits** (CORE-42) : la vue d'un Run demande `POST /authorize` une fois à son
-  ouverture pour tous les gestes du Run et de ses nodes, et masque ceux qui sont refusés ; les
-  lignes de la liste de Runs, leur menu et les actions groupées suivent la même règle. Relu quand
-  un Projet change ou qu'une extension signale un changement des Triggers. Un geste refusé par le
-  daemon malgré tout (un Droit changé entre-temps) le dit dans un toast, là où il ne disait rien.
 
 ## 2.19.0 — Ouverture sondée des WebSockets, Résumé de Run (CORE-32)
 

@@ -225,6 +225,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
         ),
         call(
             "POST",
+            "/runs/{run_id}/pipeline/overwrite-default",
+            format!("/runs/{RUN}/pipeline/overwrite-default"),
+            None,
+        ),
+        call(
+            "POST",
             "/runs/{run_id}/manager/start",
             format!("/runs/{RUN}/manager/start"),
             None,
@@ -354,6 +360,19 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             "/runs/{run_id}/nodes/{node_id}/wait-user",
             format!("/runs/{RUN}/nodes/worker/wait-user"),
             Some(json!({ "iter": 1 })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/terminal-text",
+            format!("/runs/{RUN}/nodes/worker/terminal-text"),
+            Some(json!({ "text": "hello" })),
+        ),
+        // A JSON body where multipart is expected: the refusal comes first.
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/attachments",
+            format!("/runs/{RUN}/nodes/worker/attachments"),
+            Some(json!({})),
         ),
         call(
             "POST",

@@ -10,6 +10,7 @@ pub mod origin;
 mod pane;
 mod sessions;
 mod terminal;
+mod terminal_text;
 mod wait;
 pub mod ws_log;
 
@@ -26,6 +27,7 @@ use crate::Session;
 pub use assistant::LibassistResponse;
 pub use pane::PaneResponse;
 pub use sessions::{AttachResponse, ShellResponse};
+pub use terminal_text::TerminalTextResponse;
 
 /// The routes of the session context, with their state.
 pub fn router(session: Arc<Session>) -> Router {
@@ -34,6 +36,10 @@ pub fn router(session: Arc<Session>) -> Router {
         .route(
             "/runs/{run_id}/nodes/{node_id}/wait-user",
             post(wait::declare),
+        )
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/terminal-text",
+            post(terminal_text::send),
         )
         .route("/runs/{run_id}/nodes/{node_id}/pane", get(pane::read))
         .route("/sessions/{session_id}/pty", get(terminal::pty))

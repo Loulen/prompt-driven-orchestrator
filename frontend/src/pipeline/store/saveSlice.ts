@@ -10,6 +10,7 @@ import { fetchRunPipeline, saveRunPipeline } from "../../run/api/runPipeline";
 import { fetchPipeline, savePipeline, deletePipeline as apiDeletePipeline, renamePipeline as apiRenamePipeline } from "../api/pipelines";
 import { serializePipeline } from "../../lib/serializePipeline";
 import type { EditState } from "./editState";
+import { isRunTabLocked } from "./editState";
 import { clearedHistory, droppedHistory, rekeyTab } from "./tabHistory";
 
 type Set = StoreApi<EditState>["setState"];
@@ -24,7 +25,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
     const h = s.history[tabId];
     if (!h || h.past.length === 0) return {};
     const idx = s.openTabs.findIndex((t) => t.id === tabId);
-    if (idx < 0) return {};
+    if (idx < 0 || isRunTabLocked(s.openTabs[idx])) return {};
     const current = s.openTabs[idx].pipeline;
     const prev = h.past[h.past.length - 1];
     const tabs = [...s.openTabs];
@@ -54,7 +55,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
     const h = s.history[tabId];
     if (!h || h.future.length === 0) return {};
     const idx = s.openTabs.findIndex((t) => t.id === tabId);
-    if (idx < 0) return {};
+    if (idx < 0 || isRunTabLocked(s.openTabs[idx])) return {};
     const current = s.openTabs[idx].pipeline;
     const next = h.future[h.future.length - 1];
     const tabs = [...s.openTabs];

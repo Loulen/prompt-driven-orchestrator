@@ -8,6 +8,7 @@ mod create_delete;
 mod documents;
 mod fakes;
 mod library;
+mod overwrite;
 mod queries;
 mod rename;
 mod save;

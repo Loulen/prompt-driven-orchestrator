@@ -11,6 +11,7 @@ mod error;
 mod import_document;
 mod import_workflow;
 mod library;
+mod overwrite_pipeline;
 mod pipelines;
 pub mod ports;
 mod queries;

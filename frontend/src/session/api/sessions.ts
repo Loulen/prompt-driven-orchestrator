@@ -1,8 +1,9 @@
 // The session context's routes: the status bar's gauges, a node's pane, the
-// OS terminal pop-outs and the run shell. The terminal itself is the
+// OS terminal pop-outs, the run shell and a text written into a node's input. The terminal itself is the
 // `WS /sessions/<session>/pty` bridge (see `components/TmuxTerminal`).
 
 import type { DaemonStatus } from "../../platform/model/daemon";
+import type { TerminalTextResponse } from "../../shared/generated/TerminalTextResponse";
 import { request } from "../../shared/http/client";
 
 export function fetchSessions(): Promise<DaemonStatus> {
@@ -64,5 +65,20 @@ export function fetchPane(
     "GET",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/pane`,
     { query: { iter }, label: "GET pane" },
+  );
+}
+
+/** Write `text` into the input of a node's live session **without** pressing
+ *  Enter: the user completes and submits it in the terminal. */
+export function sendTextToNodeTerminal(
+  runId: string,
+  nodeId: string,
+  iter: number,
+  text: string,
+): Promise<TerminalTextResponse> {
+  return request<TerminalTextResponse>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/terminal-text`,
+    { body: { iter, text }, label: "Send to terminal" },
   );
 }

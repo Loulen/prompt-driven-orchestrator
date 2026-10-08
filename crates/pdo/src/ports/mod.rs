@@ -2,7 +2,8 @@
 //! single context can implement them: the session context's Run-side facts
 //! (the Runs, the platform's service health, the templates of the pipeline
 //! registry), the page mounts an archive releases, the Runs as the platform
-//! sees them, the Triggers' fires the Stats count, the Projets' announcements.
+//! sees them, the Triggers' fires the Stats count, the Projets' announcements,
+//! the shared pipelines a Run's snapshot overwrites.
 //!
 //! Some of them reach a context wired after the one that reads them (the
 //! session context is wired before the Runs, which read its tmux): they hold a
@@ -12,6 +13,7 @@ pub(crate) mod platform_runs;
 pub(crate) mod project_events;
 pub(crate) mod run_pages;
 pub(crate) mod session;
+pub(crate) mod source_pipelines;
 pub(crate) mod trigger_fires;
 
 use std::sync::{Arc, OnceLock, Weak};

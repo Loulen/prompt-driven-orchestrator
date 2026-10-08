@@ -7,7 +7,7 @@ import type { EditorPipelineDef } from "../model/pipeline";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { carriedPorts, withCarriedPorts } from "../../lib/edgePorts";
 import { requalifyWhen, renameWhenPorts } from "../../lib/whenClause";
-import { hasUnsavedWork } from "./editState";
+import { hasUnsavedWork, isRunTabLocked } from "./editState";
 import type { EditState, OpenPipeline, TabHistory } from "./editState";
 
 export function mutateActiveTab(
@@ -16,6 +16,8 @@ export function mutateActiveTab(
 ): Partial<EditState> {
   const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
   if (idx < 0) return {};
+  // ADR-0085: a run tab in « pilotage » takes no definition change at all.
+  if (isRunTabLocked(state.openTabs[idx])) return {};
   const tabs = [...state.openTabs];
   const tab = { ...tabs[idx], pipeline: { ...tabs[idx].pipeline }, dirty: true };
   fn(tab);
@@ -64,7 +66,7 @@ export function mutateActiveTabWithHistory(
   opts: { coalesceKey?: string | null; track?: boolean } = {},
 ): Partial<EditState> {
   const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
-  if (idx < 0) return {};
+  if (idx < 0 || isRunTabLocked(state.openTabs[idx])) return {};
   const before = state.openTabs[idx].pipeline; // immutable per the COW invariant
   const tabId = state.openTabs[idx].id;
   const mutated = mutateActiveTab(state, fn);

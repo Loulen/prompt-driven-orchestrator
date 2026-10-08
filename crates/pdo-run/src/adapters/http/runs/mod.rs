@@ -36,6 +36,18 @@ fn bad_request(message: String) -> Response {
         .into_response()
 }
 
+/// The instance attachment budget, in MB: `max_attachments_mb`, read fresh
+/// (`stored -> env -> default`). It bounds the attachments of `POST /runs` and
+/// each import into a running node.
+pub(in crate::adapters::http) async fn attachment_budget_mb(runs: &Runs) -> i64 {
+    let stored = runs
+        .settings
+        .defaults()
+        .await
+        .and_then(|defaults| defaults.max_attachments_mb);
+    resolve_max_attachments_mb(stored)
+}
+
 /// `POST /runs`. The multipart body is bounded by the `max_attachments_mb`
 /// setting, enforced on the attachment parts (read fresh per request) — not
 /// by a static limit frozen at router build; the JSON body keeps its own
@@ -58,12 +70,7 @@ pub(super) async fn create(
     let (parsed, attachments) = if content_type.starts_with("multipart/form-data") {
         // #779: the body limit of this route is the attachment budget, read
         // FRESH from the instance setting. Text fields ride on top of it.
-        let stored = runs
-            .settings
-            .defaults()
-            .await
-            .and_then(|defaults| defaults.max_attachments_mb);
-        let max_attachment_bytes = (resolve_max_attachments_mb(stored) as u64) * 1024 * 1024;
+        let max_attachment_bytes = (attachment_budget_mb(&runs).await as u64) * 1024 * 1024;
         let multipart = match Multipart::from_request(req, &()).await {
             Ok(m) => m,
             Err(e) => return bad_request(format!("multipart parse error: {e}")),
@@ -191,6 +198,21 @@ pub(super) async fn save_pipeline(
     Json(request): Json<SaveRunPipelineRequest>,
 ) -> Response {
     runs.save_run_pipeline(&actor, &run_id, request).await
+}
+
+pub(super) async fn overwrite_preview(
+    State(runs): State<Arc<Runs>>,
+    Path(run_id): Path<String>,
+) -> Response {
+    runs.overwrite_preview(&run_id).await
+}
+
+pub(super) async fn overwrite_default(
+    State(runs): State<Arc<Runs>>,
+    Extension(actor): Extension<Actor>,
+    Path(run_id): Path<String>,
+) -> Response {
+    runs.overwrite_default_pipeline(&actor, &run_id).await
 }
 
 pub(super) async fn edit_repos(

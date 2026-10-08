@@ -26,7 +26,7 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
 use crate::Runs;
-use nodes::{gestures, read};
+use nodes::{gestures, import, read};
 
 /// The routes of the run context, with their state.
 pub fn router(runs: Arc<Runs>) -> Router {
@@ -59,6 +59,16 @@ pub fn router(runs: Arc<Runs>) -> Router {
         )
         .route("/runs/{run_id}/repos", patch(runs::edit_repos))
         .route("/runs/{run_id}/pipeline", put(runs::save_pipeline))
+        // ADR-0085: what « Overwrite default pipeline » would touch, then the
+        // overwrite itself — the only way a Run's edit reaches the shared one.
+        .route(
+            "/runs/{run_id}/pipeline/overwrite-preview",
+            get(runs::overwrite_preview),
+        )
+        .route(
+            "/runs/{run_id}/pipeline/overwrite-default",
+            post(runs::overwrite_default),
+        )
         // Manager on demand: start/stop the Run's Pipeline Manager from the
         // Manager tab. Start is idempotent (a double-click is a benign
         // re-answer); stop on a dead session is a calm no-op.
@@ -90,6 +100,12 @@ pub fn router(runs: Arc<Runs>) -> Router {
             post(gestures::start),
         )
         .route("/runs/{run_id}/nodes/{node_id}/stop", post(gestures::stop))
+        // The import into a running node: its budget is `max_attachments_mb`,
+        // enforced IN the handler (read fresh per request), as `POST /runs`.
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/attachments",
+            post(import::import).route_layer(DefaultBodyLimit::disable()),
+        )
         .route(
             "/runs/{run_id}/nodes/{node_id}/retry",
             post(gestures::retry),

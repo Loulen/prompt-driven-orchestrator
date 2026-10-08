@@ -1,6 +1,6 @@
 //! In-memory adapters of every port of the run context.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -295,6 +295,10 @@ impl Tmux for FakeTmux {
     fn paste(&self, name: &str, text: &str) {
         self.send_keys(name, text);
     }
+    fn paste_without_enter(&self, name: &str, text: &str) -> bool {
+        self.send_keys(name, text);
+        true
+    }
     fn attach_argv(&self, _name: &str, _ignore_size: bool) -> Vec<String> {
         Vec::new()
     }
@@ -482,6 +486,56 @@ impl RunDirWatch for Watcher {
     }
 }
 
+/// The shared pipelines, in memory: `id → (yaml, prompts)`.
+#[derive(Default)]
+pub struct Shared(pub Mutex<HashMap<String, (String, HashMap<String, String>)>>);
+
+impl SourcePipelines for Shared {
+    fn exists(&self, id: &str) -> bool {
+        self.0.lock().unwrap().contains_key(id)
+    }
+    fn fingerprint(&self, id: &str) -> Option<String> {
+        let shared = self.0.lock().unwrap();
+        let (yaml, prompts) = shared.get(id)?;
+        Some(pdo_pipeline::domain::fingerprint::fingerprint(yaml, prompts))
+    }
+    fn overwrite<'a>(
+        &'a self,
+        _actor: &'a Actor,
+        id: &'a str,
+        yaml: &'a str,
+        prompts: &'a HashMap<String, String>,
+    ) -> Result<(), OverwriteRefusal> {
+        let mut shared = self.0.lock().unwrap();
+        let Some(entry) = shared.get_mut(id) else {
+            return Err(OverwriteRefusal::NotFound);
+        };
+        *entry = (yaml.to_string(), prompts.clone());
+        Ok(())
+    }
+}
+
+/// The Triggers, in memory: `(pipeline id, Trigger)`.
+#[derive(Default)]
+pub struct Triggers(pub Mutex<Vec<(String, PipelineTrigger)>>);
+
+impl PipelineTriggers for Triggers {
+    fn firing<'a>(
+        &'a self,
+        pipeline_id: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<PipelineTrigger>, String>> {
+        let firing = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, _)| id == pipeline_id)
+            .map(|(_, trigger)| trigger.clone())
+            .collect();
+        Box::pin(async move { Ok(firing) })
+    }
+}
+
 /// An empty bank, as the pipeline context reads it.
 pub struct NoBank;
 
@@ -566,6 +620,8 @@ pub struct World {
     pub settings: Arc<Settings>,
     pub pages: Arc<Pages>,
     pub watcher: Arc<Watcher>,
+    pub shared: Arc<Shared>,
+    pub triggers: Arc<Triggers>,
     pub host: Arc<Host>,
     /// The daemon's repo root, a fresh directory.
     pub repo: tempfile::TempDir,
@@ -587,6 +643,8 @@ pub fn world_over(store: Store) -> World {
     let settings = Arc::new(Settings::default());
     let pages = Arc::new(Pages::default());
     let watcher = Arc::new(Watcher::default());
+    let shared = Arc::new(Shared::default());
+    let triggers = Arc::new(Triggers::default());
     let host = Arc::new(Host::default());
     let repo = tempfile::tempdir().unwrap();
     let runs = Runs::new(
@@ -605,6 +663,8 @@ pub fn world_over(store: Store) -> World {
             pages: pages.clone(),
             run_dirs: watcher.clone(),
             self_writes: pdo_pipeline::adapters::self_writes::SelfWrites::new(),
+            source_pipelines: shared.clone(),
+            pipeline_triggers: triggers.clone(),
             extensions: host.clone(),
         },
         RunsOptions {
@@ -629,6 +689,8 @@ pub fn world_over(store: Store) -> World {
         settings,
         pages,
         watcher,
+        shared,
+        triggers,
         host,
         repo,
     }

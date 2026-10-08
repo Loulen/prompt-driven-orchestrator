@@ -52,7 +52,8 @@ interface EditNodeData {
   outputs: PortBrief[];
   interactive: boolean;
   status: NodeStatus;
-  // True only for start/end markers on a completed run — see `markerReached`.
+  // True only for start/end markers on a completed run, or one waiting at End
+  // for its started nodes — see `markerReached`.
   reached?: boolean;
   // Filenames of images uploaded with the run's input. Only the start marker
   // surfaces these (issue #145); undefined/empty on every other node.
@@ -140,7 +141,11 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       style={{
         minWidth: 160,
         fontSize: "12px",
-        ...(awaitingPlay ? { opacity: 0.5, borderStyle: "dashed" } : null),
+        // The dashes take a light, thicker stroke: the card's dimming would
+        // otherwise fade them into the canvas.
+        ...(awaitingPlay
+          ? { opacity: 0.6, borderStyle: "dashed", borderWidth: 2, borderColor: "var(--color-fg-2)" }
+          : null),
         // Amber is the wiring colour throughout (#844): the same family the
         // selected edge uses. Green is the app's accent and already means
         // something else on a card. The soft ring arms the gesture on rim hover;

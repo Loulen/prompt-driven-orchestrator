@@ -21,8 +21,12 @@ export default function NodeDetailHeader({
   hasMultipleIters,
   selectedIter,
   onSelectIter,
+  statusLabel,
 }: {
   node: NodeState;
+  /** Overrides the status label: an on-demand node not launched reads « On
+   *  demand », not « Pending » (ADR-0086 — it waits for the user's ▶). */
+  statusLabel?: string;
   nodeName?: string | null;
   hasMultipleIters: boolean;
   selectedIter: number;
@@ -46,10 +50,11 @@ export default function NodeDetailHeader({
           {nodeName ?? node.node_id}
         </span>
         <span
+          data-testid="node-status-badge"
           className="rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3"
           style={{ fontSize: "10px", fontWeight: 500 }}
         >
-          {STATUS_LABELS[node.status] ?? node.status}
+          {statusLabel ?? STATUS_LABELS[node.status] ?? node.status}
         </span>
         {/* #616/ADR-0046: the harness this node's session was FROZEN on, next to
             the id — so the Run view shows what actually ran (distinct from the

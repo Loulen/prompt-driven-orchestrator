@@ -1722,6 +1722,8 @@ describe("NodeDetailPanel", () => {
         </TooltipProvider>,
       );
       expect(screen.getByTestId("start-btn")).toBeInTheDocument();
+      // No « Pending »: the node waits for the user's ▶, not for the runtime.
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("On demand");
       await waitFor(() => expect(askAuthorizationMock).toHaveBeenCalled());
       unmount();
 

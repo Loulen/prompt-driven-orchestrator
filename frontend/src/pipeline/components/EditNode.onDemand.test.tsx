@@ -59,8 +59,9 @@ describe("the card of an on-demand node (ADR-0086)", () => {
       wrapper: Wrapper,
     });
     const node = screen.getByTestId("node-card");
-    expect(node.style.opacity).toBe("0.5");
+    expect(node.style.opacity).toBe("0.6");
     expect(node.style.borderStyle).toBe("dashed");
+    expect(node.style.borderColor).toBe("var(--color-fg-2)");
     const play = screen.getByTestId("node-play-btn");
     expect(play.dataset.play).toBe("start");
     fireEvent.click(play);
@@ -69,7 +70,7 @@ describe("the card of an on-demand node (ADR-0086)", () => {
 
   it("has no ▶ when the canvas grants none (archived Run, no right)", () => {
     render(<EditNode {...card({ onDemand: true, inRun: true })} />, { wrapper: Wrapper });
-    expect(screen.getByTestId("node-card").style.opacity).toBe("0.5");
+    expect(screen.getByTestId("node-card").style.opacity).toBe("0.6");
     expect(screen.queryByTestId("node-play-btn")).toBeNull();
   });
 

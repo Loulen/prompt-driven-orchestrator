@@ -72,13 +72,14 @@ skipped nodes downstream evaluated again, a finished run re-opened).
 Some nodes you only want when you ask for them: a review, a diagnosis, a report. Turn **On demand**
 on (an `agent` or a `script`) and the runtime never launches the node nor skips it. In the run its
 card stays greyed with a ▶; you launch it while the run goes or after it ended (the ▶ re-opens a
-finished run). It reads the last completed output of each upstream node, and its preamble names an
-input whose upstream produced nothing yet. It holds no downstream node until you launch it; once it
+finished run, which ends again once the node is done). It reads the last completed output of each
+upstream node; an input whose upstream produced nothing yet is named absent in its preamble, and a
+script gets an empty `PDO_INPUT_<PORT>`. It holds no downstream node until you launch it; once it
 completes, a downstream node not launched yet runs, one already done is not run again.
 
 By default a run ends at `End`, even if a node it launched still works. In Pipeline info, **Wait for
-started nodes** makes it wait: the run stays running, says « waiting for N started nodes », and ends
-when the last of them completes.
+started nodes** makes it wait: the run stays running, says « waiting for N started nodes » (its End
+card already reached), and ends when the last of them completes.
 
 Decisions: [ADR-0002](adr/0002-mechanical-conditionals-only.md),
 [ADR-0011](adr/0011-conditional-edges-and-loop-regions.md),

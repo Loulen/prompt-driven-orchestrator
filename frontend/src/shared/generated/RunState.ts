@@ -62,12 +62,18 @@ awaiting_reason?: string,
  */
 awaiting_reason_code?: string, 
 /**
- * How many started nodes a `Running` Run that went past `End` still waits
- * for (ADR-0086): the « Attente des nœuds lancés », or a node launched
- * after the Run reached `End` (which re-opened it). Derived in
- * [`finalize`]; `None` while the Run has not reached `End`, or once it no
- * longer waits. Read by the banner (« waiting for N started nodes ») and
- * carried by the Résumé de Run (ADR-0084).
+ * The « Attente des nœuds lancés » (ADR-0086) as the Run's snapshot froze
+ * it: `true` ⇒ the Run waits at `End` for the nodes it launched.
+ * `skip_serializing_if` keeps the wire byte-identical when unset.
+ */
+wait_for_started_nodes?: boolean, 
+/**
+ * How many started nodes a `Running` Run that waits for them (the
+ * option above) still waits for once past `End` (ADR-0086). Derived in
+ * [`finalize`]; `None` while the Run has not reached `End`, once it no
+ * longer waits, and for a Run without the option — a Run re-opened by a
+ * ▶ simply runs until its node is done. Read by the banner (« waiting for
+ * N started nodes ») and carried by the Résumé de Run (ADR-0084).
  */
 waiting_for_started_nodes?: number, nodes: { [key in string]: NodeState }, edges: Array<EdgeInfo>, node_defs: Array<NodeDefInfo>, 
 /**

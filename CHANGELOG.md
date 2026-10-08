@@ -19,12 +19,16 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - **Option de Pipeline `wait_for_started_nodes`** (absente quand elle vaut `false`, le
   défaut) : un Run qui atteint `End` reste `running` tant qu'un nœud est `running`, `waiting` ou
   `awaiting_user`, qu'il doive s'y terminer ou s'y arrêter (edge vers `End` avec `reason:`).
-  La complétion ou l'arrêt du dernier de ces nœuds termine le Run. `GET /runs/{id}` et `GET /runs` portent `waiting_for_started_nodes` (nombre
-  de nœuds attendus) ; le Résumé de Run passe en version 2 et se reconstruit au démarrage.
+  La complétion ou l'arrêt du dernier de ces nœuds termine le Run. Le Run fige l'option à
+  son lancement (champ `wait_for_started_nodes` de `GET /runs/{id}`). Pour un Run qui l'a,
+  `GET /runs/{id}` et `GET /runs` portent `waiting_for_started_nodes` (nombre de nœuds attendus) ;
+  le Résumé de Run passe en version 2 et se reconstruit au démarrage. Sans l'option, un Run
+  ré-ouvert par un ▶ se termine à nouveau quand son nœud aboutit, sans bannière d'attente.
 - **Un Run terminé marque `Skipped` les branches non prises**, au lieu de les laisser en
   attente : elles gardent ainsi leur ▶ (Retry, `node` × `retry`).
-- Le préambule d'un nœud lancé avant son amont dit que l'input est absent, au lieu de donner
-  un chemin vers un fichier qui n'existe pas.
+- Le préambule d'un nœud lancé avant son amont dit que l'input est absent, et le
+  `PDO_INPUT_<PORT>` d'un script est vide, au lieu de donner un chemin vers un fichier qui
+  n'existe pas.
 - Un second `RunCompleted` sur un Run déjà terminé n'est plus écrit.
 
 ## 2.21.0 — Pilotage d'un Run en lecture seule (CORE-38)

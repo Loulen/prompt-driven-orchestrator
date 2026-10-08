@@ -32,13 +32,16 @@ export function statusForNode(
  * the view users actually see. Only the start/end markers carry this — regular
  * nodes always report their own live status. It is gated on a live run: editing
  * a library/template pipeline (no run state) never colours the markers.
+ * A running run that waits at `End` for its started nodes (ADR-0086) has
+ * reached it too: its banner says so, and the card must not contradict it.
  */
 export function markerReached(
   nodeType: NodeType,
   runState: RunState | null | undefined,
 ): boolean {
   if (nodeType !== "start" && nodeType !== "end") return false;
-  return runState != null && runReachedEnd(runState.status);
+  if (runState == null) return false;
+  return runReachedEnd(runState.status) || (runState.waiting_for_started_nodes ?? 0) > 0;
 }
 
 export function deriveEditNodes(

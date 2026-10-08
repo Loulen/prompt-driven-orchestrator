@@ -19,6 +19,11 @@ pub(super) fn apply_run_started(state: &mut RunState, event: &Event) {
                 state.name = Some(run_name.to_string());
             }
         }
+        // ADR-0086: written only when set, like the node options.
+        state.wait_for_started_nodes = payload
+            .get("wait_for_started_nodes")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if let Some(input) = payload.get("input").and_then(|v| v.as_str()) {
             state.input = Some(input.to_string());
         }

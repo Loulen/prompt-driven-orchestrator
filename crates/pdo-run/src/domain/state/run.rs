@@ -85,12 +85,18 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub awaiting_reason_code: Option<String>,
-    /// How many started nodes a `Running` Run that went past `End` still waits
-    /// for (ADR-0086): the « Attente des nœuds lancés », or a node launched
-    /// after the Run reached `End` (which re-opened it). Derived in
-    /// [`finalize`]; `None` while the Run has not reached `End`, or once it no
-    /// longer waits. Read by the banner (« waiting for N started nodes ») and
-    /// carried by the Résumé de Run (ADR-0084).
+    /// The « Attente des nœuds lancés » (ADR-0086) as the Run's snapshot froze
+    /// it: `true` ⇒ the Run waits at `End` for the nodes it launched.
+    /// `skip_serializing_if` keeps the wire byte-identical when unset.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub wait_for_started_nodes: bool,
+    /// How many started nodes a `Running` Run that waits for them (the
+    /// option above) still waits for once past `End` (ADR-0086). Derived in
+    /// [`finalize`]; `None` while the Run has not reached `End`, once it no
+    /// longer waits, and for a Run without the option — a Run re-opened by a
+    /// ▶ simply runs until its node is done. Read by the banner (« waiting for
+    /// N started nodes ») and carried by the Résumé de Run (ADR-0084).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub waiting_for_started_nodes: Option<u32>,

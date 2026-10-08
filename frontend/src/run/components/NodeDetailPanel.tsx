@@ -218,6 +218,7 @@ export default function NodeDetailPanel({
         hasMultipleIters={hasMultipleIters}
         selectedIter={selectedIter}
         onSelectIter={setSelectedIter}
+        statusLabel={isOnDemand && node.status === "pending" ? "On demand" : undefined}
       />
 
       <NodeProvisioning

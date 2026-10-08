@@ -89,6 +89,9 @@ async fn seed(w: &World, run_id: &str, yaml: &str) {
         "node_defs": node_defs,
         "edges": edges,
     }));
+    if pipeline.wait_for_started_nodes {
+        started.payload.as_mut().unwrap()["wait_for_started_nodes"] = serde_json::json!(true);
+    }
     w.runs.append_event().execute(&started).await.unwrap();
 }
 
@@ -360,7 +363,10 @@ async fn an_on_demand_node_serves_the_downstream_not_launched_yet_and_never_rela
     let run = state(&w, "r1");
     assert_eq!(run.status, RunStatus::Running, "{:?}", kinds(&w, "r1"));
     assert_eq!(run.nodes["review"].iter, 1);
-    assert_eq!(run.waiting_for_started_nodes, Some(1));
+    assert_eq!(
+        run.waiting_for_started_nodes, None,
+        "without the option, a re-opened Run simply runs"
+    );
 
     complete(&w, "r1", "review", 1).await;
     let run = state(&w, "r1");

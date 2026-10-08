@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::common::flow::{git, wait_node_status, wait_run_status};
+use crate::common::flow::git;
 use crate::common::{ensure_pdo_on_path, TestDaemon};
 use crate::test_extension::{Control, Refusal, TestExtension};
 
@@ -53,9 +53,9 @@ fn one_script(name: &str) -> String {
 const WORKER: &str = "#!/usr/bin/env bash\nset -euo pipefail\n\
     printf 'pub fn alice() {}\\n' > alice.rs\nprintf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n";
 
-/// `start → {shared, forked} → end`: `shared` delivers in place at once, so when
-/// the isolated `forked` comes back the Run's branch has moved and its
-/// merge-back is a true merge commit.
+/// `start → {shared, forked} → end`: `shared` delivers in place while the
+/// isolated `forked` works, so when `forked` comes back the Run's branch has
+/// moved and its merge-back is a true merge commit.
 fn shared_and_forked(name: &str) -> String {
     format!(
         "name: {name}\nversion: \"1.0\"\nnodes:\n  \
@@ -218,9 +218,20 @@ async fn the_delivery_commit_is_signed_by_the_identity_the_node_was_given() {
 #[tokio::test]
 async fn an_isolated_node_commit_and_its_merge_back_are_signed_by_its_identity() {
     let name = "identity-isolated";
+    // Whatever the load, `forked` is cut before `shared` delivers (`shared`
+    // waits for its sub-worktree branch) and comes back after (`forked` waits
+    // for `shared`'s commit on the Run's branch).
     let shared = "#!/usr/bin/env bash\nset -euo pipefail\n\
+        for _ in $(seq 600); do\n\
+          git rev-parse --verify --quiet \"refs/heads/pdo/sub-$PDO_RUN_ID-forked-iter-1\" >/dev/null && break\n\
+          sleep 0.1\n\
+        done\n\
         printf 'pub fn shared() {}\\n' > shared.rs\nprintf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n";
-    let forked = "#!/usr/bin/env bash\nset -euo pipefail\nsleep 3\n\
+    let forked = "#!/usr/bin/env bash\nset -euo pipefail\n\
+        for _ in $(seq 600); do\n\
+          git log --format=%s \"pdo/run-$PDO_RUN_ID\" | grep -qx 'shared iter-1: completed' && break\n\
+          sleep 0.1\n\
+        done\n\
         printf 'pub fn forked() {}\\n' > forked.rs\nprintf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n";
     let (daemon, control) = daemon_with(seed(
         name,
@@ -240,10 +251,18 @@ async fn an_isolated_node_commit_and_its_merge_back_are_signed_by_its_identity()
 
     let repo = daemon.repo_root();
     let branch = format!("pdo/run-{run_id}");
+    let graph = git(repo, &["log", "--graph", "--format=%h %s (%an)", &branch]);
+    assert_eq!(
+        git(repo, &["log", "-1", "--format=%P", &branch])
+            .split_whitespace()
+            .count(),
+        2,
+        "the Run's branch ends on the merge-back of the isolated node:\n{graph}"
+    );
     assert_eq!(
         git(repo, &["log", "-1", "--format=%s", &format!("{branch}^2")]),
         "forked iter-1: completed",
-        "the Run's branch ends on the merge-back of the isolated node"
+        "{graph}"
     );
     assert_eq!(signed_by(repo, &format!("{branch}^2")), ALICE, "its commit");
     assert_eq!(signed_by(repo, &branch), ALICE, "the merge commit");
@@ -280,8 +299,8 @@ async fn without_a_given_identity_the_delivery_keeps_the_daemon_one() {
 
 /// Which case the child runs: `given` (the extension gives Alice) or `none`.
 const CASE_ENV: &str = "PDO_TEST_NO_DAEMON_IDENTITY_CASE";
-/// The child's last stdout line: what the Run ended as, then the branch's
-/// signature and the awaiting reason.
+/// The child's last stdout line: the Run's status, the signature of its
+/// branch's tip, and whether a delivery failed on the way.
 const VERDICT: &str = "no-daemon-identity verdict: ";
 
 /// The child's side: a daemon whose environment and configuration hold no git
@@ -309,43 +328,40 @@ fn a_run_without_daemon_identity_child() {
                 control.launch.set_env(alice_env());
             }
             let run_id = start_run(&daemon, name).await;
-            let run = if case == "given" {
-                wait_run_status_long(&daemon, &run_id, "completed").await
-            } else {
-                wait_node_status_long(&daemon, &run_id, "worker", "interrupted").await
+            // Given, the Run completes. Not given, what the Run parks on after
+            // the failed delivery depends on how the script's own completion
+            // races it; the `delivery_failed` interruption is what tells.
+            let deadline = std::time::Instant::now() + Duration::from_secs(90);
+            let (run, failed) = loop {
+                let run = daemon.get_json(&format!("/runs/{run_id}")).await;
+                let failed = delivery_failed(&daemon, &run_id).await;
+                let settled = if case == "given" {
+                    run["status"] == "completed"
+                } else {
+                    failed
+                };
+                if settled || std::time::Instant::now() > deadline {
+                    break (run, failed);
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
             };
             let branch = format!("pdo/run-{run_id}");
             println!(
-                "{VERDICT}{} | {} | {}",
+                "{VERDICT}{} | {} | delivery_failed={failed}",
                 run["status"].as_str().unwrap_or("?"),
                 signed_by(daemon.repo_root(), &branch),
-                run["awaiting_reason_code"].as_str().unwrap_or("-"),
             );
         });
 }
 
-async fn wait_run_status_long(daemon: &TestDaemon, run_id: &str, status: &str) -> Value {
-    let run = wait_run_settles(daemon, run_id, status).await;
-    if run["status"] == status {
-        return run;
-    }
-    wait_run_status(daemon, run_id, status).await
-}
-
-async fn wait_node_status_long(
-    daemon: &TestDaemon,
-    run_id: &str,
-    node: &str,
-    status: &str,
-) -> Value {
-    let deadline = std::time::Instant::now() + Duration::from_secs(90);
-    loop {
-        let run = daemon.get_json(&format!("/runs/{run_id}")).await;
-        if run["nodes"][node]["status"] == status || std::time::Instant::now() > deadline {
-            return wait_node_status(daemon, run_id, node, status).await;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+/// Did a delivery of the Run fail (`delivery_failed`)?
+async fn delivery_failed(daemon: &TestDaemon, run_id: &str) -> bool {
+    let events = daemon.get_json(&format!("/runs/{run_id}/events")).await;
+    events.as_array().is_some_and(|events| {
+        events
+            .iter()
+            .any(|e| e["payload"]["reason_code"] == "delivery_failed")
+    })
 }
 
 /// Run the child on `case` with no git identity anywhere; its verdict line.
@@ -385,16 +401,19 @@ fn run_child(case: &str) -> String {
         .to_string()
 }
 
-/// The fixture is genuine: with no identity given, the delivery cannot commit,
-/// and the Run parks on `delivery_failed` — the failure CORE-43 removes.
+/// The fixture is genuine: with no identity given, the delivery cannot commit
+/// and fails with `delivery_failed`, the failure CORE-43 removes.
 #[test]
 fn a_daemon_without_identity_cannot_deliver_alone() {
     let verdict = run_child("none");
-    assert!(verdict.starts_with("awaiting_user |"), "{verdict}");
-    assert!(verdict.ends_with("| delivery_failed"), "{verdict}");
+    assert!(verdict.ends_with("| delivery_failed=true"), "{verdict}");
+    assert!(!verdict.contains(ALICE), "{verdict}");
 }
 
 #[test]
 fn a_daemon_without_identity_finishes_the_run_the_extension_signs() {
-    assert_eq!(run_child("given"), format!("completed | {ALICE} | -"));
+    assert_eq!(
+        run_child("given"),
+        format!("completed | {ALICE} | delivery_failed=false")
+    );
 }

@@ -83,6 +83,18 @@ impl WaitRefusal {
         }
     }
 
+    /// The same refusal for a gesture that speaks to the node's agent (a text
+    /// sent to its input, a file imported for it) rather than a wait.
+    pub fn gesture_message(&self, run_id: &str, node_id: &str, iter: i64) -> String {
+        match self {
+            Self::RunNotLive => format!("run {run_id} is not running"),
+            Self::NodeIsScript => {
+                format!("node {node_id} is a script node: no agent runs there")
+            }
+            _ => self.message(run_id, node_id, iter),
+        }
+    }
+
     /// Whether the refusal names something that does not exist (a `404`), rather
     /// than a state that forbids the wait (a `409`).
     pub fn is_not_found(&self) -> bool {
@@ -168,6 +180,23 @@ pub fn check_target(facts: Option<&WaitFacts>, iter: i64) -> Result<(), WaitRefu
         return Err(WaitRefusal::NodeSessionNotLive);
     }
     Ok(())
+}
+
+/// The iteration a gesture toward a node's agent addresses — `iter`, or the
+/// node's current one when absent — once [`check_target`] accepts it. A
+/// refusal names the iteration it was about. tmux still has to confirm the
+/// session.
+pub fn live_target(
+    facts: Option<&WaitFacts>,
+    iter: Option<i64>,
+) -> Result<i64, (WaitRefusal, i64)> {
+    let current = facts
+        .and_then(|f| f.node.as_ref())
+        .map(|node| node.iter)
+        .unwrap_or(1);
+    let iter = iter.unwrap_or(current);
+    check_target(facts, iter).map_err(|refusal| (refusal, iter))?;
+    Ok(iter)
 }
 
 /// What a declaration writes: nothing (`None`, a no-op), or the

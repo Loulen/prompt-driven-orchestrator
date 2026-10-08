@@ -363,6 +363,19 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
         ),
         call(
             "POST",
+            "/runs/{run_id}/nodes/{node_id}/terminal-text",
+            format!("/runs/{RUN}/nodes/worker/terminal-text"),
+            Some(json!({ "text": "hello" })),
+        ),
+        // A JSON body where multipart is expected: the refusal comes first.
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/attachments",
+            format!("/runs/{RUN}/nodes/worker/attachments"),
+            Some(json!({})),
+        ),
+        call(
+            "POST",
             "/sessions/{session_id}/attach",
             format!("/sessions/pdo-{RUN}-worker/attach"),
             None,

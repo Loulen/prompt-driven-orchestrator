@@ -241,6 +241,10 @@ GET /resources
 ]
 ```
 
+Since 0.11, `node` lists `import_files` (the files a user imports into a node with a live session)
+and `send_text` (a text written into its terminal input, without Enter): an extension of rights
+that maps the node verbs maps these two as well, or they follow its default.
+
 The same list comes from `Host::catalogue()` inside the daemon, and `core_resources()` /
 `catalogue(manifests)` build it without a daemon. An extension of rights reads it to list what
 rights can be set on, without knowing the other extensions.

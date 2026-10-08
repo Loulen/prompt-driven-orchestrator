@@ -5,6 +5,8 @@ import { READ_ONLY_HINT } from "../model/terminalRole";
 import { paneIndicator, TERMINAL_TYPOGRAPHY_RESET, type PaneSource } from "../model/terminalPane";
 import { usePaneMode } from "../store/usePaneMode";
 import { useXtermSession } from "../store/useXtermSession";
+import { useFileDropTarget } from "../../skill/store/useFileDropTarget";
+import { DropOverlay } from "../../skill/components/SkillFileDropZone";
 import TerminalToolbar from "./TerminalToolbar";
 
 export type { PaneSource } from "../model/terminalPane";
@@ -30,6 +32,13 @@ interface Props {
   toolbarIdentity?: ReactNode;
   /** #44: extra gestures at the right of the toolbar, before Copy. */
   toolbarActions?: ReactNode;
+  /** Files given to the node: dropped on the terminal (with the files) or
+   *  asked for with the Import button (empty list). Omit ⇒ no import here (the
+   *  Run shell, the assistant). */
+  onImportFiles?: (files: File[]) => void;
+  /** Set when the node cannot receive files right now (no live session): the
+   *  Import button is off and says why. */
+  importDisabledReason?: string | null;
 }
 
 /** A session's inline terminal (ADR-0005): the live PTY, or its frozen pane. */
@@ -43,6 +52,8 @@ export default function TmuxTerminal({
   onSpectatingChange,
   toolbarIdentity,
   toolbarActions,
+  onImportFiles,
+  importDisabledReason,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { mode, frozen } = usePaneMode(session, status, paneSource);
@@ -72,11 +83,29 @@ export default function TmuxTerminal({
     onSpectatingChange?.(spectating);
   }, [spectating, onSpectatingChange]);
 
+  // A file dropped anywhere on the terminal opens the import, pre-filled.
+  // Always claimed while an import handler exists, so a missed drop never
+  // navigates the tab to the file; the modal says when the node cannot take it.
+  const handleFileDrop = useCallback(
+    (dt: DataTransfer) => onImportFiles?.(Array.from(dt.files)),
+    [onImportFiles],
+  );
+  const { dragging: fileDrag, handlers: dropHandlers } = useFileDropTarget(handleFileDrop);
+  const importEnabled = onImportFiles !== undefined;
+
   return (
     <div
-      className="flex flex-1 flex-col overflow-hidden"
+      className="relative flex flex-1 flex-col overflow-hidden"
       data-testid="tmux-terminal"
+      {...(importEnabled ? dropHandlers : {})}
     >
+      {importEnabled && fileDrag !== null && (
+        <DropOverlay
+          count={fileDrag}
+          title={`Drop to import ${fileDrag} file${fileDrag === 1 ? "" : "s"} into this node`}
+          hint={importDisabledReason ?? "You review them before anything is written"}
+        />
+      )}
       <TerminalToolbar
         session={session}
         dotClass={dotClass}
@@ -94,6 +123,8 @@ export default function TmuxTerminal({
         onTakeControl={xterm.takeControl}
         identity={toolbarIdentity}
         actions={toolbarActions}
+        onImport={onImportFiles ? () => onImportFiles([]) : undefined}
+        importDisabledReason={importDisabledReason}
       />
 
       {/* Terminal container. #867: the read-only hint is always mounted and

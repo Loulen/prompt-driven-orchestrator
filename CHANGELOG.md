@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.23.0 — Fichier importé en cours de Run (CORE-37)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit deux verbes de plus, ajouts seulement.
+
+- **Fichier importé en cours de Run** : deux Opérations nouvelles sur la Ressource `node`,
+  `import_files` et `send_text` (catalogue des Ressources). Une extension de Droits qui
+  énumère les verbes d'un Node doit les mapper ; sinon elles suivent sa règle par défaut.
+  L'import compte dans le même budget `max_attachments_mb` que les fichiers joints au lancement
+  d'un Run, par import : derrière un reverse proxy, `client_max_body_size` doit le suivre.
+
 ## 2.22.0 — Livraison signée par l'identité git du Node (CORE-43)
 
 `pdo-extension-api` reste en **0.11.0** : seule la documentation de `node_env` change. Détail :

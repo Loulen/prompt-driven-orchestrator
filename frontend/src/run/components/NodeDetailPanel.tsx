@@ -246,6 +246,7 @@ export default function NodeDetailPanel({
         node={node}
         nodeName={nodeName}
         runId={runId}
+        isArchived={isArchived}
         selectedIter={selectedIter}
         selectedIterStatus={selectedIterStatus}
         sessionName={sessionName}
@@ -254,6 +255,7 @@ export default function NodeDetailPanel({
         setTerminalView={setTerminalView}
         setTerminalLive={setTerminalLive}
         setTerminalSpectating={setTerminalSpectating}
+        terminalSpectating={terminalSpectating}
         // #44: the enlarged terminal carries the panel's completion gestures.
         completion={{
           showGestures:

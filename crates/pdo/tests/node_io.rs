@@ -315,3 +315,70 @@ async fn artifact_endpoint_returns_markdown_content() {
         .args(["kill-session", "-t", &session2])
         .output();
 }
+
+const INTERMEDIATE_PIPELINE: &str = "io-intermediate";
+
+fn seed_intermediate(repo: &std::path::Path) -> anyhow::Result<()> {
+    let yaml = crate::common::flow::solo_pipeline_yaml(INTERMEDIATE_PIPELINE, false).replace(
+        "      - name: out\n",
+        "      - name: out\n      - name: preview\n        port_type: html\n        intermediate: true\n",
+    );
+    crate::common::flow::write_pipeline(repo, INTERMEDIATE_PIPELINE, &yaml)?;
+    crate::common::flow::git_init(repo)
+}
+
+/// An *Output intermédiaire* is listed and marked while its node runs: absent
+/// first (« not written yet », no error), then present as soon as the agent
+/// writes it. The node description the Pipeline Manager reads marks it too, and
+/// the completion neither waits for it nor hides it afterwards.
+#[tokio::test]
+async fn io_endpoint_marks_an_intermediate_output_while_the_node_runs() {
+    use crate::common::flow;
+
+    let daemon = TestDaemon::spawn(seed_intermediate).await.unwrap();
+    let run_id = flow::create_run(&daemon, INTERMEDIATE_PIPELINE).await;
+    let run = flow::wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    let worker = run["node_defs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "worker")
+        .unwrap();
+    assert_eq!(worker["outputs"][1]["name"], "preview");
+    assert_eq!(worker["outputs"][1]["intermediate"], true);
+    assert!(
+        worker["outputs"][0].get("intermediate").is_none(),
+        "{worker}"
+    );
+
+    let io_path = format!("/runs/{run_id}/nodes/worker/io?iter=1");
+    let io = daemon.get_json(&io_path).await;
+    let outputs = io["outputs"].as_array().unwrap();
+    assert_eq!(outputs.len(), 2, "{io}");
+    assert_eq!(outputs[0]["port"], "out");
+    assert_eq!(outputs[0]["intermediate"], false);
+    assert_eq!(outputs[1]["port"], "preview");
+    assert_eq!(outputs[1]["intermediate"], true);
+    assert_eq!(outputs[1]["port_type"], "html");
+    assert_eq!(outputs[1]["files"][0]["exists"], false);
+
+    let dir = flow::worktree(&daemon, &run_id).join(".pdo/artifacts/worker/iter-1/preview");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("output.html"), "<p>step 1</p>").unwrap();
+
+    let io = daemon.get_json(&io_path).await;
+    let preview = &io["outputs"][1];
+    assert_eq!(preview["intermediate"], true);
+    assert_eq!(preview["files"][0]["exists"], true);
+    assert!(preview["files"][0]["path"]
+        .as_str()
+        .unwrap()
+        .ends_with("worker/iter-1/preview/output.html"));
+
+    // Only `out` is written: the completion is accepted all the same.
+    let (status, body) = flow::complete_node(&daemon, &run_id, "worker").await;
+    assert_eq!(status, 200, "{body}");
+    let io = daemon.get_json(&io_path).await;
+    assert_eq!(io["outputs"][1]["files"][0]["exists"], true, "{io}");
+}

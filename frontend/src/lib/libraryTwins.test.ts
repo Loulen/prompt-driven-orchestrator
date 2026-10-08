@@ -35,7 +35,7 @@ function working(
     node_count: 3,
     modified: null,
     variables: {},
-    prompt_required: true,
+    prompt_required: true, validation: { kind: "all" },
   };
 }
 

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Save, X } from "lucide-react";
+import { BadgeCheck, Save, X } from "lucide-react";
 import { useEditStore } from "../store/editStore";
 import { hasUnsavedWork, isRunTabLocked } from "../store/editState";
 import type { OpenPipeline } from "../store/editState";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
 import RunSaveGroup from "./RunSaveGroup";
+import ValidationIndicator from "./ValidationIndicator";
+import ValidatePipelineModal from "./ValidatePipelineModal";
+import { validationOf } from "../model/pipelineValidation";
+import type { Project } from "../../workspace/model/project";
 import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
 import type { PipelineEntity } from "../../shared/extensions/contract";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "../../shared/ui/dropdown-menu";
@@ -28,7 +32,7 @@ function useRelativeTime(ts: number | undefined): string | null {
   return `Saved ${hrs}h ago`;
 }
 
-export default function TabBar() {
+export default function TabBar({ projects = [] }: { projects?: Project[] } = {}) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setActiveTab = useEditStore((s) => s.setActiveTab);
@@ -37,6 +41,10 @@ export default function TabBar() {
   const save = useEditStore((s) => s.save);
   const lastSavedAt = useEditStore((s) => s.lastSavedAt);
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const pipelines = useEditStore((s) => s.pipelines);
+  const loadPipelines = useEditStore((s) => s.loadPipelines);
+  // The Validate modal of the active Pipeline tab (CONTEXT.md « Pipeline validé »).
+  const [validateOpen, setValidateOpen] = useState(false);
 
   // Right-click context menu (#342): viewport coords so it doesn't drift when
   // the tab strip scrolls. Null = closed.
@@ -64,6 +72,12 @@ export default function TabBar() {
   // Save is shown; in « Edit for this run » Save writes the Run's snapshot only.
   const activeTab = openTabs.find((t) => t.id === activeTabId);
   const activeLocked = isRunTabLocked(activeTab);
+  // Validate and the indicator belong to a Pipeline's own tab — never a Run's
+  // (its snapshot is not what the launch forms offer), and only once the
+  // Pipeline is in the list (saved at least once under this id).
+  const activeEntry =
+    activeTab && activeTab.runId == null ? pipelines.find((p) => p.id === activeTab.id) : undefined;
+  const activeValidation = validationOf(activeEntry);
   const activeLastSaved = activeTabId ? lastSavedAt[activeTabId] : undefined;
   const savedAgo = useRelativeTime(activeLastSaved);
 
@@ -141,6 +155,25 @@ export default function TabBar() {
             {savedAgo}
           </span>
         )}
+        {activeEntry && (
+          <>
+            <ValidationIndicator
+              validation={activeValidation}
+              projects={projects}
+              testId="toolbar-validation-indicator"
+            />
+            <button
+              onClick={() => setValidateOpen(true)}
+              className="flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+              style={{ fontSize: "11px" }}
+              data-testid="validate-button"
+              title="Choose the projects this pipeline is offered to"
+            >
+              <BadgeCheck size={11} />
+              Validate
+            </button>
+          </>
+        )}
         {activeTab?.runId != null && !activeLocked ? (
           <RunSaveGroup tab={{ ...activeTab, runId: activeTab.runId }} />
         ) : activeLocked ? null : (
@@ -170,6 +203,20 @@ export default function TabBar() {
             // leaving the menu up would let it sit over the modal.
             setMenu(null);
             requestClose(ids);
+          }}
+        />
+      )}
+
+      {activeEntry && (
+        <ValidatePipelineModal
+          open={validateOpen}
+          pipelineId={activeEntry.id}
+          pipelineName={activeEntry.name}
+          validation={activeValidation}
+          projects={projects}
+          onClose={() => setValidateOpen(false)}
+          onSaved={() => {
+            void loadPipelines();
           }}
         />
       )}

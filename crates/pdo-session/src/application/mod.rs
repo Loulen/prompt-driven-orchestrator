@@ -16,3 +16,4 @@ pub mod shared_terminal;
 pub mod status;
 pub mod sweep;
 pub mod terminal;
+pub mod terminal_text;

@@ -82,6 +82,7 @@ impl Pipelines {
                 new_name,
             })
             .await;
+        self.carry_validation(id, &desired_id).await;
         self.registry.write_prompts(&desired_id, prompts);
         self.registry.prune_prompts(&desired_id, &saved);
         self.events

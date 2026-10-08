@@ -160,7 +160,7 @@ export default function UnifiedLeftPanel({
       )}
 
       {/* Library pane */}
-      {activeTab === "library" && <PipelinesPane />}
+      {activeTab === "library" && <PipelinesPane projects={projects} />}
 
       <RunsModals
         pane={runsPane}

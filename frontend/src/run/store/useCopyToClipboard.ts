@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 export type CopyStatus = "idle" | "copied" | "failed";
 
@@ -16,10 +17,10 @@ export const LOAD_FAILED = "Could not load the file to copy";
 
 /**
  * #41 — an honest clipboard write. `copied` is only ever set once
- * `navigator.clipboard.writeText` has RESOLVED; any rejection (permission
- * denied, insecure context without `navigator.clipboard`, a loader that fails)
- * lands on `failed`, so the user never pastes a stale clipboard believing the
- * copy happened. Each state falls back to `idle` on its own timer, cleared on
+ * `copyToClipboard` reports a write (the Clipboard API, or its `execCommand`
+ * fallback outside a secure context); a write neither path made, or a loader
+ * that fails, lands on `failed`, so the user never pastes a stale clipboard
+ * believing the copy happened. Each state falls back to `idle` on its own timer, cleared on
  * unmount and on every new copy.
  */
 export function useCopyToClipboard(): {
@@ -65,14 +66,8 @@ export function useCopyToClipboard(): {
         settle("failed", LOAD_FAILED);
         return;
       }
-      try {
-        const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
-        if (!clipboard?.writeText) throw new Error(CLIPBOARD_REFUSED);
-        await clipboard.writeText(text);
-        settle("copied");
-      } catch {
-        settle("failed", CLIPBOARD_REFUSED);
-      }
+      if (await copyToClipboard(text)) settle("copied");
+      else settle("failed", CLIPBOARD_REFUSED);
     },
     [settle],
   );

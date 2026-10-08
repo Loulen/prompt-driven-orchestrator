@@ -4,7 +4,8 @@
  * Order and content come from the ticket: create a pipeline, build an
  * **implementer** and a **tester**, give the tester a `verdict` enum and an
  * annotated screenshot, then wire the loop (`verdict eq fail` back to the
- * implementer, `verdict eq pass` to End), save, and decide whether to keep it.
+ * implementer, `verdict eq pass` to End), save, validate it for the projects
+ * that should see it, and decide whether to keep it.
  *
  * Copy rules the implementer of a new step must keep (design round 1):
  * - Title is an imperative, body is two sentences at most.
@@ -195,6 +196,10 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
     {
       label: "Loop",
       text: "tester → implementer when verdict eq fail; tester → End when verdict eq pass.",
+    },
+    {
+      label: "Validate",
+      text: "New Run offers it to the projects you validated it for; until then it is a test pipeline, behind Show test pipelines.",
     },
   ],
   // #825 — what the card of a Full tour's *previous* leg says when that leg was

@@ -11,9 +11,11 @@ use super::pipelines::Pipelines;
 use super::queries::PipelineSummary;
 
 impl Pipelines {
-    /// Stamp the extensions' attributes on the pipeline `id`, which `actor`
-    /// just created. Returns them.
-    pub async fn stamp_created(&self, actor: &Actor, id: &str) -> Attributes {
+    /// The instance data of the pipeline `id`, which `actor` just created (a
+    /// new one, a duplicate, an import): it is born a test pipeline, and the
+    /// extensions stamp their attributes on it. Returns the attributes.
+    pub async fn settle_created(&self, actor: &Actor, id: &str) -> Attributes {
+        self.born_unvalidated(id).await;
         let entity = EntityRef::new(ResourceKind::Pipeline, id);
         attributes::stamp(self.host(), actor, entity).await
     }

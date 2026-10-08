@@ -178,3 +178,19 @@ impl ProjectEvents for RecordingEvents {
         ready(())
     }
 }
+
+#[derive(Default)]
+pub struct RecordingDeletions(Mutex<Vec<String>>);
+
+impl RecordingDeletions {
+    pub fn deleted(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl ProjectDeletions for RecordingDeletions {
+    fn project_deleted<'a>(&'a self, project_id: &'a str) -> BoxFuture<'a, ()> {
+        self.0.lock().unwrap().push(project_id.to_string());
+        ready(())
+    }
+}

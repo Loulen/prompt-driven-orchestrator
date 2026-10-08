@@ -53,6 +53,11 @@ interface Props {
   /** ADR-0081 (#31): the `pipeline/item` decorations, at the end of line 2. */
   decorations?: ReactNode;
   /**
+   * The validation indicator (CONTEXT.md « Pipeline validé »), bottom-right under
+   * the hover actions, always visible.
+   */
+  indicator?: ReactNode;
+  /**
    * #30 — present ⇒ the row grows a « ⋯ » menu after its hover icons: its verbs,
    * the extensions' `pipeline/item/menu` groups (handed this pipeline), then
    * the delete. Only the Pipelines tab's rows offer it.
@@ -88,6 +93,7 @@ export default function LibraryRow({
   onToggleSelect,
   modified,
   decorations,
+  indicator,
   menuEntity,
 }: Props) {
   const body = (
@@ -120,20 +126,32 @@ export default function LibraryRow({
             <span className="truncate font-medium">{name}</span>
           )}
         </div>
+        {/* One line whatever the width: when the hover actions narrow the row,
+            the meta text truncates instead of wrapping, so the row keeps its
+            height and the indicator stays put. */}
         <div
-          className="mt-0.5 flex items-center gap-1.5 text-fg-4"
+          className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-fg-4"
           style={{ fontSize: "10px" }}
+          data-testid="library-row-meta"
         >
-          <span>{nodeCount} nodes</span>
-          {modified && (
-            <>
-              <span>·</span>
-              <span>edited {new Date(modified).toLocaleDateString()}</span>
-            </>
-          )}
+          <span className="min-w-0 truncate">
+            <span>{nodeCount} nodes</span>
+            {modified && (
+              <>
+                <span> · </span>
+                <span>edited {new Date(modified).toLocaleDateString()}</span>
+              </>
+            )}
+          </span>
           {decorations}
         </div>
       </div>
+      {/* Right column, the shape of a run row: line 1 = the hover-revealed
+          action icons, line 2 = the validation indicator, always visible. The
+          actions line keeps its height at rest, so the indicator never moves
+          when the icons appear. */}
+      <div className="flex shrink-0 flex-col items-end justify-between gap-1">
+      <div className="flex h-4 items-center gap-2" data-testid="library-row-actions">
       {onRenameStart && !renaming && (
         <span
           className="hidden shrink-0 group-hover:inline-flex"
@@ -186,6 +204,9 @@ export default function LibraryRow({
           deleteTitle={deleteTitle}
         />
       )}
+      </div>
+      {indicator && <span className="flex shrink-0 items-center">{indicator}</span>}
+      </div>
     </>
   );
 

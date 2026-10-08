@@ -116,6 +116,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             Some(json!({ "name": "renamed" })),
         ),
         call(
+            "PUT",
+            "/pipelines/{pipeline_id}/validation",
+            format!("/pipelines/{pipeline}/validation"),
+            Some(json!({ "kind": "all" })),
+        ),
+        call(
             "POST",
             "/pipelines/import",
             "/pipelines/import".into(),
@@ -360,6 +366,19 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             "/runs/{run_id}/nodes/{node_id}/wait-user",
             format!("/runs/{RUN}/nodes/worker/wait-user"),
             Some(json!({ "iter": 1 })),
+        ),
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/terminal-text",
+            format!("/runs/{RUN}/nodes/worker/terminal-text"),
+            Some(json!({ "text": "hello" })),
+        ),
+        // A JSON body where multipart is expected: the refusal comes first.
+        call(
+            "POST",
+            "/runs/{run_id}/nodes/{node_id}/attachments",
+            format!("/runs/{RUN}/nodes/worker/attachments"),
+            Some(json!({})),
         ),
         call(
             "POST",

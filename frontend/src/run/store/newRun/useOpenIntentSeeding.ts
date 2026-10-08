@@ -26,7 +26,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
   const rightsProjects = useRunCreationRightsStore((st) => st.projects);
 
   const {
-    setSelectedPipelineId, setSourceBranch, clearBranches, targetRepo, handleRepoChange,
+    setSelectedPipelineId, setPipelineChosen, setSourceBranch, clearBranches, targetRepo, handleRepoChange,
     resetRepo, setAutoName, setInput, setOverrides, setMode, editingTriggerId,
     setEditingTriggerId, setTriggerName, setCronPresetId, setDailyHour, setDailyMinute,
     setRawCron, setGuardCommand, setGuardTest, setGuardTestError, setAllowOverlap,
@@ -86,6 +86,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     const clearSharedIfFromTrigger = () => {
       if (!cameFromTrigger) return;
       setSelectedPipelineId("");
+      setPipelineChosen(false);
       setInput("");
       setOverrides({});
       resetRepo("");
@@ -113,6 +114,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
         setMode("trigger");
         setEditingTriggerId(trigger.id);
         setSelectedPipelineId(trigger.pipeline_id);
+        setPipelineChosen(true);
         // #470: reset the validity verdict with the field. The modal stays
         // mounted (#386), so a `repoValid === true` left over from a previous
         // open would survive next to an EMPTY repo field — reachable by opening

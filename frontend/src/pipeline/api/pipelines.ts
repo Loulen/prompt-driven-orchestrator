@@ -4,6 +4,7 @@
  */
 
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
+import type { PipelineValidation } from "../../shared/generated/PipelineValidation";
 import { ApiError, request } from "../../shared/http/client";
 import type { PipelineDetail } from "../model/pipeline";
 import { foldPipelineDetail } from "../model/pipelineDetail";
@@ -68,6 +69,22 @@ export function createPipeline(
     "POST",
     "/pipelines",
     { body: { name }, label: "POST /pipelines" },
+  );
+}
+
+/**
+ * Replace a Pipeline's validation (`PUT /pipelines/{id}/validation`, CONTEXT.md
+ * « Pipeline validé »). An empty Projet list comes back as `{ kind: "none" }`;
+ * an unknown Projet is a 400 naming it.
+ */
+export function setPipelineValidation(
+  id: string,
+  validation: PipelineValidation,
+): Promise<{ ok: boolean; id: string; validation: PipelineValidation }> {
+  return request<{ ok: boolean; id: string; validation: PipelineValidation }>(
+    "PUT",
+    `/pipelines/${encodeURIComponent(id)}/validation`,
+    { body: validation, label: `PUT /pipelines/${id}/validation` },
   );
 }
 

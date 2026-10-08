@@ -11,6 +11,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
     pipelines, selectedPipeline, selectedPipelineId, repoValid, mode, harness, setHarness,
     agentChoice, setAgentChoice, skills, setSkills, agentProfiles, skillBank,
     inheritedSkillTiers, handlePipelineChange, harnessCatalog, instanceDefaultHarness,
+    pipelineSections, repoProject,
   } = form;
   return (
     <div className="flex flex-col gap-3 py-4 border-b border-line">
@@ -32,11 +33,17 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
         <div className="flex gap-1.5">
           <PipelineSelect
             pipelines={repoValid ? pipelines : []}
+            sections={pipelineSections}
+            project={repoProject}
             value={selectedPipelineId}
             onChange={handlePipelineChange}
             disabled={!repoValid || pipelines.length === 0}
             placeholder={
-              repoValid ? "No pipelines found" : "Select a repository first"
+              !repoValid
+                ? "Select a repository first"
+                : pipelines.length === 0
+                  ? "No pipelines found"
+                  : "Choose a pipeline"
             }
           />
         </div>

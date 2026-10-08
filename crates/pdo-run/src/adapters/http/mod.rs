@@ -26,7 +26,7 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
 use crate::Runs;
-use nodes::{gestures, read};
+use nodes::{gestures, import, read};
 
 /// The routes of the run context, with their state.
 pub fn router(runs: Arc<Runs>) -> Router {
@@ -100,6 +100,12 @@ pub fn router(runs: Arc<Runs>) -> Router {
             post(gestures::start),
         )
         .route("/runs/{run_id}/nodes/{node_id}/stop", post(gestures::stop))
+        // The import into a running node: its budget is `max_attachments_mb`,
+        // enforced IN the handler (read fresh per request), as `POST /runs`.
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/attachments",
+            post(import::import).route_layer(DefaultBodyLimit::disable()),
+        )
         .route(
             "/runs/{run_id}/nodes/{node_id}/retry",
             post(gestures::retry),

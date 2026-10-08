@@ -85,13 +85,18 @@ mod tests {
     use super::*;
     use crate::application::ports::Projects;
     use pdo_workspace::adapters::{fs, git, sqlite};
-    use pdo_workspace::application::ports::{ProjectEvents, ProjectRepository};
+    use pdo_workspace::application::ports::{ProjectDeletions, ProjectEvents, ProjectRepository};
     use pdo_workspace::application::WorkspacePorts;
     use pdo_workspace::domain::project::StoredSetting;
 
     struct Silent;
     impl ProjectEvents for Silent {
         fn project_changed<'a>(&'a self, _project_id: &'a str) -> BoxFuture<'a, ()> {
+            Box::pin(async {})
+        }
+    }
+    impl ProjectDeletions for Silent {
+        fn project_deleted<'a>(&'a self, _project_id: &'a str) -> BoxFuture<'a, ()> {
             Box::pin(async {})
         }
     }
@@ -109,6 +114,7 @@ mod tests {
                 provisioning: Arc::new(sqlite::SqliteProvisioningRules::new(db.clone())),
                 recent: Arc::new(sqlite::SqliteRecentRepositories::new(db.clone())),
                 events: Arc::new(Silent),
+                deletions: Arc::new(Silent),
                 git: Arc::new(git::GitCli),
                 source_tree: Arc::new(fs::FsSourceTree),
                 files: Arc::new(fs::FsBrowser::new("/")),

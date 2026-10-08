@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand } from "lucide-react";
+import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, FileUp } from "lucide-react";
 import { Tooltip } from "../../shared/ui/tooltip";
 import {
   TAKE_CONTROL_LABEL,
@@ -32,6 +32,10 @@ interface Props {
   /** #44: extra gestures at the right of the toolbar, before Copy, followed by
    *  a separator. */
   actions?: ReactNode;
+  /** Import files from this machine into the node. Absent: no Import button. */
+  onImport?: () => void;
+  /** Why the node cannot receive files now: the button is off and says it. */
+  importDisabledReason?: string | null;
 }
 
 /** #44: the exits of the enlarged terminal, named on its collapse button. */
@@ -56,6 +60,8 @@ export default function TerminalToolbar({
   onTakeControl,
   identity,
   actions,
+  onImport,
+  importDisabledReason,
 }: Props) {
   return (
     <div
@@ -130,6 +136,25 @@ export default function TerminalToolbar({
           {actions}
           <span className="mx-1 h-3 w-px bg-line-strong" aria-hidden />
         </>
+      )}
+      {onImport && (
+        <Tooltip content={importDisabledReason ?? "Import files into this node"}>
+          <button
+            onClick={() => {
+              if (!importDisabledReason) onImport();
+            }}
+            aria-disabled={importDisabledReason ? true : undefined}
+            aria-label="Import files"
+            className={`flex h-5 w-5 items-center justify-center rounded transition-colors ${
+              importDisabledReason
+                ? "cursor-default text-fg-5"
+                : "cursor-pointer text-fg-3 hover:bg-bg-4 hover:text-fg"
+            }`}
+            data-testid="term-import"
+          >
+            <FileUp size={12} />
+          </button>
+        </Tooltip>
       )}
       {/* #772: copy the browser-side selection; the tooltip doubles as the
           discoverable hint for the keyboard shortcuts. */}

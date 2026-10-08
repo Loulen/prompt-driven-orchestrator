@@ -10,6 +10,7 @@
 //!   [`reap_policy`], [`auto_fail`], [`child_awaiting`].
 //! - [`review_comment`]: the review comments a Run folds.
 //! - [`run_summary`]: the Résumé de Run the lists read (ADR-0084).
+//! - [`live_session`]: a node's facts for the gestures that speak to its agent.
 //! - What a Run costs: [`prices`] (the price table's tiers) and [`run_cost`]
 //!   (the contributions and a transcript's usage).
 
@@ -23,6 +24,7 @@ pub mod edge_router;
 pub mod event;
 pub mod graph_resolver;
 pub mod input_resolution;
+pub mod live_session;
 pub mod loop_region;
 pub mod merge_action;
 pub mod on_demand;

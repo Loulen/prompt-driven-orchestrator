@@ -1,6 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDaemonEvents } from "./useDaemonEvents";
+import { useEditStore } from "../pipeline/store/editStore";
 import type { WsMessage } from "../run/model/liveStream";
 
 describe("useDaemonEvents", () => {
@@ -23,6 +24,7 @@ describe("useDaemonEvents", () => {
       refreshTriggers: vi.fn(),
       refreshProjects: vi.fn(),
       setTriggersPaused: vi.fn(),
+      refreshTriggersPaused: vi.fn(),
       bumpFiresRefreshKey: vi.fn(),
     };
     const hook = renderHook(() => useDaemonEvents(targets));
@@ -57,11 +59,48 @@ describe("useDaemonEvents", () => {
     expect(targets.refreshTriggers).not.toHaveBeenCalled();
   });
 
+  it("reads the Pipelines again on a pipeline_validation_changed", async () => {
+    const { useEditStore } = await import("../pipeline/store/editStore");
+    const original = useEditStore.getState().loadPipelines;
+    const loadPipelines = vi.fn(async () => {});
+    useEditStore.setState({ loadPipelines });
+    try {
+      const { targets, emit } = mount();
+      emit({ type: "pipeline_validation_changed", pipeline_id: "shared" });
+      expect(loadPipelines).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1_000);
+      expect(targets.refreshRuns).not.toHaveBeenCalled();
+    } finally {
+      useEditStore.setState({ loadPipelines: original });
+    }
+  });
+
   it("drops a pending refresh once unmounted", () => {
     const { targets, hook, emit } = mount();
     emit({ type: "event" });
     hook.unmount();
     vi.advanceTimersByTime(1_000);
     expect(targets.refreshRuns).not.toHaveBeenCalled();
+  });
+
+  it("reads every list again on a resync", () => {
+    const original = useEditStore.getState().loadPipelines;
+    const loadPipelines = vi.fn(async () => {});
+    useEditStore.setState({ loadPipelines });
+    const { targets, emit } = mount();
+    // A burst of them costs one read of each, in the window.
+    emit({ type: "resync" });
+    emit({ type: "resync" });
+    expect(targets.refreshTriggers).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(300);
+    expect(targets.refreshTriggers).toHaveBeenCalledTimes(1);
+    expect(targets.refreshTriggersPaused).toHaveBeenCalledTimes(1);
+    expect(targets.refreshProjects).toHaveBeenCalledTimes(1);
+    expect(loadPipelines).toHaveBeenCalledTimes(1);
+    expect(targets.refreshRuns).toHaveBeenCalledTimes(1);
+    expect(targets.refreshRun).toHaveBeenCalledTimes(1);
+    expect(targets.refreshSessions).toHaveBeenCalledTimes(1);
+    expect(targets.bumpFiresRefreshKey).not.toHaveBeenCalled();
+    useEditStore.setState({ loadPipelines: original });
   });
 });

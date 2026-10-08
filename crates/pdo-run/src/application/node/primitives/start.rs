@@ -245,7 +245,7 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         })),
     };
 
-    crate::application::node::spawn::freeze_claude_config_dir(&mut node_started, &params.extension);
+    crate::application::node::spawn::freeze_extension_env(&mut node_started, &params.extension);
     let session_name =
         pdo_session::domain::names::node_session_name(params.run_id, params.node_id, params.iter);
     // **Do not add a spawn path that spawns before the caller appends

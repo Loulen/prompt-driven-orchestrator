@@ -89,6 +89,7 @@ impl Pipelines {
                 new_name: new_name.clone(),
             })
             .await;
+        self.carry_validation(id, &new_id).await;
         // Announce the move ourselves: self-writes are suppressed by the
         // watcher, and clients must refresh the list under the NEW id at once.
         self.events.changed(&new_id, &new_path.to_string_lossy());

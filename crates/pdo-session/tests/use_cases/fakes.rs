@@ -68,6 +68,10 @@ pub struct FakeTmux {
     pub killed: Mutex<Vec<String>>,
     pub typed: Mutex<Vec<(String, String)>>,
     pub pasted: Mutex<Vec<(String, String)>>,
+    /// What `paste_without_enter` wrote, per session (no Enter).
+    pub pasted_without_enter: Mutex<Vec<(String, String)>>,
+    /// `paste_without_enter` is refused.
+    pub refuse_paste: Mutex<bool>,
     /// The next `new_session` fails with this message.
     pub fail_next_spawn: Mutex<Option<String>>,
     /// `kill` leaves the session alive.
@@ -160,6 +164,17 @@ impl Tmux for FakeTmux {
 
     fn paste(&self, name: &str, text: &str) {
         self.pasted.lock().unwrap().push((name.into(), text.into()));
+    }
+
+    fn paste_without_enter(&self, name: &str, text: &str) -> bool {
+        if *self.refuse_paste.lock().unwrap() {
+            return false;
+        }
+        self.pasted_without_enter
+            .lock()
+            .unwrap()
+            .push((name.into(), text.into()));
+        true
     }
 
     fn attach_argv(&self, name: &str, ignore_size: bool) -> Vec<String> {

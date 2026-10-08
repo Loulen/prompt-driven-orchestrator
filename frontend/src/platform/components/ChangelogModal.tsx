@@ -11,6 +11,7 @@ import {
   isDistribution,
   updateNotOfferedReason,
 } from "../model/updateStatus";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 /**
  * « What's new » (#698): the changelog of the versions missed since the installed one,
@@ -195,14 +196,11 @@ function ChangelogFooter({
 
   const copy = async () => {
     if (!update?.manual_command) return;
-    try {
-      await navigator.clipboard.writeText(update.manual_command);
-      setCopied(true);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable: the command is selectable text anyway */
-    }
+    // Clipboard unavailable: the command is selectable text anyway.
+    if (!(await copyToClipboard(update.manual_command))) return;
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1500);
   };
 
   // Not updatable from here: the method is unknown, or the distribution (#24)

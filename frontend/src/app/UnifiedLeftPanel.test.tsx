@@ -1,11 +1,16 @@
 import { useState } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
+import type { Project } from "../workspace/model/project";
+import type { ExtensionEntry } from "../shared/generated/ExtensionEntry";
+import type { UiContribution } from "../shared/generated/UiContribution";
+import { resetExtensions, setBundleLoader } from "../shared/extensions/store";
+import { hostReactMajor } from "../shared/extensions/shared";
 import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
 import { ApiError } from "../shared/http/client";
 import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../run/api/commands";
@@ -359,11 +364,13 @@ function renderPanel({
   libraryPipelines = [],
   selectedRunId = null,
   triggers,
+  projects,
 }: {
   runs?: RunListEntry[];
   libraryPipelines?: LibraryPipelineEntry[];
   selectedRunId?: string | null;
   triggers?: TriggerListEntry[];
+  projects?: Project[];
 } = {}) {
   return render(
     <UnifiedLeftPanel
@@ -374,6 +381,7 @@ function renderPanel({
       libraryPipelines={libraryPipelines}
       onLibraryPipelinesChanged={noop}
       triggers={triggers}
+      projects={projects}
     />,
   );
 }
@@ -497,6 +505,70 @@ describe("UnifiedLeftPanel run display labels", () => {
 // The run row's status dot. These assertions used to live on `RunsListPanel`,
 // a component nothing but its own test imported — so they guarded markup the
 // app never mounted. Deleted with it (#503); the live surface is this panel.
+describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetExtensions();
+  });
+
+  const serveExtension = (contributions: UiContribution[]) => {
+    const entry: ExtensionEntry = {
+      id: "demo",
+      name: "Extension demo",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/demo/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        contributions,
+        commands: [],
+        locations: [],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(JSON.stringify([entry]), { status: 200, headers: { "Content-Type": "application/json" } })
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    setBundleLoader(async () => ({
+      WhyEmpty: () => <p data-testid="why-empty">No Project yet</p>,
+    }));
+  };
+
+  it("keeps the core's text alone without a contribution", async () => {
+    resetExtensions();
+    serveExtension([]);
+    renderPanel({ runs: [] });
+    await act(async () => {});
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent(/^No runs yet$/);
+    expect(screen.queryByTestId("extension-decorations-runs/empty")).toBeNull();
+  });
+
+  it("shows what an extension contributes under the core's text, only while the list is empty", async () => {
+    resetExtensions();
+    serveExtension([
+      { location: "runs/empty", id: "why", label: "Why", type: "decoration", component: "WhyEmpty" } as UiContribution,
+    ]);
+    const { rerender } = renderPanel({ runs: [] });
+    expect(await screen.findByTestId("why-empty")).toHaveTextContent("No Project yet");
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent("No runs yet");
+    rerender(
+      <UnifiedLeftPanel
+        runs={[{ stalled: false, effective_repo: "", run_id: "r1", pipeline_name: "p", status: "running", started_at: null }]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    expect(screen.queryByTestId("why-empty")).toBeNull();
+  });
+});
+
 describe("UnifiedLeftPanel run status dot", () => {
   const run = (over: Partial<RunListEntry>): RunListEntry[] => [
     { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, stalled: false, effective_repo: "", ...over },
@@ -938,7 +1010,7 @@ describe("UnifiedLeftPanel pipeline delete", () => {
     path: "/home/u/.pdo/library/pipelines/simple-bugfix.yaml",
     node_count: 3,
     modified: null,
-    variables: {}, prompt_required: true,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
   };
 
   it("deletes the selected instance pipeline by id", async () => {
@@ -959,10 +1031,46 @@ describe("UnifiedLeftPanel pipeline delete", () => {
   });
 });
 
+// CONTEXT.md « Pipeline validé »: each row says who the launch forms offer it to.
+describe("UnifiedLeftPanel pipeline validation indicator", () => {
+  const row = (id: string, validation: PipelineListEntry["validation"]): PipelineListEntry => ({
+    id,
+    name: id,
+    scope: "instance",
+    path: `/home/u/.pdo/pipelines/${id}.yaml`,
+    node_count: 2,
+    modified: null,
+    variables: {},
+    prompt_required: true,
+    validation,
+  });
+
+  it("shows « All », the Projet count, or the flask of a test pipeline", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([
+      row("common", { kind: "all" }),
+      row("team", { kind: "projects", project_ids: ["prj-a"] }),
+      row("draft", { kind: "none" }),
+    ]);
+
+    renderPanel({ projects: [{ id: "prj-a", name: "Alpha", members: [] }] });
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("draft");
+
+    expect(screen.getByTestId("validation-indicator-common")).toHaveTextContent("All");
+    expect(screen.getByTestId("validation-indicator-team")).toHaveAccessibleName(
+      "Validated for: Alpha",
+    );
+    expect(screen.getByTestId("validation-indicator-draft")).toHaveAttribute(
+      "data-validation",
+      "none",
+    );
+  });
+});
+
 // #774 — a hover pencil on Pipelines-tab rows flips the name into an inline
 // input; Enter commits through the store's renamePipeline action.
 describe("UnifiedLeftPanel pipeline rename", () => {
-  const entry: PipelineListEntry = { prompt_required: true,
+  const entry: PipelineListEntry = { prompt_required: true, validation: { kind: "all" },
     id: "simple-bugfix",
     name: "simple-bugfix",
     scope: "instance",
@@ -1089,7 +1197,7 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
         path: "/repo/.pdo/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {}, prompt_required: true,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
       },
     ]);
 
@@ -1126,7 +1234,7 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
         path: "/home/u/.pdo/library/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {}, prompt_required: true,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
       } satisfies PipelineListEntry,
     ]);
     renderWithLib(); // libraryPipelines={[libOnly]}, opens Library tab
@@ -1147,7 +1255,7 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
         path: "/home/u/.pdo/library/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {}, prompt_required: true,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
       } satisfies PipelineListEntry,
     ]);
     renderWithLib(onChanged);
@@ -1181,7 +1289,7 @@ describe.skip("UnifiedLeftPanel duplicate is usable without reload (#371, supers
     path: "/home/u/.pdo/library/pipelines/planner.yaml",
     node_count: 3,
     modified: null,
-    variables: {}, prompt_required: true,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
   };
   // /pipelines shape of the copy: the daemon scans the library dir and tags it
   // scope:"library", so it belongs in block 1 (proper button, "library" badge).
@@ -1259,7 +1367,7 @@ describe.skip("UnifiedLeftPanel duplicate is usable without reload (#371, supers
       path: "/home/u/.pdo/library/pipelines/solo.yaml",
       node_count: 2,
       modified: null,
-      variables: {}, prompt_required: true,
+      variables: {}, prompt_required: true, validation: { kind: "all" },
     };
     const soloCopy: PipelineListEntry = {
       ...solo,
@@ -1337,7 +1445,7 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
     path: "/repo/.pdo/pipelines/fixture.yaml",
     node_count: 3,
     modified: null,
-    variables: {}, prompt_required: true,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
   };
 
   function renderStarredRow(libraryPipelines: LibraryPipelineEntry[]) {
@@ -2117,12 +2225,12 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     expect(scrollSpy).toHaveBeenCalled();
   });
 
-  it("archiving a parent releases its children as ACTIVE roots; the Archived section holds the parent alone (AC #2, ADR-0064)", () => {
+  it("archiving only a parent leaves its children ACTIVE roots, each linked to the archived parent (ADR-0064)", () => {
     const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
     renderPanel({ runs: archivedParent });
-    // Active list: the released children climb back to depth 0 (the grandchild
-    // stays under its own live parent), alongside the orphan and solo. A released
-    // child is grouped by its OWN repo again (kid-trig lives in /repos/b).
+    // Active list: the children climb back to depth 0 (the grandchild stays
+    // under its own live parent), alongside the orphan and solo. A child root
+    // is grouped by its OWN repo again (kid-trig lives in /repos/b).
     expect(row("kid")).toHaveAttribute("data-depth", "0");
     expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
     expect(row("grandkid")).toHaveAttribute("data-depth", "1");
@@ -2133,12 +2241,104 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
       "triage nightly",
       "#733 logout — nightly",
     ]);
+    // A root whose parent sits in the other section links to it; a root whose
+    // parent is not listed, or a nested child, does not.
+    expect(within(row("kid")).getByTestId("run-parent-link")).toHaveTextContent(
+      "Refonte auth — orchestrateur",
+    );
+    expect(within(row("kid-trig")).getByTestId("run-parent-link")).toBeInTheDocument();
+    expect(within(row("grandkid")).queryByTestId("run-parent-link")).toBeNull();
+    expect(within(row("orphan")).queryByTestId("run-parent-link")).toBeNull();
     expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(1)");
     fireEvent.click(screen.getByTestId("run-archived-toggle"));
-    // The archived parent is a leaf: no chevron, no pills, no nested rows.
+    // The archived parent holds no active child: no chevron, no pills.
     expect(labels().slice(-1)).toEqual(["Refonte auth — orchestrateur"]);
     expect(within(row("epic")).queryByTestId("run-tree-chevron")).toBeNull();
     expect(within(row("epic")).queryByTestId("run-child-pills-failed")).toBeNull();
+  });
+
+  it("the archived section renders the tree: archived children fold under their archived parent", () => {
+    const allArchived = runs.map((r) =>
+      ["epic", "kid", "kid-trig", "grandkid"].includes(r.run_id)
+        ? { ...r, status: "archived" as const }
+        : r,
+    );
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    renderPanel({ runs: allArchived });
+    expect(labels()).toEqual(["#700 spike", "triage nightly"]);
+    // The count is the number of archived runs, not of archived roots.
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(4)");
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    // Collapsed by default (the preference holds for both sections).
+    expect(labels().slice(2)).toEqual(["Refonte auth — orchestrateur"]);
+    expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(labels().slice(2)).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "#733 logout — nightly",
+    ]);
+    expect(row("kid")).toHaveAttribute("data-depth", "1");
+    expect(within(row("kid")).queryByTestId("run-parent-link")).toBeNull();
+    // The global button opens every parent of both sections.
+    fireEvent.click(screen.getByTestId("run-tree-toggle-all"));
+    expect(labels().slice(2)).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "review 731",
+      "#733 logout — nightly",
+    ]);
+  });
+
+  it("an archived child of a live parent is an archived root linked to it; the link selects the parent", () => {
+    const shelved = runs.map((r) => (r.run_id === "kid-trig" ? { ...r, status: "archived" as const } : r));
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel runs={shelved} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
+    fireEvent.click(within(row("kid-trig")).getByTestId("run-parent-link"));
+    expect(onSelectRun).toHaveBeenCalledTimes(1);
+    expect(onSelectRun).toHaveBeenCalledWith("epic");
+  });
+
+  it("a parent the filters hide clears them, so its row can be revealed; the link answers the keyboard", async () => {
+    const user = userEvent.setup();
+    const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
+    const Harness = () => {
+      const [sel, setSel] = useState<string | null>(null);
+      return (
+        <UnifiedLeftPanel runs={archivedParent} selectedRunId={sel} onSelectRun={setSel} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />
+      );
+    };
+    render(<Harness />);
+    // Keep only the implement-loop runs: the orchestrator is filtered out.
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-implement-loop"));
+    expect(screen.getByTestId("run-filter-clear")).toBeInTheDocument();
+    const link = within(row("kid")).getByTestId("run-parent-link");
+    link.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByTestId("run-filter-clear")).toBeNull();
+    expect(row("epic")).not.toBeNull();
+  });
+
+  it("selecting an archived parent from an active child's link opens the archived section on it", () => {
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
+    const Harness = () => {
+      const [sel, setSel] = useState<string | null>(null);
+      return (
+        <UnifiedLeftPanel runs={archivedParent} selectedRunId={sel} onSelectRun={setSel} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />
+      );
+    };
+    render(<Harness />);
+    expect(row("epic")).toBeNull();
+    fireEvent.click(within(row("kid")).getByTestId("run-parent-link"));
+    expect(row("epic")).not.toBeNull();
+    expect(scrollSpy).toHaveBeenCalled();
   });
 
   it("an archived parent that is FORGOTTEN releases its children as roots", () => {
@@ -2318,7 +2518,7 @@ describe.skip("UnifiedLeftPanel library multi-select (#577, scope fixtures super
     path: "/x/pipe1.yaml",
     node_count: 1,
     modified: null,
-    variables: {}, prompt_required: true,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
   };
   const libOnly: LibraryPipelineEntry = {
     id: "fixture",

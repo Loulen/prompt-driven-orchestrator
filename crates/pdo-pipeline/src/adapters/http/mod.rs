@@ -36,6 +36,11 @@ pub fn router(pipelines: Arc<Pipelines>) -> Router {
             post(pipelines::duplicate),
         )
         .route("/pipelines/{pipeline_id}/rename", put(pipelines::rename))
+        // CONTEXT.md « Pipeline validé »: the Projets the launch forms offer it to.
+        .route(
+            "/pipelines/{pipeline_id}/validation",
+            put(pipelines::validate),
+        )
         .route("/pipelines/{pipeline_id}/document", get(document::export))
         // #673 / ADR-0062: the skills sidecar of the portable document — a zip of
         // `<pipeline>.skills/<id>/…` to unpack beside the YAML. The import takes it

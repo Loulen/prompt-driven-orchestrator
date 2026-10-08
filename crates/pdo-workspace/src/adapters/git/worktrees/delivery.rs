@@ -37,10 +37,14 @@ use super::*;
 /// uncommitted work vanished with no conflict, no event and no trace — the silent
 /// loss ADR-0004 forbids. `bail!` here surfaces as
 /// `CompletionRefusal::DeliveryFailed`, which is loud and parks the Run.
+///
+/// `identity` signs the commit (CORE-43); an empty one leaves git to the
+/// daemon's own environment and configuration.
 pub fn stage_and_commit(
     worktree_dir: &std::path::Path,
     node_id: &str,
     iter: i64,
+    identity: &CommitIdentity,
 ) -> Result<Option<String>> {
     let add_output = std::process::Command::new("git")
         .args(["add", "-A"])
@@ -120,6 +124,7 @@ pub fn stage_and_commit(
     let commit_msg = delivery_commit_message(node_id, iter);
     let output = std::process::Command::new("git")
         .args(["commit", "-m", &commit_msg])
+        .envs(identity.vars())
         .current_dir(worktree_dir)
         .output()
         .with_context(|| format!("git commit failed to run in {}", worktree_dir.display()))?;
@@ -188,6 +193,10 @@ pub enum DeliveryOutcome {
 /// `NodeStarted` (`merge_action::spawn_base_sha`). `None` — a pre-#503 Run, or a
 /// spawn that recorded none — forbids the #503 resolution: an unknown base is not a
 /// licence to rewrite a branch. Ignored when the NodeRun is not isolated.
+///
+/// `identity`: the identity frozen on the NodeRun's start (CORE-43). It signs
+/// every commit this delivery writes: the delivery commit, the merge-back and
+/// the #503 resolution. Empty, git keeps the daemon's own.
 #[allow(clippy::too_many_arguments)]
 pub fn deliver_node_work(
     run_worktree_dir: &std::path::Path,
@@ -197,13 +206,14 @@ pub fn deliver_node_work(
     node_id: &str,
     iter: i64,
     spawn_base: Option<&str>,
+    identity: &CommitIdentity,
 ) -> Result<DeliveryOutcome> {
     let before = rev_parse(run_worktree_dir, "HEAD")?;
 
     if !isolated {
         // In place: the node worked in the Run's worktree, so its commit IS the
         // delivery. Nothing to merge, nothing to conflict with.
-        stage_and_commit(run_worktree_dir, node_id, iter)?;
+        stage_and_commit(run_worktree_dir, node_id, iter, identity)?;
         let after = rev_parse(run_worktree_dir, "HEAD")?;
         if before == after {
             info!("Node {node_id} iter-{iter} left nothing to deliver in the run worktree");
@@ -220,6 +230,7 @@ pub fn deliver_node_work(
         node_id,
         iter,
         spawn_base,
+        identity,
     )?;
 
     Ok(match merge {

@@ -13,6 +13,7 @@ import { humanizeCron } from "../../model/cronPresets";
 import { lastOutcomeTooltip, outcomeDot, outcomeRing } from "../../model/outcome";
 import SuspendedPill from "./SuspendedPill";
 import { suspensionTooltip } from "../../model/suspension";
+import { copyToClipboard } from "../../../shared/lib/clipboard";
 
 interface Props {
   trigger: Trigger;
@@ -226,8 +227,7 @@ function triggerEntity(t: Trigger): TriggerEntity {
 }
 
 function copyTriggerId(id: string) {
-  navigator.clipboard?.writeText(id).then(
-    () => toast("Trigger id copied"),
-    () => toast("The clipboard is not available", "error"),
+  void copyToClipboard(id).then((ok) =>
+    ok ? toast("Trigger id copied") : toast("The clipboard is not available", "error"),
   );
 }

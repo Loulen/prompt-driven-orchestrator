@@ -7,6 +7,8 @@
 //! - **Terminal**: the PTY bridge, the shared terminal (pilot and spectators),
 //!   the OS terminal pop-out, a node's pane.
 //! - **Declared wait**: `pdo wait-user`, lifted by the user's Enter.
+//! - **Terminal text**: a text written into a node's input on the user's
+//!   gesture, without Enter.
 //! - **Library assistant**: one shared authoring session, told which template is
 //!   open through the focus.
 //!
@@ -21,7 +23,9 @@ pub mod application;
 pub mod domain;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use pdo_kernel::extension_host::ExtensionHost;
 
@@ -39,6 +43,7 @@ use application::read_pane::ReadPane;
 use application::status::ReadStatus;
 use application::sweep::{ReaperGauge, SweepOrphans};
 use application::terminal::Terminals;
+use application::terminal_text::SendTerminalText;
 
 pub use adapters::http::router;
 
@@ -81,6 +86,7 @@ pub struct Session {
     focus: Arc<FocusCell>,
     options: SessionOptions,
     declare_wait: DeclareWait,
+    send_terminal_text: SendTerminalText,
     terminals: Terminals,
     sweep: SweepOrphans,
     read_status: ReadStatus,
@@ -91,6 +97,10 @@ pub struct Session {
     close_assistant: CloseAssistant,
     declare_focus: DeclareFocus,
     save_focused: SaveFocused,
+    /// How often the PTY bridge beats a terminal socket, in ms: the
+    /// [`TERMINAL_BEAT_INTERVAL`](domain::pty_protocol::TERMINAL_BEAT_INTERVAL),
+    /// shortened by tests.
+    terminal_beat_ms: AtomicU64,
 }
 
 impl Session {
@@ -118,6 +128,13 @@ impl Session {
         };
         Arc::new(Self {
             declare_wait: DeclareWait::new(
+                waits.clone(),
+                tmux.clone(),
+                typed.clone(),
+                extensions.clone(),
+            )
+            .with_projects(projects.clone()),
+            send_terminal_text: SendTerminalText::new(
                 waits.clone(),
                 tmux.clone(),
                 typed.clone(),
@@ -155,7 +172,21 @@ impl Session {
             tmux,
             focus,
             options,
+            terminal_beat_ms: AtomicU64::new(
+                domain::pty_protocol::TERMINAL_BEAT_INTERVAL.as_millis() as u64,
+            ),
         })
+    }
+
+    /// How often the PTY bridge beats the terminal sockets it opens.
+    pub fn terminal_beat_interval(&self) -> Duration {
+        Duration::from_millis(self.terminal_beat_ms.load(Ordering::Relaxed).max(1))
+    }
+
+    /// Change the beat of the terminal sockets opened afterwards (test seam).
+    pub fn set_terminal_beat_interval(&self, interval: Duration) {
+        self.terminal_beat_ms
+            .store(interval.as_millis() as u64, Ordering::Relaxed);
     }
 
     /// tmux, on the daemon's private socket: the one way the rest of PDO
@@ -172,6 +203,11 @@ impl Session {
     /// completion).
     pub fn declare_wait(&self) -> &DeclareWait {
         &self.declare_wait
+    }
+
+    /// « Copy & send to terminal »: a text into a node's input, no Enter.
+    pub fn send_terminal_text(&self) -> &SendTerminalText {
+        &self.send_terminal_text
     }
 
     /// The orphan sweep, at boot and on the reaper interval.

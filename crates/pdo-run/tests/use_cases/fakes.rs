@@ -295,6 +295,10 @@ impl Tmux for FakeTmux {
     fn paste(&self, name: &str, text: &str) {
         self.send_keys(name, text);
     }
+    fn paste_without_enter(&self, name: &str, text: &str) -> bool {
+        self.send_keys(name, text);
+        true
+    }
     fn attach_argv(&self, _name: &str, _ignore_size: bool) -> Vec<String> {
         Vec::new()
     }
@@ -482,9 +486,12 @@ impl RunDirWatch for Watcher {
     }
 }
 
+/// A shared pipeline in memory: its YAML and its prompts by node.
+pub type SharedPipeline = (String, HashMap<String, String>);
+
 /// The shared pipelines, in memory: `id → (yaml, prompts)`.
 #[derive(Default)]
-pub struct Shared(pub Mutex<HashMap<String, (String, HashMap<String, String>)>>);
+pub struct Shared(pub Mutex<HashMap<String, SharedPipeline>>);
 
 impl SourcePipelines for Shared {
     fn exists(&self, id: &str) -> bool {
@@ -493,7 +500,9 @@ impl SourcePipelines for Shared {
     fn fingerprint(&self, id: &str) -> Option<String> {
         let shared = self.0.lock().unwrap();
         let (yaml, prompts) = shared.get(id)?;
-        Some(pdo_pipeline::domain::fingerprint::fingerprint(yaml, prompts))
+        Some(pdo_pipeline::domain::fingerprint::fingerprint(
+            yaml, prompts,
+        ))
     }
     fn overwrite<'a>(
         &'a self,

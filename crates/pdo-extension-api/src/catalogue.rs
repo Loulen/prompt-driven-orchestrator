@@ -148,7 +148,7 @@ fn core_entry(
         ),
         ResourceKind::Node => (
             "Nodes",
-            "Start, stop, retry, skip and complete the nodes of a Run",
+            "Start, stop, retry, skip and complete the nodes of a Run; import files and send text into their terminal",
             &[
                 "start",
                 "stop",
@@ -159,6 +159,8 @@ fn core_entry(
                 "release_completion",
                 "wait_user",
                 "resume",
+                "import_files",
+                "send_text",
                 "mark_node_done",
                 "release_node_completion",
                 "extend_cycle",
@@ -171,8 +173,8 @@ fn core_entry(
         ),
         ResourceKind::Pipeline => (
             "Pipelines",
-            "Create, edit and delete the pipeline templates",
-            &[CREATE, UPDATE, DELETE],
+            "Create, edit, validate and delete the pipeline templates",
+            &[CREATE, UPDATE, DELETE, "validate"],
         ),
         ResourceKind::LibraryEntry => (
             "Library entries",

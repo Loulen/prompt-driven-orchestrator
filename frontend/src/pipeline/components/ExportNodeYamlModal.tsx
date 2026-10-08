@@ -3,6 +3,7 @@ import { Copy, Download, Check } from "lucide-react";
 import { exportNodeAsYaml } from "../../lib/exportNodeYaml";
 import { highlightYaml } from "./yamlHighlight";
 import type { EditorNodeDef } from "../model/pipeline";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 /**
  * Export a single node's definition as YAML (#345). Pure front-end: the YAML is
@@ -40,13 +41,9 @@ export default function ExportNodeYamlModal({
   }, [copied]);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(yaml);
-      setCopied(true);
-    } catch {
-      // Clipboard denied (permissions / insecure context) — no toast; the user
-      // can still select the <pre> text manually.
-    }
+    // Clipboard refused: no toast; the user can still select the <pre> text
+    // manually.
+    if (await copyToClipboard(yaml)) setCopied(true);
   }
 
   function handleDownload() {

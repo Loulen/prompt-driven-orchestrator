@@ -156,6 +156,8 @@ import NodeDetailPanel from "./NodeDetailPanel";
 import { useTerminalOverlayStore } from "../../session/store/terminalOverlayStore";
 import { TooltipProvider } from "../../shared/ui/tooltip";
 import type { NodeState } from "../../shared/generated/NodeState";
+import { useGestureRightsStore, useRunViewGestures } from "../store/gestureRightsStore";
+import { NOTHING_REFUSED } from "../model/runGestures";
 
 function makeNode(overrides?: Partial<NodeState>): NodeState {
   return { frontmatter_retries: 0,
@@ -1724,18 +1726,23 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("start-btn")).toBeInTheDocument();
       // No « Pending »: the node waits for the user's ▶, not for the runtime.
       expect(screen.getByTestId("node-status-badge")).toHaveTextContent("On demand");
-      await waitFor(() => expect(askAuthorizationMock).toHaveBeenCalled());
       unmount();
 
+      // CORE-42: the view of the Run asks the rights once; a refused Start is hidden.
       askAuthorizationMock.mockImplementationOnce((questions: unknown[]) =>
         Promise.resolve(questions.map(() => ({ decision: "deny", reason: "reader" }))),
       );
+      function RunView() {
+        useRunViewGestures("run-1", ["test-node"]);
+        return <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />;
+      }
       render(
         <TooltipProvider>
-          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />
+          <RunView />
         </TooltipProvider>,
       );
       await waitFor(() => expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument());
+      useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
     });
 
     it("a skipped node offers Play, which retries it (ADR-0086)", async () => {

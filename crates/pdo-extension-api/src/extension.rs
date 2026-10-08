@@ -332,6 +332,14 @@ pub trait Extension: Send + Sync + 'static {
     /// Claude Code transcripts (its cost, its liveness) under that folder
     /// instead of `~/.claude`.
     ///
+    /// The git identity variables (`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`,
+    /// `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`) also sign the Node's
+    /// delivery: its `<node> iter-<N>: completed` commit and, for an isolated
+    /// Node, the merge of its sub-worktree into the Run's and the resolution
+    /// commit in the Node's favour. The core freezes these four, and nothing
+    /// else of the environment, on the Node's start. Give all four for a
+    /// daemon with no git identity of its own to deliver.
+    ///
     /// Called on the daemon's spawn path, once per launch: keep it quick. A
     /// panic adds nothing.
     fn node_env(&self, _launch: &NodeLaunch) -> NodeEnv {

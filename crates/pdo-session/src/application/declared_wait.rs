@@ -27,6 +27,13 @@ impl TypedInput {
         self.0.lock().unwrap().remove(session);
     }
 
+    /// Text PDO wrote into the session on the user's gesture (« Copy & send to
+    /// terminal ») counts as typed: the Enter that follows lifts a declared
+    /// wait as if the user had typed the text.
+    pub(crate) fn mark(&self, session: &str) {
+        self.0.lock().unwrap().insert(session.to_string());
+    }
+
     /// Record the frame's signal; `true` when it is an Enter that follows a
     /// typed byte (and the count starts over).
     fn enter_after_typing(&self, session: &str, typed: bool, enter: bool) -> bool {
@@ -39,7 +46,7 @@ impl TypedInput {
 }
 
 /// The node an Operation on a wait targets: `<run>/<node>`.
-fn node_target(run_id: &str, node_id: &str) -> String {
+pub(crate) fn node_target(run_id: &str, node_id: &str) -> String {
     format!("{run_id}/{node_id}")
 }
 

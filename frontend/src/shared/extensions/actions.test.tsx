@@ -157,6 +157,8 @@ function fakePane(over: Partial<RunsPaneState> = {}): RunsPaneState {
     selectRange: vi.fn(),
     toggleSel: vi.fn(),
     visibleRunIds: [],
+    runById: new Map(),
+    filteredRuns: [],
     availableRepos: [],
     setProjectEditor: vi.fn(),
     projectOf: () => null,
@@ -170,6 +172,8 @@ function fakePane(over: Partial<RunsPaneState> = {}): RunsPaneState {
     runBulkKind: null,
     cleanupCascade: { finished: 0, live: 0 },
     handleRunsSettled: vi.fn(),
+    bulkShown: { cleanup: true, retry: true, pause: true },
+    mayOnRow: () => true,
     ...over,
   } as unknown as RunsPaneState;
 }
@@ -178,7 +182,7 @@ function renderRow(run: RunListEntry, pane = fakePane(), onSelectRun = vi.fn()) 
   render(
     shell(
       <RunRow
-        node={{ run, children: [], depth: 0, counts: { running: 0, awaiting: 0, done: 0, failed: 0 } } as never}
+        node={{ run, children: [], depth: 0, counts: { running: 0, awaiting: 0, done: 0, failed: 0 }, sectionParentLink: null } as never}
         pane={pane}
         selectedRunId={null}
         triggers={[]}

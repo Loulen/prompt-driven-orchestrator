@@ -15,6 +15,9 @@ import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
 import ConfirmDeleteModal from "../../shared/ui/ConfirmDeleteModal";
 import LibraryRow from "./LibraryRow";
+import ValidationIndicator from "./ValidationIndicator";
+import { validationOf } from "../model/pipelineValidation";
+import type { Project } from "../../workspace/model/project";
 import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions";
 import type { PipelineEntity } from "../../shared/extensions/contract";
 
@@ -53,7 +56,7 @@ function PipelineItemDecorations({ pipeline }: { pipeline: PipelineListEntry }) 
   );
 }
 
-export default function PipelinesPane() {
+export default function PipelinesPane({ projects = [] }: { projects?: Project[] } = {}) {
   // #774 — inline rename of a Pipelines-tab row. Same pattern as the run rows
   // above: the pencil flips the row's name into an input; Enter/blur commits,
   // Escape cancels.
@@ -284,6 +287,14 @@ export default function PipelinesPane() {
               showDuplicate
               modified={p.modified}
               decorations={<PipelineItemDecorations pipeline={p} />}
+              // Where the launch forms offer it, at a glance.
+              indicator={
+                <ValidationIndicator
+                  validation={validationOf(p)}
+                  projects={projects}
+                  testId={`validation-indicator-${p.id}`}
+                />
+              }
               onOpen={() => openPipeline(p.id)}
               onDuplicate={() => handleDuplicate(p.id)}
               onRenameStart={() => startPipelineRename(p)}

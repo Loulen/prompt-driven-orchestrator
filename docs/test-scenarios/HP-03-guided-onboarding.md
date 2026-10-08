@@ -1,6 +1,6 @@
 ---
 id: HP-03
-covers: [tour, tour-step, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up]
+covers: [tour, tour-step, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up, pipeline-validation]
 ---
 
 # HP-03 — A newcomer takes the full tour
@@ -31,6 +31,10 @@ Features validated while crossing the tour:
   knows nothing about tours, reused as-is when it already exists.
 - **New Run form**, field by field: the filesystem explorer, the pipeline menu, the agent profile
   (`Default` over `Inherit`), the two PDO skills, the prompt.
+- **Validated pipelines** (CONTEXT.md « Pipeline validé »): *First run* prepares a Projet
+  « Tutorial » holding the training repository and validates `tutorial-interactive` for it alone, so
+  the pipeline menu heads with « Project pipelines · Tutorial »; *First pipeline* ends by validating
+  the pipeline it built (Validate, next to Save, and its modal), and the tab bar's indicator follows.
 - **Interactive node** and its **completion guard** (ADR-0068): the node cannot end until a human
   releases it, and the release is observable in the inspector.
 - **Artifact modal** on the node's `out` port — the markdown the agent wrote.
@@ -81,12 +85,14 @@ Features validated while crossing the tour:
 4. The **intermediate card** recaps *Overview* and offers *Continue · First run*. **Continue** → the
    example Trigger is gone from the Triggers tab, and the *First run* tour opens on its card, which
    names what it is about to do and shows a line per **preparation** (training repository, training
-   pipeline). `Start` stays dead until both have answered.
+   pipeline, Projet « Tutorial » with the pipeline validated for it). `Start` stays dead until all
+   three have answered.
 5. `Start` → the first step lights the **New Run** button and nothing else; a click anywhere else
    does nothing at all.
 6. Walk the form, doing exactly what each card asks: name the Run, pick the training repository
    through the **magnifier** (the explorer opens on the folder the tour created), choose the tutorial
-   pipeline in the **pipeline menu**, pick the `Default` agent profile, tick **both** PDO skills in
+   pipeline in the **pipeline menu** — it heads the menu under « Project pipelines · Tutorial », before
+   « Global pipelines » — pick the `Default` agent profile, tick **both** PDO skills in
    the skills picker — which stays open across the two ticks, the card's checklist ticking as you go,
    and folds back to « 2 active skills » — paste the prompt → each step advances **on the gesture**,
    with no extra confirmation but the ones the card asks for.
@@ -105,7 +111,10 @@ Features validated while crossing the tour:
 13. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
     and offers *Finish here* or *Continue · First pipeline*.
 14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
-    Carry it to its end card and `Finish`. Every card the tour has you create must be **on screen**
+    Carry it to its end card and `Finish`. Right after **Save**, the card asks to **Validate the
+    pipeline**: Validate (next to Save) opens the modal; tick **All projects (current and future)**
+    and **Save validation** → the modal closes, the tab bar's indicator turns to the globe « All »,
+    and the tour moves on. The step is skippable: skipping it leaves a test pipeline (flask, 0). Every card the tour has you create must be **on screen**
     when it asks you to click it. Every edge is drawn from the **border** of the source card (there is
     no output dot), and the two edges out of the tester carry **`out`**, its first output — if one
     carries another port, the card sends you to the edge's **Outputs** section to tick `out`, and
@@ -158,6 +167,9 @@ Features validated while crossing the tour:
   builds: the name is then taken), and the tour stops on its refusal card rather than waiting on a
   button that does nothing.
 - The tutorial Run's canvas shows Start, the agent and End **side by side**, none on top of another.
+- In *First run*'s pipeline menu, `tutorial-interactive` sits under « Project pipelines · Tutorial »
+  and is the default; the pipeline *First pipeline* creates is born a **test pipeline** (flask, 0 in
+  the tab bar and on its row of the Pipelines tab) until the Validate step, then reads « All ».
 
 ### Internals
 
@@ -165,7 +177,10 @@ Features validated while crossing the tour:
   Replaying the tour does **not** add a commit, and does not overwrite an edit made to the tutorial
   pipeline.
 - Nothing in the daemon mentions tours: the repository came from the generic repo-creation verb, the
-  pipeline from the ordinary pipeline API.
+  pipeline from the ordinary pipeline API, the Projet « Tutorial » from the ordinary Projet API.
+- `GET /pipelines` gives `tutorial-interactive` `{"kind":"projects","project_ids":[<Tutorial>]}`,
+  and `GET /projects` lists « Tutorial » once with `/tmp/pdo-tutorial` among its members. Replaying
+  the tour reuses that Projet instead of creating a second one.
 
 ## Cleanup (best-effort)
 

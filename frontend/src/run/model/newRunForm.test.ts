@@ -21,7 +21,7 @@ import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry
 import { legacyScope } from "../../test/legacy";
 
 function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
-  return { prompt_required: true,
+  return { prompt_required: true, validation: { kind: "all" },
     id: "p1",
     name: "Auditor",
     scope: legacyScope("repo"),

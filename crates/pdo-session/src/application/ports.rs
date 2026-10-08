@@ -69,6 +69,11 @@ pub trait Tmux: Send + Sync {
     /// Hand `text` over as one bracketed paste, then Enter. Best-effort.
     fn paste(&self, name: &str, text: &str);
 
+    /// Hand `text` over as one bracketed paste, **without** Enter: it waits in
+    /// the session's input. Each call uses a buffer of its own, so concurrent
+    /// pastes never mix. `false` when tmux refused the buffer or the paste.
+    fn paste_without_enter(&self, name: &str, text: &str) -> bool;
+
     /// The argv that attaches a client to the session from a terminal: the PTY
     /// bridge runs it, `ignore_size` for a spectator (#867, ADR-0075).
     fn attach_argv(&self, name: &str, ignore_size: bool) -> Vec<String>;

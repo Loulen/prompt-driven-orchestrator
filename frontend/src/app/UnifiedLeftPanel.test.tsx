@@ -2263,6 +2263,27 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     expect(onSelectRun).toHaveBeenCalledWith("epic");
   });
 
+  it("a parent the filters hide clears them, so its row can be revealed; the link answers the keyboard", async () => {
+    const user = userEvent.setup();
+    const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
+    const Harness = () => {
+      const [sel, setSel] = useState<string | null>(null);
+      return (
+        <UnifiedLeftPanel runs={archivedParent} selectedRunId={sel} onSelectRun={setSel} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />
+      );
+    };
+    render(<Harness />);
+    // Keep only the implement-loop runs: the orchestrator is filtered out.
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-implement-loop"));
+    expect(screen.getByTestId("run-filter-clear")).toBeInTheDocument();
+    const link = within(row("kid")).getByTestId("run-parent-link");
+    link.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByTestId("run-filter-clear")).toBeNull();
+    expect(row("epic")).not.toBeNull();
+  });
+
   it("selecting an archived parent from an active child's link opens the archived section on it", () => {
     const scrollSpy = vi.fn();
     Element.prototype.scrollIntoView = scrollSpy;

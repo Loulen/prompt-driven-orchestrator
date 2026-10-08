@@ -157,9 +157,10 @@ export default function RunTreeList({
           ))}
       {/* #136 — archived runs in their own collapsible section below the
           active list, rendered as a tree like the active one. Reuses
-          renderRunRow verbatim (same archived styling / Forget action). The rendered gate is `archivedOpen`
-          ALONE — never `archivedOpen || some(selected)`, which dead-locks
-          the chevron while a selected run is archived (see decision 4). */}
+          renderRunRow verbatim (same archived styling / Forget action).
+          The rendered gate is `archivedOpen` ALONE — never
+          `archivedOpen || some(selected)`, which dead-locks the chevron
+          while a selected run is archived (see decision 4). */}
       {archivedCount > 0 && (
         <div data-testid="run-archived-section" className="border-t border-line">
           <button

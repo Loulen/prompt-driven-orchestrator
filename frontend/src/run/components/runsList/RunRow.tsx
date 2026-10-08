@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { ChevronDown, ChevronRight, CornerLeftUp, Pause, Pencil, Play, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun } from "../../model/runStatus";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
+import type { RunListEntry } from "../../../shared/generated/RunListEntry";
+import { EMPTY_RUN_FILTER } from "../../model/runFilter";
 import type { RunTreeNode } from "../../model/runTree";
 import { ChildCountPills } from "../OrchestrationTab";
 import SelectControl from "../../../shared/ui/SelectControl";
@@ -43,13 +45,21 @@ export default function RunRow({
     isExpanded, setExpanded, runSel, renamingRunId, renameValue, setRenameValue, renameInputRef,
     commitRename, cancelRename, startRename, handlePause, handleResume, setConfirmRetryAll,
     setConfirmCleanup, setConfirmForget, runShell, runsScrollRef, selectRange, toggleSel,
-    visibleRunIds, runById,
+    visibleRunIds, runById, filteredRuns, setRunFilter, setAttributeFilter, setProjectFilter,
   } = pane;
   const run = node.run;
   // A root whose parent sits in the other section (active / archived) links to
-  // it: the click selects the parent, whose section opens if need be.
-  const linkedParent =
-    node.sectionParentLink !== null ? runById.get(node.sectionParentLink) : undefined;
+  // it: the click selects the parent, whose section opens if need be. A parent
+  // the filters hide brings them down first, or there would be no row to reveal.
+  const linkedParent = node.sectionParentLink ? runById.get(node.sectionParentLink) : undefined;
+  const goToParent = (parent: RunListEntry) => {
+    if (!filteredRuns.some((r) => r.run_id === parent.run_id)) {
+      setRunFilter(EMPTY_RUN_FILTER);
+      setAttributeFilter({});
+      setProjectFilter({});
+    }
+    onSelectRun(parent.run_id);
+  };
   // ADR-0081 (#31): what the `run/item` decorations mark.
   const decorated = useMemo(
     () => ({
@@ -226,9 +236,16 @@ export default function RunRow({
               aria-label={`Go to parent run ${linkedParent.name || linkedParent.run_id}`}
               className="flex min-w-0 shrink cursor-pointer items-center gap-0.5 rounded px-0.5 font-sans text-fg-3 transition-colors hover:bg-bg-4 hover:text-acc"
               data-testid="run-parent-link"
+              tabIndex={0}
               onClick={(e) => {
                 e.stopPropagation();
-                onSelectRun(linkedParent.run_id);
+                goToParent(linkedParent);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                e.stopPropagation();
+                goToParent(linkedParent);
               }}
             >
               <CornerLeftUp size={9} className="shrink-0" />

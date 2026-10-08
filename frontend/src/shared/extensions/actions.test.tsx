@@ -158,6 +158,7 @@ function fakePane(over: Partial<RunsPaneState> = {}): RunsPaneState {
     toggleSel: vi.fn(),
     visibleRunIds: [],
     runById: new Map(),
+    filteredRuns: [],
     availableRepos: [],
     setProjectEditor: vi.fn(),
     projectOf: () => null,

@@ -157,6 +157,14 @@ export const NEW_PIPELINE_ERROR = '[data-testid="new-pipeline-error"]';
 export const outputSlot = (i: number) => `[data-output-index="${i}"]`;
 /** The delete confirmation's box — the dialog itself, not its full-screen backdrop. */
 export const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
+/** Validate, next to Save, and the modal it opens (CONTEXT.md « Pipeline validé »). */
+export const VALIDATE_BUTTON = '[data-testid="validate-button"]';
+export const VALIDATE_MODAL = '[data-testid="validate-pipeline-modal"]';
+/** The tab bar's indicator once the pipeline is offered to somebody. */
+export const VALIDATED_FOR_ALL =
+  '[data-testid="toolbar-validation-indicator"][data-validation="all"]';
+export const VALIDATED_FOR_PROJECTS =
+  '[data-testid="toolbar-validation-indicator"][data-validation="projects"]';
 
 /** The dialog is gone and a pipeline is open: Create (or Enter) did its job. */
 export function pipelineCreated(o: TourObservation): boolean {

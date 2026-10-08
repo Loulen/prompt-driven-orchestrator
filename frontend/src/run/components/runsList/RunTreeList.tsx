@@ -7,6 +7,11 @@ import { EMPTY_RUN_FILTER } from "../../model/runFilter";
 import SelectControl from "../../../shared/ui/SelectControl";
 import RunRow from "./RunRow";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
+import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
+import type { DecorationContext } from "../../../shared/extensions/contract";
+
+/** The empty Runs list is about no entity (`runs/empty`). */
+const RUNS_EMPTY: Omit<DecorationContext, "location" | "run" | "project"> = { entity: null };
 
 interface Props {
   pane: RunsPaneState;
@@ -72,8 +77,17 @@ export default function RunTreeList({
         <div
           className="px-3 py-4 text-center text-fg-4"
           style={{ fontSize: "11px" }}
+          data-testid="runs-empty"
         >
           No runs yet
+          {/* API 0.11: what the extensions say about the empty list; nothing
+              at all without a contribution. */}
+          <ExtensionDecorations<DecorationContext>
+            location="runs/empty"
+            extra={RUNS_EMPTY}
+            block
+            className="mt-1 flex-col"
+          />
         </div>
       )}
       {runs.length > 0 && filterActive && filteredRuns.length === 0 && (

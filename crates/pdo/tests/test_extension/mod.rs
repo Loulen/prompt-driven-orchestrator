@@ -53,6 +53,8 @@
 //! - `stats/tab` (0.9): `StatsTab`, which shows the period and the Refresh
 //!   count it is handed, and `Exploding`, a tab that throws; `settings/page`
 //!   (0.9): `SettingsPage`, which shows its deep link's path.
+//! - `runs/empty` (0.11): `RunsEmptyNote`, a line saying why the Runs list is
+//!   empty, and a Copy button through `copyToClipboard` of `@pdo/extension-ui`.
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
@@ -776,6 +778,13 @@ impl Extension for TestExtension {
                 "settings-page",
                 "Test settings",
                 "SettingsPage",
+            ))
+            // 0.11: an explanation in the empty Runs list.
+            .contribute(UiContribution::decoration(
+                UiLocation::RunsEmpty,
+                "runs-empty",
+                "Why empty",
+                "RunsEmptyNote",
             ));
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);

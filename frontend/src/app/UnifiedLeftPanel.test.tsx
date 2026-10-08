@@ -1,11 +1,15 @@
 import { useState } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
+import type { ExtensionEntry } from "../shared/generated/ExtensionEntry";
+import type { UiContribution } from "../shared/generated/UiContribution";
+import { resetExtensions, setBundleLoader } from "../shared/extensions/store";
+import { hostReactMajor } from "../shared/extensions/shared";
 import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
 import { ApiError } from "../shared/http/client";
 import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../run/api/commands";
@@ -497,6 +501,70 @@ describe("UnifiedLeftPanel run display labels", () => {
 // The run row's status dot. These assertions used to live on `RunsListPanel`,
 // a component nothing but its own test imported — so they guarded markup the
 // app never mounted. Deleted with it (#503); the live surface is this panel.
+describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetExtensions();
+  });
+
+  const serveExtension = (contributions: UiContribution[]) => {
+    const entry: ExtensionEntry = {
+      id: "demo",
+      name: "Extension demo",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/demo/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        contributions,
+        commands: [],
+        locations: [],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(JSON.stringify([entry]), { status: 200, headers: { "Content-Type": "application/json" } })
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    setBundleLoader(async () => ({
+      WhyEmpty: () => <p data-testid="why-empty">No Project yet</p>,
+    }));
+  };
+
+  it("keeps the core's text alone without a contribution", async () => {
+    resetExtensions();
+    serveExtension([]);
+    renderPanel({ runs: [] });
+    await act(async () => {});
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent(/^No runs yet$/);
+    expect(screen.queryByTestId("extension-decorations-runs/empty")).toBeNull();
+  });
+
+  it("shows what an extension contributes under the core's text, only while the list is empty", async () => {
+    resetExtensions();
+    serveExtension([
+      { location: "runs/empty", id: "why", label: "Why", type: "decoration", component: "WhyEmpty" } as UiContribution,
+    ]);
+    const { rerender } = renderPanel({ runs: [] });
+    expect(await screen.findByTestId("why-empty")).toHaveTextContent("No Project yet");
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent("No runs yet");
+    rerender(
+      <UnifiedLeftPanel
+        runs={[{ stalled: false, effective_repo: "", run_id: "r1", pipeline_name: "p", status: "running", started_at: null }]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    expect(screen.queryByTestId("why-empty")).toBeNull();
+  });
+});
+
 describe("UnifiedLeftPanel run status dot", () => {
   const run = (over: Partial<RunListEntry>): RunListEntry[] => [
     { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, stalled: false, effective_repo: "", ...over },

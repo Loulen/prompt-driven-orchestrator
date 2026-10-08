@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.22.0 — Nœud à la demande, nœud skipped forcé, attente des nœuds lancés (CORE-46)
+
+- **Nœud à la demande** (ADR-0086) : option `on_demand` d'un Node `agent` ou `script` (refusée
+  sur un nœud structurel), portée par la bibliothèque, l'export portable et le snapshot du Run.
+  Le runtime ne le lance ni ne le skippe ; son ▶ (carte grisée, panneau du nœud) passe par
+  `node` × `start` et ré-ouvre un Run terminé.
+- **Option de Pipeline `wait_for_started_nodes`** (absente quand elle vaut `false`, le
+  défaut) : un Run qui atteint `End` reste `running` tant qu'un nœud est `running`, `waiting` ou
+  `awaiting_user`. `GET /runs/{id}` et `GET /runs` portent `waiting_for_started_nodes` (nombre
+  de nœuds attendus) ; le Résumé de Run passe en version 2 et se reconstruit au démarrage.
+- **Un Run terminé marque `Skipped` les branches non prises**, au lieu de les laisser en
+  attente : elles gardent ainsi leur ▶ (Retry, `node` × `retry`).
+- Le préambule d'un nœud lancé avant son amont dit que l'input est absent, au lieu de donner
+  un chemin vers un fichier qui n'existe pas.
+
 ## 2.21.0 — Pilotage d'un Run en lecture seule (CORE-38)
 
 - **« Save » dans un Run n'écrit plus le Pipeline partagé** (CORE-38, ADR-0085, amende ADR-0007) :

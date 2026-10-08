@@ -29,7 +29,7 @@ must not close a quiet socket.
 | Requirement | Why |
 | --- | --- |
 | Forward `Upgrade` and `Connection: upgrade` over HTTP/1.1 | Without them the upgrade fails and the terminal stays `disconnected` |
-| Read timeout above 60 s (`proxy_read_timeout` in nginx) | The daemon beats `/ws` every 5 s and each terminal socket every 10 s; a shorter timeout cuts a terminal whose agent is thinking |
+| Read timeout above 30 s (`proxy_read_timeout` in nginx; its 60 s default is enough) | The daemon beats `/ws` every 5 s and each terminal socket every 10 s, so a socket is never idle longer than that; a timeout under the beat cuts a terminal whose agent is thinking |
 | No response buffering on these routes (`proxy_buffering off`) | Buffered frames reach the browser late, or in bursts |
 | Body size at or above `max_attachments_mb` (`client_max_body_size`) | Attachments of a new Run and files imported into a node travel in one request each (see [Attachments through a proxy](#attachments-through-a-proxy)) |
 

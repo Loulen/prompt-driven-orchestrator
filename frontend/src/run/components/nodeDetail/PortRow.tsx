@@ -35,6 +35,10 @@ export default function PortRow({
   // the collapsed « N files » row would hide which ones — count them.
   const inheritedSome = inheritedCount > 0 && !inheritedOnly;
   const portType = port.port_type ?? "markdown";
+  // CORE-45: an Output intermédiaire. Absent, it is « not written yet » — the
+  // agent fills it while it works — never a missing output.
+  const intermediate = kind === "output" && port.intermediate === true;
+  const notWrittenYet = intermediate && !anyExists;
   // ADR-0081 (#31): what the `port/item` decorations mark.
   const decorated = useMemo(
     () => ({
@@ -69,6 +73,7 @@ export default function PortRow({
   if (port.files.length > 1 && (port.repeated || isImage)) {
     displayPath = `${port.files.length} files`;
   }
+  if (notWrittenYet) displayPath = "not written yet";
 
   const totalSize = port.files.reduce((sum, f) => sum + (f.size ?? 0), 0);
 
@@ -105,6 +110,16 @@ export default function PortRow({
           <span className="font-mono text-fg" style={{ fontSize: "11.5px" }}>
             {port.port}
           </span>
+          {intermediate && (
+            <span
+              className="relative rounded border border-dashed border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-3"
+              style={{ fontSize: "9px" }}
+              title="Intermediate output: the agent updates it while it works; never checked at completion"
+              data-testid="intermediate-badge"
+            >
+              intermediate
+            </span>
+          )}
           {port.repeated && (
             <span
               className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
@@ -151,8 +166,10 @@ export default function PortRow({
           />
         </div>
         <div
-          className="mt-0.5 truncate font-mono text-fg-3"
+          className={`mt-0.5 truncate font-mono text-fg-3${notWrittenYet ? " italic" : ""}`}
           style={{ fontSize: "10.5px" }}
+          data-testid={notWrittenYet ? "port-not-written-yet" : undefined}
+          title={notWrittenYet ? firstFile?.path : undefined}
         >
           {displayPath}
         </div>

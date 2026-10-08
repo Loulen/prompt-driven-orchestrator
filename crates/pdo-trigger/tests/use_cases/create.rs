@@ -3,7 +3,7 @@ use pdo_platform::domain::audit::ActorHint;
 use pdo_trigger::application::TriggerError;
 use serde_json::json;
 
-use crate::fakes::{request, world, PIPE, REPO, TARGET_REPO_REQUIRED};
+use crate::fakes::{read_guard, request, world, PIPE, REPO, TARGET_REPO_REQUIRED};
 
 #[tokio::test]
 async fn a_creation_stores_announces_and_journals_the_full_trigger() {
@@ -23,7 +23,9 @@ async fn a_creation_stores_announces_and_journals_the_full_trigger() {
     assert_eq!(w.store.all(), vec![trigger.clone()]);
     assert_eq!(
         w.announced(),
-        vec![json!({ "type": "trigger_created", "trigger_id": trigger.id })]
+        vec![
+            json!({ "type": "trigger_created", "trigger_id": trigger.id, "read_guard": read_guard(&trigger.id) })
+        ]
     );
     let entries = w.audit.entries.lock().unwrap().clone();
     assert_eq!(entries.len(), 1, "one audit row");

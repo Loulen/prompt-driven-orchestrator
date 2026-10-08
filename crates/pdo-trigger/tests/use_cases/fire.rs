@@ -5,7 +5,7 @@ use pdo_trigger::application::TriggerError;
 use pdo_trigger::domain::fire_decision::GuardResult;
 use serde_json::json;
 
-use crate::fakes::{request, world, REPO};
+use crate::fakes::{read_guard, request, world, REPO};
 
 fn fire(id: &str) -> Operation {
     Operation::new(ResourceKind::Trigger, Verb::Action("fire".into())).on(id)
@@ -42,7 +42,7 @@ async fn run_now_starts_the_run_records_it_and_leaves_the_schedule_alone() {
     assert_eq!(
         w.announced(),
         vec![
-            json!({ "type": "trigger_fired", "trigger_id": id, "outcome": "fired", "run_id": "run-1" })
+            json!({ "type": "trigger_fired", "trigger_id": id, "outcome": "fired", "run_id": "run-1", "read_guard": read_guard(&id) })
         ]
     );
     assert_eq!(

@@ -105,7 +105,19 @@ impl Triggers {
         id: &str,
         req: PatchTriggerRequest,
     ) -> Result<Trigger, TriggerError> {
-        self.authorize(actor, &operation(Verb::Update, Some(id)))?;
+        let update = self.on_trigger(Verb::Update, id).await;
+        self.authorize(actor, &update)?;
+        // Moved to a repository of another Projet: an update there too, so
+        // nobody moves a Trigger into a Projet they may not edit.
+        if let Some(repo) = &req.target_repo {
+            let moved_to = self.projects_of_repo(repo.as_deref()).await;
+            if moved_to != update.projects {
+                self.authorize(
+                    actor,
+                    &operation(Verb::Update, Some(id)).in_projects(moved_to),
+                )?;
+            }
+        }
         let existing = match self.store.get(id).await {
             Ok(Some(t)) => t,
             Ok(None) => return Err(TriggerError::NotFound("trigger not found".to_string())),
@@ -135,10 +147,22 @@ impl Triggers {
                 "failed to reload trigger".to_string(),
             ));
         };
-        self.announce(serde_json::json!({
-            "type": "trigger_updated",
-            "trigger_id": id,
-        }));
+        // Told in the Projets it is now in, and in those it left: a reader
+        // of the old one drops it from their list.
+        let now_in = self.projects_of_repo(updated.target_repo.as_deref()).await;
+        let mut told = vec![now_in];
+        if told[0] != update.projects {
+            told.push(update.projects.clone());
+        }
+        for projects in told {
+            self.announce_about(
+                serde_json::json!({
+                    "type": "trigger_updated",
+                    "trigger_id": id,
+                }),
+                &operation(Verb::Read, Some(id)).in_projects(projects),
+            );
+        }
         // Persist BOTH snapshots (ADR-0044 §2·D): "a patch happened" cannot tell
         // a manual `enabled:false` from a cron edit unless before→after is on the
         // row.

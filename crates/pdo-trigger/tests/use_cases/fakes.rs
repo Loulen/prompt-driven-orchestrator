@@ -13,7 +13,8 @@ use pdo_platform::domain::audit::{ActorHint, NewAuditEntry};
 use pdo_trigger::application::create_trigger::CreateTriggerRequest;
 use pdo_trigger::application::ports::{
     AuditTrail, BoxFuture, GuardRunner, PipelineFacts, Repositories, RunFromTrigger,
-    SandboxProfiles, Stored, TriggerPipelines, TriggerRepository, TriggerRuns, TriggerSettings,
+    SandboxProfiles, Stored, TriggerPipelines, TriggerProjects, TriggerRepository, TriggerRuns,
+    TriggerSettings,
 };
 use pdo_trigger::domain::fire_decision::GuardResult;
 use pdo_trigger::domain::trigger::{FireRecord, NewTrigger, Trigger, TriggerFire, UpdateTrigger};
@@ -333,6 +334,26 @@ impl Repositories for Repos {
     }
 }
 
+/// The Projets of the repositories: those `owners` says, none otherwise.
+#[derive(Default)]
+pub struct Projets {
+    pub owners: Mutex<std::collections::BTreeMap<String, String>>,
+}
+
+impl TriggerProjects for Projets {
+    fn of_repository<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Vec<String>> {
+        ready(
+            self.owners
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .into_iter()
+                .collect(),
+        )
+    }
+}
+
 /// The staging profiles: `off`, `minimal`, `full`, and `team`.
 pub struct Profiles;
 
@@ -387,11 +408,14 @@ impl AuditTrail for Audit {
     }
 }
 
-/// A host that records what it is asked and refuses when told to; it
+/// A host that records what it is asked and refuses when told to (every
+/// mutation, never a read; or the reads in one Projet); it
 /// suspends the Triggers of `suspended` (API 0.8), as the extension `test`.
 #[derive(Default)]
 pub struct Host {
     pub refuse: Mutex<bool>,
+    /// Refuses the reads in this Projet (CORE-5), and only them.
+    pub refuse_reads_in: Mutex<Option<String>>,
     pub asked: Mutex<Vec<(Actor, Operation)>>,
     pub suspended: Mutex<std::collections::BTreeMap<String, String>>,
     pub suspension_asks: Mutex<Vec<TriggerRef>>,
@@ -407,7 +431,13 @@ impl ExtensionHost for Host {
             .lock()
             .unwrap()
             .push((actor.clone(), operation.clone()));
-        if *self.refuse.lock().unwrap() {
+        let refused_projet = self.refuse_reads_in.lock().unwrap().clone();
+        if operation.is_read() && refused_projet.is_some_and(|p| operation.projects.contains(&p)) {
+            return Authorization::Deny {
+                reason: "the test host refuses this read".into(),
+            };
+        }
+        if *self.refuse.lock().unwrap() && !operation.is_read() {
             Authorization::Deny {
                 reason: "the test host refuses everything".into(),
             }
@@ -439,6 +469,7 @@ pub struct World {
     pub settings: Arc<Settings>,
     pub pipelines: Arc<Pipelines>,
     pub repos: Arc<Repos>,
+    pub projets: Arc<Projets>,
     pub runs: Arc<Runs>,
     pub audit: Arc<Audit>,
     pub host: Arc<Host>,
@@ -468,6 +499,7 @@ pub fn world_with(options: TriggersOptions) -> World {
         ("needs-prompt".into(), "Needs prompt".into(), true),
     ]);
     let repos = Arc::new(Repos::default());
+    let projets = Arc::new(Projets::default());
     let runs = Arc::new(Runs::default());
     let audit = Arc::new(Audit::default());
     let host = Arc::new(Host::default());
@@ -480,6 +512,7 @@ pub fn world_with(options: TriggersOptions) -> World {
             settings: settings.clone(),
             pipelines: pipelines.clone(),
             repositories: repos.clone(),
+            projects: projets.clone(),
             sandbox_profiles: Arc::new(Profiles),
             runs: runs.clone(),
             audit: audit.clone(),
@@ -495,6 +528,7 @@ pub fn world_with(options: TriggersOptions) -> World {
         settings,
         pipelines,
         repos,
+        projets,
         runs,
         audit,
         host,
@@ -557,4 +591,9 @@ pub fn request(extra: serde_json::Value) -> CreateTriggerRequest {
         }
     }
     serde_json::from_value(body).unwrap()
+}
+
+/// The guard of what the Trigger `id` announces, outside any Projet: its read.
+pub fn read_guard(id: &str) -> serde_json::Value {
+    serde_json::json!({ "resource": "trigger", "verb": "read", "target": id, "projects": [] })
 }

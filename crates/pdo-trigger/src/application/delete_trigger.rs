@@ -15,16 +15,22 @@ impl Triggers {
         hint: ActorHint,
         id: &str,
     ) -> Result<(), TriggerError> {
-        self.authorize(actor, &operation(Verb::Delete, Some(id)))?;
+        let delete = self.on_trigger(Verb::Delete, id).await;
+        self.authorize(actor, &delete)?;
         // Read the "before" snapshot HERE, before the row is gone: `delete` returns
         // `bool`, never the row, so a later read would leave the audit a dead UUID.
         let before = self.store.get(id).await.ok().flatten();
         match self.store.delete(id).await {
             Ok(true) => {
-                self.announce(serde_json::json!({
-                    "type": "trigger_deleted",
-                    "trigger_id": id,
-                }));
+                // Read in the Projets it was in: gone, it is in none.
+                let read = operation(Verb::Read, Some(id)).in_projects(delete.projects.clone());
+                self.announce_about(
+                    serde_json::json!({
+                        "type": "trigger_deleted",
+                        "trigger_id": id,
+                    }),
+                    &read,
+                );
                 self.journal(
                     hint,
                     "trigger.deleted",

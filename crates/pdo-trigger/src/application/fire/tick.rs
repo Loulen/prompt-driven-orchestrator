@@ -93,7 +93,8 @@ impl Triggers {
             let actor = Actor::Trigger {
                 trigger_id: trigger.id.clone(),
             };
-            let fire = operation(Verb::Action(FIRE.to_string()), Some(&trigger.id));
+            let fire = operation(Verb::Action(FIRE.to_string()), Some(&trigger.id))
+                .in_projects(self.projects_of_repo(trigger.target_repo.as_deref()).await);
             if let Err(denied) = self.authorize(&actor, &fire) {
                 self.refused(&trigger, now, denied.to_string()).await;
                 continue;

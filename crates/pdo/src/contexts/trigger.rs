@@ -1,5 +1,5 @@
 //! The `trigger` context: the Triggers over SQLite, the guard run by `sh`, the
-//! Runs of the run context, the library's pipelines on disk, the repositories
+//! Runs of the run context (and the Projets of a repository, matched as theirs), the library's pipelines on disk, the repositories
 //! through git, the staging profiles over SQLite, the platform's audit journal,
 //! the kernel's bus, and the pause and the guard timeout of the settings context.
 
@@ -12,8 +12,8 @@ use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_settings::adapters::contexts::SettingsOfTriggers;
 use pdo_settings::application::ports::InstanceConfigStore;
 use pdo_trigger::adapters::contexts::{
-    GitRepositories, LibraryPipelines, PlatformAudit as TriggerAudit, RunsOfTriggers,
-    StagingProfiles,
+    GitRepositories, LibraryPipelines, PlatformAudit as TriggerAudit, ProjectsOfRuns,
+    RunsOfTriggers, StagingProfiles,
 };
 use pdo_trigger::adapters::guard_shell::ShellGuard;
 use pdo_trigger::adapters::sqlite::SqliteTriggers;
@@ -40,6 +40,7 @@ pub(super) fn triggers(w: TriggerWiring<'_>) -> Arc<Triggers> {
                 repo_root: w.repo_root.clone(),
             }),
             repositories: Arc::new(GitRepositories),
+            projects: Arc::new(ProjectsOfRuns(w.run.clone())),
             sandbox_profiles: Arc::new(StagingProfiles(Arc::new(SqliteProfiles::new(w.db)))),
             runs: Arc::new(RunsOfTriggers(w.run.clone())),
             audit: Arc::new(TriggerAudit(w.platform.clone())),

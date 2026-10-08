@@ -8,7 +8,9 @@
 //!   the global pause, the guard's dry-run, "Run now", the heartbeat's tick, the
 //!   reads. Every mutation and every fire asks the Autorisation d'opération
 //!   (`trigger` × `create` / `update` / `delete` / `pause` / `test_guard` /
-//!   `fire`); a cron fire asks with the Acteur `Trigger`.
+//!   `fire`); a cron fire asks with the Acteur `Trigger`. The reads ask
+//!   `trigger` × `read`; all are in the Projet of the Trigger's target
+//!   repository.
 //! - [`adapters`] holds the Triggers over SQLite, the guard run by `sh`, the
 //!   heartbeat (the clock that ticks), what the context reads of the other
 //!   contexts (the Runs a fire starts, the pipelines, the repositories, the

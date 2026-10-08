@@ -16,7 +16,7 @@ use pdo_run::application::paths::resolve_pipeline_path;
 use pdo_sandbox::application::ports::SandboxProfileRepository;
 
 pub use repositories::GitRepositories;
-pub use runs::RunsOfTriggers;
+pub use runs::{ProjectsOfRuns, RunsOfTriggers};
 
 use crate::application::ports::{
     AuditTrail, BoxFuture, PipelineFacts, SandboxProfiles, TriggerPipelines,

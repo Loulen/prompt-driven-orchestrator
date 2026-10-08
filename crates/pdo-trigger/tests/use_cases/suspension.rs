@@ -79,7 +79,11 @@ async fn the_extension_is_asked_with_the_trigger_and_its_last_editor() {
         .await
         .unwrap();
     w.host.suspension_asks.lock().unwrap().clear();
-    let listed = w.triggers.list(Default::default()).await.unwrap();
+    let listed = w
+        .triggers
+        .list(&Actor::LocalOperator, Default::default())
+        .await
+        .unwrap();
     assert_eq!(listed[0].trigger.suspension, None);
     let asked = w.host.suspension_asks.lock().unwrap().clone();
     assert_eq!(asked.len(), 1);
@@ -98,10 +102,18 @@ async fn every_read_carries_the_suspension_and_its_reason() {
         reason: "alice is on leave".into(),
     });
 
-    let listed = w.triggers.list(Default::default()).await.unwrap();
+    let listed = w
+        .triggers
+        .list(&Actor::LocalOperator, Default::default())
+        .await
+        .unwrap();
     assert_eq!(listed[0].trigger.suspension, expected);
     assert_eq!(
-        w.triggers.attributed(&id).await.unwrap().suspension,
+        w.triggers
+            .attributed(&Actor::LocalOperator, &id)
+            .await
+            .unwrap()
+            .suspension,
         expected
     );
     assert_eq!(

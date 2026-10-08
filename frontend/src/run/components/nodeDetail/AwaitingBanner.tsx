@@ -20,6 +20,7 @@ export default function AwaitingBanner({
   terminalLive,
   terminalSpectating = false,
   canRelease,
+  canMarkComplete,
   onRelease,
   onMarkComplete,
   onOpenChildRun,
@@ -31,6 +32,8 @@ export default function AwaitingBanner({
    *  until it takes control. */
   terminalSpectating?: boolean;
   canRelease: boolean;
+  /** CORE-42: « Mark complete » is allowed to the caller (else plain text). */
+  canMarkComplete: boolean;
   onRelease: () => void;
   onMarkComplete: () => void;
   onOpenChildRun?: (childRunId: string) => void;
@@ -54,9 +57,13 @@ export default function AwaitingBanner({
           <em>Mark ready for completion</em>
         )}{" "}
         so the agent can finish, or{" "}
-        <button type="button" className={linkClass} onClick={onMarkComplete} data-testid="awaiting-banner-mark-complete">
-          Mark complete
-        </button>{" "}
+        {canMarkComplete ? (
+          <button type="button" className={linkClass} onClick={onMarkComplete} data-testid="awaiting-banner-mark-complete">
+            Mark complete
+          </button>
+        ) : (
+          <em>Mark complete</em>
+        )}{" "}
         to take the artifacts as they are.
       </>
     );

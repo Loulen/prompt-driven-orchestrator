@@ -15,6 +15,7 @@ import type { NodeState } from "../../shared/generated/NodeState";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { WsMessage } from "../model/liveStream";
 import { useLiveRefresh } from "./useLiveRefresh";
+import { toastRefusal } from "../../shared/authorization/refusal";
 
 function pollInterval(status: NodeStatus): number | null {
   switch (status) {
@@ -216,8 +217,9 @@ export function useNodeRun(
   const stop = useCallback(async () => {
     try {
       await stopNode(runId, node.node_id);
-    } catch {
-      // best-effort
+    } catch (e) {
+      // best-effort; a refusal of the caller's rights is said (CORE-42)
+      toastRefusal(e);
     }
   }, [runId, node.node_id]);
 
@@ -320,7 +322,11 @@ export function useNodeRun(
   // like the reads — the banner acts on the iteration on screen, not on
   // `node.iter`.
   const killStale = useCallback(async () => {
-    try { await killNode(runId, node.node_id, selectedIter); } catch { /* best-effort */ }
+    try {
+      await killNode(runId, node.node_id, selectedIter);
+    } catch (e) {
+      toastRefusal(e); // best-effort; a refusal is said
+    }
   }, [runId, node.node_id, selectedIter]);
 
   const restartIteration = useCallback(async () => {

@@ -3,6 +3,7 @@ import { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
 import { useSelectedRun } from "../run/store/useSelectedRun";
+import { useRefreshGestureRightsOnReturn, useRunViewGestures } from "../run/store/gestureRightsStore";
 import { useDaemonSessions } from "../session/store/useDaemonSessions";
 import { useRightPaneRouter } from "../hooks/useRightPaneRouter";
 import { useLibassistLifecycle } from "../session/store/useLibassistLifecycle";
@@ -79,6 +80,9 @@ export default function App() {
   const [triggerOpenedTabId, setTriggerOpenedTabId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
+  // CORE-42: the view of a Run asks once which gestures it may offer.
+  useRunViewGestures(selectedRun?.run_id ?? null, Object.keys(selectedRun?.nodes ?? {}));
+  useRefreshGestureRightsOnReturn();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const updates = useUpdateFlow(updateStatus, status);
   const { setChangelogOpen, setUpdateConfirmOpen } = updates;

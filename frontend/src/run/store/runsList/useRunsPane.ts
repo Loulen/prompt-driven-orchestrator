@@ -11,6 +11,8 @@ import { projectLookup } from "../../../workspace/model/projectLookup";
 import { RETRYABLE } from "../../components/runsList/runsListTables";
 import { useRunRowActions } from "./useRunRowActions";
 import { useRunTreeView } from "./useRunTreeView";
+import { useGestureRightsStore, useListedRunGestures } from "../gestureRightsStore";
+import { mayOnRun, type RunGesture } from "../../model/runGestures";
 
 export interface ProjectEditorState {
   project: Project | null;
@@ -61,6 +63,16 @@ export function useRunsPane({
   const [runBulkKind, setRunBulkKind] = useState<"cleanup" | "retry" | "pause" | null>(null);
 
   const view = useRunTreeView(runs, selectedRunId, projects);
+
+  // CORE-42: the gestures of each row the caller may make, asked once per
+  // Run; a refused one is hidden from the row, its menu and the bulk bar.
+  const runIds = useMemo(() => runs.map((r) => r.run_id), [runs]);
+  useListedRunGestures(runIds);
+  const gestureRights = useGestureRightsStore((s) => s.rights);
+  const mayOnRow = useCallback(
+    (runId: string, gesture: RunGesture) => mayOnRun(gestureRights, runId, gesture),
+    [gestureRights],
+  );
   const { activeTree, archivedTree, filteredRuns, isExpanded, archivedOpen } = view;
 
   // #552 — verbatim `path → Projet` lookup, and the candidate repos the pencil
@@ -100,11 +112,19 @@ export function useRunsPane({
   const asRunItem = (r: RunListEntry): BulkItem => ({ id: r.run_id, label: r.name || r.run_id });
   // Each bulk action targets the subset of the selection it is valid for (mirror
   // of the per-row gates); an action whose subset is empty is disabled.
-  const cleanupItems = selectedRuns.filter((r) => r.status !== "archived").map(asRunItem);
-  const retryItems = selectedRuns.filter((r) => RETRYABLE.includes(r.status)).map(asRunItem);
-  const pauseItems = selectedRuns
+  // CORE-42: and only the Runs where the caller may make it; an action no
+  // selected Run allows is hidden (`bulkShown`).
+  const allowing = (gesture: RunGesture) => selectedRuns.filter((r) => mayOnRow(r.run_id, gesture));
+  const cleanupItems = allowing("cleanup_run").filter((r) => r.status !== "archived").map(asRunItem);
+  const retryItems = allowing("retry_all").filter((r) => RETRYABLE.includes(r.status)).map(asRunItem);
+  const pauseItems = allowing("pause_run")
     .filter((r) => r.status === "running" || r.status === "awaiting_user")
     .map(asRunItem);
+  const bulkShown = {
+    cleanup: allowing("cleanup_run").length > 0,
+    retry: allowing("retry_all").length > 0,
+    pause: allowing("pause_run").length > 0,
+  };
   // Live runs the cleanup would stop (running/awaiting/paused) — the bar's caveat.
   const runningWillStop = selectedRuns.filter((r) => isLiveRun(r.status)).length;
   // #815 — the daemon's cleanup cascades to terminated descendants and refuses
@@ -157,6 +177,8 @@ export function useRunsPane({
     cleanupItems,
     retryItems,
     pauseItems,
+    bulkShown,
+    mayOnRow,
     runningWillStop,
     cleanupCascade,
     handleRunsSettled,

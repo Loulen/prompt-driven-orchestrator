@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useEditStore } from "../pipeline/store/editStore";
 import { trailingWindow } from "../shared/lib/trailingWindow";
+import { refreshGestureRights } from "../run/store/gestureRightsStore";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -55,6 +56,8 @@ export function useDaemonEvents({
     const runs = trailingWindow(() => refreshers.current.refreshRuns());
     const run = trailingWindow(() => refreshers.current.refreshRun());
     const sessions = trailingWindow(() => refreshers.current.refreshSessions());
+    // CORE-42: the gestures shown follow the rights and the Projets.
+    const gestures = trailingWindow(refreshGestureRights);
     const unsubscribe = subscribe((msg) => {
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
         reloadPipeline(msg.pipeline_id);
@@ -73,6 +76,7 @@ export function useDaemonEvents({
       // Triggers rows themselves are unchanged, so only the Projet list refetches.
       if (msg.type === "project_changed") {
         refreshProjects();
+        gestures();
         return;
       }
       // Trigger lifecycle (#160/#162): create/update/delete refreshes the
@@ -84,6 +88,9 @@ export function useDaemonEvents({
         msg.type === "trigger_fired"
       ) {
         refreshTriggers();
+        // A `trigger_updated` about every Trigger: an extension signalled that
+        // the suspensions changed, as when an Actor's rights change.
+        if (msg.type === "trigger_updated" && !msg.trigger_id) gestures();
         if (msg.type === "trigger_fired") {
           runs();
           // #341 + #368: only the OPEN trigger's panel refetches, so an
@@ -112,6 +119,7 @@ export function useDaemonEvents({
       runs.cancel();
       run.cancel();
       sessions.cancel();
+      gestures.cancel();
     };
   }, [subscribe, refreshTriggers, setTriggersPaused, refreshProjects, reloadPipeline, loadPipelines, bumpFiresRefreshKey]);
 }

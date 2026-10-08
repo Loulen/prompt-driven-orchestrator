@@ -7,6 +7,7 @@ import { Terminal, Loader, Play, PowerOff } from "lucide-react";
 import TmuxTerminal from "../../session/components/TmuxTerminal";
 import { startRunManager, stopRunManager } from "../../run/api/manager";
 import type { RunState } from "../../shared/generated/RunState";
+import { useMayOnRun } from "../../run/store/gestureRightsStore";
 
 export function ManagerTab({
   run,
@@ -20,6 +21,10 @@ export function ManagerTab({
   onOpenSettings?: () => void;
 }) {
   const hasManager = run.has_manager ?? false;
+  // CORE-42: Start and Stop only when the caller may make them.
+  const mayOnRun = useMayOnRun(run.run_id);
+  const mayStart = mayOnRun("start_manager");
+  const mayStop = mayOnRun("stop_manager");
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [confirmingStop, setConfirmingStop] = useState(false);
@@ -100,7 +105,7 @@ export function ManagerTab({
               </button>
             </span>
           ) : (
-            <button
+            mayStop && <button
               onClick={() => setConfirmingStop(true)}
               className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:border-st-failed hover:text-st-failed"
               style={{ fontSize: "10.5px" }}
@@ -182,7 +187,7 @@ export function ManagerTab({
         nodes, resolve merges, unblock it when it waits on you. It is off by
         default to keep costs down.
       </p>
-      <button
+      {mayStart && <button
         onClick={() => void start()}
         className="mt-1 flex items-center gap-1.5 rounded-md bg-acc px-3.5 py-2 font-medium text-on-acc transition-colors hover:bg-acc-dim"
         style={{ fontSize: "12px" }}
@@ -190,7 +195,7 @@ export function ManagerTab({
       >
         <Play size={12} />
         Start manager
-      </button>
+      </button>}
       <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
         or{" "}
         <button

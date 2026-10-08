@@ -20,6 +20,7 @@ import {
   type TerminalRole,
 } from "../model/terminalRole";
 import { posteId } from "../model/poste";
+import { isHeartbeatFrame, TERMINAL_SILENCE_MS } from "../model/terminalConnection";
 import { BASE_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
 import { terminalTheme } from "../model/terminalTheme";
 import {
@@ -38,6 +39,11 @@ export const TERMINAL_READY_MARK = "terminal:pret";
 /** What the xterm of one session exposes to its toolbar. */
 export interface XtermSession {
   connected: boolean;
+  /** ADR-0083 §5: the live socket was open and fell (closed, offline, or
+   *  silent), and no socket opened since. */
+  dropped: boolean;
+  /** Open a fresh socket on the same session (the veil's Reconnect). */
+  reconnect: () => void;
   /** #867: the role the daemon gave this socket. */
   termRole: TerminalRole;
   /** #870: « Another browser took control », up for a few seconds after this
@@ -69,6 +75,13 @@ export function useXtermSession(
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<ProbedSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  // ADR-0083 §5: the session whose live socket fell, until one opens again.
+  // Keyed by session, so another session starts unveiled.
+  const [droppedSession, setDroppedSession] = useState<string | null>(null);
+  // Bumped to open a fresh socket on the same session (Reconnect, back on
+  // the tab or online while veiled). The attach effect keys on it.
+  const [attachKey, setAttachKey] = useState(0);
+  const reconnect = useCallback(() => setAttachKey((k) => k + 1), []);
   // #867: the ref is what the xterm callbacks read (they outlive renders); the
   // state drives the toolbar.
   const [termRole, setTermRole] = useState<TerminalRole>(SOLO);
@@ -204,8 +217,12 @@ export function useXtermSession(
     //
     // ADR-0083: the PTY opens through the probe. Closed by the daemon, it stays
     // closed; dropped by a daemon that restarted, it reattaches once it answers.
+    // §5: a socket silent for 30 s (the daemon beats every 10 s), or whose
+    // browser went offline, counts as dropped too, and reattaches the same way.
     const ptyPath = `/sessions/${encodeURIComponent(session)}/pty?poste=${encodeURIComponent(posteId())}`;
-    const ws = isFrozen ? null : openProbedSocket(ptyPath, { reconnect: "after-drop" });
+    const ws = isFrozen
+      ? null
+      : openProbedSocket(ptyPath, { reconnect: "after-drop", silenceMs: TERMINAL_SILENCE_MS });
     wsRef.current = ws;
 
     if (isFrozen) {
@@ -280,12 +297,19 @@ export function useXtermSession(
       setConnected(false);
       if (roleRef.current.role !== "solo") applyRole(SOLO);
     };
+    // The cleanup below closes the socket on purpose: no fall to veil.
+    let disposed = false;
+    let opened = false;
     ws?.onState((state) => {
+      if (disposed) return;
       if (state === "ouvert") {
+        opened = true;
         setConnected(true);
+        setDroppedSession(null);
         sendResize(ws, fitAddon.proposeDimensions());
       } else {
         dropRole();
+        if (opened) setDroppedSession(session);
       }
     });
 
@@ -298,8 +322,9 @@ export function useXtermSession(
         }
         term.write(new Uint8Array(data));
       } else {
-        // Text frames carry the daemon's control messages (the role); anything
-        // else is written as before.
+        // Text frames carry the daemon's control messages (the role, the
+        // beat); anything else is written as before.
+        if (isHeartbeatFrame(data)) return;
         const role = parseRoleFrame(data);
         if (role) applyRole(role);
         else term.write(data);
@@ -366,6 +391,7 @@ export function useXtermSession(
       resizeObserver.disconnect();
       inputDisposable.dispose();
       binaryDisposable.dispose();
+      disposed = true;
       ws?.close();
       roleRef.current = SOLO;
       setTermRole(SOLO);
@@ -379,7 +405,7 @@ export function useXtermSession(
     // theme switch would drop the scrollback and the attached socket. The effect
     // below repaints the live instance instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, mode, frozen]);
+  }, [session, mode, frozen, attachKey]);
 
   // #759: repaint an already-open terminal when the theme switches.
   useEffect(() => {
@@ -390,6 +416,8 @@ export function useXtermSession(
 
   return {
     connected,
+    dropped: droppedSession === session,
+    reconnect,
     termRole,
     takenOver,
     hasSelection,

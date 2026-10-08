@@ -59,8 +59,11 @@ vi.stubGlobal("WebSocket", MockWebSocket);
 // ADR-0083: the terminal opens its PTY through the probe. The probe has its
 // own tests (`probedSocket.test.ts`); here it always succeeds at once, so the
 // socket exists as soon as the terminal mounts, as these tests read it.
-const { probedOpens } = vi.hoisted(() => ({
+const { probedOpens, probedStates } = vi.hoisted(() => ({
   probedOpens: [] as { path: string; options: unknown }[],
+  // Each probed socket's state, set by the test as the probe would (a drop,
+  // a silence, offline: `hors_ligne`; reopened: `ouvert`).
+  probedStates: [] as ((state: string) => void)[],
 }));
 vi.mock("../../shared/http/probedSocket", () => ({
   openProbedSocket(path: string, options: unknown) {
@@ -75,6 +78,7 @@ vi.mock("../../shared/http/probedSocket", () => ({
     };
     ws.addEventListener("open", () => setState("ouvert"));
     ws.addEventListener("close", () => setState("hors_ligne"));
+    probedStates.push(setState);
     return {
       get state() {
         return state;
@@ -282,9 +286,13 @@ describe("TmuxTerminal", () => {
     expect(wsInstances[0].url).toContain(
       "/sessions/pdo-run1-impl-iter-1/pty",
     );
-    // Through the probe, reattached only after a drop (ADR-0083).
+    // Through the probe, reattached only after a drop, a silence of 30 s
+    // counting as one (ADR-0083).
     expect(probedOpens).toEqual([
-      { path: expect.stringContaining("/sessions/pdo-run1-impl-iter-1/pty"), options: { reconnect: "after-drop" } },
+      {
+        path: expect.stringContaining("/sessions/pdo-run1-impl-iter-1/pty"),
+        options: { reconnect: "after-drop", silenceMs: 30_000 },
+      },
     ]);
   });
 
@@ -645,6 +653,97 @@ describe("TmuxTerminal", () => {
   // terminal opened a PTY onto a session the daemon had already reaped, so the
   // browser showed `disconnected` over tmux's `can't find session:` — while
   // `GET …/pane` was serving the snapshot the whole time, to nobody.
+  describe("a connection that falls (ADR-0083 §5)", () => {
+    const paneSource = { runId: "run-1", nodeId: "impl", iter: 1 };
+    const opened = () => act(() => new Promise((r) => setTimeout(r, 10)));
+
+    beforeEach(() => {
+      probedOpens.length = 0;
+      probedStates.length = 0;
+    });
+
+    it("veils a live terminal whose connection fell, with Reconnect", async () => {
+      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
+      await opened();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+
+      // Closed, silent for 30 s, or offline: the probe says `hors_ligne`.
+      act(() => probedStates[0]("hors_ligne"));
+      const veil = screen.getByTestId("term-veil");
+      expect(veil).toHaveTextContent("Terminal connection closed");
+      expect(within(veil).getByTestId("term-reconnect")).toHaveTextContent("Reconnect");
+    });
+
+    it("does not veil a terminal that never opened", async () => {
+      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
+      act(() => probedStates[0]("hors_ligne"));
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("lifts the veil once the probe reopened the socket on its own", async () => {
+      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
+      await opened();
+      act(() => probedStates[0]("hors_ligne"));
+      expect(screen.getByTestId("term-veil")).toBeInTheDocument();
+      act(() => probedStates[0]("ouvert"));
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+      expect(probedOpens).toHaveLength(1);
+    });
+
+    it("opens a fresh socket on Reconnect, the veil up until it opens", async () => {
+      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
+      await opened();
+      act(() => probedStates[0]("hors_ligne"));
+      fireEvent.click(screen.getByTestId("term-reconnect"));
+      expect(probedOpens).toHaveLength(2);
+      expect(probedOpens[1].path).toContain("/sessions/pdo-run-1-impl-iter-1/pty");
+      expect(screen.getByTestId("term-veil")).toBeInTheDocument();
+      await opened();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("reconnects at once when the tab shows again, or the network is back", async () => {
+      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
+      await opened();
+      act(() => probedStates[0]("hors_ligne"));
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(probedOpens).toHaveLength(2);
+      act(() => {
+        window.dispatchEvent(new Event("online"));
+      });
+      expect(probedOpens).toHaveLength(3);
+      await opened();
+      // Unveiled: the tab and the network no longer reconnect anything.
+      act(() => {
+        window.dispatchEvent(new Event("online"));
+      });
+      expect(probedOpens).toHaveLength(3);
+    });
+
+    it("does not veil a node that settled under the user's eyes", async () => {
+      const { rerender } = render(
+        <TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />,
+      );
+      await opened();
+      rerender(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="completed" paneSource={paneSource} />);
+      act(() => probedStates[0]("hors_ligne"));
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("never writes the daemon's beat into the pane", async () => {
+      render(<TmuxTerminal session="pdo-run-1-impl-iter-1" status="running" paneSource={paneSource} />);
+      await opened();
+      act(() => {
+        wsInstances[0].fireEvent("message", { data: '{"type":"heartbeat"}' });
+        wsInstances[0].fireEvent("message", { data: "plain text" });
+      });
+      const written = mockTerminalInstances[0].write.mock.calls.map((c) => c[0]);
+      expect(written).toEqual(["plain text"]);
+    });
+  });
+
   describe("frozen pane of a reaped iteration", () => {
     const paneSource = { runId: "run-1", nodeId: "cop", iter: 1 };
 

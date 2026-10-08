@@ -156,6 +156,16 @@ pub struct Port {
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional = nullable)]
     pub required: bool,
+    /// Marks an **output** port as an *Output intermédiaire* (CONTEXT.md): the
+    /// agent fills it and keeps it current while it works, so humans can follow
+    /// what the node produces during the Run. It is for humans only — the
+    /// completion never checks it (neither presence nor frontmatter), a skip
+    /// writes nothing for it, and no edge may carry it (refused at parse). Its
+    /// `frontmatter`, `when` and `repeated` have no effect. Omitted from the YAML
+    /// when false. Semantic, not layout.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub intermediate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

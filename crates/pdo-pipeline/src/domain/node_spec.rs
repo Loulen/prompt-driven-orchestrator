@@ -212,6 +212,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_node_spec_keeps_an_intermediate_output() {
+        let body = parse_node_spec(
+            "name: Writer\ntype: agent\noutputs:\n  - name: adr\n  - name: draft\n    intermediate: true\n",
+        )
+        .unwrap();
+        assert!(body["warnings"].as_array().unwrap().is_empty(), "{body}");
+        assert_eq!(body["spec"]["outputs"][1]["intermediate"], true);
+        // Omitted when false, like in the pipeline YAML.
+        assert!(body["spec"]["outputs"][0].get("intermediate").is_none());
+    }
+
+    #[test]
     fn parse_node_spec_missing_name_is_hard_error() {
         let err = parse_node_spec("type: agent\n").unwrap_err();
         assert!(err.contains("name"), "{err}");

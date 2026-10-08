@@ -4,7 +4,9 @@ use super::definition::PipelineDef;
 use super::diagnostic::{Diagnostic, ParseError, ParseResult, Severity};
 use super::node::{NodeDef, NodeType, Port, PortSide, PortType};
 use super::normalize::normalize_node_value;
-use super::references::{dangling_edge_references, validate_switch_when_clauses};
+use super::references::{
+    dangling_edge_references, intermediate_outputs_on_edges, validate_switch_when_clauses,
+};
 
 /// Top-level YAML keys accepted by the unknown-field lint.
 /// MUST list every serializable field of PipelineDef — see `known_keys_cover_serialized_pipeline`.
@@ -80,6 +82,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                         description: None,
                         instructions: None,
                         required: false,
+                        intermediate: false,
                     });
                 }
             }
@@ -131,6 +134,34 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                     ),
                 });
             }
+        }
+    }
+
+    // `intermediate` means something on the output of a node an agent or a
+    // script writes. Anywhere else it would do nothing (an input) or only block
+    // the wiring of a structural port: say so instead of keeping it silently.
+    for node in &pipeline.nodes {
+        let writes_outputs = node.node_type.has_emergent_inputs();
+        let stray = node
+            .inputs
+            .iter()
+            .map(|port| (port, "input"))
+            .chain(
+                node.outputs
+                    .iter()
+                    .filter(|_| !writes_outputs)
+                    .map(|port| (port, "output")),
+            )
+            .filter(|(port, _)| port.intermediate);
+        for (port, role) in stray {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "{role} '{}' of node '{}' is marked intermediate, which only applies to an \
+                     output of an agent or script node",
+                    port.name, node.id
+                ),
+            });
         }
     }
 
@@ -204,6 +235,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     }
 
     validate_switch_when_clauses(&pipeline)?;
+    intermediate_outputs_on_edges(&pipeline)?;
 
     // Auto-materialize bounded regions here, at the model boundary rather than in
     // the editor's `addEdge` (ADR-0011 clause (b)): every reader funnels through

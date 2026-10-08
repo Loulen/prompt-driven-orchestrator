@@ -51,6 +51,11 @@ impl Creation {
         *self.host.lock().unwrap() = Some(host);
     }
 
+    /// The Host the core handed at `start`, once started.
+    pub(super) fn host(&self) -> Option<Arc<dyn Host>> {
+        self.host.lock().unwrap().clone()
+    }
+
     pub(super) fn launched(&self, launch: &NodeLaunch) {
         self.timeline
             .lock()

@@ -63,6 +63,10 @@
 //!   records each creation and the order of the stamps and the launches,
 //!   stamps `data.<key>`; `POST /ext/test/runs` creates a Run through its
 //!   `Host` ([`Control::creation`]).
+//! - **`Host::project_name`** / **`Host::triggers_changed`** (API 0.11,
+//!   `projets.rs`): `GET /ext/test/projects/<id>/name` answers the name the
+//!   core gives, `POST /ext/test/triggers-changed` signals the Triggers; a
+//!   suspension set or lifted (`/ext/test/suspensions`) signals them too.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, so two extensions share a location.
 //!
@@ -83,6 +87,7 @@ pub mod gate;
 pub mod hosted;
 pub mod interop;
 pub mod launch;
+pub mod projets;
 mod routes;
 
 use std::path::PathBuf;

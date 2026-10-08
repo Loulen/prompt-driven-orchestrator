@@ -17,7 +17,8 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::actor::actor_from_headers;
 use crate::attributes::{prefixed, AttributeStore, NoAttributes};
 use crate::delivery::Delivery;
-use crate::event_bus::EventBus;
+use crate::event_bus::{unguarded, EventBus};
+use crate::project_names::ProjectNames;
 use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
@@ -63,6 +64,9 @@ struct Registry {
     /// What creates a Run for [`Host::create_run`], once the daemon wired
     /// its contexts.
     runs: OnceLock<Arc<dyn RunCreator>>,
+    /// The names of the Projets for [`Host::project_name`] (API 0.11), once
+    /// the daemon plugged its table.
+    project_names: OnceLock<Arc<ProjectNames>>,
 }
 
 /// The host of the extensions registered at startup, in registration order.
@@ -188,6 +192,17 @@ impl Extensions {
         }
     }
 
+    /// Plug in the names of the Projets the extensions'
+    /// [`Host::project_name`] reads (API 0.11). The daemon keeps the table
+    /// current; until it is plugged, no Projet has a name.
+    pub fn serve_project_names(&self, names: Arc<ProjectNames>) {
+        if self.registry.project_names.set(names).is_err() {
+            tracing::warn!(
+                "the names of the Projets were plugged twice; the second table is ignored"
+            );
+        }
+    }
+
     /// Hand every event of the bus subscription `events` to the extensions.
     fn relay(&self, mut events: tokio::sync::broadcast::Receiver<Value>) {
         // Weak: the relay must not keep the extensions (and their delivery
@@ -294,7 +309,11 @@ impl ExtensionHost for Extensions {
         self.is_empty()
     }
 
+    /// The JSON of `/ws`: a guarded message reaches the extensions without
+    /// its guard, as it reaches `/ws`.
     fn publish(&self, event: &Value) {
+        let event = unguarded(event);
+        let event = event.as_ref();
         let publisher = (event["type"] == EXTENSION_EVENT)
             .then(|| event["extension"].as_str())
             .flatten();
@@ -809,6 +828,63 @@ mod tests {
         assert_eq!(wait_for(&seen_by_b, 1).await[0]["name"], "hello");
         let _ = std::fs::remove_dir_all(
             std::env::temp_dir().join(format!("pdo-kernel-greets-{}", std::process::id())),
+        );
+    }
+
+    #[test]
+    fn a_host_names_a_projet_once_the_daemon_plugged_its_table() {
+        let (a, _) = Peer::new("a", false);
+        let extensions = Extensions::register(vec![Box::new(a)]).unwrap();
+        let host = extensions.host_of("a");
+        assert_eq!(host.project_name("p1"), None, "no table yet");
+        let names = Arc::new(ProjectNames::default());
+        names.set("p1", "P1");
+        extensions.serve_project_names(names.clone());
+        assert_eq!(host.project_name("p1").as_deref(), Some("P1"));
+        names.set("p1", "Front");
+        assert_eq!(host.project_name("p1").as_deref(), Some("Front"));
+        assert_eq!(host.project_name("ghost"), None);
+    }
+
+    #[tokio::test]
+    async fn the_signal_of_the_triggers_announces_a_trigger_updated_without_id() {
+        let (a, seen_by_a) = Peer::new("a", false);
+        let (b, seen_by_b) = Peer::new("b", false);
+        let extensions = Extensions::register(vec![Box::new(a), Box::new(b)]).unwrap();
+        let bus = Arc::new(crate::event_bus::BroadcastEventBus::new(4));
+        let mut ws = bus.subscribe();
+        extensions.start(HostServices {
+            attributes: Arc::new(NoAttributes),
+            bus,
+            data_root: std::env::temp_dir()
+                .join(format!("pdo-kernel-triggers-{}", std::process::id())),
+        });
+        extensions.host_of("a").triggers_changed();
+        let announced = serde_json::json!({ "type": "trigger_updated" });
+        assert_eq!(ws.recv().await.unwrap(), announced);
+        assert_eq!(wait_for(&seen_by_b, 1).await, vec![announced.clone()]);
+        assert_eq!(
+            wait_for(&seen_by_a, 1).await,
+            vec![announced],
+            "an announcement of the core, which every extension sees"
+        );
+        let _ = std::fs::remove_dir_all(
+            std::env::temp_dir().join(format!("pdo-kernel-triggers-{}", std::process::id())),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_guarded_message_reaches_the_extensions_without_its_guard() {
+        let (b, seen_by_b) = Peer::new("b", false);
+        let extensions = Extensions::register(vec![Box::new(b)]).unwrap();
+        let read = Operation::new(ResourceKind::Trigger, Verb::Read).on("t1");
+        extensions.publish(&crate::event_bus::guarded(
+            serde_json::json!({ "type": "trigger_updated", "trigger_id": "t1" }),
+            &read,
+        ));
+        assert_eq!(
+            wait_for(&seen_by_b, 1).await,
+            vec![serde_json::json!({ "type": "trigger_updated", "trigger_id": "t1" })]
         );
     }
 

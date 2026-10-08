@@ -82,6 +82,9 @@ pub struct ContextResources {
     pub panic_on_trigger_name: Option<String>,
     pub price_source_url: Option<String>,
     pub price_refresh_at_boot: bool,
+    /// The names of the Projets the extensions read (API 0.11): the
+    /// workspace context keeps them current, the boot fills them.
+    pub project_names: Arc<pdo_kernel::project_names::ProjectNames>,
 }
 
 /// The contexts, wired: the handles the daemon drives (its loops, its test
@@ -266,6 +269,7 @@ pub(crate) mod testing {
                 panic_on_trigger_name: None,
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                project_names: Default::default(),
             };
             let host = Arc::new(pdo_kernel::extension_host::NoExtensions);
             let contexts = match options.tmux {

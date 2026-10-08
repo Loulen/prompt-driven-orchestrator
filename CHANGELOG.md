@@ -10,6 +10,56 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.26.0 — Interface à jour après une absence (CORE-40)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : `openProbedSocket` y reçoit l'option `silenceMs`, ajout seulement.
+
+- **Relecture après une absence** : à chaque (ré)ouverture du flux `/ws`, au retour sur l'onglet,
+  au retour du réseau et sur la trame `{"type":"resync"}` que le daemon envoie à un client qui a
+  perdu des événements, l'interface relit Runs, Run ouvert, sessions, Triggers et leur pause,
+  Projets, Pipelines et les gestes permis. Rien n'est rejoué.
+- **Terminal d'un nœud** : le daemon bat toutes les 10 s sur son socket (Ping + trame
+  `heartbeat`). Sans rien reçu pendant 30 s, hors ligne ou à la fermeture, le terminal se voile
+  (« Terminal connection closed », bouton **Reconnect**) et se rattache seul dans le même xterm.
+  Derrière un reverse proxy, son délai de lecture doit dépasser le battement : voir la section
+  WebSockets du guide.
+- **Skill seedé `pdo-interactive` v2** : la bannière de `pdo wait-user` est une notification ; la
+  question ou le résultat complet s'écrit dans la conversation avant l'appel.
+
+## 2.25.0 — Finitions de la liste de Runs (CORE-44)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit l'emplacement `runs/empty` et `copyToClipboard`, ajouts seulement.
+
+- **Liste de Runs vide** : l'emplacement d'UI `runs/empty` (décorations seulement) s'affiche sous
+  « No runs yet » tant que la liste ne contient aucun Run. Le texte du core ne change pas.
+- **Copier hors HTTPS** : `copyToClipboard(text)` de `@pdo/extension-ui` est la copie de tous les
+  boutons Copier du core ; sur une instance servie en http, elle retombe sur
+  `execCommand("copy")`. Elle ne rejette jamais et rend un booléen.
+- **Arbre des archivés** : la section des archivés range les Runs sous leur parent, comme celle des
+  actifs ; la préférence « Child runs » et le bouton global valent pour les deux. Un Run dont le
+  parent est dans l'autre section en est une racine et porte un lien vers lui. Archiver un parent
+  emporte toujours ses enfants terminés et reste refusé tant qu'un enfant vit : ce cas
+  (enfant actif sous parent archivé) ne se produit pas depuis l'UI.
+
+## 2.24.0 — Gestes selon les Droits, flux gardé par la lecture (CORE-42)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit `ExtensionEvent::guarded_by`, ajout seulement.
+
+- **Flux gardé pour les extensions** (CORE-42) : `ExtensionEvent::guarded_by(read)` attache à un
+  événement l'Opération de lecture qui le protège ; `/ws` ne l'envoie qu'aux connexions dont
+  l'Acteur peut la faire, sans la garde. Un `operation_applied` sur une Ressource d'extension est
+  gardé par la lecture de son entité, dans les Projets de son Opération : une extension qui
+  refusait toute Opération quel que soit son verbe masque désormais aussi, sur `/ws`, les
+  `operation_applied` de ses Ressources.
+- **Gestes selon les Droits** (CORE-42) : la vue d'un Run demande `POST /authorize` une fois à son
+  ouverture pour tous les gestes du Run et de ses nodes, et masque ceux qui sont refusés ; les
+  lignes de la liste de Runs, leur menu et les actions groupées suivent la même règle. Relu quand
+  un Projet change ou qu'une extension signale un changement des Triggers. Un geste refusé par le
+  daemon malgré tout (un Droit changé entre-temps) le dit dans un toast, là où il ne disait rien.
+
 ## 2.23.0 — Fichier importé en cours de Run (CORE-37)
 
 `pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée

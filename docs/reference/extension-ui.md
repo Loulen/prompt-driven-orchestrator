@@ -373,6 +373,16 @@ locations.
 - **Renders**: the status bar, right-hand group, before the service health.
 - **Context**: `DecorationContext`, `entity` = `null`.
 
+### `runs/empty`
+
+- **Accepts**: decoration.
+- **Renders**: the empty state of the Runs list, shown while the list holds no Run at all (not
+  while a filter hides every Run), under the core's « No runs yet », which stays. The decorations
+  stack one under the other, each behind its error boundary: say why the list is empty (« No
+  Project yet », and whom to ask). Nothing without a contribution.
+- **Context**: `DecorationContext`, `entity` = `null`.
+- **Since**: 0.11.
+
 ### List filters
 
 A list-filter location renders a row under the list's own filters, one control per contribution.
@@ -719,6 +729,7 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `runHostedCommand(element)` | Call an action's command, as its button does |
 | `useCurrentActor()`, `useActorDisplay(actor)` | The Actors' names, since 0.8 ([The Actors' names](#the-actors-names)) |
 | `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10; its delay of silence since 0.11 ([WebSockets](#websockets)) |
+| `copyToClipboard(text)` | Put `text` on the clipboard from a user gesture, as every Copy button of the core does: the Clipboard API, or outside a secure context (an instance served over plain http) `execCommand("copy")` on a hidden textarea. Resolves to whether the text was written, never rejects. Since 0.11 |
 | `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
 
 - **Context**: an element receives the host's `context`, merged over the context every location

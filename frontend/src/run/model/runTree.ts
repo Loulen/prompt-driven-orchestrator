@@ -4,18 +4,20 @@
  *
  * Everything that is NOT rendering lives here: building the tree from the flat
  * `GET /runs` list (a child hangs under its parent when the parent is listed
- * AND alive — i.e. not `archived`; an orphan — parent forgotten, absent or
- * archived — is a root, cf. CONTEXT.md « Run racine »), the aggregated child
- * counts over a whole subtree (four disjoint pills whose sum is the number of
- * descendants), the filter that keeps a parent as long as a descendant matches,
- * the ancestor walk that reveals a hidden run, and the flattening into the
- * visible row order (the basis for shift-range and select-all-visible).
+ * AND in the same section — active or archived; an orphan — parent forgotten,
+ * absent or in the other section — is a root of its section, cf. CONTEXT.md
+ * « Run racine »), the aggregated child counts over a whole subtree (four
+ * disjoint pills whose sum is the number of descendants), the filter that keeps
+ * a parent as long as a descendant matches, the ancestor walk that reveals a
+ * hidden run, and the flattening into the visible row order (the basis for
+ * shift-range and select-all-visible).
  *
- * "Archived" enters the tree in exactly one way: an archived run never RETAINS
- * children (archive of the parent does not touch the child, which becomes a
- * root again — ADR-0064), so an archived run is always a leaf. Otherwise a
- * child follows its parent whatever its own status, and the caller splits on
- * the ROOT's status after `buildRunTree` and before `filterRunTree`.
+ * The archived section renders the tree like the active one: a whole subtree
+ * always sits in one section, so the caller splits on the ROOT's status after
+ * `buildRunTree` and before `filterRunTree`. Archiving a parent does not touch
+ * its child (ADR-0064): a live child of an archived parent is a root of the
+ * active section, linked to its parent (`sectionParentLink`), and so is an
+ * archived child of a live parent in the archived section.
  */
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
 import { isLiveRun } from "./runStatus";
@@ -31,14 +33,24 @@ export interface RunTreeNode {
    * children) — always the real subtree, never the filtered view.
    */
   counts: ChildCounts;
+  /**
+   * The id of the parent when it is listed but sits in the OTHER section
+   * (active / archived): the row links to it. Null otherwise.
+   */
+  sectionParentLink: string | null;
+}
+
+/** Whether a run belongs to the archived section (else the active one). */
+export function isInArchivedSection(run: RunListEntry): boolean {
+  return run.status === "archived";
 }
 
 /**
- * Whether `parent` can hold children in the tree: it must be listed and not
- * archived (an archived parent has released its children, which are roots).
+ * Whether `parent` holds `child` in the tree: it must be listed and in the
+ * same section (an archived parent never holds a live child, nor the reverse).
  */
-function retainsChildren(parent: RunListEntry | undefined): parent is RunListEntry {
-  return parent !== undefined && parent.status !== "archived";
+function holdsChild(parent: RunListEntry | undefined, child: RunListEntry): parent is RunListEntry {
+  return parent !== undefined && isInArchivedSection(parent) === isInArchivedSection(child);
 }
 
 /** The bucket a single run falls in: the four sets are disjoint by construction. */
@@ -62,9 +74,10 @@ function addCounts(into: ChildCounts, from: ChildCounts): void {
 /**
  * Build the forest from the flat list. Sibling order is the list's own order
  * (the daemon already sorts by start date), so children read like the list.
- * A run whose `parent_run_id` names a run that is NOT in the list — or that is
- * `archived` — is a root: a forgotten or archived parent must not swallow its
- * children (they would otherwise vanish from the active section).
+ * A run whose `parent_run_id` names a run that is NOT in the list — or that
+ * sits in the other section — is a root: a parent must not pull its child into
+ * a section the child does not belong to. When that parent is listed, the root
+ * carries a link to it.
  *
  * Cycles cannot arise from real daemon data (a parent always predates its
  * child), but a defensive guard keeps a corrupted pair from recursing forever:
@@ -76,7 +89,7 @@ export function buildRunTree(runs: RunListEntry[]): RunTreeNode[] {
   const roots: RunListEntry[] = [];
   for (const r of runs) {
     const pid = r.parent_run_id;
-    if (pid && pid !== r.run_id && retainsChildren(byId.get(pid))) {
+    if (pid && pid !== r.run_id && holdsChild(byId.get(pid), r)) {
       const list = childrenOf.get(pid) ?? [];
       list.push(r);
       childrenOf.set(pid, list);
@@ -94,7 +107,10 @@ export function buildRunTree(runs: RunListEntry[]): RunTreeNode[] {
       counts[runCountBucket(child.run)] += 1;
       addCounts(counts, child.counts);
     }
-    return { run, children, depth, counts };
+    const pid = run.parent_run_id;
+    const sectionParentLink =
+      depth === 0 && pid && pid !== run.run_id && byId.has(pid) ? pid : null;
+    return { run, children, depth, counts, sectionParentLink };
   };
   const forest = roots.map((r) => build(r, 0));
   // A run caught in a cycle (never reachable from a root) is surfaced as a root
@@ -163,8 +179,8 @@ export function pathOnlyIds(
 
 /**
  * The ancestors of `runId` in the flat list, nearest first — following
- * `parent_run_id` only through parents that ARE listed and not archived (an
- * orphan has none) — the same rule as `buildRunTree`. Guarded against cycles.
+ * `parent_run_id` only through parents that ARE listed and in the same section
+ * (an orphan has none) — the same rule as `buildRunTree`. Guarded against cycles.
  */
 export function ancestorIds(runs: RunListEntry[], runId: string): string[] {
   const byId = new Map(runs.map((r) => [r.run_id, r]));
@@ -173,7 +189,7 @@ export function ancestorIds(runs: RunListEntry[], runId: string): string[] {
   let cur = byId.get(runId);
   while (
     cur?.parent_run_id &&
-    retainsChildren(byId.get(cur.parent_run_id)) &&
+    holdsChild(byId.get(cur.parent_run_id), cur) &&
     !seen.has(cur.parent_run_id)
   ) {
     out.push(cur.parent_run_id);

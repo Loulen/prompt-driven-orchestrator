@@ -9,6 +9,7 @@ use pdo_extension_api::{
 };
 
 use super::{ExtensionHost, Extensions, Registry};
+use crate::event_bus::guarded;
 use crate::{Actor, Operation};
 
 /// The announcement of a change of the Triggers on `/ws`; without
@@ -43,9 +44,15 @@ impl Host for ExtensionHostOf {
         }
     }
 
+    /// A guarded event rides the bus with its guard ([`guarded`]): `/ws`
+    /// judges each connection by it, the extensions receive it without.
     fn publish(&self, event: ExtensionEvent) {
         if let Some(extensions) = self.extensions() {
-            extensions.broadcast(event.to_event(&self.id));
+            let message = event.to_event(&self.id);
+            extensions.broadcast(match &event.guard {
+                Some(read) => guarded(message, read),
+                None => message,
+            });
         }
     }
 

@@ -16,4 +16,5 @@ export const {
   useCurrentActor,
   useActorDisplay,
   openProbedSocket,
+  copyToClipboard,
 } = ExtensionUi;

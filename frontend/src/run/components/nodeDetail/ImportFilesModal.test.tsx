@@ -21,8 +21,8 @@ vi.mock("../../../settings/api/settings", async () => ({
   )),
   fetchSettings: () => settingsMock(),
 }));
-vi.mock("../../../session/model/terminalClipboard", () => ({
-  writeClipboardText: (text: string) => clipboardMock(text),
+vi.mock("../../../shared/lib/clipboard", () => ({
+  copyToClipboard: (text: string) => clipboardMock(text),
 }));
 
 import ImportFilesModal from "./ImportFilesModal";

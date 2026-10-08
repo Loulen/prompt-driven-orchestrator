@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useEditStore } from "../pipeline/store/editStore";
 import { trailingWindow } from "../shared/lib/trailingWindow";
+import { refreshGestureRights } from "../run/store/gestureRightsStore";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -66,6 +67,8 @@ export function useDaemonEvents({
       refreshProjects();
       void loadPipelines();
     });
+    // CORE-42: the gestures shown follow the rights and the Projets.
+    const gestures = trailingWindow(refreshGestureRights);
     const unsubscribe = subscribe((msg) => {
       // ADR-0083 §6: back from an absence (the stream reopened, the tab shows
       // again, the network is back) or told by the daemon that this client
@@ -75,6 +78,7 @@ export function useDaemonEvents({
         run();
         sessions();
         lists();
+        gestures();
         return;
       }
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
@@ -94,6 +98,7 @@ export function useDaemonEvents({
       // Triggers rows themselves are unchanged, so only the Projet list refetches.
       if (msg.type === "project_changed") {
         refreshProjects();
+        gestures();
         return;
       }
       // Trigger lifecycle (#160/#162): create/update/delete refreshes the
@@ -105,6 +110,9 @@ export function useDaemonEvents({
         msg.type === "trigger_fired"
       ) {
         refreshTriggers();
+        // A `trigger_updated` about every Trigger: an extension signalled that
+        // the suspensions changed, as when an Actor's rights change.
+        if (msg.type === "trigger_updated" && !msg.trigger_id) gestures();
         if (msg.type === "trigger_fired") {
           runs();
           // #341 + #368: only the OPEN trigger's panel refetches, so an
@@ -134,6 +142,7 @@ export function useDaemonEvents({
       run.cancel();
       sessions.cancel();
       lists.cancel();
+      gestures.cancel();
     };
   }, [
     subscribe,

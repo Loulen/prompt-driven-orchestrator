@@ -121,6 +121,12 @@ pub enum UiLocation {
     /// [`UiElement::Decoration`] per contribution.
     #[serde(rename = "statusbar")]
     Statusbar,
+    /// The empty state of the Runs list, shown while the list holds no Run at
+    /// all, under the core's « No runs yet »: the component of a
+    /// [`UiElement::Decoration`] per contribution, rendered as is, one under
+    /// the other (an explanation of why the list is empty, say). Since 0.11.
+    #[serde(rename = "runs/empty")]
+    RunsEmpty,
     /// Above the list of the Triggers: a [`UiElement::ListFilter`] per
     /// contribution. The 0.1 `ListFilter { resource: Trigger }` slot.
     #[serde(rename = "triggers/filter")]
@@ -239,6 +245,7 @@ impl UiLocation {
         UiLocation::CanvasNode,
         UiLocation::PortItem,
         UiLocation::Statusbar,
+        UiLocation::RunsEmpty,
         UiLocation::TriggersFilter,
         UiLocation::PipelinesFilter,
         UiLocation::ProjectsFilter,
@@ -284,6 +291,7 @@ impl UiLocation {
             UiLocation::CanvasNode => "canvas/node",
             UiLocation::PortItem => "port/item",
             UiLocation::Statusbar => "statusbar",
+            UiLocation::RunsEmpty => "runs/empty",
             UiLocation::TriggersFilter => "triggers/filter",
             UiLocation::PipelinesFilter => "pipelines/filter",
             UiLocation::ProjectsFilter => "projects/filter",
@@ -347,6 +355,7 @@ impl UiLocation {
             | UiLocation::CanvasNode
             | UiLocation::PortItem
             | UiLocation::Statusbar
+            | UiLocation::RunsEmpty
             | UiLocation::TopbarAccount => matches!(element, UiElement::Decoration { .. }),
             UiLocation::Hosted(_) => true,
             _ if self.is_action_location() => matches!(element, UiElement::Action { .. }),
@@ -438,6 +447,25 @@ mod tests {
         assert!(UiLocation::SettingsPage.accepts(&page));
         assert!(!UiLocation::SettingsPage.accepts(&section));
         assert!(!UiLocation::SettingsPage.accepts(&action));
+    }
+
+    #[test]
+    fn the_empty_runs_list_takes_decorations_only() {
+        assert_eq!(UiLocation::RunsEmpty.id(), "runs/empty");
+        assert!(UiLocation::ALL.contains(&UiLocation::RunsEmpty));
+        let decoration = UiElement::Decoration {
+            component: "D".into(),
+        };
+        let section = UiElement::Section {
+            component: "S".into(),
+        };
+        let action = UiElement::Action {
+            command: "c".into(),
+        };
+        assert!(UiLocation::RunsEmpty.accepts(&decoration));
+        assert!(!UiLocation::RunsEmpty.accepts(&section));
+        assert!(!UiLocation::RunsEmpty.accepts(&action));
+        assert!(!UiLocation::RunsEmpty.is_action_location());
     }
 
     #[test]

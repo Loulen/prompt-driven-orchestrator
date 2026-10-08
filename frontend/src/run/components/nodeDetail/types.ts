@@ -18,3 +18,20 @@ export interface ModalState {
   portKind: "input" | "output";
   portType: PortType;
 }
+
+/**
+ * The gestures on the node on screen the caller may make (CORE-42), as the
+ * question of authorization answered them: each one refused is hidden. All
+ * `true` before the answer, and without an extension that restricts.
+ */
+export interface NodeGestureRights {
+  stop: boolean;
+  retry: boolean;
+  start: boolean;
+  markComplete: boolean;
+  release: boolean;
+  /** Stop of a stale node (`kill_node`). */
+  kill: boolean;
+  /** Restart of the iteration (`restart_node`). */
+  restart: boolean;
+}

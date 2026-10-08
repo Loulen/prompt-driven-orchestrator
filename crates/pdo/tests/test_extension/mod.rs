@@ -53,11 +53,16 @@
 //! - `stats/tab` (0.9): `StatsTab`, which shows the period and the Refresh
 //!   count it is handed, and `Exploding`, a tab that throws; `settings/page`
 //!   (0.9): `SettingsPage`, which shows its deep link's path.
+//! - `runs/empty` (0.11): `RunsEmptyNote`, a line saying why the Runs list is
+//!   empty, and a Copy button through `copyToClipboard` of `@pdo/extension-ui`.
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
 //!   0.8, `launch.rs`): the variables, the preamble and the suspensions the
 //!   test sets ([`Control::launch`]).
+//! - `projets.rs` (API 0.11): the name of a Projet through its `Host`, the
+//!   signal of the Triggers, and `PUT /ext/test/notes/<id>`, which publishes
+//!   a `note_changed` guarded by the read of the note in its Projet.
 //! - **`validate_create`** / **`on_create_with_data`** (API 0.9,
 //!   `creation.rs`): refuses a value holding a string starting with `refuse`,
 //!   records each creation and the order of the stamps and the launches,
@@ -776,6 +781,13 @@ impl Extension for TestExtension {
                 "settings-page",
                 "Test settings",
                 "SettingsPage",
+            ))
+            // 0.11: an explanation in the empty Runs list.
+            .contribute(UiContribution::decoration(
+                UiLocation::RunsEmpty,
+                "runs-empty",
+                "Why empty",
+                "RunsEmptyNote",
             ));
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);

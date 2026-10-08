@@ -13,7 +13,7 @@ import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
   const {
     runSelIds, runningWillStop, cleanupItems, retryItems, pauseItems, setRunBulkKind, clearSel,
-    runBulkKind, cleanupCascade, handleRunsSettled,
+    runBulkKind, cleanupCascade, handleRunsSettled, bulkShown,
   } = pane;
   const extra = useMemo(() => ({ selection: { kind: "run" as const, ids: runSelIds } }), [runSelIds]);
   const extensionActions = useExtensionBulkActions("runs/bulk", extra);
@@ -25,8 +25,10 @@ export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
           count={runSelIds.length}
           note={runningWillStop > 0 ? `${runningWillStop} running will stop` : null}
           actions={[
+            // CORE-42: an action no selected Run allows the caller is hidden.
+            ...[
             {
-              key: "cleanup",
+              key: "cleanup" as const,
               label: "Cleanup",
               icon: <Trash2 size={13} />,
               destructive: true,
@@ -34,19 +36,20 @@ export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
               onClick: () => setRunBulkKind("cleanup"),
             },
             {
-              key: "retry",
+              key: "retry" as const,
               label: "Retry",
               icon: <RotateCcw size={13} />,
               disabled: retryItems.length === 0,
               onClick: () => setRunBulkKind("retry"),
             },
             {
-              key: "pause",
+              key: "pause" as const,
               label: "Pause",
               icon: <Pause size={13} />,
               disabled: pauseItems.length === 0,
               onClick: () => setRunBulkKind("pause"),
             },
+            ].filter((action) => bulkShown[action.key]),
             ...extensionActions,
           ]}
           onClear={() => clearSel("runs")}

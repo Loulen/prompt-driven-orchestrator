@@ -3,26 +3,35 @@ import type { NodeState } from "../../../shared/generated/NodeState";
 import type { ActionVerdict } from "../../store/useNodeRun";
 import RetryPlayButton from "./RetryPlayButton";
 import { RETRY_BUTTON_CLASS, RETRY_BUTTON_STYLE } from "./labels";
+import type { NodeGestureRights } from "./types";
 
-/** The Stop / Restart / Start / Retry-Play toolbar of a live (non-archived) run. */
+/**
+ * The Stop / Restart / Start / Retry-Play toolbar of a live (non-archived) run.
+ * A gesture the caller may not make is not shown (CORE-42); without any, the
+ * toolbar is gone.
+ */
 export default function NodeControls({
   node,
   stop,
   restartIteration,
   start,
   retry,
+  may,
 }: {
   node: NodeState;
   stop: () => void;
   restartIteration: () => void;
   start: () => void;
   retry: () => void;
+  may: NodeGestureRights;
 }) {
+  if (!may.stop && !may.restart && !may.start && !may.retry) return null;
   return (
     <div
       className="flex items-center gap-1.5 border-b border-line px-3 py-1.5"
       data-testid="node-controls"
     >
+      {may.stop && (
       <button
         data-testid="stop-btn"
         disabled={node.status !== "running"}
@@ -37,7 +46,8 @@ export default function NodeControls({
         <Square size={10} />
         Stop
       </button>
-      {node.status === "running" && node.isolated_worktree && (
+      )}
+      {may.restart && node.status === "running" && node.isolated_worktree && (
         <button
           data-testid="restart-iteration-btn"
           onClick={restartIteration}
@@ -48,7 +58,7 @@ export default function NodeControls({
           Restart
         </button>
       )}
-      {node.status === "pending" && (
+      {may.start && node.status === "pending" && (
         <button
           data-testid="start-btn"
           onClick={start}
@@ -59,7 +69,7 @@ export default function NodeControls({
           Start
         </button>
       )}
-      <RetryPlayButton status={node.status} onClick={retry} />
+      {may.retry && <RetryPlayButton status={node.status} onClick={retry} />}
     </div>
   );
 }

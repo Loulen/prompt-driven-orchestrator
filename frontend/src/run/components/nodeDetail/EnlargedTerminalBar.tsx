@@ -23,6 +23,8 @@ export interface TerminalCompletion {
   /** `awaiting_user` on a live run: the gestures belong in the enlarged bar. */
   showGestures: boolean;
   canRelease: boolean;
+  /** CORE-42: « Mark complete » is allowed to the caller (else hidden). */
+  canMarkComplete: boolean;
   released: boolean;
   isReleasing: boolean;
   releaseVerdict: ({ iter: number } & ReleaseVerdict) | null;
@@ -103,19 +105,21 @@ export function EnlargedCompletionGestures({
           </button>
         </Tooltip>
       )}
-      <Tooltip content={MARK_COMPLETE_LABEL}>
-        <button
-          onClick={() => {
-            onGesture("mark");
-            completion.markComplete();
-          }}
-          aria-label={MARK_COMPLETE_LABEL}
-          className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-done transition-colors hover:bg-st-done-bg"
-          data-testid="term-mark-complete"
-        >
-          <CheckCircle size={12} />
-        </button>
-      </Tooltip>
+      {completion.canMarkComplete && (
+        <Tooltip content={MARK_COMPLETE_LABEL}>
+          <button
+            onClick={() => {
+              onGesture("mark");
+              completion.markComplete();
+            }}
+            aria-label={MARK_COMPLETE_LABEL}
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-done transition-colors hover:bg-st-done-bg"
+            data-testid="term-mark-complete"
+          >
+            <CheckCircle size={12} />
+          </button>
+        </Tooltip>
+      )}
     </>
   );
 }

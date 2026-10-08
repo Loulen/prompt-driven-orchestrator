@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import {
-  ancestorIds, buildRunTree, filterRunTree, flattenAll, parentIds, rootOf,
+  ancestorIds, buildRunTree, filterRunTree, flattenAll, isInArchivedSection, parentIds, rootOf,
 } from "../../model/runTree";
 import { EMPTY_RUN_FILTER, isFilterActive, runMatchesFilter } from "../../model/runFilter";
 import { loadChildRunsExpanded } from "../../../lib/uiPrefs";
@@ -42,11 +42,13 @@ export function useRunTreeView(
     isAttributeFilterActive(projectFilter);
 
   // #783 — the run tree, built from ALL runs so a child follows its parent into
-  // whatever section / group the ROOT lands in, whatever the child's own status
-  // or repo. The archived split is on the root — and an archived run is always
-  // a leaf (`buildRunTree` releases its children as roots, ADR-0064), so the
-  // Archived section only ever holds archived runs, never a live child.
+  // whatever group the ROOT lands in, whatever the child's own repo. A subtree
+  // never spans two sections (`buildRunTree` makes a run whose parent sits in
+  // the other section a root, linked to that parent), so the split on the
+  // root's status leaves the Archived section with archived runs only, nested
+  // like the active ones.
   const fullTree = useMemo(() => buildRunTree(runs), [runs]);
+  const runById = useMemo(() => new Map(runs.map((r) => [r.run_id, r])), [runs]);
   const tree = useMemo(() => {
     if (!isAttributeFilterActive(projectFilter)) return fullTree;
     const projectOf = projectLookup(projects);
@@ -60,8 +62,8 @@ export function useRunTreeView(
     const match = (r: RunListEntry) =>
       runMatchesFilter(r, runFilter) && matchesAttributes(r.attributes, attributeFilter);
     return {
-      activeTree: filterRunTree(tree.filter((n) => n.run.status !== "archived"), match),
-      archivedTree: filterRunTree(tree.filter((n) => n.run.status === "archived"), match),
+      activeTree: filterRunTree(tree.filter((n) => !isInArchivedSection(n.run)), match),
+      archivedTree: filterRunTree(tree.filter((n) => isInArchivedSection(n.run)), match),
     };
   }, [tree, runFilter, attributeFilter]);
   const filteredRuns = useMemo(
@@ -86,7 +88,8 @@ export function useRunTreeView(
 
   // #725/#783 — reveal the selected run: when the selection CHANGES to a run
   // whose ancestors are collapsed (Orchestration tab, URL, back navigation),
-  // open them and scroll the row into view once it exists. Adjusting state
+  // open them and scroll the row into view once it exists. A root reached by
+  // a parent link (possibly in the other section) is scrolled to as well. Adjusting state
   // during render on a tracked-key change is React's reset-on-prop pattern
   // (cf. `prevSelectedArchivedId` below). The request rides STATE so the row
   // mapper stays ref-free; the effect scrolls once per new request (the value
@@ -105,7 +108,7 @@ export function useRunTreeView(
           return next;
         });
       }
-      if (chain.length > 0) setScrollRequest(selectedRunId);
+      setScrollRequest(selectedRunId);
     }
   }
   useEffect(() => {
@@ -115,15 +118,15 @@ export function useRunTreeView(
       ?.scrollIntoView({ block: "nearest" });
   }, [scrollRequest, selectedRunId]);
 
-  // #136 — archived runs live in their own flat, collapsible section below the
-  // active list; the active list keeps the #258 per-repo grouping. #783: the
-  // section holds archived roots (always leaves — an archived parent releases
-  // its children, which climb back to the active section as roots).
-  const archivedCount = archivedTree.length;
+  // #136 — archived runs live in their own collapsible section below the
+  // active list; the active list keeps the #258 per-repo grouping. The section
+  // renders the tree like the active list; its count is every archived run it
+  // holds, nested or not.
+  const archivedCount = useMemo(() => flattenAll(archivedTree).length, [archivedTree]);
 
   // Identity of the selected run *iff* its tree currently sits in the archived
-  // set (its root is archived — i.e. it IS archived, since an archived run
-  // retains no children), else null — the signal that must reveal the section.
+  // section (its root is archived — so is the run itself, a subtree never
+  // spanning two sections), else null — the signal that must reveal the section.
   const selectedArchivedId =
     selectedRunId != null && rootOf(runs, selectedRunId)?.status === "archived"
       ? selectedRunId
@@ -174,6 +177,7 @@ export function useRunTreeView(
     activeTree,
     archivedTree,
     filteredRuns,
+    runById,
     isExpanded,
     setExpanded,
     allParentIds,

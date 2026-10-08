@@ -29,6 +29,7 @@ import { regionsDestroyedByEdgeRemoval } from "../../lib/loopRegions";
 import type { LibraryEntry } from "../model/library";
 import { useLibraryState } from "../../hooks/useLibrary";
 import type { EditorNodeDef } from "../model/pipeline";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 /** The inspector of the node selected on the canvas: its identity, type,
  *  workspace, behavior, agent, prompt, inputs and outputs. */
@@ -225,7 +226,7 @@ export default function NodeInspector({
             className="block w-full cursor-pointer select-all rounded border border-line bg-bg-3 px-2 py-1 font-mono text-fg-3"
             style={{ fontSize: "10px" }}
             title="Click to copy"
-            onClick={() => navigator.clipboard.writeText(node.id)}
+            onClick={() => void copyToClipboard(node.id)}
           >
             {node.id}
           </span>

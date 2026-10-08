@@ -3,7 +3,7 @@
 // A plain ES module, no build step: `react` is the front's own, shared through
 // its import map.
 import React from "react";
-import { openProbedSocket, useCurrentActor } from "@pdo/extension-ui";
+import { copyToClipboard, openProbedSocket, useCurrentActor } from "@pdo/extension-ui";
 
 const h = React.createElement;
 
@@ -319,6 +319,28 @@ export function SettingsPage({ context, navigate }) {
       "button",
       { type: "button", onClick: () => navigate("deep/inside"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
       "Go to deep/inside",
+    ),
+  );
+}
+
+// Decoration of `runs/empty` (0.11): why the Runs list is empty, under the
+// core's own text, and a Copy button through `copyToClipboard` of the shared
+// module (0.11), which works over plain http too.
+export function RunsEmptyNote() {
+  const [copied, setCopied] = React.useState(null);
+  return h(
+    "div",
+    { style: { ...muted, fontSize: "11px" }, "data-testid": "test-runs-empty-note" },
+    h("p", null, "No Project yet: ask an admin for one"),
+    h(
+      "button",
+      {
+        type: "button",
+        "data-testid": "test-runs-empty-copy",
+        style: { textDecoration: "underline" },
+        onClick: () => copyToClipboard("admin@example.test").then(setCopied),
+      },
+      copied === null ? "Copy the admin's address" : copied ? "Copied" : "Copy failed",
     ),
   );
 }

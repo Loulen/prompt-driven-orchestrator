@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { importedFilePhrase } from "../../model/nodeImport";
-import { writeClipboardText } from "../../../session/model/terminalClipboard";
+import { copyToClipboard } from "../../../shared/lib/clipboard";
 
 /** « Fichier importé en cours de Run »: the ready-to-use text of an import, one
  *  phrase per file, and its copy icon. `text` is what the icon copies. */
@@ -9,7 +9,7 @@ export default function ImportedText({ paths, text }: { paths: string[]; text: s
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   const copyText = async () => {
-    const ok = await writeClipboardText(text);
+    const ok = await copyToClipboard(text);
     setCopyState(ok ? "copied" : "failed");
     window.setTimeout(() => setCopyState("idle"), 1500);
   };

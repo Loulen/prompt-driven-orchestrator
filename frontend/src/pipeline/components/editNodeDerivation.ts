@@ -95,7 +95,12 @@ export function deriveEditNodes(
         inputImages:
           n.type === "start" ? (runState?.start_node?.input_images ?? []) : undefined,
         inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
-        outputs: n.outputs.map((p) => ({ name: p.name, side: p.side ?? "right", description: p.description })),
+        outputs: n.outputs.map((p) => ({
+          name: p.name,
+          side: p.side ?? "right",
+          description: p.description,
+          ...(p.intermediate ? { intermediate: true } : {}),
+        })),
         interactive: n.interactive,
         agentMode:
           n.agent_choice?.mode === "profile"

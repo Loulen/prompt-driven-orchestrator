@@ -35,6 +35,9 @@ export interface PortIO {
   port: string;
   repeated: boolean;
   port_type?: PortType;
+  /** CORE-45: an Output intermédiaire — written while the node works, never
+   *  checked. Always false on an input. */
+  intermediate?: boolean;
   files: FileInfo[];
 }
 

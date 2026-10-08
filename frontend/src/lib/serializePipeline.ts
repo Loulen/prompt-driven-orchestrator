@@ -175,6 +175,8 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
         if (port.when) p.when = port.when;
+        // An Output intermédiaire. Emitted only when set, like `required`.
+        if (port.intermediate) p.intermediate = true;
         if (port.instructions?.trim()) p.instructions = port.instructions;
         return p;
       });

@@ -37,6 +37,7 @@ async fn a_refused_mutation_changes_nothing() {
     denied(world.pipelines.save_to_library(
         &operator(),
         LibraryEntry {
+            on_demand: false,
             name: "n".into(),
             node_type: NodeType::Agent,
             inputs: vec![],

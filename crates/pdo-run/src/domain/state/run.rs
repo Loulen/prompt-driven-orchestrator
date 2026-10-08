@@ -85,6 +85,15 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub awaiting_reason_code: Option<String>,
+    /// How many started nodes a `Running` Run that went past `End` still waits
+    /// for (ADR-0086): the « Attente des nœuds lancés », or a node launched
+    /// after the Run reached `End` (which re-opened it). Derived in
+    /// [`finalize`]; `None` while the Run has not reached `End`, or once it no
+    /// longer waits. Read by the banner (« waiting for N started nodes ») and
+    /// carried by the Résumé de Run (ADR-0084).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub waiting_for_started_nodes: Option<u32>,
     #[ts(as = "HashMap<String, NodeStateView>")]
     pub nodes: HashMap<String, NodeState>,
     #[serde(default)]

@@ -55,7 +55,16 @@ awaiting_reason?: string,
  * with [`awaiting_reason`] on resume / reopen. Every non-advancement thus
  * carries a reason that is machine-branchable, not only prose to grep.
  */
-awaiting_reason_code?: string, nodes: { [key in string]: NodeState }, edges: Array<EdgeInfo>, node_defs: Array<NodeDefInfo>, 
+awaiting_reason_code?: string, 
+/**
+ * How many started nodes a `Running` Run that went past `End` still waits
+ * for (ADR-0086): the « Attente des nœuds lancés », or a node launched
+ * after the Run reached `End` (which re-opened it). Derived in
+ * [`finalize`]; `None` while the Run has not reached `End`, or once it no
+ * longer waits. Read by the banner (« waiting for N started nodes ») and
+ * carried by the Résumé de Run (ADR-0084).
+ */
+waiting_for_started_nodes?: number, nodes: { [key in string]: NodeState }, edges: Array<EdgeInfo>, node_defs: Array<NodeDefInfo>, 
 /**
  * Instance + Project + Run provisioning recipe frozen at Run creation
  * (ADR-0061). Node rules are appended only when its isolated worktree is cut.

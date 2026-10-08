@@ -29,10 +29,14 @@ pub(super) fn is_node_dead(
         return false;
     }
 
+    // ADR-0086: an edge from an on-demand node not launched yet is absent — it
+    // neither keeps the node alive nor kills it. A node fed by such edges alone
+    // is not dead: it waits for them.
     let incoming: Vec<&pdo_pipeline::domain::pipeline::EdgeDef> = pipeline
         .edges
         .iter()
         .filter(|e| e.target.node == node_id)
+        .filter(|e| crate::domain::on_demand::edge_counts(pipeline, run_state, e))
         .collect();
 
     if incoming.is_empty() {
@@ -160,8 +164,8 @@ pub(super) fn edge_is_dead(
 /// (b) it declares a `required: true` input port whose every feeding edge is dead —
 /// even if the node has other live inputs.
 ///
-/// `Start`/`End` and the structural `Loop`/`Switch` routers are never auto-skipped
-/// here: `End`-unreachability is the `unrouted` convergence path. A convergence
+/// `Start`/`End`, the structural `Loop`/`Switch` routers and the on-demand nodes
+/// (ADR-0086) are never auto-skipped here: `End`-unreachability is the `unrouted` convergence path. A convergence
 /// node whose every branch is dead is skipped like any other node (ADR-0082).
 pub fn unreachable_nodes(
     pipeline: &PipelineDef,
@@ -178,6 +182,11 @@ pub fn unreachable_nodes(
             node.node_type,
             NodeType::Start | NodeType::End | NodeType::Loop | NodeType::Switch
         ) {
+            continue;
+        }
+        // ADR-0086: an on-demand node is never skipped by the runtime, even
+        // when every upstream died — the user can still launch it.
+        if node.on_demand {
             continue;
         }
         let has_incoming = pipeline.edges.iter().any(|e| e.target.node == node.id);
@@ -212,6 +221,7 @@ pub fn unreachable_nodes(
                 .edges
                 .iter()
                 .filter(|e| e.target.node == node.id && e.target.port == port.name)
+                .filter(|e| crate::domain::on_demand::edge_counts(pipeline, run_state, e))
                 .collect();
             if feeders.is_empty() {
                 continue;

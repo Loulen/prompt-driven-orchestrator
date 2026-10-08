@@ -126,6 +126,10 @@ pub(super) struct SaveToLibraryRequest {
     /// the save) instead of 400-ing — same posture as `model`.
     #[serde(default)]
     isolated_worktree: Option<bool>,
+    /// The « on demand » option (ADR-0086). Optional: a client that omits it
+    /// stars a node the runtime launches.
+    #[serde(default)]
+    on_demand: bool,
 }
 
 impl From<SaveToLibraryRequest> for LibraryEntry {
@@ -142,6 +146,7 @@ impl From<SaveToLibraryRequest> for LibraryEntry {
             branches: None,
             prompt: req.prompt,
             isolated_worktree: req.isolated_worktree,
+            on_demand: req.on_demand,
         }
     }
 }

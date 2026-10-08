@@ -19,7 +19,7 @@ use crate::domain::state::{RunState, RunStatus};
 /// The shape of [`RunSummary`]: the Résumés written under another version
 /// are rebuilt from the event log at boot. Bump it with any change of the
 /// fields or of how they are derived.
-pub const SUMMARY_VERSION: i64 = 1;
+pub const SUMMARY_VERSION: i64 = 2;
 
 /// One Run, as the lists show it and the access checks read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +36,9 @@ pub struct RunSummary {
     pub failure_reason: Option<String>,
     pub awaiting_reason: Option<String>,
     pub awaiting_reason_code: Option<String>,
+    /// How many started nodes the Run, past `End`, still waits for (ADR-0086).
+    #[serde(default)]
+    pub waiting_for_started_nodes: Option<u32>,
     pub triggered_by: Option<String>,
     pub created_by: Option<Actor>,
     pub parent_run_id: Option<String>,
@@ -59,6 +62,7 @@ impl RunSummary {
             failure_reason: run.failure_reason.clone(),
             awaiting_reason: run.awaiting_reason.clone(),
             awaiting_reason_code: run.awaiting_reason_code.clone(),
+            waiting_for_started_nodes: run.waiting_for_started_nodes,
             triggered_by: run.triggered_by.clone(),
             created_by: run.created_by.clone(),
             parent_run_id: run.parent_run_id.clone(),

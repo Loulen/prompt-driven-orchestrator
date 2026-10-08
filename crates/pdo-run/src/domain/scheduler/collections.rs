@@ -134,6 +134,8 @@ pub(super) fn check_all_upstream_completed(
         .iter()
         .filter(|e| e.target.node == target_node_id)
         .filter(|e| e.source.node != target_node_id)
+        // ADR-0086: an on-demand node not launched yet holds no barrier.
+        .filter(|e| crate::domain::on_demand::edge_counts(pipeline, run_state, e))
         .filter(|e| {
             crate::domain::loop_region::bounded_region_reentered_by_edge(
                 pipeline,

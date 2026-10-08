@@ -239,6 +239,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let ctx = SpawnContext {
@@ -289,6 +290,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let ctx = SpawnContext {

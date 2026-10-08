@@ -179,6 +179,7 @@ impl Importer {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 }
@@ -215,6 +216,7 @@ pub(super) fn start_node() -> NodeDef {
         skills: Vec::new(),
         auto_fail: None,
         orchestrator: false,
+        on_demand: false,
     }
 }
 
@@ -239,5 +241,6 @@ pub(super) fn end_node(agent_count: usize) -> NodeDef {
         skills: Vec::new(),
         auto_fail: None,
         orchestrator: false,
+        on_demand: false,
     }
 }

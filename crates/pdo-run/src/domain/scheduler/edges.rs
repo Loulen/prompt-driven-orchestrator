@@ -211,6 +211,10 @@ pub fn evaluate_outgoing_edges_full(
             ));
         } else {
             let target_node = pipeline.nodes.iter().find(|n| n.id == *target_id);
+            // ADR-0086: an edge never launches an on-demand node.
+            if target_node.is_some_and(|n| n.on_demand) {
+                continue;
+            }
             let is_loop_target = target_node.is_some_and(|n| n.node_type == NodeType::Loop);
 
             let is_switch_target = target_node.is_some_and(|n| n.node_type == NodeType::Switch);
@@ -364,5 +368,7 @@ pub fn evaluate_outgoing_edges_full(
         }
     }
 
-    actions
+    // ADR-0086: a Run that waits for its started nodes does not end at `End`
+    // while one of them is alive — the last completion ends it.
+    defer_completion_for_started_nodes(pipeline, run_state, actions)
 }

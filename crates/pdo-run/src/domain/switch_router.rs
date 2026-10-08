@@ -67,6 +67,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 

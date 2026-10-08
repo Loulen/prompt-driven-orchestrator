@@ -31,4 +31,11 @@ prompt: string,
  * always `None` for the types that carry none. `skip_serializing_if` is
  * what keeps a starred Start/End file free of a line nobody may edit.
  */
-isolated_worktree?: boolean, };
+isolated_worktree?: boolean, 
+/**
+ * The « on demand » option (ADR-0086), starred with the node: an entry
+ * that dropped it would instantiate a node the runtime launches at once.
+ * Omitted when `false`, so an entry starred before the option reads
+ * `synced` against a node that does not carry it.
+ */
+on_demand?: boolean, };

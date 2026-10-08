@@ -117,6 +117,7 @@ impl Importer {
             skills: Vec::new(),
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         };
         self.nodes.push(node);
         self.prompts.insert(id.clone(), prompt_body);

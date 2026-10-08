@@ -7,6 +7,8 @@
 //!   `loop` node, the collection fan-out and its barrier.
 //! - [`diagnostics`]: why a convergence went `unrouted`.
 //! - [`liveness`]: the nodes the Run can no longer reach.
+//! - [`end_wait`]: the end of a Run whose started nodes are still alive
+//!   (ADR-0086).
 //! - [`dispatcher`]: the nodes ready to spawn, and the ones the session cap
 //!   holds `waiting`.
 
@@ -14,6 +16,7 @@ mod collections;
 mod diagnostics;
 pub mod dispatcher;
 mod edges;
+mod end_wait;
 mod liveness;
 mod loops;
 mod regions;
@@ -21,6 +24,7 @@ mod regions;
 pub use collections::*;
 use diagnostics::*;
 pub use edges::*;
+pub use end_wait::*;
 pub use liveness::*;
 pub use loops::*;
 pub use regions::*;
@@ -262,6 +266,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -293,6 +298,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -445,6 +451,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let state = empty_run_state();
@@ -471,6 +478,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -496,6 +504,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -525,6 +534,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -555,6 +565,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -594,6 +605,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -619,6 +631,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -644,6 +657,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -678,6 +692,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -720,6 +735,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -753,6 +769,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         // Fast branch `a` completes while `b` is still running.
@@ -818,6 +835,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         // classifier + hotfix completed; `dead` never spawned (its guard failed).
@@ -873,6 +891,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -912,6 +931,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -950,6 +970,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -1005,6 +1026,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -1070,6 +1092,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -1156,6 +1179,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -1265,6 +1289,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -1337,6 +1362,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -1421,6 +1447,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -1518,6 +1545,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -1616,6 +1644,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -1660,6 +1689,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -1716,6 +1746,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -1765,6 +1796,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -1812,6 +1844,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -1869,6 +1902,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -1944,6 +1978,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2005,6 +2040,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2060,6 +2096,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2127,6 +2164,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2187,6 +2225,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2248,6 +2287,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2294,6 +2334,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2406,6 +2447,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -2430,6 +2472,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let state = empty_run_state();
@@ -2456,6 +2499,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2496,6 +2540,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2531,6 +2576,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2589,6 +2635,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2640,6 +2687,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2695,6 +2743,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2767,6 +2816,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2818,6 +2868,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2866,6 +2917,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -2930,6 +2982,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -2955,6 +3008,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let state = empty_run_state();
 
@@ -2992,6 +3046,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let state = empty_run_state();
 
@@ -3024,6 +3079,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let mut state = empty_run_state();
         state.loop_states.insert(
@@ -3054,6 +3110,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let state = empty_run_state();
 
@@ -3081,6 +3138,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let mut state = empty_run_state();
         state
@@ -3113,6 +3171,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let state = empty_run_state();
 
@@ -3163,6 +3222,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -3776,6 +3836,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -4142,6 +4203,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -4329,6 +4391,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let mut state = empty_run_state();
@@ -4419,6 +4482,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -4667,6 +4731,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let mut rs = empty_run_state();
         rs.nodes.insert("rev".into(), completed_node("rev"));
@@ -4716,6 +4781,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let mut rs = empty_run_state();
         rs.nodes.insert("rev".into(), completed_node("rev"));
@@ -4759,6 +4825,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -4815,6 +4882,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let mut rs = empty_run_state();
         rs.nodes.insert("rev".into(), completed_node("rev"));
@@ -4891,6 +4959,7 @@ loops:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 

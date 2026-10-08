@@ -895,6 +895,7 @@ pub fn spawn_test_fixture(
         agent_choice: None,
         auto_fail: None,
         orchestrator: false,
+        on_demand: false,
     };
     let pipeline = pipeline::PipelineDef {
         name: "spawn-unit".into(),
@@ -906,6 +907,7 @@ pub fn spawn_test_fixture(
         notes: Vec::new(),
         prompt_required: false,
         grid_size: None,
+        wait_for_started_nodes: false,
     };
     let pipeline_path = repo_root.join("spawn-unit.yaml");
     (pipeline, node, pipeline_path)

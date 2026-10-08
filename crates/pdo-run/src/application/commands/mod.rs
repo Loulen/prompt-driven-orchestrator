@@ -794,6 +794,7 @@ mod tests {
                 agent_choice: None,
                 auto_fail: None,
                 orchestrator: false,
+                on_demand: false,
             }],
             edges: vec![EdgeDef {
                 source: EdgeSource::single("reviewer", "review"),
@@ -811,6 +812,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "reviewer");
@@ -852,6 +854,7 @@ mod tests {
                 agent_choice: None,
                 auto_fail: None,
                 orchestrator: false,
+                on_demand: false,
             }],
             edges: vec![EdgeDef {
                 source: EdgeSource::single("a", "out"),
@@ -869,6 +872,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "a");

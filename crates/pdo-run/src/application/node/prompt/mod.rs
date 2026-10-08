@@ -23,6 +23,8 @@ pub const ALLOWED_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "we
 
 pub struct InputResolution {
     pub port_name: String,
+    /// The upstream node the input comes from.
+    pub source_node: String,
     /// A single wire is a one-element list; a `repeated`/pooled input is one path
     /// per COMPLETED source iteration (empty when none completed). Never a raw
     /// `iter-*` glob, which could not exclude a failed iter.
@@ -124,6 +126,11 @@ pub struct AugmentContext<'a> {
     /// empty `Vec`) pools nothing — failed iterations stay quarantined, and no raw
     /// `iter-*` glob is ever handed to an agent or script.
     pub repeated_iters: HashMap<String, Vec<i64>>,
+    /// The upstream nodes with no completed iteration yet
+    /// ([`crate::domain::input_resolution::absent_sources`]): their inputs are
+    /// named absent in the preamble instead of pointing at a file that does not
+    /// exist (ADR-0086). Precomputed by the daemon, like `source_iters`.
+    pub absent_sources: std::collections::HashSet<String>,
     /// Secondary repos visible to this node; empty for a mono-repo Run. Nodes
     /// reach these ONLY by absolute path, so `build_preamble` prints the paths and
     /// `build_script_env` exposes them as `PDO_SECONDARY_REPOS` plus
@@ -228,12 +235,14 @@ mod tests {
                 agent_choice: None,
                 auto_fail: None,
                 orchestrator: false,
+                on_demand: false,
             }],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -257,6 +266,7 @@ mod tests {
             input_files: Vec::new(),
             start_prompt_present: false,
             source_iters: HashMap::new(),
+            absent_sources: Default::default(),
             repeated_iters: HashMap::new(),
             secondary_repos: Vec::new(),
             reused_sub_worktree: false,
@@ -603,6 +613,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeSource::single("planner", "plan"),
@@ -751,6 +762,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeSource::single("planner", "plan"),
@@ -810,6 +822,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -847,6 +860,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeSource::single("planner", "plan"),
@@ -895,6 +909,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeSource::single("planner", "plan"),
@@ -1142,6 +1157,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
                 NodeDef {
                     skills: Vec::new(),
@@ -1170,6 +1186,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
                 NodeDef {
                     skills: Vec::new(),
@@ -1221,6 +1238,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
             ],
             edges: vec![
@@ -1253,6 +1271,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let node = &pipeline.nodes[2]; // implementer
@@ -1334,12 +1353,14 @@ mod tests {
                 agent_choice: None,
                 auto_fail: None,
                 orchestrator: false,
+                on_demand: false,
             }],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let node = &pipeline.nodes[0];
@@ -1667,12 +1688,14 @@ mod tests {
                 agent_choice: None,
                 auto_fail: None,
                 orchestrator: false,
+                on_demand: false,
             }],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -1726,12 +1749,14 @@ mod tests {
                 agent_choice: None,
                 auto_fail: None,
                 orchestrator: false,
+                on_demand: false,
             }],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -1780,12 +1805,14 @@ mod tests {
                 agent_choice: None,
                 auto_fail: None,
                 orchestrator: false,
+                on_demand: false,
             }],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();

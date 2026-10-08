@@ -45,6 +45,11 @@ pub struct RunListEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub awaiting_reason_code: Option<String>,
+    /// How many started nodes the Run, past `End`, still waits for (ADR-0086):
+    /// the list says why a Run that reached `End` is still `Running`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub waiting_for_started_nodes: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub name: Option<String>,
@@ -110,6 +115,7 @@ impl Runs {
                     failure_reason: summary.failure_reason,
                     awaiting_reason: summary.awaiting_reason,
                     awaiting_reason_code: summary.awaiting_reason_code,
+                    waiting_for_started_nodes: summary.waiting_for_started_nodes,
                     name: summary.name,
                     triggered_by: summary.triggered_by,
                     created_by: summary.created_by,

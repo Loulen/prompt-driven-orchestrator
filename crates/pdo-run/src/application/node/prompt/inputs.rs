@@ -96,6 +96,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
         .into_iter()
         .map(|r| InputResolution {
             port_name: r.port,
+            source_node: r.source_node,
             paths: r.paths,
             repeated: r.repeated,
             from_start: r.from_start,
@@ -105,6 +106,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
     if inputs.is_empty() && ctx.node.inputs.iter().any(|p| p.name == "task") {
         inputs.push(InputResolution {
             port_name: "task".into(),
+            source_node: String::new(),
             paths: vec![crate::domain::blackboard::input_path(ctx.artifacts_dir)],
             repeated: false,
             from_start: true,

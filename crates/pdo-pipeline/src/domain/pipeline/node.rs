@@ -243,6 +243,15 @@ pub struct NodeDef {
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional = nullable)]
     pub orchestrator: bool,
+    /// The « on demand » option (ADR-0086): the runtime never launches this
+    /// node (not as a root, not through an incoming edge) and never skips it;
+    /// only the user's ▶ does. Its edges hold no downstream node until it is
+    /// launched. An option of an `agent` or a `script`, refused on a structural
+    /// node at parse ([`super::normalize::normalize_node_value`]). Semantic,
+    /// not layout — in the diff and the library content hash.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub on_demand: bool,
 }
 
 impl NodeDef {

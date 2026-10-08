@@ -187,6 +187,38 @@ pub async fn handle_node_completion(
             }
         }
     }
+
+    // ADR-0086: this completion may be the one a Run past `End` waits for —
+    // the last started node of a Run that waits for them, or a node launched
+    // after the Run went past `End`, which re-opened it. Evaluate the end again
+    // on the state the passes above left.
+    let Some((end_events, end_run_state)) = reload_run_state(state, run_id).await else {
+        return;
+    };
+    let end_frontmatter = resolve_completed_frontmatter(&pipeline, &end_run_state, &artifacts_dir);
+    let end_vars = resolve_run_variables(&pipeline, &end_events);
+    if let Some(action) =
+        scheduler::end_reached_action(&pipeline, &end_run_state, &end_frontmatter, &end_vars)
+    {
+        let end_spawn_ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: &worktree_dir,
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &end_vars,
+            repo_root: &repo_root,
+        };
+        let _ = scheduler_interpreter::interpret(
+            state,
+            &end_spawn_ctx,
+            &end_run_state,
+            SpawnDedup::InternalOnly,
+            source_iter,
+            &action,
+        )
+        .await;
+    }
 }
 
 /// Thin shim over the single-pass advancement tick owned by

@@ -231,6 +231,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -265,6 +266,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -322,6 +324,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         // Deleting back-edge A (index 2) still leaves the impl->rev->mid->impl
         // cycle, so the region is kept.
@@ -384,6 +387,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
         let region = LoopRegion {
             id: "per-issue".into(),

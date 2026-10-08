@@ -214,6 +214,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         }
     }
 
@@ -247,6 +248,7 @@ mod tests {
             notes: vec![],
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -271,6 +273,26 @@ mod tests {
             Some(AgentChoice::Inherit)
         );
         assert_eq!(imported.prompts, prompts);
+    }
+
+    /// ADR-0086: the portable document carries both options, so an imported
+    /// pipeline behaves like the original.
+    #[test]
+    fn export_carries_on_demand_and_the_wait_for_started_nodes() {
+        let mut pipeline = pipeline();
+        pipeline.wait_for_started_nodes = true;
+        pipeline
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == "worker")
+            .unwrap()
+            .on_demand = true;
+
+        let document = super::export(&pipeline, &HashMap::new()).unwrap();
+        let imported = super::interpret(&document).unwrap().pipeline;
+
+        assert!(imported.wait_for_started_nodes);
+        assert!(imported.nodes.iter().any(|n| n.id == "worker" && n.on_demand));
     }
 
     #[test]

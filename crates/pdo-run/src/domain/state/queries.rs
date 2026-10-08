@@ -32,6 +32,7 @@ impl RunState {
             failure_reason: None,
             awaiting_reason: None,
             awaiting_reason_code: None,
+            waiting_for_started_nodes: None,
             nodes: HashMap::new(),
             edges: Vec::new(),
             node_defs: Vec::new(),

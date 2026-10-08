@@ -20,7 +20,12 @@ failure_reason?: string,
  * machine slug. On the list entry for the same reason as `failure_reason`.
  * `None` for an interactive wait, which carries no incident reason.
  */
-awaiting_reason?: string, awaiting_reason_code?: string, name?: string, 
+awaiting_reason?: string, awaiting_reason_code?: string, 
+/**
+ * How many started nodes the Run, past `End`, still waits for (ADR-0086):
+ * the list says why a Run that reached `End` is still `Running`.
+ */
+waiting_for_started_nodes?: number, name?: string, 
 /**
  * Provenance: the Trigger that created this Run, if any.
  */

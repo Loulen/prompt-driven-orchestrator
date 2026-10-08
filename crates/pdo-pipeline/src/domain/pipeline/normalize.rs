@@ -107,6 +107,27 @@ pub fn normalize_node_value(
         }
     }
 
+    // ADR-0086: « on demand » is an option of a node that runs something. On a
+    // structural node (Start, End, Loop, Switch) nothing could ever be launched
+    // by the ▶, so the option is refused rather than carried in silence.
+    let on_demand = node_map
+        .get(serde_yaml::Value::String(ON_DEMAND_KEY.into()))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if on_demand {
+        let node_type = node_map
+            .get(serde_yaml::Value::String("type".into()))
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent");
+        if !matches!(node_type, "agent" | "script") {
+            return Err(ParseError::InvalidField(format!(
+                "node '{node_id}': a `{node_type}` node cannot be `on_demand` — only an \
+                 `agent` or a `script` node can wait for the user's ▶. Remove the \
+                 `on_demand` key"
+            )));
+        }
+    }
+
     // #550: fold a legacy flat `model:` / `effort:` into `harnesses.claude.*` so
     // that a parse is lossless even before the on-disk migrator has rewritten the
     // file. The migrator persists the same fold; this is the in-memory safety net
@@ -118,6 +139,9 @@ pub fn normalize_node_value(
 
 /// The node key that says where a NodeRun works (#653, ADR-0060).
 pub const ISOLATED_WORKTREE_KEY: &str = "isolated_worktree";
+
+/// The node key of the « on demand » option (ADR-0086).
+pub const ON_DEMAND_KEY: &str = "on_demand";
 
 /// The node key carrying its skills selection (#669, ADR-0062).
 pub const SKILLS_KEY: &str = "skills";

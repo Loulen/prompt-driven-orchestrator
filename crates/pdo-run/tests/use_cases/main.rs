@@ -7,6 +7,7 @@ mod append_event;
 mod commands;
 mod fakes;
 mod gestures;
+mod on_demand;
 mod operation_projects;
 mod ports;
 mod project_tiers;

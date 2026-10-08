@@ -330,6 +330,7 @@ mod tests {
         rs.node_defs.push(event::NodeDefInfo {
             isolated_worktree: Some(isolated),
             orchestrator: false,
+            on_demand: false,
             id: node_id.into(),
             name: None,
             node_type: "agent".into(),

@@ -32,4 +32,12 @@ prompt_required?: boolean,
  * in that case so an untouched pipeline round-trips byte for byte. Layout,
  * not semantics — excluded from the semantic pipeline-diff.
  */
-grid_size?: GridSize | null, };
+grid_size?: GridSize | null, 
+/**
+ * « Attente des nœuds lancés » (ADR-0086). `true` ⇒ a Run that reaches
+ * `End` completes only once no node is `running`, `waiting` or
+ * `awaiting_user`; until then it stays `Running`. `false` (the default)
+ * keeps the Run ending at `End`, and is omitted from YAML so an untouched
+ * pipeline round-trips byte for byte. Semantic, not layout.
+ */
+wait_for_started_nodes?: boolean, };

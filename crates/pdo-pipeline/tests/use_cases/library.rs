@@ -8,6 +8,7 @@ use crate::fakes::*;
 
 fn entry(name: &str, node_type: NodeType, isolated: Option<bool>) -> LibraryEntry {
     LibraryEntry {
+        on_demand: false,
         name: name.into(),
         node_type,
         inputs: vec![],

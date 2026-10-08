@@ -344,6 +344,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
                 NodeDef {
                     skills: Vec::new(),
@@ -382,6 +383,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
             ],
             edges: vec![EdgeDef {
@@ -400,6 +402,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -538,6 +541,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
                 NodeDef {
                     skills: Vec::new(),
@@ -576,6 +580,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
             ],
             edges: vec![EdgeDef {
@@ -595,6 +600,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 
@@ -767,6 +773,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
                 NodeDef {
                     skills: Vec::new(),
@@ -795,6 +802,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
                 NodeDef {
                     skills: Vec::new(),
@@ -823,6 +831,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
             ],
             edges: vec![
@@ -855,6 +864,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         for dir_name in ["a", "b"] {
@@ -914,6 +924,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
                 NodeDef {
                     skills: Vec::new(),
@@ -933,6 +944,7 @@ mod tests {
                     agent_choice: None,
                     auto_fail: None,
                     orchestrator: false,
+                    on_demand: false,
                 },
             ],
             edges: vec![EdgeDef {
@@ -951,6 +963,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
@@ -1006,6 +1019,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         };
         let mk_edge = |src: &str| EdgeDef {
             source: EdgeSource::single(src, "plan"),
@@ -1034,6 +1048,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
@@ -1091,6 +1106,7 @@ mod tests {
             agent_choice: None,
             auto_fail: None,
             orchestrator: false,
+            on_demand: false,
         };
         let mk_edge = |src: &str, port: &str| EdgeDef {
             source: EdgeSource::single(src, port),
@@ -1119,6 +1135,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         };
 
         let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
@@ -1177,12 +1194,14 @@ mod tests {
                 agent_choice: None,
                 auto_fail: None,
                 orchestrator: false,
+                on_demand: false,
             }],
             edges: Vec::new(),
             loops: Vec::new(),
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            wait_for_started_nodes: false,
         }
     }
 

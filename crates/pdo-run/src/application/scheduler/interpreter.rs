@@ -176,6 +176,35 @@ pub async fn interpret(
             }
         }
         SchedulerAction::Complete => {
+            // ADR-0086: a Run that waits for its started nodes stays `Running`
+            // while one is alive; the last completion ends it.
+            if ctx.pipeline.wait_for_started_nodes
+                && crate::domain::on_demand::started_nodes_alive(run_state) > 0
+            {
+                return ActionOutcome::Progressed;
+            }
+            // The branches the Run did not take end `Skipped`, not pending: a
+            // completed Run says which of its nodes will never run, and a
+            // skipped node keeps its ▶ (ADR-0086, « Forcer un nœud skipped »).
+            let frontmatter = crate::application::scheduler::frontmatter::resolve_completed_frontmatter(
+                ctx.pipeline,
+                run_state,
+                ctx.artifacts_dir,
+            );
+            let skips = crate::domain::scheduler::unreachable_nodes(
+                ctx.pipeline,
+                run_state,
+                &frontmatter,
+                ctx.resolved_vars,
+            );
+            crate::application::scheduler::advance::append_auto_skips(
+                state,
+                run_id,
+                ctx.pipeline,
+                ctx.artifacts_dir,
+                &skips,
+            )
+            .await;
             emit_run_event(state, run_id, event::EventKind::RunCompleted, None).await;
             ActionOutcome::Completed
         }

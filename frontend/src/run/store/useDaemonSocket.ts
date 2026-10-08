@@ -13,12 +13,17 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "pipeline_changed",
   "trigger_created",
   "trigger_fired",
+  // A Trigger edited elsewhere, or all of them when an extension signals that
+  // their suspensions changed (no `trigger_id`): the list reads them again.
+  "trigger_updated",
   "trigger_deleted",
   // #348: without this one the global-pause event is silently dropped here
   // before it reaches the App dispatcher, so a second client's banner would
   // never light up. (This transport allowlist is the easiest line in the
   // ticket to miss.)
   "triggers_paused",
+  // #552: a Projet created, renamed or deleted elsewhere.
+  "project_changed",
 ]);
 
 /**

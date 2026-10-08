@@ -198,16 +198,16 @@ impl Runs {
             Err(response) => return *response,
         };
         let id = target.pipeline_id;
-        let yaml = match std::fs::read_to_string(run_scoped_pipeline_path(&target.repo_root, run_id))
-        {
-            Ok(yaml) => yaml,
-            Err(e) => {
-                return *refusal(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("read run pipeline: {e}"),
-                )
-            }
-        };
+        let yaml =
+            match std::fs::read_to_string(run_scoped_pipeline_path(&target.repo_root, run_id)) {
+                Ok(yaml) => yaml,
+                Err(e) => {
+                    return *refusal(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("read run pipeline: {e}"),
+                    )
+                }
+            };
         let prompts = pdo_pipeline::adapters::registry::read_prompts_dir(&run_scoped_prompts_dir(
             &target.repo_root,
             run_id,

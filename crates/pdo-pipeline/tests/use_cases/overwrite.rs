@@ -18,15 +18,24 @@ fn prompts(entries: &[(&str, &str)]) -> HashMap<String, String> {
 #[tokio::test]
 async fn an_overwrite_copies_the_snapshot_prunes_orphan_prompts_and_announces_it() {
     let world = World::new();
-    world.registry.put("shared", &pipeline_with_worker("shared"));
+    world
+        .registry
+        .put("shared", &pipeline_with_worker("shared"));
     world.registry.put_prompt("shared", "worker", "Old.");
-    world.registry.put_prompt("shared", "dropped", "A node the snapshot no longer has.");
+    world
+        .registry
+        .put_prompt("shared", "dropped", "A node the snapshot no longer has.");
 
     // The snapshot renamed the pipeline: the id stays, nothing moves.
     let snapshot = pipeline_with_worker("Renamed in the run");
     world
         .pipelines
-        .overwrite(&operator(), "shared", &snapshot, &prompts(&[("worker", "New.")]))
+        .overwrite(
+            &operator(),
+            "shared",
+            &snapshot,
+            &prompts(&[("worker", "New.")]),
+        )
         .unwrap();
 
     assert_eq!(world.registry.ids(), ["shared"]);
@@ -46,9 +55,12 @@ async fn an_overwrite_copies_the_snapshot_prunes_orphan_prompts_and_announces_it
 async fn an_overwrite_refuses_a_missing_pipeline_an_invalid_snapshot_and_a_denied_update() {
     let world = World::new();
     assert!(matches!(
-        world
-            .pipelines
-            .overwrite(&operator(), "ghost", &pipeline_yaml("ghost"), &HashMap::new()),
+        world.pipelines.overwrite(
+            &operator(),
+            "ghost",
+            &pipeline_yaml("ghost"),
+            &HashMap::new()
+        ),
         Err(PipelineError::NotFound)
     ));
     world.registry.put("kept", &pipeline_yaml("kept"));
@@ -62,9 +74,12 @@ async fn an_overwrite_refuses_a_missing_pipeline_an_invalid_snapshot_and_a_denie
     let refused = World::refusing("read only");
     refused.registry.put("kept", &pipeline_yaml("kept"));
     assert!(matches!(
-        refused
-            .pipelines
-            .overwrite(&operator(), "kept", &pipeline_with_worker("kept"), &HashMap::new()),
+        refused.pipelines.overwrite(
+            &operator(),
+            "kept",
+            &pipeline_with_worker("kept"),
+            &HashMap::new()
+        ),
         Err(PipelineError::Denied(_))
     ));
     for w in [&world, &refused] {
@@ -79,7 +94,10 @@ async fn the_fingerprint_moves_with_the_yaml_and_the_prompts_and_is_none_for_a_m
     assert_eq!(world.pipelines.fingerprint("ghost"), None);
     world.registry.put("p", &pipeline_with_worker("p"));
     let first = world.pipelines.fingerprint("p").unwrap();
-    assert_eq!(world.pipelines.fingerprint("p").as_deref(), Some(first.as_str()));
+    assert_eq!(
+        world.pipelines.fingerprint("p").as_deref(),
+        Some(first.as_str())
+    );
 
     world.registry.put_prompt("p", "worker", "Edited.");
     let after_prompt = world.pipelines.fingerprint("p").unwrap();

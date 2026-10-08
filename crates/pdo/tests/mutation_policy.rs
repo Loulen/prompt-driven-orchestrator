@@ -192,7 +192,10 @@ edges:
             .join("pipeline.yaml"),
     )
     .unwrap();
-    assert!(run_yaml.contains("reviewer"), "the run's snapshot has the new node");
+    assert!(
+        run_yaml.contains("reviewer"),
+        "the run's snapshot has the new node"
+    );
     let template_path = daemon
         .repo_root()
         .join(".pdo")

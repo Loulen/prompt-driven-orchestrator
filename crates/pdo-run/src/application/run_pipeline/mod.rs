@@ -13,8 +13,8 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pdo_pipeline::domain::pipeline;
 
-pub use overwrite::{launch_source_path, LaunchSource, OverwritePreview};
 pub(crate) use overwrite::record_launch_source;
+pub use overwrite::{launch_source_path, LaunchSource, OverwritePreview};
 pub use save::SaveRunPipelineRequest;
 
 use crate::application::paths::{

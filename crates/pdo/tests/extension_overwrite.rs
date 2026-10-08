@@ -34,7 +34,11 @@ async fn overwrite_with(refusal: Refusal) -> (u16, String, String) {
         .join(".pdo/runs")
         .join(&run_id)
         .join("pipeline.yaml");
-    std::fs::write(&snapshot, before.replace("version: \"1.0\"", "version: \"9.0\"")).unwrap();
+    std::fs::write(
+        &snapshot,
+        before.replace("version: \"1.0\"", "version: \"9.0\""),
+    )
+    .unwrap();
 
     let resp = reqwest::Client::new()
         .post(format!(

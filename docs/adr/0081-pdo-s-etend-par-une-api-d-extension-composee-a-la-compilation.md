@@ -733,3 +733,21 @@ une boucle de reconnexion à elle.
 
 L'extension de test `test` ouvre `/ws` par la fonction sur sa page et en affiche l'état.
 
+## Amendement CORE-43 : l'identité git d'un Node signe sa livraison
+
+Les commits qu'un Node fait lui-même portent l'identité git que `node_env` lui donne ; le commit
+de livraison, qui emporte d'ordinaire tout son travail, portait celle du daemon, et un daemon
+sans identité git ne livrait rien (`delivery_failed`).
+
+- **Gel** : au démarrage d'un Node, le core fige dans son `NodeStarted` (`git_identity`) les
+  quatre variables d'identité de l'environnement donné par les extensions (`GIT_AUTHOR_NAME`,
+  `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`), celles qu'il a reçues, et
+  rien d'autre : cet environnement peut porter des secrets, et l'event log se lit par tout
+  lecteur du Run.
+- **Livraison** : elle relit cette identité dans l'event log (dernier `NodeStarted` du couple
+  node × iter) et l'applique au commit `<node> iter-<N>: completed`, au commit du sous-worktree
+  d'un Node isolé, à son merge dans le worktree du Run et au commit de résolution en faveur du
+  Node (ADR-0036).
+- **Sans identité gelée** : environnement et configuration git du daemon, comme avant.
+- **Version** : aucun symbole ne change ; `pdo-extension-api` reste en **0.10.0**. La
+  documentation de `node_env` décrit l'effet.

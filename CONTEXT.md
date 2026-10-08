@@ -47,7 +47,7 @@ L'**isolation de Node** choisit où un NodeRun travaille : dans un sous-worktree
 
 Un Node isolé peut travailler en parallèle sans partager son arbre de travail. Un Node non isolé évite le coût d'un sous-worktree ; s'il s'exécute en même temps qu'un autre Node non isolé, l'auteur accepte qu'ils partagent leurs modifications. PDO ne sérialise pas ce choix à sa place. À la complétion, PDO commite tout changement que Git n'ignore pas ; le dépôt cible porte la responsabilité d'ignorer les fichiers qu'il ne veut pas versionner. Deux Runs ne partagent jamais leur worktree, même lorsqu'ils exécutent la même Pipeline (ADR-0060).
 
-Le Node ne porte aucune responsabilité Git particulière : il modifie les fichiers nécessaires. PDO livre les commits existants et crée un commit déterministe s'il reste des changements, avant que le Node soit déclaré terminé et que l'aval démarre.
+Le Node ne porte aucune responsabilité Git particulière : il modifie les fichiers nécessaires. PDO livre les commits existants et crée un commit déterministe s'il reste des changements, avant que le Node soit déclaré terminé et que l'aval démarre. Ce commit, le merge d'un sous-worktree et le commit de résolution en faveur du Node portent l'**identité git du Node** quand une extension la lui donne (les quatre variables `GIT_AUTHOR_*` / `GIT_COMMITTER_*` de son environnement, figées dans son `NodeStarted`, et elles seules) ; sinon celle du daemon (CORE-43, ADR-0081).
 _Éviter_ : « doc-only » et « code-mutating » ; « worktree par pipeline » pour le worktree partagé d'un Run.
 
 ### Harnais agentique

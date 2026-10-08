@@ -250,6 +250,13 @@ the Run and its last editor then), `repository` (the Run's primary repository) a
 - **`CLAUDE_CONFIG_DIR`**: when a Node gets one, it is frozen on its `NodeStarted`
   (`claude_config_dir`), and the core reads that Node's Claude Code transcripts, for its cost
   and its liveness, under `$CLAUDE_CONFIG_DIR/projects/`.
+- **Git identity** (`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`,
+  `GIT_COMMITTER_EMAIL`): the ones a Node gets are frozen on its `NodeStarted` (`git_identity`,
+  these four only: the rest of the environment may hold secrets and is never written to the
+  event log). They sign every commit of the Node's delivery: `<node> iter-<N>: completed`, the
+  commit in an isolated Node's sub-worktree, its merge into the Run's worktree and the
+  resolution commit in the Node's favour. A daemon with no git identity of its own then
+  delivers. Without them, the delivery keeps the daemon's identity.
 - **Preamble** (`node_preamble`): placed at the very top of an agent's prompt, before
   `# PDO Runtime Preamble`, followed by a blank line. Never asked for a script.
 

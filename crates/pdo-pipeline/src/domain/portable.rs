@@ -229,6 +229,7 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
+            intermediate: false,
         };
         let mut start = node("start", "Start", NodeType::Start);
         start.outputs.push(port("user_prompt"));
@@ -296,6 +297,34 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.id == "worker" && n.on_demand));
+    }
+
+    #[test]
+    fn export_and_import_keep_an_intermediate_output() {
+        let mut pipeline = pipeline();
+        let worker = pipeline
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "worker")
+            .unwrap();
+        worker.outputs.push(Port {
+            name: "preview".into(),
+            repeated: false,
+            side: None,
+            port_type: crate::domain::pipeline::PortType::Html,
+            frontmatter: None,
+            when: None,
+            description: None,
+            instructions: None,
+            required: false,
+            intermediate: true,
+        });
+
+        let document = super::export(&pipeline, &HashMap::new()).unwrap();
+        assert!(document.contains("intermediate: true"), "{document}");
+        let imported = super::interpret(&document).unwrap().pipeline;
+        let worker = imported.nodes.iter().find(|n| n.id == "worker").unwrap();
+        assert!(worker.outputs[0].intermediate);
     }
 
     #[test]

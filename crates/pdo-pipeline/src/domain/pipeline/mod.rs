@@ -2022,6 +2022,7 @@ skills:
                 description: None,
                 instructions: None,
                 required: false,
+                intermediate: false,
             }],
             interactive: false,
             view: None,
@@ -4172,5 +4173,84 @@ notes:
                 "field '{k}' serialized but missing from KNOWN_TOP_LEVEL_KEYS — add it or the lint will false-positive (cf. #183)"
             );
         }
+    }
+
+    const INTERMEDIATE_OUTPUT: &str = r#"
+name: intermediate-output
+nodes:
+  - id: ab000001
+    name: designer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: spec
+      - name: preview
+        port_type: html
+        intermediate: true
+  - id: ab000002
+    name: builder
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+edges:
+  - source: { node: ab000001, port: spec }
+    target: { node: ab000002, port: spec }
+"#;
+
+    #[test]
+    fn intermediate_output_round_trips_and_is_omitted_when_false() {
+        let result = parse_pipeline(&with_start_end(INTERMEDIATE_OUTPUT)).unwrap();
+        let designer = &result.pipeline.nodes[2];
+        assert!(!designer.outputs[0].intermediate);
+        assert!(designer.outputs[1].intermediate);
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        // One `intermediate:` line in the whole document: the ordinary ports
+        // stay byte-identical to a pre-option pipeline.
+        assert_eq!(
+            serialized.matches("intermediate:").count(),
+            1,
+            "{serialized}"
+        );
+        let reparsed = parse_pipeline(&serialized).unwrap().pipeline;
+        assert!(reparsed.nodes[2].outputs[1].intermediate);
+        assert!(!reparsed.nodes[2].outputs[0].intermediate);
+    }
+
+    #[test]
+    fn an_edge_carrying_an_intermediate_output_is_refused_naming_the_port_and_the_edge() {
+        let yaml = with_start_end(INTERMEDIATE_OUTPUT).replace(
+            "source: { node: ab000001, port: spec }",
+            "source: { node: ab000001, ports: [spec, preview] }",
+        );
+        let err = parse_pipeline(&yaml).unwrap_err().to_string();
+        assert!(err.contains("intermediate output 'preview'"), "{err}");
+        assert!(
+            err.contains("edge 'ab000001.spec+preview -> ab000002.spec'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_unwired_intermediate_output_beside_a_wired_ordinary_one_parses() {
+        let result = parse_pipeline(&with_start_end(INTERMEDIATE_OUTPUT)).unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn intermediate_outside_an_agent_or_script_output_is_warned() {
+        let yaml = with_start_end(INTERMEDIATE_OUTPUT).replace(
+            "      - name: user_prompt\n",
+            "      - name: user_prompt\n        intermediate: true\n",
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(
+            result.diagnostics.iter().any(|d| d
+                .message
+                .contains("output 'user_prompt' of node 'start' is marked intermediate")),
+            "{:?}",
+            result.diagnostics
+        );
     }
 }

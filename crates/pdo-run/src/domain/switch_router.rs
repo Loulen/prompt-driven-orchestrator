@@ -56,6 +56,7 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
+                intermediate: false,
             }],
             outputs,
             interactive: false,
@@ -82,6 +83,7 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
+            intermediate: false,
         }
     }
 
@@ -96,6 +98,7 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
+            intermediate: false,
         }
     }
 

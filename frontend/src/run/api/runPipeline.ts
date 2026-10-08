@@ -5,6 +5,7 @@
  */
 
 import type { PipelineDetail } from "../../pipeline/model/pipeline";
+import type { OverwritePreview } from "../../shared/generated/OverwritePreview";
 import { foldPipelineDetail } from "../../pipeline/model/pipelineDetail";
 import { sidecarBlob } from "../../shared/http/sidecar";
 import { request } from "../../shared/http/client";
@@ -30,14 +31,6 @@ export function saveRunPipeline(
 }
 
 /** ADR-0085: what « Overwrite default pipeline » would touch, read before the warning. */
-export interface OverwritePreview {
-  pipeline_id: string;
-  pipeline_exists: boolean;
-  /** `null`: the Run did not record its launch, unknown rather than "no". */
-  modified_since_launch: boolean | null;
-  triggers: { id: string; name: string; enabled: boolean }[];
-}
-
 export function fetchRunPipelineOverwritePreview(runId: string): Promise<OverwritePreview> {
   return request<OverwritePreview>(
     "GET",

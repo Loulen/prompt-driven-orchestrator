@@ -303,7 +303,8 @@ pub enum OverwriteRefusal {
 }
 
 /// A Trigger that fires a pipeline, as the overwrite warning names it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct PipelineTrigger {
     pub id: String,
     pub name: String,

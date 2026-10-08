@@ -160,7 +160,7 @@ pub(super) async fn materialize(
     } else {
         // ADR-0085: remember which shared pipeline the Run came from and what
         // it looked like, so the overwrite warning can say whether it changed.
-        record_launch_source(run_repo_root, run_id, &launchable.pipeline_path);
+        record_launch_source(state, run_repo_root, run_id, &launchable.pipeline_path);
         if *run_repo_root == state.repo_root {
             // Run dirs are watched individually and non-recursively, so each new one must
             // be registered. Runs in another target repo stay unwatched — the watcher's

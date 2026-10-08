@@ -2,7 +2,8 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import TabBar from "./TabBar";
-import { fetchRunPipelineOverwritePreview, type OverwritePreview } from "../../run/api/runPipeline";
+import { fetchRunPipelineOverwritePreview } from "../../run/api/runPipeline";
+import type { OverwritePreview } from "../../shared/generated/OverwritePreview";
 
 vi.mock("../../run/api/runPipeline", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../run/api/runPipeline")>()),

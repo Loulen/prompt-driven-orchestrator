@@ -10,7 +10,6 @@ use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use pdo_kernel::Actor;
-use pdo_pipeline::domain::fingerprint::fingerprint;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -41,23 +40,28 @@ pub fn launch_source_path(repo_root: &Path, run_id: &str) -> PathBuf {
         .join("pipeline.source.json")
 }
 
-/// Record the shared pipeline at `pipeline_path` as the source of `run_id`.
-/// Best effort: a Run without it only answers « unknown » to « changed since
-/// the launch ».
-pub(crate) fn record_launch_source(repo_root: &Path, run_id: &str, pipeline_path: &Path) {
+/// Record the shared pipeline at `pipeline_path` as the source of `run_id`,
+/// with its fingerprint as the pipeline context's registry reads it. Best
+/// effort: a Run without it only answers « unknown » to « changed since the
+/// launch ».
+pub(crate) fn record_launch_source(
+    state: &Runs,
+    repo_root: &Path,
+    run_id: &str,
+    pipeline_path: &Path,
+) {
     let Some(pipeline_id) = pipeline_path.file_stem().and_then(|s| s.to_str()) else {
         return;
     };
-    let Ok(yaml) = std::fs::read_to_string(pipeline_path) else {
+    let Some(fingerprint) = state.source_pipelines.fingerprint(pipeline_id) else {
         return;
     };
-    let prompts = pdo_pipeline::adapters::registry::pipeline_prompts(pipeline_path);
     write_launch_source(
         repo_root,
         run_id,
         &LaunchSource {
             pipeline_id: pipeline_id.to_string(),
-            fingerprint: fingerprint(&yaml, &prompts),
+            fingerprint,
         },
     );
 }
@@ -77,8 +81,10 @@ fn read_launch_source(repo_root: &Path, run_id: &str) -> Option<LaunchSource> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// What « Overwrite default pipeline » would touch, read before the warning.
-#[derive(Debug, Clone, Serialize)]
+/// What « Overwrite default pipeline » would touch, read before the warning:
+/// the body of `GET /runs/{run_id}/pipeline/overwrite-preview`.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct OverwritePreview {
     /// The shared pipeline the Run was launched from.
     pub pipeline_id: String,
@@ -192,12 +198,6 @@ impl Runs {
             Err(response) => return *response,
         };
         let id = target.pipeline_id;
-        if !self.source_pipelines.exists(&id) {
-            return *refusal(
-                StatusCode::NOT_FOUND,
-                format!("the default pipeline '{id}' no longer exists (renamed or deleted)"),
-            );
-        }
         let yaml = match std::fs::read_to_string(run_scoped_pipeline_path(&target.repo_root, run_id))
         {
             Ok(yaml) => yaml,

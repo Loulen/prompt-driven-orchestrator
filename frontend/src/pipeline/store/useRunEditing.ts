@@ -4,8 +4,9 @@
  * editing » asks for when edits are unsaved.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { RunState } from "../../shared/generated/RunState";
+import { fetchRunPipelineOverwritePreview } from "../../run/api/runPipeline";
 import type { RunEdit } from "../components/RunEditControl";
 import { hasUnsavedWork, isRunTabLocked, type OpenPipeline } from "./editState";
 import { useEditStore } from "./editStore";
@@ -17,9 +18,17 @@ export interface FinishEditingConfirm {
   onSave: () => void;
 }
 
-/** The shared pipeline a Run was launched from: the id its launch carried, else its name. */
-export function sourcePipelineId(run: RunState): string {
-  return run.pipeline_id || run.pipeline_name;
+/**
+ * The shared pipeline a Run was launched from: the id the Run recorded at
+ * launch (read through the overwrite preview), else the library id its launch
+ * carried, else its name.
+ */
+export async function sourcePipelineId(run: RunState): Promise<string> {
+  try {
+    return (await fetchRunPipelineOverwritePreview(run.run_id)).pipeline_id;
+  } catch {
+    return run.pipeline_id || run.pipeline_name;
+  }
 }
 
 export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: RunState | null) {
@@ -35,6 +44,14 @@ export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: Run
   const archived = activeRunState?.status === "archived";
   const readOnly = archived || isRunTabLocked(tab);
 
+  // A Run archived while edited for itself has nothing left to save into: the
+  // tab goes back to « pilotage » (its unsaved edits with it), so the Save, the
+  // inspector and the panes say it is read-only, not just the canvas.
+  const editingArchived = archived && tab?.runEditing === true ? tab.id : null;
+  useEffect(() => {
+    if (editingArchived) void finishRunEditing(editingArchived);
+  }, [editingArchived, finishRunEditing]);
+
   const handleFinishEditing = useCallback(() => {
     if (!tab) return;
     if (hasUnsavedWork(tab)) {
@@ -49,7 +66,7 @@ export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: Run
       ? {
           editing: !isRunTabLocked(tab),
           onEditForRun: () => startRunEditing(tab.id),
-          onEditSource: () => void openPipeline(sourcePipelineId(activeRunState)),
+          onEditSource: () => void sourcePipelineId(activeRunState).then((id) => openPipeline(id)),
           onFinishEditing: handleFinishEditing,
         }
       : undefined;

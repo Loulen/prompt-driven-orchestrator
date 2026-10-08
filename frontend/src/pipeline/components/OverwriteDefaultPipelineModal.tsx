@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { TriangleAlert } from "lucide-react";
-import { fetchRunPipelineOverwritePreview, type OverwritePreview } from "../../run/api/runPipeline";
+import { fetchRunPipelineOverwritePreview } from "../../run/api/runPipeline";
+import type { OverwritePreview } from "../../shared/generated/OverwritePreview";
 import { useEditStore } from "../store/editStore";
 import type { OpenPipeline } from "../store/editState";
 

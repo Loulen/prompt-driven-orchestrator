@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { fetchRunPipelineOverwritePreview } from "../../run/api/runPipeline";
 import EditCanvas from "./EditCanvas";
 import { useEditStore } from "../store/editStore";
 import { type OpenPipeline } from "../store/editState";
@@ -72,6 +73,12 @@ vi.mock("../api/library", async (importOriginal) => ({
 vi.mock("../api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   ...(await import("../../settings/api/settings")),
+}));
+
+vi.mock("../../run/api/runPipeline", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../run/api/runPipeline")>()),
+  fetchRunPipeline: vi.fn().mockRejectedValue(new Error("offline")),
+  fetchRunPipelineOverwritePreview: vi.fn().mockRejectedValue(new Error("offline")),
 }));
 
 vi.mock("../../workspace/api/projects", async (importOriginal) => ({
@@ -258,13 +265,28 @@ describe("ADR-0085 — a run tab opens in « pilotage », « Edit for this run �
     expect(screen.getByTestId("reactflow-stub").getAttribute("data-draggable")).toBe("true");
   });
 
-  it("« Edit source pipeline » opens the run's source pipeline tab", async () => {
+  it("« Edit source pipeline » opens the pipeline the run recorded at launch", async () => {
+    vi.mocked(fetchRunPipelineOverwritePreview).mockResolvedValueOnce({
+      pipeline_id: "recorded-source",
+      pipeline_exists: true,
+      modified_since_launch: false,
+      triggers: [],
+    });
     const openPipeline = vi.fn().mockResolvedValue(undefined);
     useEditStore.setState({ openPipeline });
     renderCanvas("running", { pipeline_id: "my-pipeline" });
     fireEvent.click(screen.getByTestId("toolbar-edit"));
     fireEvent.click(await screen.findByTestId("toolbar-edit-source"));
-    expect(openPipeline).toHaveBeenCalledWith("my-pipeline");
+    await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("recorded-source"));
+  });
+
+  it("« Edit source pipeline » falls back to the library id the launch carried", async () => {
+    const openPipeline = vi.fn().mockResolvedValue(undefined);
+    useEditStore.setState({ openPipeline });
+    renderCanvas("running", { pipeline_id: "my-pipeline" });
+    fireEvent.click(screen.getByTestId("toolbar-edit"));
+    fireEvent.click(await screen.findByTestId("toolbar-edit-source"));
+    await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("my-pipeline"));
   });
 
   it("« Finish editing » locks again at once when nothing is unsaved", () => {
@@ -297,5 +319,15 @@ describe("ADR-0085 — a run tab opens in « pilotage », « Edit for this run �
     expect(await screen.findByTestId("toolbar-edit")).toBeInTheDocument();
     expect(useEditStore.getState().openTabs[0].runEditing).toBe(false);
     expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+  });
+
+  it("a Run archived while edited for itself goes back to « pilotage »", async () => {
+    useEditStore.getState().startRunEditing("__run__r1");
+    useEditStore.getState().updatePrompt("worker", "draft");
+    renderCanvas("archived");
+    await waitFor(() => expect(useEditStore.getState().openTabs[0].runEditing).toBe(false));
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+    expect(screen.queryByTestId("toolbar-finish-editing")).toBeNull();
+    expect(screen.queryByTestId("toolbar-add")).toBeNull();
   });
 });

@@ -114,6 +114,11 @@ mod extension_reads;
 #[path = "extension_projets_triggers.rs"]
 mod extension_projets_triggers;
 
+// API 0.11: an extension's event guarded by a read on `/ws`, and the
+// `operation_applied` on an extension's Ressource guarded by its entity's.
+#[path = "extension_event_guard.rs"]
+mod extension_event_guard;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;

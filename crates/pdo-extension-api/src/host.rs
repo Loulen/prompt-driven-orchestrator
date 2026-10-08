@@ -44,7 +44,9 @@ pub trait Host: Send + Sync {
 
     /// Broadcast `event` on `/ws` and to the other extensions' `on_event`,
     /// wrapped in the envelope of [`ExtensionEvent::to_event`]. Never waits
-    /// for an extension.
+    /// for an extension. An event [guarded](ExtensionEvent::guarded_by) by a
+    /// read reaches only the `/ws` connections whose Actor may run that read
+    /// (API 0.11), and never carries its guard.
     fn publish(&self, event: ExtensionEvent);
 
     /// Tell the core that an authorized mutation succeeded: `applied` is
@@ -135,12 +137,19 @@ impl Host for NeutralHost {
 }
 
 /// An event an extension publishes about its own entities: a name it
-/// chooses (`note_changed`) and a payload it owns.
+/// chooses (`note_changed`) and a payload it owns, optionally guarded by the
+/// read that protects it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct ExtensionEvent {
     pub name: String,
     pub payload: serde_json::Value,
+    /// The read (an [`Operation`](crate::Operation) with the verb `read`:
+    /// Ressource, target, Projets) a `/ws` connection's Actor must be allowed
+    /// to run to receive the event (API 0.11). `None` (the default): every
+    /// connection receives it. Never part of the envelope.
+    #[serde(skip)]
+    pub guard: Option<crate::Operation>,
 }
 
 impl ExtensionEvent {
@@ -148,7 +157,21 @@ impl ExtensionEvent {
         Self {
             name: name.into(),
             payload,
+            guard: None,
         }
+    }
+
+    /// The event, guarded by `read` (API 0.11): the core asks each `/ws`
+    /// connection's Actor for that read before sending it (the decision kept
+    /// a few seconds), and sends it without the guard. The read of the entity
+    /// the event is about: `Operation::new(kind, Verb::Read).on(id)
+    /// .in_projects(projects)`. A guard that is no read refuses every
+    /// connection. Without an extension that restricts the reads, every
+    /// connection receives it. The other extensions' `on_event` receive it
+    /// as before, whatever the guard.
+    pub fn guarded_by(mut self, read: crate::Operation) -> Self {
+        self.guard = Some(read);
+        self
     }
 
     /// The event as `/ws` and `on_event` carry it, published by the extension
@@ -181,6 +204,26 @@ mod tests {
                 "name": "note_changed",
                 "payload": { "id": "note-12" },
             })
+        );
+    }
+
+    #[test]
+    fn a_guard_never_enters_the_envelope() {
+        let read = Operation::new(ResourceKind::extension("test", "note"), Verb::Read)
+            .on("note-12")
+            .in_projects(["p2"]);
+        let event = ExtensionEvent::new("note_changed", serde_json::json!({ "id": "note-12" }))
+            .guarded_by(read.clone());
+        assert_eq!(event.guard, Some(read));
+        assert_eq!(
+            event.to_event("test"),
+            ExtensionEvent::new("note_changed", serde_json::json!({ "id": "note-12" }))
+                .to_event("test")
+        );
+        assert_eq!(
+            ExtensionEvent::new("x", serde_json::Value::Null).guard,
+            None,
+            "unguarded by default"
         );
     }
 

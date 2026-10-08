@@ -9,9 +9,11 @@
 //! per event; a change of rights shows within that delay. A `trigger_fired`
 //! still reaches the connection, without the `run_id` of a Run it may not
 //! read. A message guarded by a read ([`READ_GUARD`]: what a Trigger
-//! announces, in its Projets) and an `operation_applied` on a Trigger reach
-//! a connection only if its Actor may run that read; the guard never leaves
-//! the daemon. The other messages (pipelines, Projets, the extensions'
+//! announces, in its Projets; an extension's event its extension guarded)
+//! and an `operation_applied` on a Trigger or on an extension's Ressource
+//! reach a connection only if its Actor may run that read (the read of the
+//! entity, in the Operation's Projets); the guard never leaves the daemon.
+//! The other messages (pipelines, Projets, the extensions' unguarded
 //! events…) pass as before.
 //!
 //! The client's Close frame is answered before the connection ends (ADR-0083
@@ -169,7 +171,7 @@ impl<'a> Visibility<'a> {
         if self.runs.extensions().allows_everything() {
             return Some(message);
         }
-        if let Some(read) = guard.or_else(|| trigger_read_of(&message)) {
+        if let Some(read) = guard.or_else(|| entity_read_of(&message)) {
             if !self.may_run(read) {
                 return None;
             }
@@ -253,21 +255,27 @@ fn run_of_message(message: &Value) -> Option<(&str, bool)> {
     }
 }
 
-/// The read of the Trigger an `operation_applied` on a Trigger is about, in
-/// the Projets of its Operation: its target, or the Trigger it created.
-fn trigger_read_of(message: &Value) -> Option<Value> {
+/// The read guarding an `operation_applied` on a Trigger or on an
+/// extension's Ressource: the read of the entity it is about (its target, or
+/// the entity it created), on the same Ressource, in the Projets of its
+/// Operation. `None` for the other messages, and for a creation whose entity
+/// nobody knows.
+fn entity_read_of(message: &Value) -> Option<Value> {
     if message["type"] != "operation_applied" {
         return None;
     }
     let operation: Operation = serde_json::from_value(message["operation"].clone()).ok()?;
-    if operation.resource != ResourceKind::Trigger {
+    if !matches!(
+        operation.resource,
+        ResourceKind::Trigger | ResourceKind::Extension { .. }
+    ) {
         return None;
     }
     let target = match operation.target {
         Some(target) => target,
         None => message["entity"]["id"].as_str()?.to_string(),
     };
-    let read = Operation::new(ResourceKind::Trigger, Verb::Read)
+    let read = Operation::new(operation.resource, Verb::Read)
         .on(target)
         .in_projects(operation.projects);
     serde_json::to_value(read).ok()
@@ -366,21 +374,58 @@ mod tests {
             })
         };
         let read = |id: &str| json!({ "resource": "trigger", "verb": "read", "target": id, "projects": ["p2"] });
-        assert_eq!(trigger_read_of(&applied(json!("t1"))), Some(read("t1")));
+        assert_eq!(entity_read_of(&applied(json!("t1"))), Some(read("t1")));
         assert_eq!(
-            trigger_read_of(&applied(Value::Null)),
+            entity_read_of(&applied(Value::Null)),
             Some(read("t9")),
             "a creation is about the Trigger it produced"
         );
         assert_eq!(
-            trigger_read_of(&json!({
+            entity_read_of(&json!({
                 "type": "operation_applied",
                 "operation": { "resource": "run", "verb": "delete", "target": "r1" },
             })),
             None
         );
         assert_eq!(
-            trigger_read_of(&json!({ "type": "trigger_updated", "trigger_id": "t1" })),
+            entity_read_of(&json!({ "type": "trigger_updated", "trigger_id": "t1" })),
+            None
+        );
+    }
+
+    #[test]
+    fn an_operation_on_an_extensions_ressource_is_guarded_by_the_read_of_its_entity() {
+        let applied = |target: Value| {
+            json!({
+                "type": "operation_applied",
+                "operation": {
+                    "resource": "test/note", "verb": { "action": "pin" }, "target": target,
+                    "projects": ["p2"],
+                },
+                "entity": { "kind": "test/note", "id": "n9" },
+            })
+        };
+        let read = |id: &str| json!({ "resource": "test/note", "verb": "read", "target": id, "projects": ["p2"] });
+        assert_eq!(entity_read_of(&applied(json!("n1"))), Some(read("n1")));
+        assert_eq!(
+            entity_read_of(&applied(Value::Null)),
+            Some(read("n9")),
+            "a creation is about the entity it produced"
+        );
+        assert_eq!(
+            entity_read_of(&json!({
+                "type": "operation_applied",
+                "operation": { "resource": "test/note", "verb": "create", "target": null },
+                "entity": null,
+            })),
+            None,
+            "nothing to read: the message passes as before"
+        );
+        assert_eq!(
+            entity_read_of(&json!({
+                "type": "operation_applied",
+                "operation": { "resource": "project", "verb": "update", "target": "p1" },
+            })),
             None
         );
     }

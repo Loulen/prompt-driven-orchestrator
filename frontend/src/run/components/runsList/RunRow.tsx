@@ -10,6 +10,7 @@ import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { DecorationContext } from "../../../shared/extensions/contract";
 import RunRowMenu from "./RunRowMenu";
+import RunParentLink from "./RunParentLink";
 import ActorName from "../../../shared/actors/ActorName";
 import { runCreator } from "../../model/runCreator";
 import type { RunGesture } from "../../model/runGestures";
@@ -44,9 +45,11 @@ export default function RunRow({
     isExpanded, setExpanded, runSel, renamingRunId, renameValue, setRenameValue, renameInputRef,
     commitRename, cancelRename, startRename, handlePause, handleResume, setConfirmRetryAll,
     setConfirmCleanup, setConfirmForget, runShell, runsScrollRef, selectRange, toggleSel,
-    visibleRunIds, mayOnRow,
+    visibleRunIds, runById, mayOnRow,
   } = pane;
   const run = node.run;
+  // A root whose parent sits in the other section (active / archived) links to it.
+  const linkedParent = node.sectionParentLink ? runById.get(node.sectionParentLink) : undefined;
   // ADR-0081 (#31): what the `run/item` decorations mark.
   const decorated = useMemo(
     () => ({
@@ -219,6 +222,7 @@ export default function RunRow({
               <Zap size={9} />
             </span>
           )}
+          {linkedParent && <RunParentLink parent={linkedParent} pane={pane} onSelectRun={onSelectRun} />}
           {/* 0.8: who created the Run, as an extension names it; nothing
               without such an extension. */}
           <ActorName

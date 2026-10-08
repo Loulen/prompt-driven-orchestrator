@@ -349,7 +349,6 @@ export default function App() {
         update={updateStatus}
         onOpenVersion={() => setChangelogOpen(true)}
       />
-      <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
       <NewRunModal
         open={launch.newRunModalOpen}
         onClose={handleCloseNewRunModal}
@@ -378,6 +377,8 @@ export default function App() {
         onStartTour={startTourById}
         onStartFullTour={startFullTour}
       />
+      {/* After the full-window surfaces, which it must paint over. */}
+      <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
       <EditorModals
         conflictTab={conflictTab}
         saveErrorTab={saveErrorTab}

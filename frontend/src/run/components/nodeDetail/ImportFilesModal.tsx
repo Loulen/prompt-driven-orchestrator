@@ -9,7 +9,7 @@ import {
   formatAttachmentSize,
 } from "../../model/attachments";
 import { importedFilesText, stageImportFiles } from "../../model/nodeImport";
-import { writeClipboardText } from "../../../session/model/terminalClipboard";
+import { copyToClipboard } from "../../../shared/lib/clipboard";
 import { useSettings } from "../../../settings/store/useSettings";
 import { useFileDropTarget } from "../../../skill/store/useFileDropTarget";
 import { DropOverlay } from "../../../skill/components/SkillFileDropZone";
@@ -136,7 +136,7 @@ export default function ImportFilesModal({
     if (sendBlockedReason) return;
     setSend({ kind: "sending" });
     // Copy first: it is the fallback when the terminal write does not land.
-    const copied = await writeClipboardText(text);
+    const copied = await copyToClipboard(text);
     try {
       await sendTextToNodeTerminal(runId, nodeId, iter, text);
       onClose();

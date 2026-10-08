@@ -8,8 +8,8 @@ import {
   forcedSelectionEvent,
   isMacPlatform,
   swallowsMotionReport,
-  writeClipboardText,
 } from "../model/terminalClipboard";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 import { resizeAvoidingAltBufferCorruption } from "../model/altBufferResize";
 import {
   isTakenOver,
@@ -84,7 +84,7 @@ export function useXtermSession(
   const copySelection = useCallback(async () => {
     const term = terminalRef.current;
     if (!term || !term.hasSelection()) return;
-    const ok = await writeClipboardText(term.getSelection());
+    const ok = await copyToClipboard(term.getSelection());
     setCopyFeedback(ok ? "copied" : "failed");
     if (ok) term.clearSelection();
     window.setTimeout(() => setCopyFeedback(null), 1500);

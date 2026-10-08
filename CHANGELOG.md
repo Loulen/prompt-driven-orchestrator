@@ -10,6 +10,22 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.25.0 — Finitions de la liste de Runs (CORE-44)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit l'emplacement `runs/empty` et `copyToClipboard`, ajouts seulement.
+
+- **Liste de Runs vide** : l'emplacement d'UI `runs/empty` (décorations seulement) s'affiche sous
+  « No runs yet » tant que la liste ne contient aucun Run. Le texte du core ne change pas.
+- **Copier hors HTTPS** : `copyToClipboard(text)` de `@pdo/extension-ui` est la copie de tous les
+  boutons Copier du core ; sur une instance servie en http, elle retombe sur
+  `execCommand("copy")`. Elle ne rejette jamais et rend un booléen.
+- **Arbre des archivés** : la section des archivés range les Runs sous leur parent, comme celle des
+  actifs ; la préférence « Child runs » et le bouton global valent pour les deux. Un Run dont le
+  parent est dans l'autre section en est une racine et porte un lien vers lui. Archiver un parent
+  emporte toujours ses enfants terminés et reste refusé tant qu'un enfant vit : ce cas
+  (enfant actif sous parent archivé) ne se produit pas depuis l'UI.
+
 ## 2.24.0 — Gestes selon les Droits, flux gardé par la lecture (CORE-42)
 
 `pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée

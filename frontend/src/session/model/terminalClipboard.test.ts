@@ -1,10 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   clipboardKeyAction,
   forcedSelectionEvent,
   isMacPlatform,
   swallowsMotionReport,
-  writeClipboardText,
 } from "./terminalClipboard";
 
 describe("swallowsMotionReport (#788)", () => {
@@ -124,50 +123,5 @@ describe("isMacPlatform", () => {
     expect(isMacPlatform({ platform: "MacIntel", userAgent: "" })).toBe(true);
     expect(isMacPlatform({ platform: "", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)" })).toBe(true);
     expect(isMacPlatform({ platform: "Linux x86_64", userAgent: "Mozilla/5.0 (X11; Linux)" })).toBe(false);
-  });
-});
-
-describe("writeClipboardText (#772)", () => {
-  it("prefers navigator.clipboard when present", async () => {
-    const writeText = vi.fn(async () => undefined);
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    const execCommand = vi.fn(() => true);
-    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
-    expect(await writeClipboardText("abc")).toBe(true);
-    expect(writeText).toHaveBeenCalledWith("abc");
-    expect(execCommand).not.toHaveBeenCalled();
-  });
-
-  it("falls back to execCommand('copy') on an insecure context (no navigator.clipboard)", async () => {
-    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
-    const execCommand = vi.fn(() => {
-      // The text to copy must be selected in the document at that moment.
-      const ta = document.activeElement as HTMLTextAreaElement;
-      expect(ta.tagName).toBe("TEXTAREA");
-      expect(ta.value).toBe("from-vps");
-      return true;
-    });
-    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
-    expect(await writeClipboardText("from-vps")).toBe(true);
-    expect(execCommand).toHaveBeenCalledWith("copy");
-    // The throwaway textarea is gone again.
-    expect(document.querySelector("textarea")).toBeNull();
-  });
-
-  it("falls back to execCommand when the Clipboard API rejects", async () => {
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: vi.fn(async () => { throw new Error("denied"); }) },
-      configurable: true,
-    });
-    const execCommand = vi.fn(() => true);
-    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
-    expect(await writeClipboardText("x")).toBe(true);
-    expect(execCommand).toHaveBeenCalledWith("copy");
-  });
-
-  it("reports failure when neither path works", async () => {
-    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
-    Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
-    expect(await writeClipboardText("x")).toBe(false);
   });
 });

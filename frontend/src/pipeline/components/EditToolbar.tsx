@@ -13,6 +13,7 @@ import {
 } from "../../shared/ui/dropdown-menu";
 import { useEditStore } from "../store/editStore";
 import RunToolbarActions from "./RunToolbarActions";
+import RunEditControl, { type RunEdit } from "./RunEditControl";
 
 interface Props {
   onAddNode: (type: NodeType) => void;
@@ -47,7 +48,11 @@ interface Props {
   // #315: an archived run's canvas is read-only — hide every editing control
   // (add node/note, library insert, script, undo/redo). Only the
   // Pipeline-info button survives so the archived pipeline stays inspectable.
+  // ADR-0085: a Run followed in « pilotage » is read-only the same way.
   readOnly?: boolean;
+  // ADR-0085: the « Edit » control of a non-archived Run. Absent on a pipeline
+  // tab (always editable) and on an archived Run (read-only for good).
+  runEdit?: RunEdit;
   // #598 / ADR-0049: the "finished-run" action group — the three ways to
   // continue a TERMINAL, non-archived run, contextual to the run on screen.
   // Shown only when `finishedRun` is true (terminal ∧ !archived). Variant A
@@ -64,7 +69,7 @@ interface Props {
   run?: RunState | null;
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, run = null }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, run = null, runEdit }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -79,6 +84,8 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
     const t = s.activeTabId;
     return t != null && (s.history[t]?.future.length ?? 0) > 0;
   });
+  // A group sits before the trailing controls: they open with a separator.
+  const leadingGroup = !readOnly || runEdit != null || finishedRun;
 
   return (
     <div
@@ -186,12 +193,19 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         </>
       )}
 
+      {runEdit && (
+        <>
+          {!readOnly && <span className="mx-0.5 h-4 w-px bg-line" />}
+          <RunEditControl runEdit={runEdit} />
+        </>
+      )}
+
       {/* #598 / ADR-0049: the finished-run action group (Variant A). Contextual
           to a TERMINAL, non-archived run — the three ways to continue it. Placed
           between the history group and the view group, in its own cluster. */}
       {finishedRun && (
         <>
-          <span className="mx-0.5 h-4 w-px bg-line" />
+          {(!readOnly || runEdit) && <span className="mx-0.5 h-4 w-px bg-line" />}
 
           {onReopen && (
             <Tooltip content="Reopen — re-project & drive">
@@ -234,13 +248,13 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         </>
       )}
 
-      {run && <RunToolbarActions run={run} readOnly={readOnly} />}
+      {run && <RunToolbarActions run={run} readOnly={!leadingGroup} />}
 
       {/* #752: the Review quick access — navigation, not a toggle (no
           `aria-pressed`). The pill is the pending count; its tone is the nuance. */}
       {reviewHref && (
         <>
-          {!readOnly && <span className="mx-0.5 h-4 w-px bg-line" />}
+          {leadingGroup && <span className="mx-0.5 h-4 w-px bg-line" />}
 
           <Tooltip content={reviewTitle}>
             <a
@@ -276,7 +290,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
       {(onToggleInfo || (assistantAvailable && onOpenAssistant)) && (
         <>
           {/* #315: no leading separator when the info group is the sole control. */}
-          {!readOnly && !reviewHref && <span className="mx-0.5 h-4 w-px bg-line" />}
+          {leadingGroup && !reviewHref && <span className="mx-0.5 h-4 w-px bg-line" />}
 
           {/* #302 / ADR-0048: the "agent" glyph, immediately left of `(i)`, both
               driving the same Pipeline info panel — the Bot toggles the Assistant

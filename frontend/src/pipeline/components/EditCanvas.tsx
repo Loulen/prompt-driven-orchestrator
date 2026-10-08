@@ -38,6 +38,8 @@ import { useCanvasReveal } from "../store/useCanvasReveal";
 import { CANVAS_FIT_VIEW_OPTIONS, usePaneToggleReframe } from "../store/usePaneToggleReframe";
 import { useCanvasRunActions } from "../store/useCanvasRunActions";
 import { useCanvasWiring } from "../store/useCanvasWiring";
+import { useRunEditing } from "../store/useRunEditing";
+import FinishEditingConfirmModal from "./FinishEditingConfirmModal";
 import { EditNode } from "./EditNode";
 import { CanvasContextMenuHost } from "./CanvasContextMenu";
 
@@ -129,14 +131,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const activeRunState =
     tab?.runId && runState && tab.runId === runState.run_id ? runState : null;
 
-  // #315 / ADR-0020: an archived run's canvas is READ-ONLY. Its worktree and
-  // pipeline.yaml are gone, so any edit would fire a PUT /runs/<id>/pipeline →
-  // 404 → the tab self-closes and the canvas vanishes. We keep
-  // selection/inspection (click a node to read its output) but disable every
-  // mutation: drag, connect, add-node/add-note, and the context-menu edit
-  // actions. Keyed on `archived` ONLY, so editing-during-run (ADR-0007) stays
-  // intact for running/completed runs.
-  const readOnly = activeRunState?.status === "archived";
+  // #315 / ADR-0085: an archived Run, or a Run followed in « pilotage », is
+  // read-only: selection and inspection stay, every mutation is off (drag,
+  // connect, add-node/add-note, the context menu's edit actions).
+  const { readOnly, runEdit, finishConfirm } = useRunEditing(tab, activeRunState);
   const {
     reviewHref,
     reviewPending,
@@ -265,6 +263,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         onRetryAll={() => setConfirmRetryAll(true)}
         onOpenShell={handleOpenShell}
         run={activeRunState}
+        runEdit={runEdit}
       />
       {/* #225: lint diagnostics are an edit-mode affordance — suppress on run tabs.
           NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
@@ -314,7 +313,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           onNodeMouseLeave={onNodeMouseLeave}
           onNodeDragStop={onNodeDragStop}
           // #315: no context-menu edit actions (delete/duplicate) on a
-          // read-only archived canvas.
+          // read-only canvas.
           onNodeContextMenu={readOnly ? undefined : handleNodeContextMenu}
           onEdgeContextMenu={readOnly ? undefined : handleEdgeContextMenu}
           connectionLineComponent={DragConnectionLine}
@@ -324,7 +323,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           fitViewOptions={CANVAS_FIT_VIEW_OPTIONS}
           proOptions={{ hideAttribution: true }}
           className="bg-bg-1"
-          // #315: drag + connect are off on an archived run; click-to-select stays on.
+          // #315: drag + connect are off on a read-only canvas; click-to-select stays on.
           // #936: edges are born from a DRAG only; a click on a rim selects the node.
           nodesDraggable={!readOnly}
           nodesConnectable={!readOnly}
@@ -381,6 +380,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           modals, reusing the exact components the left-panel row uses. */}
       {runShell.shell && <RunShellModal session={runShell.shell.session} onClose={runShell.close} />}
       {confirmRetryAll && <RetryAllConfirmModal onConfirm={handleRetryAll} onCancel={() => setConfirmRetryAll(false)} />}
+      {finishConfirm && <FinishEditingConfirmModal {...finishConfirm} />}
     </div>
   );
 }

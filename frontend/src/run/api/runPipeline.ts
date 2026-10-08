@@ -1,9 +1,11 @@
 /**
- * A Run's own pipeline: read, edited mid-run, exported as a portable document
- * with its skills sidecar.
+ * A Run's own pipeline: read, edited mid-run, copied over the shared pipeline
+ * it came from (ADR-0085), exported as a portable document with its skills
+ * sidecar.
  */
 
 import type { PipelineDetail } from "../../pipeline/model/pipeline";
+import type { OverwritePreview } from "../../shared/generated/OverwritePreview";
 import { foldPipelineDetail } from "../../pipeline/model/pipelineDetail";
 import { sidecarBlob } from "../../shared/http/sidecar";
 import { request } from "../../shared/http/client";
@@ -25,6 +27,24 @@ export function saveRunPipeline(
     "PUT",
     `/runs/${encodeURIComponent(runId)}/pipeline`,
     { body: { yaml, prompts }, responseMode: "void", label: `PUT /runs/${runId}/pipeline` },
+  );
+}
+
+/** ADR-0085: what « Overwrite default pipeline » would touch, read before the warning. */
+export function fetchRunPipelineOverwritePreview(runId: string): Promise<OverwritePreview> {
+  return request<OverwritePreview>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/pipeline/overwrite-preview`,
+    { label: `GET /runs/${runId}/pipeline/overwrite-preview` },
+  );
+}
+
+/** ADR-0085: the Run's whole snapshot (YAML and prompts) replaces the shared pipeline. */
+export function overwriteDefaultPipelineFromRun(runId: string): Promise<{ pipeline_id: string }> {
+  return request<{ pipeline_id: string }>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/pipeline/overwrite-default`,
+    { label: `POST /runs/${runId}/pipeline/overwrite-default` },
   );
 }
 

@@ -1,7 +1,9 @@
 //! Layer 3a — proves issue #28: run-scoped pipeline copy and pipeline_modified
 //! events. At `RunStarted` the daemon copies the source pipeline YAML and
 //! prompts into `<run-id>/pipeline.yaml`. The watcher emits `pipeline_modified`
-//! events when the run-scoped copy is edited externally.
+//! events when the run-scoped copy is edited externally. A save for the Run
+//! writes that copy only; « Overwrite default pipeline » is the one way it
+//! reaches the shared pipeline (ADR-0085).
 
 use std::process::Command;
 use std::time::Duration;
@@ -258,23 +260,10 @@ async fn external_prompt_edit_in_run_emits_pipeline_modified() {
     );
 }
 
-#[tokio::test]
-async fn run_scoped_save_syncs_prompt_to_canonical_template_dir() {
-    // #231: saving a prompt edit from inside a run (PUT /runs/:id/pipeline) must
-    // land in the template's canonical `<name>.prompts/` dir — the one every
-    // reader (GET /pipelines/:id, node spawn) consults — and never the flat
-    // `prompts/` dir that no reader looks in. A round-trip: the edit must then be
-    // visible to the normal editor via GET /pipelines/:id.
-    let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon).await;
-
-    const EDITED: &str = "You are an EDITED planner via run-scoped save.\n";
+async fn save_for_run(daemon: &TestDaemon, run_id: &str, yaml: &str, prompt: &str) {
     let resp = reqwest::Client::new()
         .put(format!("{}/runs/{}/pipeline", daemon.url(), run_id))
-        .json(&serde_json::json!({
-            "yaml": PIPELINE_YAML,
-            "prompts": { "planner": EDITED }
-        }))
+        .json(&serde_json::json!({ "yaml": yaml, "prompts": { "planner": prompt } }))
         .send()
         .await
         .unwrap();
@@ -283,36 +272,205 @@ async fn run_scoped_save_syncs_prompt_to_canonical_template_dir() {
         "run-scoped save should succeed, got {}",
         resp.status()
     );
+}
 
-    let pipelines = daemon.repo_root().join(".pdo").join("pipelines");
+async fn shared_prompt(daemon: &TestDaemon) -> Option<String> {
+    let body = daemon
+        .get_json(&format!("/pipelines/{PIPELINE_NAME}"))
+        .await;
+    body["prompts"]["planner"].as_str().map(str::to_string)
+}
 
-    // The edit landed in the canonical template prompts dir...
-    let canonical = pipelines
-        .join(format!("{PIPELINE_NAME}.prompts"))
-        .join("planner.md");
+async fn run_prompt(daemon: &TestDaemon, run_id: &str) -> Option<String> {
+    let body = daemon.get_json(&format!("/runs/{run_id}/pipeline")).await;
+    body["prompts"]["planner"].as_str().map(str::to_string)
+}
+
+async fn overwrite_preview(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
+    let resp = reqwest::get(format!(
+        "{}/runs/{}/pipeline/overwrite-preview",
+        daemon.url(),
+        run_id
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200, "overwrite preview should succeed");
+    resp.json().await.unwrap()
+}
+
+async fn overwrite_default(daemon: &TestDaemon, run_id: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!(
+            "{}/runs/{}/pipeline/overwrite-default",
+            daemon.url(),
+            run_id
+        ))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn save_for_run_leaves_the_shared_pipeline_and_other_runs_untouched() {
+    // ADR-0085: « Save for this run » (PUT /runs/:id/pipeline) writes the
+    // run-scoped snapshot ONLY. The shared pipeline and every other Run keep
+    // their prompt: the auto-sync up to the shared pipeline is gone.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let edited_run = create_run(&daemon).await;
+    let other_run = create_run(&daemon).await;
+
+    const EDITED: &str = "You are an EDITED planner, for this run only.\n";
+    save_for_run(&daemon, &edited_run, PIPELINE_YAML, EDITED).await;
+
+    assert_eq!(run_prompt(&daemon, &edited_run).await.as_deref(), Some(EDITED));
     assert_eq!(
-        std::fs::read_to_string(&canonical).unwrap(),
-        EDITED,
-        "prompt must sync to the canonical <name>.prompts/ dir"
+        shared_prompt(&daemon).await.as_deref(),
+        Some(PROMPT_CONTENT),
+        "the shared pipeline must not move on a save for the run"
     );
-
-    // ...and NOT in a flat `prompts/` dir.
-    assert!(
-        !pipelines.join("prompts").join("planner.md").exists(),
-        "run-scoped save must not write to the flat prompts/ dir"
+    assert_eq!(
+        run_prompt(&daemon, &other_run).await.as_deref(),
+        Some(PROMPT_CONTENT),
+        "another run's snapshot must not move either"
     );
+    let pipelines = daemon.repo_root().join(".pdo").join("pipelines");
+    assert_eq!(
+        std::fs::read_to_string(pipelines.join(format!("{PIPELINE_NAME}.yaml"))).unwrap(),
+        PIPELINE_YAML
+    );
+    assert!(!pipelines.join("prompts").join("planner.md").exists());
+}
 
-    // Round-trip: GET /pipelines/:id (the normal editor's source) shows the edit.
-    let resp = reqwest::get(format!("{}/pipelines/{PIPELINE_NAME}", daemon.url()))
+#[tokio::test]
+async fn overwrite_default_copies_the_whole_snapshot_prunes_orphans_and_announces_it() {
+    // ADR-0085: « Overwrite default pipeline » replaces the shared pipeline by the
+    // Run's snapshot (YAML and prompts) at the canonical `<name>.prompts/`, drops
+    // the prompt of a node the snapshot no longer has, and says so on `/ws`.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon).await;
+    let pipelines = daemon.repo_root().join(".pdo").join("pipelines");
+    let prompts_dir = pipelines.join(format!("{PIPELINE_NAME}.prompts"));
+    std::fs::write(prompts_dir.join("gone.md"), "a node the snapshot never had").unwrap();
+
+    const EDITED: &str = "You are an EDITED planner, now the default.\n";
+    let edited_yaml = PIPELINE_YAML.replace("version: \"1.0\"", "version: \"3.0\"");
+    save_for_run(&daemon, &run_id, &edited_yaml, EDITED).await;
+
+    let mut ws = daemon.connect_ws().await.unwrap();
+    let resp = overwrite_default(&daemon, &run_id).await;
+    assert_eq!(resp.status(), 200, "overwrite should succeed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["pipeline_id"], PIPELINE_NAME);
+
+    assert_eq!(
+        std::fs::read_to_string(pipelines.join(format!("{PIPELINE_NAME}.yaml"))).unwrap(),
+        edited_yaml,
+        "the shared YAML is the run's snapshot"
+    );
+    assert_eq!(
+        std::fs::read_to_string(prompts_dir.join("planner.md")).unwrap(),
+        EDITED
+    );
+    assert!(!prompts_dir.join("gone.md").exists(), "orphan prompt pruned");
+    assert!(!pipelines.join("prompts").join("planner.md").exists());
+    assert_eq!(shared_prompt(&daemon).await.as_deref(), Some(EDITED));
+
+    let announced = timeout(Duration::from_secs(5), async {
+        while let Some(Ok(msg)) = ws.next().await {
+            let Some(text) = ws_text(&msg) else { continue };
+            let value: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+            if value["type"] == "pipeline_changed" && value["pipeline_id"] == PIPELINE_NAME {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(announced, "pipeline_changed must be broadcast for the shared pipeline");
+}
+
+#[tokio::test]
+async fn overwrite_preview_lists_triggers_and_detects_a_change_since_launch() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon).await;
+
+    // No Trigger, nothing changed since launch.
+    let preview = overwrite_preview(&daemon, &run_id).await;
+    assert_eq!(preview["pipeline_id"], PIPELINE_NAME);
+    assert_eq!(preview["pipeline_exists"], true);
+    assert_eq!(preview["modified_since_launch"], false);
+    assert_eq!(preview["triggers"], serde_json::json!([]));
+
+    // A Trigger that fires this pipeline is named in the warning.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&serde_json::json!({
+            "name": "Nightly planner",
+            "pipeline_id": PIPELINE_NAME,
+            "cron": "0 4 * * *",
+            "input_template": "from the trigger",
+            "target_repo": daemon.target_repo(),
+        }))
+        .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(resp.status(), 201, "trigger create: {}", resp.text().await.unwrap_or_default());
+    let preview = overwrite_preview(&daemon, &run_id).await;
+    let triggers = preview["triggers"].as_array().unwrap();
+    assert_eq!(triggers.len(), 1);
+    assert_eq!(triggers[0]["name"], "Nightly planner");
+    assert_eq!(triggers[0]["enabled"], true);
+    assert!(triggers[0]["id"].is_string());
+
+    // A colleague edits the shared pipeline after the launch.
+    let resp = reqwest::Client::new()
+        .put(format!("{}/pipelines/{PIPELINE_NAME}", daemon.url()))
+        .json(&serde_json::json!({
+            "yaml": PIPELINE_YAML,
+            "prompts": { "planner": "A colleague's planner.\n" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    let preview = overwrite_preview(&daemon, &run_id).await;
     assert_eq!(
-        body["prompts"]["planner"].as_str(),
-        Some(EDITED),
-        "normal editor should see the run-scoped prompt edit, got: {body:?}"
+        preview["modified_since_launch"], true,
+        "the warning must say the shared pipeline changed since the launch"
     );
+
+    // Once this Run overwrote it, its own write is not a colleague's change.
+    assert_eq!(overwrite_default(&daemon, &run_id).await.status(), 200);
+    let preview = overwrite_preview(&daemon, &run_id).await;
+    assert_eq!(preview["modified_since_launch"], false);
+}
+
+#[tokio::test]
+async fn overwrite_refuses_an_archived_run_and_a_deleted_source() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let archived = create_run(&daemon).await;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{}/commands", daemon.url(), archived))
+        .json(&serde_json::json!({ "kind": "cleanup_run" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "cleanup should succeed");
+    assert_eq!(overwrite_default(&daemon, &archived).await.status(), 409);
+    assert_eq!(
+        shared_prompt(&daemon).await.as_deref(),
+        Some(PROMPT_CONTENT),
+        "the shared pipeline is untouched"
+    );
+
+    let live = create_run(&daemon).await;
+    let pipelines = daemon.repo_root().join(".pdo").join("pipelines");
+    std::fs::remove_file(pipelines.join(format!("{PIPELINE_NAME}.yaml"))).unwrap();
+    let preview = overwrite_preview(&daemon, &live).await;
+    assert_eq!(preview["pipeline_exists"], false);
+    assert_eq!(overwrite_default(&daemon, &live).await.status(), 404);
+    assert!(!pipelines.join(format!("{PIPELINE_NAME}.yaml")).exists());
 }
 
 async fn next_event_for_node(

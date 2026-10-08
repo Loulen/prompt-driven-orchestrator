@@ -101,6 +101,7 @@ async fn every_mutation_of_a_run_is_refused_before_anything_is_written() {
             .await,
         )
         .await,
+        body(runs.overwrite_default_pipeline(&actor, "r1").await).await,
         body(runs.start_manager(&actor, "r1").await).await,
         body(runs.stop_manager(&actor, "r1").await).await,
     ];
@@ -122,6 +123,7 @@ async fn every_mutation_of_a_run_is_refused_before_anything_is_written() {
             on_run(Verb::Create, None),
             on_run(Verb::Delete, Some("r1")),
             on_run(action("edit_repos"), Some("r1")),
+            on_run(action("edit_pipeline"), Some("r1")),
             on_run(action("edit_pipeline"), Some("r1")),
             on_run(action("start_manager"), Some("r1")),
             on_run(action("stop_manager"), Some("r1")),
@@ -185,6 +187,123 @@ async fn a_created_run_starts_in_its_repository_with_its_directory_watched() {
         w.skills.delivered.lock().unwrap()[0].0,
         run_dir.join("worktree")
     );
+}
+
+/// The `relay` pipeline as the registry holds it, mirrored into the world's
+/// shared pipelines.
+fn share_relay(w: &World) {
+    let pipelines = w.repo.path().join(".pdo/pipelines");
+    let prompts = pdo_pipeline::adapters::registry::read_prompts_dir(&pipelines.join("relay.prompts"));
+    w.shared.0.lock().unwrap().insert(
+        "relay".into(),
+        (std::fs::read_to_string(pipelines.join("relay.yaml")).unwrap(), prompts),
+    );
+}
+
+/// ADR-0085: « Save for this run » writes the snapshot only; the overwrite
+/// warning reads the Triggers and a change since the launch; the overwrite
+/// hands the whole snapshot to the shared pipeline, then re-anchors.
+#[tokio::test]
+async fn a_run_saves_for_itself_and_overwrites_the_shared_pipeline_only_on_request() {
+    let w = world();
+    relay_repository(&w);
+    share_relay(&w);
+    w.triggers.0.lock().unwrap().push((
+        "relay".into(),
+        pdo_run::application::ports::PipelineTrigger {
+            id: "t1".into(),
+            name: "Nightly".into(),
+            enabled: true,
+        },
+    ));
+    let (status, answer) = body(
+        w.runs
+            .create_run(&Actor::LocalOperator, create_request(&w), Vec::new(), None)
+            .await,
+    )
+    .await;
+    assert_eq!(status, 201, "{answer}");
+    let run_id = answer["run_id"].as_str().unwrap().to_string();
+    let shared_before = w.shared.0.lock().unwrap()["relay"].clone();
+
+    let (status, answer) = body(
+        w.runs
+            .save_run_pipeline(
+                &Actor::LocalOperator,
+                &run_id,
+                SaveRunPipelineRequest {
+                    yaml: RELAY.into(),
+                    prompts: HashMap::from([("worker".to_string(), "Edited.\n".to_string())]),
+                },
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(w.shared.0.lock().unwrap()["relay"], shared_before, "the shared pipeline is untouched");
+
+    let (status, preview) = body(w.runs.overwrite_preview(&run_id).await).await;
+    assert_eq!(status, 200, "{preview}");
+    assert_eq!(preview["pipeline_id"], "relay");
+    assert_eq!(preview["pipeline_exists"], true);
+    assert_eq!(preview["modified_since_launch"], false);
+    assert_eq!(
+        preview["triggers"],
+        serde_json::json!([{ "id": "t1", "name": "Nightly", "enabled": true }])
+    );
+
+    // Someone edits the shared pipeline after the launch.
+    w.shared.0.lock().unwrap().get_mut("relay").unwrap().1.insert("worker".into(), "A colleague's.\n".into());
+    let (_, preview) = body(w.runs.overwrite_preview(&run_id).await).await;
+    assert_eq!(preview["modified_since_launch"], true);
+
+    let (status, answer) = body(
+        w.runs
+            .overwrite_default_pipeline(&Actor::LocalOperator, &run_id)
+            .await,
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["pipeline_id"], "relay");
+    let (yaml, prompts) = w.shared.0.lock().unwrap()["relay"].clone();
+    assert_eq!(yaml, RELAY);
+    assert_eq!(prompts["worker"], "Edited.\n");
+    let (_, preview) = body(w.runs.overwrite_preview(&run_id).await).await;
+    assert_eq!(
+        preview["modified_since_launch"], false,
+        "the Run's own overwrite is not someone else's change"
+    );
+
+    // The shared pipeline is gone: nothing to overwrite.
+    w.shared.0.lock().unwrap().clear();
+    let (status, _) = body(
+        w.runs
+            .overwrite_default_pipeline(&Actor::LocalOperator, &run_id)
+            .await,
+    )
+    .await;
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn an_archived_run_cannot_overwrite_the_shared_pipeline() {
+    let w = world();
+    seed_relay(&w, "r1").await;
+    for kind in [EventKind::RunCompleted, EventKind::RunArchived] {
+        w.runs
+            .append_event()
+            .execute(&event("r1", kind, None))
+            .await
+            .unwrap();
+    }
+    let (status, answer) = body(
+        w.runs
+            .overwrite_default_pipeline(&Actor::LocalOperator, "r1")
+            .await,
+    )
+    .await;
+    assert_eq!(status, 409, "{answer}");
+    assert!(w.shared.0.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

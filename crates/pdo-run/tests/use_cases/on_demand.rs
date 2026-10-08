@@ -106,7 +106,10 @@ fn state(w: &World, run_id: &str) -> RunState {
 }
 
 fn status_of(w: &World, run_id: &str, node_id: &str) -> Option<NodeStatus> {
-    state(w, run_id).nodes.get(node_id).map(|n| n.status.clone())
+    state(w, run_id)
+        .nodes
+        .get(node_id)
+        .map(|n| n.status.clone())
 }
 
 fn worktree(w: &World, run_id: &str) -> std::path::PathBuf {
@@ -262,7 +265,11 @@ edges:
 
     complete(&w, "r1", "worker", 1).await;
     assert_eq!(state(&w, "r1").status, RunStatus::Completed);
-    assert_eq!(status_of(&w, "r1", "gated"), None, "its dead upstream skipped it");
+    assert_eq!(
+        status_of(&w, "r1", "gated"),
+        None,
+        "its dead upstream skipped it"
+    );
 }
 
 /// `worker → join ← review`, `review → follow`, `join → end`.
@@ -362,7 +369,10 @@ async fn an_on_demand_node_serves_the_downstream_not_launched_yet_and_never_rela
         NodeStatus::Running,
         "the downstream not launched yet was not served"
     );
-    assert_eq!(run.nodes["join"].iter, 1, "the settled downstream ran again");
+    assert_eq!(
+        run.nodes["join"].iter, 1,
+        "the settled downstream ran again"
+    );
     assert_eq!(run.nodes["join"].status, NodeStatus::Completed);
 
     // The Run ends again once the node it launched is done.
@@ -414,19 +424,33 @@ async fn retrying_a_skipped_node_runs_its_branch_as_if_taken() {
         "{:?}",
         kinds(&w, "r1")
     );
-    assert_eq!(retry(&w, "r1", "branch").await, 200, "{:?}", kinds(&w, "r1"));
+    assert_eq!(
+        retry(&w, "r1", "branch").await,
+        200,
+        "{:?}",
+        kinds(&w, "r1")
+    );
     let run = state(&w, "r1");
     assert_eq!(run.status, RunStatus::Running);
     assert_eq!(run.nodes["branch"].status, NodeStatus::Running);
 
     assert_eq!(run.nodes["branch"].iter, 2, "not the next iteration");
     complete(&w, "r1", "branch", 2).await;
-    assert_eq!(state(&w, "r1").status, RunStatus::Completed, "{:?}", kinds(&w, "r1"));
+    assert_eq!(
+        state(&w, "r1").status,
+        RunStatus::Completed,
+        "{:?}",
+        kinds(&w, "r1")
+    );
 }
 
 /// [`PIPELINE`] with « Attente des nœuds lancés ».
 fn waiting_pipeline() -> String {
-    PIPELINE.replacen("version: \"1.0\"\n", "version: \"1.0\"\nwait_for_started_nodes: true\n", 1)
+    PIPELINE.replacen(
+        "version: \"1.0\"\n",
+        "version: \"1.0\"\nwait_for_started_nodes: true\n",
+        1,
+    )
 }
 
 #[tokio::test]
@@ -440,7 +464,14 @@ async fn a_run_that_waits_for_its_started_nodes_stays_running_at_end_until_they_
     let run = state(&w, "r1");
     assert_eq!(run.status, RunStatus::Running, "{:?}", kinds(&w, "r1"));
     assert_eq!(run.waiting_for_started_nodes, Some(1));
-    let summary = w.store.summaries.lock().unwrap().get("r1").cloned().unwrap();
+    let summary = w
+        .store
+        .summaries
+        .lock()
+        .unwrap()
+        .get("r1")
+        .cloned()
+        .unwrap();
     assert_eq!(summary.status, RunStatus::Running);
     assert_eq!(summary.waiting_for_started_nodes, Some(1));
 
@@ -449,7 +480,14 @@ async fn a_run_that_waits_for_its_started_nodes_stays_running_at_end_until_they_
     assert_eq!(run.status, RunStatus::Completed, "{:?}", kinds(&w, "r1"));
     assert_eq!(run.waiting_for_started_nodes, None);
     assert_eq!(completions(&w, "r1"), 1);
-    let summary = w.store.summaries.lock().unwrap().get("r1").cloned().unwrap();
+    let summary = w
+        .store
+        .summaries
+        .lock()
+        .unwrap()
+        .get("r1")
+        .cloned()
+        .unwrap();
     assert_eq!(summary.status, RunStatus::Completed);
 }
 
@@ -472,4 +510,102 @@ async fn an_on_demand_node_never_launched_holds_no_waiting_run() {
     advance_run(&w.runs, "r1").await;
     complete(&w, "r1", "worker", 1).await;
     assert_eq!(state(&w, "r1").status, RunStatus::Completed);
+}
+
+/// The end evaluation replays the routing as it ran: a `force_route` to `End`
+/// ends the Run once the started nodes are done, too.
+#[tokio::test]
+async fn a_forced_route_to_end_ends_the_run_once_the_started_nodes_are_done() {
+    let w = world();
+    seed(&w, "r1", &waiting_pipeline()).await;
+    advance_run(&w.runs, "r1").await;
+    assert_eq!(start(&w, "r1", "review").await, 200);
+    let forced = w
+        .runs
+        .run_command(
+            &Actor::LocalOperator,
+            "r1".into(),
+            serde_json::from_value(
+                serde_json::json!({ "kind": "force_route", "from": "worker", "target": "end" }),
+            )
+            .unwrap(),
+        )
+        .await;
+    assert_eq!(forced.status(), 200);
+
+    complete(&w, "r1", "worker", 1).await;
+    assert_eq!(
+        state(&w, "r1").status,
+        RunStatus::Running,
+        "{:?}",
+        kinds(&w, "r1")
+    );
+
+    complete(&w, "r1", "review", 1).await;
+    assert_eq!(
+        state(&w, "r1").status,
+        RunStatus::Completed,
+        "{:?}",
+        kinds(&w, "r1")
+    );
+    assert_eq!(completions(&w, "r1"), 1);
+}
+
+/// An edge into `End` with a `reason:` halts the Run — after the started
+/// nodes too, and as a halt, not a completion.
+#[tokio::test]
+async fn a_halt_at_end_waits_for_the_started_nodes_and_stays_a_halt() {
+    let yaml = waiting_pipeline().replacen(
+        "  - source: { node: worker, port: out }\n    target: { node: end, port: result }\n",
+        "  - source: { node: worker, port: out }\n    target: { node: end, port: result }\n    reason: \"enough\"\n",
+        1,
+    );
+    assert!(yaml.contains("reason: \"enough\""));
+    let w = world();
+    seed(&w, "r1", &yaml).await;
+    advance_run(&w.runs, "r1").await;
+    assert_eq!(start(&w, "r1", "review").await, 200);
+
+    complete(&w, "r1", "worker", 1).await;
+    assert_eq!(
+        state(&w, "r1").status,
+        RunStatus::Running,
+        "{:?}",
+        kinds(&w, "r1")
+    );
+
+    complete(&w, "r1", "review", 1).await;
+    let run = state(&w, "r1");
+    assert_eq!(run.status, RunStatus::Halted, "{:?}", kinds(&w, "r1"));
+    assert_eq!(completions(&w, "r1"), 0);
+}
+
+/// Stopping the last started node of a Run past `End` ends it as well.
+#[tokio::test]
+async fn stopping_the_last_started_node_ends_a_waiting_run() {
+    let w = world();
+    seed(&w, "r1", &waiting_pipeline()).await;
+    advance_run(&w.runs, "r1").await;
+    assert_eq!(start(&w, "r1", "review").await, 200);
+    complete(&w, "r1", "worker", 1).await;
+    assert_eq!(state(&w, "r1").status, RunStatus::Running);
+
+    let stopped = w
+        .runs
+        .stop_node(
+            &Actor::LocalOperator,
+            pdo_run::application::stop_node::StopNode {
+                run_id: "r1".into(),
+                node_id: "review".into(),
+            },
+        )
+        .await;
+    assert_eq!(stopped.status(), 200);
+    settle().await;
+    assert_eq!(
+        state(&w, "r1").status,
+        RunStatus::Completed,
+        "{:?}",
+        kinds(&w, "r1")
+    );
 }

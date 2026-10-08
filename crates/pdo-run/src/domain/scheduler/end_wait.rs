@@ -6,25 +6,33 @@ use super::*;
 use crate::domain::on_demand::started_nodes_alive;
 use crate::domain::state::RunStatus;
 
-/// Drop the `Complete` of `actions` while a Run that waits for its started
-/// nodes must keep waiting: a node is still `running`, `waiting` or
+/// Drop the action that ends the Run (`Complete`, or the `Halt` of an edge
+/// into `End` with a `reason:`) while a Run that waits for its started nodes
+/// must keep waiting: a node is still `running`, `waiting` or
 /// `awaiting_user`, or this very pass spawns one. A pipeline that does not
 /// wait gets its actions back untouched — the Run ends at `End`, as before.
-pub fn defer_completion_for_started_nodes(
+pub fn defer_end_for_started_nodes(
     pipeline: &PipelineDef,
     run_state: &RunState,
     mut actions: Vec<SchedulerAction>,
 ) -> Vec<SchedulerAction> {
-    if !pipeline.wait_for_started_nodes || !actions.contains(&SchedulerAction::Complete) {
+    if !pipeline.wait_for_started_nodes || !actions.iter().any(ends_the_run) {
         return actions;
     }
     let spawns = actions
         .iter()
         .any(|a| matches!(a, SchedulerAction::Spawn { .. }));
     if spawns || started_nodes_alive(run_state) > 0 {
-        actions.retain(|a| *a != SchedulerAction::Complete);
+        actions.retain(|a| !ends_the_run(a));
     }
     actions
+}
+
+fn ends_the_run(action: &SchedulerAction) -> bool {
+    matches!(
+        action,
+        SchedulerAction::Complete | SchedulerAction::Halt { .. }
+    )
 }
 
 /// The end of the Run, evaluated again after a completion that did not reach
@@ -32,10 +40,11 @@ pub fn defer_completion_for_started_nodes(
 /// for them, or of a node launched after the Run went past `End` (an on-demand
 /// node, a Retry), which re-opened it.
 ///
-/// `Some` once the Run is `Running`, no started node is alive, every edge into
-/// `End` that counts is resolved and one of them fired: `Halt` when a fired
-/// edge into `End` carries a `reason:`, `Complete` otherwise. `None` while the
-/// Run has not reached `End`, so a Run in mid-course is never ended here.
+/// `Some` once the Run is `Running`, no started node is alive and the routing
+/// of a settled producer of `End` — replayed as it ran, forced routes, Switch
+/// ports and regions included — ends the Run: `Halt` when one of them halts,
+/// `Complete` otherwise. `None` while the Run has not reached `End`, so a Run
+/// in mid-course is never ended here.
 pub fn end_reached_action(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -50,58 +59,87 @@ pub fn end_reached_action(
         .iter()
         .find(|n| n.node_type == NodeType::End)?
         .id
-        .as_str();
-    if !check_all_upstream_completed(pipeline, run_state, end_id, "", frontmatter_by_node, vars) {
-        return None;
-    }
-
-    let empty = HashMap::new();
-    let mut fired_into_end = Vec::new();
-    let producers: HashSet<&str> = pipeline
+        .clone();
+    // The producers that may route to `End`: the sources of its edges, and the
+    // sources a `force_route` sends there. A Switch routes by the branch it
+    // chose, through the producer it was evaluated for.
+    let mut producers: Vec<String> = pipeline
         .edges
         .iter()
         .filter(|e| e.target.node == end_id)
-        .filter(|e| crate::domain::on_demand::edge_counts(pipeline, run_state, e))
-        .map(|e| e.source.node.as_str())
+        .map(|e| e.source.node.clone())
+        .chain(
+            run_state
+                .forced_routes
+                .iter()
+                .filter(|(_, target)| **target == end_id)
+                .map(|(source, _)| source.clone()),
+        )
         .collect();
-    for src in producers {
-        let Some(producer) = run_state.nodes.get(src) else {
-            continue;
-        };
-        if !producer.status.is_settled_complete() {
-            continue;
-        }
-        let outgoing: Vec<&pdo_pipeline::domain::pipeline::EdgeDef> = pipeline
-            .edges
-            .iter()
-            .filter(|e| e.source.node == src)
-            .collect();
-        let fields = frontmatter_by_node.get(src).unwrap_or(&empty);
-        for edge in edge_router::fired_edges(&outgoing, fields, vars, producer.iter) {
-            if edge.target.node == end_id {
-                fired_into_end.push((src, producer.iter, edge.reason.clone(), fields));
-            }
-        }
-    }
-    fired_into_end.sort_by(|a, b| a.0.cmp(b.0));
+    producers.sort();
+    producers.dedup();
 
-    if fired_into_end.is_empty() {
-        return None;
-    }
-    if let Some((src, iter, Some(reason), fields)) = fired_into_end
-        .iter()
-        .find(|(_, _, reason, _)| reason.is_some())
-    {
-        let message = condition::render_halt_message(
-            reason,
-            &condition::HaltContext {
-                iter: *iter,
-                node_id: (*src).to_string(),
-                variables: vars.clone(),
-                fields: (*fields).clone(),
-            },
+    let empty = HashMap::new();
+    let mut ends = Vec::new();
+    for producer in producers {
+        if let Some(switch) = run_state.switch_states.get(&producer) {
+            // The Switch already chose: its edge into `End` on the chosen port
+            // is the one routing took.
+            let routed = pipeline.edges.iter().find(|e| {
+                e.source.node == switch.switch_node_id
+                    && e.target.node == end_id
+                    && e.source.carries(&switch.chosen_branch)
+            });
+            if let Some(edge) = routed {
+                if check_all_upstream_completed(
+                    pipeline,
+                    run_state,
+                    &end_id,
+                    &producer,
+                    frontmatter_by_node,
+                    vars,
+                ) {
+                    ends.push(match &edge.reason {
+                        Some(reason) => SchedulerAction::Halt {
+                            message: condition::render_halt_message(
+                                reason,
+                                &condition::HaltContext {
+                                    iter: 1,
+                                    node_id: producer.clone(),
+                                    variables: vars.clone(),
+                                    fields: HashMap::new(),
+                                },
+                            ),
+                        },
+                        None => SchedulerAction::Complete,
+                    });
+                }
+            }
+            continue;
+        }
+        let settled = run_state
+            .nodes
+            .get(&producer)
+            .is_some_and(|n| n.status.is_settled_complete());
+        if !settled {
+            continue;
+        }
+        let fields = frontmatter_by_node.get(&producer).unwrap_or(&empty);
+        ends.extend(
+            route_outgoing_edges(
+                pipeline,
+                run_state,
+                &producer,
+                vars,
+                fields,
+                frontmatter_by_node,
+            )
+            .into_iter()
+            .filter(ends_the_run),
         );
-        return Some(SchedulerAction::Halt { message });
     }
-    Some(SchedulerAction::Complete)
+    ends.iter()
+        .find(|a| matches!(a, SchedulerAction::Halt { .. }))
+        .or_else(|| ends.first())
+        .cloned()
 }

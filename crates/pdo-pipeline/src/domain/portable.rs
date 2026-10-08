@@ -292,7 +292,10 @@ mod tests {
         let imported = super::interpret(&document).unwrap().pipeline;
 
         assert!(imported.wait_for_started_nodes);
-        assert!(imported.nodes.iter().any(|n| n.id == "worker" && n.on_demand));
+        assert!(imported
+            .nodes
+            .iter()
+            .any(|n| n.id == "worker" && n.on_demand));
     }
 
     #[test]

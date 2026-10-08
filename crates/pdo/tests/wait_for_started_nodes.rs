@@ -82,7 +82,10 @@ async fn post(daemon: &TestDaemon, path: &str, body: serde_json::Value) -> (u16,
         .send()
         .await
         .unwrap();
-    (resp.status().as_u16(), resp.text().await.unwrap_or_default())
+    (
+        resp.status().as_u16(),
+        resp.text().await.unwrap_or_default(),
+    )
 }
 
 async fn complete(daemon: &TestDaemon, run_id: &str, node_id: &str) {

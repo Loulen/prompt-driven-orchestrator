@@ -18,12 +18,14 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   `node` × `start` et ré-ouvre un Run terminé.
 - **Option de Pipeline `wait_for_started_nodes`** (absente quand elle vaut `false`, le
   défaut) : un Run qui atteint `End` reste `running` tant qu'un nœud est `running`, `waiting` ou
-  `awaiting_user`. `GET /runs/{id}` et `GET /runs` portent `waiting_for_started_nodes` (nombre
+  `awaiting_user`, qu'il doive s'y terminer ou s'y arrêter (edge vers `End` avec `reason:`).
+  La complétion ou l'arrêt du dernier de ces nœuds termine le Run. `GET /runs/{id}` et `GET /runs` portent `waiting_for_started_nodes` (nombre
   de nœuds attendus) ; le Résumé de Run passe en version 2 et se reconstruit au démarrage.
 - **Un Run terminé marque `Skipped` les branches non prises**, au lieu de les laisser en
   attente : elles gardent ainsi leur ▶ (Retry, `node` × `retry`).
 - Le préambule d'un nœud lancé avant son amont dit que l'input est absent, au lieu de donner
   un chemin vers un fichier qui n'existe pas.
+- Un second `RunCompleted` sur un Run déjà terminé n'est plus écrit.
 
 ## 2.21.0 — Pilotage d'un Run en lecture seule (CORE-38)
 

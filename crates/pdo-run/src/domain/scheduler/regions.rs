@@ -204,7 +204,12 @@ pub(super) fn forward_spawn_iter(
         // ADR-0086: an on-demand node serves a downstream not launched yet; a
         // downstream already launched is not relaunched — Retry on it is the
         // explicit gesture, a cascade down to `End` is not.
-        Some(_) if pipeline.nodes.iter().any(|n| n.id == source_id && n.on_demand) => {
+        Some(_)
+            if pipeline
+                .nodes
+                .iter()
+                .any(|n| n.id == source_id && n.on_demand) =>
+        {
             return None;
         }
         Some(ts) => {

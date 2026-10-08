@@ -3995,10 +3995,18 @@ nodes:
         assert!(!flag("ab000003"));
 
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
-        assert_eq!(serialized.matches("on_demand: true").count(), 2, "{serialized}");
+        assert_eq!(
+            serialized.matches("on_demand: true").count(),
+            2,
+            "{serialized}"
+        );
         assert!(!serialized.contains("on_demand: false"), "{serialized}");
         let reparsed = parse_pipeline(&serialized).unwrap();
-        assert!(reparsed.pipeline.nodes.iter().any(|n| n.id == "ab000002" && n.on_demand));
+        assert!(reparsed
+            .pipeline
+            .nodes
+            .iter()
+            .any(|n| n.id == "ab000002" && n.on_demand));
     }
 
     /// ADR-0086: a structural node has nothing to launch — the option is
@@ -4024,8 +4032,16 @@ nodes:
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(result.pipeline.wait_for_started_nodes);
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
-        assert!(serialized.contains("wait_for_started_nodes: true"), "{serialized}");
-        assert!(parse_pipeline(&serialized).unwrap().pipeline.wait_for_started_nodes);
+        assert!(
+            serialized.contains("wait_for_started_nodes: true"),
+            "{serialized}"
+        );
+        assert!(
+            parse_pipeline(&serialized)
+                .unwrap()
+                .pipeline
+                .wait_for_started_nodes
+        );
 
         let plain = parse_pipeline(&with_start_end("name: plain\nnodes: []\n")).unwrap();
         assert!(!plain.pipeline.wait_for_started_nodes);

@@ -50,8 +50,13 @@ pub fn started_nodes_alive(run_state: &RunState) -> usize {
 /// How many started nodes a `Running` Run past `End` still waits for, read
 /// off its frozen snapshot (the projection has no pipeline to evaluate edge
 /// conditions with): `End` is past once every edge into it that counts comes
-/// from `Start` or from a settled node. `None` while the Run is not
-/// `Running`, has not reached `End`, or has no started node alive.
+/// from `Start` or from a settled node. An approximation, assumed: a settled
+/// producer whose edge into `End` did not fire counts too — the scheduler,
+/// which reads the conditions, is what ends the Run. Reads the « on demand »
+/// option off the frozen snapshot, where the scheduler reads the Run's
+/// pipeline: an « Edit for this run » of the option moves the banner only from
+/// the next Run. `None` while the Run is not `Running`, has not reached
+/// `End`, or has no started node alive.
 pub fn started_nodes_waited(run_state: &RunState) -> Option<u32> {
     if run_state.status != crate::domain::state::RunStatus::Running {
         return None;

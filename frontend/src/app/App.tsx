@@ -370,21 +370,12 @@ export default function App() {
         surfaces={surfaces}
         liveSessions={sessions.live}
         onSessionsSaved={refreshSessions}
-        // « What's new » and « Update » leave Settings first: their modals open
-        // over the app, never under the full-window surface.
-        onOpenChangelog={() => {
-          surfaces.setSettingsOpen(false);
-          setChangelogOpen(true);
-        }}
-        onRequestUpdate={() => {
-          surfaces.setSettingsOpen(false);
-          setUpdateConfirmOpen(true);
-        }}
+        onOpenChangelog={() => setChangelogOpen(true)}
+        onRequestUpdate={() => setUpdateConfirmOpen(true)}
         onStartTour={startTourById}
         onStartFullTour={startFullTour}
       />
-      {/* After the full-window surfaces: at the same z-index, the later sibling
-          paints over, so an update modal is never hidden by Settings or Stats. */}
+      {/* After the full-window surfaces, which it must paint over. */}
       <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
       <EditorModals
         conflictTab={conflictTab}

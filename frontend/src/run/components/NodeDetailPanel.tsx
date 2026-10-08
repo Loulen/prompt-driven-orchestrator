@@ -246,6 +246,7 @@ export default function NodeDetailPanel({
         node={node}
         nodeName={nodeName}
         runId={runId}
+        isArchived={isArchived}
         selectedIter={selectedIter}
         selectedIterStatus={selectedIterStatus}
         sessionName={sessionName}

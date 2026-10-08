@@ -1,9 +1,10 @@
 /**
  * A node of a Run, as the node panel reads and drives it: its prompt, its
- * inputs and outputs, and the canvas buttons (start, stop, retry and what a
- * retry would invalidate).
+ * inputs and outputs, the canvas buttons (start, stop, retry and what a retry
+ * would invalidate), and the files a user imports into it.
  */
 
+import type { ImportFilesResponse } from "../../shared/generated/ImportFilesResponse";
 import type { PortType } from "../../shared/generated/PortType";
 import { request } from "../../shared/http/client";
 
@@ -113,5 +114,23 @@ export function retryNodePreview(
     "GET",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry/preview`,
     { label: "retry_preview" },
+  );
+}
+
+/** Import files from this browser's machine into a node holding a live
+ *  session. Refused by name (no live session, over `max_attachments_mb`), in
+ *  which case nothing was written. */
+export function importNodeFiles(
+  runId: string,
+  nodeId: string,
+  iter: number,
+  files: File[],
+): Promise<ImportFilesResponse> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return request<ImportFilesResponse>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/attachments`,
+    { body: form, query: { iter }, label: "Import" },
   );
 }

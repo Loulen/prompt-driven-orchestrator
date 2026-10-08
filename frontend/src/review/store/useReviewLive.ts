@@ -18,6 +18,20 @@ interface Args {
   onTipMoved: () => void;
 }
 
+/** The live node `to` shows (`live:<node>`), when its delivery moved between
+ *  the two reads of the Run. */
+export function deliveredSince(
+  before: RunState,
+  after: RunState,
+  to: string,
+): { nodeId: string; iter: number } | null {
+  if (!to.startsWith("live:")) return null;
+  const nodeId = to.slice("live:".length);
+  const node = after.nodes[nodeId];
+  if (!node?.delivery || node.delivery.after === before.nodes[nodeId]?.delivery?.after) return null;
+  return { nodeId, iter: node.iter };
+}
+
 /**
  * The Run's WebSocket, as the Review page listens to it: every event of the
  * Run refreshes it (and so does a `resync`), to detect "tip moved" (the delivery signature changed since
@@ -52,6 +66,12 @@ export function useReviewLive({ runId, runRef, setRun, sigAtLoad, pairRef, onTip
           setRun(r);
           const sig = deliverySignature(r.nodes);
           if (sigAtLoad.current !== null && sig !== sigAtLoad.current) onTipMovedRef.current();
+          // The `node_delivered` missed while away: the live node on display
+          // delivered since the last read.
+          if (resync && before) {
+            const delivered = deliveredSince(before, r, pairRef.current.to);
+            if (delivered) setNodeDelivered(delivered);
+          }
           // #751: a reply landed live — flash its card for a moment. The dot
           // follows from `seen` (the snapshot does not know this reply).
           if (before) {

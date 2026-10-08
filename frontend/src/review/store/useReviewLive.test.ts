@@ -18,7 +18,7 @@ vi.mock("../../run/store/useDaemonSocket", () => ({
 const fetchRun = vi.fn(async (runId: string) => ({ run_id: runId, nodes: [], review_comments: [] }) as unknown as RunState);
 vi.mock("../../run/api/runs", () => ({ fetchRun: (runId: string) => fetchRun(runId) }));
 
-const { useReviewLive } = await import("./useReviewLive");
+const { deliveredSince, useReviewLive } = await import("./useReviewLive");
 
 function mount() {
   const setRun = vi.fn();
@@ -54,5 +54,14 @@ describe("useReviewLive", () => {
     listener?.({ type: "resync" });
     expect(fetchRun).toHaveBeenCalledWith("r1");
     await vi.waitFor(() => expect(setRun).toHaveBeenCalledTimes(1));
+  });
+
+  it("finds the delivery of the live node on display that a resync caught up with", () => {
+    const run = (after?: string) =>
+      ({ nodes: { impl: { iter: 2, delivery: after ? { before: "a", after } : undefined } } }) as unknown as RunState;
+    expect(deliveredSince(run(), run("b"), "live:impl")).toEqual({ nodeId: "impl", iter: 2 });
+    expect(deliveredSince(run("b"), run("b"), "live:impl")).toBeNull();
+    expect(deliveredSince(run(), run("b"), "tip")).toBeNull();
+    expect(deliveredSince(run(), run("b"), "live:other")).toBeNull();
   });
 });

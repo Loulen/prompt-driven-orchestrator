@@ -18,6 +18,7 @@ mod queries;
 mod registry_names;
 mod rename_pipeline;
 mod save_pipeline;
+mod validation;
 
 pub use error::PipelineError;
 pub use import_document::ImportedDocument;
@@ -26,6 +27,7 @@ pub use pipelines::{Pipelines, PipelinesPorts};
 pub use queries::{sidecar_export, PipelineDetail, PipelineSummary, SidecarExport};
 pub use rename_pipeline::RenameOutcome;
 pub use save_pipeline::SaveOutcome;
+pub use validation::VALIDATE;
 
 /// Where a new or moved pipeline landed.
 #[derive(Debug, Clone, PartialEq, Eq)]

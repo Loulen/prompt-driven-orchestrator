@@ -179,6 +179,12 @@ pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .await
         .context("failed to create project and provisioning rules tables")?;
 
+    // The validations of the pipelines (CONTEXT.md « Pipeline validé »): no
+    // row is every Projet, so nothing is seeded.
+    pdo_pipeline::adapters::sqlite_validations::init(db)
+        .await
+        .context("failed to create pipeline validation tables")?;
+
     // The Banque de skills index (#668, ADR-0062). Content lives on disk under
     // `<repo_root>/.pdo/skills/<id>/`; nothing is seeded.
     pdo_skill::adapters::sqlite::init(db)

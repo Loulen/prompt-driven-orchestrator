@@ -28,6 +28,8 @@ pub enum PipelineError {
     ActiveRuns(usize),
     /// The document has no top-level `name:` line to rename.
     NoNameLine,
+    /// A validation names a Projet that does not exist.
+    UnknownProject(String),
     /// The skill context refused or failed the import of the skills.
     Skills(SkillError),
     /// A write, move or delete failed, in the filesystem's words.

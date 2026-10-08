@@ -116,6 +116,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             Some(json!({ "name": "renamed" })),
         ),
         call(
+            "PUT",
+            "/pipelines/{pipeline_id}/validation",
+            format!("/pipelines/{pipeline}/validation"),
+            Some(json!({ "kind": "all" })),
+        ),
+        call(
             "POST",
             "/pipelines/import",
             "/pipelines/import".into(),

@@ -8,7 +8,8 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 
 use super::ports::{
-    ActiveRuns, NodeLibrary, PipelineEvents, PipelineRegistry, RenameLedger, SkillBank,
+    ActiveRuns, KnownProjects, NodeLibrary, PipelineEvents, PipelineRegistry, PipelineValidations,
+    RenameLedger, SkillBank,
 };
 
 /// One adapter per port.
@@ -19,6 +20,8 @@ pub struct PipelinesPorts {
     pub runs: Arc<dyn ActiveRuns>,
     pub renames: Arc<dyn RenameLedger>,
     pub skills: Arc<dyn SkillBank>,
+    pub validations: Arc<dyn PipelineValidations>,
+    pub projects: Arc<dyn KnownProjects>,
     pub extensions: Arc<dyn ExtensionHost>,
 }
 
@@ -30,6 +33,8 @@ pub struct Pipelines {
     pub(crate) runs: Arc<dyn ActiveRuns>,
     pub(crate) renames: Arc<dyn RenameLedger>,
     pub(crate) skills: Arc<dyn SkillBank>,
+    pub(crate) validations: Arc<dyn PipelineValidations>,
+    pub(crate) projects: Arc<dyn KnownProjects>,
     host: Arc<dyn ExtensionHost>,
 }
 
@@ -42,6 +47,8 @@ impl Pipelines {
             runs: ports.runs,
             renames: ports.renames,
             skills: ports.skills,
+            validations: ports.validations,
+            projects: ports.projects,
             host: ports.extensions,
         }
     }

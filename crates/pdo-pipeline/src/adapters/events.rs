@@ -15,4 +15,11 @@ impl PipelineEvents for BroadcastPipelineEvents {
             "path": path,
         }));
     }
+
+    fn validation_changed(&self, id: &str) {
+        let _ = self.0.send(serde_json::json!({
+            "type": "pipeline_validation_changed",
+            "pipeline_id": id,
+        }));
+    }
 }

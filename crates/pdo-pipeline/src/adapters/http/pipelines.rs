@@ -15,6 +15,7 @@ use super::dto::{
 use super::{common_response, error, error_with_message, structured_parse_error};
 use crate::application::{Created, PipelineError, Pipelines, RenameOutcome};
 use crate::domain::pipeline::PipelineDef;
+use crate::domain::validation::PipelineValidation;
 
 /// `GET /pipelines[?attr.<id>/<key>=<value>…]`.
 pub(super) async fn list(
@@ -23,12 +24,18 @@ pub(super) async fn list(
 ) -> Response {
     let filter = AttributeFilter::from_query(query.as_deref());
     match pipelines.list_carrying(filter).await {
-        Ok(list) => Json(
-            list.into_iter()
-                .map(PipelineListEntry::from)
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
+        Ok(list) => {
+            let mut validations = pipelines.validations().await;
+            Json(
+                list.into_iter()
+                    .map(|(summary, attributes)| {
+                        let validation = validations.remove(&summary.id).unwrap_or_default();
+                        PipelineListEntry::from((summary, attributes, validation))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_response()
+        }
         Err(PipelineError::Storage(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => fallback(e),
     }
@@ -110,7 +117,7 @@ pub(super) async fn create(
 ) -> Response {
     match pipelines.create(&actor, &req.name) {
         Ok(created) => {
-            let stamped = pipelines.stamp_created(&actor, &created.id).await;
+            let stamped = pipelines.settle_created(&actor, &created.id).await;
             created_response(created, stamped)
         }
         Err(PipelineError::NameRequired) => error(StatusCode::BAD_REQUEST, "name is required"),
@@ -209,12 +216,37 @@ pub(super) async fn duplicate(
 ) -> Response {
     match pipelines.duplicate(&actor, &id) {
         Ok(created) => {
-            let stamped = pipelines.stamp_created(&actor, &created.id).await;
+            let stamped = pipelines.settle_created(&actor, &created.id).await;
             created_response(created, stamped)
         }
         Err(PipelineError::Invalid(e)) => error(
             StatusCode::BAD_REQUEST,
             format!("invalid source pipeline: {e}"),
+        ),
+        Err(PipelineError::Storage(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => fallback(e),
+    }
+}
+
+/// `PUT /pipelines/{id}/validation`: replace the Projets the pipeline is
+/// offered to. `404` for an unknown pipeline, `400` naming an unknown Projet,
+/// both before any write.
+pub(super) async fn validate(
+    State(pipelines): State<Arc<Pipelines>>,
+    Extension(actor): Extension<Actor>,
+    AxumPath(pipeline_id): AxumPath<String>,
+    Json(validation): Json<PipelineValidation>,
+) -> Response {
+    match pipelines.validate(&actor, &pipeline_id, validation).await {
+        Ok(stored) => Json(serde_json::json!({
+            "ok": true,
+            "id": pipeline_id,
+            "validation": stored,
+        }))
+        .into_response(),
+        Err(PipelineError::UnknownProject(project_id)) => error(
+            StatusCode::BAD_REQUEST,
+            format!("no such project: {project_id}"),
         ),
         Err(PipelineError::Storage(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => fallback(e),

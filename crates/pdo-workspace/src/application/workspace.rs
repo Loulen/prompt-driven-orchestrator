@@ -9,8 +9,8 @@ use pdo_kernel::repository_path::member_spellings;
 use pdo_kernel::{Actor, Operation, ResourceKind};
 
 use super::ports::{
-    FileBrowser, Git, ProjectEvents, ProjectRepository, ProvisioningRulesRepository,
-    RecentRepositories, SourceTree,
+    FileBrowser, Git, ProjectDeletions, ProjectEvents, ProjectRepository,
+    ProvisioningRulesRepository, RecentRepositories, SourceTree,
 };
 
 /// One adapter per port.
@@ -19,6 +19,7 @@ pub struct WorkspacePorts {
     pub provisioning: Arc<dyn ProvisioningRulesRepository>,
     pub recent: Arc<dyn RecentRepositories>,
     pub events: Arc<dyn ProjectEvents>,
+    pub deletions: Arc<dyn ProjectDeletions>,
     pub git: Arc<dyn Git>,
     pub source_tree: Arc<dyn SourceTree>,
     pub files: Arc<dyn FileBrowser>,
@@ -30,6 +31,7 @@ pub struct Workspace {
     pub(crate) provisioning: Arc<dyn ProvisioningRulesRepository>,
     pub(crate) recent: Arc<dyn RecentRepositories>,
     pub(crate) events: Arc<dyn ProjectEvents>,
+    pub(crate) deletions: Arc<dyn ProjectDeletions>,
     pub(crate) git: Arc<dyn Git>,
     pub(crate) source_tree: Arc<dyn SourceTree>,
     pub(crate) files: Arc<dyn FileBrowser>,
@@ -43,6 +45,7 @@ impl Workspace {
             provisioning: ports.provisioning,
             recent: ports.recent,
             events: ports.events,
+            deletions: ports.deletions,
             git: ports.git,
             source_tree: ports.source_tree,
             files: ports.files,

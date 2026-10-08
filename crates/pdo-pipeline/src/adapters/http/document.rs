@@ -102,7 +102,7 @@ pub(super) async fn import(
                 "warnings": imported.warnings,
                 "skills": imported.skills,
             });
-            let stamped = pipelines.stamp_created(&actor, &imported.id).await;
+            let stamped = pipelines.settle_created(&actor, &imported.id).await;
             with_attributes(&mut body, stamped);
             (StatusCode::CREATED, Json(body)).into_response()
         }

@@ -1,6 +1,7 @@
 //! The `pipeline` context: the instance registry and the node library on
 //! disk, the daemon's live stream, the skill bank, the Stats absorption a
-//! rename leaves behind, and the Runs that still use a pipeline.
+//! rename leaves behind, the Runs that still use a pipeline, and the
+//! validations of the pipelines over SQLite with the Projets they name.
 
 use std::sync::Arc;
 
@@ -9,14 +10,17 @@ use pdo_pipeline::adapters::events::BroadcastPipelineEvents;
 use pdo_pipeline::adapters::library_fs::FsNodeLibrary;
 use pdo_pipeline::adapters::registry::FsPipelineRegistry;
 use pdo_pipeline::adapters::skill_bank::BankOfSkills;
+use pdo_pipeline::adapters::sqlite_validations::SqlitePipelineValidations;
 use pdo_pipeline::{Pipelines, PipelinesPorts};
 use pdo_run::adapters::pipeline_runs::PipelineRuns;
 use pdo_run::Runs;
 use pdo_skill::Skills;
 use pdo_stats::adapters::rename_ledger::StatsRenames;
 use pdo_stats::Stats;
+use pdo_workspace::adapters::sqlite::SqliteProjects;
 
 use super::ContextResources;
+use crate::ports::pipeline_projects::WorkspaceKnownProjects;
 
 pub(super) fn pipelines(
     r: &ContextResources,
@@ -35,6 +39,10 @@ pub(super) fn pipelines(
         runs: Arc::new(PipelineRuns(run.store().clone())),
         renames: Arc::new(StatsRenames(stats.clone())),
         skills: Arc::new(BankOfSkills(skills.clone())),
+        validations: Arc::new(SqlitePipelineValidations::new(r.db.clone())),
+        projects: Arc::new(WorkspaceKnownProjects(Arc::new(SqliteProjects::new(
+            r.db.clone(),
+        )))),
         extensions: host,
     }))
 }

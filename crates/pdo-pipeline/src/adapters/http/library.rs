@@ -105,7 +105,7 @@ pub(super) async fn import_workflow(
                 "path": imported.path.to_string_lossy(),
                 "warnings": imported.warnings,
             });
-            let stamped = pipelines.stamp_created(&actor, &imported.id).await;
+            let stamped = pipelines.settle_created(&actor, &imported.id).await;
             with_attributes(&mut body, stamped);
             (StatusCode::CREATED, Json(body)).into_response()
         }

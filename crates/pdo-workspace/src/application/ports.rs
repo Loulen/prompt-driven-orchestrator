@@ -113,6 +113,13 @@ pub trait ProjectEvents: Send + Sync {
     fn project_changed<'a>(&'a self, project_id: &'a str) -> BoxFuture<'a, ()>;
 }
 
+/// Who forgets what pointed at a Projet once it is deleted (the validations of
+/// the pipelines). Awaited once the deletion is stored, before the Projet's
+/// change is announced.
+pub trait ProjectDeletions: Send + Sync {
+    fn project_deleted<'a>(&'a self, project_id: &'a str) -> BoxFuture<'a, ()>;
+}
+
 /// Git. One adapter implements it, tested against real temporary repositories.
 pub trait Git: Send + Sync {
     /// `path` as a repository a Run can work in: absolute, a directory, a repo.

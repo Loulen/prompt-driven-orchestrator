@@ -10,6 +10,7 @@ use ts_rs::TS;
 use crate::application::PipelineSummary;
 use crate::domain::library::LibraryEntry;
 use crate::domain::pipeline::{self, VariableDef};
+use crate::domain::validation::PipelineValidation;
 use crate::domain::yaml_json::yaml_value_to_json;
 
 #[derive(Serialize, TS)]
@@ -49,10 +50,15 @@ pub(super) struct PipelineListEntry {
     #[serde(skip_serializing_if = "Attributes::is_empty")]
     #[ts(as = "Option<Attributes>", optional)]
     attributes: Attributes,
+    /// The Projets the launch forms offer it to (CONTEXT.md « Pipeline
+    /// validé »); `all` when it states none.
+    validation: PipelineValidation,
 }
 
-impl From<(PipelineSummary, Attributes)> for PipelineListEntry {
-    fn from((summary, attributes): (PipelineSummary, Attributes)) -> Self {
+impl From<(PipelineSummary, Attributes, PipelineValidation)> for PipelineListEntry {
+    fn from(
+        (summary, attributes, validation): (PipelineSummary, Attributes, PipelineValidation),
+    ) -> Self {
         Self {
             id: summary.id,
             name: summary.name,
@@ -67,6 +73,7 @@ impl From<(PipelineSummary, Attributes)> for PipelineListEntry {
                 .collect(),
             prompt_required: summary.prompt_required,
             attributes,
+            validation,
         }
     }
 }

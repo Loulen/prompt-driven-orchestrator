@@ -125,7 +125,7 @@ pub(crate) fn wire_over(
     let late_runs = Late::new();
     let late_platform = Late::new();
     let late_pipelines = Late::new();
-    let workspace = workspace::workspace(&r, host.clone());
+    let workspace = workspace::workspace(&r, &late_pipelines, host.clone());
     let skills = skill::skills(&r.db, &r.repo_root, host.clone());
     let sandbox = sandbox::router(&r, host.clone());
     let session = session::session(&r, tmux, &late_runs, &late_platform, host.clone());

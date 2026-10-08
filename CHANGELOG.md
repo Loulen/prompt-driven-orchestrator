@@ -27,6 +27,17 @@ seulement, une extension 0.1 à 0.10 compile et tourne telle quelle. Détail :
   Projet de son dépôt cible (aucun sans dépôt cible). `GET /triggers`, `GET /triggers/{id}`,
   ses tirs et ce que `/ws` dit d'un Trigger demandent `trigger` × `read`. Une extension qui
   refusait toute Opération quel que soit son verbe masque désormais aussi les Triggers.
+- **Flux gardé pour les extensions** (CORE-42) : `ExtensionEvent::guarded_by(read)` attache à un
+  événement l'Opération de lecture qui le protège ; `/ws` ne l'envoie qu'aux connexions dont
+  l'Acteur peut la faire, sans la garde. Un `operation_applied` sur une Ressource d'extension est
+  gardé par la lecture de son entité, dans les Projets de son Opération : une extension qui
+  refusait toute Opération quel que soit son verbe masque désormais aussi, sur `/ws`, les
+  `operation_applied` de ses Ressources.
+- **Gestes selon les Droits** (CORE-42) : la vue d'un Run demande `POST /authorize` une fois à son
+  ouverture pour tous les gestes du Run et de ses nodes, et masque ceux qui sont refusés ; les
+  lignes de la liste de Runs, leur menu et les actions groupées suivent la même règle. Relu quand
+  un Projet change ou qu'une extension signale un changement des Triggers. Un geste refusé par le
+  daemon malgré tout (un Droit changé entre-temps) le dit dans un toast, là où il ne disait rien.
 
 ## 2.19.0 — Ouverture sondée des WebSockets, Résumé de Run (CORE-32)
 

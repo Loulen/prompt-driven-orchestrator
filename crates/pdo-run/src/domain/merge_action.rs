@@ -12,6 +12,8 @@
 //! nothing else; comparing its answer to the branch's actual tip is the effect
 //! layer's job.
 
+use pdo_workspace::domain::commit_identity::CommitIdentity;
+
 use crate::domain::event::Event;
 use crate::domain::event::EventKind;
 
@@ -91,6 +93,28 @@ pub fn frozen_isolation(events: &[Event], node_id: &str, iter: i64) -> Option<bo
         .as_bool()
 }
 
+/// The git identity FROZEN onto `(node_id, iter)` at spawn (CORE-43): the four
+/// `GIT_AUTHOR_*` / `GIT_COMMITTER_*` variables the extensions put in the Node's
+/// environment, which sign its delivery.
+///
+/// Anchored on the **last** `NodeStarted` for the pair, like [`spawn_base_sha`]:
+/// a re-spawn asks the extensions again and freezes their answer anew. Empty —
+/// no extension gave one, a pre-CORE-43 Run, or a payload this build cannot read
+/// — means the daemon's own identity.
+pub fn frozen_git_identity(events: &[Event], node_id: &str, iter: i64) -> CommitIdentity {
+    events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == EventKind::NodeStarted
+                && e.node_id.as_deref() == Some(node_id)
+                && e.iter.unwrap_or(1) == iter
+        })
+        .and_then(|e| e.payload.as_ref()?.get("git_identity").cloned())
+        .and_then(|identity| serde_json::from_value(identity).ok())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +137,55 @@ mod tests {
             payload: Some(serde_json::json!({ "base_sha": base_sha })),
             ..ev(EventKind::NodeStarted, Some(node_id), Some(iter))
         }
+    }
+
+    fn spawn_signed(node_id: &str, iter: i64, author: &str) -> Event {
+        Event {
+            payload: Some(serde_json::json!({
+                "git_identity": { "GIT_AUTHOR_NAME": author, "GIT_COMMITTER_NAME": author },
+            })),
+            ..ev(EventKind::NodeStarted, Some(node_id), Some(iter))
+        }
+    }
+
+    fn authors(identity: &CommitIdentity) -> Vec<(String, String)> {
+        identity
+            .vars()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_git_identity_comes_off_the_last_node_started() {
+        let events = vec![
+            ev(EventKind::RunStarted, None, None),
+            spawn_signed("impl", 1, "Alice"),
+            ev(EventKind::NodeInterrupted, Some("impl"), Some(1)),
+            spawn_signed("impl", 1, "Bob"),
+            spawn_signed("impl", 2, "Carol"),
+        ];
+        assert_eq!(
+            authors(&frozen_git_identity(&events, "impl", 1)),
+            vec![
+                ("GIT_AUTHOR_NAME".to_string(), "Bob".to_string()),
+                ("GIT_COMMITTER_NAME".to_string(), "Bob".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_frozen_identity_is_the_empty_one() {
+        let events = vec![
+            ev(EventKind::RunStarted, None, None),
+            spawn("impl", 1, "aaaa1111"),
+            Event {
+                payload: Some(serde_json::json!({ "git_identity": "garbage" })),
+                ..ev(EventKind::NodeStarted, Some("ship"), Some(1))
+            },
+        ];
+        assert!(frozen_git_identity(&events, "impl", 1).is_empty());
+        assert!(frozen_git_identity(&events, "ship", 1).is_empty());
+        assert!(frozen_git_identity(&events, "never", 1).is_empty());
     }
 
     #[test]

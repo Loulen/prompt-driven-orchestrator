@@ -84,6 +84,10 @@ mod extension_trigger_fire;
 #[path = "extension_node_launch.rs"]
 mod extension_node_launch;
 
+// CORE-43: the delivery of a Node signed by the identity an extension gives it.
+#[path = "delivery_identity.rs"]
+mod delivery_identity;
+
 // API 0.9: the extension data of a Run's creation, `--ext`, `Host::create_run`.
 #[path = "extension_run_creation.rs"]
 mod extension_run_creation;

@@ -133,6 +133,9 @@ pub async fn deliver_node_run(
     // history rewritten by this node, and resolving in its favour drops nothing.
     // No base recorded ⇒ no resolution.
     let spawn_base = merge_action::spawn_base_sha(events, node_id, iter);
+    // CORE-43: the identity the extensions gave the node signs every commit of
+    // its delivery, as it signs the commits the node made itself.
+    let identity = merge_action::frozen_git_identity(events, node_id, iter);
 
     // The lock guards the *git operation*, not the nodes' work: two non-isolated
     // NodeRuns still run side by side in the shared worktree with no runtime
@@ -150,6 +153,7 @@ pub async fn deliver_node_run(
             node_id,
             iter,
             spawn_base.as_deref(),
+            &identity,
         )
     };
 

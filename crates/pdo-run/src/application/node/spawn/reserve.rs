@@ -293,7 +293,7 @@ pub(super) async fn reserve(
                 "base_sha": spawn_base_sha,
             })),
         };
-        freeze_claude_config_dir(&mut node_started, extension);
+        freeze_extension_env(&mut node_started, extension);
         // A failed `NodeStarted` append means the reservation was NOT recorded:
         // treat it as a spawn abort (reap + RunFailed) rather than launching a
         // tmux session the run's event log has no record of.
@@ -357,18 +357,28 @@ pub(super) async fn reserve(
     Ok((full_prompt, script_env))
 }
 
-/// API 0.8: FREEZE the `CLAUDE_CONFIG_DIR` an extension gave the node, so its
-/// cost and liveness read its transcripts under that folder. Written only when
-/// given, so every other `NodeStarted` keeps its shape.
-pub(crate) fn freeze_claude_config_dir(
+/// FREEZE on the `NodeStarted` what the core reads back from the environment
+/// the extensions gave the node. Each key is written only when given, so every
+/// other `NodeStarted` keeps its shape.
+///
+/// - API 0.8: the `CLAUDE_CONFIG_DIR`, so its cost and liveness read its
+///   transcripts under that folder.
+/// - CORE-43: the git identity (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`), which signs
+///   its delivery. Nothing else of that environment: it may carry secrets, and
+///   the event log is read by every Reader of the Run.
+pub(crate) fn freeze_extension_env(
     node_started: &mut event::Event,
     extension: &pdo_kernel::extension_host::NodeContribution,
 ) {
     use crate::application::node::extension_launch::CLAUDE_CONFIG_DIR;
-    if let (Some(dir), Some(payload)) = (
-        extension.env.get(CLAUDE_CONFIG_DIR),
-        node_started.payload.as_mut(),
-    ) {
+    let Some(payload) = node_started.payload.as_mut() else {
+        return;
+    };
+    if let Some(dir) = extension.env.get(CLAUDE_CONFIG_DIR) {
         payload["claude_config_dir"] = serde_json::json!(dir);
+    }
+    let identity = pdo_workspace::domain::commit_identity::CommitIdentity::from_env(&extension.env);
+    if !identity.is_empty() {
+        payload["git_identity"] = serde_json::json!(identity);
     }
 }

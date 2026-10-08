@@ -10,6 +10,24 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.20.0
+
+`pdo-extension-api` passe en **0.11.0**, et le module `@pdo/extension-ui` avec lui : ajouts
+seulement, une extension 0.1 à 0.10 compile et tourne telle quelle. Détail :
+`docs/reference/extension-api.md`.
+
+- **Nom d'un Projet** (CORE-41) : `Host::project_name(id)` donne le nom d'un Projet, ou rien
+  pour un id inconnu, de façon synchrone (y compris depuis `authorize`). Le daemon lit les
+  Projets avant de servir et relit un Projet à chaque changement, avant de l'annoncer.
+- **Triggers en direct** (CORE-41) : le flux de l'interface relaie `trigger_updated` et
+  `project_changed`, qu'il jetait ; un Trigger modifié ou un Projet renommé ailleurs se met à
+  jour sans recharger. `Host::triggers_changed()` annonce un `trigger_updated` sans
+  `trigger_id`, et la liste des Triggers relit tout.
+- **Triggers lus dans leur Projet** (CORE-41) : les Opérations sur un Trigger sont dans le
+  Projet de son dépôt cible (aucun sans dépôt cible). `GET /triggers`, `GET /triggers/{id}`,
+  ses tirs et ce que `/ws` dit d'un Trigger demandent `trigger` × `read`. Une extension qui
+  refusait toute Opération quel que soit son verbe masque désormais aussi les Triggers.
+
 ## 2.19.0 — Ouverture sondée des WebSockets, Résumé de Run (CORE-32)
 
 `pdo-extension-api` passe en **0.10.0** : ajout seulement, une extension 0.1 à 0.9 compile et

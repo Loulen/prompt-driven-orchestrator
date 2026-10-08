@@ -23,6 +23,8 @@ export default function RunRowMenu({
   canResume,
   canRetryAll,
   canCleanup,
+  canRename,
+  canForget,
 }: {
   run: RunListEntry;
   pane: RunsPaneState;
@@ -31,6 +33,10 @@ export default function RunRowMenu({
   canResume: boolean;
   canRetryAll: boolean;
   canCleanup: boolean;
+  /** CORE-42: the caller may rename the Run. */
+  canRename: boolean;
+  /** CORE-42: an archived Run the caller may forget. */
+  canForget: boolean;
 }) {
   const { startRename, handlePause, handleResume, setConfirmRetryAll, setConfirmCleanup, setConfirmForget, runShell } =
     pane;
@@ -39,7 +45,7 @@ export default function RunRowMenu({
   const extra = useMemo(() => ({ entity: runEntity(run) }), [run]);
   return (
     <RowMenu label={`More actions for ${label}`} testId="run-row-menu">
-      {!isRenaming && (
+      {!isRenaming && canRename && (
         <RowMenuItem data-testid="run-menu-rename" onClick={() => startRename(run)}>
           <Pencil /> Rename
         </RowMenuItem>
@@ -68,7 +74,7 @@ export default function RunRowMenu({
         <Copy /> Copy run id
       </RowMenuItem>
       <ExtensionMenuGroups location="run/item/menu" extra={extra} itemClassName={ROW_MENU_EXTENSION_ITEM} />
-      {(canCleanup || isArchived) && <DropdownMenuSeparator />}
+      {(canCleanup || canForget) && <DropdownMenuSeparator />}
       {canCleanup && (
         <RowMenuItem
           variant="destructive"
@@ -78,7 +84,7 @@ export default function RunRowMenu({
           <Trash2 /> {isLiveRun(run.status) ? "Stop and archive" : "Cleanup"}
         </RowMenuItem>
       )}
-      {isArchived && (
+      {canForget && (
         <RowMenuItem variant="destructive" data-testid="run-menu-forget" onClick={() => setConfirmForget(run.run_id)}>
           <Trash2 /> Forget
         </RowMenuItem>

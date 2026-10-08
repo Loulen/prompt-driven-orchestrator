@@ -6,9 +6,14 @@ import type { GesturePopover } from "./EnlargedTerminalBar";
  * The behaviour of the « Terminal agrandi » (#44, core #968): the overlay's
  * exits, the keyboard it keeps from the app, the focus it gives the agent, and
  * the verdict popover of its gestures. `collapse` (a stable callback) brings
- * the terminal back to the split view.
+ * the terminal back to the split view. While `keyboardSuspended` (a modal over
+ * the overlay, the import), the keyboard is the modal's.
  */
-export function useEnlargedTerminal(expanded: boolean, collapse: () => void) {
+export function useEnlargedTerminal(
+  expanded: boolean,
+  collapse: () => void,
+  keyboardSuspended = false,
+) {
   const frameRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   // Closing on the backdrop needs the press AND the release there: a selection
@@ -39,7 +44,7 @@ export function useEnlargedTerminal(expanded: boolean, collapse: () => void) {
   // aimed at the terminal's textarea is the agent's (Escape interrupts Claude
   // Code), and passes untouched, the rule of `RunShellModal`.
   useEffect(() => {
-    if (!expanded) return;
+    if (!expanded || keyboardSuspended) return;
     const onKey = (e: KeyboardEvent) => {
       const active = document.activeElement;
       if (active && active.classList.contains("xterm-helper-textarea")) return;
@@ -51,7 +56,7 @@ export function useEnlargedTerminal(expanded: boolean, collapse: () => void) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [expanded, collapse]);
+  }, [expanded, collapse, keyboardSuspended]);
 
   // The gesture popover closes on any press outside it.
   useEffect(() => {

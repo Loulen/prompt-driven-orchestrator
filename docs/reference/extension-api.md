@@ -113,6 +113,8 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /triggers` (0.11) | `trigger` × `read`, targeted, per Trigger listed, in the Projet of its target repository | the Trigger is absent |
 | `GET /triggers/{id}`, `/triggers/{id}/fires` (0.11) | `trigger` × `read` on `{id}` | `403` `operation_refused` |
 | `/ws`, about a Trigger (0.11) | `trigger` × `read` on the Trigger a message is about (`trigger_created`, `trigger_updated`, `trigger_deleted`, `trigger_fired`, `operation_applied` on it), in its Projet, per connection (answer kept 5 s) | the message is not sent to that connection |
+| `/ws`, an extension's event guarded by a read (0.11) | the read the event carries (`ExtensionEvent::guarded_by`), per connection (answer kept 5 s) | the event is not sent to that connection |
+| `/ws`, an `operation_applied` on an extension's Ressource (0.11) | `<extension>/<kind>` × `read` on the entity it is about (its target, or the entity a creation made), in the Projets of its Operation, per connection (answer kept 5 s) | the message is not sent to that connection |
 
 A read is in the same Projets as the gestures on its entity: a Run's in the Projet of its primary
 repository, a Trigger's in the Projet of its target repository, a Projet's in itself. The actor is the one `identify` found: on `/ws`, the one of the
@@ -154,7 +156,9 @@ core's mechanisms (amendment #34):
 - `authorize(actor, operation)`: every extension's `authorize`, the caller's included; answer a
   refusal with `Authorization::into_result()?`, a `403` `operation_refused`.
 - `on_create(actor, entity)`: the attributes the other extensions stamp; the extension stores them.
-- `publish(ExtensionEvent)`: broadcast on `/ws` and to the other extensions.
+- `publish(ExtensionEvent)`: broadcast on `/ws` and to the other extensions. An event
+  `guarded_by(read)` (0.11) reaches only the `/ws` connections whose Actor may run that read
+  (below); the other extensions receive it whatever the guard.
 - `applied(OperationApplied)`: tell the core that an authorized mutation succeeded.
 - `catalogue()` (0.8): the catalogue of the Ressources, below.
 - `display_name(actor)` (0.8): how an Actor shows, the first extension that names it (the
@@ -168,7 +172,8 @@ core's mechanisms (amendment #34):
 - `triggers_changed()` (0.11): the suspensions of the Triggers changed for a cause outside a
   Trigger's mutation, one the extension holds itself. The core announces
   `{"type": "trigger_updated"}`, without `trigger_id`, and the list of the Triggers reads them all
-  again (below).
+  again (below). The interface also asks again which gestures on the Runs it may show: call it
+  when an Actor's rights change, so that an open view follows without reloading.
 
 `NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
 Run (`503`), names no Projet and signals nothing: the host of `ExtensionContext::new`, and a stand-in in an extension's
@@ -240,6 +245,10 @@ GET /resources
     "verbs": ["create", "update", "delete", "archive"], "extension": "test" }
 ]
 ```
+
+Since 0.11, `node` lists `import_files` (the files a user imports into a node with a live session)
+and `send_text` (a text written into its terminal input, without Enter): an extension of rights
+that maps the node verbs maps these two as well, or they follow its default.
 
 The same list comes from `Host::catalogue()` inside the daemon, and `core_resources()` /
 `catalogue(manifests)` build it without a daemon. An extension of rights reads it to list what
@@ -339,3 +348,24 @@ pill appear or go without reloading.
 ```
 
 An extension's own events arrive as `{"type": "extension_event", "extension", "name", "payload"}`.
+
+**Guard what a Reader may not read (0.11).** An event about an entity of a Projet goes, by
+default, to every `/ws` connection. Attach the read that protects it, and the core sends it only to
+the connections whose Actor may run that read (a Reader of another Projet receives nothing of it):
+
+```rust
+let read = Operation::new(ResourceKind::extension("notes", "note"), Verb::Read)
+    .on(&note.id)
+    .in_projects([note.project.clone()]);
+host.publish(ExtensionEvent::new("note_changed", payload).guarded_by(read));
+```
+
+The core asks `authorize` once per connection and per read (the answer kept 5 s, as for a Run),
+and sends the event without the guard: the envelope does not change. A guard that is no read
+refuses every connection. Without an extension that restricts the reads, every connection
+receives it. An `operation_applied` on an extension's Ressource needs no guard: the core guards it
+with the read of its entity, in the Projets of its Operation, so fill those Projets when you build
+the Operation, and its `entity` for a creation (without either, the message reaches every
+connection). Your own `authorize` then answers that read: refuse it where the Actor may not read
+the entity. For a deletion, the entity is gone when the read is asked: decide on the Projets of
+the Operation, not by looking the entity up, or no connection learns of the deletion.

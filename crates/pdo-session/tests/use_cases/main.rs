@@ -11,3 +11,4 @@ mod shell;
 mod status;
 mod sweep;
 mod terminal;
+mod terminal_text;

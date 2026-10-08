@@ -1,4 +1,4 @@
-import { useCallback, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { Maximize2 } from "lucide-react";
 import type { NodeState } from "../../../shared/generated/NodeState";
 import type { NodeStatus } from "../../../shared/generated/NodeStatus";
@@ -9,6 +9,8 @@ import {
 } from "../../../shared/ui/resizable";
 import TmuxTerminal from "../../../session/components/TmuxTerminal";
 import { terminalPlaceholder } from "../../model/nodeStatus";
+import { importBlockedReason, SEND_NEEDS_CONTROL } from "../../model/nodeImport";
+import ImportFilesModal from "./ImportFilesModal";
 import { STATUS_BORDER } from "../../../nodeStyles";
 import type { TerminalView } from "./types";
 import {
@@ -34,6 +36,7 @@ export default function TerminalSection({
   node,
   nodeName,
   runId,
+  isArchived = false,
   selectedIter,
   selectedIterStatus,
   sessionName,
@@ -42,12 +45,14 @@ export default function TerminalSection({
   setTerminalView,
   setTerminalLive,
   setTerminalSpectating,
+  terminalSpectating = false,
   detailsPane,
   completion,
 }: {
   node: NodeState;
   nodeName?: string | null;
   runId: string;
+  isArchived?: boolean;
   selectedIter: number;
   selectedIterStatus: NodeStatus;
   sessionName: string;
@@ -56,6 +61,9 @@ export default function TerminalSection({
   setTerminalView: Dispatch<SetStateAction<TerminalView>>;
   setTerminalLive: (live: boolean) => void;
   setTerminalSpectating: (spectating: boolean) => void;
+  /** This browser only watches the terminal (ADR-0075): it may import, not
+   *  write into the agent's input. */
+  terminalSpectating?: boolean;
   detailsPane: ReactNode;
   completion: TerminalCompletion;
 }) {
@@ -65,6 +73,15 @@ export default function TerminalSection({
   // ResizeObserver resizes the grid both ways.
   const expanded = terminalView === "expanded";
   const collapse = useCallback(() => setTerminalView("split"), [setTerminalView]);
+  // « Fichier importé en cours de Run »: the files dropped on the terminal (or
+  // `[]` from its Import button) while the import modal is open.
+  const [importFiles, setImportFiles] = useState<File[] | null>(null);
+  const importReason = importBlockedReason({
+    isArchived,
+    selectedIter,
+    currentIter: node.iter,
+    status: selectedIterStatus,
+  });
   const {
     frameRef,
     popoverRef,
@@ -73,7 +90,14 @@ export default function TerminalSection({
     onFramePointerDownCapture,
     onBackdropPointerDown,
     onBackdropPointerUp,
-  } = useEnlargedTerminal(expanded, collapse);
+  } = useEnlargedTerminal(expanded, collapse, importFiles !== null);
+  const closeImport = useCallback(() => {
+    setImportFiles(null);
+    // Back to the agent's input, where a sent text waits for Enter.
+    frameRef.current
+      ?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+      ?.focus();
+  }, [frameRef]);
 
   // One element in both modes (only its classes change), so the terminal under
   // it is never remounted. Fixed positioning needs no ancestor with a
@@ -131,6 +155,8 @@ export default function TerminalSection({
           paneSource={{ runId, nodeId: node.node_id, iter: selectedIter }}
           onLiveSocketChange={setTerminalLive}
           onSpectatingChange={setTerminalSpectating}
+          onImportFiles={isArchived ? undefined : setImportFiles}
+          importDisabledReason={importReason}
         />
       ) : (
         <div className="flex h-full flex-col" data-testid="pending-placeholder">
@@ -154,6 +180,17 @@ export default function TerminalSection({
           completion={completion}
           iter={selectedIter}
           popoverRef={popoverRef}
+        />
+      )}
+      {importFiles !== null && (
+        <ImportFilesModal
+          runId={runId}
+          nodeId={node.node_id}
+          iter={node.iter}
+          initialFiles={importFiles}
+          blockedReason={importReason}
+          sendBlockedReason={terminalSpectating ? SEND_NEEDS_CONTROL : null}
+          onClose={closeImport}
         />
       )}
     </div>

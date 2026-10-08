@@ -10,6 +10,50 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.25.0 — Finitions de la liste de Runs (CORE-44)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit l'emplacement `runs/empty` et `copyToClipboard`, ajouts seulement.
+
+- **Liste de Runs vide** : l'emplacement d'UI `runs/empty` (décorations seulement) s'affiche sous
+  « No runs yet » tant que la liste ne contient aucun Run. Le texte du core ne change pas.
+- **Copier hors HTTPS** : `copyToClipboard(text)` de `@pdo/extension-ui` est la copie de tous les
+  boutons Copier du core ; sur une instance servie en http, elle retombe sur
+  `execCommand("copy")`. Elle ne rejette jamais et rend un booléen.
+- **Arbre des archivés** : la section des archivés range les Runs sous leur parent, comme celle des
+  actifs ; la préférence « Child runs » et le bouton global valent pour les deux. Un Run dont le
+  parent est dans l'autre section en est une racine et porte un lien vers lui. Archiver un parent
+  emporte toujours ses enfants terminés et reste refusé tant qu'un enfant vit : ce cas
+  (enfant actif sous parent archivé) ne se produit pas depuis l'UI.
+
+## 2.24.0 — Gestes selon les Droits, flux gardé par la lecture (CORE-42)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit `ExtensionEvent::guarded_by`, ajout seulement.
+
+- **Flux gardé pour les extensions** (CORE-42) : `ExtensionEvent::guarded_by(read)` attache à un
+  événement l'Opération de lecture qui le protège ; `/ws` ne l'envoie qu'aux connexions dont
+  l'Acteur peut la faire, sans la garde. Un `operation_applied` sur une Ressource d'extension est
+  gardé par la lecture de son entité, dans les Projets de son Opération : une extension qui
+  refusait toute Opération quel que soit son verbe masque désormais aussi, sur `/ws`, les
+  `operation_applied` de ses Ressources.
+- **Gestes selon les Droits** (CORE-42) : la vue d'un Run demande `POST /authorize` une fois à son
+  ouverture pour tous les gestes du Run et de ses nodes, et masque ceux qui sont refusés ; les
+  lignes de la liste de Runs, leur menu et les actions groupées suivent la même règle. Relu quand
+  un Projet change ou qu'une extension signale un changement des Triggers. Un geste refusé par le
+  daemon malgré tout (un Droit changé entre-temps) le dit dans un toast, là où il ne disait rien.
+
+## 2.23.0 — Fichier importé en cours de Run (CORE-37)
+
+`pdo-extension-api` et `@pdo/extension-ui` restent en **0.11.0**, version pas encore publiée
+sur `main` : elle reçoit deux verbes de plus, ajouts seulement.
+
+- **Fichier importé en cours de Run** : deux Opérations nouvelles sur la Ressource `node`,
+  `import_files` et `send_text` (catalogue des Ressources). Une extension de Droits qui
+  énumère les verbes d'un Node doit les mapper ; sinon elles suivent sa règle par défaut.
+  L'import compte dans le même budget `max_attachments_mb` que les fichiers joints au lancement
+  d'un Run, par import : derrière un reverse proxy, `client_max_body_size` doit le suivre.
+
 ## 2.22.0 — Livraison signée par l'identité git du Node (CORE-43)
 
 `pdo-extension-api` reste en **0.11.0** : seule la documentation de `node_env` change. Détail :

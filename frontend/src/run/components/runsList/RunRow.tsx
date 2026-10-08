@@ -13,6 +13,7 @@ import RunRowMenu from "./RunRowMenu";
 import RunParentLink from "./RunParentLink";
 import ActorName from "../../../shared/actors/ActorName";
 import { runCreator } from "../../model/runCreator";
+import type { RunGesture } from "../../model/runGestures";
 
 interface Props {
   node: RunTreeNode;
@@ -44,7 +45,7 @@ export default function RunRow({
     isExpanded, setExpanded, runSel, renamingRunId, renameValue, setRenameValue, renameInputRef,
     commitRename, cancelRename, startRename, handlePause, handleResume, setConfirmRetryAll,
     setConfirmCleanup, setConfirmForget, runShell, runsScrollRef, selectRange, toggleSel,
-    visibleRunIds, runById,
+    visibleRunIds, runById, mayOnRow,
   } = pane;
   const run = node.run;
   // A root whose parent sits in the other section (active / archived) links to it.
@@ -76,19 +77,24 @@ export default function RunRow({
     ? "border-st-stale"
     : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).ring;
   const isArchived = run.status === "archived";
-  const canCleanup = !isArchived;
+  // CORE-42: each gesture also needs the caller's right to make it.
+  const may = (gesture: RunGesture) => mayOnRow(run.run_id, gesture);
+  const canCleanup = !isArchived && may("cleanup_run");
+  const canRename = may("rename_run");
+  const canForget = isArchived && may("delete");
   const isRenaming = renamingRunId === run.run_id;
   // #110 — gate on EXPLICIT statuses, never isLiveRun/isTerminalRun: the former
   // includes `paused` (would wrongly show Pause on a paused run → 409); the
   // latter includes `archived` (would wrongly show Retry-all on archived → 409).
   // Each set is a subset of its daemon guard's accepted statuses.
-  const canPause = run.status === "running" || run.status === "awaiting_user";
-  const canResume = run.status === "paused";
+  const canPause = (run.status === "running" || run.status === "awaiting_user") && may("pause_run");
+  const canResume = run.status === "paused" && may("resume_run");
   const canRetryAll =
-    run.status === "completed" ||
-    run.status === "failed" ||
-    run.status === "halted" ||
-    run.status === "skipped";
+    (run.status === "completed" ||
+      run.status === "failed" ||
+      run.status === "halted" ||
+      run.status === "skipped") &&
+    may("retry_all");
 
   return (
     <button
@@ -232,7 +238,7 @@ export default function RunRow({
           icons appear. */}
       <div className="flex shrink-0 flex-col items-end justify-between gap-1">
       <div className="flex h-4 items-center">
-      {!isRenaming && (
+      {!isRenaming && canRename && (
         <span
           role="button"
           title="Rename run"
@@ -322,7 +328,7 @@ export default function RunRow({
           <Trash2 size={12} />
         </span>
       )}
-      {isArchived && (
+      {canForget && (
         <span
           role="button"
           title="Forget this run permanently (event log + metadata)"
@@ -343,6 +349,8 @@ export default function RunRow({
         canResume={canResume}
         canRetryAll={canRetryAll}
         canCleanup={canCleanup}
+        canRename={canRename}
+        canForget={canForget}
       />
       </div>
       {/* Line 2: the `run/item` decorations (ADR-0081, #31), then the child

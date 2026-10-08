@@ -3,6 +3,7 @@ import type { NodeState } from "../../../shared/generated/NodeState";
 import type { NodeStatus } from "../../../shared/generated/NodeStatus";
 import AwaitingBanner from "./AwaitingBanner";
 import { isOutputValidationFailure } from "../../model/nodeStatus";
+import type { NodeGestureRights } from "./types";
 
 // The prefix the daemon puts on a merge-back conflict's interruption reason
 // (`merge_conflict: <detail>`, #601).
@@ -43,6 +44,7 @@ export default function NodeBanners({
   killStale,
   restartIteration,
   retry,
+  may,
 }: {
   node: NodeState;
   isArchived?: boolean;
@@ -60,6 +62,8 @@ export default function NodeBanners({
   killStale: () => void;
   restartIteration: () => void;
   retry: () => void;
+  /** CORE-42: the gestures on this node the caller may make; the others hide. */
+  may: NodeGestureRights;
 }) {
   return (
     <>
@@ -88,6 +92,7 @@ export default function NodeBanners({
           terminalLive={terminalLive ?? true}
           terminalSpectating={terminalSpectating}
           canRelease={canReleaseCompletion && !isReleasing}
+          canMarkComplete={may.markComplete}
           onRelease={releaseCompletion}
           onMarkComplete={markComplete}
           onOpenChildRun={onOpenChildRun}
@@ -119,6 +124,7 @@ export default function NodeBanners({
           </span>
           {!isArchived && (
             <div className="flex items-center gap-1">
+              {may.kill && (
               <button
                 data-testid="stale-stop-btn"
                 onClick={killStale}
@@ -128,6 +134,8 @@ export default function NodeBanners({
                 <Square size={10} />
                 Stop
               </button>
+              )}
+              {may.restart && (
               <button
                 data-testid="stale-retry-btn"
                 onClick={restartIteration}
@@ -137,6 +145,7 @@ export default function NodeBanners({
                 <RotateCcw size={10} />
                 Retry
               </button>
+              )}
             </div>
           )}
         </div>
@@ -176,7 +185,7 @@ export default function NodeBanners({
           >
             {interruptedBannerText(node.failure_reason)}
           </span>
-          {!isArchived && (
+          {!isArchived && may.retry && (
             <button
               data-testid="interrupted-reopen-btn"
               onClick={retry}

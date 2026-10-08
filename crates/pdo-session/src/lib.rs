@@ -7,6 +7,8 @@
 //! - **Terminal**: the PTY bridge, the shared terminal (pilot and spectators),
 //!   the OS terminal pop-out, a node's pane.
 //! - **Declared wait**: `pdo wait-user`, lifted by the user's Enter.
+//! - **Terminal text**: a text written into a node's input on the user's
+//!   gesture, without Enter.
 //! - **Library assistant**: one shared authoring session, told which template is
 //!   open through the focus.
 //!
@@ -39,6 +41,7 @@ use application::read_pane::ReadPane;
 use application::status::ReadStatus;
 use application::sweep::{ReaperGauge, SweepOrphans};
 use application::terminal::Terminals;
+use application::terminal_text::SendTerminalText;
 
 pub use adapters::http::router;
 
@@ -81,6 +84,7 @@ pub struct Session {
     focus: Arc<FocusCell>,
     options: SessionOptions,
     declare_wait: DeclareWait,
+    send_terminal_text: SendTerminalText,
     terminals: Terminals,
     sweep: SweepOrphans,
     read_status: ReadStatus,
@@ -118,6 +122,13 @@ impl Session {
         };
         Arc::new(Self {
             declare_wait: DeclareWait::new(
+                waits.clone(),
+                tmux.clone(),
+                typed.clone(),
+                extensions.clone(),
+            )
+            .with_projects(projects.clone()),
+            send_terminal_text: SendTerminalText::new(
                 waits.clone(),
                 tmux.clone(),
                 typed.clone(),
@@ -172,6 +183,11 @@ impl Session {
     /// completion).
     pub fn declare_wait(&self) -> &DeclareWait {
         &self.declare_wait
+    }
+
+    /// « Copy & send to terminal »: a text into a node's input, no Enter.
+    pub fn send_terminal_text(&self) -> &SendTerminalText {
+        &self.send_terminal_text
     }
 
     /// The orphan sweep, at boot and on the reaper interval.

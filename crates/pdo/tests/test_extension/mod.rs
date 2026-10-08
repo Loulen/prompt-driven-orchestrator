@@ -60,6 +60,9 @@
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
 //!   0.8, `launch.rs`): the variables, the preamble and the suspensions the
 //!   test sets ([`Control::launch`]).
+//! - `projets.rs` (API 0.11): the name of a Projet through its `Host`, the
+//!   signal of the Triggers, and `PUT /ext/test/notes/<id>`, which publishes
+//!   a `note_changed` guarded by the read of the note in its Projet.
 //! - **`validate_create`** / **`on_create_with_data`** (API 0.9,
 //!   `creation.rs`): refuses a value holding a string starting with `refuse`,
 //!   records each creation and the order of the stamps and the launches,

@@ -1,12 +1,16 @@
 import { useMemo, useRef, useState } from "react";
-import { ChevronDown, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import type { PipelineListEntry } from "../../../shared/generated/PipelineListEntry";
+import type { Project } from "../../../workspace/model/project";
+import { validationOf, type PipelineSections } from "../../../pipeline/model/pipelineValidation";
 import { SelectedMarker } from "../../../harness/components/HarnessSelect";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
 } from "../../../shared/ui/dropdown-menu";
 import { highlightSegments } from "../../../workspace/model/branchSelect";
 import * as newRunForm from "../../model/newRunForm";
@@ -34,15 +38,25 @@ import * as newRunForm from "../../model/newRunForm";
  * row comes back, `Enter` takes the first remaining row, `Esc` empties the fragment and
  * only then closes. Typing from the list returns to the field rather than driving Base
  * UI's typeahead, so there is one filtering gesture and not two competing ones.
+ *
+ * Sections (CONTEXT.md « Pipeline validé »): the Pipelines of the repository's Projet
+ * first, then the global ones; the test Pipelines are folded behind « Show test
+ * pipelines ». A Pipeline validated for other Projets only is in no section.
  */
 export default function PipelineSelect({
   pipelines,
+  sections,
+  project,
   value,
   onChange,
   disabled,
   placeholder,
 }: {
   pipelines: PipelineListEntry[];
+  /** The menu's sections for the chosen repository (see `pipelineSections`). */
+  sections: PipelineSections;
+  /** The Projet that owns the chosen repository, or null — no first section then. */
+  project: Project | null;
   value: string;
   onChange: (id: string) => void;
   disabled: boolean;
@@ -51,13 +65,26 @@ export default function PipelineSelect({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // The test Pipelines are folded away by default. Reopening on a held test
+  // Pipeline unfolds them, so the selected row is never hidden from its own menu.
+  const [showTests, setShowTests] = useState(false);
   const filterRef = useRef<HTMLInputElement>(null);
-
-  const visible = useMemo(
-    () => newRunForm.filterPipelines(pipelines, query),
-    [pipelines, query],
-  );
   const selected = pipelines.find((p) => p.id === value);
+
+  // The sections, each narrowed by the fragment. The test section only counts once
+  // unfolded; `visible` is the flat order the keyboard walks and Enter takes from.
+  const shown = useMemo(
+    () => ({
+      project: newRunForm.filterPipelines(sections.project, query),
+      global: newRunForm.filterPipelines(sections.global, query),
+      test: newRunForm.filterPipelines(sections.test, query),
+    }),
+    [sections, query],
+  );
+  const visible = useMemo(
+    () => [...shown.project, ...shown.global, ...(showTests ? shown.test : [])],
+    [shown, showTests],
+  );
 
   // Derived, never a stored "should I still be open?": a repo change empties the list
   // and reselects from scratch, and a menu left hanging over that would be offering a
@@ -118,6 +145,70 @@ export default function PipelineSelect({
     }
   };
 
+  const renderRow = (pipeline: PipelineListEntry) => {
+    const index = visible.indexOf(pipeline);
+    const isSelected = pipeline.id === value;
+    return (
+      <DropdownMenuItem
+        key={pipeline.id}
+        // The id is a YAML file stem, so it may hold characters a CSS selector
+        // would need escaped. `data-testid` is matched as a whole attribute
+        // value by both Testing Library and Playwright, so it takes the id raw;
+        // `data-pipeline-id` repeats it for anything that must build a query.
+        data-testid={`pipeline-select-option-${pipeline.id}`}
+        data-pipeline-id={pipeline.id}
+        className={`relative pl-6 font-mono ${isSelected ? "bg-acc-bg text-acc" : ""}`}
+        onClick={() => choose(pipeline.id)}
+        onKeyDown={(e) => onOptionKeyDown(e, index)}
+      >
+        {isSelected && <SelectedMarker />}
+        <span className="truncate">
+          {highlightSegments(pipeline.name, query).map((seg, s) => (
+            <span
+              key={s}
+              className={seg.match ? "underline decoration-acc underline-offset-2" : undefined}
+            >
+              {seg.text}
+            </span>
+          ))}
+        </span>
+        <span
+          className="ml-auto shrink-0 pl-3 font-sans text-fg-4"
+          style={{ fontSize: "10px" }}
+        >
+          {pipeline.scope}
+        </span>
+      </DropdownMenuItem>
+    );
+  };
+
+  const renderSection = (
+    key: "project" | "global" | "test",
+    label: string,
+    rows: PipelineListEntry[],
+    empty: string,
+  ) => (
+    <DropdownMenuGroup data-testid={`pipeline-select-section-${key}`}>
+      <DropdownMenuLabel
+        className="px-1.5 pt-1.5 pb-0.5 font-sans uppercase tracking-wider text-fg-4"
+        style={{ fontSize: "9.5px" }}
+      >
+        {label}
+      </DropdownMenuLabel>
+      {rows.length > 0 ? (
+        rows.map(renderRow)
+      ) : (
+        <div
+          data-testid={`pipeline-select-section-${key}-empty`}
+          className="px-2 py-1 text-fg-4"
+          style={{ fontSize: "10.5px" }}
+        >
+          {query ? `No match for “${query}”` : empty}
+        </div>
+      )}
+    </DropdownMenuGroup>
+  );
+
   return (
     <DropdownMenu
       open={menuOpen}
@@ -125,7 +216,10 @@ export default function PipelineSelect({
         setOpen(next);
         // Reset on the way IN, not on the way out: however the last close happened
         // (Escape, click away, a repo change), reopening shows the full list.
-        if (next) setQuery("");
+        if (next) {
+          setQuery("");
+          setShowTests(selected != null && validationOf(selected).kind === "none");
+        }
       }}
     >
       <DropdownMenuTrigger
@@ -174,7 +268,7 @@ export default function PipelineSelect({
           )}
         </div>
 
-        {visible.length === 0 ? (
+        {query && visible.length === 0 ? (
           // Mute, and the current selection is untouched: the fragment is a lens, not
           // an action.
           <div
@@ -185,41 +279,44 @@ export default function PipelineSelect({
             No pipeline matches “{query}”
           </div>
         ) : (
-          visible.map((pipeline, index) => {
-            const isSelected = pipeline.id === value;
-            return (
-              <DropdownMenuItem
-                key={pipeline.id}
-                // The id is a YAML file stem, so it may hold characters a CSS selector
-                // would need escaped. `data-testid` is matched as a whole attribute
-                // value by both Testing Library and Playwright, so it takes the id raw;
-                // `data-pipeline-id` repeats it for anything that must build a query.
-                data-testid={`pipeline-select-option-${pipeline.id}`}
-                data-pipeline-id={pipeline.id}
-                className={`relative pl-6 font-mono ${isSelected ? "bg-acc-bg text-acc" : ""}`}
-                onClick={() => choose(pipeline.id)}
-                onKeyDown={(e) => onOptionKeyDown(e, index)}
-              >
-                {isSelected && <SelectedMarker />}
-                <span className="truncate">
-                  {highlightSegments(pipeline.name, query).map((seg, s) => (
-                    <span
-                      key={s}
-                      className={seg.match ? "underline decoration-acc underline-offset-2" : undefined}
-                    >
-                      {seg.text}
-                    </span>
-                  ))}
-                </span>
-                <span
-                  className="ml-auto shrink-0 pl-3 font-sans text-fg-4"
-                  style={{ fontSize: "10px" }}
-                >
-                  {pipeline.scope}
-                </span>
-              </DropdownMenuItem>
-            );
-          })
+          <>
+            {project &&
+              renderSection(
+                "project",
+                `Project pipelines · ${project.name}`,
+                shown.project,
+                `No pipeline validated for ${project.name} yet`,
+              )}
+            {renderSection(
+              "global",
+              "Global pipelines",
+              shown.global,
+              "No pipeline validated for all projects",
+            )}
+          </>
+        )}
+
+        {sections.test.length > 0 && (
+          <>
+            <div className="my-1 h-px bg-line" />
+            <DropdownMenuItem
+              data-testid="pipeline-select-show-tests"
+              aria-expanded={showTests}
+              // Folding is not a choice: the menu stays open.
+              closeOnClick={false}
+              onClick={() => setShowTests((v) => !v)}
+              className="gap-1 font-sans text-fg-3"
+              style={{ fontSize: "11px" }}
+            >
+              {showTests ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+              <span>{showTests ? "Hide test pipelines" : "Show test pipelines"}</span>
+              <span className="ml-auto text-fg-4" style={{ fontSize: "10px" }}>
+                {sections.test.length}
+              </span>
+            </DropdownMenuItem>
+            {showTests &&
+              renderSection("test", "Unvalidated pipelines", shown.test, "No test pipeline")}
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

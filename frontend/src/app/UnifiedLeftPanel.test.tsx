@@ -6,6 +6,7 @@ import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
+import type { Project } from "../workspace/model/project";
 import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
 import { ApiError } from "../shared/http/client";
 import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../run/api/commands";
@@ -359,11 +360,13 @@ function renderPanel({
   libraryPipelines = [],
   selectedRunId = null,
   triggers,
+  projects,
 }: {
   runs?: RunListEntry[];
   libraryPipelines?: LibraryPipelineEntry[];
   selectedRunId?: string | null;
   triggers?: TriggerListEntry[];
+  projects?: Project[];
 } = {}) {
   return render(
     <UnifiedLeftPanel
@@ -374,6 +377,7 @@ function renderPanel({
       libraryPipelines={libraryPipelines}
       onLibraryPipelinesChanged={noop}
       triggers={triggers}
+      projects={projects}
     />,
   );
 }
@@ -938,7 +942,7 @@ describe("UnifiedLeftPanel pipeline delete", () => {
     path: "/home/u/.pdo/library/pipelines/simple-bugfix.yaml",
     node_count: 3,
     modified: null,
-    variables: {}, prompt_required: true,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
   };
 
   it("deletes the selected instance pipeline by id", async () => {
@@ -959,10 +963,46 @@ describe("UnifiedLeftPanel pipeline delete", () => {
   });
 });
 
+// CONTEXT.md « Pipeline validé »: each row says who the launch forms offer it to.
+describe("UnifiedLeftPanel pipeline validation indicator", () => {
+  const row = (id: string, validation: PipelineListEntry["validation"]): PipelineListEntry => ({
+    id,
+    name: id,
+    scope: "instance",
+    path: `/home/u/.pdo/pipelines/${id}.yaml`,
+    node_count: 2,
+    modified: null,
+    variables: {},
+    prompt_required: true,
+    validation,
+  });
+
+  it("shows « All », the Projet count, or the flask of a test pipeline", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([
+      row("common", { kind: "all" }),
+      row("team", { kind: "projects", project_ids: ["prj-a"] }),
+      row("draft", { kind: "none" }),
+    ]);
+
+    renderPanel({ projects: [{ id: "prj-a", name: "Alpha", members: [] }] });
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("draft");
+
+    expect(screen.getByTestId("validation-indicator-common")).toHaveTextContent("All");
+    expect(screen.getByTestId("validation-indicator-team")).toHaveAccessibleName(
+      "Validated for: Alpha",
+    );
+    expect(screen.getByTestId("validation-indicator-draft")).toHaveAttribute(
+      "data-validation",
+      "none",
+    );
+  });
+});
+
 // #774 — a hover pencil on Pipelines-tab rows flips the name into an inline
 // input; Enter commits through the store's renamePipeline action.
 describe("UnifiedLeftPanel pipeline rename", () => {
-  const entry: PipelineListEntry = { prompt_required: true,
+  const entry: PipelineListEntry = { prompt_required: true, validation: { kind: "all" },
     id: "simple-bugfix",
     name: "simple-bugfix",
     scope: "instance",
@@ -1089,7 +1129,7 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
         path: "/repo/.pdo/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {}, prompt_required: true,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
       },
     ]);
 
@@ -1126,7 +1166,7 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
         path: "/home/u/.pdo/library/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {}, prompt_required: true,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
       } satisfies PipelineListEntry,
     ]);
     renderWithLib(); // libraryPipelines={[libOnly]}, opens Library tab
@@ -1147,7 +1187,7 @@ describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance 
         path: "/home/u/.pdo/library/pipelines/fixture.yaml",
         node_count: 3,
         modified: null,
-        variables: {}, prompt_required: true,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
       } satisfies PipelineListEntry,
     ]);
     renderWithLib(onChanged);
@@ -1181,7 +1221,7 @@ describe.skip("UnifiedLeftPanel duplicate is usable without reload (#371, supers
     path: "/home/u/.pdo/library/pipelines/planner.yaml",
     node_count: 3,
     modified: null,
-    variables: {}, prompt_required: true,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
   };
   // /pipelines shape of the copy: the daemon scans the library dir and tags it
   // scope:"library", so it belongs in block 1 (proper button, "library" badge).
@@ -1259,7 +1299,7 @@ describe.skip("UnifiedLeftPanel duplicate is usable without reload (#371, supers
       path: "/home/u/.pdo/library/pipelines/solo.yaml",
       node_count: 2,
       modified: null,
-      variables: {}, prompt_required: true,
+      variables: {}, prompt_required: true, validation: { kind: "all" },
     };
     const soloCopy: PipelineListEntry = {
       ...solo,
@@ -1337,7 +1377,7 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
     path: "/repo/.pdo/pipelines/fixture.yaml",
     node_count: 3,
     modified: null,
-    variables: {}, prompt_required: true,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
   };
 
   function renderStarredRow(libraryPipelines: LibraryPipelineEntry[]) {
@@ -2318,7 +2358,7 @@ describe.skip("UnifiedLeftPanel library multi-select (#577, scope fixtures super
     path: "/x/pipe1.yaml",
     node_count: 1,
     modified: null,
-    variables: {}, prompt_required: true,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
   };
   const libOnly: LibraryPipelineEntry = {
     id: "fixture",

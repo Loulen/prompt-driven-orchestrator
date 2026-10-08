@@ -24,6 +24,8 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "triggers_paused",
   // #552: a Projet created, renamed or deleted elsewhere.
   "project_changed",
+  // The validation of a Pipeline changed (CONTEXT.md « Pipeline validé »).
+  "pipeline_validation_changed",
 ]);
 
 /**

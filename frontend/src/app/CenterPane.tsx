@@ -3,6 +3,7 @@ import EditCanvas from "../pipeline/components/EditCanvas";
 import TabBar from "../pipeline/components/TabBar";
 import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
+import type { Project } from "../workspace/model/project";
 import type { useRunNavigation } from "./useRunNavigation";
 
 /**
@@ -23,6 +24,7 @@ export default function CenterPane({
   selectedRun,
   onSelectRun: handleSelectRun,
   rightPaneCollapsed,
+  projects,
 }: {
   hasEditTab: boolean;
   orchestratorReturn: ReturnType<typeof useRunNavigation>["orchestratorReturn"];
@@ -38,10 +40,12 @@ export default function CenterPane({
   onSelectRun: (runId: string) => void;
   /** #949: whether the right pane is folded — the canvas re-frames on its toggle. */
   rightPaneCollapsed: boolean;
+  /** The Projets the tab bar's validation indicator names. */
+  projects: Project[];
 }) {
   return hasEditTab ? (
     <div className="flex h-full min-w-0 flex-col">
-      <TabBar />
+      <TabBar projects={projects} />
       {orchestratorReturn && selectedRun?.run_id === orchestratorReturn.childRunId && (
         <button
           type="button"

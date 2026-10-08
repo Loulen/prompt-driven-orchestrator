@@ -83,7 +83,7 @@ describe("useDaemonSocket", () => {
     unmount();
   });
 
-  it("relays the changes of the Triggers and of the Projets made elsewhere", async () => {
+  it("relays the changes of the Triggers, the Projets and the validations made elsewhere", async () => {
     const { result, unmount } = renderHook(() => useDaemonSocket());
     await settle();
     const seen: WsMessage[] = [];
@@ -95,11 +95,15 @@ describe("useDaemonSocket", () => {
       // An extension's signal: every Trigger, no id.
       ws.fire("message", { data: JSON.stringify({ type: "trigger_updated" }) });
       ws.fire("message", { data: JSON.stringify({ type: "project_changed", project_id: "p1" }) });
+      ws.fire("message", {
+        data: JSON.stringify({ type: "pipeline_validation_changed", pipeline_id: "shared" }),
+      });
     });
     expect(seen).toEqual([
       { type: "trigger_updated", trigger_id: "t1" },
       { type: "trigger_updated" },
       { type: "project_changed", project_id: "p1" },
+      { type: "pipeline_validation_changed", pipeline_id: "shared" },
     ]);
     stop();
     unmount();

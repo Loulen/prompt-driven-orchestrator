@@ -19,6 +19,7 @@ export interface WsMessage {
     | "trigger_deleted"
     | "triggers_paused"
     | "project_changed"
+    | "pipeline_validation_changed"
     | "cost_prices_synced"
     | "run_forgotten";
   event?: DaemonEvent;

@@ -24,9 +24,12 @@ export function useNewRunState(open: boolean) {
   // target repo's branches, both served by the daemon (#359).
   const {
     pipelines,
+    projects,
     selectedPipeline,
     selectedPipelineId,
     setSelectedPipelineId,
+    pipelineChosen,
+    setPipelineChosen,
     branches,
     branchesLoading,
     sourceBranch,
@@ -176,7 +179,8 @@ export function useNewRunState(open: boolean) {
   }, []);
 
   return {
-    pipelines, selectedPipeline, selectedPipelineId, setSelectedPipelineId, branches,
+    pipelines, projects, selectedPipeline, selectedPipelineId, setSelectedPipelineId,
+    pipelineChosen, setPipelineChosen, branches,
     branchesLoading, sourceBranch, setSourceBranch, loadBranches, clearBranches, lastFetchAt,
     branchFetchError, branchesFetching, refetchRemotes, rereadBranches, fastForward,
     targetRepo, repoValid, repoError, repoValidating, repoBorderClass, handleRepoChange,

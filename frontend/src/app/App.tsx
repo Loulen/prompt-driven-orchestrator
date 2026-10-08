@@ -293,6 +293,7 @@ export default function App() {
               selectedRun={selectedRun}
               onSelectRun={handleSelectRun}
               rightPaneCollapsed={rightPaneCollapsed}
+              projects={projects}
             />
           </ResizablePanel>
 

@@ -47,7 +47,7 @@ function listBranchesReturns(branches: BranchRef[], over: Partial<BranchList> = 
 }
 
 function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
-  return { prompt_required: true,
+  return { prompt_required: true, validation: { kind: "all" },
     id: "p1",
     name: "Auditor",
     scope: "instance",

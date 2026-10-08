@@ -6,6 +6,7 @@ import { useNewRunState } from "./useNewRunState";
 import { useOpenIntentSeeding } from "./useOpenIntentSeeding";
 import { useAttachments } from "./useAttachments";
 import { useNewRunSubmit } from "./useNewRunSubmit";
+import { usePipelineOffer } from "./usePipelineOffer";
 import type { SectionFormHost } from "../../../shared/extensions/sectionForm";
 
 interface NewRunFormArgs {
@@ -27,16 +28,12 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
   const state = useNewRunState(open);
   useOpenIntentSeeding(open, openIntent, state);
   const {
-    pipelines, selectedPipeline, selectedPipelineId, setSelectedPipelineId, repoValid,
-    overrides, setOverrides, setVarsOpen,
+    selectedPipeline, setSelectedPipelineId, setPipelineChosen, overrides, setOverrides,
+    setVarsOpen,
   } = state;
 
-  // Auto-select first repo pipeline when available
-  const shouldAutoSelect = open && repoValid && pipelines.length > 0 && !selectedPipelineId;
-  if (shouldAutoSelect) {
-    const first = pipelines[0];
-    if (first) setSelectedPipelineId(first.id);
-  }
+  // The Pipeline menu's sections, and the selection held to them.
+  const { repoProject, sections: pipelineSections } = usePipelineOffer(open, state);
 
   const variableEntries = useMemo(() => {
     if (!selectedPipeline) return [];
@@ -53,10 +50,11 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
   const handlePipelineChange = useCallback(
     (value: string) => {
       setSelectedPipelineId(value);
+      setPipelineChosen(true);
       setOverrides({});
       setVarsOpen(false);
     },
-    [setSelectedPipelineId, setOverrides, setVarsOpen],
+    [setSelectedPipelineId, setPipelineChosen, setOverrides, setVarsOpen],
   );
 
   const flushPendingSaves = useEditStore((s) => s.flushPendingSaves);
@@ -83,6 +81,8 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
 
   return {
     ...state,
+    repoProject,
+    pipelineSections,
     variableEntries,
     overrideCount,
     handlePipelineChange,

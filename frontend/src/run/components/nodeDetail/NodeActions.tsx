@@ -23,6 +23,7 @@ export default function NodeActions({
   markVerdict,
   releaseCompletion,
   markComplete,
+  canMarkComplete,
 }: {
   node: NodeState;
   runId: string;
@@ -37,6 +38,8 @@ export default function NodeActions({
   markVerdict: ({ iter: number } & MarkVerdict) | null;
   releaseCompletion: () => void;
   markComplete: () => void;
+  /** CORE-42: « Mark complete » is allowed to the caller (else hidden). */
+  canMarkComplete: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1.5 px-3 py-2">
@@ -92,6 +95,7 @@ export default function NodeActions({
                       : "Mark ready for completion"}
                 </button>
             )}
+              {canMarkComplete && (
               <button
                 onClick={markComplete}
                 title="Take the artifacts as they are and complete the node now"
@@ -102,6 +106,7 @@ export default function NodeActions({
                 <CheckCircle size={12} />
                 Mark complete
               </button>
+              )}
           </div>
 
           {completionReleased ? (

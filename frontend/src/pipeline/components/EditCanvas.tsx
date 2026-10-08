@@ -147,6 +147,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     handleReopen,
     handleRetryAll,
     handleOpenShell,
+    mayReopen,
+    mayRetryAll,
   } = useCanvasRunActions(activeRunState, onSelectRun);
 
   const { profiles: agentProfiles } = useAgentProfiles();
@@ -259,8 +261,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         reviewTitle={reviewTitle}
         readOnly={readOnly}
         finishedRun={finishedRun}
-        onReopen={handleReopen}
-        onRetryAll={() => setConfirmRetryAll(true)}
+        onReopen={mayReopen ? handleReopen : undefined}
+        onRetryAll={mayRetryAll ? () => setConfirmRetryAll(true) : undefined}
         onOpenShell={handleOpenShell}
         run={activeRunState}
         runEdit={runEdit}

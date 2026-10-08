@@ -18,7 +18,8 @@ import DetailsPane from "./nodeDetail/DetailsPane";
 import TerminalSection from "./nodeDetail/TerminalSection";
 import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
 import { nodeSessionEnded } from "../model/nodeStatus";
-import type { ModalState, TerminalView } from "./nodeDetail/types";
+import type { ModalState, NodeGestureRights, TerminalView } from "./nodeDetail/types";
+import { useMayOnNode } from "../store/gestureRightsStore";
 
 interface Props {
   node: NodeState;
@@ -128,6 +129,22 @@ export default function NodeDetailPanel({
     onRetryStarted: showTerminalSplit,
   });
 
+  // CORE-42: the gestures the caller may make here, as the view of the Run
+  // asked them once when it opened; the refused ones are hidden.
+  const mayOnNode = useMayOnNode(runId, node.node_id);
+  const may = useMemo<NodeGestureRights>(
+    () => ({
+      stop: mayOnNode("stop"),
+      retry: mayOnNode("retry"),
+      start: mayOnNode("start"),
+      markComplete: mayOnNode("mark_node_done"),
+      release: mayOnNode("release_completion"),
+      kill: mayOnNode("kill_node"),
+      restart: mayOnNode("restart_node"),
+    }),
+    [mayOnNode],
+  );
+
   const sessionName = `pdo-${runId}-${node.node_id}-iter-${selectedIter}`;
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
   const showTerminal = node.status !== "pending";
@@ -143,6 +160,7 @@ export default function NodeDetailPanel({
   const isReleasing =
     releaseVerdict?.iter === selectedIter && releaseVerdict.kind === "pending";
   const canReleaseCompletion =
+    may.release &&
     selectedIteration?.interactive === true &&
     (selectedIterStatus === "running" || selectedIterStatus === "awaiting_user") &&
     !isArchived;
@@ -213,6 +231,7 @@ export default function NodeDetailPanel({
           restartIteration={restartIteration}
           start={start}
           retry={retry}
+          may={may}
         />
       )}
 
@@ -240,6 +259,7 @@ export default function NodeDetailPanel({
         killStale={killStale}
         restartIteration={restartIteration}
         retry={retry}
+        may={may}
       />
 
       <TerminalSection
@@ -262,6 +282,7 @@ export default function NodeDetailPanel({
             !isArchived &&
             (selectedIterStatus === "awaiting_user" || nodeAwaitsOnLatestIter),
           canRelease: canReleaseCompletion,
+          canMarkComplete: may.markComplete,
           released: completionReleased,
           isReleasing,
           releaseVerdict,
@@ -286,6 +307,7 @@ export default function NodeDetailPanel({
                 markVerdict={markVerdict}
                 releaseCompletion={releaseCompletion}
                 markComplete={markComplete}
+                canMarkComplete={may.markComplete}
               />
             }
             node={node}

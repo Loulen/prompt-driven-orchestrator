@@ -170,6 +170,8 @@ function fakePane(over: Partial<RunsPaneState> = {}): RunsPaneState {
     runBulkKind: null,
     cleanupCascade: { finished: 0, live: 0 },
     handleRunsSettled: vi.fn(),
+    bulkShown: { cleanup: true, retry: true, pause: true },
+    mayOnRow: () => true,
     ...over,
   } as unknown as RunsPaneState;
 }

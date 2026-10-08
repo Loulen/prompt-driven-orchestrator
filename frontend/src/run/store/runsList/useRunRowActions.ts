@@ -4,6 +4,7 @@ import type { RunStatus } from "../../../shared/generated/RunStatus";
 import { forgetRun } from "../../api/runs";
 import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../../api/commands";
 import { useRunShell } from "../../../session/store/useRunShell";
+import { toastRefusal } from "../../../shared/authorization/refusal";
 
 /**
  * The per-row actions of the Runs list: the confirm-gated cleanup / forget /
@@ -26,8 +27,9 @@ export function useRunRowActions(onSelectRun: (runId: string) => void) {
   async function handleCleanup(runId: string) {
     try {
       await cleanupRun(runId);
-    } catch {
-      // event-driven refresh will pick up state change
+    } catch (e) {
+      // event-driven refresh will pick up state change; a refusal is said
+      toastRefusal(e);
     }
     setConfirmCleanup(null);
   }
@@ -35,8 +37,9 @@ export function useRunRowActions(onSelectRun: (runId: string) => void) {
   async function handleForget(runId: string) {
     try {
       await forgetRun(runId);
-    } catch {
-      // event-driven refresh will pick up state change
+    } catch (e) {
+      // event-driven refresh will pick up state change; a refusal is said
+      toastRefusal(e);
     }
     setConfirmForget(null);
   }
@@ -46,16 +49,18 @@ export function useRunRowActions(onSelectRun: (runId: string) => void) {
   async function handlePause(runId: string) {
     try {
       await pauseRun(runId);
-    } catch {
-      // event-driven refresh will pick up state change
+    } catch (e) {
+      // event-driven refresh will pick up state change; a refusal is said
+      toastRefusal(e);
     }
   }
 
   async function handleResume(runId: string) {
     try {
       await resumeRun(runId);
-    } catch {
-      // event-driven refresh will pick up state change
+    } catch (e) {
+      // event-driven refresh will pick up state change; a refusal is said
+      toastRefusal(e);
     }
   }
 
@@ -67,8 +72,9 @@ export function useRunRowActions(onSelectRun: (runId: string) => void) {
     try {
       const { run_id } = await retryAll(runId);
       onSelectRun(run_id);
-    } catch {
-      // event-driven refresh will pick up state change
+    } catch (e) {
+      // event-driven refresh will pick up state change; a refusal is said
+      toastRefusal(e);
     }
     setConfirmRetryAll(null);
   }
@@ -83,8 +89,9 @@ export function useRunRowActions(onSelectRun: (runId: string) => void) {
     if (!renamingRunId) return;
     try {
       await renameRun(renamingRunId, renameValue.trim());
-    } catch {
-      // event-driven refresh will pick up state change
+    } catch (e) {
+      // event-driven refresh will pick up state change; a refusal is said
+      toastRefusal(e);
     }
     setRenamingRunId(null);
     setRenameValue("");

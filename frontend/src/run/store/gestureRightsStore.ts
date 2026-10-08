@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { create } from "zustand";
 import { askAuthorization } from "../../shared/authorization/api";
+import type { RunState } from "../../shared/generated/RunState";
 import {
   batches,
   gestureQuestions,
@@ -143,6 +144,15 @@ export function useRunViewGestures(runId: string | null, nodeIds: readonly strin
   useEffect(() => {
     if (runId) void askView(runId, nodesKey ? nodesKey.split("\n") : []);
   }, [runId, nodesKey, askView]);
+}
+
+/**
+ * The shell's open Run, `run`: its view asks what it offers when it opens,
+ * and every gesture asked is asked again when the window comes back.
+ */
+export function useSelectedRunGestures(run: RunState | null): void {
+  useRunViewGestures(run?.run_id ?? null, Object.keys(run?.nodes ?? {}));
+  useRefreshGestureRightsOnReturn();
 }
 
 /** The rows of the Runs list ask what they offer, once per Run. */

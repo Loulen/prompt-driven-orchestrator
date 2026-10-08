@@ -86,6 +86,12 @@ export function useDaemonEvents({
         loadPipelines();
         return;
       }
+      // A Pipeline's validation changed (another tab or client, or a Projet
+      // deleted): the indicators and the launch forms read it from the list.
+      if (msg.type === "pipeline_validation_changed") {
+        loadPipelines();
+        return;
+      }
       // #348: global pause flip — reflect it live across every client. The
       // per-Trigger `enabled` state (and hence the Triggers list) is untouched,
       // so no refresh is needed; just mirror the flag.

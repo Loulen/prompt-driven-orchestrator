@@ -65,6 +65,7 @@ pub struct Fixture {
     pub provisioning: Arc<InMemoryProvisioning>,
     pub recent: Arc<InMemoryRecent>,
     pub events: Arc<RecordingEvents>,
+    pub deletions: Arc<RecordingDeletions>,
     pub git: Arc<FakeGit>,
     pub source_tree: Arc<RecordingSourceTree>,
     pub host: Arc<RecordingHost>,
@@ -82,6 +83,7 @@ fn build_with(host: RecordingHost) -> Fixture {
     let provisioning = Arc::new(InMemoryProvisioning::default());
     let recent = Arc::new(InMemoryRecent::default());
     let events = Arc::new(RecordingEvents::default());
+    let deletions = Arc::new(RecordingDeletions::default());
     let git = Arc::new(FakeGit::default());
     let source_tree = Arc::new(RecordingSourceTree::default());
     let host = Arc::new(host);
@@ -91,6 +93,7 @@ fn build_with(host: RecordingHost) -> Fixture {
             provisioning: provisioning.clone(),
             recent: recent.clone(),
             events: events.clone(),
+            deletions: deletions.clone(),
             git: git.clone(),
             source_tree: source_tree.clone(),
             files: Arc::new(NoFiles),
@@ -103,6 +106,7 @@ fn build_with(host: RecordingHost) -> Fixture {
         provisioning,
         recent,
         events,
+        deletions,
         git,
         source_tree,
         host,

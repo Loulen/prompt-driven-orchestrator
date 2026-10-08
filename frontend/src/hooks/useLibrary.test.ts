@@ -108,17 +108,6 @@ describe("computeSyncState", () => {
     expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
   });
 
-  it("returns diverged when only an output's intermediate flag differs (CORE-45)", () => {
-    const node = makeNode({
-      outputs: [{ name: "review", repeated: false, side: "right", intermediate: true }],
-    });
-    expect(computeSyncState(node, "You review code.", [makeEntry()])).toBe("diverged");
-    const flagged = makeEntry({
-      outputs: [{ name: "review", repeated: false, side: "right", intermediate: true }],
-    });
-    expect(computeSyncState(node, "You review code.", [flagged])).toBe("synced");
-  });
-
   it("returns diverged when the workspace differs (#655)", () => {
     // Two Agents identical but for where they work are NOT the same content:
     // one forks a sub-worktree, the other writes into the Run's. Same trap as

@@ -55,22 +55,14 @@ pub fn validate(
         None => return Ok(()),
     };
 
-    // An *Output intermédiaire* is never checked: neither its presence nor its
-    // frontmatter. Only the ordinary outputs are the node's production contract.
-    let ordinary: Vec<Port> = node
-        .outputs
-        .iter()
-        .filter(|port| !port.intermediate)
-        .cloned()
-        .collect();
-    if ordinary.is_empty() {
+    if node.outputs.is_empty() {
         return Ok(());
     }
 
     let mut missing = Vec::new();
     let mut violations = Vec::new();
 
-    for port in &ordinary {
+    for port in &node.outputs {
         match port.port_type {
             PortType::Image => {
                 let port_dir =
@@ -137,7 +129,7 @@ pub fn validate(
         return Err(ValidationError::FrontmatterMismatch(violations));
     }
 
-    let fm_violations = validate_frontmatter_schemas(&ordinary, node_id, iter, artifacts_dir);
+    let fm_violations = validate_frontmatter_schemas(&node.outputs, node_id, iter, artifacts_dir);
     if !fm_violations.is_empty() {
         return Err(ValidationError::FrontmatterMismatch(fm_violations));
     }
@@ -345,7 +337,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -360,7 +351,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -375,7 +365,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -393,68 +382,6 @@ mod tests {
             .join(port_name);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("output.md"), content).unwrap();
-    }
-
-    fn intermediate(mut port: Port) -> Port {
-        port.intermediate = true;
-        port
-    }
-
-    #[test]
-    fn an_absent_intermediate_output_never_refuses_the_completion() {
-        let tmp = TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        write_artifact(artifacts, "writer", 1, "report", "done");
-        let mut html = intermediate(port("preview"));
-        html.port_type = PortType::Html;
-        let pipeline = make_pipeline(vec![make_node(
-            "writer",
-            vec![
-                port("report"),
-                intermediate(port("plan")),
-                html,
-                intermediate(repeated_port("notes")),
-            ],
-        )]);
-        assert_eq!(validate(&pipeline, "writer", 1, artifacts), Ok(()));
-    }
-
-    #[test]
-    fn an_empty_or_invalid_intermediate_output_never_refuses_the_completion() {
-        let tmp = TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        write_artifact(artifacts, "writer", 1, "report", "done");
-        write_artifact(artifacts, "writer", 1, "plan", "");
-        write_artifact(artifacts, "writer", 1, "draft", "---\nverdict: [unclosed\n");
-        let mut schema = HashMap::new();
-        schema.insert(
-            "verdict".to_string(),
-            field_decl("enum", Some(vec!["PASS"])),
-        );
-        let pipeline = make_pipeline(vec![make_node(
-            "writer",
-            vec![
-                port("report"),
-                intermediate(port("plan")),
-                intermediate(typed_port("draft", schema)),
-            ],
-        )]);
-        assert_eq!(validate(&pipeline, "writer", 1, artifacts), Ok(()));
-    }
-
-    #[test]
-    fn a_missing_ordinary_output_still_refuses_beside_an_intermediate_one() {
-        let tmp = TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        write_artifact(artifacts, "writer", 1, "plan", "draft");
-        let pipeline = make_pipeline(vec![make_node(
-            "writer",
-            vec![port("report"), intermediate(port("plan"))],
-        )]);
-        assert_eq!(
-            validate(&pipeline, "writer", 1, artifacts),
-            Err(ValidationError::MissingOutputs(vec!["report".into()]))
-        );
     }
 
     #[test]
@@ -774,7 +701,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -789,7 +715,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -905,7 +830,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 

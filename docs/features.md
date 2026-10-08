@@ -82,11 +82,6 @@ PDO validates each output when the node completes. A missing file or a frontmatt
 the schema refuses the completion, and the agent is told why in its own session, before the next node
 starts. Artifacts live in the run's blackboard and survive archiving.
 
-An output ticked **intermediate** lets you follow the work while it happens: the agent fills it
-early and updates it as it goes, and its row in the node panel opens live, marked `intermediate`
-(« not written yet » until the first write). Nothing checks it at completion and no edge carries
-it: anything the next node needs goes through an ordinary output.
-
 Decisions: [ADR-0010](adr/0010-port-output-as-directory.md),
 [ADR-0013](adr/0013-client-side-mermaid-rendering.md),
 [ADR-0020](adr/0020-archive-preserves-outputs.md),

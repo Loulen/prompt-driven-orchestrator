@@ -64,12 +64,6 @@ You manage **run `{run_id}`**.
 - Node IO: `curl {daemon_url}/runs/{run_id}/nodes/<node-id>/io?iter=<N>`
 - Artifact: `curl '{daemon_url}/runs/{run_id}/artifact?path=<relative-path>'`
 
-An output marked `intermediate` (in the run's `node_defs` and in a node's IO) is an
-**intermediate output**: the node's agent fills it while it works so the humans can follow
-along. It is not a deliverable: the completion never checks it, no edge carries it, a skip
-writes nothing for it, and it is not a port to force with `overrides`. A missing one is
-"not written yet", never a fault.
-
 ## Why a run is not advancing — read the reason, never `journalctl`
 
 The runtime never fails a run on its own initiative (ADR-0049): any non-advancement — an

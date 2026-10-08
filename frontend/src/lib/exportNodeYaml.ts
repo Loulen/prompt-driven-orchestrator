@@ -34,7 +34,6 @@ function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, 
   if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
   if (port.when) p.when = port.when;
   if (port.instructions?.trim()) p.instructions = port.instructions;
-  if (port.intermediate) p.intermediate = true;
   return p;
 }
 

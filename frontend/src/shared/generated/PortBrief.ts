@@ -5,10 +5,4 @@ export type PortBrief = { name: string,
 /**
  * The port's side, or its default side when the pipeline sets none.
  */
-side: PortSide, description?: string, 
-/**
- * An *Output intermédiaire* (CONTEXT.md): shown to humans while the node
- * works, never checked, never wired. Absent from the wire when `false`,
- * so a pre-option snapshot reads unchanged.
- */
-intermediate?: boolean, };
+side: PortSide, description?: string, };

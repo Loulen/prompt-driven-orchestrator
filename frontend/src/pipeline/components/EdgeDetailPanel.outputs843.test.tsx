@@ -105,17 +105,6 @@ describe("Outputs section (#843)", () => {
     expect(checkbox("notes")).not.toBeChecked();
   });
 
-  it("never offers an Output intermédiaire (CORE-45)", () => {
-    seedEdge(singlePort);
-    const tab = useEditStore.getState().openTabs[0];
-    tab.pipeline.nodes[0].outputs[2] = { ...tab.pipeline.nodes[0].outputs[2], intermediate: true };
-    render(<EdgeDetailPanel />);
-
-    const section = screen.getByTestId("outputs-section");
-    expect(within(section).getByTestId("output-checkbox-spec")).toBeInTheDocument();
-    expect(within(section).queryByTestId("output-checkbox-notes")).not.toBeInTheDocument();
-  });
-
   it("is the FIRST section of the panel, before When", () => {
     seedEdge(singlePort);
     render(<EdgeDetailPanel />);

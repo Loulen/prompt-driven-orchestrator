@@ -59,6 +59,22 @@ describe("useDaemonEvents", () => {
     expect(targets.refreshTriggers).not.toHaveBeenCalled();
   });
 
+  it("reads the Pipelines again on a pipeline_validation_changed", async () => {
+    const { useEditStore } = await import("../pipeline/store/editStore");
+    const original = useEditStore.getState().loadPipelines;
+    const loadPipelines = vi.fn(async () => {});
+    useEditStore.setState({ loadPipelines });
+    try {
+      const { targets, emit } = mount();
+      emit({ type: "pipeline_validation_changed", pipeline_id: "shared" });
+      expect(loadPipelines).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1_000);
+      expect(targets.refreshRuns).not.toHaveBeenCalled();
+    } finally {
+      useEditStore.setState({ loadPipelines: original });
+    }
+  });
+
   it("drops a pending refresh once unmounted", () => {
     const { targets, hook, emit } = mount();
     emit({ type: "event" });

@@ -10,6 +10,7 @@ use pdo_kernel::{Actor, Operation};
 use pdo_pipeline::application::ports::*;
 use pdo_pipeline::domain::library::LibraryEntry;
 use pdo_pipeline::domain::pipeline::{split_live_prompts, PipelineDef};
+use pdo_pipeline::domain::validation::PipelineValidation;
 use pdo_pipeline::{Pipelines, PipelinesPorts};
 use pdo_skill::domain::error::SkillError;
 use pdo_skill::domain::selection::SkillRef;
@@ -245,9 +246,16 @@ impl NodeLibrary for Library {
     }
 }
 
-/// Every `pipeline_changed` announced, as `(id, path)`.
+/// Every `pipeline_changed` announced, as `(id, path)`, and every
+/// `pipeline_validation_changed`, as the id.
 #[derive(Default)]
-pub struct Events(pub Mutex<Vec<(String, String)>>);
+pub struct Events(pub Mutex<Vec<(String, String)>>, pub Mutex<Vec<String>>);
+
+impl Events {
+    pub fn validations_changed(&self) -> Vec<String> {
+        self.1.lock().unwrap().clone()
+    }
+}
 
 impl PipelineEvents for Events {
     fn changed(&self, id: &str, path: &str) {
@@ -255,6 +263,64 @@ impl PipelineEvents for Events {
             .lock()
             .unwrap()
             .push((id.to_string(), path.to_string()));
+    }
+    fn validation_changed(&self, id: &str) {
+        self.1.lock().unwrap().push(id.to_string());
+    }
+}
+
+/// The stated validations, by pipeline id.
+#[derive(Default)]
+pub struct Validations(pub Mutex<HashMap<String, PipelineValidation>>);
+
+impl Validations {
+    pub fn of(&self, id: &str) -> Option<PipelineValidation> {
+        self.0.lock().unwrap().get(id).cloned()
+    }
+    pub fn set(&self, id: &str, validation: PipelineValidation) {
+        self.0.lock().unwrap().insert(id.to_string(), validation);
+    }
+}
+
+impl PipelineValidations for Validations {
+    fn all(&self) -> BoxFuture<'_, Result<HashMap<String, PipelineValidation>, String>> {
+        ready(Ok(self.0.lock().unwrap().clone()))
+    }
+    fn put<'a>(
+        &'a self,
+        id: &'a str,
+        validation: &'a PipelineValidation,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        self.set(id, validation.clone());
+        ready(Ok(()))
+    }
+    fn forget<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        self.0.lock().unwrap().remove(id);
+        ready(Ok(()))
+    }
+    fn carry<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        let mut all = self.0.lock().unwrap();
+        all.remove(to);
+        if let Some(validation) = all.remove(from) {
+            all.insert(to.to_string(), validation);
+        }
+        ready(Ok(()))
+    }
+}
+
+/// The Projets that exist.
+#[derive(Default)]
+pub struct Projects(pub Mutex<Vec<String>>);
+
+impl Projects {
+    pub fn add(&self, id: &str) {
+        self.0.lock().unwrap().push(id.to_string());
+    }
+}
+
+impl KnownProjects for Projects {
+    fn exists<'a>(&'a self, project_id: &'a str) -> BoxFuture<'a, Result<bool, String>> {
+        ready(Ok(self.0.lock().unwrap().iter().any(|id| id == project_id)))
     }
 }
 
@@ -335,6 +401,8 @@ pub struct World {
     pub runs: Arc<Runs>,
     pub renames: Arc<Renames>,
     pub bank: Arc<Bank>,
+    pub validations: Arc<Validations>,
+    pub projects: Arc<Projects>,
 }
 
 impl World {
@@ -354,6 +422,8 @@ impl World {
         let runs = Arc::new(Runs::default());
         let renames = Arc::new(Renames::default());
         let bank = Arc::new(bank);
+        let validations = Arc::new(Validations::default());
+        let projects = Arc::new(Projects::default());
         let pipelines = Pipelines::new(PipelinesPorts {
             registry: registry.clone(),
             library: library.clone(),
@@ -361,6 +431,8 @@ impl World {
             runs: runs.clone(),
             renames: renames.clone(),
             skills: bank.clone(),
+            validations: validations.clone(),
+            projects: projects.clone(),
             extensions: host.clone(),
         });
         Self {
@@ -372,6 +444,8 @@ impl World {
             runs,
             renames,
             bank,
+            validations,
+            projects,
         }
     }
 

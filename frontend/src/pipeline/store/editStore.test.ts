@@ -1743,7 +1743,7 @@ describe("scope-qualified pipeline ops", () => {
       node_count: 3,
       modified: null,
       variables: {},
-      prompt_required: true,
+      prompt_required: true, validation: { kind: "all" as const },
     };
     useEditStore.setState({
       pipelines: [
@@ -2581,7 +2581,7 @@ describe("pipeline rename (#774)", () => {
       name: "Renamed Pipeline",
     });
     mockFetchPipelines.mockResolvedValueOnce([
-      { prompt_required: true,
+      { prompt_required: true, validation: { kind: "all" },
         id: "renamed-pipeline",
         name: "Renamed Pipeline",
         scope: "instance",

@@ -19,6 +19,7 @@ export interface WsMessage {
     | "trigger_deleted"
     | "triggers_paused"
     | "project_changed"
+    | "pipeline_validation_changed"
     | "cost_prices_synced"
     | "run_forgotten"
     /** Re-read the whole state (ADR-0083 §6): sent by the daemon to a client

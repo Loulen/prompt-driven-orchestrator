@@ -1,7 +1,7 @@
 /**
  * The second half of the *First pipeline* tour (#823): the tester node, its
  * verdict and screenshot outputs, the loop that wires it back to the implementer
- * and on to End, then save and keep-or-delete. Pure data, spliced after the
+ * and on to End, then save, validate and keep-or-delete. Pure data, spliced after the
  * first half in `firstPipeline.ts`; the copy rules there apply here too.
  */
 
@@ -12,6 +12,10 @@ import {
   NAME_INPUT,
   OUT_PORT,
   PROMPT_INPUT,
+  VALIDATED_FOR_ALL,
+  VALIDATED_FOR_PROJECTS,
+  VALIDATE_BUTTON,
+  VALIDATE_MODAL,
   agent,
   agents,
   carryOutEdgeStep,
@@ -225,6 +229,28 @@ export const TESTER_STEPS: TourStep[] = [
     waitingFor: "the Save button",
     // Not skippable: everything after this reads the saved file.
     done: (o) => !o.app.dirty && !!o.app.pipelineId && o.app.libraryPipelineIds.includes(o.app.pipelineId),
+  },
+  {
+    // A pipeline PDO creates is born a test pipeline: New Run offers it only
+    // behind « Show test pipelines ». Validating it is what makes the one just
+    // built show up at launch.
+    id: "validate",
+    title: "Validate the pipeline",
+    // Two beats, one card: the button, then the modal it opens.
+    body: (o) =>
+      o.present(VALIDATE_MODAL)
+        ? "Tick All projects, or the projects that should see it, then Save validation. Leaving everything unticked keeps it a test pipeline."
+        : "Click Validate, next to Save. A new pipeline is a test pipeline: New Run hides it until you validate it for a project, or for all of them.",
+    target: (o) => (o.present(VALIDATE_MODAL) ? [VALIDATE_MODAL] : [VALIDATE_BUTTON]),
+    soft: (o) => o.present(VALIDATE_MODAL),
+    waitingFor: "the Validate button, next to Save",
+    failureHint: "It appears in the tab bar once the pipeline is saved.",
+    // A reader who keeps a test pipeline skips; the recap says what that means.
+    skippable: true,
+    advanceHint: "advances once validated",
+    done: (o) =>
+      !o.present(VALIDATE_MODAL) &&
+      (o.present(VALIDATED_FOR_ALL) || o.present(VALIDATED_FOR_PROJECTS)),
   },
   {
     id: "keep-or-delete",

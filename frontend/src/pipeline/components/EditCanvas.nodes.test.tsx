@@ -565,31 +565,3 @@ describe("End marker accepts an incoming edge on any of its four borders (#840)"
     expect(handles.some((el) => el.getAttribute("data-handleid")?.startsWith("rim-"))).toBe(false);
   });
 });
-
-describe("EditNode — Outputs intermédiaires (CORE-45)", () => {
-  function workProps(outputs: { name: string; intermediate?: boolean }[]) {
-    const props = markerProps({ nodeType: "agent" });
-    props.data.outputs = outputs.map((o) => ({ side: "right" as const, ...o }));
-    return props;
-  }
-
-  it("shows them apart on the card, and the rim still starts a wire from the ordinary output", () => {
-    render(<EditNode {...workProps([{ name: "out" }, { name: "preview", intermediate: true }])} />, {
-      wrapper: Wrapper,
-    });
-    const chips = screen.getAllByTestId("intermediate-output-chip");
-    expect(chips.map((c) => c.textContent)).toEqual(["preview"]);
-    expect(screen.getByTestId("rim-source-right")).toBeInTheDocument();
-  });
-
-  it("a node whose every output is intermediate grows no rim: no wire leaves it", () => {
-    render(<EditNode {...workProps([{ name: "preview", intermediate: true }])} />, { wrapper: Wrapper });
-    expect(screen.getByTestId("intermediate-output-chip")).toHaveTextContent("preview");
-    expect(screen.queryByTestId("rim-source-right")).not.toBeInTheDocument();
-  });
-
-  it("a node without one keeps its card as before", () => {
-    render(<EditNode {...workProps([{ name: "out" }])} />, { wrapper: Wrapper });
-    expect(screen.queryByTestId("intermediate-outputs-row")).not.toBeInTheDocument();
-  });
-});

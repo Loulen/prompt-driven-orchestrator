@@ -1,5 +1,5 @@
 /**
- * The *First run* tour (#824, spec #821) — pure data. The two idempotent
+ * The *First run* tour (#824, spec #821) — pure data. The idempotent
  * preparations its first step depends on live in `firstRunPreparation.ts`.
  *
  * It fills the New Run form, field by field, with the user doing every gesture,
@@ -18,6 +18,7 @@
 import type { TourDef, TourStep } from "../tourDef";
 import {
   TUTORIAL_OUT_PORT,
+  TUTORIAL_PROJECT_NAME,
   TUTORIAL_PROMPT,
   TUTORIAL_REPO_NAME,
   TUTORIAL_REPO_PARENT,
@@ -25,6 +26,7 @@ import {
   TUTORIAL_RUN_PIPELINE_ID,
   prepareRepo,
   prepareTutorialPipeline,
+  prepareTutorialProject,
 } from "./firstRunPreparation";
 import {
   AGENT_DEFAULT_CHOSEN,
@@ -121,7 +123,7 @@ const STEPS: TourStep[] = [
   {
     id: "pick-pipeline",
     title: `Choose ${TUTORIAL_RUN_PIPELINE_ID}`,
-    body: `Pick ${TUTORIAL_RUN_PIPELINE_ID}. It is a pipeline with a single node that waits for you instead of running on its own: the simplest Run there is.`,
+    body: `Pick ${TUTORIAL_RUN_PIPELINE_ID}, under Project pipelines. The menu lists the pipelines validated for the repository's project first; this one has a single node that waits for you instead of running on its own.`,
     target: (o) => (o.present(PIPELINE_OPTION) ? [PIPELINE_OPTION] : [PIPELINE_TRIGGER]),
     soft: true,
     waitingFor: "the Pipeline menu",
@@ -214,7 +216,7 @@ export const FIRST_RUN_TOUR: TourDef = {
     title: "Launch your first Run",
     body: "You will fill the New Run form yourself, step by step: a throwaway repository, a one-node pipeline that talks to you, a profile, two skills and a prompt. Then you press Launch.",
     footnote:
-      "Nothing here touches your own repositories. Both items are reused on the next run of the tour.",
+      "Nothing here touches your own repositories or projects. Everything is reused on the next run of the tour.",
     prepare: [
       {
         id: "repo",
@@ -229,6 +231,13 @@ export const FIRST_RUN_TOUR: TourDef = {
         ready: `Pipeline ${TUTORIAL_RUN_PIPELINE_ID} in the Library`,
         failureTitle: "The training pipeline could not be created",
         run: prepareTutorialPipeline,
+      },
+      {
+        id: "project",
+        pending: `Project ${TUTORIAL_PROJECT_NAME}, with the pipeline validated for it…`,
+        ready: `Project ${TUTORIAL_PROJECT_NAME}, with the pipeline validated for it`,
+        failureTitle: `The ${TUTORIAL_PROJECT_NAME} project could not be prepared`,
+        run: prepareTutorialProject,
       },
     ],
   },

@@ -5,11 +5,9 @@ import {
   carries,
   declaredOutputs,
   defaultConditionPort,
-  edgeCarryingOutput,
   emergentInputs,
   inDeclarationOrder,
   primaryPort,
-  wireableOutputs,
   withCarriedPorts,
 } from "./edgePorts";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
@@ -134,50 +132,6 @@ describe("declaredOutputs / inDeclarationOrder", () => {
 
   it("keeps a port the node no longer declares rather than dropping it", () => {
     expect(inDeclarationOrder(["gone", "out"], ["out", "spec"])).toEqual(["out", "gone"]);
-  });
-});
-
-describe("Outputs intermédiaires never wired (CORE-45)", () => {
-  const design: EditorNodeDef = {
-    id: "design",
-    name: "designer",
-    type: "agent",
-    inputs: [],
-    outputs: [
-      { name: "preview", repeated: false, side: "right", intermediate: true },
-      { name: "out", repeated: false, side: "right" },
-      { name: "spec", repeated: false, side: "right" },
-    ],
-    interactive: false,
-  };
-  const orchestrator: EditorNodeDef = {
-    id: "orchestrator",
-    name: "builder",
-    type: "agent",
-    inputs: [],
-    outputs: [],
-    interactive: false,
-  };
-  const pipeline: EditorPipelineDef = {
-    name: "p",
-    version: "1.0",
-    variables: {},
-    nodes: [design, orchestrator],
-    edges: [multi],
-  };
-
-  it("never offers an intermediate output among an edge's ports", () => {
-    expect(declaredOutputs(pipeline, multi)).toEqual(["out", "spec"]);
-  });
-
-  it("puts the first ORDINARY output first, the one a new edge carries", () => {
-    expect(wireableOutputs(design)[0]?.name).toBe("out");
-    expect(wireableOutputs(undefined)).toEqual([]);
-  });
-
-  it("names the edge carrying an output, by node names", () => {
-    expect(edgeCarryingOutput(pipeline, "design", "spec")).toBe("designer.out+spec -> builder.out");
-    expect(edgeCarryingOutput(pipeline, "design", "preview")).toBeNull();
   });
 });
 

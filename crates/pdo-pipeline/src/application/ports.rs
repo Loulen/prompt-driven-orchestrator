@@ -14,6 +14,7 @@ use pdo_skill::domain::sidecar::{SidecarImportReport, SidecarSkill};
 
 use crate::domain::library::LibraryEntry;
 use crate::domain::pipeline::PipelineDef;
+use crate::domain::validation::PipelineValidation;
 
 /// The future an async port method returns (the ports are `dyn`, D23).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -96,6 +97,34 @@ pub trait NodeLibrary: Send + Sync {
 pub trait PipelineEvents: Send + Sync {
     /// `pipeline_changed`: the list and any open editor refresh `id`.
     fn changed(&self, id: &str, path: &str);
+    /// `pipeline_validation_changed`: the list, its indicators and the launch
+    /// forms read the validation of `id` again.
+    fn validation_changed(&self, id: &str);
+}
+
+/// The validations the pipelines state (CONTEXT.md « Pipeline validé »), keyed
+/// by pipeline id. A pipeline absent from the store is validated for every
+/// Projet.
+pub trait PipelineValidations: Send + Sync {
+    /// Every stated validation.
+    fn all(&self) -> BoxFuture<'_, Result<HashMap<String, PipelineValidation>, String>>;
+    /// Replace the validation of `id`.
+    fn put<'a>(
+        &'a self,
+        id: &'a str,
+        validation: &'a PipelineValidation,
+    ) -> BoxFuture<'a, Result<(), String>>;
+    /// Drop the validation of `id`: it reads as every Projet again.
+    fn forget<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), String>>;
+    /// A rename moved `from` to `to`: its validation follows. Nothing stated,
+    /// nothing moved.
+    fn carry<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), String>>;
+}
+
+/// The Projets, as the pipeline context sees them.
+pub trait KnownProjects: Send + Sync {
+    /// Whether the Projet `project_id` exists.
+    fn exists<'a>(&'a self, project_id: &'a str) -> BoxFuture<'a, Result<bool, String>>;
 }
 
 /// The Runs, as the pipeline context sees them.

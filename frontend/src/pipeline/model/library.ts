@@ -16,8 +16,6 @@ export interface LibraryPort {
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
   instructions?: string | null;
-  /** An Output intermédiaire (CORE-45). Absent ⇒ an ordinary port. */
-  intermediate?: boolean | null;
 }
 
 export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): PortDef {
@@ -29,7 +27,6 @@ export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): 
     ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
     ...(port.when ? { when: port.when } : {}),
     ...(port.instructions?.trim() ? { instructions: port.instructions } : {}),
-    ...(port.intermediate ? { intermediate: true } : {}),
   };
 }
 

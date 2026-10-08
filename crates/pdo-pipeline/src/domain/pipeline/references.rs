@@ -20,6 +20,15 @@ use super::node::{FrontmatterFieldDecl, NodeDef, NodeType, Port};
 pub fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
     let node_ids: HashSet<&str> = pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
 
+    let edge_label = |edge: &EdgeDef| {
+        format!(
+            "edge '{} -> {}.{}'",
+            edge.source.label(),
+            edge.target.node,
+            edge.target.port
+        )
+    };
+
     // `ports` names the port(s) the endpoint claims on its node: one for a
     // target, one PER CARRIED PORT for a multi-port source (ADR-0073) — a typo in
     // the second port of a `ports:` list is the same dangling reference as a typo
@@ -83,45 +92,6 @@ pub fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
         }
     }
     errors
-}
-
-/// `edge 'design.out -> review.in'`: how a diagnostic names an edge.
-fn edge_label(edge: &EdgeDef) -> String {
-    format!(
-        "edge '{} -> {}.{}'",
-        edge.source.label(),
-        edge.target.node,
-        edge.target.port
-    )
-}
-
-/// The first edge that carries an *Output intermédiaire*, refused with the port
-/// and the edge it names. An intermediate output is for humans only: the
-/// completion never checks it, so wiring it would hand the downstream node a
-/// content nothing guarantees. A runtime-coherence invariant, not a prescriptive
-/// rule — which is why it refuses at parse instead of warning like a dangling
-/// reference.
-pub(crate) fn intermediate_outputs_on_edges(pipeline: &PipelineDef) -> Result<(), ParseError> {
-    for edge in &pipeline.edges {
-        let Some(source) = pipeline.nodes.iter().find(|n| n.id == edge.source.node) else {
-            continue;
-        };
-        let wired = source
-            .outputs
-            .iter()
-            .find(|port| port.intermediate && edge.source.carries(&port.name));
-        if let Some(port) = wired {
-            return Err(ParseError::InvalidField(format!(
-                "{}: carries intermediate output '{}' of node '{}'; an intermediate \
-                 output cannot be wired (remove it from the edge, or uncheck \
-                 'intermediate' on the port)",
-                edge_label(edge),
-                port.name,
-                source.id
-            )));
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn validate_switch_when_clauses(pipeline: &PipelineDef) -> Result<(), ParseError> {

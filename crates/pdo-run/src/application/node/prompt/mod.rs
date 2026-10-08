@@ -37,8 +37,6 @@ pub struct OutputDeclaration {
     pub port_name: String,
     pub path: PathBuf,
     pub port_type: PortType,
-    /// An *Output intermédiaire*: listed apart in the preamble, never checked.
-    pub intermediate: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -209,7 +207,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 outputs: vec![Port {
                     name: "plan".into(),
@@ -221,7 +218,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -734,7 +730,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             outputs: vec![Port {
                 name: "summary".into(),
@@ -746,7 +741,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             interactive: false,
             view: None,
@@ -1138,7 +1132,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1167,7 +1160,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1196,7 +1188,6 @@ mod tests {
                             description: None,
                             instructions: None,
                             required: false,
-                            intermediate: false,
                         },
                         Port {
                             name: "context".into(),
@@ -1208,7 +1199,6 @@ mod tests {
                             description: None,
                             instructions: None,
                             required: false,
-                            intermediate: false,
                         },
                     ],
                     outputs: vec![Port {
@@ -1221,7 +1211,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1314,7 +1303,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 outputs: vec![Port {
                     name: "review".into(),
@@ -1336,7 +1324,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -1376,151 +1363,6 @@ mod tests {
             preamble.contains("FAIL"),
             "preamble should list allowed values"
         );
-    }
-
-    /// `sample_pipeline` plus an intermediate html `preview` on `planner`, with
-    /// an expected content and a (kept but ignored) frontmatter schema.
-    fn pipeline_with_intermediate_output() -> PipelineDef {
-        let mut pipeline = sample_pipeline();
-        let mut preview = pipeline.nodes[0].outputs[0].clone();
-        preview.name = "preview".into();
-        preview.port_type = PortType::Markdown;
-        preview.intermediate = true;
-        preview.instructions = Some("The plan so far.".into());
-        preview.frontmatter = Some(
-            [(
-                "draft_verdict".into(),
-                pdo_pipeline::domain::pipeline::FrontmatterFieldDecl {
-                    field_type: "string".into(),
-                    allowed: None,
-                },
-            )]
-            .into_iter()
-            .collect(),
-        );
-        pipeline.nodes[0].outputs.push(preview);
-        pipeline
-    }
-
-    #[test]
-    fn intermediate_outputs_are_listed_apart_with_their_conduct() {
-        let pipeline = pipeline_with_intermediate_output();
-        let node = &pipeline.nodes[0];
-        let vars = HashMap::new();
-        let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
-
-        let outputs = preamble.find("## Outputs\n").expect("outputs section");
-        let intermediate = preamble
-            .find("## Intermediate outputs\n")
-            .expect("intermediate outputs section");
-        let plan = preamble
-            .find("- `plan`: write to")
-            .expect("ordinary output");
-        let preview = preamble
-            .find("- `preview`: write to `/repo/.pdo/artifacts/planner/iter-1/preview/output.md`")
-            .expect("intermediate output with its path");
-        assert!(
-            outputs < plan && plan < intermediate && intermediate < preview,
-            "{preamble}"
-        );
-
-        let section = &preamble[intermediate..];
-        for conduct in [
-            "early",
-            "update it as you work",
-            "never checked",
-            "rename it onto",
-        ] {
-            assert!(section.contains(conduct), "missing «{conduct}»: {section}");
-        }
-        assert!(
-            section.contains("Expected content: The plan so far."),
-            "{section}"
-        );
-        // The schema stays in the YAML but nothing validates it: never described.
-        assert!(!preamble.contains("draft_verdict"), "{preamble}");
-    }
-
-    #[test]
-    fn a_node_with_only_intermediate_outputs_declares_no_outputs() {
-        let mut pipeline = sample_pipeline();
-        pipeline.nodes[0].outputs[0].intermediate = true;
-        let node = &pipeline.nodes[0];
-        let vars = HashMap::new();
-        let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
-        assert!(
-            preamble.contains("## Outputs\n\nNo outputs declared.\n"),
-            "{preamble}"
-        );
-        assert!(preamble.contains("## Intermediate outputs\n"), "{preamble}");
-    }
-
-    #[test]
-    fn no_intermediate_section_without_intermediate_outputs() {
-        let pipeline = sample_pipeline();
-        let node = &pipeline.nodes[0];
-        let vars = HashMap::new();
-        let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
-        assert!(!preamble.contains("Intermediate outputs"), "{preamble}");
-    }
-
-    #[test]
-    fn a_script_node_gets_the_path_of_its_intermediate_output() {
-        let mut pipeline = pipeline_with_intermediate_output();
-        pipeline.nodes[0].node_type = NodeType::Script;
-        let node = &pipeline.nodes[0];
-        let vars = HashMap::new();
-        let env = build_script_env(&sample_ctx(&pipeline, node, &vars));
-        assert!(env.contains(&(
-            "PDO_OUTPUT_PREVIEW".to_string(),
-            "/repo/.pdo/artifacts/planner/iter-1/preview/output.md".to_string()
-        )));
-    }
-
-    #[test]
-    fn an_intermediate_output_is_never_handed_over_as_partial_output() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        let pipeline = pipeline_with_intermediate_output();
-        let node = &pipeline.nodes[0];
-        for port in ["plan", "preview"] {
-            let dir = artifacts.join("planner/iter-1").join(port);
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("output.md"), "work").unwrap();
-        }
-        assert_eq!(
-            surviving_partial_outputs(node, artifacts, 1, None),
-            vec![artifacts.join("planner/iter-1/plan/output.md")]
-        );
-    }
-
-    #[test]
-    fn a_new_iteration_points_at_its_own_intermediate_output() {
-        // Nothing is copied forward: iteration 2 is told to write its own file,
-        // and the one iteration 1 left is not presented as its work.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        let pipeline = pipeline_with_intermediate_output();
-        let node = &pipeline.nodes[0];
-        let dir = artifacts.join("planner/iter-1/preview");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("output.md"), "iteration 1").unwrap();
-
-        let vars = HashMap::new();
-        let mut ctx = sample_ctx(&pipeline, node, &vars);
-        ctx.artifacts_dir = artifacts;
-        ctx.iter = 2;
-        let preview = resolve_output_paths(&ctx)
-            .into_iter()
-            .find(|o| o.port_name == "preview")
-            .unwrap();
-        assert!(preview.intermediate);
-        assert_eq!(
-            preview.path,
-            artifacts.join("planner/iter-2/preview/output.md")
-        );
-        assert!(!preview.path.exists());
-        assert!(surviving_partial_outputs(node, artifacts, 2, None).is_empty());
     }
 
     #[test]
@@ -1815,7 +1657,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -1875,7 +1716,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -1930,7 +1770,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,

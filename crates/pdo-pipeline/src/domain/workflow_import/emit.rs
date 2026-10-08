@@ -79,7 +79,6 @@ impl Importer {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         };
         out_port.frontmatter = frontmatter;
 

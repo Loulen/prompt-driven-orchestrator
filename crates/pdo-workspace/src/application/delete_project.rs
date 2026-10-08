@@ -1,4 +1,5 @@
-//! Delete a Projet and free its member paths.
+//! Delete a Projet, free its member paths, and have what pointed at it
+//! forget it.
 
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
@@ -20,6 +21,7 @@ impl Workspace {
         if !deleted {
             return Err(WorkspaceError::NotFound);
         }
+        self.deletions.project_deleted(id).await;
         self.events.project_changed(id).await;
         Ok(())
     }
@@ -41,6 +43,7 @@ mod tests {
             .await
             .unwrap();
         assert!(f.projects.all().is_empty());
+        assert_eq!(f.deletions.deleted(), vec!["p1".to_string()]);
         assert_eq!(f.events.changed(), vec!["p1".to_string()]);
     }
 
@@ -53,6 +56,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, WorkspaceError::NotFound);
+        assert!(f.deletions.deleted().is_empty());
         assert!(f.events.changed().is_empty());
     }
 
@@ -67,6 +71,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, WorkspaceError::Denied(_)));
         assert_eq!(f.projects.all().len(), 1);
+        assert!(f.deletions.deleted().is_empty());
         assert_eq!(f.host.asked()[0].verb, Verb::Delete);
     }
 }

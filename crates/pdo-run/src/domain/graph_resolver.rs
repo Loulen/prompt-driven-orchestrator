@@ -298,7 +298,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 })
                 .collect(),
             outputs: outputs
@@ -313,7 +312,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 })
                 .collect(),
             interactive: false,
@@ -346,7 +344,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
                 Port {
                     name: "break".into(),
@@ -358,7 +355,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
             ],
             outputs: vec![
@@ -372,7 +368,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
                 Port {
                     name: "done".into(),
@@ -384,7 +379,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
             ],
             interactive: false,

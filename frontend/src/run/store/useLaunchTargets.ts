@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchPipelines } from "../../pipeline/api/pipelines";
+import { fetchProjects } from "../../workspace/api/projects";
+import type { Project } from "../../workspace/model/project";
 import { pickDefaultBranch } from "../../workspace/model/branchSelect";
 import { useBranchList } from "../../workspace/store/useBranchList";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
@@ -23,7 +25,16 @@ import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry
  */
 export function useLaunchTargets(open: boolean) {
   const [pipelines, setPipelines] = useState<PipelineListEntry[]>([]);
+  // The Projets, to know which one owns the chosen repository and so which
+  // Pipelines head the menu (CONTEXT.md « Pipeline validé »). `null` until the
+  // first answer: a selection must not be judged « not offered » against a list
+  // that has not arrived yet.
+  const [projects, setProjects] = useState<Project[] | null>(null);
   const [selectedPipelineId, setSelectedPipelineId] = useState("");
+  // Whether the held pipeline is the user's choice (picked in the menu, or the
+  // edited Trigger's) rather than the form's default. Only a choice is kept; a
+  // default follows the menu.
+  const [pipelineChosen, setPipelineChosen] = useState(false);
   const [sourceBranch, setSourceBranch] = useState("");
   const {
     branches,
@@ -76,6 +87,11 @@ export function useLaunchTargets(open: boolean) {
     fetchPipelines()
       .then((list) => setPipelines(list))
       .catch(() => {});
+    // Fresh on every open: a Projet created meanwhile (the First run tour makes
+    // one) must head the menu the next time the form opens.
+    fetchProjects()
+      .then((list) => setProjects(list))
+      .catch(() => setProjects([]));
   }, [open]);
 
   useEffect(() => {
@@ -89,9 +105,12 @@ export function useLaunchTargets(open: boolean) {
 
   return {
     pipelines,
+    projects,
     selectedPipeline,
     selectedPipelineId,
     setSelectedPipelineId,
+    pipelineChosen,
+    setPipelineChosen,
     loadPipelines,
     branches,
     branchesLoading,

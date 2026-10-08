@@ -62,7 +62,6 @@ export default function StarButton({
         ...(p.frontmatter ? { frontmatter: p.frontmatter } : {}),
         ...(p.when ? { when: p.when } : {}),
         ...(p.instructions?.trim() ? { instructions: p.instructions } : {}),
-        ...(p.intermediate ? { intermediate: true } : {}),
       })),
       interactive: node.interactive,
       // #296/#345: persist the per-node model so the library is model-aware and

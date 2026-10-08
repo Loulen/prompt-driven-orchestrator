@@ -1,6 +1,6 @@
 //! The pipeline context's adapters: the HTTP routes (driving), and the
-//! registry, the library, the watcher, the live stream and the skill bank
-//! (driven).
+//! registry, the library, the watcher, the live stream, the skill bank and
+//! the validations over SQLite (driven).
 
 pub mod events;
 pub mod frontmatter_file;
@@ -10,4 +10,5 @@ pub mod library_fs;
 pub mod registry;
 pub mod self_writes;
 pub mod skill_bank;
+pub mod sqlite_validations;
 pub mod watcher;

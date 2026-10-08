@@ -42,7 +42,8 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
 /// - `PDO_ARTIFACTS_DIR` — the Blackboard root.
 /// - `PDO_INPUT_<PORT>` — absolute path of each resolved input. A `repeated`
 ///   input holds one path per COMPLETED source iteration, `\n`-separated (empty
-///   when nothing has completed); a single wire holds exactly one path (#353).
+///   when nothing has completed); a single wire holds exactly one path (#353),
+///   or nothing when its upstream has produced nothing in this Run (ADR-0086).
 /// - `PDO_INPUT_<PORT>_REPEATED=1` — set when that input is a `repeated`/pooled
 ///   input, so a script knows to `readarray -t files <<< "$PDO_INPUT_<PORT>"`
 ///   (and to `pdo skip` when the value is empty).

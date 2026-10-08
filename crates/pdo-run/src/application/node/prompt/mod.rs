@@ -25,7 +25,8 @@ pub struct InputResolution {
     pub port_name: String,
     /// The upstream node the input comes from.
     pub source_node: String,
-    /// A single wire is a one-element list; a `repeated`/pooled input is one path
+    /// A single wire is a one-element list (empty when its upstream has produced
+    /// nothing in this Run, ADR-0086); a `repeated`/pooled input is one path
     /// per COMPLETED source iteration (empty when none completed). Never a raw
     /// `iter-*` glob, which could not exclude a failed iter.
     pub paths: Vec<PathBuf>,
@@ -672,6 +673,44 @@ mod tests {
             env.get("PDO_INPUT_LAPS").map(String::as_str),
             Some(""),
             "present but empty when nothing has completed"
+        );
+    }
+
+    #[test]
+    fn script_env_empties_an_input_whose_upstream_produced_nothing() {
+        // ADR-0086: a script launched ahead of its producer (an on-demand node)
+        // gets an empty `PDO_INPUT_<PORT>`, never the path of a file nothing
+        // wrote — the same convention as an empty pool.
+        let mut pipeline = sample_pipeline();
+        pipeline.nodes.push(NodeDef {
+            node_type: NodeType::Script,
+            id: "reader".into(),
+            name: "reader".into(),
+            on_demand: true,
+            ..pipeline.nodes[0].clone()
+        });
+        pipeline.edges.push(EdgeDef {
+            source: EdgeSource::single("planner", "plan"),
+            target: EdgeEndpoint {
+                node: "reader".into(),
+                port: "work".into(),
+            },
+            ..Default::default()
+        });
+        let node = pipeline.nodes.iter().find(|n| n.id == "reader").unwrap();
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.absent_sources = ["planner".to_string()].into_iter().collect();
+
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(env.get("PDO_INPUT_WORK").map(String::as_str), Some(""));
+
+        ctx.absent_sources.clear();
+        ctx.source_iters = HashMap::from([("planner".to_string(), 1)]);
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(
+            env.get("PDO_INPUT_WORK").map(String::as_str),
+            Some("/repo/.pdo/artifacts/planner/iter-1/plan/output.md")
         );
     }
 

@@ -15,20 +15,31 @@ pub const GIT_IDENTITY_VARS: [&str; 4] = [
 
 /// The identity PDO signs a delivery with, by variable name.
 ///
-/// Holds only [`GIT_IDENTITY_VARS`]: it is built from a Node's environment,
-/// which may carry secrets, and frozen in the event log. Empty means "the
-/// daemon's own identity": git then reads its environment and configuration
-/// as it always did.
+/// Holds only [`GIT_IDENTITY_VARS`] with a value: it is built from a Node's
+/// environment, which may carry secrets, and frozen in the event log; what is
+/// read back from the log goes through the same filter, so no other variable
+/// ever reaches a git command. An empty value is dropped too: git refuses an
+/// empty name, where the daemon's would have signed. Empty means "the daemon's
+/// own identity": git then reads its environment and configuration as it
+/// always did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(from = "BTreeMap<String, String>")]
 pub struct CommitIdentity(BTreeMap<String, String>);
+
+impl From<BTreeMap<String, String>> for CommitIdentity {
+    fn from(vars: BTreeMap<String, String>) -> Self {
+        Self::from_env(&vars)
+    }
+}
 
 impl CommitIdentity {
     /// The identity variables among `env`, every other variable dropped.
     pub fn from_env<'a>(env: impl IntoIterator<Item = (&'a String, &'a String)>) -> Self {
         Self(
             env.into_iter()
-                .filter(|(name, _)| GIT_IDENTITY_VARS.contains(&name.as_str()))
+                .filter(|(name, value)| {
+                    GIT_IDENTITY_VARS.contains(&name.as_str()) && !value.trim().is_empty()
+                })
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
         )
@@ -85,6 +96,31 @@ mod tests {
         let identity = CommitIdentity::from_env(&env(&[("PDO_TOKEN", "secret")]));
         assert!(identity.is_empty());
         assert_eq!(identity, CommitIdentity::default());
+    }
+
+    #[test]
+    fn an_empty_value_is_no_identity() {
+        let identity = CommitIdentity::from_env(&env(&[
+            ("GIT_AUTHOR_NAME", ""),
+            ("GIT_AUTHOR_EMAIL", "  "),
+            ("GIT_COMMITTER_NAME", "Alice"),
+        ]));
+        let vars: Vec<_> = identity.vars().collect();
+        assert_eq!(vars, vec![("GIT_COMMITTER_NAME", "Alice")]);
+    }
+
+    /// What the event log holds is filtered again on the way back: a payload
+    /// this daemon did not write cannot hand git another variable.
+    #[test]
+    fn reading_back_keeps_only_the_identity_variables() {
+        let read: CommitIdentity = serde_json::from_value(serde_json::json!({
+            "GIT_AUTHOR_NAME": "Alice",
+            "GIT_SSH_COMMAND": "ssh -i stolen",
+            "GIT_DIR": "/elsewhere",
+        }))
+        .unwrap();
+        let vars: Vec<_> = read.vars().collect();
+        assert_eq!(vars, vec![("GIT_AUTHOR_NAME", "Alice")]);
     }
 
     #[test]

@@ -256,7 +256,8 @@ the Run and its last editor then), `repository` (the Run's primary repository) a
   event log). They sign every commit of the Node's delivery: `<node> iter-<N>: completed`, the
   commit in an isolated Node's sub-worktree, its merge into the Run's worktree and the
   resolution commit in the Node's favour. A daemon with no git identity of its own then
-  delivers. Without them, the delivery keeps the daemon's identity.
+  delivers, provided all four are given (a missing or empty one falls back to the daemon's).
+  Without them, the delivery keeps the daemon's identity.
 - **Preamble** (`node_preamble`): placed at the very top of an agent's prompt, before
   `# PDO Runtime Preamble`, followed by a blank line. Never asked for a script.
 

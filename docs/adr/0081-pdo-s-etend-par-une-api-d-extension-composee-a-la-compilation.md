@@ -741,9 +741,9 @@ sans identité git ne livrait rien (`delivery_failed`).
 
 - **Gel** : au démarrage d'un Node, le core fige dans son `NodeStarted` (`git_identity`) les
   quatre variables d'identité de l'environnement donné par les extensions (`GIT_AUTHOR_NAME`,
-  `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`), celles qu'il a reçues, et
-  rien d'autre : cet environnement peut porter des secrets, et l'event log se lit par tout
-  lecteur du Run.
+  `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`), celles qu'il a reçues avec
+  une valeur, et rien d'autre : cet environnement peut porter des secrets, et l'event log se lit
+  par tout lecteur du Run. La relecture filtre de nouveau : aucune autre variable n'atteint git.
 - **Livraison** : elle relit cette identité dans l'event log (dernier `NodeStarted` du couple
   node × iter) et l'applique au commit `<node> iter-<N>: completed`, au commit du sous-worktree
   d'un Node isolé, à son merge dans le worktree du Run et au commit de résolution en faveur du

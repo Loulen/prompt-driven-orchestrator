@@ -105,18 +105,21 @@ async fn an_unreadable_owner_aborts_the_pass_before_any_kill() {
 async fn the_library_assistant_is_judged_on_presence() {
     let tmux = FakeTmux::with_sessions(&[LIBASSIST_SESSION_NAME]);
     let focus = Arc::new(FocusCell::default());
-    focus.set(Some(LibassistFocus {
-        pipeline_id: "review".into(),
-        path: None,
-        at: chrono::Utc::now(),
-    }));
+    focus.set(
+        LIBASSIST_SESSION_NAME,
+        Some(LibassistFocus {
+            pipeline_id: "review".into(),
+            path: None,
+            at: chrono::Utc::now(),
+        }),
+    );
     sweep(tmux.clone(), owners(&[], false), focus.clone())
         .run()
         .await
         .unwrap();
     assert!(tmux.has(LIBASSIST_SESSION_NAME), "a fresh focus keeps it");
 
-    focus.set(None);
+    focus.set(LIBASSIST_SESSION_NAME, None);
     tmux.attached
         .lock()
         .unwrap()
@@ -137,4 +140,36 @@ async fn the_library_assistant_is_judged_on_presence() {
         .unwrap();
     assert!(!tmux.has(LIBASSIST_SESSION_NAME), "nobody there: reaped");
     assert_eq!(tally.killed_for_absent_run, 0, "idleness is housekeeping");
+}
+
+/// CORE-61: each assistant is judged on its own Actor's focus: Alice editing
+/// keeps hers, not Bob's.
+#[tokio::test]
+async fn each_assistant_is_judged_on_its_own_actors_focus() {
+    let alice =
+        pdo_session::domain::names::libassist_session_name_of(&pdo_kernel::Actor::Identified {
+            namespace: "test".into(),
+            id: "alice".into(),
+        });
+    let bob =
+        pdo_session::domain::names::libassist_session_name_of(&pdo_kernel::Actor::Identified {
+            namespace: "test".into(),
+            id: "bob".into(),
+        });
+    let tmux = FakeTmux::with_sessions(&[alice.as_str(), bob.as_str()]);
+    let focus = Arc::new(FocusCell::default());
+    focus.set(
+        &alice,
+        Some(LibassistFocus {
+            pipeline_id: "review".into(),
+            path: None,
+            at: chrono::Utc::now(),
+        }),
+    );
+    sweep(tmux.clone(), owners(&[], false), focus)
+        .run()
+        .await
+        .unwrap();
+    assert!(tmux.has(&alice), "her focus keeps hers");
+    assert!(!tmux.has(&bob), "his, with no focus, is reaped");
 }

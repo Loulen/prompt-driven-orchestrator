@@ -87,6 +87,11 @@ mod extension_trigger_fire;
 #[path = "extension_node_launch.rs"]
 mod extension_node_launch;
 
+// CORE-61, API 0.13: the launch of every agent session with who starts it, one
+// library assistant per Actor, the session events.
+#[path = "extension_sessions.rs"]
+mod extension_sessions;
+
 // CORE-43: the delivery of a Node signed by the identity an extension gives it.
 #[path = "delivery_identity.rs"]
 mod delivery_identity;

@@ -2,6 +2,7 @@
 //! the instance's pinned profile — and the pin's resolution.
 
 use pdo_harness::agent_choice::ResolvedCombo;
+use pdo_kernel::Actor;
 use tracing::{error, info, warn};
 
 use crate::application::events::{emit_run_event, reload_run_state};
@@ -11,7 +12,12 @@ use crate::application::sandbox::{sandbox_home_roots, stage_harness_set, Sandbox
 use crate::domain::event::EventKind;
 use crate::Runs;
 
-/// Spawn the Run's Pipeline Manager session.
+/// Spawn the Run's Pipeline Manager session, started by `started_by`: the
+/// Actor whose gesture starts it, or `None` when it starts with the Run, which
+/// then reads as started by the Run's creator (CORE-61). The extensions' launch
+/// hooks are asked for it, with that Actor: their variables go into its
+/// environment, their text at the top of its prompt. Once up, it is announced
+/// started.
 ///
 /// **Its only reservation is `RunStarted`** (ADR-0038): the orphan sweep resolves a
 /// `pdo-mgr-<run>` session against the *run*, not a node, so a manager spawned for a
@@ -23,6 +29,7 @@ pub async fn spawn_manager_session(
     worktree_dir: &std::path::Path,
     name_hint: RunNameHint,
     sandboxed: bool,
+    started_by: Option<Actor>,
 ) {
     // The URL must be reachable from the side this manager runs on. A sandboxed
     // manager execs into the Run's container, where `localhost` is the container, so a
@@ -51,6 +58,20 @@ pub async fn spawn_manager_session(
     let run_state = reload_run_state(state, run_id)
         .await
         .map(|(_, state)| state);
+    let started_by =
+        started_by.or_else(|| run_state.as_ref().and_then(|run| run.created_by.clone()));
+    let extension = match &run_state {
+        Some(run) => {
+            crate::application::node::extension_launch::manager_contribution(
+                state,
+                run,
+                started_by.clone(),
+            )
+            .await
+        }
+        None => Default::default(),
+    };
+    let full_prompt = extension.above(full_prompt);
     let config = state.settings.defaults().await;
     let profiles = state.settings.agent_profiles().await;
     let manager_agent = pdo_harness::agent_choice::resolve_infra(
@@ -153,12 +174,13 @@ pub async fn spawn_manager_session(
         // The manager is an infra session, not a pipeline node — it never calls
         // `pdo complete`, so it gets no turn-end `Stop` hook.
         false,
-        // The manager is no Node: the launch hooks are not asked (API 0.8).
-        &[],
+        // What the extensions give the session of whoever starts it (API 0.13).
+        &crate::application::node::extension_launch::env_pairs(&extension),
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {
         info!("Spawned manager session: {session_name}");
+        state.sessions().started_named(&session_name, started_by);
     }
 }
 

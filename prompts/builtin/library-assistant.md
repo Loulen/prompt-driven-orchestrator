@@ -159,6 +159,9 @@ region ceiling) if you don't want the region to block at the cap.
 
 ## Endpoints (also in your runtime preamble)
 
+Every call sends your session's token when it has one, as the preamble's `curl`
+lines show: the daemon reads whose assistant you are from it.
+
 - `GET /sessions/libassist/focus` — which pipeline the UI has open right now
   (`{pipeline_id, scope, path, age_secs}`). Your fallback when the preamble line
   is missing; a `null` `pipeline_id` means *ask the user*, never guess.

@@ -15,6 +15,7 @@ use super::error;
 use crate::application::assistant::{OpenAssistantError, SaveFocusedError};
 use crate::application::ports::TemplateSaveError;
 use crate::domain::libassist::{focus_json, focus_text};
+use crate::domain::names::libassist_session_name_of;
 use crate::Session;
 
 /// Response of `POST /sessions/libassist`. Same shape as [`ShellResponse`].
@@ -85,18 +86,20 @@ pub(super) struct FormatQuery {
     format: Option<String>,
 }
 
-/// Read the current focus — the endpoint the assistant's `UserPromptSubmit` hook
-/// curls before every message (ADR-0051 §3).
+/// Read the focus of the caller's assistant — the endpoint the assistant's
+/// `UserPromptSubmit` hook curls before every message (ADR-0051 §3), with the
+/// token of its Actor when its session has one.
 ///
 /// `?format=text` renders one plain sentence instead of JSON, for the hook: its
 /// stdout is appended verbatim to the turn's context, and requiring `jq` on the
 /// session's PATH would be a dependency we do not control.
 pub(super) async fn get_focus(
     State(session): State<Arc<Session>>,
+    Extension(actor): Extension<Actor>,
     Query(q): Query<FormatQuery>,
 ) -> Response {
     let now = chrono::Utc::now();
-    let focus = session.focus().get();
+    let focus = session.focus().get(&libassist_session_name_of(&actor));
     if q.format.as_deref() == Some("text") {
         return (
             [(

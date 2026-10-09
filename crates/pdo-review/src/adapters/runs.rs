@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use pdo_kernel::Actor;
 use pdo_run::application::events::{append_event, load_events};
 use pdo_run::application::manager::ensure_run_manager;
 use pdo_run::application::paths::effective_repo_root;
@@ -56,9 +57,10 @@ impl ReviewRuns for ContextRuns {
         &'a self,
         run_id: &'a str,
         run: &'a RunState,
+        actor: &'a Actor,
     ) -> BoxFuture<'a, Result<bool, (u16, serde_json::Value)>> {
         Box::pin(async move {
-            ensure_run_manager(&self.0, run_id, run)
+            ensure_run_manager(&self.0, run_id, run, actor)
                 .await
                 .map_err(|(status, body)| (status.as_u16(), body))
         })

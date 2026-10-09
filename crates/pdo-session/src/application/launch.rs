@@ -157,7 +157,8 @@ pub fn spawn_shell(
 /// written as a sibling `settings.json` of `prompt_path`). The primer is written
 /// to `prompt_path`, kept **out** of `working_dir` so the user-facing pipelines
 /// directory stays clean. Never sandboxed: authoring is design-time work on the
-/// host.
+/// host. `extension_env` is what the extensions add to its launch (CORE-61):
+/// exported like a Node's, never over a variable the core sets.
 // Every argument is an irreducible input to the spawn (identity, working context,
 // primer path, launch selector); a struct would only move the list — same
 // rationale as `spawn` / `spawn_shell` / `build_tmux_script`.
@@ -171,6 +172,7 @@ pub fn spawn_libassist(
     daemon_port: u16,
     harness: &pdo_harness::registry::HarnessDescriptor,
     tmux_cmd_override: Option<&str>,
+    extension_env: &[(String, String)],
 ) -> Result<()> {
     if let Some(parent) = prompt_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -194,7 +196,7 @@ pub fn spawn_libassist(
     // #661/ADR-0055: the assistant is a `claude` REPL, so it needs the same
     // interactive PATH the preflight resolves the binary on.
     let session_path = tmux.session_path();
-    let script = build_tmux_script(
+    let script = build_tmux_script_with(
         LIBASSIST_ENV_ID,
         LIBASSIST_ENV_ID,
         0,
@@ -210,6 +212,7 @@ pub fn spawn_libassist(
         },
         None, // never sandboxed
         settings_path.as_deref(),
+        extension_env,
     );
     tmux.new_session(session_name, working_dir, &script, Some("libassist"))?;
 
@@ -488,6 +491,7 @@ mod tests {
             6172,
             &pdo_harness::registry::claude(),
             Some("true"),
+            &[("FIXTURE_HELLO".to_string(), "monde".to_string())],
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(&primer).unwrap(), "primer");
@@ -500,5 +504,6 @@ mod tests {
             script.contains("export PDO_RUN_ID='\\''__libassist__'\\''"),
             "{script}"
         );
+        assert!(script.contains("FIXTURE_HELLO"), "{script}");
     }
 }

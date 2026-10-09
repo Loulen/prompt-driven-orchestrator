@@ -23,6 +23,8 @@ pub struct Runs {
     pub unreadable: Mutex<bool>,
     pub worktree: Mutex<Option<PathBuf>>,
     pub manager_running: Mutex<bool>,
+    /// The Actor each start of the manager was asked for.
+    pub manager_started_by: Mutex<Vec<Actor>>,
     pub manager_refusal: Mutex<Option<(u16, serde_json::Value)>>,
     pub handed: Mutex<Vec<(String, String, bool)>>,
     /// The Projets of each Run; none for a Run absent from it.
@@ -77,6 +79,7 @@ impl ReviewRuns for Runs {
         &'a self,
         _run_id: &'a str,
         _run: &'a RunState,
+        actor: &'a Actor,
     ) -> BoxFuture<'a, Result<bool, (u16, serde_json::Value)>> {
         Box::pin(async move {
             if let Some(refusal) = self.manager_refusal.lock().unwrap().clone() {
@@ -84,6 +87,9 @@ impl ReviewRuns for Runs {
             }
             let mut running = self.manager_running.lock().unwrap();
             let created = !*running;
+            if created {
+                self.manager_started_by.lock().unwrap().push(actor.clone());
+            }
             *running = true;
             Ok(created)
         })

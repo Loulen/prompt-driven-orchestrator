@@ -173,8 +173,8 @@ fn core_entry(
         ),
         ResourceKind::Pipeline => (
             "Pipelines",
-            "Create, edit, validate and delete the pipeline templates",
-            &[CREATE, UPDATE, DELETE, "validate"],
+            "Create, edit, validate and delete the pipeline templates; open the library assistant",
+            &[CREATE, UPDATE, DELETE, "validate", "open_assistant"],
         ),
         ResourceKind::LibraryEntry => (
             "Library entries",

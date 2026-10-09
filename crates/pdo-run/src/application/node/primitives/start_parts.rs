@@ -78,7 +78,7 @@ pub struct StartNodeParams<'a> {
 /// Owns its data because [`SessionTail`] and the sandbox wrap borrow; both are
 /// rebuilt in [`StartNodeSpawn::execute`].
 pub struct StartNodeSpawn {
-    pub(super) session_name: String,
+    pub session_name: String,
     pub(super) prompt: String,
     pub(super) working_dir: PathBuf,
     pub(super) run_id: String,

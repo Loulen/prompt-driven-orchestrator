@@ -9,13 +9,18 @@
 //!   Trigger (`PUT /ext/test/suspensions {"trigger_id", "reason"}`, `DELETE
 //!   /ext/test/suspensions/<id>` lifts it).
 //!
+//! - **`session_env`** / **`session_preamble`** (API 0.13), for a session
+//!   that is no Node (the Pipeline Manager, the library assistant): the same
+//!   variables plus `TEST_STARTED_BY`, the id of who starts the session (else
+//!   its kind of Actor, `nobody` when unknown), and the same preamble.
+//!
 //! Every launch it is asked about is recorded ([`Launch::launches`], `GET
 //! /ext/test/launch`), with whether it asked for the preamble.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use pdo::extension_api::{NodeEnv, NodeLaunch, TriggerRef};
+use pdo::extension_api::{Actor, NodeEnv, NodeLaunch, SessionLaunch, TriggerRef};
 use serde_json::{json, Value};
 
 /// The launch side of the test extension's control.
@@ -81,6 +86,29 @@ impl Launch {
 
     pub(super) fn node_preamble(&self, launch: &NodeLaunch) -> Option<String> {
         self.record("node_preamble", launch);
+        self.preamble.lock().unwrap().clone()
+    }
+
+    pub(super) fn session_env(&self, launch: &SessionLaunch) -> NodeEnv {
+        self.launches
+            .lock()
+            .unwrap()
+            .push(json!({ "hook": "session_env", "launch": launch }));
+        let started_by = match &launch.started_by {
+            Some(Actor::Identified { id, .. }) => id.clone(),
+            Some(actor) => actor.kind().to_string(),
+            None => "nobody".to_string(),
+        };
+        let mut env = self.env.lock().unwrap().clone();
+        env.insert("TEST_STARTED_BY".into(), started_by);
+        env
+    }
+
+    pub(super) fn session_preamble(&self, launch: &SessionLaunch) -> Option<String> {
+        self.launches
+            .lock()
+            .unwrap()
+            .push(json!({ "hook": "session_preamble", "launch": launch }));
         self.preamble.lock().unwrap().clone()
     }
 

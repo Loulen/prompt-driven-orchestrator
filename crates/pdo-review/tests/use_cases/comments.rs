@@ -100,6 +100,28 @@ async fn a_send_records_one_event_per_comment_and_hands_the_manager_one_message(
     assert_eq!(next["manager_started"], false);
 }
 
+/// CORE-61: the manager a send starts is started by the author of the
+/// comments, whose Droits it acts with; a manager already running keeps who
+/// started it.
+#[tokio::test]
+async fn the_manager_a_send_starts_is_started_by_the_author_of_the_comments() {
+    let w = World::new();
+    w.completed_run("r1").await;
+    let bob = Actor::Identified {
+        namespace: "test".into(),
+        id: "bob".into(),
+    };
+    w.review
+        .send_comments(&bob, "r1", vec![draft(1, "why?")])
+        .await
+        .unwrap();
+    w.review
+        .send_comments(&Actor::LocalOperator, "r1", vec![draft(2, "and?")])
+        .await
+        .unwrap();
+    assert_eq!(*w.runs.manager_started_by.lock().unwrap(), vec![bob]);
+}
+
 #[tokio::test]
 async fn drafts_stay_drafts_when_the_send_is_refused() {
     let w = World::new();

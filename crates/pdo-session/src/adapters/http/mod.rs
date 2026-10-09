@@ -50,8 +50,9 @@ pub fn router(session: Arc<Session>) -> Router {
         )
         .route("/sessions/{run_id}/shell", post(sessions::open_shell))
         // The library pipeline authoring assistant (ADR-0051). No pipeline id in
-        // the path: there is ONE assistant for the whole daemon. `POST` is
-        // create-if-absent; `DELETE` reaps it when the user leaves every edit view.
+        // the path: there is ONE assistant per Actor, the caller's (CORE-61).
+        // `POST` is create-if-absent; `DELETE` reaps it when the user leaves
+        // every edit view.
         .route(
             "/sessions/libassist",
             post(assistant::open).delete(assistant::close),

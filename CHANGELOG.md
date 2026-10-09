@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.31.0 — Sessions d'agent et Acteur qui les démarre (CORE-61)
+
+- **API d'extension 0.13.0**, sans rupture : hooks `session_env` et `session_preamble`, demandés
+  pour toute session qui fait agir un agent (Node, Manager d'un Run, Assistant de
+  bibliothèque) avec l'Acteur qui la démarre ; par défaut, `node_env` et `node_preamble` pour
+  un Node et rien pour les autres. Événements `session_started`, `session_taken_over` et
+  `session_ended` (`SessionEvent`), sur `/ws` pour une session d'un Run, une fois une
+  extension chargée.
+- **Un Assistant de bibliothèque par Acteur** : `POST /sessions/libassist` ouvre celui de
+  l'appelant ; l'opérateur local garde `pdo-libassist-shared`. Le focus, le save et la
+  fermeture sont ceux de l'appelant.
+- **L'ouverture de l'Assistant change d'Opération** : `pipeline` × `open_assistant` (sans
+  cible, hors Projet) remplace `session` × `create`. Une extension de droits qui refusait
+  l'Assistant par `session` × `create` doit refuser la nouvelle Opération.
+
 ## 2.30.0 — Un Run vu par une extension : personnes, Présences, coût (CORE-62)
 
 - **Le core ne dessine plus le créateur d'un Run** : ni sur sa ligne dans la liste des Runs, ni

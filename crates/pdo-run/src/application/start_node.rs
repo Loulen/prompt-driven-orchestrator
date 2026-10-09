@@ -320,8 +320,12 @@ pub async fn force_spawn_node(
     // first also means a rejected append leaves no orphan session; the residual risk
     // (append landed, spawn failed) is what `spawn_node` has always carried.
     if let Some(spawn) = &result.spawn {
-        if let Err(e) = spawn.execute(state.tmux()) {
-            error!("failed to spawn tmux session: {e}");
+        match spawn.execute(state.tmux()) {
+            // CORE-61: the session is up, started by the Run's creator.
+            Ok(()) => state
+                .sessions()
+                .started_named(&spawn.session_name, run_state.created_by.clone()),
+            Err(e) => error!("failed to spawn tmux session: {e}"),
         }
     }
 

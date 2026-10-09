@@ -7,9 +7,10 @@ use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
-use super::{session_target, FocusCell};
+use super::FocusCell;
 use crate::application::ports::Templates;
 use crate::domain::libassist::{focus_json, LibassistFocus};
+use crate::domain::names::libassist_session_name_of;
 
 /// `PUT /sessions/libassist/focus`. The UI repeats it every 20 s while an edit
 /// view is open, and the repetition is load-bearing twice over: it is how the
@@ -38,16 +39,18 @@ impl DeclareFocus {
         }
     }
 
-    /// Returns the focus as the UI reads it back.
+    /// Declare the focus of `actor`'s assistant. Returns the focus as the UI
+    /// reads it back.
     pub fn execute(
         &self,
         actor: &Actor,
         pipeline_id: Option<String>,
     ) -> Result<serde_json::Value, Denied> {
-        let operation = Operation::new(ResourceKind::Session, Verb::Update).on(session_target());
+        let session = libassist_session_name_of(actor);
+        let operation = Operation::new(ResourceKind::Session, Verb::Update).on(session.clone());
         authorize(self.host.as_ref(), actor, &operation)?;
         let Some(pipeline_id) = pipeline_id.filter(|id| !id.is_empty()) else {
-            self.focus.set(None);
+            self.focus.set(&session, None);
             return Ok(serde_json::json!({ "ok": true, "pipeline_id": null }));
         };
         // The absolute path is the daemon's job, not the client's: "scope" means
@@ -62,7 +65,7 @@ impl DeclareFocus {
             at: chrono::Utc::now(),
         };
         let body = focus_json(Some(&focus), focus.at);
-        self.focus.set(Some(focus));
+        self.focus.set(&session, Some(focus));
         Ok(body)
     }
 }

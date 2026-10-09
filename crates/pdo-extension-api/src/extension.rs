@@ -2,92 +2,15 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use serde::Serialize;
-
 use crate::{
-    Actor, ActorDisplay, Admission, Attributes, CliInvocation, CliOutput, CliSpec, EntityRef,
-    ExtensionSkill, Host, Manifest, NeutralHost, NodeEnv, NodeLaunch, Operation, ResourceKind,
-    TriggerRef, UiContributions,
+    Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
+    EntityRef, ExtensionSkill, Host, Manifest, NeutralHost, NodeEnv, NodeLaunch, Operation,
+    ResourceKind, SessionLaunch, TriggerRef, UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
 /// Never the body, which a hook must not consume.
 pub type RequestParts = axum::http::request::Parts;
-
-/// The answer of `authorize`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "decision", rename_all = "snake_case")]
-#[must_use]
-pub enum Authorization {
-    Allow,
-    /// Refuse the Operation. The `reason` reaches the operator in the error the
-    /// gesture already shows.
-    Deny {
-        reason: String,
-    },
-}
-
-impl Authorization {
-    pub fn deny(reason: impl Into<String>) -> Self {
-        Authorization::Deny {
-            reason: reason.into(),
-        }
-    }
-
-    pub fn is_allowed(&self) -> bool {
-        matches!(self, Authorization::Allow)
-    }
-
-    /// `Ok` when allowed, the [`Denied`] refusal otherwise: what a route of an
-    /// extension answers with `?`.
-    pub fn into_result(self) -> Result<(), Denied> {
-        match self {
-            Authorization::Allow => Ok(()),
-            Authorization::Deny { reason } => Err(Denied { reason }),
-        }
-    }
-}
-
-/// The `error` slug of a refused Operation.
-pub const OPERATION_REFUSED: &str = "operation_refused";
-
-/// An Operation an extension refused, with the reason to show the operator.
-///
-/// As a response, `403` with the body every refusal of the daemon carries:
-/// `{"error": "operation_refused", "message": "operation refused: <reason>",
-/// "reason": <reason>}`. An extension answers its own refused Operations with
-/// it, so a client reads them like the core's.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Denied {
-    pub reason: String,
-}
-
-impl fmt::Display for Denied {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "operation refused: {}", self.reason)
-    }
-}
-
-impl std::error::Error for Denied {}
-
-impl Denied {
-    /// The JSON body of the refusal.
-    pub fn body(&self) -> serde_json::Value {
-        serde_json::json!({
-            "error": OPERATION_REFUSED,
-            "message": self.to_string(),
-            "reason": self.reason,
-        })
-    }
-}
-
-impl IntoResponse for Denied {
-    fn into_response(self) -> Response {
-        (StatusCode::FORBIDDEN, axum::Json(self.body())).into_response()
-    }
-}
 
 /// What the core gives an extension when the daemon starts.
 #[derive(Clone)]
@@ -356,6 +279,43 @@ pub trait Extension: Send + Sync + 'static {
         None
     }
 
+    /// The environment variables to add to any session being launched that
+    /// makes an agent act, or runs a script Node (API 0.13): a Node, the
+    /// Pipeline Manager of a Run, the library assistant. The core asks this
+    /// hook, never [`Self::node_env`] directly: by default it answers
+    /// [`Self::node_env`] for a Node and nothing for the other sessions, so an
+    /// extension that only knows `node_env` behaves as before.
+    ///
+    /// The rules of [`Self::node_env`] hold for every session: the core never
+    /// overwrites one of its own variables, the first extension registered
+    /// wins a name, a panic adds nothing. The launch names the session, its
+    /// Run and Projets, and the Actor who starts it
+    /// ([`SessionLaunch::started_by`]); the end of the session is published
+    /// as a [`SessionEvent`](crate::SessionEvent) (`session_ended`), so what
+    /// the variables hand over can be revoked then. Called on the daemon's
+    /// spawn path, once per launch: keep it quick.
+    fn session_env(&self, launch: &SessionLaunch) -> NodeEnv {
+        match &launch.node {
+            Some(node) => self.node_env(node),
+            None => NodeEnv::new(),
+        }
+    }
+
+    /// A text the core places at the very top of the prompt of an agent
+    /// session being launched (API 0.13): before `# PDO Runtime Preamble` for
+    /// a Node, before the runtime preamble of the Pipeline Manager and of the
+    /// library assistant. Never asked for a script Node. By default,
+    /// [`Self::node_preamble`] for a Node and nothing for the other sessions.
+    ///
+    /// Two extensions' texts follow each other in registration order. Called
+    /// on the daemon's spawn path: keep it quick. A panic adds nothing.
+    fn session_preamble(&self, launch: &SessionLaunch) -> Option<String> {
+        launch
+            .node
+            .as_ref()
+            .and_then(|node| self.node_preamble(node))
+    }
+
     /// Why `trigger` is suspended, if it is: a suspended Trigger fires neither
     /// on its schedule nor by "Run now", and the interface shows it switched
     /// off with this reason. Asked again at every read and every due tick, so
@@ -430,6 +390,12 @@ mod tests {
         let launch = NodeLaunch::new("r1", "n1", 1, crate::NodeKind::Agent, "/repo");
         assert!(ext.node_env(&launch).is_empty());
         assert_eq!(ext.node_preamble(&launch), None);
+        let manager = SessionLaunch::new(crate::SessionRef::new(
+            "pdo-mgr-r1",
+            crate::SessionKind::Manager,
+        ));
+        assert!(ext.session_env(&manager).is_empty());
+        assert_eq!(ext.session_preamble(&manager), None);
         assert_eq!(
             ext.trigger_suspension(&TriggerRef::new("t1", "Nightly", None)),
             None
@@ -441,43 +407,6 @@ mod tests {
     fn extensions_are_object_safe() {
         let extensions: Vec<Box<dyn Extension>> = vec![Box::new(Bare)];
         assert_eq!(extensions.len(), 1);
-    }
-
-    #[test]
-    fn a_refusal_carries_its_reason() {
-        let deny = Authorization::deny("admins only");
-        assert!(!deny.is_allowed());
-        assert_eq!(
-            serde_json::to_value(&deny).unwrap(),
-            serde_json::json!({ "decision": "deny", "reason": "admins only" })
-        );
-        assert_eq!(
-            deny.into_result(),
-            Err(Denied {
-                reason: "admins only".into()
-            })
-        );
-        assert_eq!(Authorization::Allow.into_result(), Ok(()));
-    }
-
-    #[tokio::test]
-    async fn a_refusal_answers_403_with_the_core_body() {
-        let response = Denied {
-            reason: "projects are read-only".into(),
-        }
-        .into_response();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
-            serde_json::json!({
-                "error": "operation_refused",
-                "message": "operation refused: projects are read-only",
-                "reason": "projects are read-only",
-            })
-        );
     }
 
     #[test]

@@ -10,6 +10,7 @@ use tracing::info;
 
 use crate::application::launch::spawn_shell;
 use crate::application::ports::{NoRunProjects, RunLookup, RunProjects, RunShells, Tmux};
+use crate::application::session_ledger::SessionLedger;
 use crate::domain::launch::SandboxWrap;
 use crate::domain::names::shell_session_name;
 
@@ -41,6 +42,7 @@ pub struct OpenShell {
     host: Arc<dyn ExtensionHost>,
     daemon_port: u16,
     projects: Arc<dyn RunProjects>,
+    ledger: Arc<SessionLedger>,
 }
 
 impl OpenShell {
@@ -52,11 +54,19 @@ impl OpenShell {
     ) -> Self {
         Self {
             runs,
+            ledger: Arc::new(SessionLedger::new(tmux.clone(), host.clone())),
             tmux,
             host,
             daemon_port,
             projects: Arc::new(NoRunProjects),
         }
+    }
+
+    /// The same use case, announcing the shells it starts in `ledger`
+    /// (CORE-61).
+    pub fn with_ledger(mut self, ledger: Arc<SessionLedger>) -> Self {
+        self.ledger = ledger;
+        self
     }
 
     /// The same use case, its Operations in the Projets `projects` gives.
@@ -126,6 +136,7 @@ impl OpenShell {
                     "Opened run shell {session} in {}",
                     target.worktree.display()
                 );
+                self.ledger.started_named(&session, Some(actor.clone()));
                 Ok(OpenedShell {
                     session,
                     created: true,

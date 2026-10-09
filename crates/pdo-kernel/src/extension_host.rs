@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
     ActorDisplay, Admission, Attributes, Authorization, EntityRef, Extension, ExtensionContext,
-    ExtensionData, Host, Manifest, NodeLaunch, RequestParts, Resource, ResourceKind, TriggerRef,
+    ExtensionData, Host, Manifest, RequestParts, Resource, ResourceKind, SessionLaunch, TriggerRef,
     EXTENSION_EVENT,
 };
 use serde_json::Value;
@@ -379,8 +379,8 @@ impl ExtensionHost for Extensions {
         pdo_extension_api::catalogue(self.registry.registered.iter().map(|r| &r.manifest))
     }
 
-    fn node_launch(&self, launch: &NodeLaunch) -> NodeContribution {
-        launch::node_launch(self, launch)
+    fn session_launch(&self, launch: &SessionLaunch) -> NodeContribution {
+        launch::session_launch(self, launch)
     }
 
     fn trigger_suspension(&self, trigger: &TriggerRef) -> Option<TriggerSuspension> {

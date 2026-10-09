@@ -51,6 +51,15 @@ async fn a_terminal_run_gets_one_shell_then_reattaches_to_it() {
     let asked = host.asked();
     assert_eq!(asked[0].resource, ResourceKind::Session);
     assert_eq!(asked[0].verb, Verb::Create);
+    // CORE-61: the shell's start is announced once, by who opened it, on the
+    // bus (it is a session of the Run).
+    let events = host.events();
+    assert_eq!(events.len(), 1);
+    assert!(events[0].0);
+    assert_eq!(events[0].1["type"], "session_started");
+    assert_eq!(events[0].1["actor"]["kind"], "local_operator");
+    assert_eq!(events[0].1["session"]["kind"], "shell");
+    assert_eq!(events[0].1["session"]["run_id"], RUN);
 }
 
 #[tokio::test]

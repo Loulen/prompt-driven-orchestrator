@@ -17,6 +17,10 @@
 //! The other messages (pipelines, Projets, the extensions' unguarded
 //! events…) pass as before.
 //!
+//! The client says which Run its tab shows (`{"type": "show_run", "run_id":
+//! <id> | null}`, [`SHOW_RUN`]): the Presences on the Runs (API 0.12). The
+//! connection's end is its departure.
+//!
 //! The client's Close frame is answered before the connection ends (ADR-0083
 //! §3): a closing without it counts as a failure for the browser. Every
 //! opening, closing and refused upgrade has its line in the journal
@@ -32,6 +36,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use futures_util::SinkExt;
+use pdo_extension_api::{PRESENCE_ARRIVED, PRESENCE_LEFT};
 use pdo_kernel::authorization::authorize_read;
 use pdo_kernel::event_bus::READ_GUARD;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
@@ -42,6 +47,7 @@ use tokio::sync::broadcast;
 use tokio::time;
 use tracing::warn;
 
+use crate::domain::presence::ConnectionId;
 use crate::Runs;
 
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -55,6 +61,9 @@ pub const READ_DECISION_TTL: Duration = Duration::from_secs(5);
 /// How long a decision is kept at all: a `run_forgotten` (whose Run, gone,
 /// has no Projet any more) is judged by the last decision about its Run.
 const FORGET_DECISIONS_AFTER: Duration = Duration::from_secs(600);
+
+/// What a client sends when its tab shows another Run, or none.
+pub const SHOW_RUN: &str = "show_run";
 
 /// The path of the stream, as the journal names it.
 const PATH: &str = "/ws";
@@ -78,13 +87,20 @@ pub(super) async fn upgrade(
     ws.on_upgrade(move |socket| async move {
         ws_log::opened(PATH, requested.elapsed());
         let opened = Instant::now();
-        let closing = relay(socket, runs, actor).await;
+        let connection = runs.open_connection();
+        let closing = relay(socket, runs.clone(), actor, connection).await;
+        runs.close_connection(connection);
         ws_log::closed(PATH, closing, opened.elapsed());
     })
 }
 
 /// Relay the bus to `socket` until either side ends it; how it ended.
-async fn relay(mut socket: WebSocket, runs: Arc<Runs>, actor: Actor) -> Closing {
+async fn relay(
+    mut socket: WebSocket,
+    runs: Arc<Runs>,
+    actor: Actor,
+    connection: ConnectionId,
+) -> Closing {
     let ready = serde_json::json!({ "type": "ready" });
     if socket
         .send(Message::Text(ready.to_string().into()))
@@ -118,8 +134,12 @@ async fn relay(mut socket: WebSocket, runs: Arc<Runs>, actor: Actor) -> Closing 
                         let _ = socket.flush().await;
                         return Closing::ByClient(frame.map_or(NO_STATUS, |f| f.code));
                     }
-                    // The client has nothing to say on this stream; pings are
-                    // answered by the protocol itself.
+                    Some(Ok(Message::Text(text))) => {
+                        if let Some(run_id) = shown_run(&text) {
+                            runs.show_run(connection, &visible.actor, run_id.as_deref()).await;
+                        }
+                    }
+                    // Pings are answered by the protocol itself.
                     Some(Ok(_)) => {}
                     None | Some(Err(_)) => return Closing::Dropped,
                 }
@@ -243,13 +263,14 @@ impl<'a> Visibility<'a> {
 
 /// The Run a message of the bus is about, and whether that Run is gone: a
 /// Run's event (`{"type": "event", "event": {"run_id"…}}`), its
-/// `run_forgotten`, an `operation_applied` on a Run or one of its nodes (the
+/// `run_forgotten`, an arrival or a departure on it, an `operation_applied` on a Run or one of its nodes (the
 /// creation of a Run has no target: the Run is the entity it produced).
 /// `None` for everything else.
 fn run_of_message(message: &Value) -> Option<(&str, bool)> {
     match message["type"].as_str()? {
         "event" => Some((message["event"]["run_id"].as_str()?, false)),
         "run_forgotten" => Some((message["run_id"].as_str()?, true)),
+        PRESENCE_ARRIVED | PRESENCE_LEFT => Some((message["run_id"].as_str()?, false)),
         "operation_applied" => {
             let operation = &message["operation"];
             match operation["resource"].as_str()? {
@@ -298,6 +319,16 @@ fn run_mentioned_by(message: &Value) -> Option<&str> {
         "trigger_fired" => message["run_id"].as_str(),
         _ => None,
     }
+}
+
+/// The Run a client's message says its tab shows (`Some(None)`: none), or
+/// `None` for any other message.
+fn shown_run(text: &str) -> Option<Option<String>> {
+    let message: Value = serde_json::from_str(text).ok()?;
+    if message["type"] != SHOW_RUN {
+        return None;
+    }
+    Some(message["run_id"].as_str().map(str::to_string))
 }
 
 fn unix_timestamp_secs() -> String {
@@ -350,6 +381,33 @@ mod tests {
             Some(("r5", false)),
             "a creation is about the Run it produced"
         );
+    }
+
+    #[test]
+    fn a_presence_is_about_its_run() {
+        for kind in [PRESENCE_ARRIVED, PRESENCE_LEFT] {
+            assert_eq!(
+                run_of_message(
+                    &json!({ "type": kind, "run_id": "r1", "actor": {}, "presences": [] })
+                ),
+                Some(("r1", false))
+            );
+        }
+    }
+
+    #[test]
+    fn a_client_says_which_run_its_tab_shows() {
+        assert_eq!(
+            shown_run(r#"{"type":"show_run","run_id":"r1"}"#),
+            Some(Some("r1".to_string()))
+        );
+        assert_eq!(
+            shown_run(r#"{"type":"show_run","run_id":null}"#),
+            Some(None)
+        );
+        assert_eq!(shown_run(r#"{"type":"show_run"}"#), Some(None));
+        assert_eq!(shown_run(r#"{"type":"hello"}"#), None);
+        assert_eq!(shown_run("not json"), None);
     }
 
     #[test]

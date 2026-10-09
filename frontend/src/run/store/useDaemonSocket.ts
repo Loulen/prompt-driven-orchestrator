@@ -34,6 +34,9 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "project_changed",
   // The validation of a Pipeline changed (CONTEXT.md « Pipeline validé »).
   "pipeline_validation_changed",
+  // API 0.12: who has which Run open.
+  "presence_arrived",
+  "presence_left",
   // ADR-0083 §6: the daemon lost messages for this client.
   "resync",
 ]);
@@ -53,6 +56,8 @@ const statusListeners = new Set<() => void>();
 let stream: ProbedSocket | null = null;
 let users = 0;
 let status: ConnectionStatus = "disconnected";
+/** The Run this tab shows (API 0.12), told to the daemon at each opening. */
+let shownRun: string | null = null;
 
 function statusOf(state: ProbedSocketState): ConnectionStatus {
   switch (state) {
@@ -89,7 +94,10 @@ function acquire() {
   socket.onState((state) => {
     if (state === "ouvert") performance.mark?.(STREAM_OPEN_MARK);
     setStatus(statusOf(state));
-    if (state === "ouvert") emit(RESYNC);
+    if (state === "ouvert") {
+      if (shownRun) tellShownRun();
+      emit(RESYNC);
+    }
   });
   socket.onMessage((data) => {
     if (typeof data !== "string") return;
@@ -114,6 +122,21 @@ function release() {
   document.removeEventListener("visibilitychange", wake);
   window.removeEventListener("online", wake);
   setStatus("disconnected");
+}
+
+function tellShownRun() {
+  stream?.send(JSON.stringify({ type: "show_run", run_id: shownRun }));
+}
+
+/**
+ * Tell the daemon which Run this tab shows, or `null` for none (API 0.12): the
+ * Presences on the Runs. Said again at each (re)opening of the stream; the
+ * stream's end is the tab's departure.
+ */
+export function showRun(runId: string | null) {
+  if (runId === shownRun) return;
+  shownRun = runId;
+  tellShownRun();
 }
 
 /** Listen to the stream's messages; returns the unsubscribe. */

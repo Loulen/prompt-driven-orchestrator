@@ -6,6 +6,8 @@
  */
 
 import type { DaemonEvent } from "../../shared/generated/DaemonEvent";
+import type { Actor } from "../../shared/generated/Actor";
+import type { Presence } from "../../shared/generated/Presence";
 
 export interface WsMessage {
   type:
@@ -22,6 +24,9 @@ export interface WsMessage {
     | "pipeline_validation_changed"
     | "cost_prices_synced"
     | "run_forgotten"
+    /** An Actor opened a Run, or no longer has it open anywhere (API 0.12). */
+    | "presence_arrived"
+    | "presence_left"
     /** Re-read the whole state (ADR-0083 §6): sent by the daemon to a client
      *  that lost messages, and emitted by the stream itself after each
      *  (re)opening, a return to the tab and a return of the network. */
@@ -41,4 +46,8 @@ export interface WsMessage {
   project_id?: string;
   /** Set on `cost_prices_synced` messages: how many price rows the sync wrote. */
   rows?: number;
+  /** Set on `presence_*` messages: who arrived or left. */
+  actor?: Actor;
+  /** Set on `presence_*` messages: the Run's Presences once it happened. */
+  presences?: Presence[];
 }

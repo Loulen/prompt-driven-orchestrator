@@ -28,6 +28,7 @@ mod identity;
 mod launch;
 mod neutral;
 mod port;
+mod run_view;
 mod skills;
 pub use creation::{CreationRefusal, RunCreator};
 use host_of::{panic_message, ExtensionHostOf};
@@ -35,6 +36,7 @@ pub use identity::Identification;
 pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
 pub use neutral::NoExtensions;
 pub use port::ExtensionHost;
+pub use run_view::RunViews;
 pub use skills::ProvidedSkills;
 
 /// What the daemon gives its extension host once its resources are open.
@@ -67,6 +69,9 @@ struct Registry {
     /// The names of the Projets for [`Host::project_name`] (API 0.11), once
     /// the daemon plugged its table.
     project_names: OnceLock<Arc<ProjectNames>>,
+    /// What shows a Run to [`Host::presences`] and [`Host::run_cost`] (API
+    /// 0.12), once the daemon wired its contexts.
+    run_views: OnceLock<Arc<dyn RunViews>>,
 }
 
 /// The host of the extensions registered at startup, in registration order.
@@ -811,8 +816,7 @@ mod tests {
         let extensions = Extensions::register(vec![Box::new(a), Box::new(b)]).unwrap();
         let bus = Arc::new(crate::event_bus::BroadcastEventBus::new(16));
         let mut ws = bus.subscribe();
-        let root =
-            std::env::temp_dir().join(format!("pdo-kernel-guard-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("pdo-kernel-guard-{}", std::process::id()));
         extensions.start(HostServices {
             attributes: Arc::new(crate::attributes::InMemoryAttributes::default()),
             bus,
@@ -822,8 +826,7 @@ mod tests {
             .on("i1")
             .in_projects(["p2"]);
         extensions.host_of("a").publish(
-            ExtensionEvent::new("item_changed", serde_json::json!({ "id": "i1" }))
-                .guarded_by(read),
+            ExtensionEvent::new("item_changed", serde_json::json!({ "id": "i1" })).guarded_by(read),
         );
 
         let unguarded = serde_json::json!({

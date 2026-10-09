@@ -13,7 +13,6 @@ import { formatEstCost } from "../../run/model/costLabel";
 import type { EditorPipelineDef } from "../model/pipeline";
 
 import { SourceBlock } from "./SourceBlock";
-import RunCreator from "../../run/components/RunCreator";
 import PipelineMetaSections from "./PipelineMetaSections";
 import { PipelineConfigSections } from "./ExtensionInspectorSections";
 import { useEditStore } from "../store/editStore";
@@ -214,7 +213,6 @@ export function InfoTab({
             <span className="rounded bg-bg-3 px-1.5 py-0.5 font-mono text-fg-2">{run.harness}</span>
           </div>
         )}
-        {run && <RunCreator run={run} />}
         {run && <SourceBlock run={run} />}
         {run && (
           <div

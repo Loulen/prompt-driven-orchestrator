@@ -1,8 +1,8 @@
 use serde::Serialize;
 
 use crate::{
-    Actor, ActorDisplay, Attributes, Authorization, EntityRef, NewRun, OperationApplied, Resource,
-    RunCreation, RunNotCreated,
+    Actor, ActorDisplay, Attributes, Authorization, EntityRef, NewRun, OperationApplied, Presence,
+    Resource, RunCostRead, RunCreation, RunNotCreated,
 };
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
@@ -114,6 +114,25 @@ pub trait Host: Send + Sync {
     /// the list of the Triggers reads them all again. Never waits. Nothing by
     /// default.
     fn triggers_changed(&self) {}
+
+    /// The Actors who have the Run `run_id` open in a browser right now (API
+    /// 0.12), by order of arrival: one [`Presence`] per Actor, whatever its
+    /// count of tabs. Empty for a Run nobody has open, a Run the core does
+    /// not know, and by default. Synchronous and quick. Each arrival and each
+    /// departure is announced too ([`PRESENCE_ARRIVED`](crate::PRESENCE_ARRIVED),
+    /// [`PRESENCE_LEFT`](crate::PRESENCE_LEFT)).
+    fn presences(&self, _run_id: &str) -> Vec<Presence> {
+        Vec::new()
+    }
+
+    /// The cost of the Run `run_id` (API 0.12), the one its Info tab shows:
+    /// its amount, whether it is a lower bound, and why it is unknown.
+    /// `None` for a Run the core does not know, and by default. Read on
+    /// demand from the Run's sessions: await it from a route or a task, not
+    /// from a hook.
+    fn run_cost(&self, _run_id: &str) -> RunCostRead {
+        Box::pin(std::future::ready(None))
+    }
 }
 
 /// The host of an extension alone: everything allowed, events go nowhere, no
@@ -264,6 +283,13 @@ mod tests {
         }
         assert_eq!(Older.project_name("prj-1"), None);
         Older.triggers_changed();
+        assert!(Older.presences("r1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_neutral_host_sees_nobody_and_no_cost() {
+        assert!(NeutralHost.presences("r1").is_empty());
+        assert_eq!(NeutralHost.run_cost("r1").await, None);
     }
 
     #[tokio::test]

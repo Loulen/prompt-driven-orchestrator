@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useDaemonSocket } from "../run/store/useDaemonSocket";
+import { usePresences } from "../run/store/presences";
 import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
 import { useSelectedRun } from "../run/store/useSelectedRun";
@@ -186,6 +187,8 @@ export default function App() {
 
   // CORE-1: `#/runs/<id>` selects the Run, from the address bar or an extension.
   useRunLink(handleSelectRun);
+  // API 0.12: the daemon knows which Run this tab shows (the Presences).
+  usePresences(selectedRunId);
   // CORE-2: the address keeps no Run, so a lost session comes back to it this way.
   useEffect(() => {
     setSignInReturnLink(selectedRunId ? formatRunLink(selectedRunId) : null);

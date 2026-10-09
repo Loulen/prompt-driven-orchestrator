@@ -1,6 +1,6 @@
 import { renderHook, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { STREAM_OPEN_MARK, STREAM_SILENCE_MS, useDaemonSocket } from "./useDaemonSocket";
+import { STREAM_OPEN_MARK, STREAM_SILENCE_MS, showRun, useDaemonSocket } from "./useDaemonSocket";
 import { useReviewLive } from "../../review/store/useReviewLive";
 import type { WsMessage } from "../model/liveStream";
 
@@ -13,12 +13,16 @@ class FakeSocket {
   readyState = 0;
   binaryType = "blob";
   closedWith: number | undefined;
+  sent: string[] = [];
   constructor(url: string) {
     this.url = url;
     FakeSocket.instances.push(this);
   }
   addEventListener(type: string, listener: (event: object) => void) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  send(data: string) {
+    this.sent.push(data);
   }
   /** Like a browser: the "close" event arrives later, not inside `close()`. */
   close(code?: number) {
@@ -108,6 +112,26 @@ describe("useDaemonSocket", () => {
       { type: "pipeline_validation_changed", pipeline_id: "shared" },
     ]);
     stop();
+    unmount();
+  });
+
+  it("tells the daemon which Run the tab shows, again at each reopening (API 0.12)", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    const { unmount } = renderHook(() => useDaemonSocket());
+    await settle();
+    act(() => FakeSocket.instances[0].fire("open"));
+    const shown = (socket: FakeSocket) => socket.sent.map((data) => JSON.parse(data));
+    showRun("r1");
+    showRun("r1");
+    expect(shown(FakeSocket.instances[0])).toEqual([{ type: "show_run", run_id: "r1" }]);
+    act(() => FakeSocket.instances[0].fire("close", { code: 1006 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    act(() => FakeSocket.instances[1].fire("open"));
+    expect(shown(FakeSocket.instances[1])).toEqual([{ type: "show_run", run_id: "r1" }]);
+    showRun(null);
+    expect(shown(FakeSocket.instances[1]).at(-1)).toEqual({ type: "show_run", run_id: null });
     unmount();
   });
 

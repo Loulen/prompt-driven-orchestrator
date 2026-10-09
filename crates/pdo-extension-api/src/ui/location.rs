@@ -101,6 +101,12 @@ pub enum UiLocation {
     /// of the child counters: a [`UiElement::Decoration`] per contribution.
     #[serde(rename = "run/item")]
     RunItem,
+    /// The people of a row of the Runs list, in its left-hand column after
+    /// the pipeline's name: a [`UiElement::Decoration`] per contribution,
+    /// handed the Actors who have the Run open (its Presences, live). The core
+    /// draws no person there itself. Since 0.12.
+    #[serde(rename = "run/item/people")]
+    RunItemPeople,
     /// A mark on a row of the Triggers list, on its second line: a
     /// [`UiElement::Decoration`] per contribution.
     #[serde(rename = "trigger/item")]
@@ -240,6 +246,7 @@ impl UiLocation {
         UiLocation::PipelineConfig,
         UiLocation::RunInfo,
         UiLocation::RunItem,
+        UiLocation::RunItemPeople,
         UiLocation::TriggerItem,
         UiLocation::PipelineItem,
         UiLocation::CanvasNode,
@@ -286,6 +293,7 @@ impl UiLocation {
             UiLocation::PipelineConfig => "pipeline/config",
             UiLocation::RunInfo => "run/info",
             UiLocation::RunItem => "run/item",
+            UiLocation::RunItemPeople => "run/item/people",
             UiLocation::TriggerItem => "trigger/item",
             UiLocation::PipelineItem => "pipeline/item",
             UiLocation::CanvasNode => "canvas/node",
@@ -350,6 +358,7 @@ impl UiLocation {
             | UiLocation::SkillDetail
             | UiLocation::StatsTab => matches!(element, UiElement::Tab { .. }),
             UiLocation::RunItem
+            | UiLocation::RunItemPeople
             | UiLocation::TriggerItem
             | UiLocation::PipelineItem
             | UiLocation::CanvasNode
@@ -435,6 +444,8 @@ mod tests {
         assert!(UiLocation::TopbarAccount.accepts(&decoration));
         assert!(!UiLocation::TopbarAccount.accepts(&action));
         assert!(!UiLocation::RunItem.accepts(&section));
+        assert!(UiLocation::RunItemPeople.accepts(&decoration));
+        assert!(!UiLocation::RunItemPeople.accepts(&action));
         assert!(UiLocation::SkillDetail.accepts(&tab));
         assert!(UiLocation::ProjectsFilter.accepts(&filter));
         assert!(!UiLocation::TriggersFilter.accepts(&decoration));

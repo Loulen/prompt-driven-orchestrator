@@ -12,8 +12,7 @@ import ExtensionDecorations from "../../../shared/extensions/ExtensionDecoration
 import type { DecorationContext } from "../../../shared/extensions/contract";
 import RunRowMenu from "./RunRowMenu";
 import RunParentLink from "./RunParentLink";
-import ActorName from "../../../shared/actors/ActorName";
-import { runCreator } from "../../model/runCreator";
+import RunRowPeople from "./RunRowPeople";
 import type { RunGesture } from "../../model/runGestures";
 
 interface Props {
@@ -230,13 +229,9 @@ export default function RunRow({
             </span>
           )}
           {linkedParent && <RunParentLink parent={linkedParent} pane={pane} onSelectRun={onSelectRun} />}
-          {/* 0.8: who created the Run, as an extension names it; nothing
-              without such an extension. */}
-          <ActorName
-            actor={runCreator(run)}
-            className="shrink-0 font-sans text-fg-3"
-            size={12}
-          />
+          {/* 0.12: the people of the Run, as the extensions draw them
+              (`run/item/people`); nothing without such an extension. */}
+          <RunRowPeople run={run} />
         </div>
       </div>
       {/* Right column (#783): line 1 = the hover-revealed action icons, line 2

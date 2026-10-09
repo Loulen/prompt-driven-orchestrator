@@ -2,7 +2,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Actor } from "../generated/Actor";
 import ActorLabel from "./ActorLabel";
-import ActorName from "./ActorName";
 import { initials } from "./initials";
 import { actorKey, requestDisplays, resetActorsForTests, useActorsStore } from "./store";
 
@@ -43,23 +42,6 @@ describe("the Actors' display names", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(useActorsStore.getState().displays[actorKey(alice)]?.name).toBe("Alice Martin");
     expect(useActorsStore.getState().displays[actorKey(operator)]).toBeNull();
-  });
-
-  it("shows a named Actor's avatar and name", async () => {
-    render(<ActorName actor={alice} />);
-    expect(await screen.findByText("Alice Martin")).toBeTruthy();
-    expect(screen.getByTestId("actor-avatar").textContent).toBe("AM");
-  });
-
-  it("shows nothing for an Actor no extension names, nor without Actor", async () => {
-    const { container } = render(
-      <>
-        <ActorName actor={operator} />
-        <ActorName actor={null} />
-      </>,
-    );
-    await waitFor(() => expect(useActorsStore.getState().displays[actorKey(operator)]).toBeNull());
-    expect(container.textContent).toBe("");
   });
 
   it("an unreachable daemon names nobody", async () => {

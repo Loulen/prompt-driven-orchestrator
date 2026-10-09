@@ -218,8 +218,8 @@ export interface TabProps extends ContributionProps<TabContext> {
 }
 
 /**
- * A decoration (`run/item`, `trigger/item`, `pipeline/item`, `canvas/node`,
- * `port/item`, `review/file`, `statusbar`): the item it marks, `null` on the
+ * A decoration (`run/item`, `run/item/people`, `trigger/item`, `pipeline/item`,
+ * `canvas/node`, `port/item`, `review/file`, `statusbar`): the item it marks, `null` on the
  * status bar. A decoration sits inside its item (often a button): a clickable
  * one calls `event.stopPropagation()`.
  */

@@ -129,6 +129,9 @@ mod extension_projets_triggers;
 #[path = "extension_event_guard.rs"]
 mod extension_event_guard;
 
+#[path = "extension_run_view.rs"]
+mod extension_run_view;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;

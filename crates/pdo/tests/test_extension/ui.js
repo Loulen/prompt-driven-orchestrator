@@ -439,3 +439,32 @@ export function AccountMenu() {
       ),
   );
 }
+
+// `review/composer` (0.14): a source of completion opened by `#`. Its tags
+// depend on what is typed after `#` and on the Run under review.
+const TAGS = ["bug", "perf", "review-later"];
+
+export function suggestTags(query, context) {
+  const run = context.run?.id ? [`run-${context.run.id.toLowerCase()}`] : [];
+  return [...TAGS, ...run]
+    .filter((tag) => tag.startsWith(query.toLowerCase()))
+    .map((tag) => ({
+      id: tag,
+      label: tag,
+      insert: `#${tag}`,
+      hint: "tag",
+      detail: tag.startsWith("run-") ? "this Run" : "Test",
+    }));
+}
+
+// The render of an inserted `#tag`: a chip, in the text of the sent comment.
+export function TagChip({ text }) {
+  return h(
+    "span",
+    {
+      "data-testid": "test-tag-chip",
+      style: { padding: "0 4px", borderRadius: "4px", background: "rgba(34,197,94,.15)", color: "rgb(34,197,94)" },
+    },
+    text,
+  );
+}

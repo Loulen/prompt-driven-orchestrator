@@ -36,11 +36,11 @@ async fn each_gesture_names_its_operation_in_the_projets_of_its_run() {
         .await;
     let _ = w
         .review
-        .decide(&actor, "r1", "rc-001", Decision::Resolve, None)
+        .decide(&actor, "r1", "rc-001", Decision::Resolve, None, None)
         .await;
     let _ = w
         .review
-        .decide(&actor, "r1", "rc-001", Decision::Reopen, None)
+        .decide(&actor, "r1", "rc-001", Decision::Reopen, None, None)
         .await;
     assert_eq!(
         w.asked(),
@@ -71,11 +71,12 @@ async fn a_refusal_answers_403_and_writes_nothing() {
         text: "done".into(),
         resolved: true,
         author: None,
+        session_node: None,
     };
     assert!(refused(w.review.reply(&actor, "r1", "rc-001", reply).await));
     assert!(refused(
         w.review
-            .decide(&actor, "r1", "rc-001", Decision::Resolve, None)
+            .decide(&actor, "r1", "rc-001", Decision::Resolve, None, None)
             .await
     ));
     // Refused before the Run is looked up: an unknown Run is refused too.

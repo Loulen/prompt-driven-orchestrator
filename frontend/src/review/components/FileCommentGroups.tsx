@@ -58,6 +58,7 @@ export default function FileCommentGroups({ runId, pair, comments, outdatedEntri
               <div key={e.draft.key} className="mx-3 my-2">
                 <CommentEditor
                   anchor={e.anchor}
+                  pair={pair}
                   initial={e.draft.text}
                   wipKey={wipKey(runId, e.anchor, pair)}
                   sendDisabledReason={comments.sendDisabledReason}

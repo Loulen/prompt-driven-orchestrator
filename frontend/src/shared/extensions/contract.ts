@@ -18,6 +18,8 @@ import type { Attributes } from "./attributes";
 import type { BaseContext, ProjectContext } from "./context";
 
 export type { BaseContext, ProjectContext, RunContext } from "./context";
+// API 0.14: the sources of completion of `review/composer`.
+export type * from "./completionContract";
 
 /** Who the element belongs to. */
 export interface ExtensionRef {
@@ -389,3 +391,4 @@ export interface CommandHost {
 }
 
 export type CommandFunction = (context: CommandContext, host: CommandHost) => unknown;
+

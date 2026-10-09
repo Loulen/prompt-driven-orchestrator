@@ -113,6 +113,21 @@ impl Runs {
             .map(|log| log.iter().map(|e| e.kind.clone()).collect())
             .unwrap_or_default()
     }
+
+    /// The payloads of the `kind` events appended to `run_id`, in order.
+    pub fn payloads(&self, run_id: &str, kind: EventKind) -> Vec<serde_json::Value> {
+        self.logs
+            .lock()
+            .unwrap()
+            .get(run_id)
+            .map(|log| {
+                log.iter()
+                    .filter(|e| e.kind == kind)
+                    .filter_map(|e| e.payload.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// A git whose refs are the ones a test names; every diff is empty.

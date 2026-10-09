@@ -1,10 +1,13 @@
 import { CheckCircle2, Hourglass, Undo2 } from "lucide-react";
+import { useActorDisplay } from "../../shared/actors/store";
 import { authorKind, authorLabel, footerStatus, relativeTime } from "../model/commentStatus";
 import { AuthorGlyph, Spinner } from "./commentBits";
 
 // The footer of a sent comment: what happened last, and the human's decision.
 
 export function FooterStatusView({ status }: { status: ReturnType<typeof footerStatus> }) {
+  // CORE-63: the name an extension gives the Actor who acted, in the tooltips.
+  const name = useActorDisplay(status.kind === "awaiting" ? null : status.actor)?.name;
   switch (status.kind) {
     case "awaiting":
       return (
@@ -15,34 +18,34 @@ export function FooterStatusView({ status }: { status: ReturnType<typeof footerS
       );
     case "replied":
       return (
-        <span className="inline-flex items-center gap-1" title={`Replied by ${authorLabel(status.author)}`}>
+        <span className="inline-flex items-center gap-1" title={`Replied by ${authorLabel(status.author, name)}`}>
           <AuthorGlyph kind={authorKind(status.author)} size={10} /> {relativeTime(status.at)}
         </span>
       );
     case "proposed":
       return (
-        <span className="inline-flex items-center gap-1 text-st-await" title={`Resolution proposed by ${authorLabel(status.author)}`}>
+        <span className="inline-flex items-center gap-1 text-st-await" title={`Resolution proposed by ${authorLabel(status.author, name)}`}>
           <Hourglass size={10} />
           <AuthorGlyph kind={authorKind(status.author)} size={10} /> <span className="text-fg-4">{relativeTime(status.at)}</span>
         </span>
       );
     case "resolved":
       return (
-        <span className="inline-flex items-center gap-1 text-st-done" title={`Resolved by ${authorLabel(status.by)}`}>
+        <span className="inline-flex items-center gap-1 text-st-done" title={`Resolved by ${authorLabel(status.by, name)}`}>
           <CheckCircle2 size={10} />
           <AuthorGlyph kind={authorKind(status.by)} size={10} /> <span className="text-fg-4">{relativeTime(status.at)}</span>
         </span>
       );
     case "reopened":
       return (
-        <span className="inline-flex items-center gap-1" title={`Reopened by ${authorLabel(status.by)}`}>
+        <span className="inline-flex items-center gap-1" title={`Reopened by ${authorLabel(status.by, name)}`}>
           <Undo2 size={10} />
           <AuthorGlyph kind={authorKind(status.by)} size={10} /> {relativeTime(status.at)}
         </span>
       );
     case "declined":
       return (
-        <span className="inline-flex items-center gap-1" title={`Proposal declined by ${authorLabel(status.by)} — open for the agent`}>
+        <span className="inline-flex items-center gap-1" title={`Proposal declined by ${authorLabel(status.by, name)} — open for the agent`}>
           <Undo2 size={10} />
           <AuthorGlyph kind={authorKind(status.by)} size={10} /> {relativeTime(status.at)}
         </span>

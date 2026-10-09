@@ -200,6 +200,7 @@ async fn an_agent_reply_proposes_and_the_human_decides() {
         text: text.into(),
         resolved,
         author: Some("ignored".into()),
+        session_node: None,
     };
     let body = w
         .review
@@ -227,7 +228,7 @@ async fn an_agent_reply_proposes_and_the_human_decides() {
     let actor = Actor::LocalOperator;
     let body = w
         .review
-        .decide(&actor, "r1", "rc-001", Decision::Reopen, None)
+        .decide(&actor, "r1", "rc-001", Decision::Reopen, None, None)
         .await
         .unwrap();
     assert_eq!(body["changed"], true);
@@ -235,7 +236,7 @@ async fn an_agent_reply_proposes_and_the_human_decides() {
     let before = w.runs.kinds("r1").len();
     let body = w
         .review
-        .decide(&actor, "r1", "rc-001", Decision::Reopen, None)
+        .decide(&actor, "r1", "rc-001", Decision::Reopen, None, None)
         .await
         .unwrap();
     assert_eq!(body["changed"], false);
@@ -243,7 +244,14 @@ async fn an_agent_reply_proposes_and_the_human_decides() {
 
     let body = w
         .review
-        .decide(&actor, "r1", "rc-001", Decision::Resolve, Some("lead"))
+        .decide(
+            &actor,
+            "r1",
+            "rc-001",
+            Decision::Resolve,
+            Some("lead"),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(body["comment"]["status"], "resolved");
@@ -264,6 +272,7 @@ async fn under_the_setting_an_agent_resolves_directly() {
                 text: "Fixed.".into(),
                 resolved: true,
                 author: Some("fixer".into()),
+                session_node: None,
             },
         )
         .await
@@ -313,6 +322,7 @@ async fn the_list_filters_by_state_and_maps_onto_a_pair() {
             "r1",
             "rc-002",
             Decision::Resolve,
+            None,
             None,
         )
         .await

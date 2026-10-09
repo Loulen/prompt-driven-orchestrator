@@ -10,6 +10,19 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.32.0 — Auteur Acteur des commentaires de Review, sources d'autocomplétion du compositeur (CORE-63)
+
+- **`pdo-extension-api` 0.14.0** : nouvel Emplacement d'UI `review/composer` (le compositeur de
+  commentaire de Review) et nouveau genre de contribution `completion` (`UiContribution::completion`,
+  `.rendering`) : un caractère déclencheur, une fonction de suggestions exportée par le bundle,
+  le texte inséré, et en option le rendu de ce texte dans le commentaire. Sans contribution, le
+  compositeur ne change pas. Référence : `docs/reference/extension-ui.md`.
+- Un commentaire de Review, chacune de ses réponses, sa résolution et sa réouverture enregistrent
+  l'Acteur de la requête (`actor`, `resolved_by_actor`, `reopened_by_actor`), en plus du rôle
+  (`author`, `by`). Les événements `review_comment_*` le portent, avec le texte. Les commentaires
+  écrits avant restent lisibles, sans Acteur. Quand une extension identifie l'appelant d'une
+  session d'agent, le rôle (`manager`, id du Node) se lit dans les en-têtes de la session.
+
 ## 2.31.0 — Sessions d'agent et Acteur qui les démarre (CORE-61)
 
 - **API d'extension 0.13.0**, sans rupture : hooks `session_env` et `session_preamble`, demandés

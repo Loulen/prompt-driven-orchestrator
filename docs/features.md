@@ -120,6 +120,10 @@ one with `pdo review reply`, the answer lands in the thread in real time, and th
 the fix back into the pipeline (restart a node, inject an artifact). By default you resolve a
 comment; the agent only proposes the resolution.
 
+Each comment, reply, resolution and reopening keeps who made it: with an extension that names
+people, the thread shows their names, and an extension can complete what you type in the comment
+editor (a character opens its suggestions, see [extension-ui.md](reference/extension-ui.md#sources-of-completion)).
+
 Decisions: [ADR-0067](adr/0067-la-relecture-de-diff-est-une-conversation-dans-l-event-log-entre-deux-refs-du-run.md).
 Commands: [`pdo review`](reference/cli.md#cli-commands).
 

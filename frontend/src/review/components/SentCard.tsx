@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, CornerDownRight, History, Hourglass, Lock, MessageSquare, Undo2 } from "lucide-react";
-import Markdown from "react-markdown";
-import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../../shared/markdown/plugins";
+import { Check, ChevronRight, CornerDownRight, History, Lock, MessageSquare, Undo2 } from "lucide-react";
+import { useActorDisplay } from "../../shared/actors/store";
 import type { CommentState } from "../model/commentStatus";
 import { authorKind, authorLabel, commentState, firstWords, footerStatus, plural, relativeTime } from "../model/commentStatus";
 import { parseExcerpt } from "../model/entries";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
 import { AuthorGlyph, AuthorIcon, StateIcon } from "./commentBits";
 import { DecisionButton, FooterStatusView } from "./commentFooter";
+import ReplyRow from "./ReplyRow";
 
 /**
  * A **sent** review comment (#750, #751, #752): its thread, its state, its
@@ -87,11 +87,14 @@ export default function SentCard({
 
   const firstUnread = replies.length - unread;
   const resolver = c.resolved_by ?? "user";
+  // CORE-63: the names extensions give the Actors who resolved or proposed.
+  const resolverName = useActorDisplay(c.resolved_by_actor)?.name;
+  const proposerName = useActorDisplay(footer.kind === "proposed" ? footer.actor : null)?.name;
   const stateTitle =
     state === "resolved"
-      ? `Resolved by ${authorLabel(resolver)}`
+      ? `Resolved by ${authorLabel(resolver, resolverName)}`
       : state === "proposed"
-        ? `Resolution proposed by ${authorLabel(footer.kind === "proposed" ? footer.author : "agent")}`
+        ? `Resolution proposed by ${authorLabel(footer.kind === "proposed" ? footer.author : "agent", proposerName)}`
         : "Sent · open";
 
   return (
@@ -137,7 +140,7 @@ export default function SentCard({
           </span>
         )}
         <StateIcon state={state} title={stateTitle} />
-        <AuthorIcon author={c.author} />
+        <AuthorIcon author={c.author} actor={c.actor} />
         {outdated ? (
           <span
             className="font-mono text-fg-4"
@@ -182,7 +185,7 @@ export default function SentCard({
         )}
         <span className="ml-auto inline-flex items-center gap-1 text-fg-4">
           {state === "resolved" ? (
-            <span className="inline-flex items-center gap-0.5 text-fg-4" title={`Resolved by ${authorLabel(resolver)}`} data-testid="review-comment-resolved-by">
+            <span className="inline-flex items-center gap-0.5 text-fg-4" title={`Resolved by ${authorLabel(resolver, resolverName)}`} data-testid="review-comment-resolved-by">
               <AuthorGlyph kind={authorKind(resolver)} size={10} />
               <Check size={10} className="text-st-done" />
             </span>
@@ -237,49 +240,9 @@ export default function SentCard({
           {body(c.text)}
           {replies.length > 0 && (
             <div className="border-t border-line bg-bg-1" data-testid="review-comment-thread">
-              {replies.map((r, i) => {
-                const kind = authorKind(r.author);
-                const isUnread = i >= firstUnread;
-                return (
-                  <div
-                    key={`${r.at}-${i}`}
-                    className={`grid grid-cols-[14px_1fr] gap-2 px-2.5 py-[7px] ${i > 0 ? "border-t border-dashed border-line-soft" : ""}`}
-                    data-testid="review-reply"
-                    data-author={r.author}
-                    data-unread={isUnread ? "true" : undefined}
-                    data-proposes={r.proposes_resolution ? "true" : undefined}
-                  >
-                    <span className="mt-px text-fg-3" title={authorLabel(r.author)}>
-                      <AuthorGlyph kind={kind} size={12} />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 text-fg-3" style={{ fontSize: "10.5px" }}>
-                        {kind === "node" && (
-                          <span className="font-mono text-fg-2" style={{ fontSize: "10px" }} title={`node ${r.author}`}>
-                            {r.author}
-                          </span>
-                        )}
-                        <span className="text-fg-4">{relativeTime(r.at)}</span>
-                        {r.proposes_resolution && (
-                          <span className="inline-flex items-center text-st-await" title="Proposes to resolve" data-testid="review-reply-proposes">
-                            <Hourglass size={10} />
-                          </span>
-                        )}
-                        {isUnread && (
-                          <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-st-running" title="New reply" data-testid="review-reply-unread" aria-label="new" />
-                        )}
-                      </div>
-                      <div
-                        className="artifact-markdown text-fg [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
-                        style={{ fontSize: "11.5px", lineHeight: 1.5 }}
-                        data-testid="review-reply-body"
-                      >
-                        <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{r.text}</Markdown>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+              {replies.map((r, i) => (
+                <ReplyRow key={`${r.at}-${i}`} reply={r} first={i === 0} unread={i >= firstUnread} />
+              ))}
             </div>
           )}
           {/* One line whatever the width: the pair label truncates, the id and the status never wrap. */}

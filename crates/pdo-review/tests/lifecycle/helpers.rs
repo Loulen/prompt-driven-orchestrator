@@ -203,6 +203,7 @@ pub async fn seed_sent_comment(state: &Arc<TestState>, run_id: &str, id: &str) {
         text: "Name this `fn delta`.".into(),
         excerpt: String::new(),
         author: "user".into(),
+        actor: None,
         sent_at: pdo_kernel::clock::now_iso(),
         batch_id: Some("b1".into()),
         status: ReviewCommentStatus::Sent,
@@ -210,8 +211,10 @@ pub async fn seed_sent_comment(state: &Arc<TestState>, run_id: &str, id: &str) {
         proposal_pending: false,
         resolved_by: None,
         resolved_at: None,
+        resolved_by_actor: None,
         reopened_by: None,
         reopened_at: None,
+        reopened_by_actor: None,
         proposal_declined: false,
     };
     append_event(

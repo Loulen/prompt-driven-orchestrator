@@ -293,6 +293,7 @@ export default function ReviewFileCard({
                 return (
                   <CommentEditor
                     anchor={anchor}
+                    pair={pair}
                     wipKey={wipKey(runId, anchor, pair)}
                     sendDisabledReason={comments.sendDisabledReason}
                     onSave={(text) => {
@@ -314,6 +315,7 @@ export default function ReviewFileCard({
                   return (
                     <CommentEditor
                       anchor={entry.anchor}
+                      pair={pair}
                       initial={entry.draft.text}
                       wipKey={wipKey(runId, entry.anchor, pair)}
                       sendDisabledReason={comments.sendDisabledReason}

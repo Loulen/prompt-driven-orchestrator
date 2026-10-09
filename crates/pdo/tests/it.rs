@@ -312,6 +312,9 @@ mod run_diff_range;
 #[path = "review_comments.rs"]
 mod review_comments;
 
+#[path = "review_comment_actor.rs"]
+mod review_comment_actor;
+
 #[path = "run_naming.rs"]
 mod run_naming;
 

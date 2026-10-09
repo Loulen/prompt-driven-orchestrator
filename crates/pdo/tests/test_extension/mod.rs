@@ -56,6 +56,9 @@
 //!   (0.9): `SettingsPage`, which shows its deep link's path.
 //! - `runs/empty` (0.11): `RunsEmptyNote`, a line saying why the Runs list is
 //!   empty, and a Copy button through `copyToClipboard` of `@pdo/extension-ui`.
+//! - `review/composer` (0.14): `tags`, a source of completion opened by `#`
+//!   (`suggestTags`: `bug`, `perf`, `review-later` and `run-<the Run's id>`),
+//!   whose inserted `#tag` renders as a chip (`TagChip`).
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
@@ -823,7 +826,18 @@ impl Extension for TestExtension {
                 "people",
                 "People",
                 "PeopleMarks",
-            ));
+            ))
+            // 0.14: a source of completion of the Review comment editor.
+            .contribute(
+                UiContribution::completion(
+                    UiLocation::ReviewComposer,
+                    "tags",
+                    "Tags",
+                    '#',
+                    "suggestTags",
+                )
+                .rendering("#[a-z][a-z0-9-]*", "TagChip"),
+            );
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);
             let command = UiCommand::new(

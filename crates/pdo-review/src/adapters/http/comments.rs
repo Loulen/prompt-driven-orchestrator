@@ -3,9 +3,10 @@
 use std::sync::Arc;
 
 use axum::extract::{Json, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
+use pdo_kernel::actor::actor_from_headers;
 use pdo_kernel::Actor;
 
 use super::answer;
@@ -32,10 +33,21 @@ pub(super) async fn list(
     answer(review.list_comments(&run_id, query).await)
 }
 
+/// The node of the session the call comes from, by its session headers:
+/// what names the author's role when an extension identified the caller as a
+/// person (CORE-63).
+fn session_node(headers: &HeaderMap) -> Option<String> {
+    match actor_from_headers(headers) {
+        Actor::Agent { node_id, .. } => Some(node_id),
+        _ => None,
+    }
+}
+
 /// `POST /runs/{run_id}/review/comments/{comment_id}/reply`.
 pub(super) async fn reply(
     State(review): State<Arc<Review>>,
     Extension(actor): Extension<Actor>,
+    headers: HeaderMap,
     Path((run_id, comment_id)): Path<(String, String)>,
     Json(req): Json<ReplyReviewCommentRequest>,
 ) -> Response {
@@ -43,6 +55,7 @@ pub(super) async fn reply(
         text: req.text,
         resolved: req.resolved,
         author: req.author,
+        session_node: session_node(&headers),
     };
     answer(review.reply(&actor, &run_id, &comment_id, command).await)
 }
@@ -51,25 +64,48 @@ pub(super) async fn reply(
 pub(super) async fn resolve(
     State(review): State<Arc<Review>>,
     Extension(actor): Extension<Actor>,
+    headers: HeaderMap,
     Path((run_id, comment_id)): Path<(String, String)>,
     body: Option<Json<ReviewDecisionRequest>>,
 ) -> Response {
-    decide(review, actor, run_id, comment_id, body, Decision::Resolve).await
+    let session = session_node(&headers);
+    decide(
+        review,
+        actor,
+        session,
+        run_id,
+        comment_id,
+        body,
+        Decision::Resolve,
+    )
+    .await
 }
 
 /// `POST /runs/{run_id}/review/comments/{comment_id}/reopen`.
 pub(super) async fn reopen(
     State(review): State<Arc<Review>>,
     Extension(actor): Extension<Actor>,
+    headers: HeaderMap,
     Path((run_id, comment_id)): Path<(String, String)>,
     body: Option<Json<ReviewDecisionRequest>>,
 ) -> Response {
-    decide(review, actor, run_id, comment_id, body, Decision::Reopen).await
+    let session = session_node(&headers);
+    decide(
+        review,
+        actor,
+        session,
+        run_id,
+        comment_id,
+        body,
+        Decision::Reopen,
+    )
+    .await
 }
 
 async fn decide(
     review: Arc<Review>,
     actor: Actor,
+    session: Option<String>,
     run_id: String,
     comment_id: String,
     body: Option<Json<ReviewDecisionRequest>>,
@@ -78,7 +114,14 @@ async fn decide(
     let by = body.map(|Json(b)| b).unwrap_or_default().by;
     answer(
         review
-            .decide(&actor, &run_id, &comment_id, decision, by.as_deref())
+            .decide(
+                &actor,
+                &run_id,
+                &comment_id,
+                decision,
+                by.as_deref(),
+                session.as_deref(),
+            )
             .await,
     )
 }

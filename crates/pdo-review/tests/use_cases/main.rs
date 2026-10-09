@@ -5,6 +5,7 @@
 //! the orchestration (#926); the real git and the real log are stage 3
 //! (`tests/lifecycle/`).
 
+mod actors;
 mod comments;
 mod diff;
 mod fakes;

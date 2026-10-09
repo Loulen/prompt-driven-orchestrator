@@ -78,8 +78,8 @@ pub use session::{
 };
 pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
-    ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions, UiElement,
-    UiElementKind, UiLocation, UiSlot, When, UI_MODULE, UI_MODULE_MAJOR,
+    CompletionRender, ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions,
+    UiElement, UiElementKind, UiLocation, UiSlot, When, UI_MODULE, UI_MODULE_MAJOR,
 };
 
 pub use axum;

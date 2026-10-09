@@ -62,6 +62,32 @@ pub enum UiElement {
     Decoration { component: String },
     /// A control that filters a list on attributes.
     ListFilter { component: String },
+    /// A source of completion of a text field (0.14): typing `trigger` opens
+    /// a list of suggestions the function `suggest` of the bundle answers; the
+    /// suggestion picked inserts its text. The core never interprets what is
+    /// inserted. Optionally, the `render` of what was inserted in the text
+    /// once shown.
+    Completion {
+        /// The one character that opens the list, typed at the start of the
+        /// text or after a space.
+        trigger: String,
+        /// The function the bundle exports, `(query, context) => suggestions`.
+        suggest: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        render: Option<CompletionRender>,
+    },
+}
+
+/// How the text a [`UiElement::Completion`] inserted shows once the text is
+/// rendered: each match of `pattern` (a JavaScript regular expression) in its
+/// plain text is drawn by the exported `component` instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[non_exhaustive]
+pub struct CompletionRender {
+    pub pattern: String,
+    pub component: String,
 }
 
 /// The kind of a [`UiElement`], without what renders it: what a
@@ -78,6 +104,7 @@ pub enum UiElementKind {
     Section,
     Decoration,
     ListFilter,
+    Completion,
 }
 
 impl UiElement {
@@ -90,6 +117,7 @@ impl UiElement {
             UiElement::Section { .. } => UiElementKind::Section,
             UiElement::Decoration { .. } => UiElementKind::Decoration,
             UiElement::ListFilter { .. } => UiElementKind::ListFilter,
+            UiElement::Completion { .. } => UiElementKind::Completion,
         }
     }
 }
@@ -179,6 +207,36 @@ impl UiContribution {
         Self::new(location, id.as_ref(), label.as_ref(), element)
     }
 
+    /// A source of completion at `location`: typing `trigger` opens the
+    /// suggestions the bundle's exported function `suggest` answers (0.14).
+    pub fn completion(
+        location: UiLocation,
+        id: impl AsRef<str>,
+        label: impl AsRef<str>,
+        trigger: char,
+        suggest: impl Into<String>,
+    ) -> Self {
+        let element = UiElement::Completion {
+            trigger: trigger.to_string(),
+            suggest: suggest.into(),
+            render: None,
+        };
+        Self::new(location, id.as_ref(), label.as_ref(), element)
+    }
+
+    /// The same source of completion, each match of `pattern` (a JavaScript
+    /// regular expression) in a rendered text drawn by the exported
+    /// `component`. Elsewhere, unchanged.
+    pub fn rendering(mut self, pattern: impl Into<String>, component: impl Into<String>) -> Self {
+        if let UiElement::Completion { render, .. } = &mut self.element {
+            *render = Some(CompletionRender {
+                pattern: pattern.into(),
+                component: component.into(),
+            });
+        }
+        self
+    }
+
     /// The same page, with the SVG served at `url` as its icon. Only a page
     /// has its own icon (an action shows its command's): elsewhere, unchanged.
     pub fn with_icon(mut self, url: impl Into<String>) -> Self {
@@ -227,6 +285,32 @@ mod tests {
             serde_json::to_value(UiElementKind::ListFilter).unwrap(),
             "list_filter"
         );
+    }
+
+    #[test]
+    fn a_completion_declares_its_trigger_its_function_and_its_render() {
+        let source = UiContribution::completion(
+            UiLocation::ReviewComposer,
+            "tags",
+            "Tags",
+            '#',
+            "suggestTags",
+        )
+        .rendering("#[a-z]+", "Tag");
+        assert_eq!(source.element.kind(), UiElementKind::Completion);
+        assert_eq!(
+            serde_json::to_value(&source).unwrap(),
+            json!({
+                "location": "review/composer", "id": "tags", "label": "Tags",
+                "type": "completion", "trigger": "#", "suggest": "suggestTags",
+                "render": { "pattern": "#[a-z]+", "component": "Tag" },
+            })
+        );
+        let bare = UiContribution::completion(UiLocation::ReviewComposer, "t", "T", '#', "s")
+            .with_icon("/ignored.svg");
+        assert!(serde_json::to_value(&bare).unwrap().get("render").is_none());
+        let page = UiContribution::page(UiLocation::TopbarEnd, "p", "P", "P").rendering("x", "X");
+        assert!(serde_json::to_value(&page).unwrap().get("render").is_none());
     }
 
     #[test]

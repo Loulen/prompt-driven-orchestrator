@@ -4,6 +4,8 @@ interface Props {
   extensionId: string;
   /** A small mark instead of a sentence: where a sentence would break a row (a decoration). */
   compact?: boolean;
+  /** What shows instead of the failed element, when given (the text a render was drawing). */
+  fallback?: ReactNode;
   children: ReactNode;
 }
 
@@ -23,6 +25,7 @@ export default class ExtensionBoundary extends Component<Props, { failed: boolea
   }
 
   render() {
+    if (this.state.failed && this.props.fallback !== undefined) return this.props.fallback;
     if (this.state.failed && this.props.compact) {
       return (
         <span

@@ -521,6 +521,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("settings/page", "page", "settings-page"),
         triple("runs/empty", "decoration", "runs-empty"),
         triple("run/item/people", "decoration", "people"),
+        triple("review/composer", "completion", "tags"),
     ]);
     // One action at each Action location (#30), then the command that fails.
     expected.extend(
@@ -547,6 +548,13 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         json!({ "not": { "eq": ["entity.status", "archived"] } })
     );
     assert_eq!(contribution("fail")["command"], test_extension::FAIL);
+    let tags = contribution("tags");
+    assert_eq!(tags["trigger"], "#");
+    assert_eq!(tags["suggest"], "suggestTags");
+    assert_eq!(
+        tags["render"],
+        json!({ "pattern": "#[a-z][a-z0-9-]*", "component": "TagChip" })
+    );
     let commands = ui["commands"].as_array().unwrap();
     assert!(commands.iter().any(|c| c["id"] == "test.at-runs-bulk"
         && c["title"] == "Test runs/bulk"

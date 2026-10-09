@@ -61,6 +61,7 @@ impl Review {
         let now = pdo_kernel::clock::now_iso();
         let batch_id = uuid::Uuid::new_v4().to_string();
         let mut prepared = self.prepare(
+            actor,
             run_id,
             &run,
             &drafts,

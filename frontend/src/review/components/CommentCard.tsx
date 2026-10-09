@@ -1,10 +1,9 @@
 import { Pencil, Trash2 } from "lucide-react";
-import Markdown from "react-markdown";
-import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../../shared/markdown/plugins";
 import type { ReviewEntry } from "../model/entries";
 import { relativeTime } from "../model/commentStatus";
 import { anchorLabel } from "../model/drafts";
 import { Badge, Spinner } from "./commentBits";
+import ReviewMarkdown from "./ReviewMarkdown";
 import SentCard from "./SentCard";
 
 /**
@@ -91,7 +90,7 @@ export default function CommentCard({
       style={{ fontSize: "11.5px", lineHeight: 1.5 }}
       data-testid="review-comment-body"
     >
-      <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{text}</Markdown>
+      <ReviewMarkdown text={text} />
     </div>
   );
 

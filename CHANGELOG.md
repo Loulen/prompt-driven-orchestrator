@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.30.0 — Un Run vu par une extension : personnes, Présences, coût (CORE-62)
+
+- **Le core ne dessine plus le créateur d'un Run** : ni sur sa ligne dans la liste des Runs, ni
+  dans son onglet Info (le chip « Created by » disparaît). Sans extension, aucune personne
+  n'apparaît. `created_by` reste sur l'API et dans le contexte de `run/info`.
+- **`pdo-extension-api` 0.12.0**, par ajout : l'emplacement `run/item/people` (une Décoration
+  sur la ligne d'un Run, avec ses Présences en direct), `Host::presences` et `Host::run_cost`
+  (le coût de l'onglet Info). Une extension écrite pour 0.11 compile sans changement.
+- **Présences** : chaque onglet dit sur `/ws` quel Run il montre (`{"type": "show_run",
+  "run_id"}`) ; le core annonce `presence_arrived` et `presence_left` (filtrés par la lecture du
+  Run) et sert `GET /runs/presences`.
+
 ## 2.29.0 — Output intermédiaire (CORE-45)
 
 - **Output intermédiaire** : un output port peut être coché « intermediate » (champ

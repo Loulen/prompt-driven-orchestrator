@@ -3,7 +3,7 @@
 // A plain ES module, no build step: `react` is the front's own, shared through
 // its import map.
 import React from "react";
-import { copyToClipboard, openProbedSocket, useCurrentActor } from "@pdo/extension-ui";
+import { copyToClipboard, openProbedSocket, useActorDisplay, useCurrentActor } from "@pdo/extension-ui";
 
 const h = React.createElement;
 
@@ -342,6 +342,32 @@ export function RunsEmptyNote() {
       },
       copied === null ? "Copy the admin's address" : copied ? "Copied" : "Copy failed",
     ),
+  );
+}
+
+// `run/item/people` (0.12): one mark per Presence of the row's Run, live, each
+// named as the extensions name its Actor (its kind otherwise).
+export function PeopleMarks({ context }) {
+  const presences = context.presences ?? [];
+  if (presences.length === 0) return null;
+  return h(
+    "span",
+    { style: { display: "inline-flex", gap: "2px" }, "data-testid": "test-people" },
+    presences.map((presence) => h(PresenceMark, { key: JSON.stringify(presence.actor), presence })),
+  );
+}
+
+function PresenceMark({ presence }) {
+  const display = useActorDisplay(presence.actor);
+  const name = display?.name ?? presence.actor.id ?? presence.actor.kind;
+  return h(
+    "span",
+    {
+      "data-testid": "test-presence",
+      title: `${name}, here since ${presence.since}`,
+      style: { border: "1px solid currentColor", borderRadius: "8px", padding: "0 4px", fontSize: "10px" },
+    },
+    name,
   );
 }
 

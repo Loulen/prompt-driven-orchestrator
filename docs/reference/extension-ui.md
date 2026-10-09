@@ -9,7 +9,7 @@ what each accepts and the context each hands over are part of the semver of
 The Rust types are in `pdo-extension-api` (`UiLocation`, `UiContribution`, `UiElement`,
 `UiCommand`, `When`, `UiContributions`). Their TypeScript is generated into
 `frontend/src/shared/generated/` (`UiLocation.ts`, `UiContribution.ts`…); the props and contexts
-below are `frontend/src/shared/extensions/contract.ts`.
+below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`).
 
 ## Declaring contributions
 
@@ -328,6 +328,27 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 - **Renders**: a row of the Runs list, in its right-hand column, on line 2 (the line of the child
   counts, before them), so a badge never truncates the pipeline's name.
 - **Context**: `DecorationContext`, `entity` = `{ kind: "run", id, name?, attributes }`.
+
+### `run/item/people`
+
+- **Accepts**: decoration.
+- **Renders**: a row of the Runs list, in its left-hand column, on line 2 after the pipeline's
+  name (and its trigger badge): the people of the Run. **The core draws no person there**:
+  nothing without a contribution, neither the creator nor anyone else.
+- **Context**: `RunPeopleContext` = `DecorationContext` + `presences`, `entity` = `{ kind: "run",
+  id, name?, attributes, created_by }`:
+
+  ```ts
+  interface Presence { actor: Actor; since: string } // since: the arrival of the Actor's first tab
+  interface RunPeopleEntity extends EntityContext { kind: "run"; created_by: Actor | null }
+  interface RunPeopleContext extends DecorationContext { entity: RunPeopleEntity; presences: Presence[] }
+  ```
+
+  `presences` are the Actors who have the Run open in a browser, by order of arrival, one per
+  Actor whatever its count of tabs, **live**: the context changes at each arrival and each
+  departure ([extension-api.md](extension-api.md#presences-012)). Name them with
+  `useActorDisplay(actor)`.
+- **Since**: 0.12.
 
 ### `trigger/item`
 
@@ -754,8 +775,8 @@ them. The shared module `@pdo/extension-ui` exports:
 | `useCurrentActor()` | The Actor using the interface and its display name, `{ actor, display }` (`display` is `null` when no extension names it); `null` until known |
 | `useActorDisplay(actor)` | The display name of any `Actor` (`{ name, avatar_url }`); `null` while unknown, or when no extension names it. Batched and cached: call it per row |
 
-The core shows them too: the creator of a Run on its row (only when an extension names it),
-the `actor_display` of each row of the audit journal (`GET /audit`).
+The core shows them too: the `actor_display` of each row of the audit journal (`GET /audit`).
+It draws no person on a Run (since 0.12): an extension does, at `run/item/people` and `run/info`.
 
 Over HTTP: `GET /actors/me` (`{actor, display}`) and `POST /actors/display` (`{actors: [Actor]}`
 → `{displays: [ActorDisplay | null]}`, in order).

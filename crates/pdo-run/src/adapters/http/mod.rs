@@ -3,7 +3,8 @@
 //! its repositories, its Pipeline Manager), a Run's detail and its events, the
 //! `/ws` stream, the node routes (the agent's `done` / `fail` / `skip`, the
 //! canvas buttons, what a node reads), the Pipeline Manager's
-//! `/runs/{id}/commands` and the liveness sweep's heartbeat. The legacy router
+//! `/runs/{id}/commands`, the Presences on the Runs and the liveness sweep's
+//! heartbeat. The legacy router
 //! merges [`router`] while it still assembles the daemon, behind the
 //! `identify` middleware of the composition root.
 //!
@@ -12,6 +13,7 @@
 
 mod commands;
 pub mod nodes;
+mod presence;
 pub mod read_guard;
 mod run_detail;
 pub mod runs;
@@ -42,6 +44,8 @@ pub fn router(runs: Arc<Runs>) -> Router {
         .route("/runs", get(runs::list))
         // Static path — must stay declared before `/runs/{run_id}`.
         .route("/runs/reapable", get(runs::reapable))
+        // API 0.12: who has which Run open. Static too, before `/runs/{run_id}`.
+        .route("/runs/presences", get(presence::list))
         .route("/runs/{run_id}", delete(runs::forget))
         .route("/runs/{run_id}/children", get(runs::children))
         .route("/runs/{run_id}/file", get(runs::file))

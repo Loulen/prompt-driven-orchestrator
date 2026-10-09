@@ -520,6 +520,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("stats/tab", "tab", "stats-exploding"),
         triple("settings/page", "page", "settings-page"),
         triple("runs/empty", "decoration", "runs-empty"),
+        triple("run/item/people", "decoration", "people"),
     ]);
     // One action at each Action location (#30), then the command that fails.
     expected.extend(

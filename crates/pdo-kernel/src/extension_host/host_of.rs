@@ -5,7 +5,7 @@ use std::sync::Weak;
 
 use pdo_extension_api::{
     ActorDisplay, Attributes, Authorization, EntityRef, ExtensionData, ExtensionEvent, Host,
-    NewRun, OperationApplied, Resource, RunCreation, RunNotCreated,
+    NewRun, OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNotCreated,
 };
 
 use super::{ExtensionHost, Extensions, Registry};
@@ -93,6 +93,25 @@ impl Host for ExtensionHostOf {
     fn triggers_changed(&self) {
         if let Some(extensions) = self.extensions() {
             extensions.broadcast(serde_json::json!({ "type": TRIGGER_UPDATED }));
+        }
+    }
+
+    fn presences(&self, run_id: &str) -> Vec<Presence> {
+        self.registry
+            .upgrade()
+            .and_then(|registry| registry.run_views.get().cloned())
+            .map(|views| views.presences(run_id))
+            .unwrap_or_default()
+    }
+
+    fn run_cost(&self, run_id: &str) -> RunCostRead {
+        let views = self
+            .registry
+            .upgrade()
+            .and_then(|registry| registry.run_views.get().cloned());
+        match views {
+            Some(views) => views.run_cost(run_id),
+            None => Box::pin(std::future::ready(None)),
         }
     }
 

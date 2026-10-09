@@ -3,7 +3,7 @@
 //! seams).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64};
 use std::sync::Arc;
 
 use pdo_kernel::authorization::{authorize, Denied};
@@ -145,6 +145,10 @@ pub struct Runs {
     pub(crate) node_done_tail_gate: Arc<tokio::sync::Notify>,
     /// Whether the tail gate is currently armed.
     pub(crate) node_done_tail_gate_armed: Arc<AtomicBool>,
+    /// Who has which Run open (API 0.12), by connection of the event stream.
+    pub(crate) presences: std::sync::Mutex<crate::domain::presence::PresenceBook>,
+    /// The id of the next connection of the event stream.
+    pub(crate) next_connection: AtomicU64,
 }
 
 impl Runs {
@@ -200,6 +204,8 @@ impl Runs {
             panic_on_spawn: Arc::new(AtomicBool::new(options.panic_on_spawn)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(AtomicBool::new(false)),
+            presences: std::sync::Mutex::new(Default::default()),
+            next_connection: AtomicU64::new(1),
             options,
         })
     }

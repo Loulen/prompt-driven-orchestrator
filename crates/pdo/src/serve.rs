@@ -231,8 +231,10 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
         // workspace context keeps current.
         started.serve_project_names(resources.project_names.clone());
         let contexts = contexts::wire(resources, contexts_host.clone());
-        // API 0.9: an extension's `Host::create_run` creates through the Runs.
+        // API 0.9: an extension's `Host::create_run` creates through the Runs;
+        // API 0.12: its `Host::presences` and `Host::run_cost` read them.
         started.serve_runs(Arc::new(ExtensionRuns::of(&contexts.run)));
+        started.serve_run_views(Arc::new(ExtensionRuns::of(&contexts.run)));
         contexts
     })
 }

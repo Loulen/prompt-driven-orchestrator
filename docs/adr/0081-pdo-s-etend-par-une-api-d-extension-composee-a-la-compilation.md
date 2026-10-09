@@ -751,3 +751,29 @@ sans identité git ne livrait rien (`delivery_failed`).
 - **Sans identité gelée** : environnement et configuration git du daemon, comme avant.
 - **Version** : aucun symbole ne change ; `pdo-extension-api` reste en **0.10.0**. La
   documentation de `node_env` décrit l'effet.
+
+## Amendement CORE-62 : un Run vu par une extension (personnes, Présences, coût)
+
+Le core dessinait le Créateur du Run sur sa ligne et dans son onglet Info. Une extension qui
+gère des personnes veut en montrer d'autres (qui a le Run ouvert, qui en répond), ou aucune ; et
+pour agréger des coûts, elle devait relire les transcripts.
+
+- **Emplacement `run/item/people`** (accepte une Décoration) : sur la ligne d'un Run, colonne de
+  gauche, après le nom du pipeline, là où le core dessinait le Créateur. Son contexte porte le Run
+  (`created_by` compris) et ses **Présences**, à jour en direct. **Le core cesse de dessiner le
+  Créateur** sur la ligne et dans l'onglet Info : sans extension, aucune personne n'apparaît.
+  `created_by` reste sur l'API et dans le contexte de `run/info`.
+- **Présence** : chaque onglet dit sur `/ws` quel Run il montre (`show_run`) ; le core tient qui a
+  quel Run ouvert (un par Acteur, quel que soit le nombre d'onglets), annonce l'arrivée et le
+  départ (`presence_arrived`, `presence_left`, filtrés comme les événements du Run) et les rend
+  lisibles : `Host::presences`, `GET /runs/presences`. Un départ est constaté quand l'onglet
+  montre autre chose ou que sa connexion se ferme. Un Run illisible pour l'Acteur ne compte pas.
+- **Coût** : `Host::run_cost` lit le coût d'un Run comme l'onglet Info l'affiche (`RunCost` :
+  montant ou inconnu, borne inférieure et modèles sans prix, harnais sans source de coût).
+- **Version** : `pdo-extension-api` **0.12.0**, par ajout (deux méthodes de `Host` avec un défaut
+  neutre, deux types, deux constantes d'événement, une variante de `UiLocation`). Une extension
+  0.1 à 0.11 compile et tourne sans changement.
+
+Écartés : une Présence déduite des requêtes HTTP (aucun départ observable) ; un emplacement
+« créateur » réservé (une seule extension y aurait dessiné, et le core aurait gardé un dessin par
+défaut).

@@ -8,7 +8,8 @@
 //! [`Attributes`] on a new entity, observe events, contribute routes and UI, answer a command line
 //! (`pdo ext <id> <args…>`), bring skills into the Banque de skills, contribute
 //! to the launch of a Node (environment variables, a preamble) and suspend a
-//! Trigger.
+//! Trigger, and see a Run as people do: who has it open ([`Presence`]) and
+//! what it cost ([`RunCost`]).
 //!
 //! An extension runs its **own** mutations through the same mechanisms, by the
 //! [`Host`] its [`ExtensionContext`] carries: its entities are a
@@ -49,6 +50,7 @@ mod launch;
 mod manifest;
 mod operation;
 mod run_creation;
+mod run_view;
 mod skill;
 mod ui;
 
@@ -67,6 +69,7 @@ pub use launch::{NodeEnv, NodeKind, NodeLaunch, TriggerProvenance, TriggerRef};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
 pub use run_creation::{ExtensionData, NewRun, RunCreation, RunNotCreated, RunRepo};
+pub use run_view::{Presence, RunCost, RunCostRead, PRESENCE_ARRIVED, PRESENCE_LEFT};
 pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
     ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions, UiElement,
@@ -89,5 +92,7 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// extension data of a creation, its hooks, `Host::create_run` and the
 /// `stats/tab` and `settings/page` locations, amendments CORE-29 and CORE-30;
 /// 0.10 only added the probed opening of the WebSockets, amendment CORE-32;
-/// 0.11 only added `Host::project_name` and `Host::triggers_changed`).
+/// 0.11 only added `Host::project_name` and `Host::triggers_changed`; 0.12
+/// only added the Presences, `Host::presences`, `Host::run_cost` and the
+/// `run/item/people` location).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

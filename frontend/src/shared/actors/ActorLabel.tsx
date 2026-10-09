@@ -1,6 +1,6 @@
 import type { Actor } from "../generated/Actor";
 import { actorLabel } from "../lib/actor";
-import { ActorAvatar } from "./ActorName";
+import { ActorAvatar } from "./ActorAvatar";
 import { useActorDisplay } from "./store";
 
 /**

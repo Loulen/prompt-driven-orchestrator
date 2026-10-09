@@ -26,6 +26,8 @@
 //!   CORE-5): a list keeps the Runs the actor may read.
 //! - What a command triggers once it was authorized: the archive of a Run and
 //!   its descendants ([`archive`]), `retry_all` ([`retry_all`]).
+//! - Who has a Run open in a browser ([`presence`], API 0.12): what each
+//!   connection of the event stream shows, announced on the bus.
 //! - The daemon's own transitions: [`boot_recovery`], the [`stale`] sweep,
 //!   the sandbox preparation ([`sandbox_prep`]), an edit of a run-scoped
 //!   pipeline on disk ([`pipeline_modified`]).
@@ -52,6 +54,7 @@ pub mod operations;
 pub mod paths;
 pub mod pipeline_modified;
 pub mod ports;
+pub mod presence;
 pub mod projections;
 pub mod read_access;
 pub mod read_run;

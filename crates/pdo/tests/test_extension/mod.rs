@@ -3,7 +3,8 @@
 //! published.
 //!
 //! - **`identify`**: the caller named by the [`ACTOR_HEADER`] request header
-//!   becomes `Actor::Identified { namespace: "test", id }`; so does the holder
+//!   (or by the cookie `pdo-test-actor`, `run_view.rs`) becomes
+//!   `Actor::Identified { namespace: "test", id }`; so does the holder
 //!   of the token it may require (`gate.rs`, [`Control::set_gate`]); otherwise
 //!   the core decides.
 //! - **`admit`**: with a token required, refuses a request nobody identified,
@@ -72,6 +73,10 @@
 //!   `projets.rs`): `GET /ext/test/projects/<id>/name` answers the name the
 //!   core gives, `POST /ext/test/triggers-changed` signals the Triggers; a
 //!   suspension set or lifted (`/ext/test/suspensions`) signals them too.
+//! - **`Host::presences`** / **`Host::run_cost`** (API 0.12, `run_view.rs`):
+//!   `GET /ext/test/runs/<id>/view` answers them; `GET /ext/test/act-as?actor=
+//!   <id>` signs a browser in as that Actor; `PeopleMarks`, at
+//!   `run/item/people`, draws one mark per Presence of the row's Run.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, so two extensions share a location.
 //!
@@ -94,6 +99,7 @@ pub mod interop;
 pub mod launch;
 pub mod projets;
 mod routes;
+pub mod run_view;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -507,9 +513,11 @@ impl Extension for TestExtension {
             .and_then(|v| v.to_str().ok())
             .map(str::trim)
             .filter(|caller| !caller.is_empty())
+            .map(str::to_string)
+            .or_else(|| run_view::actor_of_cookie(request))
             .map(|caller| Actor::Identified {
                 namespace: ID.to_string(),
-                id: caller.to_string(),
+                id: caller,
             });
         named.or_else(|| gate::identify(&self.control.gate(), request))
     }
@@ -788,6 +796,13 @@ impl Extension for TestExtension {
                 "runs-empty",
                 "Why empty",
                 "RunsEmptyNote",
+            ))
+            // 0.12: who has the row's Run open.
+            .contribute(UiContribution::decoration(
+                UiLocation::RunItemPeople,
+                "people",
+                "People",
+                "PeopleMarks",
             ));
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);

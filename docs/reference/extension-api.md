@@ -4,7 +4,7 @@ What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 
 amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
 source of truth for signatures; this page says what each part is for and what goes on the wire.
 
-Version: **0.11.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+Version: **0.12.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -109,6 +109,8 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /projects` | `project` × `read`, per Projet | the Projet is absent |
 | `GET /projects/{id}` | `project` × `read` | `403` |
 | `GET /fs/browse` (the loupe, the explorers) | `repository` × `read`, no target, in no Projet | `403` |
+| `GET /runs/presences` (0.12) | `run` × `read`, targeted, per Run listed | the Run is absent |
+| `/ws`, a Presence (0.12) | `run` × `read` on the Run a `presence_arrived` or `presence_left` is about, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `GET /repos/recent` (the New Run prefill) | `run` × `read` on the last Run of each repository, in the repository's Projet | the repository is absent |
 | `GET /triggers` (0.11) | `trigger` × `read`, targeted, per Trigger listed, in the Projet of its target repository | the Trigger is absent |
 | `GET /triggers/{id}`, `/triggers/{id}/fires` (0.11) | `trigger` × `read` on `{id}` | `403` `operation_refused` |
@@ -169,6 +171,16 @@ core's mechanisms (amendment #34):
   does not know. Synchronous and quick: call it from your own `authorize` to name the Projet in a
   refusal's reason. The core reads the Projets once before it serves and again at each change, so
   the name follows a renaming before the change is announced; a deleted Projet has none.
+- `presences(run_id)` (0.12): the Actors who have the Run open in a browser right now, by order
+  of arrival ([Presences](#presences-012)); empty for a Run nobody has open or the core does not
+  know. Synchronous and quick.
+- `run_cost(run_id)` (0.12): the cost of the Run, the one its Info tab shows, read on demand from
+  its sessions: `RunCost { usd, partial, unpriced_models, uncosted_harnesses }`, `usd` `None`
+  when unknown (show « — », never `0`), `partial` when a model without a price was left out (a
+  lower bound), `uncosted_harnesses` the harnesses without a cost source that make it unknown.
+  `None` for a Run the core does not know; the breakdown by harness the Info tab may add is not
+  part of it. Await it from a route or a task. An extension that
+  aggregates costs reads them so, without reading the transcripts.
 - `triggers_changed()` (0.11): the suspensions of the Triggers changed for a cause outside a
   Trigger's mutation, one the extension holds itself. The core announces
   `{"type": "trigger_updated"}`, without `trigger_id`, and the list of the Triggers reads them all
@@ -176,7 +188,7 @@ core's mechanisms (amendment #34):
   when an Actor's rights change, so that an open view follows without reloading.
 
 `NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
-Run (`503`), names no Projet and signals nothing: the host of `ExtensionContext::new`, and a stand-in in an extension's
+Run (`503`), names no Projet, signals nothing, sees nobody on a Run and knows no cost: the host of `ExtensionContext::new`, and a stand-in in an extension's
 tests.
 
 ## Admission of a request
@@ -223,8 +235,9 @@ shows:
   in order.
 - `GET /audit`: each row's `actor` (the Actor of the request that made the mutation, absent on
   older rows and outside a request) and `actor_display`.
-- The interface: the creator of a Run on its row; `useCurrentActor()` and `useActorDisplay(actor)`
-  of `@pdo/extension-ui` for the extensions' bundles.
+- The interface: `useCurrentActor()` and `useActorDisplay(actor)` of `@pdo/extension-ui` for the
+  extensions' bundles. The core draws no person on a Run (0.12): neither on its row nor in its
+  Info tab; an extension does (`run/item/people`, `run/info`).
 
 An `Actor` on the wire: `{"kind": "local_operator"}`, `{"kind": "agent", "run_id", "node_id"}`,
 `{"kind": "trigger", "trigger_id"}`, `{"kind": "identified", "namespace", "id"}`.
@@ -324,6 +337,34 @@ The surfaces that fill `extensions`:
   `operation_refused`), the same checks, the same stamps, `created_by` = `actor`, a root Run. Await
   it from a route or a task; never from a hook of the creation it starts.
 
+## Presences (0.12)
+
+The core knows which Actors have a Run open in a browser. Each tab of the interface says on its
+event stream which Run it shows (`{"type": "show_run", "run_id": "<id>" | null}` on `/ws`,
+again at each reopening); a Run its Actor may not read, or that does not exist, counts as none.
+An Actor is **present** on a Run while one of its tabs at least shows it: it arrives with its first
+tab, and leaves when its last one shows another Run, none, or closes (its connection ends).
+
+- `Host::presences(run_id)`: the Run's Presences now, `[{ "actor": <Actor>, "since": "<RFC
+  3339>" }]`, by order of arrival.
+- `GET /runs/presences`: `{"runs": [{"run_id", "presences": […]}]}`, every Run someone has open
+  that the caller may read.
+- The events, on `/ws` (to the connections that may read the Run) and in `on_event`:
+
+  ```json
+  { "type": "presence_arrived", "run_id": "20261009-101500-a1b2c3d",
+    "actor": { "kind": "identified", "namespace": "test", "id": "bob" },
+    "presences": [ { "actor": { "kind": "identified", "namespace": "test", "id": "alice" },
+                     "since": "2026-10-09T10:15:02.120Z" },
+                   { "actor": { "kind": "identified", "namespace": "test", "id": "bob" },
+                     "since": "2026-10-09T10:16:40.031Z" } ] }
+  ```
+
+  `presence_left` has the same shape; `presences` is the Run's Presences once the change
+  happened. The front hands them to `run/item/people` ([extension-ui.md](extension-ui.md#runitempeople)).
+
+Without extension every tab is the local operator's: one Presence at most per Run.
+
 ## A suspended Trigger (0.8)
 
 `trigger_suspension` receives a `TriggerRef` (`id`, `name`, `last_editor`) and answers the
@@ -353,6 +394,8 @@ pill appear or go without reloading.
 ```
 
 An extension's own events arrive as `{"type": "extension_event", "extension", "name", "payload"}`.
+Who opens and leaves a Run arrives as `presence_arrived` and `presence_left` (0.12,
+[Presences](#presences-012)).
 
 **Guard what a Reader may not read (0.11).** An event about an entity of a Projet goes, by
 default, to every `/ws` connection. Attach the read that protects it, and the core sends it only to

@@ -78,6 +78,7 @@ impl Runs {
 
         info!("Run {run_id} forgotten (event log purged)");
 
+        state.forget_presences(&run_id);
         // Piggy-back on the pipeline-broadcast channel: the event channel only carries
         // typed `event_log::Event` records, and every event for this run was just deleted.
         state.bus().publish(serde_json::json!({

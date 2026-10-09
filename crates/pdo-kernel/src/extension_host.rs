@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
     ActorDisplay, Admission, Attributes, Authorization, EntityRef, Extension, ExtensionContext,
-    ExtensionData, Host, Manifest, NodeLaunch, RequestParts, Resource, ResourceKind, TriggerRef,
+    ExtensionData, Host, Manifest, RequestParts, Resource, ResourceKind, SessionLaunch, TriggerRef,
     EXTENSION_EVENT,
 };
 use serde_json::Value;
@@ -374,8 +374,8 @@ impl ExtensionHost for Extensions {
         pdo_extension_api::catalogue(self.registry.registered.iter().map(|r| &r.manifest))
     }
 
-    fn node_launch(&self, launch: &NodeLaunch) -> NodeContribution {
-        launch::node_launch(self, launch)
+    fn session_launch(&self, launch: &SessionLaunch) -> NodeContribution {
+        launch::session_launch(self, launch)
     }
 
     fn trigger_suspension(&self, trigger: &TriggerRef) -> Option<TriggerSuspension> {
@@ -811,8 +811,7 @@ mod tests {
         let extensions = Extensions::register(vec![Box::new(a), Box::new(b)]).unwrap();
         let bus = Arc::new(crate::event_bus::BroadcastEventBus::new(16));
         let mut ws = bus.subscribe();
-        let root =
-            std::env::temp_dir().join(format!("pdo-kernel-guard-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("pdo-kernel-guard-{}", std::process::id()));
         extensions.start(HostServices {
             attributes: Arc::new(crate::attributes::InMemoryAttributes::default()),
             bus,
@@ -822,8 +821,7 @@ mod tests {
             .on("i1")
             .in_projects(["p2"]);
         extensions.host_of("a").publish(
-            ExtensionEvent::new("item_changed", serde_json::json!({ "id": "i1" }))
-                .guarded_by(read),
+            ExtensionEvent::new("item_changed", serde_json::json!({ "id": "i1" })).guarded_by(read),
         );
 
         let unguarded = serde_json::json!({

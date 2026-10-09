@@ -243,13 +243,19 @@ impl<'a> Visibility<'a> {
 
 /// The Run a message of the bus is about, and whether that Run is gone: a
 /// Run's event (`{"type": "event", "event": {"run_id"…}}`), its
-/// `run_forgotten`, an `operation_applied` on a Run or one of its nodes (the
-/// creation of a Run has no target: the Run is the entity it produced).
+/// `run_forgotten`, an event of one of its sessions (`session_started`,
+/// `session_taken_over`, `session_ended`), an `operation_applied` on a Run or
+/// one of its nodes (the creation of a Run has no target: the Run is the
+/// entity it produced).
 /// `None` for everything else.
 fn run_of_message(message: &Value) -> Option<(&str, bool)> {
     match message["type"].as_str()? {
         "event" => Some((message["event"]["run_id"].as_str()?, false)),
         "run_forgotten" => Some((message["run_id"].as_str()?, true)),
+        // CORE-61: a session of a Run (the library assistant's has none).
+        "session_started" | "session_taken_over" | "session_ended" => {
+            Some((message["session"]["run_id"].as_str()?, false))
+        }
         "operation_applied" => {
             let operation = &message["operation"];
             match operation["resource"].as_str()? {
@@ -326,6 +332,22 @@ mod tests {
         assert_eq!(
             run_of_message(&json!({ "type": "run_forgotten", "run_id": "r2" })),
             Some(("r2", true))
+        );
+        assert_eq!(
+            run_of_message(&json!({
+                "type": "session_taken_over",
+                "actor": { "kind": "local_operator" },
+                "session": { "id": "pdo-mgr-r3", "kind": "manager", "run_id": "r3" },
+            })),
+            Some(("r3", false))
+        );
+        assert_eq!(
+            run_of_message(&json!({
+                "type": "session_ended",
+                "actor": null,
+                "session": { "id": "pdo-libassist-shared", "kind": "library_assistant", "run_id": null },
+            })),
+            None
         );
         assert_eq!(
             run_of_message(&json!({

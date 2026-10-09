@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use pdo_extension_api::{Authorization, RequestParts};
-use pdo_kernel::extension_host::ExtensionHost;
+use pdo_extension_api::{Authorization, RequestParts, SessionLaunch};
+use pdo_kernel::extension_host::{ExtensionHost, NodeContribution};
 use pdo_kernel::{Actor, Operation};
 
 use pdo_session::application::ports::*;
@@ -16,29 +16,36 @@ use pdo_session::domain::pane::{PaneTarget, ReattachOutcome};
 use pdo_session::domain::reaper::{NodeRunInfo, SweepTtls};
 
 /// An extension host that refuses everything, or allows everything, and
-/// remembers what it was asked.
+/// remembers what it was asked; it gives every session launch
+/// [`Host::contribution`] and keeps every event announced or published.
+#[derive(Default)]
 pub struct Host {
     pub refuse: bool,
     pub asked: Mutex<Vec<Operation>>,
+    pub contribution: Mutex<NodeContribution>,
+    pub launches: Mutex<Vec<SessionLaunch>>,
+    /// Every event: `(on the bus, event)`; `false` for the extensions only.
+    pub events: Mutex<Vec<(bool, serde_json::Value)>>,
 }
 
 impl Host {
     pub fn allowing() -> Arc<Self> {
-        Arc::new(Self {
-            refuse: false,
-            asked: Mutex::new(Vec::new()),
-        })
+        Arc::new(Self::default())
     }
 
     pub fn refusing() -> Arc<Self> {
         Arc::new(Self {
             refuse: true,
-            asked: Mutex::new(Vec::new()),
+            ..Self::default()
         })
     }
 
     pub fn asked(&self) -> Vec<Operation> {
         self.asked.lock().unwrap().clone()
+    }
+
+    pub fn events(&self) -> Vec<(bool, serde_json::Value)> {
+        self.events.lock().unwrap().clone()
     }
 }
 
@@ -56,7 +63,22 @@ impl ExtensionHost for Host {
         }
     }
 
-    fn publish(&self, _event: &serde_json::Value) {}
+    fn publish(&self, event: &serde_json::Value) {
+        self.events.lock().unwrap().push((false, event.clone()));
+    }
+
+    fn announce(&self, event: serde_json::Value) {
+        self.events.lock().unwrap().push((true, event));
+    }
+
+    fn installed(&self) -> Vec<String> {
+        vec!["fake".into()]
+    }
+
+    fn session_launch(&self, launch: &SessionLaunch) -> NodeContribution {
+        self.launches.lock().unwrap().push(launch.clone());
+        self.contribution.lock().unwrap().clone()
+    }
 }
 
 /// A tmux server in memory: sessions are names, panes are strings.

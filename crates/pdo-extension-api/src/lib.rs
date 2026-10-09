@@ -7,8 +7,9 @@
 //! the data a creation carries for it ([`ExtensionData`]) and stamp
 //! [`Attributes`] on a new entity, observe events, contribute routes and UI, answer a command line
 //! (`pdo ext <id> <args…>`), bring skills into the Banque de skills, contribute
-//! to the launch of a Node (environment variables, a preamble) and suspend a
-//! Trigger.
+//! to the launch of every agent session (environment variables, a preamble),
+//! observe who starts a session, takes control of its terminal and when it
+//! ends ([`SessionEvent`]), and suspend a Trigger.
 //!
 //! An extension runs its **own** mutations through the same mechanisms, by the
 //! [`Host`] its [`ExtensionContext`] carries: its entities are a
@@ -38,6 +39,7 @@
 
 mod actor;
 mod admission;
+mod authorization;
 mod catalogue;
 mod cli;
 mod display;
@@ -49,24 +51,28 @@ mod launch;
 mod manifest;
 mod operation;
 mod run_creation;
+mod session;
 mod skill;
 mod ui;
 
 pub use actor::Actor;
 pub use admission::{Admission, UNAUTHENTICATED};
+pub use authorization::{Authorization, Denied, OPERATION_REFUSED};
 pub use catalogue::{catalogue, core_resources, Resource, ResourceDeclaration};
 pub use cli::{CliInvocation, CliOutput, CliSpec, EXIT_NO_CLI};
 pub use display::ActorDisplay;
 pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
-pub use extension::{
-    Authorization, Denied, Extension, ExtensionContext, RequestParts, OPERATION_REFUSED,
-};
+pub use extension::{Extension, ExtensionContext, RequestParts};
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use launch::{NodeEnv, NodeKind, NodeLaunch, TriggerProvenance, TriggerRef};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
 pub use run_creation::{ExtensionData, NewRun, RunCreation, RunNotCreated, RunRepo};
+pub use session::{
+    SessionChange, SessionEvent, SessionKind, SessionLaunch, SessionRef, SESSION_ENDED,
+    SESSION_STARTED, SESSION_TAKEN_OVER,
+};
 pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
     ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions, UiElement,
@@ -89,5 +95,7 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// extension data of a creation, its hooks, `Host::create_run` and the
 /// `stats/tab` and `settings/page` locations, amendments CORE-29 and CORE-30;
 /// 0.10 only added the probed opening of the WebSockets, amendment CORE-32;
-/// 0.11 only added `Host::project_name` and `Host::triggers_changed`).
+/// 0.11 only added `Host::project_name` and `Host::triggers_changed`; 0.12
+/// only added the launch hooks of every session, `session_env` and
+/// `session_preamble`, and the session events).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

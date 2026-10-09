@@ -15,6 +15,7 @@ publish = false
 
 [dependencies]
 pdo-kernel.workspace = true
+pdo-extension-api.workspace = true
 pdo-harness.workspace = true
 anyhow.workspace = true
 axum.workspace = true
@@ -28,6 +29,5 @@ tracing.workspace = true
 ts-rs.workspace = true
 
 [dev-dependencies]
-pdo-extension-api.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true

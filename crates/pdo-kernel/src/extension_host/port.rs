@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use pdo_extension_api::{
-    ActorDisplay, Admission, Attributes, Authorization, EntityRef, ExtensionData, NodeLaunch,
-    RequestParts, Resource, ResourceKind, TriggerRef,
+    ActorDisplay, Admission, Attributes, Authorization, EntityRef, ExtensionData, RequestParts,
+    Resource, ResourceKind, SessionLaunch, TriggerRef,
 };
 use serde_json::Value;
 
@@ -104,9 +104,11 @@ pub trait ExtensionHost: Send + Sync {
         pdo_extension_api::core_resources()
     }
 
-    /// What the extensions add to the launch of a Node: their environment
-    /// variables and their preamble ([`NodeContribution`]). Nothing by default.
-    fn node_launch(&self, _launch: &NodeLaunch) -> NodeContribution {
+    /// What the extensions add to the launch of a session (API 0.12): a
+    /// Node, the Pipeline Manager, the library assistant. Their environment
+    /// variables and their preamble ([`NodeContribution`]). Nothing by
+    /// default.
+    fn session_launch(&self, _launch: &SessionLaunch) -> NodeContribution {
         NodeContribution::default()
     }
 

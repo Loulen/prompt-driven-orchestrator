@@ -1,21 +1,28 @@
-//! Open and reap the one library assistant.
+//! Open and reap the library assistant of an Actor.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use pdo_extension_api::{SessionKind, SessionLaunch, SessionRef};
 use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::{info, warn};
 
-use super::{session_target, FocusCell};
+use super::FocusCell;
 use crate::application::launch::spawn_libassist;
 use crate::application::ports::{AssistantHarness, Tmux};
+use crate::application::session_ledger::SessionLedger;
 use crate::domain::launch::host_daemon_url;
 use crate::domain::libassist::{
-    build_library_assistant_prompt, libassist_cwd, libassist_state_dir,
+    build_library_assistant_prompt, libassist_cwd, libassist_primer_path,
 };
-use crate::domain::names::LIBASSIST_SESSION_NAME;
+use crate::domain::names::libassist_session_name_of;
+
+/// The action of the `pipeline` Operation that opens the library assistant
+/// (CORE-61): an assistant writes templates, so opening it is a gesture on the
+/// Pipelines.
+pub const OPEN_ASSISTANT: &str = "open_assistant";
 
 /// Where the assistant runs, and how its launch may be stubbed.
 #[derive(Debug, Clone)]
@@ -44,10 +51,15 @@ pub enum OpenAssistantError {
     Spawn(String),
 }
 
-/// Open (or re-attach) the assistant: create-if-absent, **one for the whole
-/// daemon**. Unlike the run shell there is no Run to gate on. Nothing about
-/// *which* template is being edited is frozen at spawn time: the
-/// `UserPromptSubmit` hook re-injects the open template on every message.
+/// Open (or re-attach) the assistant of an Actor: create-if-absent, **one per
+/// Actor** (CORE-61), the Operation `pipeline` × `open_assistant`. Unlike the
+/// run shell there is no Run to gate on. Nothing about *which* template is
+/// being edited is frozen at spawn time: the `UserPromptSubmit` hook re-injects
+/// its Actor's open template on every message.
+///
+/// The launch hooks of the extensions are asked for it
+/// ([`ExtensionHost::session_launch`], the Actor as who starts it): their
+/// variables go into its environment, their text at the top of its primer.
 ///
 /// The session persists across a PTY/tab close; [`CloseAssistant`] reaps it when
 /// the user leaves every edit view, and the sweep's idle arm is the backstop for
@@ -57,6 +69,7 @@ pub struct OpenAssistant {
     harness: Arc<dyn AssistantHarness>,
     host: Arc<dyn ExtensionHost>,
     launch: AssistantLaunch,
+    ledger: Arc<SessionLedger>,
 }
 
 impl OpenAssistant {
@@ -67,6 +80,7 @@ impl OpenAssistant {
         launch: AssistantLaunch,
     ) -> Self {
         Self {
+            ledger: Arc::new(SessionLedger::new(tmux.clone(), host.clone())),
             tmux,
             harness,
             host,
@@ -74,9 +88,15 @@ impl OpenAssistant {
         }
     }
 
+    /// The same use case, announcing the sessions it starts in `ledger`.
+    pub fn with_ledger(mut self, ledger: Arc<SessionLedger>) -> Self {
+        self.ledger = ledger;
+        self
+    }
+
     pub async fn execute(&self, actor: &Actor) -> Result<Opened, OpenAssistantError> {
-        // A creation carries no target (the session does not exist yet).
-        let operation = Operation::new(ResourceKind::Session, Verb::Create);
+        // No target: the Pipelines of the instance, none in particular.
+        let operation = Operation::new(ResourceKind::Pipeline, Verb::Action(OPEN_ASSISTANT.into()));
         authorize(self.host.as_ref(), actor, &operation).map_err(OpenAssistantError::Refused)?;
         let repo_root = &self.launch.repo_root;
         let cwd = libassist_cwd(repo_root);
@@ -85,7 +105,7 @@ impl OpenAssistant {
         std::fs::create_dir_all(&cwd)
             .map_err(|e| OpenAssistantError::Dir(format!("failed to create pipelines dir: {e}")))?;
 
-        let session = LIBASSIST_SESSION_NAME.to_string();
+        let session = libassist_session_name_of(actor);
         // Create-then-verify-on-failure, mirroring the run shell.
         if self.tmux.session_exists(&session) {
             return Ok(Opened {
@@ -103,7 +123,13 @@ impl OpenAssistant {
                 .join("library-assistant.md"),
         )
         .unwrap_or_default();
-        let full_prompt = build_library_assistant_prompt(&daemon_url, &static_prompt);
+        let session_ref = SessionRef::new(&session, SessionKind::LibraryAssistant);
+        let contribution = self
+            .host
+            .session_launch(&SessionLaunch::new(session_ref.clone()).started_by(actor.clone()));
+        let full_prompt =
+            contribution.above(build_library_assistant_prompt(&daemon_url, &static_prompt));
+        let extension_env: Vec<(String, String)> = contribution.env.into_iter().collect();
 
         let harness = self.harness.resolve().await;
         // The per-message focus hook rides on `--settings`, a hole only the
@@ -124,8 +150,8 @@ impl OpenAssistant {
         }
 
         // Keep the primer OUT of the user-facing templates dir: it and the hook
-        // settings live in a sibling `.libassist/`.
-        let prompt_path = libassist_state_dir(repo_root).join("assistant.md");
+        // settings live in a sibling `.libassist/`, one primer per session.
+        let prompt_path = libassist_primer_path(repo_root, &session);
         let tmux = self.tmux.clone();
         let spawned = spawn_libassist(
             tmux.as_ref(),
@@ -136,10 +162,12 @@ impl OpenAssistant {
             self.launch.daemon_port,
             &harness,
             self.launch.tmux_cmd_override.as_deref(),
+            &extension_env,
         );
         match spawned {
             Ok(()) => {
                 info!("Opened library assistant {session} in {}", cwd.display());
+                self.ledger.started(session_ref, Some(actor.clone()));
                 Ok(Opened {
                     session,
                     created: true,
@@ -157,7 +185,7 @@ impl OpenAssistant {
     }
 }
 
-/// Reap the assistant, fired when the user leaves **every** pipeline edit view —
+/// Reap the assistant of an Actor, fired when it leaves **every** pipeline edit view —
 /// NOT when they leave the Assistant *tab*: the info panel closes by itself on
 /// each edit-tab switch, so tab-leave would reap the conversation on every round
 /// trip between two templates.
@@ -179,10 +207,11 @@ impl CloseAssistant {
 
     /// Whether a session existed to reap.
     pub fn execute(&self, actor: &Actor) -> Result<bool, Denied> {
-        let operation = Operation::new(ResourceKind::Session, Verb::Delete).on(session_target());
+        let session = libassist_session_name_of(actor);
+        let operation = Operation::new(ResourceKind::Session, Verb::Delete).on(session.clone());
         authorize(self.host.as_ref(), actor, &operation)?;
-        let session = LIBASSIST_SESSION_NAME;
-        self.focus.set(None);
+        let session = session.as_str();
+        self.focus.set(session, None);
         let existed = self.tmux.session_exists(session);
         self.tmux.kill(session);
         if existed {

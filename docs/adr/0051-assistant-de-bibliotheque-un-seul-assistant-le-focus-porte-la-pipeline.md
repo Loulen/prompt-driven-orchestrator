@@ -80,3 +80,20 @@ lent » et « ne pas reap tant qu'on édite ». Ils disent la même chose : **l'
 - **« Quitter toute vue d'édition » se lit sur les onglets ouverts, pas sur l'onglet actif.** Aller
   voir un Run pendant qu'une template reste ouverte n'est pas quitter l'édition ; y reaper la session
   coûterait la conversation, c'est-à-dire le reproche à l'origine de l'issue.
+
+## Amendement CORE-61 : un assistant par Acteur
+
+Une instance partagée par une équipe fait agir chaque session avec les Droits de qui l'a démarrée.
+Un assistant unique pour tout le démon ferait écrire tout le monde au nom d'une seule personne, et
+mélangerait les conversations. L'assistant devient donc **un par Acteur** :
+
+- `POST /sessions/libassist` ouvre l'assistant de l'appelant (`pdo-libassist-shared` pour
+  l'opérateur local, si bien qu'un démon sans Extension qui identifie ses appelants garde son
+  unique assistant) ; l'ouvrir est l'Opération `pipeline` × `open_assistant`.
+- Le focus, le save et la fermeture sont ceux de l'Acteur appelant ; le sweep juge chaque
+  assistant sur le focus de son Acteur.
+- Les hooks de lancement des Extensions sont demandés pour lui, avec l'Acteur qui l'ouvre.
+
+Le reste de cette décision tient pour chaque assistant : un seul par Acteur, keyé sur rien
+d'autre, son historique partagé entre toutes les templates de son Acteur.
+

@@ -9,8 +9,10 @@
 //! - **Declared wait**: `pdo wait-user`, lifted by the user's Enter.
 //! - **Terminal text**: a text written into a node's input on the user's
 //!   gesture, without Enter.
-//! - **Library assistant**: one shared authoring session, told which template is
-//!   open through the focus.
+//! - **Library assistant**: one authoring session per Actor, told which
+//!   template its Actor has open through its focus.
+//! - **Session ledger**: who started each session, who takes control of its
+//!   terminal, when it ends, as the extensions are told (CORE-61).
 //!
 //! Hexagonal inside: `domain/` holds the pure rules, `application/` the ports
 //! (tmux behind the one [`Tmux`](application::ports::Tmux) port) and one use case
@@ -40,6 +42,7 @@ use application::ports::{
     Templates, TerminalWindow, Tmux,
 };
 use application::read_pane::ReadPane;
+use application::session_ledger::SessionLedger;
 use application::status::ReadStatus;
 use application::sweep::{ReaperGauge, SweepOrphans};
 use application::terminal::Terminals;
@@ -84,6 +87,7 @@ pub struct SessionOptions {
 pub struct Session {
     tmux: Arc<dyn Tmux>,
     focus: Arc<FocusCell>,
+    ledger: Arc<SessionLedger>,
     options: SessionOptions,
     declare_wait: DeclareWait,
     send_terminal_text: SendTerminalText,
@@ -121,6 +125,7 @@ impl Session {
         let typed = Arc::new(TypedInput::default());
         let focus = Arc::new(FocusCell::default());
         let reaper = Arc::new(ReaperGauge::default());
+        let ledger = Arc::new(SessionLedger::new(tmux.clone(), extensions.clone()));
         let launch = AssistantLaunch {
             repo_root: options.repo_root.clone(),
             daemon_port: options.daemon_port,
@@ -146,7 +151,8 @@ impl Session {
                 LiftWait::new(waits, typed, extensions.clone()),
                 extensions.clone(),
             )
-            .with_projects(projects.clone()),
+            .with_projects(projects.clone())
+            .with_ledger(ledger.clone()),
             sweep: SweepOrphans::new(tmux.clone(), owners, focus.clone(), reaper.clone()),
             read_status: ReadStatus::new(gauges, reaper),
             read_pane: ReadPane::new(panes, tmux.clone(), extensions.clone())
@@ -157,7 +163,8 @@ impl Session {
                 extensions.clone(),
                 options.daemon_port,
             )
-            .with_projects(projects.clone()),
+            .with_projects(projects.clone())
+            .with_ledger(ledger.clone()),
             attach: AttachTerminal::new(tmux.clone(), terminal_window, extensions.clone())
                 .with_projects(projects),
             open_assistant: OpenAssistant::new(
@@ -165,12 +172,14 @@ impl Session {
                 assistant_harness,
                 extensions.clone(),
                 launch,
-            ),
+            )
+            .with_ledger(ledger.clone()),
             close_assistant: CloseAssistant::new(tmux.clone(), focus.clone(), extensions.clone()),
             declare_focus: DeclareFocus::new(focus.clone(), templates.clone(), extensions.clone()),
             save_focused: SaveFocused::new(focus.clone(), templates, extensions),
             tmux,
             focus,
+            ledger,
             options,
             terminal_beat_ms: AtomicU64::new(
                 domain::pty_protocol::TERMINAL_BEAT_INTERVAL.as_millis() as u64,
@@ -215,9 +224,15 @@ impl Session {
         &self.sweep
     }
 
-    /// The library assistant's focus.
+    /// The focus of each library assistant.
     pub fn focus(&self) -> &FocusCell {
         &self.focus
+    }
+
+    /// The live sessions, as the extensions are told about them: who started
+    /// each, who takes control, when it ends (CORE-61).
+    pub fn ledger(&self) -> &Arc<SessionLedger> {
+        &self.ledger
     }
 
     /// The terminals the PTY bridge pilots.

@@ -118,7 +118,6 @@ impl SweepOrphans {
         //     the reads took 4 s". The assistant's presence facts are read against
         //     the same `now`.
         let now = chrono::Utc::now();
-        let focus_at = self.focus.get().map(|f| f.at);
 
         // (3) EDGE SECOND — the owners of the sessions that actually exist, read
         //     AFTER the inventory (the log only grows, so an absence seen now was an
@@ -133,10 +132,11 @@ impl SweepOrphans {
             let mut focus_age = None;
             match &parsed {
                 None => {}
-                // A library assistant owns no Run: it is judged on human presence.
+                // A library assistant owns no Run: it is judged on the presence
+                // of its Actor (its own focus).
                 Some(ParsedSession::LibAssist) => {
                     attached = self.tmux.is_attached(&session_name);
-                    focus_age = focus_at.map(|at| {
+                    focus_age = self.focus.get(&session_name).map(|f| f.at).map(|at| {
                         now.signed_duration_since(at)
                             .to_std()
                             .unwrap_or(Duration::ZERO)

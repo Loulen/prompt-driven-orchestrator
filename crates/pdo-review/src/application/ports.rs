@@ -6,6 +6,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+use pdo_kernel::Actor;
 use pdo_run::domain::event::Event;
 use pdo_run::domain::state::RunState;
 
@@ -32,12 +33,14 @@ pub trait ReviewRuns: Send + Sync {
     /// Append one review event to the Run's log (guarded, stored, published).
     fn append<'a>(&'a self, event: &'a Event) -> BoxFuture<'a, Result<(), String>>;
 
-    /// Start the Run's Pipeline Manager if it is not running: `true` when this
-    /// call started it. A refusal is `(status, body)`, answered verbatim.
+    /// Start the Run's Pipeline Manager if it is not running, started by
+    /// `actor` (CORE-61): `true` when this call started it. A refusal is
+    /// `(status, body)`, answered verbatim.
     fn ensure_manager<'a>(
         &'a self,
         run_id: &'a str,
         run: &'a RunState,
+        actor: &'a Actor,
     ) -> BoxFuture<'a, Result<bool, (u16, serde_json::Value)>>;
 
     /// Paste `message` into the manager's session, off the request — after a

@@ -12,6 +12,7 @@ use tracing::info;
 
 use super::FocusCell;
 use crate::application::ports::{TemplateSaveError, Templates};
+use crate::domain::names::libassist_session_name_of;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveFocusedError {
@@ -57,13 +58,18 @@ impl SaveFocused {
         }
     }
 
+    /// Save into the template `actor`'s focus names: the assistant calls it
+    /// with its Actor's identity, so it writes what its own Actor has open.
     pub fn execute(
         &self,
         actor: &Actor,
         yaml: &str,
         prompts: &HashMap<String, String>,
     ) -> Result<Saved, SaveFocusedError> {
-        let focus = self.focus.get().ok_or(SaveFocusedError::NoFocus)?;
+        let focus = self
+            .focus
+            .get(&libassist_session_name_of(actor))
+            .ok_or(SaveFocusedError::NoFocus)?;
         let id = focus.pipeline_id;
         let operation = Operation::new(ResourceKind::Pipeline, Verb::Update).on(id.clone());
         authorize(self.host.as_ref(), actor, &operation).map_err(SaveFocusedError::Refused)?;

@@ -310,6 +310,11 @@ pub async fn spawn_node(
     {
         return outcome;
     }
+    // CORE-61: the session is up, started by the Run's creator.
+    deps.runs.sessions().started_named(
+        &pdo_session::domain::names::node_session_name(spawn_ctx.run_id, &node.id, iter),
+        loaded.as_ref().and_then(|(_, run)| run.created_by.clone()),
+    );
 
     // #588 / ADR-0069: NO `NodeAwaitingUser` at spawn, interactive or not. A
     // fresh node has the colour of a working node; the wait is declared by its

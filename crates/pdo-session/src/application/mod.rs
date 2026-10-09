@@ -12,6 +12,7 @@ pub mod open_shell;
 pub mod ports;
 pub mod read_pane;
 pub mod reap;
+pub mod session_ledger;
 pub mod shared_terminal;
 pub mod status;
 pub mod sweep;

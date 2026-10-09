@@ -55,6 +55,7 @@ pub(super) fn run(w: RunWiring<'_>) -> Arc<Runs> {
             )),
             managers: Arc::new(TmuxManagerSessions(w.session.tmux().clone())),
             tmux: w.session.tmux().clone(),
+            sessions: w.session.ledger().clone(),
             waits: Arc::new(SessionWaits(w.session.clone())),
             projects: Arc::new(WorkspaceProjects(w.workspace.clone())),
             skills: Arc::new(ContextSkills(w.skills.clone())),

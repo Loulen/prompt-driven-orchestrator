@@ -1,14 +1,13 @@
-//! The library pipeline authoring assistant (#302 / ADR-0048, one shared
-//! session since #594 / ADR-0051): where it works, what it is told, and the
-//! **focus** — which template the UI has open, and when it last said so.
+//! The library pipeline authoring assistant (#302 / ADR-0048, one session per
+//! Actor since CORE-61): where it works, what it is told, and the **focus** —
+//! which template the UI of its Actor has open, and when it last said so.
 
 use std::path::{Path, PathBuf};
 
 /// The `PDO_RUN_ID` / `PDO_NODE_ID` the assistant's session is env-wrapped with.
 ///
-/// A single constant for both since #594: the assistant is one session for the
-/// whole daemon, so there is no pipeline id left to pose as a pseudo-run — and
-/// there never was a Run behind it. Both values are inert (the assistant never
+/// A single constant for both since #594: there is no pipeline id to pose as a
+/// pseudo-run — and there never was a Run behind it. Both values are inert (the assistant never
 /// self-signals via `pdo complete`); the load-bearing export is `PDO_DAEMON_URL`.
 pub const LIBASSIST_ENV_ID: &str = "__libassist__";
 
@@ -45,6 +44,18 @@ pub fn libassist_cwd(repo_root: &Path) -> PathBuf {
 /// of the cwd, so the user-facing templates directory stays clean.
 pub fn libassist_state_dir(repo_root: &Path) -> PathBuf {
     repo_root.join(".pdo").join(".libassist")
+}
+
+/// The primer of the assistant session `session`, in [`libassist_state_dir`]:
+/// `assistant.md` for the local operator's, `<session>.md` for any other
+/// Actor's, so two Actors never read each other's.
+pub fn libassist_primer_path(repo_root: &Path, session: &str) -> PathBuf {
+    let file = if session == crate::domain::names::LIBASSIST_SESSION_NAME {
+        "assistant.md".to_string()
+    } else {
+        format!("{session}.md")
+    };
+    libassist_state_dir(repo_root).join(file)
 }
 
 pub fn focus_json(
@@ -94,6 +105,10 @@ pub fn focus_text(focus: Option<&LibassistFocus>) -> String {
     }
 }
 
+/// The `curl` arguments that send the session's token, when it has one: the
+/// one the `UserPromptSubmit` hook sends too.
+pub const AUTH_HEADER: &str = r#"${PDO_TOKEN:+-H "Authorization: Bearer $PDO_TOKEN"}"#;
+
 /// Runtime preamble for the library pipeline authoring assistant (ADR-0048,
 /// reshaped by ADR-0051).
 ///
@@ -102,17 +117,23 @@ pub fn focus_text(focus: Option<&LibassistFocus>) -> String {
 /// text rather than shipping a custom MCP. The **write-on-save** rule is restated
 /// here so it holds even if the static role file is trimmed.
 ///
-/// **It names no pipeline.** One assistant serves every template, so a pipeline
+/// **Every call carries the session's token** ([`AUTH_HEADER`]): one assistant
+/// per Actor (CORE-61) means the daemon reads whose focus to use, and whose
+/// template to save, off the caller's identity; without the token an
+/// assistant would be read as the local operator's.
+///
+/// **It names no pipeline.** One assistant serves every template of its Actor, so a pipeline
 /// id frozen at spawn would be wrong from the second template onwards. Which one
 /// is open arrives per message via the `UserPromptSubmit` hook; the instruction to
 /// fetch it is kept here in plain text because that hook only exists on a harness
 /// exposing `--settings` (ADR-0051 §3).
 pub fn build_library_assistant_preamble(daemon_url: &str) -> String {
+    let auth = AUTH_HEADER;
     format!(
         r#"# Pipeline Assistant Runtime Preamble
 
 You author PDO pipeline templates in natural language, on the user's behalf. You
-are **one shared assistant for the whole daemon**: the user switches between
+are **the assistant of the person who opened you**: they switch between
 templates without restarting you, so the template you work on changes over time
 and your conversation history does not.
 
@@ -124,8 +145,13 @@ context at **every** user message. It names the pipeline id, its scope, and the
 sibling you guessed from the working directory.
 
 If that line is missing (some harnesses cannot inject it), fetch the same fact
-yourself **before acting**: `curl -s {daemon_url}/sessions/libassist/focus`. If it
+yourself **before acting**: `curl -s {auth} {daemon_url}/sessions/libassist/focus`. If it
 answers no pipeline, ask the user which one — do not pick one.
+
+**Every call to the daemon carries `{auth}`**, exactly as written: it sends
+the token of your session when it has one. The daemon knows whose assistant you
+are from it (whose template is open, where your save goes); a call without it is
+read as somebody else's.
 
 Your working directory is the repo's templates folder; read the `*.yaml` files in
 it for real, in-house examples of the format. It is a source of examples, **not**
@@ -133,10 +159,10 @@ the location of the file you are editing: that is the absolute path the focus
 gives you, and it may live in another folder entirely.
 
 - Daemon base URL: `{daemon_url}`
-- Which pipeline is open: `curl -s {daemon_url}/sessions/libassist/focus`
-- List every template: `curl {daemon_url}/library/pipelines`
-- Validate a single node's YAML before you save: `curl -X POST {daemon_url}/nodes/parse -H 'Content-Type: application/json' -d '{{"yaml":"<node yaml>"}}'`
-- Persist the open template: `curl -X POST {daemon_url}/sessions/libassist/save -H 'Content-Type: application/json' -d '{{"yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
+- Which pipeline is open: `curl -s {auth} {daemon_url}/sessions/libassist/focus`
+- List every template: `curl {auth} {daemon_url}/library/pipelines`
+- Validate a single node's YAML before you save: `curl {auth} -X POST {daemon_url}/nodes/parse -H 'Content-Type: application/json' -d '{{"yaml":"<node yaml>"}}'`
+- Persist the open template: `curl {auth} -X POST {daemon_url}/sessions/libassist/save -H 'Content-Type: application/json' -d '{{"yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
 
 **Saving takes no id and no scope.** The daemon writes into the file the focus
 names, because it is the only party that knows where that is. Do **not** save
@@ -191,6 +217,12 @@ mod tests {
             "and never offers the library store as a way to save:\n{p}"
         );
         assert!(
+            p.contains(&format!(
+                "curl {AUTH_HEADER} -X POST http://localhost:1234/sessions/libassist/save"
+            )),
+            "the save carries the session's token, so it is its Actor's (CORE-61):\n{p}"
+        );
+        assert!(
             p.contains("Do **not** save\nthrough `POST /library/pipelines`"),
             "the trap is named outright, so a model that knows the old endpoint is \
              warned off it:\n{p}"
@@ -233,6 +265,14 @@ mod tests {
         assert_eq!(
             libassist_state_dir(Path::new("/repo")),
             PathBuf::from("/repo/.pdo/.libassist")
+        );
+        assert_eq!(
+            libassist_primer_path(Path::new("/repo"), "pdo-libassist-shared"),
+            PathBuf::from("/repo/.pdo/.libassist/assistant.md")
+        );
+        assert_eq!(
+            libassist_primer_path(Path::new("/repo"), "pdo-libassist-a01"),
+            PathBuf::from("/repo/.pdo/.libassist/pdo-libassist-a01.md")
         );
     }
 }

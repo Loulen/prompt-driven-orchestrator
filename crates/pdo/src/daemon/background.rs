@@ -1,5 +1,6 @@
 //! The daemon's background work: the periodic loops (the reaper, the stale
-//! detection, the Triggers' heartbeat, the relay of a Run's pipeline edits),
+//! detection, the Triggers' heartbeat, the relay of a Run's pipeline edits,
+//! the end of the sessions announced to the extensions),
 //! each panic-isolated, and the detached boot tasks (the price refresh, the
 //! version check, the harness catalogues' warm-up).
 
@@ -25,6 +26,7 @@ pub(super) struct Loops {
     _stale: Option<JoinHandle<()>>,
     _trigger: Option<JoinHandle<()>>,
     _run_modified: Option<JoinHandle<()>>,
+    _sessions: JoinHandle<()>,
 }
 
 impl Loops {
@@ -44,6 +46,14 @@ impl Loops {
             _trigger: (!nested && config.run_trigger_scheduler_loop)
                 .then(|| pdo_trigger::adapters::heartbeat::spawn(triggers.clone())),
             _run_modified: None,
+            // CORE-61: no cleanup, only the end of the sessions observed and
+            // announced, so a nested daemon runs it too.
+            _sessions: tokio::spawn(
+                session
+                    .ledger()
+                    .clone()
+                    .watch(pdo_session::application::session_ledger::RECONCILE_INTERVAL),
+            ),
         }
     }
 

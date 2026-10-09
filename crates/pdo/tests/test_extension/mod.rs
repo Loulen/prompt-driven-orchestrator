@@ -60,6 +60,12 @@
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
 //!   0.8, `launch.rs`): the variables, the preamble and the suspensions the
 //!   test sets ([`Control::launch`]).
+//! - **`session_env`** / **`session_preamble`** (API 0.12, `launch.rs`): for a
+//!   Node, its `node_env` / `node_preamble`; for the Pipeline Manager and the
+//!   library assistant, the same variables plus `TEST_STARTED_BY` (the id of
+//!   who starts the session, else its kind of Actor), and the same preamble.
+//!   The session events (`session_started`, `session_taken_over`,
+//!   `session_ended`) reach `on_event` like every other event.
 //! - `projets.rs` (API 0.11): the name of a Projet through its `Host`, the
 //!   signal of the Triggers, and `PUT /ext/test/notes/<id>`, which publishes
 //!   a `note_changed` guarded by the read of the note in its Projet.
@@ -103,8 +109,8 @@ use std::time::Duration;
 use pdo::extension_api::{
     Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
     EntityRef, Extension, ExtensionContext, ExtensionSkill, Manifest, NodeEnv, NodeLaunch,
-    Operation, RequestParts, ResourceDeclaration, ResourceKind, Slot, TriggerRef, UiCommand,
-    UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
+    Operation, RequestParts, ResourceDeclaration, ResourceKind, SessionLaunch, Slot, TriggerRef,
+    UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -534,6 +540,20 @@ impl Extension for TestExtension {
 
     fn node_preamble(&self, launch: &NodeLaunch) -> Option<String> {
         self.control.launch.node_preamble(launch)
+    }
+
+    fn session_env(&self, launch: &SessionLaunch) -> NodeEnv {
+        match &launch.node {
+            Some(node) => self.node_env(node),
+            None => self.control.launch.session_env(launch),
+        }
+    }
+
+    fn session_preamble(&self, launch: &SessionLaunch) -> Option<String> {
+        match &launch.node {
+            Some(node) => self.node_preamble(node),
+            None => self.control.launch.session_preamble(launch),
+        }
     }
 
     fn trigger_suspension(&self, trigger: &TriggerRef) -> Option<String> {

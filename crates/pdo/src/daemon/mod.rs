@@ -148,6 +148,12 @@ pub async fn serve_with_config(
         // on orphaned Running nodes and surface git/event-log divergence.
         boot_recovery::run_boot_recovery(&run).await;
     }
+    // CORE-61: the sessions a previous daemon started end like the others, and
+    // their end is announced to the extensions.
+    let ledger = session.ledger().clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || ledger.adopt_live()).await {
+        warn!("the live sessions could not be adopted: {e}");
+    }
 
     let app = match &config.router_layer {
         Some(layer) => layer.apply(router),

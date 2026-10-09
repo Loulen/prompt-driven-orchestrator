@@ -659,6 +659,12 @@ pub fn world_over(store: Store) -> World {
             live_facts: disk.clone(),
             managers: managers.clone(),
             tmux: tmux.clone(),
+            sessions: Arc::new(
+                pdo_session::application::session_ledger::SessionLedger::new(
+                    tmux.clone(),
+                    host.clone(),
+                ),
+            ),
             waits: waits.clone(),
             projects: projects.clone(),
             skills: skills.clone(),

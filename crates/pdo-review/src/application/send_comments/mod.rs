@@ -70,10 +70,10 @@ impl Review {
         )?;
 
         // 3. Manager on demand — before any event, so a refusal leaves the
-        //    drafts intact.
+        //    drafts intact. Started by the author of the comments (CORE-61).
         let created = self
             .runs
-            .ensure_manager(run_id, &run.state)
+            .ensure_manager(run_id, &run.state, actor)
             .await
             .map_err(|(status, body)| Failure::Json(status, body))?;
 

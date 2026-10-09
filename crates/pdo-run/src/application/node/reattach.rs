@@ -178,5 +178,10 @@ pub async fn reattach_node_session(
             error: e.to_string(),
         };
     }
+    // CORE-61: the resumed session is a session started again, by the Run's
+    // creator.
+    state
+        .sessions()
+        .started_named(session_name, run_state.created_by.clone());
     ReattachOutcome::Resumed
 }

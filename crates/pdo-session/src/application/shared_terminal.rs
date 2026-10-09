@@ -24,6 +24,10 @@ pub struct Membership {
     /// reads it once to attach, then follows its changes (see
     /// [`follow_ignore_size`]).
     pub ignore_size: watch::Receiver<bool>,
+    /// Whether joining put the hand on this connection's poste: the first to
+    /// attach (a solo terminal), never a spectator, nor a second tab of the
+    /// poste that already drove (CORE-61).
+    pub took_the_hand: bool,
 }
 
 struct Connection {
@@ -61,6 +65,18 @@ impl SessionPresence {
         }
         firsts.sort_by_key(|(_, arrived)| *arrived);
         firsts.into_iter().map(|(p, _)| p).collect()
+    }
+
+    /// The poste whose keystrokes reach the pane: the pilot, or the one poste
+    /// of a solo terminal.
+    fn driver(&self) -> Option<String> {
+        if self.pilot.is_some() {
+            return self.pilot.clone();
+        }
+        match self.postes().as_slice() {
+            [only] => Some(only.to_string()),
+            _ => None,
+        }
     }
 
     /// Re-derive the pilot and push to every connection what changed for it.
@@ -145,9 +161,10 @@ impl SharedTerminalRegistry {
         let spectator = Arc::new(AtomicBool::new(false));
         let (ignore_tx, ignore_rx) = watch::channel(false);
         let presence = inner.sessions.entry(session.to_string()).or_default();
+        let driver_before = presence.driver();
         presence.connections.push(Connection {
             id,
-            poste,
+            poste: poste.clone(),
             arrived: id,
             size: INITIAL_SIZE,
             resized: 0,
@@ -157,10 +174,12 @@ impl SharedTerminalRegistry {
             ignore_size: ignore_tx,
         });
         presence.settle();
+        let driver_after = presence.driver();
         Membership {
             id,
             spectator,
             ignore_size: ignore_rx,
+            took_the_hand: driver_after.as_ref() == Some(&poste) && driver_before != driver_after,
         }
     }
 
@@ -512,5 +531,18 @@ mod tests {
         assert_eq!(a.last().unwrap()["role"], "solo");
         let f: serde_json::Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
         assert_eq!(f["role"], "solo");
+    }
+
+    #[test]
+    fn only_the_first_to_attach_takes_the_hand_on_joining() {
+        let reg = SharedTerminalRegistry::default();
+        let a = join(&reg, Some("A"));
+        assert!(a.m.took_the_hand, "a solo terminal is driven by its poste");
+        let second_tab = join(&reg, Some("A"));
+        assert!(!second_tab.m.took_the_hand, "the poste already drove");
+        let b = join(&reg, Some("B"));
+        assert!(!b.m.took_the_hand, "a spectator takes nothing");
+        let c = join(&reg, None);
+        assert!(!c.m.took_the_hand, "a third poste is a spectator too");
     }
 }

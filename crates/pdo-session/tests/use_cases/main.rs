@@ -4,6 +4,7 @@ mod assistant;
 mod attach;
 mod declared_wait;
 mod fakes;
+mod ledger;
 mod pane;
 mod projects;
 mod reap;

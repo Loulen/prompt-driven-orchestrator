@@ -57,6 +57,54 @@ async fn a_spectator_takes_control_unless_it_is_refused() {
     }
 }
 
+/// CORE-61: a take-over that changed the pilot is announced with who took
+/// it; a refused one, or one without effect (the pilot's own), is not.
+#[tokio::test]
+async fn a_take_over_is_announced_only_when_it_changes_the_pilot() {
+    const SESSION: &str = "pdo-20260506-143000-a3f1b2c-worker-iter-1";
+    let bob = Actor::Identified {
+        namespace: "test".into(),
+        id: "bob".into(),
+    };
+    for (host, announced) in [(Host::allowing(), 1), (Host::refusing(), 0)] {
+        let t = terminals(host.clone());
+        let (pilot_tx, _pilot_rx) = mpsc::unbounded_channel();
+        let (spectator_tx, _spectator_rx) = mpsc::unbounded_channel();
+        let pilot = t.registry().join(SESSION, Some("A".into()), pilot_tx);
+        let spectator = t.registry().join(SESSION, Some("B".into()), spectator_tx);
+        t.take_control(&Actor::LocalOperator, SESSION, pilot.id)
+            .await;
+        t.take_control(&bob, SESSION, spectator.id).await;
+        let events = host.events();
+        assert_eq!(events.len(), announced);
+        if announced == 1 {
+            assert!(events[0].0, "a session of a Run goes on the bus");
+            assert_eq!(events[0].1["type"], "session_taken_over");
+            assert_eq!(events[0].1["actor"]["id"], "bob");
+            assert_eq!(events[0].1["session"]["id"], SESSION);
+            assert_eq!(events[0].1["session"]["node_id"], "worker");
+            assert_eq!(events[0].1["session"]["run_id"], "20260506-143000-a3f1b2c");
+        }
+    }
+}
+
+#[test]
+fn the_first_to_drive_a_terminal_is_announced() {
+    let host = Host::allowing();
+    let t = terminals(host.clone());
+    t.joined_as_driver(&Actor::LocalOperator, "pdo-mgr-20260506-143000-a3f1b2c");
+    let events = host.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1["type"], "session_taken_over");
+    assert_eq!(events[0].1["session"]["kind"], "manager");
+    t.joined_as_driver(&Actor::LocalOperator, "not-a-pdo-session");
+    assert_eq!(
+        host.events().len(),
+        1,
+        "a name PDO does not give is ignored"
+    );
+}
+
 #[test]
 fn the_bridge_attaches_through_the_tmux_port() {
     let t = terminals(Host::allowing());

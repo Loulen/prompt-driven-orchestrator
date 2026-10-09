@@ -3,6 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
+use pdo_extension_api::{SessionKind, SessionRef};
+use pdo_kernel::Actor;
+
 /// Compute the per-daemon tmux socket name (`tmux -L <name>`) for a daemon
 /// listening on `daemon_port`.
 ///
@@ -40,8 +43,10 @@ pub fn shell_session_name(run_id: &str) -> String {
     format!("pdo-shell-{run_id}")
 }
 
-/// The one library authoring assistant session, for the whole daemon (#594,
-/// ADR-0051 — it replaces the per-pipeline name of #302 / ADR-0048).
+/// The library authoring assistant session of the local operator (#594,
+/// ADR-0051 — it replaced the per-pipeline name of #302 / ADR-0048): the one
+/// session of a daemon whose callers are all the local operator. Since CORE-61
+/// every other Actor has its own ([`libassist_session_name_of`]).
 ///
 /// **The `-shared` suffix is load-bearing, not decoration.** [`parse_session_name`]
 /// strips the `libassist-` prefix and rejects an *empty* remainder, so a bare
@@ -51,13 +56,57 @@ pub fn shell_session_name(run_id: &str) -> String {
 /// in the session name.
 pub const LIBASSIST_SESSION_NAME: &str = "pdo-libassist-shared";
 
-/// Session naming convention for the library pipeline authoring assistant.
-///
-/// One name for the whole daemon, so `POST /sessions/libassist` is
-/// create-if-absent (a second open re-attaches the same session, with its whole
-/// conversation). See [`LIBASSIST_SESSION_NAME`] for why the name is not bare.
+/// Session naming convention for the library pipeline authoring assistant of
+/// the local operator. See [`LIBASSIST_SESSION_NAME`] for why the name is not
+/// bare.
 pub fn libassist_session_name() -> &'static str {
     LIBASSIST_SESSION_NAME
+}
+
+/// The library assistant session of `actor` (CORE-61): one per Actor, so
+/// `POST /sessions/libassist` is create-if-absent **per Actor** (a second open
+/// re-attaches the same session, with its whole conversation) and two Actors
+/// never share a conversation.
+///
+/// The local operator keeps [`LIBASSIST_SESSION_NAME`]: a daemon without an
+/// extension that identifies its callers behaves as before. Any other Actor's
+/// name ends with a stable digest of the Actor, which tmux accepts whatever the
+/// extension's ids hold (`.` and `:` are not allowed in a tmux session name).
+pub fn libassist_session_name_of(actor: &Actor) -> String {
+    match actor {
+        Actor::LocalOperator => LIBASSIST_SESSION_NAME.to_string(),
+        other => {
+            let key = serde_json::to_string(other).unwrap_or_default();
+            format!("pdo-libassist-a{:016x}", fnv1a(key.as_bytes()))
+        }
+    }
+}
+
+/// FNV-1a, 64 bits: a digest that stays the same from one build to the next,
+/// unlike the standard library's hasher.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// The session `name`, as the extensions see it ([`SessionRef`]); `None` for a
+/// name PDO does not give.
+pub fn session_ref(name: &str) -> Option<SessionRef> {
+    Some(match parse_session_name(name)? {
+        ParsedSession::NodeRun {
+            run_id,
+            node_id,
+            iter,
+        } => SessionRef::new(name, SessionKind::Node)
+            .in_run(run_id)
+            .of_node(node_id, iter),
+        ParsedSession::Manager { run_id } => {
+            SessionRef::new(name, SessionKind::Manager).in_run(run_id)
+        }
+        ParsedSession::Shell { run_id } => SessionRef::new(name, SessionKind::Shell).in_run(run_id),
+        ParsedSession::LibAssist => SessionRef::new(name, SessionKind::LibraryAssistant),
+    })
 }
 
 /// Parsed components of a `pdo-*` session name.
@@ -75,12 +124,13 @@ pub enum ParsedSession {
     Shell {
         run_id: String,
     },
-    /// The library pipeline authoring assistant [`LIBASSIST_SESSION_NAME`]
-    /// (#302 / ADR-0048, made a singleton by #594 / ADR-0051).
+    /// A library pipeline authoring assistant (#302 / ADR-0048, one per Actor
+    /// since CORE-61, [`libassist_session_name_of`]).
     ///
-    /// A **unit** variant: one assistant per daemon. Which template is being
-    /// edited is the daemon's *focus*, not the session's identity — putting it
-    /// back in the name would re-create the per-pipeline session it replaced.
+    /// A **unit** variant: the name says whose assistant it is, never which
+    /// template is being edited — that is the *focus* of its Actor; putting
+    /// the template back in the name would re-create the per-pipeline session
+    /// it replaced.
     /// Owns no Run; reaped by the explicit `DELETE` on leaving every edit view,
     /// with the sweep's idle arm as the backstop.
     LibAssist,
@@ -127,8 +177,8 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
     // #302: the library assistant — parsed BEFORE the `-iter-` split, like
     // `shell-` / `mgr-`, for the same reason.
     //
-    // The suffix is no longer read (#594: one shared session), but it must still be
-    // **non-empty** — that rejection is why the singleton is named
+    // The suffix names whose assistant it is (CORE-61), never a template, and it
+    // must be **non-empty** — that rejection is why the local operator's is named
     // `pdo-libassist-shared` and not `pdo-libassist`.
     if let Some(suffix) = rest.strip_prefix("libassist-") {
         if !suffix.is_empty() {
@@ -329,6 +379,55 @@ mod tests {
             parse_session_name(libassist_session_name()),
             Some(ParsedSession::LibAssist)
         );
+    }
+
+    #[test]
+    fn each_actor_has_its_own_assistant_and_the_local_operator_keeps_the_shared_one() {
+        let alice = Actor::Identified {
+            namespace: "test".into(),
+            id: "alice@example.org".into(),
+        };
+        let bob = Actor::Identified {
+            namespace: "test".into(),
+            id: "bob".into(),
+        };
+        assert_eq!(
+            libassist_session_name_of(&Actor::LocalOperator),
+            LIBASSIST_SESSION_NAME
+        );
+        let of_alice = libassist_session_name_of(&alice);
+        assert_eq!(of_alice, libassist_session_name_of(&alice.clone()));
+        assert_ne!(of_alice, libassist_session_name_of(&bob));
+        assert_ne!(of_alice, LIBASSIST_SESSION_NAME);
+        assert!(
+            !of_alice.contains('.') && !of_alice.contains(':') && !of_alice.contains('@'),
+            "tmux takes it: {of_alice}"
+        );
+        assert_eq!(
+            parse_session_name(&of_alice),
+            Some(ParsedSession::LibAssist)
+        );
+    }
+
+    #[test]
+    fn a_session_name_reads_as_the_session_the_extensions_see() {
+        let run_id = "20260731-153057-553fcb3";
+        let node = session_ref(&node_session_name(run_id, "worker", 2)).unwrap();
+        assert_eq!(node.kind, SessionKind::Node);
+        assert_eq!(node.run_id.as_deref(), Some(run_id));
+        assert_eq!(node.node_id.as_deref(), Some("worker"));
+        assert_eq!(node.iter, Some(2));
+        assert_eq!(node.id, node_session_name(run_id, "worker", 2));
+        let manager = session_ref(&manager_session_name(run_id)).unwrap();
+        assert_eq!(manager.kind, SessionKind::Manager);
+        assert_eq!(manager.run_id.as_deref(), Some(run_id));
+        assert_eq!(manager.node_id, None);
+        let shell = session_ref(&shell_session_name(run_id)).unwrap();
+        assert_eq!(shell.kind, SessionKind::Shell);
+        let assistant = session_ref(LIBASSIST_SESSION_NAME).unwrap();
+        assert_eq!(assistant.kind, SessionKind::LibraryAssistant);
+        assert_eq!(assistant.run_id, None);
+        assert_eq!(session_ref("pdo-"), None);
     }
 
     #[test]

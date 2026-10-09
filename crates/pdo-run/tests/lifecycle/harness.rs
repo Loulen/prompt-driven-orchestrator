@@ -314,6 +314,12 @@ pub async fn build_with(
             bus: Arc::new(BroadcastEventBus::from_sender(bus_tx.clone())),
             live_facts,
             managers: Arc::new(TmuxManagerSessions(tmux.clone())),
+            sessions: Arc::new(
+                pdo_session::application::session_ledger::SessionLedger::new(
+                    tmux.clone(),
+                    Arc::new(NoExtensions),
+                ),
+            ),
             tmux,
             waits: Arc::new(NoWaits),
             projects: Arc::new(NoProjects),

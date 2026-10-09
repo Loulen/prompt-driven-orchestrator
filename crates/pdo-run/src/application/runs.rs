@@ -12,6 +12,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_sandbox::application::ports::SandboxProfileRepository;
 use pdo_session::application::ports::Tmux;
+use pdo_session::application::session_ledger::SessionLedger;
 
 use super::append_event::AppendEvent;
 use pdo_pipeline::adapters::self_writes::SelfWrites;
@@ -34,6 +35,9 @@ pub struct RunsPorts {
     pub managers: Arc<dyn ManagerSessions>,
     /// tmux on this daemon's private socket (the session context's port).
     pub tmux: Arc<dyn Tmux>,
+    /// The live sessions as the extensions are told about them (the session
+    /// context's ledger, CORE-61): a Run announces each session it starts.
+    pub sessions: Arc<SessionLedger>,
     /// The declared wait (the session context).
     pub waits: Arc<dyn DeclaredWaits>,
     /// The Projets a Run's repositories belong to (the workspace context).
@@ -93,6 +97,7 @@ pub struct Runs {
     append_event: AppendEvent,
     read_run: ReadRun,
     pub(crate) tmux: Arc<dyn Tmux>,
+    sessions: Arc<SessionLedger>,
     pub(crate) waits: Arc<dyn DeclaredWaits>,
     pub(crate) projects: Arc<dyn Projects>,
     pub(crate) skills: Arc<dyn NodeSkills>,
@@ -155,6 +160,7 @@ impl Runs {
             live_facts,
             managers,
             tmux,
+            sessions,
             waits,
             projects,
             skills,
@@ -175,6 +181,7 @@ impl Runs {
             store,
             bus,
             tmux,
+            sessions,
             waits,
             projects,
             skills,
@@ -232,6 +239,12 @@ impl Runs {
     /// daemons collide.
     pub fn tmux(&self) -> &dyn Tmux {
         self.tmux.as_ref()
+    }
+
+    /// The live sessions, as the extensions are told about them: every session
+    /// a Run starts is announced there (CORE-61).
+    pub fn sessions(&self) -> &SessionLedger {
+        &self.sessions
     }
 
     /// Serializes admission (see the field): the create path holds it too.

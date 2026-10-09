@@ -4,7 +4,7 @@ What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 
 amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
 source of truth for signatures; this page says what each part is for and what goes on the wire.
 
-Version: **0.11.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+Version: **0.12.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -30,6 +30,8 @@ default, and with no extension the daemon behaves as if none existed.
 | `skills()` | once, before `start` | none |
 | `node_env(launch)` (0.8) | at every launch of a Node, agent or script, and at an agent's resume; the first registered wins a name | none |
 | `node_preamble(launch)` (0.8) | at every launch of an agent; texts follow in registration order | none |
+| `session_env(launch)` (0.12) | at every launch of a session that makes an agent act or runs a script Node: a Node (the core asks this hook, never `node_env` directly), the Pipeline Manager, the library assistant; the first registered wins a name | `node_env` for a Node, none otherwise |
+| `session_preamble(launch)` (0.12) | at every launch of an agent session; texts follow in registration order | `node_preamble` for a Node, none otherwise |
 | `trigger_suspension(trigger)` (0.8) | at every read of a Trigger and every due tick; the first `Some` wins, a panic suspends nothing | not suspended |
 
 ## The Manifest
@@ -259,6 +261,9 @@ rights can be set on, without knowing the other extensions.
 in no Projet: a Pipeline belongs to the instance. An extension of rights that maps the Pipeline
 verbs maps this one too, or the Validate button is refused.
 
+`pipeline` × `open_assistant` (0.12) opens the caller's library assistant (`POST
+/sessions/libassist`), untargeted, in no Projet; see *The launch of every session*.
+
 ## The launch of a Node (0.8)
 
 `node_env` and `node_preamble` receive a `NodeLaunch`: `run_id`, `node_id`, `iter`, `kind`
@@ -290,6 +295,77 @@ the Run and its last editor then), `repository` (the Run's primary repository) a
 The Run carries who created it on the API: `created_by` on `GET /runs/<id>` and `GET /runs`,
 `trigger_editor` on a fired Run (`GET /runs/<id>`); a Trigger carries `last_editor`, set at its
 creation and at each `PATCH`. All three are the Actor's JSON, absent when unknown.
+
+## The launch of every session (0.12)
+
+A Node is not the only session that makes an agent act: the Pipeline Manager of a Run and the
+library assistant do too. `session_env` and `session_preamble` receive a `SessionLaunch` for each:
+
+```json
+{ "session": { "id": "pdo-mgr-<run>", "kind": "manager", "run_id": "<run>",
+               "node_id": null, "iter": null },
+  "started_by": { "kind": "identified", "namespace": "acme", "id": "bob" },
+  "projects": ["p1"],
+  "node": null }
+```
+
+- `session.kind`: `node`, `manager`, `library_assistant` (or `shell`, in the events only: a run
+  shell runs no agent and asks no hook). `session.id` is the tmux session's name, the one the
+  terminals use (`/sessions/<id>/pty`).
+- `started_by`: who starts the session. A Node: the creator of its Run. The Pipeline Manager:
+  the creator of the Run when it starts with the Run (`manager_enabled`), otherwise the Actor
+  whose gesture starts it (its Start, `POST /runs/<id>/manager/start`; the sending of review
+  comments, `POST /runs/<id>/review/comments/send`, which starts it on demand). The library
+  assistant: the Actor who opens it. `null` for a Run created before the core recorded its
+  creator.
+- `projects`: the Projet owning the Run's primary repository; none for the library assistant.
+- `node`: for a Node, its `NodeLaunch` (above); `null` otherwise.
+
+By default `session_env` answers `node_env(launch.node)` for a Node and nothing for any other
+session, and `session_preamble` the same with `node_preamble`: an extension that only knows the
+0.8 hooks behaves as before. The rules of `node_env` hold for every session (a core variable is
+never overwritten, the first registered extension wins a name, a panic adds nothing). The
+manager's preamble goes before its runtime preamble, the assistant's before
+`# Pipeline Assistant Runtime Preamble`.
+
+**One library assistant per Actor.** `POST /sessions/libassist` opens the caller's own
+assistant, create-if-absent (`pdo-libassist-shared` for the local operator, so a daemon without
+an extension that identifies its callers has the one it always had). Opening it is the Operation
+`pipeline` × `open_assistant`, untargeted, in no Projet: an extension of rights maps it to the
+right to write the Pipelines. Its focus (`PUT`/`GET /sessions/libassist/focus`), its save
+(`POST /sessions/libassist/save`) and its close (`DELETE /sessions/libassist`) are the caller's
+own: the assistant calls back with the identity of its Actor. Its runtime preamble has it send
+`PDO_TOKEN` on every call, as the hook that injects the focus does: an extension that identifies
+callers by a token hands one to the assistant through `session_env`, or the assistant's calls
+read as the local operator's.
+
+## Session events (0.12)
+
+The core publishes three events about its sessions, `SessionEvent` in the crate:
+
+```json
+{ "type": "session_started" | "session_taken_over" | "session_ended",
+  "actor": { "kind": "identified", "namespace": "acme", "id": "bob" } | null,
+  "session": { "id": "pdo-<run>-worker-iter-1", "kind": "node", "run_id": "<run>",
+               "node_id": "worker", "iter": 1 } }
+```
+
+- `session_started`: a session came up (a Node, a resumed Node, the Pipeline Manager, the
+  library assistant, a run shell). `actor` is who started it, as in `SessionLaunch`.
+- `session_taken_over`: an Actor took control of the session's terminal. Either it attached
+  and drives the terminal (the first poste on it), or, a spectator, it took the hand from the
+  pilot (ADR-0075). A spectator who only watches publishes nothing, nor does a take-over that is
+  refused or changes nothing (the pilot's own). `actor` is who took control.
+- `session_ended`: the session is gone, however it ended (its work is done, it was stopped,
+  reaped, its harness exited). Observed within a few seconds of the end. `actor` is who started
+  it; `null` for a session a previous daemon started. Revoke there what `session_env` handed
+  over.
+
+A session of a Run goes to every extension's `on_event` and on `/ws`, to the connections whose
+Actor may read the Run; the library assistant's, which belongs to no Run, only to the extensions.
+Without an extension, nothing is published. `SessionEvent::from_event` reads one back in
+`on_event`; it answers `None` for a `kind` of session added by a later version of the API, so
+read the JSON yourself if you must see every session.
 
 ## The creation of a Run (0.9)
 

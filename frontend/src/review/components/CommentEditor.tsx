@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
-import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../../shared/markdown/plugins";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocationContext } from "../../shared/extensions/catalogue";
+import type { ReviewComposerContext } from "../../shared/extensions/contract";
+import { useCompletion, type CompletionItem } from "../../shared/extensions/useCompletion";
+import type { RefPair } from "../../run/model/runRefs";
 import type { Anchor } from "../model/drafts";
 import { anchorLabel, sideLabel } from "../model/drafts";
+import CompletionList from "./CompletionList";
+import ReviewMarkdown from "./ReviewMarkdown";
 
 /**
  * The inline comment editor of the Review page (#750), opened under a diff line
@@ -13,10 +17,16 @@ import { anchorLabel, sideLabel } from "../model/drafts";
  *
  * The half-typed text is mirrored to `sessionStorage` under `wipKey` on every
  * keystroke and cleared on save/cancel, so a stray reload never loses a remark.
+ *
+ * CORE-63: the extensions' sources of completion (`review/composer`) open their
+ * list on their trigger; the list takes the arrows, Enter, Tab and Escape while
+ * it is open. Without a source, the editor is unchanged.
  */
 
 interface Props {
   anchor: Anchor;
+  /** The pair the comment is written against: the sources of completion receive it. */
+  pair: RefPair;
   /** Editing an existing draft: its current text. */
   initial?: string;
   /** The sessionStorage key of the work-in-progress text. */
@@ -45,11 +55,17 @@ function writeWip(key: string, text: string): void {
   }
 }
 
-export default function CommentEditor({ anchor, initial, wipKey, sendDisabledReason, onSave, onSend, onCancel }: Props) {
+export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisabledReason, onSave, onSend, onCancel }: Props) {
   const [text, setText] = useState<string>(() => initial ?? readWip(wipKey));
   const [tab, setTab] = useState<"write" | "preview">("write");
   const ref = useRef<HTMLTextAreaElement | null>(null);
   const editing = initial !== undefined;
+  const composerExtra = useMemo(
+    () => ({ review: { from: pair.from, to: pair.to }, anchor: { path: anchor.path, side: anchor.side, line: anchor.line } }),
+    [pair.from, pair.to, anchor.path, anchor.side, anchor.line],
+  );
+  const composerContext = useLocationContext<ReviewComposerContext>("review/composer", composerExtra);
+  const completion = useCompletion("review/composer", composerContext);
 
   useEffect(() => {
     const t = window.setTimeout(() => ref.current?.focus(), 0);
@@ -61,6 +77,15 @@ export default function CommentEditor({ anchor, initial, wipKey, sendDisabledRea
     writeWip(wipKey, v);
   };
   const clearWip = () => writeWip(wipKey, "");
+  const pickSuggestion = (item: CompletionItem) => {
+    const done = completion.pick(text, item);
+    if (!done) return;
+    change(done.text);
+    window.setTimeout(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(done.caret, done.caret);
+    }, 0);
+  };
   const canSubmit = text.trim().length > 0;
 
   const save = () => {
@@ -120,8 +145,20 @@ export default function CommentEditor({ anchor, initial, wipKey, sendDisabledRea
         <textarea
           ref={ref}
           value={text}
-          onChange={(e) => change(e.target.value)}
+          onChange={(e) => {
+            change(e.target.value);
+            completion.update(e.target.value, e.target.selectionStart ?? e.target.value.length);
+          }}
+          onClick={(e) => completion.update(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
+          onBlur={completion.close}
+          onKeyUp={(e) => {
+            // The caret moved without a change: the list follows it.
+            if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+              completion.update(e.currentTarget.value, e.currentTarget.selectionStart ?? 0);
+            }
+          }}
           onKeyDown={(e) => {
+            if (completion.onKeyDown(e, pickSuggestion)) return;
             if (e.key === "Escape") {
               e.preventDefault();
               e.stopPropagation();
@@ -143,12 +180,14 @@ export default function CommentEditor({ anchor, initial, wipKey, sendDisabledRea
           data-testid="review-editor-preview-body"
         >
           {text.trim() ? (
-            <Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{text}</Markdown>
+            <ReviewMarkdown text={text} />
           ) : (
             <span className="italic text-fg-4">Nothing to preview</span>
           )}
         </div>
       )}
+
+      {tab === "write" && <CompletionList completion={completion} textarea={ref} onPick={pickSuggestion} />}
 
       <div className="flex items-center gap-2 px-2.5 py-[5px] text-fg-4" style={{ fontSize: "10px" }}>
         <span>

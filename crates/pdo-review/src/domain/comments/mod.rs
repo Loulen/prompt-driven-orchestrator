@@ -116,6 +116,7 @@ pub(crate) mod fixtures {
             text: "`canSend` should be false\nwhile sending.".into(),
             excerpt: excerpt("l1\nl2\nl3\nl4\nl5\nl6", line, 2),
             author: "user".into(),
+            actor: None,
             sent_at: "2026-09-09T10:00:00.000Z".into(),
             batch_id: Some("b1".into()),
             status: ReviewCommentStatus::Sent,
@@ -123,8 +124,10 @@ pub(crate) mod fixtures {
             proposal_pending: false,
             resolved_by: None,
             resolved_at: None,
+            resolved_by_actor: None,
             reopened_by: None,
             reopened_at: None,
+            reopened_by_actor: None,
             proposal_declined: false,
         }
     }

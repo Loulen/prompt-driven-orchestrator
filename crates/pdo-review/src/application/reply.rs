@@ -22,19 +22,26 @@ pub struct ReplyCommand {
     pub resolved: bool,
     /// Fallback author when the call comes from no session.
     pub author: Option<String>,
+    /// The node of the session the call was made from, read from its session
+    /// headers, when an extension identified the caller as someone else than
+    /// that session's Agent (the person the session acts for).
+    pub session_node: Option<String>,
 }
 
-/// The node of the session the actor speaks from: the agent CLI's.
-pub(crate) fn session_node(actor: &Actor) -> Option<&str> {
+/// The node of the session the actor speaks from: the agent CLI's, or the
+/// one its session headers name (`declared`) when an extension identified the
+/// caller as a person.
+pub(crate) fn session_node<'a>(actor: &'a Actor, declared: Option<&'a str>) -> Option<&'a str> {
     match actor {
         Actor::Agent { node_id, .. } => Some(node_id.as_str()),
-        _ => None,
+        _ => declared,
     }
 }
 
 impl Review {
     /// The author is **deduced from the session** that calls (the manager
-    /// session reads `manager`, a node session its node id). `resolved: true`
+    /// session reads `manager`, a node session its node id); the event also
+    /// carries the caller's `actor` (CORE-63). `resolved: true`
     /// is a **proposal** by default (`review_comment_replied` with
     /// `proposes_resolution`); under `review_agent_can_resolve` it also
     /// appends `review_comment_resolved` by the same author — the human keeps
@@ -55,7 +62,10 @@ impl Review {
             return Err(Failure::error(400, "empty reply text"));
         }
         let status = find_comment(&run, comment_id)?.status;
-        let author = reply_author(session_node(actor), command.author.as_deref());
+        let author = reply_author(
+            session_node(actor, command.session_node.as_deref()),
+            command.author.as_deref(),
+        );
         let can_resolve = command.resolved && self.agent_can_resolve().await;
         let outcome = ReplyOutcome::of(command.resolved, status, can_resolve);
 
@@ -65,6 +75,7 @@ impl Review {
             json!({
                 "id": comment_id,
                 "author": author,
+                "actor": actor,
                 "text": text,
                 "proposes_resolution": proposes_resolution(command.resolved, status),
             }),
@@ -74,7 +85,7 @@ impl Review {
             self.append_review_event(
                 run_id,
                 EventKind::ReviewCommentResolved,
-                json!({ "id": comment_id, "by": author }),
+                json!({ "id": comment_id, "by": author, "actor": actor }),
             )
             .await?;
         }

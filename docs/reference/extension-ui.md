@@ -73,6 +73,7 @@ exclusive.
 | Section (`section`) | `UiContribution::section(…)` | the exported component, under a heading |
 | Decoration (`decoration`) | `UiContribution::decoration(…)` | the exported component, a small mark on an item (a row, a card, the status bar) |
 | List filter (`list_filter`) | `UiContribution::list_filter(…)` | the exported component, above a list |
+| Source of completion (`completion`, 0.12) | `UiContribution::completion(location, id, label, trigger, suggest)`, `.rendering(pattern, component)` | the core: a list of the exported function's suggestions, opened by `trigger` in a text field; the exported component draws each match of `pattern` in the rendered text |
 
 Every contribution may carry a `when` clause (`.when(When::…)`): the core renders it only while
 the clause holds.
@@ -367,6 +368,20 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 Accepts decorations as well as actions: see [`review/file`](#reviewfile) among the Action
 locations.
 
+### `review/composer`
+
+- **Accepts**: source of completion (0.12), the one location that takes it
+  ([Sources of completion](#sources-of-completion)).
+- **Renders**: the comment editor of the Review page. Typing a source's trigger opens a list
+  under it, in the style of the ref picker, without header nor keyboard hint; the render draws
+  what was inserted in the editor's Preview, the comment cards (draft and sent) and the replies.
+  Without a contribution, the editor and the comments are unchanged.
+- **Context**: `ReviewComposerContext` = `ReviewContext` + `anchor` (`{ path, side, line }`, the
+  line the comment is written on); `run` is the Run under review (and `project` its Projet). A
+  render receives the location's context without `review` nor `anchor` (a comment card does not
+  know which pair the editor had).
+- **Since**: 0.12.
+
 ### `statusbar`
 
 - **Accepts**: decoration.
@@ -565,6 +580,53 @@ interface ReviewFileContext extends ReviewContext { entity: FileEntity; file: { 
 - **Renders**: the « ⋮ » menu of a skill or a folder of the skill bank: its verbs, the
   extensions' groups, then its delete (or « Managed by PDO » on a locked skill).
 - **Context**: `ItemContext<SkillEntity>`.
+
+## Sources of completion
+
+A source of completion (0.12) lets an extension complete what a person types in a text field
+of the core, today the Review comment editor (`review/composer`). The core never interprets
+what is inserted: it is text of the comment, sent and stored as typed.
+
+```rust
+use pdo_extension_api::{UiContribution, UiContributions, UiLocation};
+
+UiContributions::bundle("/ext/test/ui.js", 19).contribute(
+    UiContribution::completion(UiLocation::ReviewComposer, "tags", "Tags", '#', "suggestTags")
+        .rendering("#[a-z][a-z0-9-]*", "TagChip"),
+)
+```
+
+```ts
+interface CompletionSuggestion {
+  id: string;            // unique within the answer
+  label: string;         // the row's main text
+  insert: string;        // what replaces the trigger and the query
+  hint?: string | null;  // after the label, monospace (an id)
+  detail?: string | null; // at the right of the row (a role)
+  avatar?: { name: string; avatar_url?: string | null } | null; // an image, or the initials of name
+}
+type CompletionFunction = (query: string, context: ReviewComposerContext)
+  => CompletionSuggestion[] | Promise<CompletionSuggestion[]>;
+interface CompletionRenderProps { extension: ExtensionRef; context: LocationContext; text: string }
+```
+
+- **Trigger**: one character. The list opens when the word under the caret starts with it, at the
+  start of the text or after a whitespace (`a#b` opens nothing), and closes at the first
+  whitespace.
+- **`suggest`**: the function the bundle exports under that name, called at each keystroke with
+  the text typed after the trigger (`""` right after it) and the location's context. An answer
+  that arrives after a newer one is dropped; a throw or a rejection shows no suggestion. The
+  sources of the same trigger add up in the list, in contribution order. An empty answer closes
+  the list.
+- **Pick**: ↑ and ↓ move, Enter or Tab picks, Escape closes the list (a second Escape cancels the
+  editor as before), a click picks. The trigger and the query are replaced by `insert`, followed
+  by a space.
+- **Render** (optional): each match of `pattern`, a JavaScript regular expression, in the plain
+  text of a rendered comment (not in code nor in a link) is drawn by the exported `component`,
+  which receives the match as `text`. A component that throws shows the plain text. Without a
+  render, the inserted text shows as markdown.
+- A source whose bundle does not export `suggest` is left out; a render whose component is not
+  exported, or whose pattern is not a valid regular expression, draws nothing.
 
 ## Pages
 

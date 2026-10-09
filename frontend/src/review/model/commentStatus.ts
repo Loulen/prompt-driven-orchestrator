@@ -1,3 +1,4 @@
+import type { Actor } from "../../shared/generated/Actor";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
 import type { RunRefs } from "../../shared/generated/RunRefs";
 import type { RunState } from "../../shared/generated/RunState";
@@ -132,10 +133,16 @@ export function authorKind(author: string): AuthorKind {
   return "node";
 }
 
-/** `you` / `manager` / the node id — the tooltip text next to an author icon. */
-export function authorLabel(author: string): string {
+/**
+ * `you` / `manager` / the node id — the tooltip text next to an author icon.
+ * CORE-63: with the `name` an extension gives the author's Actor, a person
+ * reads as that name, an agent as `Alice (agent) · manager`.
+ */
+export function authorLabel(author: string, name?: string | null): string {
   const k = authorKind(author);
-  return k === "user" ? "you" : k === "manager" ? "manager" : author;
+  const role = k === "user" ? "you" : k === "manager" ? "manager" : author;
+  if (!name) return role;
+  return k === "user" ? name : `${name} (agent) · ${role}`;
 }
 
 /** First line, truncated with an ellipsis — the collapsed resolved card's summary. */
@@ -147,24 +154,26 @@ export function firstWords(text: string, max = 44): string {
 /** What the sent card's footer says, right of the id and the pair. */
 export type FooterStatus =
   | { kind: "awaiting" }
-  | { kind: "replied"; author: string; at: string }
-  | { kind: "proposed"; author: string; at: string }
-  | { kind: "resolved"; by: string; at: string }
-  | { kind: "reopened"; by: string; at: string }
-  | { kind: "declined"; by: string; at: string };
+  | { kind: "replied"; author: string; at: string; actor?: Actor }
+  | { kind: "proposed"; author: string; at: string; actor?: Actor }
+  | { kind: "resolved"; by: string; at: string; actor?: Actor }
+  | { kind: "reopened"; by: string; at: string; actor?: Actor }
+  | { kind: "declined"; by: string; at: string; actor?: Actor };
 
 export function footerStatus(c: ReviewComment): FooterStatus {
   const replies = c.replies ?? [];
   const last = replies[replies.length - 1];
-  if (c.status === "resolved") return { kind: "resolved", by: c.resolved_by ?? "user", at: c.resolved_at ?? last?.at ?? c.sent_at };
+  if (c.status === "resolved") {
+    return { kind: "resolved", by: c.resolved_by ?? "user", at: c.resolved_at ?? last?.at ?? c.sent_at, actor: c.resolved_by_actor };
+  }
   if (c.proposal_pending) {
     const proposing = [...replies].reverse().find((r) => r.proposes_resolution) ?? last;
-    return { kind: "proposed", author: proposing?.author ?? "agent", at: proposing?.at ?? c.sent_at };
+    return { kind: "proposed", author: proposing?.author ?? "agent", at: proposing?.at ?? c.sent_at, actor: proposing?.actor };
   }
   if (c.reopened_at && (!last || c.reopened_at >= last.at)) {
-    return { kind: c.proposal_declined ? "declined" : "reopened", by: c.reopened_by ?? "user", at: c.reopened_at };
+    return { kind: c.proposal_declined ? "declined" : "reopened", by: c.reopened_by ?? "user", at: c.reopened_at, actor: c.reopened_by_actor };
   }
-  if (last) return { kind: "replied", author: last.author, at: last.at };
+  if (last) return { kind: "replied", author: last.author, at: last.at, actor: last.actor };
   return { kind: "awaiting" };
 }
 

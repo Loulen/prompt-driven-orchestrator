@@ -1,4 +1,7 @@
 import { Bot, CheckCircle2, Cpu, Hourglass, MessageSquare, User } from "lucide-react";
+import { ActorAvatar } from "../../shared/actors/ActorName";
+import { useActorDisplay } from "../../shared/actors/store";
+import type { Actor } from "../../shared/generated/Actor";
 import type { AuthorKind, CommentState } from "../model/commentStatus";
 import { authorKind, authorLabel } from "../model/commentStatus";
 
@@ -15,11 +18,26 @@ export function StateIcon({ state, title, size = 12 }: { state: CommentState; ti
   );
 }
 
-/** The author icon — person you, bot manager, chip node — name in the tooltip. */
-export function AuthorIcon({ author, size = 12 }: { author: string; size?: number }) {
+/**
+ * The author icon — person you, bot manager, chip node — name in the tooltip.
+ * CORE-63: a person an extension names shows as its avatar and name; an agent
+ * keeps its icon, the person it acts for in the tooltip.
+ */
+export function AuthorIcon({ author, actor, size = 12 }: { author: string; actor?: Actor | null; size?: number }) {
   const kind = authorKind(author);
+  const display = useActorDisplay(actor);
+  if (display && kind === "user") {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1 text-fg-2" title={display.name} data-testid="review-author" data-author-kind={kind}>
+        <ActorAvatar display={display} size={size + 2} />
+        <span className="truncate font-medium" data-testid="review-author-name">
+          {display.name}
+        </span>
+      </span>
+    );
+  }
   return (
-    <span className="inline-flex items-center gap-1 text-fg-3" title={authorLabel(author)} data-testid="review-author" data-author-kind={kind}>
+    <span className="inline-flex items-center gap-1 text-fg-3" title={authorLabel(author, display?.name)} data-testid="review-author" data-author-kind={kind}>
       <AuthorGlyph kind={kind} size={size} />
       {kind === "node" && (
         <span className="font-mono text-fg-2" style={{ fontSize: "10px" }}>

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::domain::event::{Event, EventKind};
+use pdo_kernel::Actor;
 
 /// The side of the diff a comment is anchored on. `old` = the source ref's
 /// content (a deleted or context line numbered on the left), `new` = the
@@ -68,6 +69,12 @@ pub enum ReviewCommentStatus {
 #[ts(export)]
 pub struct ReviewReply {
     pub author: String,
+    /// The Actor of the request that replied (CORE-63): with an extension that
+    /// identifies the caller, the person the agent's session acts for. Absent
+    /// on a reply recorded before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub actor: Option<Actor>,
     pub text: String,
     pub at: String,
     /// The agent proposes a resolution with this reply (#751 decides whether it
@@ -103,7 +110,15 @@ pub struct ReviewComment {
     /// Kept so the comment reads post-mortem even when the file is gone.
     #[serde(default)]
     pub excerpt: String,
+    /// The role of the author: `user` for a person, `manager` or a node id for
+    /// an agent.
     pub author: String,
+    /// The Actor of the request that sent the comment (CORE-63): an extension
+    /// that names it shows its name instead of `user`. Absent on a comment sent
+    /// before it was kept: the page shows it as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub actor: Option<Actor>,
     pub sent_at: String,
     /// The send batch this comment travelled in — one message to the manager
     /// per batch.
@@ -127,6 +142,11 @@ pub struct ReviewComment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub resolved_at: Option<String>,
+    /// The Actor of the request that resolved it (CORE-63); `None` while `sent`
+    /// or on an older resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resolved_by_actor: Option<Actor>,
     /// The last reopen, kept so the footer can read "Reopened by you · time".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -134,6 +154,10 @@ pub struct ReviewComment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reopened_at: Option<String>,
+    /// The Actor of the request that reopened it last (CORE-63).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reopened_by_actor: Option<Actor>,
     /// The last reopen landed on a comment that was still `sent`: it declined a
     /// pending proposal rather than reopening a resolved comment. Cleared by the
     /// next reply.
@@ -143,6 +167,14 @@ pub struct ReviewComment {
 
 fn default_status() -> ReviewCommentStatus {
     ReviewCommentStatus::Sent
+}
+
+/// The `actor` of a reply, resolve or reopen event; `None` on an older event
+/// or an unreadable one.
+fn payload_actor(payload: &serde_json::Value) -> Option<Actor> {
+    payload
+        .get("actor")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
 /// Fold one review event into the projected list. Additive only; unknown ids
@@ -197,6 +229,7 @@ pub fn fold(comments: &mut Vec<ReviewComment>, event: &Event) {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
+                actor: payload_actor(payload),
                 at: event.ts.clone(),
                 proposes_resolution,
             });
@@ -220,9 +253,11 @@ pub fn fold(comments: &mut Vec<ReviewComment>, event: &Event) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("user")
                 .to_string();
+            let actor = payload_actor(payload);
             if event.kind == EventKind::ReviewCommentResolved {
                 c.status = ReviewCommentStatus::Resolved;
                 c.resolved_by = Some(by);
+                c.resolved_by_actor = actor;
                 c.resolved_at = Some(event.ts.clone());
                 c.proposal_pending = false;
                 c.proposal_declined = false;
@@ -232,8 +267,10 @@ pub fn fold(comments: &mut Vec<ReviewComment>, event: &Event) {
                 let declined = c.status == ReviewCommentStatus::Sent && c.proposal_pending;
                 c.status = ReviewCommentStatus::Sent;
                 c.resolved_by = None;
+                c.resolved_by_actor = None;
                 c.resolved_at = None;
                 c.reopened_by = Some(by);
+                c.reopened_by_actor = actor;
                 c.reopened_at = Some(event.ts.clone());
                 c.proposal_pending = false;
                 c.proposal_declined = declined;
@@ -260,6 +297,7 @@ mod tests {
             text: "`canSend` should be false\nwhile sending.".into(),
             excerpt: format!("> {line} | l{line}"),
             author: "user".into(),
+            actor: None,
             sent_at: "2026-09-09T10:00:00.000Z".into(),
             batch_id: Some("b1".into()),
             status: ReviewCommentStatus::Sent,
@@ -267,8 +305,10 @@ mod tests {
             proposal_pending: false,
             resolved_by: None,
             resolved_at: None,
+            resolved_by_actor: None,
             reopened_by: None,
             reopened_at: None,
+            reopened_by_actor: None,
             proposal_declined: false,
         }
     }
@@ -472,6 +512,74 @@ mod tests {
             wire.get("proposal_pending").is_none(),
             "false flags stay off the wire"
         );
+    }
+
+    fn alice() -> Actor {
+        Actor::Identified {
+            namespace: "test".into(),
+            id: "alice".into(),
+        }
+    }
+
+    #[test]
+    fn fold_keeps_the_actor_of_each_gesture() {
+        let mut list = vec![];
+        let mut c = sent("rc-001", 3);
+        c.actor = Some(alice());
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentSent,
+                serde_json::to_value(&c).unwrap(),
+            ),
+        );
+        assert_eq!(list[0].actor, Some(alice()));
+        let bob = serde_json::json!({ "kind": "identified", "namespace": "test", "id": "bob" });
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentReplied,
+                serde_json::json!({ "id": "rc-001", "author": "manager", "actor": bob, "text": "on it" }),
+            ),
+        );
+        let bob: Actor = serde_json::from_value(bob).unwrap();
+        assert_eq!(list[0].replies[0].actor.as_ref(), Some(&bob));
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentResolved,
+                serde_json::json!({ "id": "rc-001", "by": "user", "actor": alice() }),
+            ),
+        );
+        assert_eq!(list[0].resolved_by_actor, Some(alice()));
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentReopened,
+                serde_json::json!({ "id": "rc-001", "by": "user", "actor": bob }),
+            ),
+        );
+        assert_eq!(list[0].resolved_by_actor, None);
+        assert_eq!(list[0].reopened_by_actor, Some(bob));
+    }
+
+    #[test]
+    fn an_older_comment_without_actor_reads_as_before() {
+        let mut list = vec![];
+        let mut v = serde_json::to_value(sent("rc-001", 3)).unwrap();
+        assert!(v.get("actor").is_none(), "no actor, nothing on the wire");
+        v.as_object_mut().unwrap().remove("actor");
+        fold(&mut list, &ev(EventKind::ReviewCommentSent, v));
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentReplied,
+                serde_json::json!({ "id": "rc-001", "author": "manager", "text": "done" }),
+            ),
+        );
+        assert_eq!(list[0].actor, None);
+        assert_eq!(list[0].author, "user");
+        assert_eq!(list[0].replies[0].actor, None);
     }
 
     #[test]

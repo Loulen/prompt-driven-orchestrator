@@ -4,7 +4,7 @@ What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 
 amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
 source of truth for signatures; this page says what each part is for and what goes on the wire.
 
-Version: **0.11.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+Version: **0.12.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -223,7 +223,8 @@ shows:
   in order.
 - `GET /audit`: each row's `actor` (the Actor of the request that made the mutation, absent on
   older rows and outside a request) and `actor_display`.
-- The interface: the creator of a Run on its row; `useCurrentActor()` and `useActorDisplay(actor)`
+- The interface: the creator of a Run on its row; the authors of the Review's comments, their
+  replies, resolutions and reopenings (0.12); `useCurrentActor()` and `useActorDisplay(actor)`
   of `@pdo/extension-ui` for the extensions' bundles.
 
 An `Actor` on the wire: `{"kind": "local_operator"}`, `{"kind": "agent", "run_id", "node_id"}`,
@@ -353,6 +354,22 @@ pill appear or go without reloading.
 ```
 
 An extension's own events arrive as `{"type": "extension_event", "extension", "name", "payload"}`.
+
+**The Run events** arrive as `{"type": "event", "event": {"run_id", "kind", "ts", "node_id",
+"iter", "payload"}}`. Those of a Review comment (0.12) carry the Actor of the gesture:
+
+| `kind` | `payload` |
+| --- | --- |
+| `review_comment_sent` | the comment: `id`, `path`, `side`, `line`, `from_ref`, `to_ref`, `text`, `excerpt`, `author`, `actor`, `sent_at`, `batch_id` |
+| `review_comment_replied` | `id`, `author`, `actor`, `text`, `proposes_resolution` |
+| `review_comment_resolved`, `review_comment_reopened` | `id`, `by`, `actor` |
+
+`author` and `by` name the role: `user` for a person, `manager` or a node id for an agent (read
+from the session the call came from, even when an extension identified its caller). `actor` is
+the Actor of the request: the person an extension identified, or the one an agent's session acts
+for; `{"kind": "local_operator"}` without such an extension. An event recorded before 0.12 has no
+`actor`. `GET /runs/<id>/review/comments` lists the comments with the same `actor`, plus
+`resolved_by_actor`, `reopened_by_actor` and each reply's `actor`.
 
 **Guard what a Reader may not read (0.11).** An event about an entity of a Projet goes, by
 default, to every `/ws` connection. Attach the read that protects it, and the core sends it only to

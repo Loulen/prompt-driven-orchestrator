@@ -6,7 +6,8 @@
  * A location is a list: every extension's contributions add up there, in
  * registration order, then in each extension's declaration order. An element is
  * left out when its bundle is not ready, when the bundle does not export what it
- * names (the component, or its command's function), or when its `when` clause
+ * names (the component, its command's function, or a source of completion's
+ * `suggest`), or when its `when` clause
  * is false on the location's context.
  */
 
@@ -17,6 +18,8 @@ import type { UiContribution } from "../generated/UiContribution";
 import type { UiLocation } from "../generated/UiLocation";
 import { useBaseContext } from "./context";
 import type {
+  CompletionFunction,
+  CompletionRenderProps,
   EntityContext,
   LocationContext,
   PageProps,
@@ -38,6 +41,17 @@ export interface ContributionElement<P = unknown> {
   Component: ComponentType<P> | null;
   /** The command an action calls; `null` for any other element. */
   command: UiCommand | null;
+  /** What a source of completion exports (0.12); absent for any other element. */
+  completion?: CompletionSource;
+}
+
+/** A source of completion (`completion`), as its bundle exports it. */
+export interface CompletionSource {
+  /** The one character that opens its list. */
+  trigger: string;
+  suggest: CompletionFunction;
+  /** What draws an inserted text once rendered; `null` without one. */
+  render: { pattern: string; Component: ComponentType<CompletionRenderProps> } | null;
 }
 
 /** Every element at `location`, `when` clauses not evaluated. */
@@ -55,6 +69,17 @@ export function elementsAt<P>(
         const command = commands.find((c) => c.id === contribution.command);
         if (!command || typeof module[command.export] !== "function") return [];
         return [{ ...base, Component: null, command }];
+      }
+      if (contribution.type === "completion") {
+        const suggest = module[contribution.suggest];
+        if (typeof suggest !== "function") return [];
+        const Render = contribution.render ? module[contribution.render.component] : undefined;
+        const render =
+          contribution.render && typeof Render === "function"
+            ? { pattern: contribution.render.pattern, Component: Render as ComponentType<CompletionRenderProps> }
+            : null;
+        const completion = { trigger: contribution.trigger, suggest: suggest as CompletionFunction, render };
+        return [{ ...base, Component: null, command: null, completion }];
       }
       const Component = module[contribution.component];
       if (typeof Component !== "function") return [];

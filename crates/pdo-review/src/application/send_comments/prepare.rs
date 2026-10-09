@@ -1,6 +1,7 @@
 //! Steps 1–2 of a send: the Run branch must still exist, and every draft is
 //! validated and anchored before anything is touched.
 
+use pdo_kernel::Actor;
 use pdo_run::domain::run_refs::{self, Resolved};
 use pdo_run::domain::state::RunStatus;
 use pdo_workspace::adapters::git::revisions::is_safe_path;
@@ -42,8 +43,10 @@ impl Review {
     ///    text, known ref ids — `400` names the offending index) and resolved:
     ///    its SHAs and its excerpt. An anchor on the working tree freezes its
     ///    `snapshot` tree id (#835). The ids are assigned once the manager is up.
+    ///    Each comment keeps the `actor` that sends it (CORE-63).
     pub(super) fn prepare(
         &self,
+        actor: &Actor,
         run_id: &str,
         run: &ReviewedRun,
         drafts: &[DraftComment],
@@ -111,6 +114,7 @@ impl Review {
                 text: c.text.trim_end().to_string(),
                 excerpt,
                 author: "user".to_string(),
+                actor: Some(actor.clone()),
                 sent_at: sent_at.to_string(),
                 batch_id: Some(batch_id.to_string()),
                 status: ReviewCommentStatus::Sent,
@@ -118,8 +122,10 @@ impl Review {
                 proposal_pending: false,
                 resolved_by: None,
                 resolved_at: None,
+                resolved_by_actor: None,
                 reopened_by: None,
                 reopened_at: None,
+                reopened_by_actor: None,
                 proposal_declined: false,
             });
         }

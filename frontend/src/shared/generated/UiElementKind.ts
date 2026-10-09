@@ -5,4 +5,4 @@
  * [`HostedLocation`](super::HostedLocation) accepts. On the wire, the
  * element's `type`.
  */
-export type UiElementKind = "page" | "action" | "tab" | "section" | "decoration" | "list_filter";
+export type UiElementKind = "page" | "action" | "tab" | "section" | "decoration" | "list_filter" | "completion";

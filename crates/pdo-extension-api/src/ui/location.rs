@@ -196,6 +196,12 @@ pub enum UiLocation {
     /// and #31).
     #[serde(rename = "review/file")]
     ReviewFile,
+    /// The comment editor of the Review page: a [`UiElement::Completion`] per
+    /// contribution, a source of suggestions opened by its trigger character
+    /// as the comment is typed. Hands over the Run under review and the
+    /// compared pair as `review`. Since 0.12.
+    #[serde(rename = "review/composer")]
+    ReviewComposer,
     /// The « ⋮ » menu of a skill or a folder of the skill bank. Hands over the
     /// skill or the folder as `entity`.
     #[serde(rename = "skill/menu")]
@@ -262,6 +268,7 @@ impl UiLocation {
         UiLocation::TabMenu,
         UiLocation::ReviewToolbar,
         UiLocation::ReviewFile,
+        UiLocation::ReviewComposer,
         UiLocation::SkillMenu,
         UiLocation::StatsTab,
         UiLocation::SettingsPage,
@@ -308,6 +315,7 @@ impl UiLocation {
             UiLocation::TabMenu => "tab/menu",
             UiLocation::ReviewToolbar => "review/toolbar",
             UiLocation::ReviewFile => "review/file",
+            UiLocation::ReviewComposer => "review/composer",
             UiLocation::SkillMenu => "skill/menu",
             UiLocation::StatsTab => "stats/tab",
             UiLocation::SettingsPage => "settings/page",
@@ -334,6 +342,7 @@ impl UiLocation {
                     UiElement::Decoration { .. } | UiElement::Action { .. }
                 )
             }
+            UiLocation::ReviewComposer => matches!(element, UiElement::Completion { .. }),
             UiLocation::Settings
             | UiLocation::ProjectEdit
             | UiLocation::RunNew
@@ -469,6 +478,24 @@ mod tests {
     }
 
     #[test]
+    fn the_review_composer_takes_completion_sources_only() {
+        assert_eq!(UiLocation::ReviewComposer.id(), "review/composer");
+        assert!(UiLocation::ALL.contains(&UiLocation::ReviewComposer));
+        let source = UiElement::Completion {
+            trigger: "#".into(),
+            suggest: "s".into(),
+            render: None,
+        };
+        let decoration = UiElement::Decoration {
+            component: "D".into(),
+        };
+        assert!(UiLocation::ReviewComposer.accepts(&source));
+        assert!(!UiLocation::ReviewComposer.accepts(&decoration));
+        assert!(!UiLocation::ReviewFile.accepts(&source));
+        assert!(!UiLocation::ReviewComposer.is_action_location());
+    }
+
+    #[test]
     fn stats_and_settings_take_a_tab_and_a_page() {
         assert_eq!(UiLocation::StatsTab.id(), "stats/tab");
         assert_eq!(UiLocation::SettingsPage.id(), "settings/page");
@@ -497,6 +524,11 @@ mod tests {
             },
             UiElement::ListFilter {
                 component: "F".into(),
+            },
+            UiElement::Completion {
+                trigger: "#".into(),
+                suggest: "s".into(),
+                render: None,
             },
         ];
         for location in UiLocation::ALL {

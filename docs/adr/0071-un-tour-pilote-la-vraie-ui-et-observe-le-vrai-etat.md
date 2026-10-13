@@ -1,7 +1,8 @@
 # Un Tour pilote la vraie UI et observe le vrai état
 
 > Statut : accepted (grilling #816), amendé au grilling #909 (§4 : la préparation peut lancer un vrai Run
-> de nodes `script` et poser un objet temporaire que le rangement retire). Vocabulaire : CONTEXT.md
+> de nodes `script` et poser un objet temporaire que le rangement retire), amendé au grilling PDO-20
+> (§5 : les objets d'un tour appartiennent à l'identité de tour du navigateur). Vocabulaire : CONTEXT.md
 > § « Tours guidés — onboarding ».
 
 ## Contexte
@@ -39,7 +40,8 @@ outputs, un terminal et une pastille, sans harnais configuré ni coût. Sa prép
 **vrai Run d'une pipeline de nodes `script`** (ADR-0017) : il se termine en quelques secondes, ses
 outputs sont écrits et validés, son worktree existe et s'archive par le vrai geste. La préparation
 n'est pas une étape : elle se joue derrière la carte d'intro, avant que l'utilisateur ait quoi que ce
-soit à apprendre, et reste idempotente (réutilise dépôt, pipeline et dernier Run terminé non archivé).
+soit à apprendre, et reste idempotente (réutilise dépôt, pipeline, et le dernier Run terminé non
+archivé *de la même identité de tour*, §5).
 Un objet posé uniquement pour être montré (le Trigger d'exemple) est rendu **inoffensif par
 construction** — actif, mais son guard refuse toujours, il ne lance jamais de Run — et le **rangement**
 du tour le supprime à toute sortie (fin, quitter, arrêt propre). Ce que l'utilisateur garderait après
@@ -52,6 +54,27 @@ tout**, outputs et terminal désignés comme zones vides — moins cher, mais le
 qu'il explique. Le prix assumé : le tour dit qu'un node est « en général un agent » en montrant des
 scripts.
 
+**5. Ce qu'un tour pose ou fait poser appartient à l'identité de tour du navigateur.** Une instance
+PDO se partage (le Dojo en fait jouer les tours à plusieurs en même temps) et PDO n'a aucune notion
+d'utilisateur. Un tour reconnaissait ses objets à leur nom fixe ou à « le plus récent » : le Run
+d'*Overview* réutilisé par tous (l'archivage de l'un bloquait l'étape d'archivage des autres), le
+Trigger d'exemple que le rangement de l'un retirait sous les yeux d'un autre, « ton Run » de *First
+run* lu comme le premier de la liste (le Launch d'un voisin validait ton étape), et le nom de
+pipeline de *First pipeline* refusé au deuxième joueur. Désormais chaque navigateur tire une fois une
+**identité de tour** (4 caractères base36, mémoire navigateur) que tous les noms posés ou collés par un
+tour portent en suffixe. La préparation ne réutilise, et le rangement ne retire, que les objets de
+cette identité ; le Run lancé par l'utilisateur se reconnaît à l'id que son propre lancement a reçu,
+jamais à sa position dans la liste. Ce que les tours ne font que lire (dépôt d'entraînement, pipelines
+du tour, Projet *Tutorial*) reste commun. Le daemon ignore toujours les tours (§3) : l'identité est un
+suffixe de nom, pas un champ.
+
+Écartées : **un identifiant par passage** — chaque replay empilerait un Run et un Trigger, ce que
+l'idempotence de §4 refuse ; **un prénom saisi** au lancement — une étape de plus, et deux « Alex »
+se marchent encore dessus ; **une identité côté daemon** (utilisateurs, sessions) — elle couplerait
+le daemon aux tours pour un besoin d'onboarding. Le prix assumé : une identité perdue (mémoire vidée,
+autre navigateur) en tire une nouvelle et laisse ses anciens objets orphelins ; le Trigger y reste
+inoffensif par construction.
+
 ## Conséquences
 
 - *First run* dépend d'un harnais configuré pour aller jusqu'au bout ; sans lui, l'étape de lancement
@@ -61,6 +84,7 @@ scripts.
   ciblables (`<select>` natif) doit être remplacé par le menu maison avant d'entrer dans un tour.
 - Le dépôt d'entraînement vit sous `/tmp` et disparaît avec lui ; aucun nettoyage à gérer.
 - Un onglet fermé en plein tour saute le rangement : le Trigger d'exemple reste, inoffensif, et le
-  prochain passage le reprend par son nom avant de le ranger.
+  prochain passage du même navigateur le reprend par son nom avant de le ranger. Un Trigger d'exemple
+  hérité, sans suffixe d'identité, est retiré par le rangement de n'importe quel passage.
 - Les Runs des tours sont de vrais Runs : ils comptent dans Stats et dans la règle de la Modale de
   bienvenue.

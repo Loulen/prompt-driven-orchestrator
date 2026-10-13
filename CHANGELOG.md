@@ -10,6 +10,12 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.120.0
+**Plus de côté (L/T/R/B) sur les ports** (#991, spec #981). Le routage appartient à l'edge : au
+chargement, l'ancien `side` d'un output devient une `source_anchor` sans offset (milieu du côté),
+et celui du `result` d'un End un `target_side`. Le fichier n'est réécrit qu'à la sauvegarde ;
+lancer `pdo migrate` sur `~/.pdo/pipelines` et `~/.pdo/library` pour convertir le reste.
+
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les
 icônes de survol, bouton d'édition d'un Run réduit au crayon, menus Éditer / Save et modale

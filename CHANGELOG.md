@@ -10,6 +10,11 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.119.2
+Feedback de survol uniforme sur les actions des profils agentiques et de staging (#994, spec
+#984) : « + New profile » en bouton secondaire bordé, curseur main et teinte au survol sur
+Edit, Delete, la modale et la confirmation ; aucun survol sur un bouton désactivé.
+
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les
 icônes de survol, bouton d'édition d'un Run réduit au crayon, menus Éditer / Save et modale

@@ -7350,8 +7350,10 @@ async fn move_pipeline_validation(state: &AppState, old_id: &str, new_id: &str) 
 }
 
 /// `PUT /pipelines/{id}/validation` (#974): replace the Pipeline's validation —
-/// `{"kind":"all"}`, `{"kind":"none"}` or `{"kind":"projects","project_ids":[…]}`.
-/// An empty Projet list stores « not validated ». Unknown Projets are refused
+/// `{"kind":"all"}`, `{"kind":"none"}` or `{"kind":"projects","project_ids":[…]}`;
+/// `all` may list the Projets it is listed first for (#992,
+/// `{"kind":"all","project_ids":[…]}`). An empty `projects` list stores « not
+/// validated ». Unknown Projets are refused
 /// before any write, naming the first one.
 async fn put_pipeline_validation(
     State(state): State<Arc<AppState>>,
@@ -7362,23 +7364,22 @@ async fn put_pipeline_validation(
     if !path.exists() {
         return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
     }
-    if let project_store::PipelineValidation::Projects { project_ids } = &validation {
-        for project_id in project_ids {
-            match project_store::get(&state.db, project_id).await {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({
-                            "error": format!("no such project: {project_id}"),
-                        })),
-                    )
-                        .into_response()
-                }
-                Err(e) => {
-                    error!("failed to read project {project_id}: {e}");
-                    return project_list_error();
-                }
+    // #992: an `all` validation's « listed first » Projets follow the same rule.
+    for project_id in validation.project_ids() {
+        match project_store::get(&state.db, project_id).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("no such project: {project_id}"),
+                    })),
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                error!("failed to read project {project_id}: {e}");
+                return project_list_error();
             }
         }
     }
@@ -16878,9 +16879,12 @@ async fn run_snapshot_for_overwrite(
                 .into_response(),
         )
     };
-    let events = load_events(&state.db, run_id)
-        .await
-        .map_err(|e| refuse(StatusCode::INTERNAL_SERVER_ERROR, format!("load events: {e}")))?;
+    let events = load_events(&state.db, run_id).await.map_err(|e| {
+        refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("load events: {e}"),
+        )
+    })?;
     let Some(run_state) = event_log::project(&events) else {
         return Err(refuse(StatusCode::NOT_FOUND, "run not found".to_string()));
     };
@@ -16910,8 +16914,7 @@ async fn get_run_pipeline_overwrite_preview(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
-    let (run_state, _snapshot, template) = match run_snapshot_for_overwrite(&state, &run_id).await
-    {
+    let (run_state, _snapshot, template) = match run_snapshot_for_overwrite(&state, &run_id).await {
         Ok(found) => found,
         Err(response) => return *response,
     };
@@ -17002,7 +17005,10 @@ async fn overwrite_default_pipeline(
     // fingerprint so the next overwrite from this Run does not warn about its own
     // write as a colleague's change.
     if let Some(fingerprint) = pipeline_source_fingerprint(&template) {
-        let _ = std::fs::write(run_source_fingerprint_path(&repo_root, &run_id), fingerprint);
+        let _ = std::fs::write(
+            run_source_fingerprint_path(&repo_root, &run_id),
+            fingerprint,
+        );
     }
     // Self-writes are muted on the watcher: announce the change ourselves so an
     // open tab of the shared Pipeline reloads.
@@ -23683,7 +23689,8 @@ fn copy_pipeline_to_run(
     // overwrite warning can say whether a colleague changed it since. Best
     // effort: a missing fingerprint only makes that line "unknown".
     if let Some(fingerprint) = pipeline_source_fingerprint(pipeline_path) {
-        if let Err(e) = std::fs::write(run_source_fingerprint_path(repo_root, run_id), fingerprint) {
+        if let Err(e) = std::fs::write(run_source_fingerprint_path(repo_root, run_id), fingerprint)
+        {
             warn!("run {run_id}: could not record the pipeline launch fingerprint: {e}");
         }
     }
@@ -36464,7 +36471,11 @@ mod tests {
         assert_ne!(first, after_prompt, "a prompt edit changes the fingerprint");
 
         let yaml = std::fs::read_to_string(&template).unwrap();
-        std::fs::write(&template, yaml.replace("version: \"1.0\"", "version: \"2.0\"")).unwrap();
+        std::fs::write(
+            &template,
+            yaml.replace("version: \"1.0\"", "version: \"2.0\""),
+        )
+        .unwrap();
         assert_ne!(
             after_prompt,
             pipeline_source_fingerprint(&template).unwrap(),
@@ -37927,6 +37938,164 @@ edges:
             listed_validation(&app, "doomed").await,
             serde_json::json!({ "kind": "all" })
         );
+    }
+
+    // --- #992 (PDO-15) — validé pour tous et en tête pour des Projets ---
+
+    #[tokio::test]
+    async fn validation_all_with_projects_round_trips_and_all_alone_is_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "shared");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let bravo = project_store::create(&state.db, "Bravo").await.unwrap();
+        let app = build_router(state);
+
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({
+                "kind": "all",
+                "project_ids": [alpha.id, bravo.id, alpha.id],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let first_for_both =
+            serde_json::json!({ "kind": "all", "project_ids": [alpha.id, bravo.id] });
+        assert_eq!(body["validation"], first_for_both, "duplicates collapse");
+        assert_eq!(listed_validation(&app, "shared").await, first_for_both);
+
+        // `{"kind":"all"}` without a list: exactly the pre-#992 shape, and it
+        // replaces the « listed first » Projets.
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "all" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["validation"], serde_json::json!({ "kind": "all" }));
+        assert_eq!(
+            listed_validation(&app, "shared").await,
+            serde_json::json!({ "kind": "all" })
+        );
+
+        // An empty list is the same as no list.
+        let (_, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "all", "project_ids": [] })),
+        )
+        .await;
+        assert_eq!(body["validation"], serde_json::json!({ "kind": "all" }));
+    }
+
+    #[tokio::test]
+    async fn validation_all_with_an_unknown_project_is_refused_before_any_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "shared");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let app = build_router(state);
+        let only_alpha = serde_json::json!({ "kind": "projects", "project_ids": [alpha.id] });
+        call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(only_alpha.clone()),
+        )
+        .await;
+
+        let (status, body) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/shared/validation",
+            Some(serde_json::json!({ "kind": "all", "project_ids": [alpha.id, "prj-ghost"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("prj-ghost"));
+        assert_eq!(listed_validation(&app, "shared").await, only_alpha);
+    }
+
+    #[tokio::test]
+    async fn validation_deleting_a_listed_first_project_keeps_the_pipeline_validated_for_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "generic");
+        write_test_pipeline(tmp.path(), "solo");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let bravo = project_store::create(&state.db, "Bravo").await.unwrap();
+        let app = build_router(state);
+        call_json(
+            &app,
+            "PUT",
+            "/pipelines/generic/validation",
+            Some(serde_json::json!({ "kind": "all", "project_ids": [alpha.id, bravo.id] })),
+        )
+        .await;
+        call_json(
+            &app,
+            "PUT",
+            "/pipelines/solo/validation",
+            Some(serde_json::json!({ "kind": "projects", "project_ids": [alpha.id] })),
+        )
+        .await;
+
+        let (status, _) = call_json(&app, "DELETE", &format!("/projects/{}", alpha.id), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            listed_validation(&app, "generic").await,
+            serde_json::json!({ "kind": "all", "project_ids": [bravo.id] })
+        );
+        // Non-regression (#974): validated for this Projet alone → test Pipeline.
+        assert_eq!(
+            listed_validation(&app, "solo").await,
+            serde_json::json!({ "kind": "none" })
+        );
+
+        // The last listed-first Projet gone: « All +1 » becomes plain « All ».
+        call_json(&app, "DELETE", &format!("/projects/{}", bravo.id), None).await;
+        assert_eq!(
+            listed_validation(&app, "generic").await,
+            serde_json::json!({ "kind": "all" })
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_all_with_projects_survives_a_rename_and_is_never_exported() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "before");
+        let state = test_state_with_dir(tmp.path()).await;
+        let alpha = project_store::create(&state.db, "Alpha").await.unwrap();
+        let app = build_router(state);
+        let first_for_alpha = serde_json::json!({ "kind": "all", "project_ids": [alpha.id] });
+        call_json(
+            &app,
+            "PUT",
+            "/pipelines/before/validation",
+            Some(first_for_alpha.clone()),
+        )
+        .await;
+
+        let (status, _) = call_json(
+            &app,
+            "PUT",
+            "/pipelines/before/rename",
+            Some(serde_json::json!({ "name": "after" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed_validation(&app, "after").await, first_for_alpha);
+
+        let (_, document) = call_json(&app, "GET", "/pipelines/after/document", None).await;
+        let document = document.as_str().unwrap();
+        assert!(!document.contains(&alpha.id), "export carries no Projet");
+        assert!(!document.contains("Alpha"), "export carries no Projet");
     }
 
     // --- #774 — pipeline rename (visible name ⇄ file stem 1:1) ---

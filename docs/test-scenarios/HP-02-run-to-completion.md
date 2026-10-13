@@ -21,7 +21,8 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - **Repo explorer**: the loupe opens a filesystem explorer (dirs only, dotfiles hidden, git/symlink
   flags) that picks a folder through the existing validation path and degrades gracefully on an
   unreadable directory (#131).
-- **Start-node input images**: images surface on the Start node and in the Start inspector (#145).
+- **Start-node input images**: images surface in the Start inspector only — the Start card on the
+  canvas shows no image strip (#145, PDO-18).
 - **Conditional routing**: a producer fans out to **all** matching guarded edges (multi-match); an
   `else` edge catches the unmatched case; pills are always visible (#144).
 - **Loop region**: a bounded review loop exits early on its PASS edge and, if the verdict never

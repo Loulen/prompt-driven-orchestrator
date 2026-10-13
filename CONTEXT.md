@@ -405,7 +405,7 @@ Un Run prend un **input unique** : du free-text, une référence d'issue, ou un 
 L'input peut aussi être **construit interactivement** via un nœud d'entrée `interactive: true` : le user écrit un prompt brut court, attache la session, l'agent grille jusqu'à un input structuré.
 
 - **Saisie persistante de la modale New Run** : le contenu saisi survit à une fermeture/réouverture et n'est vidé qu'après un lancement réussi.
-- **Images d'input** : téléversables à côté du prompt, stockées dans `_input/` du Blackboard, listées dans le préambule du nœud d'entrée, affichées sur la carte Start et dans son inspecteur.
+- **Images d'input** : téléversables à côté du prompt, stockées dans `_input/` du Blackboard, listées dans le préambule du nœud d'entrée, affichées dans l'inspecteur du Start — jamais sur la carte Start du canvas, qui reste nue.
 - **Fichier importé en cours de Run** : l'utilisateur donne un fichier de son poste à un nœud **à session vive**, en le glissant sur son terminal ou via l'import du terminal — le même geste sur une instance locale ou distante. Le fichier est déposé dans le Blackboard du Run (jamais commité, nettoyé avec le Run) sous le budget de pièces jointes de l'instance ; PDO ne prévient pas l'agent de lui-même : il rend un texte qui donne le chemin, que l'utilisateur copie ou fait **écrire dans le terminal sans le valider** (le geste de l'utilisateur, jamais un envoi). _Éviter_ : « upload » (le geste est un import vers un nœud), « input » (l'input est celui du Run).
 
 ### `prompt_required` — pipeline runnable sans prompt

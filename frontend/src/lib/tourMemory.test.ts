@@ -2,14 +2,18 @@
  * What the browser remembers about tours (#823) and the welcome-modal rule
  * (spec #821, stories 1–4 and 6).
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+  drawTourIdentity,
   loadTourOffered,
   loadToursDone,
   markTourDone,
   markTourOffered,
   resetTourMemory,
   shouldOfferWelcome,
+  tourIdentity,
+  TOUR_IDENTITY_FORMAT,
+  withTourIdentity,
 } from "./tourMemory";
 
 beforeEach(() => localStorage.clear());
@@ -67,5 +71,64 @@ describe("the keys", () => {
     expect(shouldOfferWelcome({ offered: loadTourOffered(), runsLoaded: true, runCount: 0 })).toBe(
       true,
     );
+  });
+});
+
+describe("the identité de tour", () => {
+  it("is drawn once, as four base36 characters, and kept by the browser", () => {
+    const id = tourIdentity();
+    expect(id).toMatch(/^[0-9a-z]{4}$/);
+    expect(localStorage.getItem("pdo.tour.identity")).toBe(id);
+    // Stable: a later read (a reload reads the same store) gives the same identity.
+    expect(tourIdentity()).toBe(id);
+    expect(tourIdentity()).toBe(id);
+  });
+
+  it("is read back from the store — another browser's store gives another identity", () => {
+    localStorage.setItem("pdo.tour.identity", "aaaa");
+    expect(tourIdentity()).toBe("aaaa");
+    localStorage.setItem("pdo.tour.identity", "bbbb");
+    expect(tourIdentity()).toBe("bbbb");
+  });
+
+  it("redraws a stored value that is not an identity", () => {
+    localStorage.setItem("pdo.tour.identity", "NOT-AN-ID");
+    const id = tourIdentity();
+    expect(id).toMatch(TOUR_IDENTITY_FORMAT);
+    expect(localStorage.getItem("pdo.tour.identity")).toBe(id);
+  });
+
+  it("keeps one identity for the session when the store refuses to keep it", () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    try {
+      const first = tourIdentity();
+      expect(first).toMatch(TOUR_IDENTITY_FORMAT);
+      expect(tourIdentity()).toBe(first);
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it("draws identities that differ from one browser to the next", () => {
+    const drawn = new Set(Array.from({ length: 50 }, () => drawTourIdentity()));
+    for (const id of drawn) expect(id).toMatch(TOUR_IDENTITY_FORMAT);
+    // 36^4 ≈ 1.7 M identities: fifty draws colliding into a handful would mean no randomness.
+    expect(drawn.size).toBeGreaterThan(45);
+  });
+
+  it("suffixes a name with this browser's identity", () => {
+    localStorage.setItem("pdo.tour.identity", "k3x9");
+    expect(withTourIdentity("tour-overview")).toBe("tour-overview-k3x9");
+    expect(withTourIdentity("tour-overview", "p7qa")).toBe("tour-overview-p7qa");
+  });
+
+  it("survives a reset of the tutorial memory, which would orphan the tours' objects", () => {
+    localStorage.setItem("pdo.tour.identity", "k3x9");
+    markTourOffered();
+    markTourDone("overview");
+    resetTourMemory();
+    expect(tourIdentity()).toBe("k3x9");
   });
 });

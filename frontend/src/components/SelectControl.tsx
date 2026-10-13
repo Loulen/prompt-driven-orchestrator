@@ -1,96 +1,102 @@
 import type { MouseEvent } from "react";
 import { Check } from "lucide-react";
+import StatusIcon from "./StatusIcon";
+import { statusTitle, type StatusKey } from "../lib/statusTable";
 
 interface Props {
   /** Whether this row is checked (in the selection set). */
   selected: boolean;
   /**
-   * The resting status-dot colour (`bg-st-*`). Omit/null for a row with no
-   * status (a Library pipeline) — the slot is empty at rest and only the hover
-   * ring fades in, keeping the leading slot identical in shape across tabs.
+   * The row's status, shown at rest as its Status icon. Omit/null for a row with
+   * no status (a Library pipeline, a group header) — the slot is empty at rest
+   * and only the hover square fades in, keeping the leading slot identical in
+   * shape across tabs.
    */
-  dotClass?: string | null;
+  status?: StatusKey | null;
+  /** Added to the status tooltip (e.g. a run's failure or awaiting reason). */
+  statusReason?: string | null;
   /**
-   * The hover-ring colour (`border-st-*`) — the filled dot "goes hollow" in its
-   * own colour on hover. Defaults to a neutral ring (used by rows with no status
-   * colour). Only meaningful while unselected.
+   * The list is in selection mode (at least one row checked): every control
+   * stays a square until the selection is cleared, and the row's status moves
+   * into the control's tooltip.
    */
-  ringClass?: string;
-  /** Pulse the resting dot (a live/running row). */
-  pulse?: boolean;
-  /** Native tooltip on the resting dot (e.g. a run's failure reason). */
-  dotTitle?: string;
+  selecting?: boolean;
   /** Accessible name + tooltip for the control itself. */
   label: string;
   onSelect: (e: MouseEvent) => void;
-  /** Forwarded to the RESTING dot so existing dot assertions keep working
-   *  (`run-status-dot` / `trigger-status-dot`). */
+  /** Forwarded to the RESTING Status icon so existing dot assertions keep
+   *  working (`run-status-dot` / `trigger-status-dot`). */
   dotTestId?: string;
   /** data-testid on the interactive control (the select hit-target). */
   testId?: string;
 }
 
 /**
- * The leading select control shared by every left-panel row (#577, design "D").
- * The status dot *is* the checkbox: at rest it shows the row's status colour; on
- * row hover it morphs to a hollow ring ("the inside goes empty"); clicking it
- * selects the row and it becomes a green check. Clicking the control selects
- * (and stops propagation so the row body's open/navigate is untouched); a
- * shift-click is forwarded via the event so the caller can extend a range.
+ * The leading select control shared by every left-panel row (#577, PDO-22 #997).
+ * The round is reserved for the status, the square for the selection: at rest
+ * the slot shows the row's Status icon; on row hover it gives way to an empty
+ * square; once checked it is a filled accent square with a check — never a
+ * round check that could pass for « completed ». While the list is in selection
+ * mode, every unchecked row shows the empty square too.
  *
- * Exactly one of {resting dot, hover ring} is `display`ed at any time, so the
- * single-cell grid always centres the visible glyph — no layout shift between
- * states. The resting dot stays in the DOM even while hover-hidden, which is why
- * status-colour and failure-tooltip assertions on it survive this refactor.
+ * The Status icon is a SIBLING of the checkbox (a checkbox's children are
+ * presentational), so a screen reader still announces it; it stays in the DOM
+ * (visually hidden) while the square shows. The checkbox overlays the whole
+ * cell, so clicking the glyph selects the row; its tooltip carries the status
+ * (« Select x · Failed: reason ») since hovering the row hides the glyph.
  */
 export default function SelectControl({
   selected,
-  dotClass,
-  ringClass = "border-fg-3",
-  pulse = false,
-  dotTitle,
+  status,
+  statusReason,
+  selecting = false,
   label,
   onSelect,
   dotTestId,
   testId,
 }: Props) {
+  const squareMode = selected || selecting;
+  const title = status ? `${label} · ${statusTitle(status, statusReason)}` : label;
   return (
-    <span
-      role="checkbox"
-      aria-checked={selected}
-      aria-label={label}
-      title={label}
-      data-testid={testId}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect(e);
-      }}
-      className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center"
-    >
-      {selected ? (
-        <span
-          className="grid h-4 w-4 place-items-center rounded-full bg-acc text-on-acc"
-          data-testid="select-check"
-        >
-          <Check size={11} strokeWidth={3} />
-        </span>
-      ) : (
-        <>
-          {/* Resting status dot — hidden (but kept in the DOM) on row hover. */}
+    <span className="relative grid h-4 w-4 shrink-0 place-items-center">
+      {status && (
+        <StatusIcon
+          status={status}
+          reason={statusReason}
+          testId={dotTestId}
+          className={squareMode ? "sr-only" : "group-hover:hidden"}
+        />
+      )}
+      <span
+        role="checkbox"
+        aria-checked={selected}
+        aria-label={label}
+        title={title}
+        data-testid={testId}
+        data-select-mode={squareMode ? "square" : "glyph"}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect(e);
+        }}
+        className="absolute inset-0 grid cursor-pointer place-items-center"
+      >
+        {selected ? (
           <span
-            data-testid={dotTestId}
-            title={dotTitle}
-            className={`block h-2 w-2 rounded-full group-hover:hidden ${
-              dotClass ?? "opacity-0"
-            } ${pulse ? "animate-pulse" : ""}`}
-          />
-          {/* Hover ring — the filled dot gone hollow; only shown on row hover. */}
+            className="grid h-3 w-3 place-items-center rounded-[2.5px] bg-acc text-on-acc"
+            data-testid="select-check"
+          >
+            <Check size={9} strokeWidth={3.5} />
+          </span>
+        ) : (
           <span
             aria-hidden="true"
-            className={`hidden h-3.5 w-3.5 rounded-full border-2 group-hover:block ${ringClass}`}
+            data-testid="select-square"
+            className={`h-3 w-3 rounded-[2.5px] border-[1.5px] border-fg-3 ${
+              selecting ? "block" : "hidden group-hover:block"
+            }`}
           />
-        </>
-      )}
+        )}
+      </span>
     </span>
   );
 }

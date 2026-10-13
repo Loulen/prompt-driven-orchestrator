@@ -250,6 +250,25 @@ describe("ValidatePipelineModal", () => {
     expect(screen.getByTestId("validate-verdict")).toHaveTextContent("Offered to 1 project only.");
   });
 
+  it("lists the Projets by name, whatever the API order (#992)", () => {
+    render(
+      <ValidatePipelineModal
+        open
+        pipelineId="my-pipe"
+        pipelineName="my pipe"
+        validation={{ kind: "none" }}
+        projects={[bravo, alpha]}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const boxes = screen
+      .getAllByRole("checkbox")
+      .map((b) => b.getAttribute("data-testid"))
+      .filter((id) => id !== "validate-all");
+    expect(boxes).toEqual(["validate-project-prj-alpha", "validate-project-prj-bravo"]);
+  });
+
   it("starts from a stored « All + Projets »", () => {
     renderModal({ kind: "all", project_ids: ["prj-alpha"] });
     expect(screen.getByTestId("validate-all")).toBeChecked();

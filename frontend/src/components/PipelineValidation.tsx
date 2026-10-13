@@ -200,24 +200,27 @@ export function ValidatePipelineModal({
               No project yet. Name a repository group in the Runs list to create one.
             </p>
           ) : (
-            projects.map((project) => (
-              <label
-                key={project.id}
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 hover:bg-bg-3"
-              >
-                <input
-                  type="checkbox"
-                  checked={ticked.includes(project.id)}
-                  onChange={() => toggle(project.id)}
-                  data-testid={`validate-project-${project.id}`}
-                  className="accent-acc"
-                />
-                <span className="truncate">{project.name}</span>
-                <span className="ml-auto shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
-                  {project.members.length} repo{project.members.length === 1 ? "" : "s"}
-                </span>
-              </label>
-            ))
+            // #992: by name, as in the design (the API returns creation order).
+            [...projects]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((project) => (
+                <label
+                  key={project.id}
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 hover:bg-bg-3"
+                >
+                  <input
+                    type="checkbox"
+                    checked={ticked.includes(project.id)}
+                    onChange={() => toggle(project.id)}
+                    data-testid={`validate-project-${project.id}`}
+                    className="accent-acc"
+                  />
+                  <span className="truncate">{project.name}</span>
+                  <span className="ml-auto shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
+                    {project.members.length} repo{project.members.length === 1 ? "" : "s"}
+                  </span>
+                </label>
+              ))
           )}
         </div>
 

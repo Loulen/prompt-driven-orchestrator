@@ -813,8 +813,12 @@ export default function App() {
       // #552: a Projet mutation (name/harness/members) — refresh the Projet list
       // so the Runs and Triggers regrouping is live across clients. The Runs /
       // Triggers rows themselves are unchanged, so only the Projet list refetches.
+      // #992: deleting a Projet also rewrites the validations that named it
+      // (« All +1 » back to « All », a Projet-only one back to test), so the
+      // Pipelines list, which carries them, refetches too.
       if (msg.type === "project_changed") {
         refreshProjects();
+        loadPipelines();
         return;
       }
       // #974: a Pipeline's validation changed (another tab or client) — the

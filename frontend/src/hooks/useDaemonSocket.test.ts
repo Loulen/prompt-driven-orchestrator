@@ -172,6 +172,14 @@ describe("useDaemonSocket (#972)", () => {
     expect(received.map((m) => m.type)).toEqual(["resync", "event"]);
   });
 
+  it("forwards Projet and validation changes to the listeners (#992)", () => {
+    const { received } = mount();
+    act(() => last().open());
+    act(() => last().receive({ type: "project_changed", project_id: "prj-1" }));
+    act(() => last().receive({ type: "pipeline_validation_changed", pipeline_id: "p" }));
+    expect(received.map((m) => m.type)).toEqual(["project_changed", "pipeline_validation_changed"]);
+  });
+
   it("re-reads when the tab becomes visible again", () => {
     const { resyncs } = mount();
     act(() => last().open());

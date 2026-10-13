@@ -36,6 +36,10 @@ const FORWARDED = new Set<WsMessage["type"]>([
   "triggers_paused",
   // #974: the validation of a Pipeline changed — refreshes the list.
   "pipeline_validation_changed",
+  // #992: a Projet mutation (#552). Missing here, the App never heard of a
+  // Projet created, renamed or deleted in another tab, nor of the validations
+  // a deletion rewrites, until a reload.
+  "project_changed",
   // #972: the daemon lost messages for this client — re-read everything.
   "resync",
 ]);

@@ -61,8 +61,8 @@ export default function AddNodeFromYamlModal({
         id: newId,
         name: result.spec.name,
         type: result.spec.type as NodeType,
-        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
-        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
+        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p)),
+        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p)),
         interactive: result.spec.interactive,
         // #653/ADR-0060: carry the pasted node's workspace through. Dropping it
         // would silently fork a sub-worktree for a node that opted out.

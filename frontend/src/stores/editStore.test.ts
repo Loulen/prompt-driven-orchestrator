@@ -742,10 +742,10 @@ describe("edge selection (ADR-0011 edge detail panel, #147)", () => {
 describe("start/end markers are structural (#684)", () => {
   function markerPipeline(): PipelineDef {
     const start = makeNode({ id: "start", name: "Start", type: "start", inputs: [],
-      outputs: [{ name: "user_prompt", repeated: false, side: "right" }] });
+      outputs: [{ name: "user_prompt", repeated: false }] });
     const worker = makeNode({ id: "work1234", name: "worker" });
     const end = makeNode({ id: "end", name: "End", type: "end", outputs: [],
-      inputs: [{ name: "result", repeated: false, side: "left" }] });
+      inputs: [{ name: "result", repeated: false }] });
     const edges: EdgeDef[] = [
       { source: { node: "start", port: "user_prompt" }, target: { node: "work1234", port: "in" } },
       { source: { node: "work1234", port: "out" }, target: { node: "end", port: "result" } },
@@ -824,7 +824,7 @@ describe("duplicateNode", () => {
       outputs: [{
         name: "review",
         repeated: false,
-        side: "right",
+        
         instructions: "Return a concise verdict.",
       }],
     });
@@ -1928,7 +1928,7 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
       outputs: [{
         name: "result",
         repeated: false,
-        side: "right",
+        
         instructions: "Write the original summary.",
       }],
     });

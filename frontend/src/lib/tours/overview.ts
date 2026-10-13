@@ -96,23 +96,22 @@ nodes:
     name: Start
     type: start
     outputs:
-      - { name: user_prompt, side: right }
+      - { name: user_prompt }
     view: { x: 199, y: 47 }
   - id: end
     name: End
     type: end
     inputs:
-      - { name: result, side: left }
+      - { name: result }
     view: { x: 204, y: 316 }
   - id: implementer
     name: implementer
     type: script
     isolated_worktree: false
     inputs:
-      - { name: task, side: left }
+      - { name: task }
     outputs:
       - name: code
-        side: right
         instructions: "What was changed, in a few lines."
     view: { x: 196, y: 135 }
   - id: reviewer
@@ -120,10 +119,9 @@ nodes:
     type: script
     isolated_worktree: false
     inputs:
-      - { name: code, side: left }
+      - { name: code }
     outputs:
       - name: review
-        side: right
         frontmatter:
           verdict:
             allowed: [pass, fail]

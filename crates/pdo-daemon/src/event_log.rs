@@ -31,10 +31,12 @@ pub struct EdgeInfo {
     pub when_clause: Option<serde_json::Value>,
 }
 
+/// A port as the Run's snapshot summarises it. No `side` (PDO-17): a port has
+/// none any more. An event log written before carries a `side` key, which serde
+/// ignores on read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortBrief {
     pub name: String,
-    pub side: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
@@ -7939,17 +7941,19 @@ mod tests {
                 "status": "completed"
             },
             "name": "Golden Run (final)",
+            // The golden log's `PortBrief`s still carry the pre-PDO-17 `side`:
+            // it reads back without error and is simply dropped.
             "node_defs": [
-                { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "end", "inputs": [ { "name": "result", "side": "left" } ], "node_type": "end", "outputs": [], "view_x": null, "view_y": null },
-                { "id": "planner", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "worker", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "auto", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "stopped", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "stale", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "temp", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "interactive", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "sw", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null }
+                { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt" } ], "view_x": null, "view_y": null },
+                { "id": "end", "inputs": [ { "name": "result" } ], "node_type": "end", "outputs": [], "view_x": null, "view_y": null },
+                { "id": "planner", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "worker", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "auto", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "stopped", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "stale", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "temp", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "interactive", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "sw", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null }
             ],
             "nodes": {
                 "auto": {

@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineValidation, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineValidation, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -2099,18 +2099,16 @@ export function importPipelineDocument(
 export interface LibraryPort {
   name: string;
   repeated: boolean;
-  side?: string;
   port_type?: PortType;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
   instructions?: string | null;
 }
 
-export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): PortDef {
+export function libraryPortToPortDef(port: LibraryPort): PortDef {
   return {
     name: port.name,
     repeated: port.repeated,
-    side: (port.side as PortSide) ?? defaultSide,
     ...(port.port_type ? { port_type: port.port_type } : {}),
     ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
     ...(port.when ? { when: port.when } : {}),

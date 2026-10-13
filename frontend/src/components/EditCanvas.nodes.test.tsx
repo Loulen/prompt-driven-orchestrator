@@ -389,21 +389,18 @@ describe("EditNode rim drag-source (#844)", () => {
 
 const SIDES: PortSide[] = ["top", "right", "bottom", "left"];
 
-function endNode(declaredSide: PortSide = "left"): NodeDef {
+function endNode(): NodeDef {
   return {
     id: "end",
     name: "End",
     type: "end",
-    inputs: [{ name: "result", repeated: false, side: declaredSide }],
+    inputs: [{ name: "result", repeated: false }],
     outputs: [],
     interactive: false,
   };
 }
 
-function pipelineToEnd(
-  edge: Partial<PipelineDef["edges"][number]>,
-  declaredSide: PortSide = "left",
-): PipelineDef {
+function pipelineToEnd(edge: Partial<PipelineDef["edges"][number]>): PipelineDef {
   return {
     name: "p",
     variables: {},
@@ -413,10 +410,10 @@ function pipelineToEnd(
         name: "src",
         type: "agent",
         inputs: [],
-        outputs: [{ name: "plan", repeated: false, side: "right" }],
+        outputs: [{ name: "plan", repeated: false }],
         interactive: false,
       },
-      endNode(declaredSide),
+      endNode(),
     ],
     edges: [
       {
@@ -449,22 +446,22 @@ describe("End marker accepts an incoming edge on any of its four borders (#840)"
     expect(edge.data?.targetAnchor).toEqual(anchor);
   });
 
-  it("lets the saved anchor win over the declared side when the drop was on the left", () => {
+  it("lets the saved anchor win over `target_side` when the drop was on the left", () => {
     // `target_side: left` is never written (it is the default), so a left drop on
-    // an End declared `top` survives only through its anchor.
+    // an End whose edges otherwise land on `top` survives only through its anchor.
     const [edge] = deriveEditEdges(
-      pipelineToEnd({ target_anchor: { side: "left", offset: 20 } }, "top"),
+      pipelineToEnd({ target_anchor: { side: "left", offset: 20 }, target_side: "top" }),
     );
     expect(edge.targetHandle).toBe("__anchor:left");
     expect(edge.data?.targetSide).toBe("left");
   });
 
-  it.each(SIDES)("keeps a legacy End edge (no anchor) on its declared %s side", (declared) => {
-    // Pipelines saved before this fix carry no anchor on their End edges: they
-    // reopen exactly where they used to land, on `result`'s declared side.
-    const [edge] = deriveEditEdges(pipelineToEnd({}, declared));
-    expect(edge.targetHandle).toBe(`__anchor:${declared}`);
-    expect(edge.data?.targetSide).toBe(declared);
+  it.each(SIDES)("lands an un-anchored End edge on its `target_side` %s", (side) => {
+    // A legacy End edge reaches the client with its `result`'s declared side
+    // already converted into `target_side` by the daemon's loader (PDO-17).
+    const [edge] = deriveEditEdges(pipelineToEnd(side === "left" ? {} : { target_side: side }));
+    expect(edge.targetHandle).toBe(`__anchor:${side}`);
+    expect(edge.data?.targetSide).toBe(side);
   });
 
   it("keeps carrying the declared `result` port", () => {

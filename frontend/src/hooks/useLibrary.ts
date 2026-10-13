@@ -47,7 +47,6 @@ function portsMatch(
     const lp = libPorts[i];
     if (np.name !== lp.name) return false;
     if (np.repeated !== lp.repeated) return false;
-    if ((np.side ?? null) !== (lp.side ?? null)) return false;
     // deepEqual, not JSON.stringify: frontmatter/when are maps whose key
     // order is nondeterministic on the daemon side (Rust HashMap).
     if (!deepEqual(np.frontmatter ?? null, lp.frontmatter ?? null)) return false;

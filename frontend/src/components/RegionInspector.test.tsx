@@ -10,7 +10,7 @@ function makeNode(id: string, name: string): NodeDef {
     name,
     type: "agent",
     inputs: [],
-    outputs: [{ name: "out", repeated: false, side: "right" }],
+    outputs: [{ name: "out", repeated: false }],
     interactive: false,
   };
 }

@@ -55,6 +55,13 @@ describe("anchorPoint", () => {
     expect(anchorPoint(RECT, undefined, "left")).toEqual({ x: 100, y: 140 });
   });
 
+  it("draws an anchor without offset at the middle of ITS side (PDO-17)", () => {
+    // A converted legacy port side: the anchor's side wins over the fallback.
+    expect(anchorPoint(RECT, { side: "bottom" }, "right")).toEqual({ x: 200, y: 180 });
+    expect(anchorPoint(RECT, { side: "top" }, "left")).toEqual({ x: 200, y: 100 });
+    expect(anchorPoint(RECT, { side: "left" }, "right")).toEqual({ x: 100, y: 140 });
+  });
+
   it("keeps the anchor clear of the corners", () => {
     expect(anchorPoint(RECT, { side: "top", offset: -50 }, "top")).toEqual({ x: 110, y: 100 });
     expect(anchorPoint(RECT, { side: "top", offset: 9999 }, "top")).toEqual({ x: 290, y: 100 });

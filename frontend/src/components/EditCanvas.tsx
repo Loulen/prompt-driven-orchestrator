@@ -156,10 +156,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   // vestigial declared `in` still anchors by drop (#175) rather than being
   // mistaken for a fixed-side declared port.
   const emergent = landsByDrop(data.nodeType);
-  // A declared port's body handle arrives from its own declared side (#175 AC3),
-  // not a hardcoded left. Moot for a lands-by-drop body (edges bind to the
-  // per-side anchor handles below), but kept consistent.
-  const bodyHandleSide = data.inputs[0]?.side ?? "left";
 
   return (
     <NodeCard
@@ -185,12 +181,12 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           on the node body. A single invisible target handle covers the card and
           carries the drop highlight. A lands-by-drop node (work nodes, End since
           #840) renders it id-less and binds incoming edges to the per-side
-          anchors below; any other declared input keeps its handle id and its
-          declared-side `position`. */}
+          anchors below; any other declared input keeps its handle id and lands
+          on the left (a port has no side, PDO-17). */}
       <Handle
         id={emergent ? undefined : data.inputs[0]?.name}
         type="target"
-        position={SIDE_TO_POSITION[bodyHandleSide]}
+        position={SIDE_TO_POSITION.left}
         isConnectable={isConnectable}
         isConnectableStart={false}
         className={`emergent-body-target${isDropTarget ? " is-drop" : ""}`}
@@ -990,7 +986,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           id, name, type, interactive: false, view,
           isolated_worktree: false,
           inputs: [],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          outputs: [{ name: "out", repeated: false }],
         };
         break;
       default:
@@ -999,8 +995,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           // #653/ADR-0060: a new Agent is isolated. The safe placement is the
           // default, and sharing the Run worktree is an explicit opt-out.
           isolated_worktree: true,
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          inputs: [{ name: "in", repeated: false }],
+          outputs: [{ name: "out", repeated: false }],
         };
     }
     addNodeToStore(newNode);

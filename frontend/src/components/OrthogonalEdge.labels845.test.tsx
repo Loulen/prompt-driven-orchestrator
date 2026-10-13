@@ -36,8 +36,8 @@ function seedEdge(edge: Partial<EdgeDef> = {}) {
         type: "agent",
         inputs: [],
         outputs: [
-          { name: "out", repeated: false, side: "right" },
-          { name: "spec", repeated: false, side: "right" },
+          { name: "out", repeated: false },
+          { name: "spec", repeated: false },
         ],
         interactive: false,
       },

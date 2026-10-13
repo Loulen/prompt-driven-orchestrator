@@ -23892,13 +23892,9 @@ fn augment_run_state_from_disk(
     run_state.edges = pipe.edges.iter().map(edge_info_from_pipeline).collect();
 }
 
-fn port_brief(p: &pipeline::Port, default_side: &str) -> event_log::PortBrief {
+fn port_brief(p: &pipeline::Port) -> event_log::PortBrief {
     event_log::PortBrief {
         name: p.name.clone(),
-        side: p
-            .side
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| default_side.into()),
         description: p.description.clone(),
     }
 }
@@ -23918,8 +23914,8 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
         orchestrator: n.orchestrator,
         view_x: n.view.as_ref().map(|v| v.x),
         view_y: n.view.as_ref().map(|v| v.y),
-        inputs: n.inputs.iter().map(|p| port_brief(p, "left")).collect(),
-        outputs: n.outputs.iter().map(|p| port_brief(p, "right")).collect(),
+        inputs: n.inputs.iter().map(port_brief).collect(),
+        outputs: n.outputs.iter().map(port_brief).collect(),
     }
 }
 

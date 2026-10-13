@@ -52,6 +52,11 @@
   --color-on-acc: #04140d;
   /* Same, for the Inspector's amber scope (`.panel-r`). */
   --color-on-acc-warn: #1a0f00;
+  /* The app's green accent, which the Inspector's amber scope (`.panel-r`)
+     does not repaint: same value as `--color-acc` above. For a mark that
+     must not blend with the amber of a wait next to it (#980: the `active`
+     unit of a node's duration, beside the awaiting dot). */
+  --color-acc-app: #10b981;
 
   /* PDO status */
   --color-st-running: #3b82f6;
@@ -203,6 +208,7 @@
   --color-acc-border: rgba(3, 113, 79, 0.30);
   --color-on-acc: #f2fbf7;
   --color-on-acc-warn: #fff7ed;
+  --color-acc-app: #03714f;
 
   /* PDO status */
   --color-st-running: #1d4ed8;

@@ -82,6 +82,32 @@ export function iterationDurations(
 }
 
 /**
+ * The durations as the panel prints them (#980 FP): whole seconds, so that
+ * Total = Active + Waiting holds on screen too, not only in ms. Each figure
+ * would otherwise lose its own fraction (`3m 18s` != `1m 2s` + `2m 15s`).
+ *
+ * Seconds are rounded, as Stats -> Performance rounds them, so a finished
+ * iteration reads the same in both places. The figure that does not move is
+ * rounded on its own and the third one is derived: during an open wait Active
+ * is frozen (rounded, Waiting = Total - Active), otherwise Waiting is (rounded,
+ * Active = Total - Waiting). Deriving the frozen figure instead would make it
+ * flicker by a second as the other two tick.
+ */
+export function displayedDurations(
+  durations: IterationDurations,
+  waitOpen: boolean,
+): IterationDurations {
+  const seconds = (ms: number) => Math.round(ms / 1000) * 1000;
+  const total = seconds(durations.total);
+  if (waitOpen) {
+    const active = Math.min(seconds(durations.active), total);
+    return { total, active, waiting: total - active };
+  }
+  const waiting = Math.min(seconds(durations.waiting), total);
+  return { total, active: total - waiting, waiting };
+}
+
+/**
  * `Date.now()`, refreshed every second while `ticking`. Modeled on
  * `useRunDuration`: no interval at all once the iteration is over. The value is
  * read at mount, so a caller switching iterations remounts (`key`) to start fresh.
@@ -97,12 +123,14 @@ export function useNow(ticking: boolean): number {
 }
 
 /**
- * Live durations of an iteration: tick every second while it runs (an open wait
- * included: Total keeps going, Active is frozen), fixed once it ends.
+ * Live durations of an iteration, as displayed (`displayedDurations`): tick
+ * every second while it runs (an open wait included: Total keeps going, Active
+ * is frozen), fixed once it ends.
  */
 export function useIterationDurations(timing: IterationTiming): IterationDurations | null {
   const ticking =
     !!timing.started_at && timing.completed_at == null && iterationIsLive(timing.status);
   const now = useNow(ticking);
-  return iterationDurations(timing, now);
+  const durations = iterationDurations(timing, now);
+  return durations && displayedDurations(durations, !!timing.open_wait_since);
 }

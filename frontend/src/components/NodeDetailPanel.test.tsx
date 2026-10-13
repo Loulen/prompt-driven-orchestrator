@@ -3310,10 +3310,10 @@ describe("iteration duration modes (#980)", () => {
     expect(label).toHaveTextContent("8m 31s active");
     expect(label).toHaveAccessibleName("8m 31s active. Click to show total time");
     // Off the default, the unit takes the accent color.
-    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-acc");
+    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-acc-app");
     fireEvent.click(label);
     expect(label).toHaveTextContent("12m 4s total");
-    expect(screen.getByTestId("iteration-duration-unit")).not.toHaveClass("text-acc");
+    expect(screen.getByTestId("iteration-duration-unit")).not.toHaveClass("text-acc-app");
   });
 
   it("is a native button, so Enter and Space switch it too", () => {

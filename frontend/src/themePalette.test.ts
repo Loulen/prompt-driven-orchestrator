@@ -59,6 +59,7 @@ const TEXT = [
   "fg-3",
   "fg-4",
   "acc",
+  "acc-app",
   "st-running",
   "st-await",
   "st-done",

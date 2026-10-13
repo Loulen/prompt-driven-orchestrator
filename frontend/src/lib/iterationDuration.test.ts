@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  displayedDurations,
   isDeclaredWaitCause,
   iterationDurations,
   iterationIsLive,
@@ -109,5 +110,39 @@ describe("iterationDurations (#980)", () => {
     [null, false],
   ] as const)("cause %s is a declared wait: %s", (cause, expected) => {
     expect(isDeclaredWaitCause(cause)).toBe(expected);
+  });
+});
+
+describe("displayedDurations (#980 FP)", () => {
+  it("keeps Total = Active + Waiting in whole seconds once each is rounded", () => {
+    // 198.4 s = 62.9 s + 135.5 s: rounding each on its own would print 198 != 63 + 136.
+    const d = displayedDurations({ total: 198_400, active: 62_900, waiting: 135_500 }, false);
+    expect(d).toEqual({ total: 198_000, active: 62_000, waiting: 136_000 });
+    expect(d.active + d.waiting).toBe(d.total);
+  });
+
+  it("rounds Total and Waiting as Stats -> Performance does", () => {
+    // The FP's finished iteration: Stats reads 4m13s, Waiting 2m16s, Active 1m57s.
+    const d = displayedDurations({ total: 252_738, active: 117_046, waiting: 135_692 }, false);
+    expect(d).toEqual({ total: 253_000, active: 117_000, waiting: 136_000 });
+  });
+
+  it("keeps Active still while a wait is open, whatever the tick", () => {
+    const active = 40_300;
+    for (let x = 0; x < 2_000; x += 100) {
+      const total = 68_800 + x;
+      const d = displayedDurations({ total, active, waiting: total - active }, true);
+      expect(d.active).toBe(40_000);
+      expect(d.active + d.waiting).toBe(d.total);
+    }
+  });
+
+  it("keeps Waiting still while the iteration works", () => {
+    const waiting = 135_500;
+    for (let x = 0; x < 2_000; x += 100) {
+      const total = 198_400 + x;
+      const d = displayedDurations({ total, active: total - waiting, waiting }, false);
+      expect(d.waiting).toBe(136_000);
+    }
   });
 });

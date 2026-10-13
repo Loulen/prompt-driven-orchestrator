@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.120.0
+**Pipeline validé pour tous et mis en tête pour des Projets** (#992, spec #989).
+
+- La validation `all` accepte une liste optionnelle de Projets (`{"kind":"all","project_ids":[…]}`,
+  absente = vide), sans migration. Ces Projets voient le Pipeline en tête, dans « Project
+  pipelines », plutôt qu'en « Global pipelines ». Supprimer un Projet laisse un `all` en `all`.
+- Modale « Validate » : cases des Projets actives sous « All projects », Projets triés par nom.
+  Indicateur globe + « All +N ».
+- L'événement `project_changed` est relayé au front : la suppression ou la création d'un Projet
+  se reflète sans rechargement.
+- Menu des Pipelines : plus de colonne « instance ».
+
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les
 icônes de survol, bouton d'édition d'un Run réduit au crayon, menus Éditer / Save et modale

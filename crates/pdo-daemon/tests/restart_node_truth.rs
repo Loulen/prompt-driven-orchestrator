@@ -234,8 +234,19 @@ async fn wait_for_node_status(daemon: &TestDaemon, run_id: &str, node_id: &str, 
 
 /// **The pre-kill contract, as a reusable oracle.** A refusal that leaves any
 /// trace at all has already broken ADR-0037 §3, whatever its status code.
+///
+/// The run-creation `pipeline_modified` is excluded on both sides: the file
+/// watcher emits it after a ~1 s debounce, so under a loaded test suite it can
+/// land between `before` and `after` — an echo of the run's creation, not a
+/// trace of the refused command.
 async fn assert_no_trace(daemon: &TestDaemon, run_id: &str, before: &[serde_json::Value]) {
-    let after = events_of(daemon, run_id).await;
+    let not_watcher_echo = |e: &serde_json::Value| e["kind"] != "pipeline_modified";
+    let before: Vec<_> = before.iter().filter(|e| not_watcher_echo(e)).collect();
+    let after: Vec<_> = events_of(daemon, run_id)
+        .await
+        .into_iter()
+        .filter(not_watcher_echo)
+        .collect();
     assert_eq!(
         after.len(),
         before.len(),
@@ -692,7 +703,13 @@ async fn a_restart_inventories_every_interrupted_git_op_and_routes_it_to_the_pre
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
+    let done_status = resp.status();
+    assert_eq!(
+        done_status,
+        200,
+        "planner done refused: {}",
+        resp.text().await.unwrap_or_default()
+    );
     wait_for_node_status(&daemon, &run_id, "impl-1", "running").await;
 
     // The dead session mid git-op: kill it, then plant the markers a SIGKILL

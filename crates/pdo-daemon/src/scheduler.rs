@@ -4525,6 +4525,7 @@ mod tests {
                 completed_at: Some("t1".into()),
                 interactive: false,
                 completion_released: false,
+                waited_ms: 0,
             })
             .collect();
         ns

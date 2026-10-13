@@ -124,6 +124,35 @@ export function saveWiringGridSize(v: GridSize): void {
 }
 
 /**
+ * #980 — the Mode de durée the node panel shows (`total` or `active`). One
+ * global choice, toggled by clicking the duration on the panel's meta line: it
+ * follows the user from node to node and survives a reload. Absent /
+ * unparseable → `total`.
+ */
+export type NodeDurationMode = "total" | "active";
+
+const NODE_DURATION_MODE_KEY = "pdo.ui.nodeDurationMode";
+
+export function loadNodeDurationMode(): NodeDurationMode {
+  try {
+    const raw = localStorage.getItem(NODE_DURATION_MODE_KEY);
+    if (raw == null) return "total";
+    const v: unknown = JSON.parse(raw);
+    return v === "active" ? "active" : "total";
+  } catch {
+    return "total";
+  }
+}
+
+export function saveNodeDurationMode(v: NodeDurationMode): void {
+  try {
+    localStorage.setItem(NODE_DURATION_MODE_KEY, JSON.stringify(v));
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+}
+
+/**
  * Stats keeps **no** per-browser preference (#819). The box-plot zoom and the
  * axis mode used to live here under `pdo.stats.*`; they are now ephemeral like
  * every other Stats setting — see `lib/statsFilters.ts`. Stale keys from an

@@ -15203,6 +15203,13 @@ struct RunChildEntry {
     started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     completed_at: Option<String>,
+    /// PDO-22 (#999): the child's `failure_reason` / `awaiting_reason`, so the
+    /// Orchestration tab's Status icon tooltip reads « Failed: <reason> » like
+    /// the run list and Run info. Omitted when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    awaiting_reason: Option<String>,
     /// Derived on read via the cost cache (ADR-0052) — never persisted. Absent
     /// (JSON `null`/omitted) when the cost is unavailable: the surface renders
     /// "—", never `$0`.
@@ -15443,6 +15450,8 @@ async fn list_run_children(
             stalled,
             started_at: child.started_at,
             completed_at: child.completed_at,
+            failure_reason: child.failure_reason,
+            awaiting_reason: child.awaiting_reason,
             cost,
         };
         by_node.entry(child.parent_node_id).or_default().push(entry);

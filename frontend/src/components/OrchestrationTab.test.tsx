@@ -87,3 +87,55 @@ describe("OrchestrationTab with an awaiting child (#588)", () => {
     expect(countChildren(children)).toEqual({ finished: 0, failed: 0, stale: 0, running: 2 });
   });
 });
+
+// PDO-22 (#999): each child wears the list's Status icon — the one table, so a
+// halted / skipped / archived child never reads as completed, paused stays paused.
+describe("OrchestrationTab child Status icons (#999)", () => {
+  it("gives every child the glyph of its own status", () => {
+    const children = [
+      child("done", { status: "completed" }),
+      child("halt", { status: "halted" }),
+      child("skip", { status: "skipped" }),
+      child("arch", { status: "archived" }),
+      child("pause", { status: "paused" }),
+      child("stall", { stalled: true }),
+    ];
+    render(
+      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+    );
+    const icons = screen.getAllByTestId("orchestration-child-status");
+    expect(icons.map((i) => i.getAttribute("data-status"))).toEqual([
+      "completed",
+      "halted",
+      "skipped",
+      "archived",
+      "paused",
+      "stalled",
+    ]);
+    // Named for assistive tech, with a tooltip — no text label sits beside it.
+    expect(icons[1]).toHaveAttribute("role", "img");
+    expect(icons[1]).toHaveAccessibleName("Halted");
+    expect(icons[1]).toHaveAttribute("title", "Halted");
+    expect(icons[4]).toHaveAccessibleName("Paused");
+    expect(icons.filter((i) => i.getAttribute("data-status") === "completed")).toHaveLength(1);
+  });
+
+  it("puts the child's reason in the tooltip, like the run list and Run info", () => {
+    const children = [
+      child("fail", { status: "failed", failure_reason: "exit 1" }),
+      child("halt", { status: "halted", failure_reason: "Halted: verdict was FAIL" }),
+      child("wait", { status: "awaiting_user", awaiting_reason: "which repo?" }),
+    ];
+    render(
+      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+    );
+    const icons = screen.getAllByTestId("orchestration-child-status");
+    expect(icons.map((i) => i.getAttribute("title"))).toEqual([
+      "Failed: exit 1",
+      "Halted: verdict was FAIL",
+      "Awaiting you: which repo?",
+    ]);
+    // The accessible name stays the bare label.
+    expect(icons[0]).toHaveAccessibleName("Failed");
+  });
+});

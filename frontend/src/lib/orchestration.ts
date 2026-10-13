@@ -19,6 +19,10 @@ export interface RunChildEntry {
   stalled?: boolean;
   started_at?: string;
   completed_at?: string;
+  /** PDO-22 (#999): why the child failed / halted, or what it awaits — the
+   *  Status icon's tooltip reason. Omitted by the daemon when absent. */
+  failure_reason?: string | null;
+  awaiting_reason?: string | null;
   /** The daemon's CostStat, derived on read (ADR-0052) — never persisted.
    *  Shape mirrors `RunState.cost` (no `form` at the top level: the per-slice
    *  forms live in `by_harness`). */

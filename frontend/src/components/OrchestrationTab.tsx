@@ -1,10 +1,9 @@
 // #723 — Orchestration tab of the NodeRun detail panel + the shared count pastilles.
 import { useEffect, useState } from "react";
 import { ExternalLink, GitFork } from "lucide-react";
-import type { RunStatus } from "../types";
 import { isLiveRun } from "../types";
 import { formatDuration } from "../lib/runDuration";
-import { type StatusKey } from "../lib/statusTable";
+import { runStatusKey, type StatusKey } from "../lib/statusTable";
 import StatusIcon from "./StatusIcon";
 import { formatCostAmount } from "../lib/costLabel";
 import {
@@ -14,25 +13,6 @@ import {
   type RunChildEntry,
   totalChildren,
 } from "../lib/orchestration";
-
-const RUN_STATUS_LABEL: Record<RunStatus, string> = {
-  running: "Running",
-  awaiting_user: "Awaiting user",
-  completed: "Completed",
-  failed: "Failed",
-  skipped: "Skipped",
-  halted: "Halted",
-  paused: "Paused",
-  archived: "Archived",
-};
-
-function runStatusDot(status: RunStatus): string {
-  if (status === "failed") return "bg-st-failed";
-  if (status === "awaiting_user") return "bg-st-await";
-  if (status === "paused") return "bg-st-stopped";
-  if (isLiveRun(status)) return "bg-st-running";
-  return "bg-st-done";
-}
 
 /**
  * The child counters (« compteurs d'enfants », #723/#783): a Status icon
@@ -159,9 +139,10 @@ function ChildRow({
       }`}
     >
       <div className="flex items-center gap-1.5">
-        <span
-          title={RUN_STATUS_LABEL[child.status] ?? child.status}
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${runStatusDot(child.status)} ${live ? "animate-pulse" : ""}`}
+        <StatusIcon
+          status={runStatusKey(child)}
+          reason={child.failure_reason ?? child.awaiting_reason}
+          testId="orchestration-child-status"
         />
         <button
           type="button"
@@ -184,7 +165,7 @@ function ChildRow({
           </span>
         )}
       </div>
-      <div className="flex items-center gap-1 pl-3 font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
+      <div className="flex items-center gap-1 pl-[18px] font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
         <span className="truncate">{child.pipeline_name}</span>
         {started && (
           <span>
@@ -258,7 +239,7 @@ export function OrchestrationTab({
       )}
       {nodeLive && counts.running > 0 && (
         <div className="flex items-center gap-1.5 text-fg-4" style={{ fontSize: "10px" }}>
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-st-running" />
+          <StatusIcon status="running" size="xs" decorative />
           Node completes once every child is terminal.
         </div>
       )}

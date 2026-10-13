@@ -10,6 +10,12 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.122.0
+**Status icon dans les panneaux de Run et de nœud** (#999, spec #996, story PDO-22) : Run info,
+toolbar du terminal, sélecteur d'itération et enfants d'un orchestrateur portent le glyphe du
+statut (tooltip avec la raison, nom accessible réduit au libellé) ; les compteurs d'enfants
+passent en glyphes.
+
 ## 1.121.0
 **Status icon sur les nœuds du canvas et dans le tour guidé** (#1000, spec #996, story PDO-22) :
 chaque nœud qui a un statut porte son glyphe dans le coin haut droit (aucun sur pending ni sur

@@ -303,6 +303,18 @@ describe("TmuxTerminal", () => {
     expect(toolbar.firstElementChild?.className).toMatch(/rounded-full/);
   });
 
+  // PDO-22 (#999): a node's terminal wears the iteration's Status icon — the list's glyph.
+  it("shows the node's Status icon in the plain toolbar when it has a status", () => {
+    render(<TmuxTerminal session="pdo-run1-impl-iter-1" status="awaiting_user" />);
+    const toolbar = screen.getByTestId("term-toolbar");
+    const icon = within(toolbar).getByTestId("term-status-icon");
+    expect(toolbar.firstElementChild).toBe(icon);
+    expect(icon).toHaveAttribute("data-status", "awaiting_user");
+    expect(icon).toHaveAccessibleName("Awaiting you");
+    expect(icon).toHaveAttribute("title", "Awaiting you");
+    expect(within(toolbar).queryByTestId("term-connection-dot")).not.toBeInTheDocument();
+  });
+
   it("shows detach button", () => {
     render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     expect(screen.getByTestId("term-detach")).toBeInTheDocument();

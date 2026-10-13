@@ -672,6 +672,25 @@ describe("NodeDetailPanel", () => {
 
       await act(async () => {});
     });
+
+    // PDO-22 (#999): one Status icon per iteration, the list's glyph.
+    it("shows each iteration's Status icon in the selector", async () => {
+      renderPanel({
+        iter: 3,
+        status: "running",
+        iterations: [
+          { iter: 1, status: "failed", started_at: null, completed_at: null },
+          { iter: 2, status: "stopped", started_at: null, completed_at: null },
+          { iter: 3, status: "running", started_at: null, completed_at: null },
+        ],
+      });
+      await act(async () => {});
+      expect(screen.getByTestId("iter-selector-status")).toHaveAttribute("data-status", "running");
+      fireEvent.click(screen.getByText(/iter 3/));
+      expect(await screen.findByTestId("iter-option-1-status")).toHaveAccessibleName("Failed");
+      expect(screen.getByTestId("iter-option-2-status")).toHaveAttribute("data-status", "stopped");
+      expect(screen.getByTestId("iter-option-3-status")).toHaveAttribute("data-status", "running");
+    });
   });
 
   describe("FrontmatterRetryBanners", () => {
@@ -2672,7 +2691,7 @@ describe("NodeDetailPanel", () => {
       expect(frame.className).not.toMatch(/\bborder-st-running\b/);
       // The awaiting halo joins the shadow.
       expect(frame.style.boxShadow).toContain("color-mix");
-      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Awaiting User");
+      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Awaiting you");
       expect(screen.getByTestId("term-identity-status")).toHaveAttribute("data-status", "awaiting_user");
     });
 

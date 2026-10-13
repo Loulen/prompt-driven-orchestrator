@@ -481,6 +481,13 @@ async fn children_endpoint_lists_children_grouped_by_parent_node() {
             child.get("completed_at").is_none(),
             "a live child has no completed_at"
         );
+        // PDO-22 (#999): the reasons feed the Status icon tooltip; a healthy
+        // live child has none, and they are omitted rather than null.
+        assert!(
+            child.get("failure_reason").is_none() && child.get("awaiting_reason").is_none(),
+            "no reason on a healthy live child: {:?}",
+            child
+        );
         // ADR-0052: the cost is derived on read; with no transcripts to read it
         // is ABSENT, and the surface renders "—" — never `$0`.
         assert!(

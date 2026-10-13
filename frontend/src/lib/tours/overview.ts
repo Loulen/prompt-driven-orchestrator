@@ -541,13 +541,15 @@ const INSPECTOR_EXPLORE = [
   testId("term-copy"),
 ];
 
-/** The status dot, drawn three times over (#911): the tour's Run only ever shows green. */
-const STATUS_DOTS: TourIllustration = {
+/** The Status icon's legend (PDO-22, #1000): the four shapes the reader meets
+ *  first, by their meaning — the shape carries the status, not the colour. */
+const STATUS_ICONS: TourIllustration = {
   kind: "rows",
   rows: [
-    { label: "fix-login", detail: "waits for you", dotClass: "bg-st-await" },
-    { label: "add-tests", detail: "running", dotClass: "bg-st-running", pulse: true },
-    { label: OVERVIEW_RUN_NAME, detail: "finished", dotClass: "bg-st-done" },
+    { status: "completed", label: "finished" },
+    { status: "running", label: "running" },
+    { status: "awaiting_user", label: "waits for you" },
+    { status: "failed", label: "failed" },
   ],
 };
 const STATS_BUTTON = testId("open-stats");
@@ -876,16 +878,16 @@ const STEPS: TourStep[] = [
   {
     ...readStep({
       id: "status-dots",
-      title: "The status dot",
-      body: "Green means finished. Orange means the Run waits for you, blue means it is running.",
+      title: "The status icon",
+      body: "Its shape tells you where the Run is: a check means finished, a turning circle means running, a question mark means it waits for you. Hover it for details.",
       target: () => {
         const id = overviewRunId();
         return id ? [`${runRow(id)} ${RUN_SELECT}`] : [];
       },
-      waitingFor: "the status dot of your Run",
+      waitingFor: "the status icon of your Run",
       failureHint: "It is on your Run's row, in the Runs tab.",
     }),
-    illustration: STATUS_DOTS,
+    illustration: STATUS_ICONS,
   },
   readStep({
     id: "worktree",

@@ -1,5 +1,6 @@
 import type { NodeStatus } from "../types";
 import { STATUS_BORDER, STATUS_BG, SELECTION_RING_STYLE } from "../nodeStyles";
+import StatusIcon from "./StatusIcon";
 
 interface NodeCardProps {
   status: NodeStatus;
@@ -23,18 +24,18 @@ export function NodeCard({ status, selected, className, style, children }: NodeC
       }}
     >
       {children}
-      {status === "failed" && (
+      {/* PDO-22 (#1000): the Status icon in the corner, on a bg-1 pastille so it
+          reads on any status fill, in both themes (where the failed badge sat).
+          Pending wears none — nor does a library template, whose nodes have no
+          run status and so read as pending. */}
+      {status !== "pending" && (
         <span
-          data-testid="failed-badge"
-          className="absolute z-[3] rounded-full bg-st-failed border-2 border-bg-1"
-          style={{
-            top: -7,
-            right: -7,
-            width: 18,
-            height: 18,
-            boxShadow: "0 2px 6px rgba(239,68,68,0.4)",
-          }}
-        />
+          data-testid="node-status-badge"
+          className="absolute z-[3] grid place-items-center rounded-full bg-bg-1"
+          style={{ top: -9, right: -9, width: 20, height: 20 }}
+        >
+          <StatusIcon status={status} size="md" testId="node-status-icon" />
+        </span>
       )}
     </div>
   );

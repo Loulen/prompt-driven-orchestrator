@@ -324,25 +324,34 @@ describe("the popover", () => {
 
   // ---- #911 --------------------------------------------------------------
 
-  it("draws a step's illustration: one mock row per status, in the app's dot colours", () => {
+  it("draws a step's illustration: one legend row per status, with the app's own Status icon", () => {
     renderPopover(
       step({
         illustration: {
           kind: "rows",
           rows: [
-            { label: "a", detail: "waits for you", dotClass: "bg-st-await" },
-            { label: "b", detail: "running", dotClass: "bg-st-running", pulse: true },
-            { label: "c", detail: "finished", dotClass: "bg-st-done" },
+            { status: "completed", label: "finished" },
+            { status: "running", label: "running" },
+            { status: "awaiting_user", label: "waits for you" },
+            { status: "failed", label: "failed" },
           ],
         },
       }),
     );
     const rows = screen.getAllByTestId("tour-illustration-row");
-    expect(rows.map((r) => r.textContent)).toEqual(["awaits for you", "brunning", "cfinished"]);
-    const dots = screen.getAllByTestId("tour-illustration-dot");
-    expect(dots[0]).toHaveClass("bg-st-await");
-    expect(dots[1]).toHaveClass("bg-st-running", "animate-pulse");
-    expect(dots[2]).toHaveClass("bg-st-done");
+    expect(rows.map((r) => r.textContent)).toEqual(["finished", "running", "waits for you", "failed"]);
+    const icons = screen.getAllByTestId("tour-illustration-icon");
+    expect(icons.map((i) => i.getAttribute("data-status"))).toEqual([
+      "completed",
+      "running",
+      "awaiting_user",
+      "failed",
+    ]);
+    // The label right after says it in words: the glyph is hidden from assistive tech.
+    for (const icon of icons) expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icons[0]).toHaveClass("text-st-done");
+    // Running turns slowly, as in the real list — fixed under reduced motion.
+    expect(icons[1].querySelector("svg")!.getAttribute("class")).toContain("motion-safe:animate-");
   });
 
   it("draws no illustration on a step without one", () => {

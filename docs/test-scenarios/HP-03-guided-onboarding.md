@@ -38,7 +38,7 @@ Features validated while crossing the tour:
 - **Preparation and tidy-up** (#911, ADR-0071 §4): *Overview* prepares the `tutorial-overview`
   pipeline (two `script` nodes), an example Trigger whose guard always refuses, and a Run it waits
   for until `completed` — then removes the example Trigger when the tour ends.
-- **Archiving a Run** (#911): the tour's Run is archived by the real gesture; its dot turns grey and
+- **Archiving a Run** (#911): the tour's Run is archived by the real gesture; its status icon turns into the grey archive box and
   its outputs stay readable.
 - **Read-only panels** (#911): the panel a gesture opens (node inspector, edge panel, Start
   inspector) stays lit; its tabs switch, it scrolls and unfolds, but nothing in it can be edited
@@ -70,8 +70,9 @@ Features validated while crossing the tour:
    click the **reviewer → End** edge (a bubble points at `verdict eq pass`), click **Start** — the
    card says first that it shows the prompt the Run was started with, and a bubble points at that
    input once it is open — read the Runs tab (the card sends you back to it if you left it) and the
-   status dot (the card draws the three colours: orange, blue, green), **archive** the Run (the dot
-   turns grey), open **Triggers** (the example Trigger is listed) and **Pipelines**
+   status icon (*The status icon*: the card describes the shapes, not the colours, and draws four
+   glyphs with their meaning: finished, running, waits for you, failed), **archive** the Run (its
+   glyph turns into the grey archive box), open **Triggers** (the example Trigger is listed) and **Pipelines**
    (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but not opened.
    The gestures advance on the observed state — and stop for `Next` when the card has something new
    to say; the rest take `Next`.
@@ -118,8 +119,8 @@ Features validated while crossing the tour:
 - At every step: the target is lit, the rest of the window is dimmed, a click outside the target
   changes nothing, and the progress reads *n / N* with the way out in the card's corner.
 - No step advances on a timer: leaving the screen alone never moves the tour on.
-- Hovering the tour Run's row on the status-dot card does **not** make the card jump: the lit
-  area keeps its place while the dot turns into the select ring.
+- Hovering the tour Run's row on the status-icon card does **not** make the card jump: the lit
+  area keeps its place while the glyph turns into the empty select square.
 - The panel a gesture opened is **not dimmed**: its tabs switch and it scrolls, yet typing into
   one of its fields, ticking a box or pressing one of its buttons changes nothing. Once the tour
   has moved past that step, the panel is editable again.

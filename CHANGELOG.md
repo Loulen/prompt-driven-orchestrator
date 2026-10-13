@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.121.0
+**Status icon sur les nœuds du canvas et dans le tour guidé** (#1000, spec #996, story PDO-22) :
+chaque nœud qui a un statut porte son glyphe dans le coin haut droit (aucun sur pending ni sur
+une template de bibliothèque) ; l'étape « The status icon » du tour Overview décrit les formes.
+
+## 1.120.1
+**Palette des statuts lisible en deutan/protan** (#998, spec #996, story PDO-22) : en thème clair,
+completed (`#006b64`), failed (`#7f1d1d`) et awaiting (`#9f4500`) s'écartent sous simulation
+deutan et protan ; interrupted (`#7b410f`) et stale (`#7b573f`) ne reprennent plus la teinte
+d'awaiting. En sombre, seul interrupted change (`#fcd34d`). Les teintes s'écartent du design
+validé pour tenir l'AA du texte sur sa propre teinte (verrouillé par `themePalette.test.ts`).
+
 ## 1.120.0
 **Status icon dans les listes de Runs et de Triggers** (#997, spec #996, story PDO-22) : la
 forme du glyphe porte le statut (lisible sans distinguer les couleurs), sélection d'une ligne

@@ -10,6 +10,11 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.120.0
+**Status icon dans les listes de Runs et de Triggers** (#997, spec #996, story PDO-22) : la
+forme du glyphe porte le statut (lisible sans distinguer les couleurs), sélection d'une ligne
+en carré, mode sélection jusqu'à Clear ou Échap.
+
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les
 icônes de survol, bouton d'édition d'un Run réduit au crayon, menus Éditer / Save et modale

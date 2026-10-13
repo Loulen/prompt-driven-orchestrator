@@ -38,19 +38,10 @@ import SelectControl from "./SelectControl";
 import TriggersListPanel from "./TriggersListPanel";
 import { ValidationIndicator } from "./PipelineValidation";
 import { validationOf } from "../lib/pipelineValidation";
+import { runStatusKey } from "../lib/statusTable";
 
 type LeftTab = "runs" | "triggers" | "library";
 
-const STATUS_STYLES: Record<RunStatus, { dot: string; ring: string }> = {
-  running: { dot: "bg-st-running", ring: "border-st-running" },
-  awaiting_user: { dot: "bg-st-await", ring: "border-st-await" },
-  completed: { dot: "bg-st-done", ring: "border-st-done" },
-  failed: { dot: "bg-st-failed", ring: "border-st-failed" },
-  skipped: { dot: "bg-st-skipped", ring: "border-st-skipped" },
-  halted: { dot: "bg-st-blocked", ring: "border-st-blocked" },
-  paused: { dot: "bg-st-paused", ring: "border-st-paused" },
-  archived: { dot: "bg-st-archived", ring: "border-st-archived" },
-};
 
 /** Runs whose bulk-Retry is valid (mirror of the per-row `canRetryAll`). */
 const RETRYABLE: readonly RunStatus[] = ["completed", "failed", "halted", "skipped"];
@@ -321,16 +312,11 @@ export default function UnifiedLeftPanel({
     const expanded = hasChildren && isExpanded(run.run_id);
     const isSelected = run.run_id === selectedRunId;
     const rowSelected = runSel.has(run.run_id);
-    // A stalled run (no node running/waiting, nothing schedulable; #180) is
-    // surfaced amber and steady, overriding its still-`running` canonical
+    // A stalled run (no node running/waiting, nothing schedulable; #180) shows
+    // the steady `stalled` glyph, overriding its still-`running` canonical
     // status — "never a silent stall". `stalled` is derived per read by the
     // daemon (`event_log::is_stalled`) and shipped on every list entry.
-    const dot = run.stalled
-      ? "bg-st-stale"
-      : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).dot;
-    const ring = run.stalled
-      ? "border-st-stale"
-      : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).ring;
+    const statusKey = runStatusKey(run);
     const isArchived = run.status === "archived";
     const canCleanup = !isArchived;
     const isRenaming = renamingRunId === run.run_id;
@@ -387,17 +373,17 @@ export default function UnifiedLeftPanel({
             chevron stacked under it. Two distinct targets: the chevron never
             selects nor opens the run. */}
         <div className="flex w-4 shrink-0 flex-col items-center gap-1">
-        {/* #577 — the status dot doubles as the select control: it goes hollow on
-            hover and becomes a green check when selected. #503: the resting dot
-            still carries the failure reason so a red Run has something to say;
-            #588: an amber dot carries the awaiting reason (the agent's question,
-            or « child run <name> is awaiting you »). */}
+        {/* #577 / PDO-22 — the Status icon doubles as the select control: it
+            gives way to an empty square on hover and becomes a filled accent
+            square when selected. #503: the glyph still carries the failure
+            reason so a failed Run has something to say; #588: an awaiting glyph
+            carries the awaiting reason (the agent's question, or « child run
+            <name> is awaiting you »). */}
         <SelectControl
           selected={rowSelected}
-          dotClass={dot}
-          ringClass={ring}
-          pulse={run.status === "running" && !run.stalled}
-          dotTitle={run.failure_reason ?? run.awaiting_reason ?? undefined}
+          status={statusKey}
+          statusReason={run.failure_reason ?? run.awaiting_reason ?? undefined}
+          selecting={runSel.size > 0}
           dotTestId="run-status-dot"
           testId="run-select-control"
           label={rowSelected ? `Deselect ${run.name || run.run_id}` : `Select ${run.name || run.run_id}`}
@@ -1218,6 +1204,7 @@ export default function UnifiedLeftPanel({
               name={p.name}
               nodeCount={p.node_count}
               checked={librarySel.has(`${p.scope}-${p.id}`)}
+              selecting={librarySel.size > 0}
               onToggleSelect={(e) => {
                 const selId = `${p.scope}-${p.id}`;
                 if (e.shiftKey) selectRange("library", selId, libVisibleIds);

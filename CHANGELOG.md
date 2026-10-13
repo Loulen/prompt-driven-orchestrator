@@ -10,6 +10,12 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.120.0
+**Tours jouables à plusieurs sur une instance partagée** (#986) : chaque navigateur tire une
+identité de tour (`[0-9a-z]{4}`), et le tour *Overview* prépare et range son propre Run
+(`tour-overview-<id>`) et son propre Trigger (`tutorial-example-trigger-<id>`), sans toucher
+à ceux des autres. Le Trigger hérité sans suffixe est rangé ; le Run hérité reste en place.
+
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les
 icônes de survol, bouton d'édition d'un Run réduit au crayon, menus Éditer / Save et modale
